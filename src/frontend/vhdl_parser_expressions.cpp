@@ -176,30 +176,52 @@ Expression VhdlParser::parse_primary() {
               {},
               name.span};
       std::vector<Expression> arguments;
+      std::vector<std::string> argument_names;
+      bool saw_named = false;
       if (!at(TokenKind::RightParen)) {
-        auto first = parse_expression();
-        if (match_keyword("downto", true)
-            || match_keyword("to", true)) {
-          const auto direction = previous();
-          auto second = parse_expression();
-          expect(TokenKind::RightParen, "')' after slice",
-                 "FSIM-VHDL-PARSE-033");
-          return Expression{
-              ExpressionKind::Slice,
-              detail::ascii_lower(direction.text),
-              {base, std::move(first), std::move(second)},
-              cover(name.span, previous().span)};
-        }
-        arguments.push_back(std::move(first));
-        while (match(TokenKind::Comma)) {
-          arguments.push_back(parse_expression());
-        }
+        do {
+          std::string argument_name;
+          if (at(TokenKind::Identifier)
+              && at(TokenKind::Arrow, 1)) {
+            saw_named = true;
+            argument_name = vhdl_name(advance().text);
+            advance();
+          } else if (saw_named) {
+            error(
+                current(),
+                "FSIM-VHDL-SEM-073",
+                "a positional function-call actual cannot follow a "
+                "named actual");
+          }
+          auto argument = parse_expression();
+          if (arguments.empty() && argument_name.empty()
+              && (match_keyword("downto", true)
+                  || match_keyword("to", true))) {
+            const auto direction = previous();
+            auto second = parse_expression();
+            expect(TokenKind::RightParen, "')' after slice",
+                   "FSIM-VHDL-PARSE-033");
+            return Expression{
+                ExpressionKind::Slice,
+                detail::ascii_lower(direction.text),
+                {base, std::move(argument), std::move(second)},
+                cover(name.span, previous().span)};
+          }
+          arguments.push_back(std::move(argument));
+          argument_names.push_back(std::move(argument_name));
+        } while (match(TokenKind::Comma));
       }
       expect(TokenKind::RightParen, "')' after arguments",
              "FSIM-VHDL-PARSE-033");
-      return Expression{ExpressionKind::Call, std::move(canonical),
-                        std::move(arguments),
-                        cover(name.span, previous().span)};
+      Expression call{
+          ExpressionKind::Call,
+          std::move(canonical),
+          std::move(arguments),
+          cover(name.span, previous().span)};
+      if (saw_named) {
+        call.call_argument_names = std::move(argument_names);
+      }
+      return call;
     }
     return Expression{ExpressionKind::Identifier, std::move(canonical), {},
                       name.span};

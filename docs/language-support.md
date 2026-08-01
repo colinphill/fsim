@@ -443,7 +443,7 @@ callbacks, and VCD-observed results. Distinct nominal element types remain
 incompatible even when their layouts match. One-dimensional fixed arrays of
 those packed words support `$fread`, `$readmemb`/`$readmemh`, and
 `$writememb`/`$writememh`; multidimensional memory-file operands and string or
-unpacked-aggregate elements remain checked exclusions. Native schema 68 and
+unpacked-aggregate elements remain checked exclusions. Native schema 69 and
 container semantic revision 28 retain exact aggregate identity,
 construction/mutation operands, string-port aliases, dimensions, source, and
 debug provenance. Unicode/real string conversions, standard or multichannel

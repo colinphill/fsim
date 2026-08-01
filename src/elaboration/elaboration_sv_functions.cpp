@@ -31,23 +31,106 @@ public:
     }
 
 private:
-    const frontend::FunctionDeclaration* find_function(
-        const std::string_view name) const {
-        const auto found = std::ranges::find(
-            functions_, name,
-            &frontend::FunctionDeclaration::name);
-        return found == functions_.end() ? nullptr : &*found;
-    }
-
     std::optional<Value> evaluate_expression(
         const Expression& expression,
         const SystemVerilogConstantEnvironment& environment,
-        std::string& error) {
+        std::string& error,
+        const frontend::Type* expected_type = nullptr) {
         if (expression.kind == ExpressionKind::Call) {
-            if (const auto* function =
-                    find_function(expression.text)) {
-                return evaluate_call(
-                    *function, expression, environment, error);
+            std::optional<Value> selected;
+            std::size_t matches = 0;
+            bool named_function = false;
+            std::string candidate_error;
+            for (const auto& function : functions_) {
+                if (function.name != expression.text) {
+                    continue;
+                }
+                named_function = true;
+                if (expected_type != nullptr
+                    && function.language
+                        == frontend::Language::Vhdl2008
+                    && (function.return_type.domain
+                            != expected_type->domain
+                        || ((!function.return_type.nominal_type.empty()
+                             || !expected_type->nominal_type.empty())
+                            && function.return_type.nominal_type
+                                != expected_type->nominal_type))) {
+                    continue;
+                }
+                bool obvious_match =
+                    expression.operands.size()
+                        <= function.arguments.size()
+                    && (expression.call_argument_names.empty()
+                        || expression.call_argument_names.size()
+                            == expression.operands.size());
+                for (std::size_t index = 0;
+                     obvious_match
+                     && index < expression.operands.size();
+                     ++index) {
+                    std::size_t formal_index = index;
+                    if (!expression.call_argument_names.empty()
+                        && !expression.call_argument_names[index].empty()) {
+                        const auto formal = std::ranges::find(
+                            function.arguments,
+                            expression.call_argument_names[index],
+                            &frontend::FunctionArgument::name);
+                        if (formal == function.arguments.end()) {
+                            obvious_match = false;
+                            break;
+                        }
+                        formal_index = static_cast<std::size_t>(
+                            std::distance(
+                                function.arguments.begin(), formal));
+                    }
+                    const auto kind = expression.operands[index].kind;
+                    const auto domain =
+                        function.arguments[formal_index].type.domain;
+                    obvious_match =
+                        kind == ExpressionKind::IntegerLiteral
+                            ? domain
+                                == frontend::ValueDomain::Integer
+                        : kind == ExpressionKind::BooleanLiteral
+                            ? domain
+                                == frontend::ValueDomain::Boolean
+                        : kind == ExpressionKind::StringLiteral
+                            ? domain
+                                == frontend::ValueDomain::String
+                            : true;
+                }
+                if (!obvious_match) {
+                    continue;
+                }
+                std::string current_error;
+                auto value = evaluate_call(
+                    function,
+                    expression,
+                    environment,
+                    current_error);
+                if (!value) {
+                    if (candidate_error.empty()) {
+                        candidate_error = std::move(current_error);
+                    }
+                    continue;
+                }
+                ++matches;
+                if (!selected) {
+                    selected = std::move(*value);
+                }
+            }
+            if (matches == 1) {
+                return selected;
+            }
+            if (matches > 1) {
+                error = "constant function call '" + expression.text
+                    + "' is ambiguous among visible overloads";
+                return std::nullopt;
+            }
+            if (named_function) {
+                error = candidate_error.empty()
+                    ? "constant function call '" + expression.text
+                        + "' matches no visible overload"
+                    : std::move(candidate_error);
+                return std::nullopt;
             }
             if (expression.text == "inside") {
                 if (expression.operands.size() < 2) {
@@ -138,7 +221,8 @@ private:
         const SystemVerilogConstantEnvironment& environment,
         std::string& error) {
         const auto value =
-            evaluate_expression(expression, environment, error);
+            evaluate_expression(
+                expression, environment, error, &type);
         if (!value) {
             return std::nullopt;
         }
@@ -226,19 +310,6 @@ private:
                 return std::nullopt;
             }
         }
-        if (std::ranges::find(call_stack_, &function)
-            != call_stack_.end()) {
-            error =
-                "recursive constant function call involving '"
-                + function.name + "'";
-            return std::nullopt;
-        }
-        call_stack_.push_back(&function);
-        struct Pop {
-            std::vector<const frontend::FunctionDeclaration*>& stack;
-            ~Pop() { stack.pop_back(); }
-        } pop{call_stack_};
-
         auto environment = globals_;
         for (std::size_t index = 0;
              index < function.arguments.size(); ++index) {
@@ -258,6 +329,18 @@ private:
                 function.arguments[index].name,
                 std::move(*value));
         }
+        if (std::ranges::find(call_stack_, &function)
+            != call_stack_.end()) {
+            error =
+                "recursive constant function call involving '"
+                + function.name + "'";
+            return std::nullopt;
+        }
+        call_stack_.push_back(&function);
+        struct Pop {
+            std::vector<const frontend::FunctionDeclaration*>& stack;
+            ~Pop() { stack.pop_back(); }
+        } pop{call_stack_};
 
         std::unordered_map<std::string, const frontend::Type*> types;
         types.emplace(function.name, &function.return_type);
@@ -1119,6 +1202,13 @@ void fold_systemverilog_constant_functions(
                 functions,
                 environment,
                 fallback_environment);
+            if (argument.default_value) {
+                fold_expression(
+                    *argument.default_value,
+                    functions,
+                    environment,
+                    fallback_environment);
+            }
         }
         for (auto& variable : procedure.variables) {
             fold_type(

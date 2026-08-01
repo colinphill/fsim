@@ -8,7 +8,32 @@ using namespace elaboration_detail;
 Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
         const Expression& expression,
         const std::size_t expected_width,
-        const frontend::Type*) {
+        const frontend::Type* expected_type) {
+        if (language_ == frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::Binary
+            && expression.operands.size() == 2) {
+            const auto found = function_indices_.find(expression.text);
+            if (found != function_indices_.end()) {
+                Expression call{
+                    ExpressionKind::Call,
+                    expression.text,
+                    expression.operands,
+                    expression.span};
+                const bool matching_user_operator =
+                    std::ranges::any_of(
+                        found->second,
+                        [&](const std::size_t index) {
+                          return vhdl_function_profile_matches(
+                              call,
+                              *function_frames_[index].source,
+                              expected_type);
+                        });
+                if (matching_user_operator) {
+                    return lower_user_function_expression(
+                        call, expected_width, expected_type);
+                }
+            }
+        }
         if (expression.kind == ExpressionKind::Binary
             && expression.operands.size() == 2
             && (is_container_expression(expression.operands[0])
@@ -844,10 +869,19 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             }
             return destination;
         }
-        report(
-            "FSIM-ELAB-043",
-            "expression form is parsed but not executable yet",
-            expression.span);
+        if (language_ == frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::Call) {
+            report(
+                "FSIM-ELAB-VHNAME-001",
+                "VHDL function or type mark '" + expression.text
+                    + "' is not visible in this expression context",
+                expression.span);
+        } else {
+            report(
+                "FSIM-ELAB-043",
+                "expression form is parsed but not executable yet",
+                expression.span);
+        }
         return std::nullopt;
         }
 

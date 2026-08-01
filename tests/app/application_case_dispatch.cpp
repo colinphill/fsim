@@ -77,6 +77,7 @@ constexpr NamedApplicationCase application_cases[] = {
 #elif FSIM_APPLICATION_SHARD == 2
 int fsim_application_case_vhdl_type_generics();
 int fsim_application_case_vhdl_function_generics();
+int fsim_application_case_vhdl_overloads();
 int fsim_application_case_vhdl_procedure_generics();
 int fsim_application_case_vhdl_package_generics();
 int fsim_application_case_vhdl_generic_subprograms();
@@ -91,6 +92,7 @@ int fsim_application_case_vhdl_package_records();
 constexpr NamedApplicationCase application_cases[] = {
     {"vhdl_type_generics", fsim_application_case_vhdl_type_generics},
     {"vhdl_function_generics", fsim_application_case_vhdl_function_generics},
+    {"vhdl_overloads", fsim_application_case_vhdl_overloads},
     {"vhdl_procedure_generics", fsim_application_case_vhdl_procedure_generics},
     {"vhdl_package_generics", fsim_application_case_vhdl_package_generics},
     {"vhdl_generic_subprograms",

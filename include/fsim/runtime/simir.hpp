@@ -1158,6 +1158,8 @@ enum class ResolutionKind : std::uint8_t {
   none,
   sv_wire,
   std_logic,
+  vhdl_user_or,
+  vhdl_user_and,
 };
 
 enum class ValueKind : std::uint8_t {

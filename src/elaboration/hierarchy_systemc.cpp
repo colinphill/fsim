@@ -686,6 +686,7 @@ using namespace elaboration_detail;
             return;
         }
         stack_.push_back(identity);
+        register_vhdl_resolution_functions(unit);
 
         SignalMap local = std::move(aliases);
         StringMap local_string_objects =
@@ -703,8 +704,8 @@ using namespace elaboration_detail;
                 const frontend::Type& type) {
               if (unit.language
                       == frontend::Language::SystemVerilog2017
-                  || !type.enumeration_literals.empty()
-                  || type.vhdl_array) {
+                  || unit.language
+                      == frontend::Language::Vhdl2008) {
                   visible_type_marks.try_emplace(
                       std::string{name}, &type);
               }

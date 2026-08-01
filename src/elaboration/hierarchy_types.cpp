@@ -114,6 +114,10 @@ using namespace elaboration_detail;
                     base.vhdl_type_declaration =
                         derived.vhdl_type_declaration;
                 }
+                if (!derived.vhdl_resolution_function.empty()) {
+                    base.vhdl_resolution_function =
+                        derived.vhdl_resolution_function;
+                }
                 const bool has_integer_constraint =
                     derived.integer_range_expression.has_value();
                 const bool has_discrete_constraint =
@@ -290,6 +294,10 @@ using namespace elaboration_detail;
                     element.spelling;
                 type.vhdl_array->element_named_type.clear();
                 type.domain = element.domain;
+                // Resolve packed array elements independently.
+                if (!element.vhdl_resolution_function.empty()) {
+                    type.vhdl_resolution_function = element.vhdl_resolution_function;
+                }
             }
             if (type.named_type.empty()) {
                 return !vhdl
@@ -1278,6 +1286,10 @@ using namespace elaboration_detail;
             declaration.is_port,
             declaration.direction,
             declaration.span});
+        if (!declaration.type.vhdl_resolution_function.empty()) {
+            resolver_by_signal_.insert_or_assign(
+                id, declaration.type.vhdl_resolution_function);
+        }
         auto initial = Logic4::x;
         if (declaration.type.spelling == "event") {
             initial = Logic4::zero;

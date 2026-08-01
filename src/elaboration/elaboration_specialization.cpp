@@ -410,6 +410,23 @@ SpecializedUnit specialize_unit(
                     override.span});
                 continue;
             }
+            if (is_vhdl
+                && !fold_vhdl_static_expressions(
+                    actual_expression,
+                    source,
+                    parent_environment,
+                    error,
+                    range_error)) {
+                diagnostics.push_back({
+                    range_error
+                        ? "FSIM-ELAB-VHSTATIC-002"
+                        : "FSIM-ELAB-VHSTATIC-001",
+                    "cannot evaluate VHDL static expression in "
+                    + std::string{object_kind}
+                    + " actual: " + error,
+                    override.span});
+                continue;
+            }
             auto value =
                 is_vhdl
                     ? vhdl_enumeration_ordinal(
@@ -622,6 +639,23 @@ SpecializedUnit specialize_unit(
                             ? "FSIM-ELAB-VHENUMATTR-002"
                             : "FSIM-ELAB-VHENUMATTR-001",
                         "cannot evaluate enumeration attribute in "
+                        + std::string{object_kind} + " '"
+                        + parameter.name + "': " + error,
+                        parameter.span});
+                    value = 0;
+                }
+                if (is_vhdl && !value
+                    && !fold_vhdl_static_expressions(
+                        default_expression,
+                        source,
+                        result.environment,
+                        error,
+                        range_error)) {
+                    diagnostics.push_back({
+                        range_error
+                            ? "FSIM-ELAB-VHSTATIC-002"
+                            : "FSIM-ELAB-VHSTATIC-001",
+                        "cannot evaluate VHDL static expression in "
                         + std::string{object_kind} + " '"
                         + parameter.name + "': " + error,
                         parameter.span});
@@ -852,6 +886,8 @@ SpecializedUnit specialize_unit(
         result.string_environment =
             std::move(systemverilog_string_environment);
     } else if (is_vhdl) {
+        fold_vhdl_static_type_expressions(
+            result.unit, result.environment, diagnostics);
         // The bounded VHDL and SystemVerilog function HIR intentionally
         // shares the same time-free integral evaluator. Calls whose operands
         // are not locally static remain in the tree for runtime lowering.
@@ -1057,6 +1093,13 @@ SpecializedUnit specialize_unit(
                 domains,
                 diagnostics,
                 source.language);
+            if (argument.default_value) {
+                substitute_parameters(
+                    *argument.default_value,
+                    result.environment,
+                    domains,
+                    source.language);
+            }
         }
         for (auto& variable : procedure.variables) {
             substitute_parameters(
@@ -1178,6 +1221,13 @@ SpecializedUnit specialize_unit(
                 domains,
                 diagnostics,
                 source.language);
+            if (argument.default_value) {
+                substitute_parameters(
+                    *argument.default_value,
+                    result.environment,
+                    domains,
+                    source.language);
+            }
         }
         for (auto& variable : procedure.variables) {
             substitute_parameters(

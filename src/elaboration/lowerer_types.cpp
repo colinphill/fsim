@@ -724,6 +724,28 @@ using namespace elaboration_detail;
         case ExpressionKind::Update:
             return false;
         case ExpressionKind::Binary:
+            if (const auto found =
+                    function_indices_.find(expression.text);
+                found != function_indices_.end()
+                && expression.operands.size() == 2) {
+                const Expression call{
+                    ExpressionKind::Call,
+                    expression.text,
+                    expression.operands,
+                    expression.span};
+                if (std::ranges::any_of(
+                        found->second,
+                        [&](const std::size_t index) {
+                          const auto& function =
+                              *function_frames_[index].source;
+                          return function.return_type.domain
+                                  == frontend::ValueDomain::Integer
+                              && vhdl_function_profile_matches(
+                                  call, function, nullptr);
+                        })) {
+                    return true;
+                }
+            }
             return expression.operands.size() == 2
                 && (expression.text == "+"
                     || expression.text == "-"
@@ -739,6 +761,17 @@ using namespace elaboration_detail;
                     visible_function(expression.text)) {
                 return function->return_type.domain
                     == frontend::ValueDomain::Integer;
+            }
+            if (const auto found =
+                    function_indices_.find(expression.text);
+                found != function_indices_.end()) {
+                return std::ranges::any_of(
+                    found->second,
+                    [&](const std::size_t index) {
+                      return function_frames_[index]
+                                 .source->return_type.domain
+                          == frontend::ValueDomain::Integer;
+                    });
             }
             if (expression.text == "?:"
                 && expression.operands.size() == 3) {
@@ -1011,35 +1044,40 @@ using namespace elaboration_detail;
                 if (found == function_indices_.end()) {
                     continue;
                 }
-                const auto& function =
-                    *function_frames_[found->second].source;
-                std::set<std::string> dependencies;
-                collect_statement_identifiers(
-                    function.statements, dependencies);
-                collect_statement_calls(
-                    collect_statement_calls, function.statements);
-                for (const auto& argument : function.arguments) {
-                    dependencies.erase(argument.name);
-                    if (argument.default_value) {
-                        collect_identifiers(
-                            *argument.default_value, dependencies);
-                        collect_expression_calls(
-                            collect_expression_calls,
-                            *argument.default_value);
+                for (const auto index : found->second) {
+                    const auto& function =
+                        *function_frames_[index].source;
+                    std::set<std::string> dependencies;
+                    collect_statement_identifiers(
+                        function.statements, dependencies);
+                    collect_statement_calls(
+                        collect_statement_calls,
+                        function.statements);
+                    for (const auto& argument : function.arguments) {
+                        dependencies.erase(argument.name);
+                        if (argument.default_value) {
+                            collect_identifiers(
+                                *argument.default_value,
+                                dependencies);
+                            collect_expression_calls(
+                                collect_expression_calls,
+                                *argument.default_value);
+                        }
                     }
-                }
-                for (const auto& variable : function.variables) {
-                    dependencies.erase(variable.name);
-                    if (variable.initializer) {
-                        collect_identifiers(
-                            *variable.initializer, dependencies);
-                        collect_expression_calls(
-                            collect_expression_calls,
-                            *variable.initializer);
+                    for (const auto& variable : function.variables) {
+                        dependencies.erase(variable.name);
+                        if (variable.initializer) {
+                            collect_identifiers(
+                                *variable.initializer,
+                                dependencies);
+                            collect_expression_calls(
+                                collect_expression_calls,
+                                *variable.initializer);
+                        }
                     }
+                    output.insert(
+                        dependencies.begin(), dependencies.end());
                 }
-                output.insert(
-                    dependencies.begin(), dependencies.end());
                 continue;
             }
 

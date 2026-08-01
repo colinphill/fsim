@@ -472,26 +472,17 @@ HierarchyBuilder::HierarchyBuilder(
                         continue;
                     }
                     found_selected = true;
-                    const auto [owner, inserted] =
-                        bare_owners.emplace(
-                            function.name, package_owner);
-                    if (!inserted
-                        && owner->second != package_owner) {
-                        report(
-                            "FSIM-ELAB-VHFUNC-010",
-                            "VHDL function '" + function.name
-                                + "' is directly visible from multiple "
-                                  "packages",
-                            item.span);
-                        continue;
-                    }
                     if (std::ranges::none_of(
                             function_imports,
                             [&](const auto& existing) {
-                                return existing.name
-                                    == function.name;
+                                return existing.span.source_name
+                                        == function.span.source_name
+                                    && existing.span.begin.offset
+                                        == function.span.begin.offset;
                             })) {
-                        function_imports.push_back(function);
+                        auto imported = function;
+                        imported.visibility_owner = package_owner;
+                        function_imports.push_back(std::move(imported));
                     }
                 }
                 for (const auto& procedure :
@@ -515,26 +506,17 @@ HierarchyBuilder::HierarchyBuilder(
                         continue;
                     }
                     found_selected = true;
-                    const auto [owner, inserted] =
-                        bare_owners.emplace(
-                            procedure.name, package_owner);
-                    if (!inserted
-                        && owner->second != package_owner) {
-                        report(
-                            "FSIM-ELAB-VHPROC-013",
-                            "VHDL procedure '" + procedure.name
-                                + "' is directly visible from multiple "
-                                  "packages",
-                            item.span);
-                        continue;
-                    }
                     if (std::ranges::none_of(
                             procedure_imports,
                             [&](const auto& existing) {
-                                return existing.name
-                                    == procedure.name;
+                                return existing.span.source_name
+                                        == procedure.span.source_name
+                                    && existing.span.begin.offset
+                                        == procedure.span.begin.offset;
                             })) {
-                        procedure_imports.push_back(procedure);
+                        auto imported = procedure;
+                        imported.visibility_owner = package_owner;
+                        procedure_imports.push_back(std::move(imported));
                     }
                 }
                 for (const auto& generic :
@@ -682,11 +664,29 @@ HierarchyBuilder::HierarchyBuilder(
             std::make_move_iterator(unit.parameters.begin()),
             std::make_move_iterator(unit.parameters.end()));
         unit.parameters = std::move(imports);
+        std::unordered_set<std::string> local_function_names;
+        for (const auto& function : unit.functions) {
+            local_function_names.insert(function.name);
+        }
+        std::erase_if(
+            function_imports,
+            [&](const auto& function) {
+              return local_function_names.contains(function.name);
+            });
         function_imports.insert(
             function_imports.end(),
             std::make_move_iterator(unit.functions.begin()),
             std::make_move_iterator(unit.functions.end()));
         unit.functions = std::move(function_imports);
+        std::unordered_set<std::string> local_procedure_names;
+        for (const auto& procedure : unit.procedures) {
+            local_procedure_names.insert(procedure.name);
+        }
+        std::erase_if(
+            procedure_imports,
+            [&](const auto& procedure) {
+              return local_procedure_names.contains(procedure.name);
+            });
         procedure_imports.insert(
             procedure_imports.end(),
             std::make_move_iterator(unit.procedures.begin()),
@@ -807,10 +807,13 @@ HierarchyBuilder::HierarchyBuilder(
                 [](const frontend::FunctionDeclaration& declaration,
                    const frontend::FunctionDeclaration& body) {
                   if (declaration.name != body.name
+                      || declaration.pure != body.pure
                       || declaration.arguments.size()
                           != body.arguments.size()
                       || declaration.return_type.spelling
                           != body.return_type.spelling
+                      || declaration.return_type.named_type
+                          != body.return_type.named_type
                       || declaration.return_type.domain
                           != body.return_type.domain) {
                       return false;
@@ -822,6 +825,8 @@ HierarchyBuilder::HierarchyBuilder(
                               != body.arguments[index].direction
                           || declaration.arguments[index].type.spelling
                               != body.arguments[index].type.spelling
+                          || declaration.arguments[index].type.named_type
+                              != body.arguments[index].type.named_type
                           || declaration.arguments[index].type.domain
                               != body.arguments[index].type.domain) {
                           return false;
@@ -848,6 +853,21 @@ HierarchyBuilder::HierarchyBuilder(
                     != effective_package.functions.end()) {
                     *declaration = body_function;
                 } else {
+                    if (std::ranges::any_of(
+                            effective_package.functions,
+                            [&](const auto& candidate) {
+                              return candidate.name
+                                      == body_function.name
+                                  && !candidate.defined;
+                            })) {
+                        report(
+                            "FSIM-ELAB-VHLEGAL-001",
+                            "VHDL function body '"
+                                + body_function.name
+                                + "' does not conform to any package "
+                                  "declaration with that designator",
+                            body_function.span);
+                    }
                     effective_package.functions.push_back(
                         body_function);
                 }
@@ -865,6 +885,8 @@ HierarchyBuilder::HierarchyBuilder(
                       const auto& left = declaration.arguments[index];
                       const auto& right = body.arguments[index];
                       if (left.type.spelling != right.type.spelling
+                          || left.type.named_type
+                              != right.type.named_type
                           || left.type.domain != right.type.domain
                           || left.direction != right.direction
                           || left.object_class
@@ -893,6 +915,21 @@ HierarchyBuilder::HierarchyBuilder(
                     != effective_package.procedures.end()) {
                     *declaration = body_procedure;
                 } else {
+                    if (std::ranges::any_of(
+                            effective_package.procedures,
+                            [&](const auto& candidate) {
+                              return candidate.name
+                                      == body_procedure.name
+                                  && !candidate.defined;
+                            })) {
+                        report(
+                            "FSIM-ELAB-VHLEGAL-003",
+                            "VHDL procedure body '"
+                                + body_procedure.name
+                                + "' does not conform to any package "
+                                  "declaration with that designator",
+                            body_procedure.span);
+                    }
                     effective_package.procedures.push_back(
                         body_procedure);
                 }
@@ -913,6 +950,31 @@ HierarchyBuilder::HierarchyBuilder(
                            .source_dependencies.end()) {
                 effective_package.source_dependencies.push_back(
                     body_source);
+            }
+        }
+        const bool generic_package = std::ranges::any_of(
+            package.parameters,
+            [](const auto& parameter) {
+              return !parameter.local;
+            });
+        if (!generic_package) {
+            for (const auto& function : effective_package.functions) {
+                if (!function.defined) {
+                    report(
+                        "FSIM-ELAB-VHLEGAL-002",
+                        "VHDL package function '" + function.name
+                            + "' has no conforming body",
+                        function.span);
+                }
+            }
+            for (const auto& procedure : effective_package.procedures) {
+                if (!procedure.defined) {
+                    report(
+                        "FSIM-ELAB-VHLEGAL-004",
+                        "VHDL package procedure '" + procedure.name
+                            + "' has no conforming body",
+                        procedure.span);
+                }
             }
         }
         std::vector<frontend::VhdlContextItem>
@@ -1163,6 +1225,43 @@ HierarchyBuilder::HierarchyBuilder(
             if (!specialized_package) {
                 continue;
             }
+            const bool exported_function =
+                std::ranges::any_of(
+                    package->functions,
+                    [&](const auto& candidate) {
+                      return candidate.name == constant_name;
+                    })
+                && std::ranges::any_of(
+                    specialized_package->unit.functions,
+                    [&](const auto& candidate) {
+                      return candidate.name == constant_name
+                          && candidate.defined;
+                    });
+            const bool exported_procedure =
+                std::ranges::any_of(
+                    package->procedures,
+                    [&](const auto& candidate) {
+                      return candidate.name == constant_name;
+                    })
+                && std::ranges::any_of(
+                    specialized_package->unit.procedures,
+                    [&](const auto& candidate) {
+                      return candidate.name == constant_name
+                          && candidate.defined;
+                    });
+            if (exported_function || exported_procedure) {
+                const auto separator = identifier.rfind('.');
+                const auto prefix = identifier.substr(0, separator);
+                const PackageBinding binding{
+                    requested_library + "." + package_name,
+                    specialized_package->unit,
+                    specialized_package->environment,
+                    specialized_package->values,
+                    specialized_package->identity_values};
+                materialize_vhdl_package_binding(
+                    unit, prefix, binding);
+                continue;
+            }
             const auto declaration = std::find_if(
                 package->parameters.begin(),
                 package->parameters.end(),
@@ -1196,7 +1295,7 @@ HierarchyBuilder::HierarchyBuilder(
                         "FSIM-ELAB-PKG-010",
                         "VHDL package '" + requested_library
                             + "." + package_name
-                            + "' has no constant or enumeration literal '"
+                            + "' has no exported item '"
                             + constant_name + "'",
                         reference_span);
                 }

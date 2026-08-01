@@ -98,7 +98,11 @@ void Interpreter::Impl::release_slice(
     const auto initial =
         signal.resolution == ResolutionKind::sv_wire
             ? Logic4::z
-            : Logic4::x;
+            : signal.resolution == ResolutionKind::vhdl_user_or
+                ? Logic4::zero
+                : signal.resolution == ResolutionKind::vhdl_user_and
+                    ? Logic4::one
+                    : Logic4::x;
     return PackedLogic4{signal.initial_value.width(), initial};
   }
 
@@ -133,8 +137,43 @@ PackedLogic4& Interpreter::Impl::driver_slot(
       drivers.push_back(
           *external_driver_values.at(signal_id));
     }
-    return runtime::resolve(
-        std::span<const PackedLogic4>{drivers});
+    if (get_signal(signal_id).resolution
+            != ResolutionKind::vhdl_user_or
+        && get_signal(signal_id).resolution
+            != ResolutionKind::vhdl_user_and) {
+      return runtime::resolve(
+          std::span<const PackedLogic4>{drivers});
+    }
+    const auto& signal = get_signal(signal_id);
+    const bool bitwise_and = signal.resolution
+        == ResolutionKind::vhdl_user_and;
+    auto result = drivers.front();
+    for (auto driver_index = std::size_t{1};
+         driver_index < drivers.size(); ++driver_index) {
+      const auto& driver = drivers[driver_index];
+      for (std::size_t bit = 0; bit < result.width(); ++bit) {
+        if (signal.value_kind == ValueKind::logic9) {
+          result.set_logic9(
+              bit,
+              bitwise_and
+                  ? runtime::logic_and(
+                        result.get_logic9(bit),
+                        driver.get_logic9(bit))
+                  : runtime::logic_or(
+                        result.get_logic9(bit),
+                        driver.get_logic9(bit)));
+          continue;
+        }
+        const auto current = result.get(bit);
+        const auto value = driver.get(bit);
+        result.set(
+            bit,
+            bitwise_and
+                ? runtime::logic_and(current, value)
+                : runtime::logic_or(current, value));
+      }
+    }
+    return result;
   }
 
 PackedLogic4& Interpreter::Impl::external_driver_slot(

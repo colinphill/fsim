@@ -182,6 +182,13 @@ void substitute_package_bound_items(
                 domains,
                 diagnostics,
                 frontend::Language::Vhdl2008);
+            if (argument.default_value) {
+                substitute_parameters(
+                    *argument.default_value,
+                    environment,
+                    domains,
+                    frontend::Language::Vhdl2008);
+            }
         }
         for (auto& variable : procedure.variables) {
             substitute_parameters(
@@ -325,12 +332,17 @@ void HierarchyBuilder::materialize_vhdl_package_binding(
         if (std::ranges::any_of(
                 unit.functions,
                 [&](const auto& existing) {
-                    return existing.name == name;
+                    return existing.name == name
+                        && existing.span.source_name
+                            == function.span.source_name
+                        && existing.span.begin.offset
+                            == function.span.begin.offset;
                 })) {
             continue;
         }
         auto imported = function;
         imported.name = name;
+        imported.visibility_owner = std::string{prefix};
         for (auto& variable : imported.variables) {
             if (variable.initializer) {
                 rename_package_expression(
@@ -346,12 +358,17 @@ void HierarchyBuilder::materialize_vhdl_package_binding(
         if (std::ranges::any_of(
                 unit.procedures,
                 [&](const auto& existing) {
-                    return existing.name == name;
+                    return existing.name == name
+                        && existing.span.source_name
+                            == procedure.span.source_name
+                        && existing.span.begin.offset
+                            == procedure.span.begin.offset;
                 })) {
             continue;
         }
         auto imported = procedure;
         imported.name = name;
+        imported.visibility_owner = std::string{prefix};
         for (auto& variable : imported.variables) {
             if (variable.initializer) {
                 rename_package_expression(

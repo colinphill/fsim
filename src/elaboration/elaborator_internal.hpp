@@ -291,6 +291,18 @@ bool fold_vhdl_enumeration_attributes(
     std::string& error,
     bool& range_error);
 
+bool fold_vhdl_static_expressions(
+    Expression& expression,
+    const DesignUnit& unit,
+    const ConstantEnvironment& environment,
+    std::string& error,
+    bool& range_error);
+
+void fold_vhdl_static_type_expressions(
+    DesignUnit& unit,
+    const ConstantEnvironment& environment,
+    std::vector<Diagnostic>& diagnostics);
+
 void substitute_parameters(
     Expression& expression,
     const ConstantEnvironment& environment,
@@ -1133,6 +1145,38 @@ private:
     [[nodiscard]] const frontend::FunctionDeclaration*
     visible_function(std::string_view name) const;
 
+    enum class FunctionResultKind : std::uint8_t {
+        Packed,
+        String,
+        Container,
+    };
+
+    struct CallableSelection {
+        bool named{};
+        std::optional<std::size_t> index;
+    };
+
+    [[nodiscard]] CallableSelection select_function_overload(
+        const Expression& expression,
+        const frontend::Type* expected_type,
+        FunctionResultKind result_kind);
+
+    [[nodiscard]] CallableSelection select_procedure_overload(
+        const Statement& statement);
+
+    [[nodiscard]] bool vhdl_callable_type_matches(
+        const frontend::Type& formal,
+        const frontend::Type& actual) const;
+
+    [[nodiscard]] bool vhdl_expression_matches_type(
+        const Expression& expression,
+        const frontend::Type& formal) const;
+
+    [[nodiscard]] bool vhdl_function_profile_matches(
+        const Expression& expression,
+        const frontend::FunctionDeclaration& function,
+        const frontend::Type* expected_type) const;
+
     void initialize_function_support();
 
     std::optional<std::vector<const Expression*>>
@@ -1305,7 +1349,7 @@ private:
         bool lowered{};
     };
     std::vector<FunctionFrame> function_frames_;
-    std::unordered_map<std::string, std::size_t>
+    std::unordered_map<std::string, std::vector<std::size_t>>
         function_indices_;
     std::deque<std::size_t> pending_functions_;
     std::vector<std::unordered_set<std::size_t>>
@@ -1350,7 +1394,7 @@ private:
         bool lowered{};
     };
     std::vector<ProcedureFrame> procedure_frames_;
-    std::unordered_map<std::string, std::size_t>
+    std::unordered_map<std::string, std::vector<std::size_t>>
         procedure_indices_;
     std::deque<std::size_t> pending_procedures_;
     std::vector<std::unordered_set<std::size_t>>
@@ -1581,6 +1625,9 @@ private:
     std::optional<ResolutionKind> explicit_resolution(
         const SignalId signal);
 
+    void register_vhdl_resolution_functions(
+        const DesignUnit& unit);
+
     void set_resolution(
         const SignalId signal,
         const ResolutionKind resolution);
@@ -1768,6 +1815,8 @@ private:
         boundary_driver_paths_;
     std::unordered_set<SignalId> cross_language_boundary_signals_;
     std::unordered_map<SignalId, std::string> resolver_by_signal_;
+    std::unordered_map<std::string, ResolutionKind>
+        vhdl_resolution_kinds_;
     std::unordered_map<
         ContainerObjectId,
         std::vector<ContainerBoundaryDriver>>

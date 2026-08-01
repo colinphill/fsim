@@ -42,25 +42,68 @@ void Lowerer::initialize_procedure_support() {
 
     procedure_frames_.reserve(procedures_.size());
     for (const auto& procedure : procedures_) {
-        const auto index = procedure_frames_.size();
-        const auto [existing, inserted] =
-            procedure_indices_.emplace(procedure.name, index);
-        if (!inserted) {
+        auto& overloads = procedure_indices_[procedure.name];
+        const bool duplicate_profile = std::ranges::any_of(
+            overloads,
+            [&](const std::size_t candidate_index) {
+              const auto& candidate =
+                  *procedure_frames_[candidate_index].source;
+              const bool imported_distinct_declarations =
+                  !candidate.visibility_owner.empty()
+                  && !procedure.visibility_owner.empty()
+                  && candidate.visibility_owner
+                      != procedure.visibility_owner;
+              if (candidate.arguments.size()
+                      != procedure.arguments.size()
+                  || imported_distinct_declarations) {
+                return false;
+              }
+              for (std::size_t argument = 0;
+                   argument < procedure.arguments.size();
+                   ++argument) {
+                const auto& left = candidate.arguments[argument];
+                const auto& right = procedure.arguments[argument];
+                if (left.direction != right.direction
+                    || left.object_class != right.object_class
+                    || !vhdl_callable_type_matches(
+                        left.type, right.type)) {
+                  return false;
+                }
+              }
+              return true;
+            });
+        if (duplicate_profile) {
             report(
-                "FSIM-ELAB-VHPROC-006",
-                "ambiguous visible VHDL procedure '"
+                "FSIM-ELAB-VHOVER-006",
+                "duplicate VHDL procedure profile '"
                     + procedure.name + "'",
                 procedure.span);
-            (void)existing;
             continue;
         }
+        const auto index = procedure_frames_.size();
         ProcedureFrame frame;
         frame.source = &procedure;
         procedure_frames_.push_back(std::move(frame));
+        overloads.push_back(index);
     }
     procedure_dependencies_.resize(procedure_frames_.size());
     if (procedure_frames_.empty()) {
         return;
+    }
+    for (const auto& frame : procedure_frames_) {
+        const auto& procedure = *frame.source;
+        for (const auto& argument : procedure.arguments) {
+            if (argument.default_value
+                && !vhdl_expression_matches_type(
+                    *argument.default_value, argument.type)) {
+                report(
+                    "FSIM-ELAB-VHLEGAL-008",
+                    "default for VHDL procedure formal '"
+                        + argument.name
+                        + "' does not match its subtype",
+                    argument.default_value->span);
+            }
+        }
     }
 
     procedure_call_stack_.pointer =
@@ -88,16 +131,18 @@ void Lowerer::lower_procedure_call(const Statement& statement) {
             statement.span);
         return;
     }
-    const auto found =
-        procedure_indices_.find(statement.procedure_name);
-    if (found == procedure_indices_.end()) {
+    const auto selected = select_procedure_overload(statement);
+    if (!selected.named) {
         report(
             "FSIM-ELAB-VHPROC-014",
             "unknown VHDL procedure '" + statement.procedure_name + "'",
             statement.span);
         return;
     }
-    const auto procedure_index = found->second;
+    if (!selected.index) {
+        return;
+    }
+    const auto procedure_index = *selected.index;
     auto& frame = procedure_frames_[procedure_index];
     const auto& procedure = *frame.source;
 
@@ -157,14 +202,19 @@ void Lowerer::lower_procedure_call(const Statement& statement) {
     }
     for (std::size_t index = 0;
          index < actuals.size(); ++index) {
-        if (actuals[index] == nullptr) {
-            report(
-                "FSIM-ELAB-VHPROC-017",
-                "procedure '" + procedure.name
-                    + "' requires an actual for formal '"
-                    + procedure.arguments[index].name + "'",
-                statement.span);
+      if (actuals[index] == nullptr) {
+        if (procedure.arguments[index].default_value) {
+          actuals[index] =
+              &*procedure.arguments[index].default_value;
+        } else {
+          report(
+              "FSIM-ELAB-VHPROC-017",
+              "procedure '" + procedure.name
+                  + "' requires an actual for formal '"
+                  + procedure.arguments[index].name + "'",
+              statement.span);
         }
+      }
     }
     if (std::ranges::any_of(
             actuals,

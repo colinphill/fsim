@@ -379,6 +379,8 @@ therefore excluded.
 | `FSIM-VHDL-SEM-069` | error | A component declaration's end name does not match its opening name. |
 | `FSIM-VHDL-SEM-071` | error | A component generic or port formal is declared more than once or conflicts with another component formal. |
 | `FSIM-VHDL-SEM-072` | error | A component port default is declared on a non-input formal. |
+| `FSIM-VHDL-SEM-073` | error | A positional VHDL function-call actual follows a named actual. |
+| `FSIM-VHDL-SEM-074` | error | A VHDL procedure parameter default is declared on a non-input formal. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -406,15 +408,13 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-029` | error | A bounded VHDL function formal is not constant class. |
 | `FSIM-VHDL-UNSUPPORTED-030` | error | A bounded VHDL function formal is not input mode. |
 | `FSIM-VHDL-UNSUPPORTED-031` | error | A VHDL function formal type is outside the bounded scalar integral or visible scalar-subtype profile. |
-| `FSIM-VHDL-UNSUPPORTED-032` | error | A bounded VHDL function formal has a default expression. |
-| `FSIM-VHDL-UNSUPPORTED-033` | error | A VHDL function uses an operator-symbol designator. |
+| `FSIM-VHDL-UNSUPPORTED-033` | error | A VHDL interface function uses an operator-symbol designator. |
 | `FSIM-VHDL-UNSUPPORTED-034` | error | A VHDL function result type is outside the bounded scalar integral or visible scalar-subtype profile. |
 | `FSIM-VHDL-UNSUPPORTED-035` | error | A VHDL function declarative item is not a local variable. |
 | `FSIM-VHDL-UNSUPPORTED-037` | error | A bounded VHDL function body contains timing, signal updates, or another unsupported statement. |
 | `FSIM-VHDL-UNSUPPORTED-038` | error | A bounded VHDL procedure formal has signal or file class rather than constant or variable class. |
 | `FSIM-VHDL-UNSUPPORTED-039` | error | A bounded VHDL procedure formal uses buffer, linkage, or another unsupported mode. |
 | `FSIM-VHDL-UNSUPPORTED-040` | error | A VHDL procedure formal type is outside the bounded scalar integral or visible scalar-subtype profile. |
-| `FSIM-VHDL-UNSUPPORTED-041` | error | A bounded VHDL procedure formal has a default expression. |
 | `FSIM-VHDL-UNSUPPORTED-042` | error | A VHDL procedure uses an operator-symbol designator. |
 | `FSIM-VHDL-UNSUPPORTED-043` | error | A VHDL procedure declarative item is not a local variable. |
 | `FSIM-VHDL-UNSUPPORTED-044` | error | A bounded VHDL procedure body contains timing, signal updates, or another unsupported statement. |
@@ -1046,7 +1046,28 @@ therefore excluded.
 | `FSIM-ELAB-VHFUNC-007` | error | A selected function actual has no executable body. |
 | `FSIM-ELAB-VHFUNC-008` | error | A selected function actual is impure in the bounded interface-function subset. |
 | `FSIM-ELAB-VHFUNC-009` | error | An interface-function binding conflicts with a child-local function name. |
-| `FSIM-ELAB-VHFUNC-010` | error | The same VHDL function name is directly visible from multiple packages. |
+| `FSIM-ELAB-VHOVER-001` | error | A VHDL function call is ambiguous among the visible overloads after result and actual-profile filtering. |
+| `FSIM-ELAB-VHOVER-002` | error | A VHDL function call matches no visible overload after result and actual-profile filtering. |
+| `FSIM-ELAB-VHOVER-003` | error | Two visible VHDL function declarations have the same callable profile. |
+| `FSIM-ELAB-VHOVER-004` | error | A VHDL procedure call is ambiguous among the visible overloads after actual-profile filtering. |
+| `FSIM-ELAB-VHOVER-005` | error | A VHDL procedure call matches no visible overload after actual-profile filtering. |
+| `FSIM-ELAB-VHOVER-006` | error | Two visible VHDL procedure declarations have the same callable profile. |
+| `FSIM-ELAB-VHOVER-007` | error | A VHDL type conversion selects a type without a bounded executable width. |
+| `FSIM-ELAB-VHLEGAL-001` | error | A VHDL package function body does not conform to any same-designator declaration. |
+| `FSIM-ELAB-VHLEGAL-002` | error | A VHDL package function declaration has no conforming body. |
+| `FSIM-ELAB-VHLEGAL-003` | error | A VHDL package procedure body does not conform to any same-designator declaration. |
+| `FSIM-ELAB-VHLEGAL-004` | error | A VHDL package procedure declaration has no conforming body. |
+| `FSIM-ELAB-VHLEGAL-005` | error | A pure VHDL function reads a non-formal signal. |
+| `FSIM-ELAB-VHLEGAL-006` | error | A pure VHDL function calls a procedure. |
+| `FSIM-ELAB-VHLEGAL-007` | error | A VHDL function formal default does not match its subtype. |
+| `FSIM-ELAB-VHLEGAL-008` | error | A VHDL procedure formal default does not match its subtype. |
+| `FSIM-ELAB-VHNAME-001` | error | A VHDL function or type mark is not visible in an expression context. |
+| `FSIM-ELAB-VHRESOLVE-001` | error | A VHDL resolution indication names no visible function with an executable body. |
+| `FSIM-ELAB-VHRESOLVE-002` | error | A VHDL resolution function does not have the required pure array-input/base-result profile. |
+| `FSIM-ELAB-VHRESOLVE-003` | error | A VHDL resolution function is ambiguous or conflicts with another visible body. |
+| `FSIM-ELAB-VHRESOLVE-004` | error | A VHDL resolution function body is outside the bounded OR/AND reduction subset. |
+| `FSIM-ELAB-VHSTATIC-001` | error | A VHDL scalar or array type attribute or integer-subtype conversion is not locally static. |
+| `FSIM-ELAB-VHSTATIC-002` | error | A locally static VHDL type attribute or integer-subtype conversion is outside the representable or declared range. |
 | `FSIM-ELAB-VHPROC-001` | error | An interface-procedure generic has no retained profile in HIR. |
 | `FSIM-ELAB-VHPROC-002` | error | An interface-procedure association or selected actual is not same-language VHDL. |
 | `FSIM-ELAB-VHPROC-003` | error | An interface-procedure actual is not a simple visible procedure name. |
@@ -1059,7 +1080,6 @@ therefore excluded.
 | `FSIM-ELAB-VHPROC-010` | error | A recursive VHDL procedure call graph is unsupported. |
 | `FSIM-ELAB-VHPROC-011` | error | An interface-procedure binding conflicts with a child-local subprogram name. |
 | `FSIM-ELAB-VHPROC-012` | error | A generated or scoped procedure actual is outside the bounded interface-procedure subset. |
-| `FSIM-ELAB-VHPROC-013` | error | The same VHDL procedure name is directly visible from multiple packages. |
 | `FSIM-ELAB-VHPROC-014` | error | A VHDL procedure call names no visible procedure. |
 | `FSIM-ELAB-VHPROC-015` | error | A named VHDL procedure-call association is unknown or duplicated. |
 | `FSIM-ELAB-VHPROC-016` | error | A positional VHDL procedure actual follows a named actual during lowering. |

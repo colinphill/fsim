@@ -9,10 +9,12 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-111 VHDL analysis-order,
+- Implementation baseline: pushed feature-batch-111 VHDL analysis-order,
   package/body context, transitive callable provenance, and recursive
-  configuration-binding closure on top of the closed Batch 110 CI boundary.
-- The source-size refactor is complete: all 334 authored C/C++ source, header,
+  configuration-binding closure at commit `fdafa67`, plus an intentionally
+  dirty Batch 112 ordinary-callable overload-resolution checkpoint described
+  below. Do not reset the worktree to the pushed commit.
+- The source-size refactor is complete: all 336 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 115-alternative
@@ -54,7 +56,11 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   cache invalidation. Exact LLVM 22.1.8 Debug and Release passed 65/65 tests in
   112.30/97.27 seconds; analysis order took 0.02 seconds in both and scoped
   locals remained 0.98/1.03 seconds. Focused LLVM-disabled ASan/UBSan tests
-  also pass. Batch 111 is not a CI boundary, so no Actions run was inspected.
+  also pass. Batch 111 is not a CI boundary, but run `30712751618` was
+  inspected after an explicit request and passed all 12 jobs. The final
+  Windows/MSVC/LLVM Debug job completed in 25 minutes 55 seconds. The coarse
+  Actions build step made the Windows jobs appear hung, but every configuration
+  advanced and completed within the established timing envelope.
 - Batch 110 and its mandatory non-documentation CI boundary are closed.
   Initial run `30709270776` showed Windows' default 1 MiB test-executable
   stack was no longer sufficient after the operation/test-host refactor:
@@ -67,8 +73,31 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   elaboration in 0.32 seconds, scoped locals in 0.25 seconds, and the API in
   0.29 seconds. MSVC LLVM Debug passed 64/64 in 1,092.19 seconds, and
   ASan/UBSan passed 63/63 in 516.76 seconds.
-- Resume with Batch 112: complete VHDL name and overload resolution,
-  visibility, constant evaluation, legality, and resolution functions.
+- Batch 112 is in progress: complete VHDL name and overload resolution,
+  visibility, constant evaluation, legality, and resolution functions. The
+  current dirty checkpoint replaces one-name/one-index function and procedure
+  maps with ordered overload sets, preserves same-designator package imports
+  and qualified package materialization by declaration identity, adds
+  contextual result/actual-profile selection in the new
+  `src/elaboration/lowerer_overloads.cpp`, diagnoses duplicate and ambiguous
+  callable profiles, and conservatively follows every overload body for
+  wildcard sensitivity. The exact LLVM Debug elaboration target builds with
+  eight workers and the pre-existing `fsim.elaboration` test passes in 0.11
+  seconds after preserving its targeted non-writable-procedure diagnostic.
+  The focused overload fixture now passes local and wildcard-package integer/
+  Boolean function and procedure selection plus no-match, ambiguity, and
+  duplicate-profile diagnostics. The integer-family precheck recognizes
+  integer-returning overload candidates, and the positive fixture keeps
+  function and procedure outputs independently driven. The synchronized
+  diagnostic catalog covers 1,419 production codes. Two-/three-part
+  direct-selected package callables now materialize with package/body source
+  provenance. The new application differential passes in 0.32 seconds for the
+  interpreter, LLVM O0/O2 cold/warm cache reuse, and an edited package body
+  that changes both results and the specialization key. All 339 authored
+  sources pass the 2,000-line gate. Broader contextual name/type resolution,
+  constant evaluation, legality, and resolution-function slices remain
+  pending. Keep this paragraph and the ten-task checklist below current as
+  those milestones land.
 - The Batch 100 boundary is closed at repair commit `d2f216e`. Initial run
   `30640792808` and replacements `30647570353`/`30651503050` passed every
   ordinary job but exposed exact 1,500.27/1,800.14/2,400.12-second sanitizer
@@ -1376,15 +1405,145 @@ memories release audit**:
 
 #### Latest continuation state (supersedes the older stopping point below)
 
-Batch 111 is complete. The exact LLVM 22.1.8 warnings-as-errors Debug and
-Release regressions passed all 65 tests in 112.30 and 97.27 seconds. Scoped
-locals remained quick at 0.98/1.03 seconds. The diagnostic catalog covers
-1,415 production codes, and all 336 authored files pass the empty-allowlist
-2,000-line source gate. Batch 110 feature/footprint repairs and its 12-job CI
-closure are pushed; Batch 111 implementation and handoff are complete. Resume
-with Batch 112. The older checkpoint narrative below is
-retained as implementation history, but its uncommitted and unvalidated claims
-are obsolete.
+Batch 111 is complete and pushed at `fdafa67`. The exact LLVM 22.1.8
+warnings-as-errors Debug and Release regressions passed all 65 tests in 112.30
+and 97.27 seconds. Scoped locals remained quick at 0.98/1.03 seconds. The
+diagnostic catalog covers 1,415 production codes, and all 336 authored files
+pass the empty-allowlist 2,000-line source gate. Batch 110 feature/footprint
+repairs and its 12-job CI closure are pushed. The explicitly requested Batch
+111 Actions inspection is run `30712751618`, which passed all 12 jobs. The
+final Windows/MSVC/LLVM Debug job completed in 25 minutes 55 seconds; the
+earlier apparent collective hang was not reproduced.
+
+Batch 112 is now intentionally dirty and incomplete. Its first implementation
+slice preserves ordinary VHDL function and procedure overload sets across
+local and package visibility, selects packed calls by contextual result and
+actual profiles, retains the existing SystemVerilog single-function behavior,
+rejects duplicate/ambiguous/no-match profiles with new `VHOVER` diagnostics,
+and follows every possible overload body for wildcard sensitivity. The
+working set is `CMakeLists.txt`, `tests/CMakeLists.txt`,
+`tests/elaboration/elaborator_test.cpp`,
+`tests/elaboration/elaborator_test_support.hpp`, the new
+`tests/elaboration/elaborator_vhdl_overload_test.cpp`,
+`tests/app/application_case_dispatch.cpp`, the new
+`tests/app/vhdl_overload_application_test.cpp`, `docs/diagnostics.md`,
+`src/elaboration/elaborator_internal.hpp`,
+`src/elaboration/lowerer_{functions,procedures,sv_strings,types}.cpp`,
+`src/elaboration/{hierarchy_packages,elaboration_vhdl_packages}.cpp`, and the
+new untracked `src/elaboration/lowerer_overloads.cpp`. The exact LLVM Debug
+`fsim_elaboration_tests` target built successfully with `--parallel 8`. The
+focused `fsim.elaboration` test now passes in 0.14 seconds with local,
+same-package, cross-package wildcard, and two-/three-part direct-selected
+integer/Boolean function/procedure selection plus no-match, ambiguity, and
+duplicate-profile cases. VHDL function calls now retain named association
+metadata, bounded functions and input-mode procedures retain defaults, and
+result-context, named/defaulted, and recursively nested overload selection is
+covered by the same focused elaboration test. Direct local designators now hide
+use-visible package callables, imported same-profile homographs retain distinct
+package owners and diagnose call-site ambiguity, and context-expanded plus
+generic-package-instance overload sets elaborate successfully. The expanded
+1.78-second application differential executes those cases plus explicit
+integer-family and nominal-enumeration conversions in the interpreter and LLVM
+O0/O2, passes cold/warm cache reuse, and retains the package-body edit that
+changes values and the specialization key. Package-body declaration
+conformance, missing bodies, pure signal reads/procedure calls, and mismatched
+formal defaults now have focused negative legality coverage. The catalog gate
+currently covers 1,435
+production codes and all 340 authored sources pass the line gate. This is
+foundation evidence only: the remaining Batch 112 semantic slices, full
+gates, documentation closure, commit, and push are still required. Resume with
+the residual contextual name/type lookup and legality cases.
+
+The latest static-expression slice folds declaration-ordered package constants
+through integer-subtype conversions, scalar and array type attributes,
+arithmetic, dependent array bounds, and nested same-designator overloaded pure
+function calls. Aggregate, indexed-name, and slice actuals select their
+array/scalar profiles and execute in the same interpreter/LLVM matrix. Task 6
+now has focused implementation evidence.
+
+The latest name/type legality slice gives missing expression-context
+function/type marks a dedicated diagnostic, preserves a distinct unknown or
+wrong-context procedure diagnostic, and negative-tests unqualified nominal
+aggregate ambiguity. Static integer conversions now diagnose declared-range
+violations separately, while integer-family overflow retains the established
+package-range diagnostic. Tasks 4, 5, and 7 now have focused implementation
+evidence.
+
+The latest runtime slice retains scalar and resolved-element-array VHDL
+resolution indications and validates visible pure array-input/base-result
+profiles. Supported one-return OR/AND resolver bodies now execute
+deterministically across two delayed independent drivers in the interpreter
+and LLVM O0/O2 for `bit`, exact Logic9, composite arrays, and a resolver plus
+resolved subtype imported from a package. Exact `H`/`L` driver inspection,
+elementwise composite results, and VCD output agree across engines at times 1
+ns and 2 ns. Invisible, wrong-profile, ambiguous, and unsupported-body cases
+are negative-tested. Tasks 8 and 9 now have focused implementation evidence.
+The older checkpoint narrative below is retained as implementation history, but
+its uncommitted and unvalidated claims are obsolete.
+
+## Completed feature batch 112
+
+1. Retain ordered ordinary VHDL function/procedure overload sets with exact
+   declaration identity and unchanged SystemVerilog callable behavior.
+2. Resolve local calls by association shape, defaults, formal profile, actual
+   base type, and contextual result type.
+3. Preserve overload sets through package/context/direct-selected visibility,
+   bodies, generic-package materialization, provenance, and cache invalidation.
+4. Complete simple/selected/indexed/slice/attribute/literal/subprogram lookup
+   plus deterministic hiding, homograph, ambiguity, and missing-name legality.
+5. Complete contextual literal, conversion, aggregate, attribute, operator,
+   nested-call, and expected-result typing under VHDL base/nominal rules.
+6. Extend locally static evaluation across constants, bounds, aliases,
+   conversions, attributes, operators, and eligible pure user functions.
+7. Add the dedicated subprogram/name legality pass, including body conformance,
+   purity, declarations, object classes, modes, defaults, and call contexts.
+8. Represent and validate scalar/composite resolution indications and visible
+   resolution-function profiles on resolved subtypes and signals.
+9. Execute supported resolution functions across independent drivers in the
+   interpreter and LLVM O0/O2 with Logic9, scheduling, ABI, cache, VCD, and
+   debugger evidence.
+10. Close focused positive/negative, runtime differential, cache-edit,
+    sanitizer, source/diagnostic, full Debug/Release, documentation, commit,
+    and push evidence.
+
+Batch status is **complete**. All ten tasks have implementation and gate
+evidence. The LLVM-disabled ASan/UBSan focused gate passed all six selected
+tests in 3.38 seconds with LeakSanitizer disabled because it cannot run under
+the local ptrace environment. The LLVM 22.1.8 warnings-as-errors Debug suite
+passed all 66 tests in 172.72 seconds, including overloads in 1.73 seconds and
+scoped locals in 0.79 seconds. Release passed all 66 tests in 155.90 seconds,
+including overloads in 1.76 seconds and scoped locals in 0.78 seconds. The
+catalog contains 1,435 production codes and all 340 authored sources pass the
+2,000-line gate. Native-object schema 69 separates the changed
+overload/static lowering contract from Batch 111 cache entries; the public
+runtime ABI and container semantic revision 28 remain unchanged.
+
+## In-progress feature batch 113
+
+1. Complete entity, architecture, component, and direct-instantiation generic
+   interfaces with ordered class, subtype, mode, default, and source identity.
+2. Resolve positional/named generic associations, `open` defaults, ordering,
+   duplicate/unknown formals, required actuals, conversions, and static legality.
+3. Evaluate declaration-ordered generic defaults and actuals across earlier
+   generics, packages, attributes, conversions, aggregates, and pure functions.
+4. Complete component conformance and binding plus direct entity, architecture,
+   and configuration instantiation with exact generic/port profile checks.
+5. Build stable value/type/subprogram/package specialization identities with
+   transitive cache provenance and equivalent-instance sharing.
+6. Support expression, conversion, qualified, slice, concatenation, and
+   aggregate input-port actuals while checking writable output/inout actuals.
+7. Implement `open` port actuals, input defaults, unconnected outputs/buffers,
+   association ordering, and mode-specific missing/illegal-open diagnostics.
+8. Propagate generic-dependent scalar/composite constraints through ports,
+   component views, direct instances, hierarchy aliases, and boundary checks.
+9. Prove multiple specializations across interpreter/LLVM O0/O2, scheduling,
+   VCD, debugger, hierarchy, cache reuse, and source-edit invalidation.
+10. Close focused positive/negative/runtime, sanitizer, source/catalog, full
+    Debug/Release, matrix/docs, commit, and push evidence.
+
+Batch status is **in progress**. Keep this ten-task list current in both the
+official plan and this handoff. Change it to complete only after all ten tasks
+and their gates close and work moves to Batch 114.
 
 Batch 110 has advanced through these validated features:
 

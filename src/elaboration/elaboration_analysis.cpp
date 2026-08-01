@@ -845,6 +845,10 @@ QualifiedIdentifierMap qualified_identifiers(
         for (const auto& argument : procedure.arguments) {
             collect_qualified_identifiers(
                 argument.type, result);
+            if (argument.default_value) {
+                collect_qualified_identifiers(
+                    *argument.default_value, result);
+            }
         }
         for (const auto& variable : procedure.variables) {
             collect_qualified_identifiers(
@@ -896,6 +900,10 @@ QualifiedIdentifierMap qualified_identifiers(
         for (const auto& argument : procedure.arguments) {
             collect_qualified_identifiers(
                 argument.type, result);
+            if (argument.default_value) {
+                collect_qualified_identifiers(
+                    *argument.default_value, result);
+            }
         }
         for (const auto& variable : procedure.variables) {
             collect_qualified_identifiers(

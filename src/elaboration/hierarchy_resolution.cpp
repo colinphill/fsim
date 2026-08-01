@@ -55,12 +55,101 @@ HierarchyBuilder::explicit_resolution(
     if (found->second == "sv_wire") {
         return ResolutionKind::sv_wire;
     }
+    if (const auto user =
+            vhdl_resolution_kinds_.find(found->second);
+        user != vhdl_resolution_kinds_.end()) {
+        return user->second;
+    }
     report(
         "FSIM-ELAB-BIND-050",
         "unknown resolver '" + found->second
             + "'; expected \"std_logic\" or \"sv_wire\"",
         {});
     return ResolutionKind::none;
+}
+
+void HierarchyBuilder::register_vhdl_resolution_functions(
+    const DesignUnit& unit) {
+    if (unit.language != frontend::Language::Vhdl2008) {
+        return;
+    }
+    for (const auto& alias : unit.type_aliases) {
+        const auto& resolver = alias.type.vhdl_resolution_function;
+        if (resolver.empty()) {
+            continue;
+        }
+        std::vector<const frontend::FunctionDeclaration*> matches;
+        for (const auto& function : unit.functions) {
+            if (function.name == resolver && function.defined) {
+                matches.push_back(&function);
+            }
+        }
+        if (matches.empty()) {
+            report(
+                "FSIM-ELAB-VHRESOLVE-001",
+                "VHDL resolution function '" + resolver
+                    + "' is not visible with an executable body",
+                alias.span);
+            continue;
+        }
+        std::vector<const frontend::FunctionDeclaration*> profiles;
+        for (const auto* function : matches) {
+            const bool supported_base =
+                alias.type.domain == frontend::ValueDomain::Bit2
+                || alias.type.domain == frontend::ValueDomain::Logic9;
+            if (function->pure
+                && function->arguments.size() == 1
+                && function->arguments.front().type.vhdl_array
+                && supported_base
+                && function->arguments.front().type.vhdl_array
+                       ->element_domain == alias.type.domain
+                && function->return_type.domain == alias.type.domain) {
+                profiles.push_back(function);
+            }
+        }
+        if (profiles.size() != 1) {
+            report(
+                profiles.empty()
+                    ? "FSIM-ELAB-VHRESOLVE-002"
+                    : "FSIM-ELAB-VHRESOLVE-003",
+                profiles.empty()
+                    ? "VHDL resolution function '" + resolver
+                        + "' must be pure with one array-of-base-type "
+                          "input and a base-type result"
+                    : "VHDL resolution function '" + resolver
+                        + "' is ambiguous for subtype '" + alias.name
+                        + "'",
+                alias.span);
+            continue;
+        }
+        const auto& body = profiles.front()->statements;
+        const auto supported_return =
+            body.size() == 1
+            && body.front().kind == StatementKind::Return
+            && body.front().value.kind == ExpressionKind::Binary
+            && (body.front().value.text == "or"
+                || body.front().value.text == "and");
+        if (!supported_return) {
+            report(
+                "FSIM-ELAB-VHRESOLVE-004",
+                "bounded VHDL resolution function '" + resolver
+                    + "' must return one scalar OR or AND expression",
+                profiles.front()->span);
+            continue;
+        }
+        const auto kind = body.front().value.text == "or"
+            ? ResolutionKind::vhdl_user_or
+            : ResolutionKind::vhdl_user_and;
+        const auto [existing, inserted] =
+            vhdl_resolution_kinds_.emplace(resolver, kind);
+        if (!inserted && existing->second != kind) {
+            report(
+                "FSIM-ELAB-VHRESOLVE-003",
+                "VHDL resolution function designator '" + resolver
+                    + "' denotes conflicting visible bodies",
+                alias.span);
+        }
+    }
 }
 
 void HierarchyBuilder::set_resolution(

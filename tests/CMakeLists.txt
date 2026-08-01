@@ -99,6 +99,7 @@ add_executable(
   elaboration/elaborator_types_test.cpp
   elaboration/elaborator_type_generic_test.cpp
   elaboration/elaborator_vhdl_function_test.cpp
+  elaboration/elaborator_vhdl_overload_test.cpp
   elaboration/elaborator_vhdl_procedure_test.cpp
   elaboration/elaborator_vhdl_package_test.cpp
   elaboration/elaborator_vhdl_generic_subprogram_test.cpp
@@ -412,6 +413,10 @@ if(TARGET fsim_application)
       fsim.application.vhdl_function_generics
       fast functions generics vhdl cache hierarchy)
     fsim_add_application_case(
+      2 vhdl_overloads app/vhdl_overload_application_test.cpp
+      fsim.application.vhdl_overloads
+      fast functions procedures packages vhdl cache)
+    fsim_add_application_case(
       2 vhdl_procedure_generics app/vhdl_procedure_generic_application_test.cpp
       fsim.application.vhdl_procedure_generics
       fast procedures generics vhdl cache hierarchy)
@@ -630,6 +635,24 @@ add_test(
 set_tests_properties(
   fsim.application.vhdl_function_generics
   PROPERTIES LABELS "fast;functions;generics;vhdl;cache;hierarchy"
+)
+
+add_executable(
+  fsim_vhdl_overload_application_tests
+  app/vhdl_overload_application_test.cpp
+)
+fsim_configure_test(fsim_vhdl_overload_application_tests)
+target_link_libraries(
+  fsim_vhdl_overload_application_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.vhdl_overloads
+  COMMAND fsim_vhdl_overload_application_tests
+)
+set_tests_properties(
+  fsim.application.vhdl_overloads
+  PROPERTIES LABELS "fast;functions;procedures;packages;vhdl;cache"
 )
 
 add_executable(

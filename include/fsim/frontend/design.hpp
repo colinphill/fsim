@@ -325,6 +325,9 @@ struct Type {
   // is selected and is used for source/cache provenance rather than type
   // compatibility.
   std::string vhdl_type_declaration;
+  // Canonical selected function name from a VHDL subtype resolution
+  // indication. Empty denotes an unresolved subtype.
+  std::string vhdl_resolution_function;
   // Declaration-order spelling of a VHDL enumeration's literals. Identifier
   // literals are canonicalized case-insensitively; character literals retain
   // their quoted spelling. The ordinal is the vector index.
@@ -480,6 +483,7 @@ struct ProcedureArgument {
   PortDirection direction{PortDirection::Input};
   InterfaceObjectClass object_class{InterfaceObjectClass::Constant};
   SourceSpan span;
+  std::optional<Expression> default_value;
 };
 
 struct InterfaceFunctionProfile {
@@ -1059,6 +1063,9 @@ struct FunctionDeclaration {
   SourceSpan span;
   // Package/body/context sources required to specialize this callable.
   std::vector<std::string> source_dependencies;
+  // Nonempty on an elaboration copy made visible through a package. Used to
+  // distinguish use-visible homographs from duplicates in one local region.
+  std::string visibility_owner;
 };
 
 struct TaskArgument {
@@ -1116,6 +1123,9 @@ struct ProcedureDeclaration {
   SourceSpan span;
   // Package/body/context sources required to specialize this callable.
   std::vector<std::string> source_dependencies;
+  // Nonempty on an elaboration copy made visible through a package. Used to
+  // distinguish use-visible homographs from duplicates in one local region.
+  std::string visibility_owner;
 };
 
 /// Retained VHDL-2008 generic function template.

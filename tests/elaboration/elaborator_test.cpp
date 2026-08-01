@@ -32,6 +32,7 @@ int main() {
   test_assertion_types_and_random_lowering();
   test_vhdl_interface_type_generics();
   test_vhdl_interface_function_generics();
+  test_vhdl_callable_overloads();
   test_vhdl_interface_procedure_generics();
   test_vhdl_interface_package_generics();
   test_vhdl_generic_subprograms();

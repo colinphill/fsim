@@ -841,7 +841,8 @@ entity function_user is
 end entity;
 
 architecture rtl of function_user is
-  pure function increment(constant value : in integer) return integer is
+  pure function increment(
+    constant value : in integer := 1) return integer is
     variable temporary : integer := value;
   begin
     temporary := temporary + 1;
@@ -911,6 +912,7 @@ end architecture;
       body.name == "increment"
           && body.language == Language::Vhdl2008
           && body.pure && body.defined && body.automatic
+          && body.arguments.front().default_value
           && body.variables.size() == 1
           && body.statements.size() == 2
           && body.statements.front().kind
@@ -963,15 +965,13 @@ end architecture;
   require(
       has_code("FSIM-VHDL-UNSUPPORTED-029")
           && has_code("FSIM-VHDL-UNSUPPORTED-030")
-          && has_code("FSIM-VHDL-UNSUPPORTED-032")
-          && has_code("FSIM-VHDL-UNSUPPORTED-033")
           && has_code("FSIM-VHDL-UNSUPPORTED-038")
           && has_code("FSIM-VHDL-UNSUPPORTED-039")
           && has_code("FSIM-VHDL-UNSUPPORTED-037")
           && has_code("FSIM-VHDL-PARSE-157")
           && has_code("FSIM-VHDL-PARSE-164")
           && has_code("FSIM-VHDL-SEM-046"),
-      "VHDL function class, mode, default, designator, procedure, "
+      "VHDL function class, mode, designator, procedure, "
       "return, and placement diagnostics");
 }
 

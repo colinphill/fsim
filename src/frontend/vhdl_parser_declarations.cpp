@@ -479,7 +479,22 @@ void VhdlParser::parse_subtype_declaration(
   }
   expect_keyword(
       "is", true, "FSIM-VHDL-PARSE-134");
+  std::string resolution_function;
+  if (at(TokenKind::Identifier)) {
+    std::size_t lookahead = 1;
+    while (at(TokenKind::Dot, lookahead)
+           && at(TokenKind::Identifier, lookahead + 1)) {
+      lookahead += 2;
+    }
+    if (at(TokenKind::Identifier, lookahead)
+        && !keyword("range", lookahead, true)) {
+      resolution_function = parse_vhdl_selected_name(
+          "resolution function name");
+    }
+  }
   auto type = parse_vhdl_type(true, true);
+  type.vhdl_resolution_function =
+      std::move(resolution_function);
   type.vhdl_type_declaration =
       start.span.source_name + ":"
       + std::to_string(start.span.begin.offset) + ":"

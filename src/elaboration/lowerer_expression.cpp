@@ -1457,6 +1457,81 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     expression.span},
                 expected_width);
         }
+        if (language_ == frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::Call
+            && expression.operands.size() == 1) {
+            const auto* conversion_type =
+                visible_type_mark(expression.text);
+            frontend::Type builtin;
+            if (conversion_type == nullptr) {
+                builtin.spelling = expression.text;
+                if (expression.text == "integer"
+                    || expression.text == "natural"
+                    || expression.text == "positive") {
+                    builtin.domain = frontend::ValueDomain::Integer;
+                    builtin.is_signed = true;
+                    if (expression.text == "natural") {
+                        builtin.integer_range = frontend::IntegerRange{
+                            0,
+                            std::numeric_limits<std::int32_t>::max(),
+                            false};
+                    } else if (expression.text == "positive") {
+                        builtin.integer_range = frontend::IntegerRange{
+                            1,
+                            std::numeric_limits<std::int32_t>::max(),
+                            false};
+                    }
+                    conversion_type = &builtin;
+                } else if (expression.text == "boolean") {
+                    builtin.domain = frontend::ValueDomain::Boolean;
+                    conversion_type = &builtin;
+                } else if (expression.text == "bit") {
+                    builtin.domain = frontend::ValueDomain::Bit2;
+                    conversion_type = &builtin;
+                }
+            }
+            if (conversion_type != nullptr) {
+                const auto width = conversion_type->width();
+                if (!width || *width == 0 || *width > 64) {
+                    report(
+                        "FSIM-ELAB-VHOVER-007",
+                        "VHDL conversion type '" + expression.text
+                            + "' has no executable width in 1..64",
+                        expression.span);
+                    return std::nullopt;
+                }
+                auto source = lower_expression(
+                    expression.operands.front(),
+                    *width,
+                    conversion_type);
+                if (!source) {
+                    return std::nullopt;
+                }
+                if (register_width(*source) != *width) {
+                    *source = resize_register(
+                        *source,
+                        *width,
+                        is_signed_expression(
+                            expression.operands.front()));
+                }
+                if (register_domain(*source)
+                    != conversion_type->domain) {
+                    const auto destination = allocate_register(
+                        *width, conversion_type->domain);
+                    process_.operations.emplace_back(
+                        CopyRegister{destination, *source});
+                    source = destination;
+                }
+                if (!conversion_type->enumeration_literals.empty()) {
+                    emit_enumeration_check(*source, *conversion_type);
+                } else if (conversion_type->domain
+                           == frontend::ValueDomain::Integer) {
+                    emit_integer_check(
+                        *source, conversion_type->integer_range);
+                }
+                return source;
+            }
+        }
         if (expression.kind == ExpressionKind::Call) {
             emit_debug_point(
                 DebugPointKind::call, expression.span);

@@ -173,10 +173,9 @@ Lowerer::lower_string_expression(
       process_.operations.emplace_back(method);
       return method.string_destination;
     }
-    const auto found =
-        function_indices_.find(expression.text);
-    if (!function_support_initialized_
-        || found == function_indices_.end()) {
+    const auto selected = select_function_overload(
+        expression, nullptr, FunctionResultKind::String);
+    if (!function_support_initialized_ || !selected.named) {
       report(
           "FSIM-ELAB-SVSTRING-011",
           "unknown runtime string function '"
@@ -184,7 +183,10 @@ Lowerer::lower_string_expression(
           expression.span);
       return std::nullopt;
     }
-    const auto function_index = found->second;
+    if (!selected.index) {
+      return std::nullopt;
+    }
+    const auto function_index = *selected.index;
     auto& frame = function_frames_[function_index];
     const auto& function = *frame.source;
     if (function.return_type.domain

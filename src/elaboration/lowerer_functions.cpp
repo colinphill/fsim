@@ -9,8 +9,9 @@ const frontend::FunctionDeclaration* Lowerer::visible_function(
     const std::string_view name) const {
     const auto found = function_indices_.find(std::string{name});
     return found == function_indices_.end()
+            || found->second.size() != 1
         ? nullptr
-        : function_frames_[found->second].source;
+        : function_frames_[found->second.front()].source;
 }
 
 void Lowerer::initialize_function_support() {
@@ -36,17 +37,58 @@ void Lowerer::initialize_function_support() {
 
     function_frames_.reserve(functions_.size());
     for (const auto& function : functions_) {
-        const auto index = function_frames_.size();
-        const auto [existing, inserted] =
-            function_indices_.emplace(function.name, index);
-        if (!inserted) {
+        auto& overloads = function_indices_[function.name];
+        if (function.language
+                != frontend::Language::Vhdl2008
+            && !overloads.empty()) {
             report(
                 "FSIM-ELAB-SVFUNC-002",
                 "ambiguous visible function '" + function.name + "'",
                 function.span);
-            (void)existing;
             continue;
         }
+        const bool duplicate_vhdl_profile =
+            function.language == frontend::Language::Vhdl2008
+            && std::ranges::any_of(
+                overloads,
+                [&](const std::size_t candidate_index) {
+                  const auto& candidate =
+                      *function_frames_[candidate_index].source;
+                  const bool imported_distinct_declarations =
+                      !candidate.visibility_owner.empty()
+                      && !function.visibility_owner.empty()
+                      && candidate.visibility_owner
+                          != function.visibility_owner;
+                  if (candidate.arguments.size()
+                          != function.arguments.size()
+                      || imported_distinct_declarations
+                      || !vhdl_callable_type_matches(
+                          candidate.return_type,
+                          function.return_type)) {
+                    return false;
+                  }
+                  for (std::size_t argument = 0;
+                       argument < function.arguments.size();
+                       ++argument) {
+                    if (candidate.arguments[argument].direction
+                            != function.arguments[argument].direction
+                        || !vhdl_callable_type_matches(
+                            candidate.arguments[argument].type,
+                            function.arguments[argument].type)) {
+                      return false;
+                    }
+                  }
+                  return true;
+                });
+        if (duplicate_vhdl_profile) {
+            report(
+                "FSIM-ELAB-VHOVER-003",
+                "duplicate VHDL function profile '"
+                    + function.name + "'",
+                function.span);
+            continue;
+        }
+        const auto index = function_frames_.size();
         FunctionFrame frame;
         frame.source = &function;
         if (!function.automatic) {
@@ -57,10 +99,81 @@ void Lowerer::initialize_function_support() {
                     "function");
         }
         function_frames_.push_back(std::move(frame));
+        overloads.push_back(index);
     }
     function_dependencies_.resize(function_frames_.size());
     if (function_frames_.empty()) {
         return;
+    }
+
+    for (const auto& frame : function_frames_) {
+        const auto& function = *frame.source;
+        if (function.language
+            != frontend::Language::Vhdl2008) {
+            continue;
+        }
+        for (const auto& argument : function.arguments) {
+            if (argument.default_value
+                && !vhdl_expression_matches_type(
+                    *argument.default_value, argument.type)) {
+                report(
+                    "FSIM-ELAB-VHLEGAL-007",
+                    "default for VHDL function formal '"
+                        + argument.name
+                        + "' does not match its subtype",
+                    argument.default_value->span);
+            }
+        }
+        if (!function.pure) {
+            continue;
+        }
+        std::set<std::string> dependencies;
+        collect_statement_identifiers(
+            function.statements, dependencies);
+        for (const auto& argument : function.arguments) {
+            dependencies.erase(argument.name);
+        }
+        for (const auto& variable : function.variables) {
+            dependencies.erase(variable.name);
+        }
+        const auto signal = std::ranges::find_if(
+            dependencies,
+            [&](const auto& name) {
+              return signals_.contains(name);
+            });
+        if (signal != dependencies.end()) {
+            report(
+                "FSIM-ELAB-VHLEGAL-005",
+                "pure VHDL function '" + function.name
+                    + "' reads signal '" + *signal + "'",
+                function.span);
+        }
+        const auto calls_procedure =
+            [&](const auto& self,
+                const std::vector<Statement>& statements) -> bool {
+              for (const auto& statement : statements) {
+                if (statement.kind == StatementKind::ProcedureCall
+                    || self(self, statement.statements)
+                    || self(self, statement.else_statements)) {
+                    return true;
+                }
+                for (const auto& alternative :
+                     statement.case_alternatives) {
+                    if (self(self, alternative.statements)) {
+                        return true;
+                    }
+                }
+              }
+              return false;
+            };
+        if (calls_procedure(
+                calls_procedure, function.statements)) {
+            report(
+                "FSIM-ELAB-VHLEGAL-006",
+                "pure VHDL function '" + function.name
+                    + "' calls a procedure",
+                function.span);
+        }
     }
 
     function_call_stack_.pointer =
@@ -83,7 +196,7 @@ void Lowerer::initialize_function_support() {
 Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
     const Expression& expression,
     const std::size_t expected_width,
-    const frontend::Type*) {
+    const frontend::Type* expected_type) {
     if (expression.kind != ExpressionKind::Call
         || !function_support_initialized_) {
         return ExpressionAttempt{};
@@ -97,13 +210,17 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
             + qualified.text;
         qualified.operands.erase(qualified.operands.begin());
         return lower_user_function_expression(
-            qualified, expected_width, nullptr);
+            qualified, expected_width, expected_type);
     }
-    const auto found = function_indices_.find(expression.text);
-    if (found == function_indices_.end()) {
+    const auto selected = select_function_overload(
+        expression, expected_type, FunctionResultKind::Packed);
+    if (!selected.named) {
         return ExpressionAttempt{};
     }
-    const auto function_index = found->second;
+    if (!selected.index) {
+        return std::nullopt;
+    }
+    const auto function_index = *selected.index;
     auto& frame = function_frames_[function_index];
     const auto& function = *frame.source;
     if (function.return_type.domain
@@ -350,11 +467,15 @@ Lowerer::lower_user_container_function_expression(
         qualified.operands.erase(qualified.operands.begin());
         return lower_user_container_function_expression(qualified);
     }
-    const auto found = function_indices_.find(expression.text);
-    if (found == function_indices_.end()) {
+    const auto selected = select_function_overload(
+        expression, nullptr, FunctionResultKind::Container);
+    if (!selected.named) {
         return std::nullopt;
     }
-    const auto function_index = found->second;
+    if (!selected.index) {
+        return std::nullopt;
+    }
+    const auto function_index = *selected.index;
     auto& frame = function_frames_[function_index];
     const auto& function = *frame.source;
     if (!function.return_type.systemverilog_container) {

@@ -6056,6 +6056,152 @@ locals in 1.03 seconds, and containers in 97.27 seconds, on 2026-08-01. Batch
 configuration, and component tests also pass. Batch 111 is not a ten-batch
 CI-inspection boundary, so no Actions run was inspected.
 
+### One-hundred-twelfth feature batch — VHDL semantic resolution closure — Complete
+
+The current ten implementation tasks are:
+
+1. Retain every ordinary VHDL function and procedure declaration in an ordered
+   overload set keyed by its canonical designator and exact source identity,
+   while preserving SystemVerilog's existing single-visible-function rules.
+2. Resolve local function and procedure calls by positional/named association
+   shape, defaults, formal class/mode, actual base type, and contextual function
+   result type without mutating or prematurely lowering rejected candidates.
+3. Preserve overload sets through selected and wildcard package visibility,
+   direct selected package names, package bodies, contexts, generic-package
+   materialization, and declaration-level source provenance/cache invalidation.
+4. Complete case-insensitive simple, selected, indexed, slice, attribute,
+   enumeration-literal, and subprogram-name lookup with deterministic hiding,
+   homograph, ambiguity, and missing-name diagnostics at the correct region.
+5. Complete contextual universal-literal, conversion, aggregate, attribute,
+   operator, nested-call, and expected-result typing so overload resolution uses
+   VHDL base-type and nominal-composite rules rather than width-only heuristics.
+6. Extend locally static constant evaluation through visible/package constants,
+   enumeration and array bounds, aliases, conversions, attributes, operators,
+   and eligible pure time-free user functions with overflow/range diagnostics.
+7. Add a dedicated VHDL legality pass for duplicate or nonconforming subprogram
+   profiles and bodies, purity violations, incomplete declarations, illegal
+   object classes/modes/defaults, and context-dependent call restrictions.
+8. Represent and validate scalar and composite VHDL resolution indications,
+   including visible resolution-function selection, required parameter/result
+   profiles, resolved-subtype identity, and illegal unresolved multi-driver use.
+9. Execute supported user resolution functions deterministically for independent
+   process drivers in the interpreter and LLVM O0/O2, retaining exact Logic9,
+   update/delay semantics, VCD/debug views, native ABI validation, and cache
+   identity/provenance.
+10. Add focused positive/negative frontend and elaboration fixtures plus
+    interpreter/LLVM O0/O2, cache-edit, debug/VCD, sanitizer, source-budget,
+    diagnostic-catalog, full Debug/Release, documentation, commit, and push
+    evidence before marking Batch 112 complete.
+
+Batch status is **complete**. The implementation replaces
+one-name/one-index callable maps with ordered overload sets, preserves same-name
+package imports by declaration identity, adds a separate contextual overload
+selector, and keeps wildcard sensitivity conservative across all candidates.
+VHDL function-call parsing now retains positional and named associations, and
+bounded function and input-mode procedure formals retain executable defaults.
+The selector recursively validates nested function profiles without lowering
+rejected candidates and uses the assignment result context to distinguish
+otherwise identical argument profiles. Named-formal shape and omitted defaults
+also participate in function and procedure selection; a non-input procedure
+default and a positional function actual after a named actual have dedicated
+legality diagnostics.
+Callable imports now carry their package visibility owner. Directly visible
+local function/procedure designators hide use-visible package overloads, while
+same-profile homographs from different wildcard-imported packages remain
+distinct candidates and report call-site ambiguity instead of a false local
+duplicate. Context-expanded and locally instantiated generic-package overload
+sets are included in the focused fixture.
+Explicit integer-family subtype conversions and nominal enumeration
+conversions now provide their selected type to overload filtering and execute
+with the destination range checks. Package specialization diagnoses
+nonconforming and missing ordinary function/procedure bodies. The callable
+legality slice also rejects mismatched formal defaults and pure functions that
+read signals or call procedures; the frontend retains those procedure calls so
+the semantic diagnostic is issued at the function declaration.
+The exact LLVM Debug elaboration target builds with eight workers. The focused
+elaboration suite passes in 0.14 seconds with local, same-package,
+cross-package wildcard, and two-/three-part direct-selected integer/Boolean
+function and procedure selection plus no-match, ambiguity, and
+duplicate-profile diagnostics. It additionally covers result-only, named,
+defaulted, nested-call, direct-over-use hiding, imported-homograph ambiguity,
+context, generic-package overloads, conversions, body conformance, purity, and
+default legality. The integer-family precheck admits an
+integer-returning overload candidate before contextual call selection, and
+qualified ordinary packages materialize their callable set with exact body and
+transitive source dependencies. The focused application differential passes in
+1.78 seconds across the interpreter, LLVM O0/O2 cold/warm reuse, explicit
+integer/nominal-enumeration conversions, and an overloaded pure package
+function used during locally static constant evaluation. Declaration-ordered
+package constants now fold integer-subtype conversions, scalar and array type
+attributes, arithmetic operators, dependent array bounds, and nested
+same-designator overloaded pure-function calls. Aggregate, indexed-name, and
+slice actuals select their array/scalar profiles in the same runtime matrix. A
+scalar `bit`
+resolution indication now retains and validates its pure array-input/base-result
+function. The same bounded OR/AND resolver model now covers exact Logic9
+drivers, arrays of resolved scalar elements, and a resolver plus resolved
+subtype imported from a visible package. Independent delayed-driver values,
+including exact `H` and `L`, elementwise composite results, and VCD timelines
+agree across the interpreter and LLVM O0/O2 cold/warm runs. Unsupported,
+invisible, ambiguous, and wrong-profile resolution functions have distinct
+diagnostics. Missing expression-context function/type marks, missing or
+wrong-context procedure calls, same-width nominal aggregate ambiguity, static
+conversion range violations, and integer overflow now have focused negative
+evidence. The differential also retains a package-body edit that changes
+results and specialization keys. The synchronized diagnostic catalog covers
+1,435 production codes, and all 340 authored sources pass the 2,000-line gate.
+All ten tasks are complete. The LLVM-disabled ASan/UBSan focused gate passed
+all six selected tests in 3.38 seconds with LeakSanitizer disabled because the
+local ptrace environment cannot run it. The exact LLVM 22.1.8 warnings-as-errors
+Debug regression passed all 66 tests in 172.72 seconds; the overload application
+passed in 1.73 seconds and the scoped-locals application passed in 0.79 seconds.
+The corresponding Release regression passed all 66 tests in 155.90 seconds;
+the overload application passed in 1.76 seconds and scoped locals passed in
+0.78 seconds. The diagnostic catalog retained 1,435 production codes and the
+source gate accepted all 340 authored sources.
+Native-object schema 69 prevents reuse across the changed overload/static
+lowering contract; the public runtime ABI and container semantic revision 28
+remain unchanged.
+
+### One-hundred-thirteenth feature batch — VHDL generic and instantiation closure — In progress
+
+The current ten implementation tasks are:
+
+1. Complete entity, architecture, component, and directly instantiated design
+   unit generic interfaces while retaining declaration order, class, subtype,
+   mode, default, and source identity.
+2. Resolve positional and named generic associations, `open` defaults, mixed
+   ordering, duplicate/unknown formals, missing required actuals, conversions,
+   and locally static legality deterministically.
+3. Evaluate generic defaults and actuals in declaration order, including
+   references to earlier generics, visible package constants, attributes,
+   conversions, aggregates, and bounded pure functions.
+4. Complete component declaration conformance and default/explicit binding plus
+   direct entity, architecture, and configuration instantiation with exact
+   generic and port profile checking.
+5. Give every effective value, type, subprogram, and package generic binding a
+   stable specialization identity with complete transitive cache provenance and
+   deterministic sharing between equivalent instances.
+6. Admit input-port expressions, conversions, qualified expressions, slices,
+   concatenations, and aggregates while enforcing writable-name legality for
+   output, buffer, and inout actuals.
+7. Implement `open` port actuals, input defaults, unconnected output/buffer
+   behavior, association-order rules, and mode-specific missing/illegal-open
+   diagnostics.
+8. Propagate generic-dependent scalar and composite constraints through formal
+   ports, component views, direct instances, hierarchy aliases, and boundary
+   range/direction checks.
+9. Execute multiple differently specialized component/direct instances
+   identically in the interpreter and LLVM O0/O2 with scheduling, VCD, debugger,
+   hierarchy, cache reuse, and source-edit invalidation evidence.
+10. Add focused positive/negative parser, elaboration, and runtime differentials;
+    update the matrix and diagnostics; then pass sanitizer, source/catalog, full
+    Debug/Release, documentation, commit, and push gates before closing Batch 113.
+
+Batch status is **in progress**. Keep this ten-task list current in both the
+official plan and resume handoff. Change it to complete only after all ten tasks
+and their gates close and work moves to Batch 114.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the

@@ -119,6 +119,7 @@ void test_selection_and_assignment_lowering();
 void test_assertion_types_and_random_lowering();
 void test_vhdl_interface_type_generics();
 void test_vhdl_interface_function_generics();
+void test_vhdl_callable_overloads();
 void test_vhdl_interface_procedure_generics();
 void test_vhdl_interface_package_generics();
 void test_vhdl_generic_subprograms();

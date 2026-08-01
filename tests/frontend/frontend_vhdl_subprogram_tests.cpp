@@ -27,7 +27,7 @@ void test_vhdl_procedure_declarations() {
       R"(
 package procedure_pkg is
   procedure exchange(
-    constant source : in integer;
+    constant source : in integer := 2;
     variable destination : out integer;
     variable accumulator : inout integer);
 end package;
@@ -97,6 +97,7 @@ end architecture;
           && declaration.arguments.size() == 3
           && declaration.arguments[0].object_class
               == InterfaceObjectClass::Constant
+          && declaration.arguments[0].default_value
           && declaration.arguments[1].object_class
               == InterfaceObjectClass::Variable
           && declaration.arguments[1].direction
@@ -186,11 +187,10 @@ end architecture;
   require(
       has_code("FSIM-VHDL-SEM-049")
           && has_code("FSIM-VHDL-UNSUPPORTED-038")
-          && has_code("FSIM-VHDL-UNSUPPORTED-041")
           && has_code("FSIM-VHDL-UNSUPPORTED-044")
           && has_code("FSIM-VHDL-SEM-056")
           && has_code("FSIM-VHDL-SEM-046"),
-      "VHDL procedure class, default, timing, and return diagnostics");
+      "VHDL procedure class, timing, and return diagnostics");
 }
 
 } // namespace fsim::tests::frontend
