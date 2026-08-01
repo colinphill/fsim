@@ -1222,7 +1222,7 @@ struct GenerateAlternative {
 /// `condition`, and `iteration`, with their body in `then_body`.
 /// Selection regions use `condition` as the selector plus `alternatives`.
 /// Static regions always elaborate `then_body`, optionally beneath
-/// `then_scope`.
+/// `then_scope`; a valid `condition` retains a VHDL block guard expression.
 /// Regions recursively compose while the current executable subset admits
 /// module/entity instances as leaf items.
 struct GenerateRegion {

@@ -798,23 +798,47 @@ end architecture;
       "guarded_block.vhd",
       R"(
 architecture rtl of guarded is
+  signal enabled : boolean;
 begin
-  guarded_scope: block (true)
+  guarded_scope: block (enabled and true) is
+  begin
+  end block guarded_scope;
+end architecture;
+)",
+      Language::Vhdl2008);
+  const auto& guarded_region =
+      guarded_vhdl_block.design.units.front().generate_regions.front();
+  require(
+      guarded_vhdl_block.ok()
+          && guarded_region.kind == GenerateKind::StaticBlock
+          && guarded_region.then_scope == "guarded_scope"
+          && guarded_region.condition.kind == ExpressionKind::Binary
+          && guarded_region.condition.text == "and"
+          && guarded_region.condition.operands.size() == 2
+          && guarded_region.condition.operands.front().text == "enabled",
+      "guarded VHDL block retains its expression and scope");
+
+  const auto malformed_vhdl_guard = parse_text(
+      "malformed_guarded_block.vhd",
+      R"(
+architecture rtl of guarded is
+  signal enabled : boolean;
+begin
+  guarded_scope: block (enabled
   begin
   end block guarded_scope;
 end architecture;
 )",
       Language::Vhdl2008);
   require(
-      !guarded_vhdl_block.ok()
+      !malformed_vhdl_guard.ok()
           && std::any_of(
-              guarded_vhdl_block.diagnostics.begin(),
-              guarded_vhdl_block.diagnostics.end(),
+              malformed_vhdl_guard.diagnostics.begin(),
+              malformed_vhdl_guard.diagnostics.end(),
               [](const auto& diagnostic) {
-                return diagnostic.code
-                    == "FSIM-VHDL-UNSUPPORTED-021";
+                return diagnostic.code == "FSIM-VHDL-PARSE-231";
               }),
-      "guarded VHDL block is targeted");
+      "guarded VHDL block requires a closing parenthesis");
 
   const auto mismatched_vhdl_block = parse_text(
       "mismatched_block.vhd",

@@ -6371,6 +6371,19 @@ Batch status is **in progress**. Keep this ten-task list current in both the
 official plan and resume handoff. Change it to complete only after all ten tasks
 and their gates close and work moves to Batch 115.
 
+Tasks 1 and 2 are focused-complete. The frontend now retains a guarded block's
+expression in `GenerateRegion::condition`, preserves optional `is`, scope/end
+labels, and exact source spans, and reports `FSIM-VHDL-PARSE-231` for a missing
+closing parenthesis instead of issuing the retired blanket unsupported error.
+Elaboration synthesizes a scope-qualified Boolean `GUARD` signal plus a
+reactive implicit-inertial driver from the enclosing expression; parent-local
+names are qualified before the implicit declaration shadows them. A statically
+non-Boolean expression reports `FSIM-ELAB-GEN-013`. Focused elaboration proves
+the exact `guarded_scope.guard` hierarchy and false-to-true activation. The
+application differential agrees across interpreter and LLVM O0/O2 cold/warm
+runs, including scheduling, normalized VCD, and cache reuse. Batch 114 remains
+**in progress** with Tasks 3 through 10 outstanding.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the

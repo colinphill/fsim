@@ -678,6 +678,20 @@ auto generated_block_behavior_vhdl_config =
         "vhdl:work.generated_block_behavior_vhdl(rtl)",
         fsim::project::Language::vhdl,
         generated_block_behavior_vhdl_source);
+auto generated_guarded_behavior_vhdl_config =
+    make_generated_behavior_config(
+        "generated-guarded-behavior-vhdl-test",
+        "vhdl:work.generated_guarded_behavior_vhdl(rtl)",
+        fsim::project::Language::vhdl,
+        generated_block_behavior_vhdl_source);
+auto generated_guarded_behavior_vhdl_o0_config =
+    generated_guarded_behavior_vhdl_config;
+generated_guarded_behavior_vhdl_o0_config.project.name =
+    "generated-guarded-behavior-vhdl-o0-test";
+generated_guarded_behavior_vhdl_o0_config.build.optimization =
+    fsim::project::Optimization::o0;
+generated_guarded_behavior_vhdl_o0_config.build.cache_path =
+    directory / "generated-guarded-behavior-vhdl-o0-test-cache";
 const auto run_generated_behavior =
     [&](const fsim::project::Config& behavior_config,
         const fsim::app::SimulationEngine engine,
@@ -708,7 +722,8 @@ const auto verify_generated_behavior =
     [&](const fsim::project::Config& behavior_config,
         const std::vector<std::string_view>& local_paths,
         const std::vector<std::string>& expected_values,
-        const std::size_t expected_processes) {
+        const std::size_t expected_processes,
+        const fsim::runtime::SimulationTick expected_time = 0) {
       const auto reference = run_generated_behavior(
           behavior_config,
           fsim::app::SimulationEngine::interpreter,
@@ -721,7 +736,7 @@ const auto verify_generated_behavior =
       assert(
           cold.simulation.result.status
           == fsim::runtime::RunStatus::completed);
-      assert(cold.simulation.result.time == 0);
+      assert(cold.simulation.result.time == expected_time);
       assert(cold.simulation.final_values == expected_values);
       assert(cold.simulation.process_count == expected_processes);
       for (const auto local_path : local_paths) {
@@ -793,6 +808,18 @@ verify_generated_behavior(
     {"static_scope.generated_value"},
     {"1000", "0111"},
     2);
+verify_generated_behavior(
+    generated_guarded_behavior_vhdl_config,
+    {"enabled", "guarded_scope.guard"},
+    {"1", "1", "1"},
+    3,
+    1);
+verify_generated_behavior(
+    generated_guarded_behavior_vhdl_o0_config,
+    {"enabled", "guarded_scope.guard"},
+    {"1", "1", "1"},
+    3,
+    1);
 
 }
 

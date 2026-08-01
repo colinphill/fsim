@@ -1685,6 +1685,16 @@ Batch status is **in progress**. Keep this ten-task list current in both the
 official plan and this handoff. Change it to complete only after all ten tasks
 and their gates close and work moves to Batch 115.
 
+Tasks 1 and 2 are focused-complete. Guarded blocks retain their exact Boolean
+expression, optional `is`, labels, and source span; a missing `)` reports
+`FSIM-VHDL-PARSE-231`. Elaboration creates the scope-qualified implicit
+`guarded_scope.guard` Boolean signal and reactive driver after qualifying parent
+names, while `FSIM-ELAB-GEN-013` rejects a statically non-Boolean guard. The
+focused frontend/elaboration evidence and interpreter plus LLVM O0/O2 cold/warm
+application differential prove false-to-true activation, scheduling,
+normalized VCD, hierarchy, and cache reuse. Batch 114 remains **in progress**
+with Tasks 3 through 10 outstanding.
+
 Batch 110 has advanced through these validated features:
 
 1. deterministic string expression and mutation/conversion methods;

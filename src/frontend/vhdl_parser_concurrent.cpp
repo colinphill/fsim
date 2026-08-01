@@ -221,14 +221,12 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
   GenerateRegion result;
   result.kind = GenerateKind::StaticBlock;
   result.then_scope = vhdl_name(label.text);
-  if (at(TokenKind::LeftParen)) {
-    const auto guard = current();
-    skip_balanced(
-        TokenKind::LeftParen, TokenKind::RightParen);
-    error(
-        guard,
-        "FSIM-VHDL-UNSUPPORTED-021",
-        "guarded block statements are not executable yet");
+  if (match(TokenKind::LeftParen)) {
+    result.condition = parse_expression();
+    expect(
+        TokenKind::RightParen,
+        "')' after a VHDL block guard expression",
+        "FSIM-VHDL-PARSE-231");
   }
   (void)match_keyword("is", true);
   parse_vhdl_generate_declarations(

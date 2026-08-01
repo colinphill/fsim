@@ -309,6 +309,7 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-228` | error | A component declaration is missing its terminating semicolon. |
 | `FSIM-VHDL-PARSE-229` | error | An indexed generate block configuration is missing its closing parenthesis. |
 | `FSIM-VHDL-PARSE-230` | error | A default-box generic association is missing its closing angle bracket. |
+| `FSIM-VHDL-PARSE-231` | error | Expected `)` after a VHDL block guard expression. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -398,7 +399,6 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-017` | error | A wait is nested in conditional control flow requiring suspension-path analysis. |
 | `FSIM-VHDL-UNSUPPORTED-018` | error | A generic type is outside the bounded scalar integer, Boolean, and bit subset. |
 | `FSIM-VHDL-UNSUPPORTED-020` | error | A generate branch contains an item outside the bounded constant, local-signal, assignment, process, instance, and nested-generate subset. |
-| `FSIM-VHDL-UNSUPPORTED-021` | error | Guarded VHDL block statements are not executable yet. |
 | `FSIM-VHDL-UNSUPPORTED-022` | error | A package declaration item is outside the bounded constant, type, subtype, or function subset. |
 | `FSIM-VHDL-UNSUPPORTED-023` | error | A package constant is outside the scalar integer, Boolean, or bit subset. |
 | `FSIM-VHDL-UNSUPPORTED-024` | error | A context declaration contains an item other than a library clause, use clause, or context reference. |
@@ -985,6 +985,7 @@ therefore excluded.
 | `FSIM-ELAB-GEN-010` | error | Selection-generate scalar/range choices overlap or contain duplicate defaults. |
 | `FSIM-ELAB-GEN-011` | error | A generated constant or parameter cannot be evaluated in its declaration-order environment. |
 | `FSIM-ELAB-GEN-012` | error | A generated constant/parameter violates a bounded scalar subtype or exceeds the 64-bit integral width. |
+| `FSIM-ELAB-GEN-013` | error | A VHDL block guard expression has a non-Boolean type. |
 | `FSIM-ELAB-PKG-001` | error | A bounded VHDL package import is not `library.package.all` or `library.package.constant`. |
 | `FSIM-ELAB-PKG-002` | error | A project VHDL package named by a use clause was not found in the selected library. |
 | `FSIM-ELAB-PKG-003` | error | A selected package constant or type named by a use clause does not exist. |

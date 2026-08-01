@@ -37,6 +37,7 @@ begin
     assert 0 = 1 report "cross-engine mismatch" severity failure;
   end process;
 end architecture;
+
 )";
 }
 provenance_source = directory / "provenance.sv";
@@ -382,6 +383,28 @@ begin
       observed <= generated_value + 1;
     end process;
   end block static_scope;
+end architecture;
+
+entity generated_guarded_behavior_vhdl is
+  port (
+    observed : out boolean
+  );
+end entity;
+
+architecture rtl of generated_guarded_behavior_vhdl is
+  signal enabled : boolean;
+begin
+  stimulus: process
+  begin
+    enabled <= false;
+    wait for 1 ns;
+    enabled <= true;
+    wait;
+  end process;
+  guarded_scope: block (enabled) is
+  begin
+    observed <= guard;
+  end block guarded_scope;
 end architecture;
 )";
 }

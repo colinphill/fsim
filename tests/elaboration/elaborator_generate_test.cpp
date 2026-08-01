@@ -390,6 +390,29 @@ begin
   end block static_scope;
 end architecture;
 
+entity generated_vhdl_guarded_behavior is
+  port (
+    enabled : in boolean;
+    observed : out boolean
+  );
+end entity;
+architecture rtl of generated_vhdl_guarded_behavior is
+begin
+  guarded_scope: block (enabled) is
+  begin
+    observed <= guard;
+  end block guarded_scope;
+end architecture;
+
+entity generated_vhdl_bad_guard is
+end entity;
+architecture rtl of generated_vhdl_bad_guard is
+begin
+  guarded_scope: block (1) is
+  begin
+  end block guarded_scope;
+end architecture;
+
 entity generated_vhdl_bad_constant is
 end entity;
 architecture rtl of generated_vhdl_bad_constant is
@@ -986,6 +1009,45 @@ end architecture;
             ->signal_value(*generated_vhdl_block_observed)
             .to_msb_string()
         == "1000");
+
+    const auto guarded = fsim::elaboration::elaborate(
+        generated_design,
+        "vhdl:work.generated_vhdl_guarded_behavior(rtl)");
+    assert(guarded.ok());
+    const auto guarded_enabled =
+        guarded.design->find_signal("enabled");
+    const auto guarded_implicit =
+        guarded.design->find_signal("guarded_scope.guard");
+    const auto guarded_observed =
+        guarded.design->find_signal("observed");
+    assert(guarded_enabled && guarded_implicit && guarded_observed);
+    assert(guarded.design->processes().size() == 2);
+    auto guarded_interpreter = guarded.design->create_interpreter();
+    for (const auto& [value, expected] :
+         std::array{
+             std::pair{"0", "0"},
+             std::pair{"1", "1"}}) {
+        guarded_interpreter->deposit_signal(
+            *guarded_enabled,
+            fsim::runtime::PackedLogic4::from_msb_string(value));
+        assert(
+            guarded_interpreter->run().status
+            == fsim::runtime::RunStatus::completed);
+        assert(
+            guarded_interpreter->signal_value(*guarded_implicit)
+                .to_msb_string()
+            == expected);
+        assert(
+            guarded_interpreter->signal_value(*guarded_observed)
+                .to_msb_string()
+            == expected);
+    }
+
+    const auto bad_guard = fsim::elaboration::elaborate(
+        generated_design,
+        "vhdl:work.generated_vhdl_bad_guard(rtl)");
+    assert(!bad_guard.ok());
+    assert(has_diagnostic(bad_guard, "FSIM-ELAB-GEN-013"));
 
     const auto generated_sv_bad_constant =
         fsim::elaboration::elaborate(

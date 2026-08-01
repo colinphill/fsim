@@ -1334,6 +1334,68 @@ void append_generated_body(
         diagnostics);
 }
 
+std::optional<frontend::ValueDomain> vhdl_guard_domain(
+    const frontend::Expression& expression,
+    const ConstantDomainEnvironment& domains,
+    const GeneratedNameEnvironment& visible_names,
+    const DesignUnit& unit) {
+    using frontend::ExpressionKind;
+    using frontend::ValueDomain;
+    if (expression.kind == ExpressionKind::BooleanLiteral) {
+        return ValueDomain::Boolean;
+    }
+    if (expression.kind == ExpressionKind::IntegerLiteral) {
+        return ValueDomain::Integer;
+    }
+    if (expression.kind == ExpressionKind::StringLiteral) {
+        return ValueDomain::String;
+    }
+    if (expression.kind == ExpressionKind::LogicLiteral) {
+        return ValueDomain::Logic9;
+    }
+    if (expression.kind == ExpressionKind::Identifier) {
+        if (const auto constant = domains.find(expression.text);
+            constant != domains.end()) {
+            return constant->second.domain;
+        }
+        const auto mapped = visible_names.find(expression.text);
+        const auto name = mapped == visible_names.end()
+            ? std::string_view{expression.text}
+            : std::string_view{mapped->second};
+        const auto find_domain = [&](const auto& declarations)
+            -> std::optional<ValueDomain> {
+          const auto found = std::ranges::find(
+              declarations, name, &frontend::SignalDeclaration::name);
+          return found == declarations.end()
+              ? std::nullopt
+              : std::optional{found->type.domain};
+        };
+        if (const auto domain = find_domain(unit.ports)) return domain;
+        return find_domain(unit.signals);
+    }
+    if (expression.kind == ExpressionKind::Unary
+        && expression.text == "not" && expression.operands.size() == 1) {
+        return vhdl_guard_domain(
+            expression.operands.front(), domains, visible_names, unit);
+    }
+    if (expression.kind == ExpressionKind::Binary) {
+        constexpr std::array<std::string_view, 6> comparisons{
+            "=", "/=", "<", "<=", ">", ">="};
+        if (std::ranges::find(comparisons, expression.text)
+            != comparisons.end()) {
+            return ValueDomain::Boolean;
+        }
+        constexpr std::array<std::string_view, 6> logical{
+            "and", "or", "nand", "nor", "xor", "xnor"};
+        if (std::ranges::find(logical, expression.text) != logical.end()
+            && !expression.operands.empty()) {
+            return vhdl_guard_domain(
+                expression.operands.front(), domains, visible_names, unit);
+        }
+    }
+    return std::nullopt;
+}
+
 
 
 void expand_generate_regions(
@@ -1347,8 +1409,46 @@ void expand_generate_regions(
     std::vector<Diagnostic>& diagnostics) {
     for (const auto& generate : generates) {
         if (generate.kind == frontend::GenerateKind::StaticBlock) {
+            auto body = generate.then_body;
+            if (language == frontend::Language::Vhdl2008
+                && generate.condition.valid()) {
+                const auto domain = vhdl_guard_domain(
+                    generate.condition, domains, visible_names, unit);
+                if (domain && *domain != frontend::ValueDomain::Boolean) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-GEN-013",
+                        "VHDL block guard expression must have Boolean "
+                        "type",
+                        generate.condition.span});
+                    continue;
+                }
+                auto guard_expression = generate.condition;
+                qualify_generated_expression(
+                    guard_expression, visible_names);
+                frontend::SignalDeclaration guard;
+                guard.name = "guard";
+                guard.type.spelling = "boolean";
+                guard.type.domain = frontend::ValueDomain::Boolean;
+                guard.span = generate.condition.span;
+                body.signals.insert(
+                    body.signals.begin(), std::move(guard));
+                frontend::Statement driver;
+                driver.kind = frontend::StatementKind::Assignment;
+                driver.assignment_kind =
+                    frontend::AssignmentKind::Continuous;
+                driver.target = frontend::Expression{
+                    frontend::ExpressionKind::Identifier,
+                    "guard", {}, generate.condition.span};
+                driver.value = std::move(guard_expression);
+                driver.vhdl_delay_mechanism =
+                    frontend::VhdlDelayMechanism::ImplicitInertial;
+                driver.span = generate.condition.span;
+                body.concurrent_statements.insert(
+                    body.concurrent_statements.begin(),
+                    std::move(driver));
+            }
             append_generated_body(
-                generate.then_body,
+                std::move(body),
                 environment,
                 domains,
                 language,
