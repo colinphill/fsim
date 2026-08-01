@@ -1557,7 +1557,7 @@ output/buffer/inout expressions require writable names. `hierarchy_ports.cpp`
 holds the new boundary implementation and `hierarchy_types.cpp` remains exactly
 2,000 lines. The focused frontend, elaboration, component interpreter/LLVM
 O0/O2/cache, catalog, and 343-source line-budget evidence passes in the LLVM
-Debug tree. Batch 113 and Task 7 remain in progress.
+Debug tree. Batch 113 remains in progress; Tasks 5, 8, 9, and 10 remain.
 
 Task 1 now has focused implementation evidence: implicit/explicit value
 generics retain normalized constant class and input mode, invalid classes/modes
@@ -1607,6 +1607,17 @@ mark reports `FSIM-ELAB-VHPORT-001`, and non-input expressions retain
 `FSIM-ELAB-VHPORT-002`. The component interpreter and LLVM O0/O2 cold/warm
 differential covers both qualified and converted runtime expressions. Batch
 113 remains **in progress**.
+
+Task 7 is now focused-complete. VHDL port maps accept positional-then-named
+associations and diagnose duplicate names or named-then-positional ordering as
+`FSIM-VHDL-SEM-078/079`; component normalization also rejects malformed
+retained order. Omitted/open inputs use retained defaults, required inputs keep
+their component/direct diagnostics, and omitted or explicit-open output/buffer
+ports execute through child-local signals without a parent driver. The
+component interpreter and LLVM O0/O2 cold/warm differential observes values 5
+and 7 from open output and buffer formals. The current catalog covers 1,438
+codes and the source gate accepts all 343 authored sources. Batch 113 remains
+**in progress** with Tasks 5, 8, 9, and 10 outstanding.
 
 Batch 110 has advanced through these validated features:
 

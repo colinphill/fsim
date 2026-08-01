@@ -626,7 +626,7 @@ architecture RTL of Counter is
 begin
   q <= count;
   Direct_Child: entity Work.Child(Gates)
-    port map (Clock => clk, q);
+    port map (clk, Q => q);
   Component_Child: Child
     port map (clk, Result => count);
 
@@ -692,16 +692,16 @@ end architecture RTL;
           "direct entity library, unit, and architecture");
   require(direct_instance.connections.size() == 2,
           "direct entity connection count");
-  require(direct_instance.connections[0].port ==
-              std::optional<std::string>{"clock"},
-          "VHDL named formal must be canonicalized");
+  require(!direct_instance.connections[0].port,
+          "VHDL positional actual remains positional");
   require(direct_instance.connections[0].value.kind ==
               ExpressionKind::Identifier &&
               direct_instance.connections[0].value.text == "clk",
-          "VHDL named actual identifier");
-  require(!direct_instance.connections[1].port &&
+          "VHDL positional actual identifier");
+  require(direct_instance.connections[1].port ==
+              std::optional<std::string>{"q"} &&
               direct_instance.connections[1].value.text == "q",
-          "VHDL positional connection");
+          "VHDL positional-then-named connection");
   require(direct_instance.span.source_name == "counter.vhd" &&
               direct_instance.span.begin.line > 1 &&
               direct_instance.connections[0].span.begin.line > 1,
@@ -816,6 +816,35 @@ end architecture;
           && architecture->instances[2].connections[0]
                  .value.operands.front().text == "data",
       "qualified input actual retains its explicit type mark");
+
+  const auto invalid = parse_text(
+      "invalid-port-associations.vhd",
+      R"(
+entity invalid_port_top is
+end entity;
+architecture rtl of invalid_port_top is
+  signal data : bit;
+begin
+  child: entity work.invalid_port_leaf(rtl)
+    port map (
+      first_value => data,
+      first_value => data,
+      data);
+end architecture;
+)",
+      Language::Vhdl2008);
+  const auto has_code = [&](const std::string_view code) {
+    return std::ranges::any_of(
+        invalid.diagnostics,
+        [&](const Diagnostic& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      !invalid.ok()
+          && has_code("FSIM-VHDL-SEM-078")
+          && has_code("FSIM-VHDL-SEM-079"),
+      "duplicate and named-then-positional port maps are rejected");
 }
 
 void test_vhdl_generics() {

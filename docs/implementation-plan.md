@@ -6216,8 +6216,8 @@ expressions require writable signal names. The partitioned port-boundary
 implementation keeps `hierarchy_types.cpp` at 2,000 lines. The focused frontend,
 elaboration, component interpreter/LLVM O0/O2 cache differential, diagnostic
 catalog, and 343-source line-budget evidence passes in the LLVM Debug tree.
-Task 7 remains in progress; these bounded slices are not yet the
-complete task claims.
+The remaining implementation work is in Tasks 5, 8, 9, and 10; these bounded
+slices are not yet the complete batch claim.
 
 Task 1 now has focused implementation evidence. Implicit and explicit VHDL
 value-generic interfaces normalize to retained constant class and input mode;
@@ -6276,6 +6276,19 @@ diagnostic, while every output/buffer/inout expression still requires a
 writable signal through `FSIM-ELAB-VHPORT-002`. The component interpreter and
 LLVM O0/O2 cold/warm differential proves the qualified and converted dynamic
 paths. Task 6 is focused-complete; Batch 113 remains **in progress**.
+
+Task 7 now has complete focused evidence. Port maps accept positional followed
+by named associations and reject duplicate names or a positional actual after
+a named one with stable `FSIM-VHDL-SEM-078/079` diagnostics; component
+normalization independently rejects malformed retained association order.
+Omitted and explicit-`open` input ports materialize a retained default, while a
+required input reports the component- or direct-boundary diagnostic. Output
+and buffer formals may be omitted or explicitly opened, retain child-local
+signals, and execute their assignments without manufacturing a parent driver.
+Non-input expression actuals remain illegal. The focused interpreter and LLVM
+O0/O2 cold/warm differential observes exact output/buffer values. The latest
+catalog has 1,438 production codes and all 343 authored sources pass the line
+budget. Task 7 is focused-complete; Batch 113 remains **in progress**.
 
 ## Forward language-closure feature batches
 

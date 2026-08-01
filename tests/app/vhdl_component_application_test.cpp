@@ -39,6 +39,7 @@ struct Capture {
   std::array<std::string, 2> aggregate_generic_outputs;
   std::array<std::string, 2> static_generic_outputs;
   std::array<std::string, 2> composite_expression_outputs;
+  std::array<std::string, 2> open_mode_outputs;
   std::vector<std::pair<std::string, std::string>> keys;
   std::vector<fsim::runtime::simir::ExecutionPoint> points;
   fsim::app::NativeCacheStatistics cache;
@@ -118,7 +119,7 @@ Capture run_once(
     }
   }
   assert(project);
-  assert(project->design.specializations().size() == 20);
+  assert(project->design.specializations().size() == 21);
   for (const auto path : {
            "component_runtime_top.positional_child",
            "component_runtime_top.default_child"}) {
@@ -412,6 +413,16 @@ Capture run_once(
     capture.direct_default_inputs[index] =
         simulation.read_signal(*signal).to_msb_string();
   }
+  constexpr std::array<std::string_view, 2> open_mode_outputs{
+      "component_runtime_top.open_mode_child.output_value",
+      "component_runtime_top.open_mode_child.buffer_value"};
+  for (std::size_t index = 0;
+       index < open_mode_outputs.size(); ++index) {
+    const auto signal = simulation.find_signal(open_mode_outputs[index]);
+    assert(signal);
+    capture.open_mode_outputs[index] =
+        simulation.read_signal(*signal).to_msb_string();
+  }
   return capture;
 }
 
@@ -438,6 +449,8 @@ void verify(
           == std::array<std::string, 2>{bits(41), bits(42)}));
   assert((capture.direct_default_inputs
           == std::array<std::string, 2>{bits(13), bits(13)}));
+  assert((capture.open_mode_outputs
+          == std::array<std::string, 2>{bits(5), bits(7)}));
   assert((capture.dependent_generic_outputs
           == std::array<std::string, 3>{bits(8), bits(6), bits(6)}));
   assert((capture.aggregate_generic_outputs
@@ -547,6 +560,17 @@ end entity;
 architecture rtl of component_runtime_vector is
 begin
   output_value <= input_value;
+end architecture;
+
+entity component_runtime_open_modes is
+  port (
+    output_value : out integer;
+    buffer_value : buffer integer);
+end entity;
+architecture rtl of component_runtime_open_modes is
+begin
+  output_value <= 5;
+  buffer_value <= 7;
 end architecture;
 
 entity component_runtime_generic_defaults is
@@ -776,6 +800,10 @@ begin
         vector_expression_input(1 downto 0)
           & vector_expression_input(7 downto 6)),
       output_value => concat_expression_output);
+  open_mode_child: entity work.component_runtime_open_modes(rtl)
+    port map (
+      output_value => open,
+      buffer_value => open);
   direct_default_omitted: entity work.component_runtime_defaulted(rtl)
     port map (entity_default_output => open);
   direct_default_open: entity work.component_runtime_defaulted(rtl)
@@ -843,6 +871,8 @@ end architecture;
     assert(cold.expression_inputs == warm.expression_inputs);
     assert(reference.direct_default_inputs == cold.direct_default_inputs);
     assert(cold.direct_default_inputs == warm.direct_default_inputs);
+    assert(reference.open_mode_outputs == cold.open_mode_outputs);
+    assert(cold.open_mode_outputs == warm.open_mode_outputs);
     assert(reference.dependent_generic_outputs
            == cold.dependent_generic_outputs);
     assert(cold.dependent_generic_outputs

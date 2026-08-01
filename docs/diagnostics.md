@@ -383,6 +383,8 @@ therefore excluded.
 | `FSIM-VHDL-SEM-075` | error | A VHDL entity port default is declared on a non-input formal. |
 | `FSIM-VHDL-SEM-076` | error | A VHDL value generic is declared with a nonconstant object class. |
 | `FSIM-VHDL-SEM-077` | error | A VHDL value generic is declared with a mode other than input. |
+| `FSIM-VHDL-SEM-078` | error | A named port actual is repeated in one instance map. |
+| `FSIM-VHDL-SEM-079` | error | A positional port actual follows a named actual. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |

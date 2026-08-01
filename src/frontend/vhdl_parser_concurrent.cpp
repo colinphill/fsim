@@ -480,8 +480,30 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
     return instance;
   }
 
+  bool saw_named_port = false;
   while (!at_end() && !at(TokenKind::RightParen)) {
-    instance.connections.push_back(parse_vhdl_port_connection());
+    const auto actual_start = current();
+    auto connection = parse_vhdl_port_connection();
+    if (connection.port) {
+      saw_named_port = true;
+      if (std::ranges::any_of(
+              instance.connections,
+              [&](const PortConnection& existing) {
+                return existing.port == connection.port;
+              })) {
+        error(
+            actual_start,
+            "FSIM-VHDL-SEM-078",
+            "duplicate named port actual '"
+                + *connection.port + "'");
+      }
+    } else if (saw_named_port) {
+      error(
+          actual_start,
+          "FSIM-VHDL-SEM-079",
+          "a positional port actual cannot follow a named actual");
+    }
+    instance.connections.push_back(std::move(connection));
     if (!match(TokenKind::Comma)) {
       break;
     }

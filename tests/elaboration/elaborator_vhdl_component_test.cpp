@@ -1791,6 +1791,92 @@ end architecture;
     assert(has_diagnostic(
         direct_missing_input, "FSIM-ELAB-BIND-027"));
 
+    const auto open_output_modes = elaborate_text(
+        "open_output_modes.vhd",
+        R"(
+entity open_mode_leaf is
+  port (
+    output_value : out integer;
+    buffer_value : buffer integer);
+end entity;
+architecture rtl of open_mode_leaf is
+begin
+  output_value <= 5;
+  buffer_value <= 7;
+end architecture;
+entity open_mode_top is
+end entity;
+architecture rtl of open_mode_top is
+begin
+  omitted_child: entity work.open_mode_leaf(rtl);
+  explicit_child: entity work.open_mode_leaf(rtl)
+    port map (
+      output_value => open,
+      buffer_value => open);
+end architecture;
+)",
+        "vhdl:work.open_mode_top(rtl)");
+    assert(open_output_modes.ok());
+    auto open_output_interpreter =
+        open_output_modes.design->create_interpreter();
+    assert(
+        open_output_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    for (const auto child :
+         {"omitted_child", "explicit_child"}) {
+        const auto output_signal =
+            open_output_modes.design->find_signal(
+                "open_mode_top." + std::string{child}
+                + ".output_value");
+        const auto buffer_signal =
+            open_output_modes.design->find_signal(
+                "open_mode_top." + std::string{child}
+                + ".buffer_value");
+        assert(output_signal && buffer_signal);
+        assert(open_output_interpreter
+                   ->signal_value(*output_signal).low_word().aval
+               == 5);
+        assert(open_output_interpreter
+                   ->signal_value(*buffer_signal).low_word().aval
+               == 7);
+    }
+
+    auto invalid_port_order = fsim::frontend::parse_text(
+        "invalid_component_port_order.vhd",
+        R"(
+entity order_leaf is
+  port (first_value, second_value : in integer);
+end entity;
+architecture rtl of order_leaf is
+begin
+end architecture;
+entity order_top is
+end entity;
+architecture rtl of order_top is
+  signal first_value, second_value : integer;
+  component order_leaf is
+    port (first_value, second_value : in integer);
+  end component;
+begin
+  child: order_leaf
+    port map (
+      first_value => first_value,
+      second_value => second_value);
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(invalid_port_order.ok());
+    invalid_port_order.design.units.back()
+        .instances.front().connections.back().port.reset();
+    const auto invalid_port_order_result =
+        fsim::elaboration::elaborate(
+            invalid_port_order.design,
+            "vhdl:work.order_top(rtl)");
+    assert(!invalid_port_order_result.ok());
+    assert(has_diagnostic(
+        invalid_port_order_result,
+        "FSIM-ELAB-VHCOMP-009"));
+
     const auto configured_default = elaborate_text(
         "configured_component_default.vhd",
         R"(
