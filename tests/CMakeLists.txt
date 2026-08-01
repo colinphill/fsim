@@ -260,6 +260,299 @@ if(FSIM_WITH_LLVM)
 endif()
 
 if(TARGET fsim_application)
+  option(
+    FSIM_MERGE_APPLICATION_TESTS
+    "Merge application cases into a small number of selectable test hosts"
+    ON
+  )
+
+  if(FSIM_MERGE_APPLICATION_TESTS)
+    set(
+      fsim_application_test_hosts
+      fsim_application_tests
+      fsim_application_tests_1
+      fsim_application_tests_2
+      fsim_application_tests_3
+    )
+    foreach(application_shard RANGE 0 3)
+      list(GET fsim_application_test_hosts ${application_shard} test_host)
+      add_executable(
+        ${test_host}
+        app/application_case_dispatch.cpp
+      )
+      fsim_configure_test(${test_host})
+      target_compile_definitions(
+        ${test_host}
+        PRIVATE
+          FSIM_APPLICATION_SHARD=${application_shard}
+          FSIM_APPLICATION_WITH_TCL=$<BOOL:${FSIM_WITH_TCL}>
+          FSIM_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+      )
+      target_link_libraries(
+        ${test_host}
+        PRIVATE
+          fsim_application
+          fsim_cli
+      )
+      if(
+        WIN32
+        AND (
+          MSVC
+          OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+        )
+      )
+        target_link_options(
+          ${test_host}
+          PRIVATE "$<$<CONFIG:Debug>:/STACK:8388608>"
+        )
+      endif()
+    endforeach()
+
+    function(
+      fsim_add_application_case
+      application_shard
+      case_name
+      case_source
+      test_name
+    )
+      list(GET fsim_application_test_hosts ${application_shard} test_host)
+      set_property(
+        SOURCE "${case_source}"
+        APPEND PROPERTY
+          COMPILE_DEFINITIONS
+            "main=fsim_application_case_${case_name}"
+      )
+      target_sources(${test_host} PRIVATE "${case_source}")
+      add_test(
+        NAME "${test_name}"
+        COMMAND ${test_host} "${case_name}"
+      )
+      if(ARGN)
+        set_tests_properties(
+          "${test_name}"
+          PROPERTIES LABELS "${ARGN}"
+        )
+      endif()
+    endfunction()
+
+    fsim_add_application_case(
+      0 core app/application_test.cpp fsim.application)
+    target_sources(
+      fsim_application_tests
+      PRIVATE
+        app/application_test_cli.cpp
+        app/application_test_fixture.cpp
+        app/application_test_mixed.cpp
+        app/application_test_simulation.cpp
+        app/application_test_source_updates.cpp
+        app/application_test_sources_common.cpp
+        app/application_test_sources_mixed.cpp
+        app/application_test_sources_systemc.cpp
+        app/application_test_specialization.cpp
+        app/application_test_support.cpp
+        app/application_test_systemc.cpp
+    )
+    fsim_add_application_case(
+      0 expressions app/expression_application_test.cpp
+      fsim.application.expressions fast expressions)
+    fsim_add_application_case(
+      0 scoped_locals app/scoped_local_application_test.cpp
+      fsim.application.scoped_locals fast scoped-locals)
+    fsim_add_application_case(
+      0 call_safe_points app/call_safe_point_application_test.cpp
+      fsim.application.call_safe_points fast call-safe-points)
+    fsim_add_application_case(
+      0 named_events app/named_event_application_test.cpp
+      fsim.application.named_events fast named-events)
+    fsim_add_application_case(
+      0 fork app/fork_application_test.cpp
+      fsim.application.fork fast fork systemverilog cache debugger)
+    fsim_add_application_case(
+      0 display app/display_application_test.cpp
+      fsim.application.display fast display)
+    fsim_add_application_case(
+      0 random app/random_application_test.cpp
+      fsim.application.random fast random)
+    fsim_add_application_case(
+      0 assertions app/assertion_application_test.cpp
+      fsim.application.assertions fast assertions)
+    fsim_add_application_case(
+      0 line_directives app/line_directive_application_test.cpp
+      fsim.application.line_directives fast line-directives)
+    fsim_add_application_case(
+      0 time app/time_application_test.cpp
+      fsim.application.time fast time)
+    fsim_add_application_case(
+      0 delay_modes app/delay_mode_application_test.cpp
+      fsim.application.delay_modes fast delay-modes)
+    fsim_add_application_case(
+      0 transition_delays app/transition_delay_application_test.cpp
+      fsim.application.transition_delays fast transition-delays)
+    fsim_add_application_case(
+      0 procedural_assignments app/procedural_assignment_application_test.cpp
+      fsim.application.procedural_assignments fast procedural-assignments)
+    fsim_add_application_case(
+      0 resolution app/resolution_application_test.cpp
+      fsim.application.resolution fast resolution mixed-language)
+
+    fsim_add_application_case(
+      1 sv_parameter_sizing app/sv_parameter_sizing_application_test.cpp
+      fsim.application.sv_parameter_sizing fast parameters systemverilog)
+    fsim_add_application_case(
+      1 sv_type_parameters app/sv_type_parameter_application_test.cpp
+      fsim.application.sv_type_parameters fast parameters systemverilog)
+    fsim_add_application_case(
+      1 sv_string_parameters app/sv_string_parameter_application_test.cpp
+      fsim.application.sv_string_parameters fast parameters strings systemverilog)
+    fsim_add_application_case(
+      1 sv_interfaces app/sv_interface_application_test.cpp
+      fsim.application.sv_interfaces
+      fast interfaces packages systemverilog cache debugger vcd)
+    fsim_add_application_case(
+      1 sv_functions app/sv_function_application_test.cpp
+      fsim.application.sv_functions fast functions systemverilog cache)
+    fsim_add_application_case(
+      1 sv_tasks app/sv_task_application_test.cpp
+      fsim.application.sv_tasks fast tasks systemverilog cache)
+    fsim_add_application_case(
+      1 sv_callable_closure app/sv_callable_closure_application_test.cpp
+      fsim.application.sv_callable_closure
+      fast functions tasks systemverilog cache debugger vcd)
+    fsim_add_application_case(
+      1 sv_suspending_tasks app/sv_suspending_task_application_test.cpp
+      fsim.application.sv_suspending_tasks
+      fast tasks timing systemverilog cache)
+    fsim_add_application_case(
+      1 sv_mutable_strings app/sv_mutable_string_application_test.cpp
+      fsim.application.sv_mutable_strings
+      fast strings tasks timing systemverilog cache debugger)
+    fsim_add_application_case(
+      1 sv_containers app/sv_container_application_test.cpp
+      fsim.application.sv_containers
+      fast containers tasks timing systemverilog cache)
+    fsim_add_application_case(
+      1 sv_files app/sv_file_application_test.cpp
+      fsim.application.sv_files
+      fast files strings tasks timing systemverilog cache debugger)
+    fsim_add_application_case(
+      1 sv_preprocessor_generate
+      app/sv_preprocessor_generate_application_test.cpp
+      fsim.application.sv_preprocessor_generate
+      fast preprocessor generate systemverilog)
+    fsim_add_application_case(
+      1 sv_aggregate_multidimensional
+      app/sv_aggregate_multidimensional_application_test.cpp
+      fsim.application.sv_aggregate_multidimensional
+      fast aggregates containers systemverilog cache debugger)
+
+    fsim_add_application_case(
+      2 vhdl_type_generics app/vhdl_type_generic_application_test.cpp
+      fsim.application.vhdl_type_generics fast generics vhdl cache hierarchy)
+    fsim_add_application_case(
+      2 vhdl_function_generics app/vhdl_function_generic_application_test.cpp
+      fsim.application.vhdl_function_generics
+      fast functions generics vhdl cache hierarchy)
+    fsim_add_application_case(
+      2 vhdl_procedure_generics app/vhdl_procedure_generic_application_test.cpp
+      fsim.application.vhdl_procedure_generics
+      fast procedures generics vhdl cache hierarchy)
+    fsim_add_application_case(
+      2 vhdl_package_generics app/vhdl_package_generic_application_test.cpp
+      fsim.application.vhdl_package_generics
+      fast packages functions procedures generics vhdl cache hierarchy)
+    fsim_add_application_case(
+      2 vhdl_generic_subprograms
+      app/vhdl_generic_subprogram_application_test.cpp
+      fsim.application.vhdl_generic_subprograms
+      fast functions procedures generics vhdl cache hierarchy)
+    fsim_add_application_case(
+      2 vhdl_configurations app/vhdl_configuration_application_test.cpp
+      fsim.application.vhdl_configurations
+      fast configurations vhdl cache hierarchy debugger)
+    fsim_add_application_case(
+      2 vhdl_components app/vhdl_component_application_test.cpp
+      fsim.application.vhdl_components
+      fast components vhdl cache hierarchy debugger)
+    fsim_add_application_case(
+      2 vhdl_integer_shifts app/vhdl_integer_shift_application_test.cpp
+      fsim.application.vhdl_integer_shifts fast vhdl integer expressions)
+    fsim_add_application_case(
+      2 vhdl_logic9 app/vhdl_logic9_application_test.cpp
+      fsim.application.vhdl_logic9 fast vhdl logic9 resolution)
+    fsim_add_application_case(
+      2 vhdl_records app/vhdl_record_application_test.cpp
+      fsim.application.vhdl_records fast vhdl records logic9)
+    fsim_add_application_case(
+      2 vhdl_package_records app/vhdl_package_record_application_test.cpp
+      fsim.application.vhdl_package_records fast vhdl records packages logic9)
+
+    fsim_add_application_case(
+      3 vhdl_record_aggregates app/vhdl_record_aggregate_application_test.cpp
+      fsim.application.vhdl_record_aggregates
+      fast vhdl records aggregates packages logic9)
+    fsim_add_application_case(
+      3 vhdl_subtypes app/vhdl_subtype_application_test.cpp
+      fsim.application.vhdl_subtypes
+      fast vhdl subtypes packages hierarchy integer logic9)
+    fsim_add_application_case(
+      3 vhdl_enumerations app/vhdl_enumeration_application_test.cpp
+      fsim.application.vhdl_enumerations
+      fast vhdl enumerations packages hierarchy cache vcd)
+    fsim_add_application_case(
+      3 vhdl_arrays app/vhdl_array_application_test.cpp
+      fsim.application.vhdl_arrays
+      fast vhdl arrays packages hierarchy cache vcd)
+    fsim_add_application_case(
+      3 vhdl_projected app/vhdl_projected_application_test.cpp
+      fsim.application.vhdl_projected fast vhdl projected-waveforms)
+    fsim_add_application_case(
+      3 systemc_datatypes app/systemc_datatype_application_test.cpp
+      fsim.application.systemc_datatypes fast systemc datatypes)
+
+    set_tests_properties(
+      fsim.application.scoped_locals
+      PROPERTIES TIMEOUT 60
+    )
+    set_tests_properties(
+      fsim.application.sv_containers
+      PROPERTIES TIMEOUT 1200
+    )
+    if(MSVC AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+      set_tests_properties(
+        fsim.application
+        PROPERTIES TIMEOUT 600
+      )
+    endif()
+
+    if(FSIM_WITH_TCL)
+      fsim_add_application_case(
+        3 tcl app/tcl_application_test.cpp
+        fsim.application.tcl fast tcl)
+      if(FSIM_WITH_BUNDLED_TCL)
+        set_tests_properties(
+          fsim.application.tcl
+          PROPERTIES
+            ENVIRONMENT
+              "FSIM_TCL_LIBRARY=${FSIM_FETCHED_TCL_LIBRARY_DIR}"
+        )
+        add_test(
+          NAME fsim.tcl.fetched-relocation
+          COMMAND
+            "${CMAKE_COMMAND}"
+            "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+            "-DFSIM_TCL_LIBRARY_DIR=${FSIM_FETCHED_TCL_LIBRARY_DIR}"
+            "-DFSIM_TCL_LIBRARY_VERSION=${FSIM_TCL_LIBRARY_VERSION}"
+            "-DFSIM_STAGE_DIR=${CMAKE_CURRENT_BINARY_DIR}/fetched-tcl-stage"
+            -P
+            "${PROJECT_SOURCE_DIR}/cmake/CheckFetchedTclRelocation.cmake"
+        )
+        set_tests_properties(
+          fsim.tcl.fetched-relocation
+          PROPERTIES LABELS "fast;tcl;cmake"
+        )
+      endif()
+    endif()
+  else()
   add_executable(
     fsim_expression_application_tests
     app/expression_application_test.cpp
@@ -1191,6 +1484,8 @@ set_tests_properties(
         PROPERTIES LABELS "fast;tcl;cmake"
       )
     endif()
+  endif()
+
   endif()
 
   add_executable(fsim_api_tests api/api_test.cpp)

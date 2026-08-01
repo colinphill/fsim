@@ -392,4 +392,5 @@ int main() {
 #if defined(FSIM_HAS_LLVM)
   assert(edited.cache.misses > 0);
 #endif
+  return 0;
 }

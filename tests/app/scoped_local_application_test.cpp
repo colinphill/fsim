@@ -261,4 +261,5 @@ endmodule
   test_scoped_locals(
       directory.path, source, fsim::project::Optimization::o2);
   std::cout << "scoped local application tests passed\n";
+  return 0;
 }

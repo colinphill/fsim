@@ -377,4 +377,5 @@ endmodule
   test_named_events(
       directory.path, source, fsim::project::Optimization::o2);
   std::cout << "named event application tests passed\n";
+  return 0;
 }

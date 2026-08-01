@@ -323,4 +323,5 @@ endmodule
   verify_auto_resolution_selects_first(directory.path, source);
   verify_cli_override(directory.path, source);
   std::cout << "delay mode application tests passed\n";
+  return 0;
 }

@@ -324,7 +324,7 @@ endmodule
                 ->processes().front().operations,
             [](const auto& operation) {
               const auto* check =
-                  std::get_if<
+                  fsim::runtime::simir::operation_get_if<
                       fsim::runtime::simir::IntegerCheck>(
                       &operation);
               return check != nullptr

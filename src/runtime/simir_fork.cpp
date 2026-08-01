@@ -7,7 +7,7 @@ namespace fsim::runtime::simir {
     ProcessState& process,
     const InstructionIndex instruction,
     const Operation& operation) {
-  if (const auto* fork = std::get_if<Fork>(&operation)) {
+  if (const auto* fork = fsim::runtime::simir::operation_get_if<Fork>(&operation)) {
     clear_wait_timeout(process);
     notify_execution_point(
         process, instruction, ExecutionPointKind::process_suspend,
@@ -15,7 +15,7 @@ namespace fsim::runtime::simir {
     spawn_fork(process, instruction, *fork);
     return true;
   }
-  if (std::holds_alternative<ForkEnd>(operation)) {
+  if (fsim::runtime::simir::operation_holds<ForkEnd>(operation)) {
     if (!process.fork_parent) {
       process.pc = instruction;
       fail(process, "ForkEnd requires a dynamically spawned fork child");
@@ -27,7 +27,7 @@ namespace fsim::runtime::simir {
     complete_fork_child(process);
     return true;
   }
-  if (std::holds_alternative<WaitFork>(operation)) {
+  if (fsim::runtime::simir::operation_holds<WaitFork>(operation)) {
     clear_wait_timeout(process);
     if (process.live_children.empty()) {
       queue_current(process.program.id);
@@ -39,7 +39,7 @@ namespace fsim::runtime::simir {
         process.current_source);
     return true;
   }
-  if (!std::holds_alternative<DisableFork>(operation)) {
+  if (!fsim::runtime::simir::operation_holds<DisableFork>(operation)) {
     return false;
   }
   clear_wait_timeout(process);
@@ -96,6 +96,7 @@ void Interpreter::Impl::spawn_fork(
   const auto group_id = next_fork_group++;
   const auto shared_frame = parent.frame;
   const auto program = parent.program;
+  const auto design_process = parent.design_process;
   auto* const executor = parent.executor.get();
 
   std::set<ProcessId> children;
@@ -106,7 +107,7 @@ void Interpreter::Impl::spawn_fork(
     }
     ProcessState child;
     child.program = program;
-    child.design_process = parent.design_process;
+    child.design_process = design_process;
     child.program.id = child_id;
     child.program.name +=
         ".$fork[" + std::to_string(instruction) + "].child["

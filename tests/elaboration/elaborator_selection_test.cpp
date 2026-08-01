@@ -285,7 +285,7 @@ endmodule
             part_process.operations.begin(),
             part_process.operations.end(),
             [](const auto& operation) {
-              return std::holds_alternative<
+              return fsim::runtime::simir::operation_holds<
                   fsim::runtime::simir::DynamicPartSelect>(operation);
             })
         == 7);
@@ -765,7 +765,7 @@ endmodule
           return std::ranges::any_of(
               process.operations,
               [](const auto& operation) {
-                const auto* binary = std::get_if<
+                const auto* binary = fsim::runtime::simir::operation_get_if<
                     fsim::runtime::simir::Binary>(&operation);
                 return binary != nullptr
                     && binary->operation
@@ -881,12 +881,12 @@ endmodule
         dynamic_wait_process.operations.begin(),
         dynamic_wait_process.operations.end(),
         [](const fsim::runtime::simir::Operation& operation) {
-          return std::holds_alternative<
+          return fsim::runtime::simir::operation_holds<
               fsim::runtime::simir::WaitOn>(operation);
         });
     assert(dynamic_wait != dynamic_wait_process.operations.end());
     assert(
-        std::get<fsim::runtime::simir::WaitOn>(*dynamic_wait)
+        fsim::runtime::simir::operation_get<fsim::runtime::simir::WaitOn>(*dynamic_wait)
             .signals.size()
         == 1);
     auto dynamic_wildcard_interpreter =
@@ -970,7 +970,7 @@ endmodule
             sv_conditional_process.operations.begin(),
             sv_conditional_process.operations.end(),
             [](const fsim::runtime::simir::Operation& operation) {
-                return std::holds_alternative<
+                return fsim::runtime::simir::operation_holds<
                     fsim::runtime::simir::Branch>(operation);
             })
         == 5);
@@ -979,7 +979,7 @@ endmodule
             sv_conditional_process.operations.begin(),
             sv_conditional_process.operations.end(),
             [](const fsim::runtime::simir::Operation& operation) {
-                return std::holds_alternative<
+                return fsim::runtime::simir::operation_holds<
                     fsim::runtime::simir::LogicalNot>(operation);
             })
         == 10);
@@ -1333,7 +1333,7 @@ endmodule
     assert(std::ranges::any_of(
         elaborated_repeat_statements.design->processes().front().operations,
         [](const auto& operation) {
-          const auto* binary = std::get_if<
+          const auto* binary = fsim::runtime::simir::operation_get_if<
               fsim::runtime::simir::Binary>(&operation);
           return binary != nullptr
               && binary->operation

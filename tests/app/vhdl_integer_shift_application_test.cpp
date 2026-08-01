@@ -392,4 +392,5 @@ end architecture;
   }
   std::cout
       << "VHDL integer shift application tests passed\n";
+  return 0;
 }

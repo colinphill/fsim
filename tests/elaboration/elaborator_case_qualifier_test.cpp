@@ -86,7 +86,7 @@ endmodule
       operations,
       [](const fsim::runtime::simir::Operation& operation) {
         const auto* report =
-            std::get_if<fsim::runtime::simir::Report>(&operation);
+            fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Report>(&operation);
         return report != nullptr
             && report->severity
                 == fsim::runtime::simir::AssertionSeverity::warning;

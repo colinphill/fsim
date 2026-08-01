@@ -447,4 +447,5 @@ endmodule
       fsim::project::Optimization::o2);
   test_cli_failure_reporting(manifest);
   std::cout << "assertion application tests passed\n";
+  return 0;
 }

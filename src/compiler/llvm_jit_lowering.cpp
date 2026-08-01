@@ -114,10 +114,6 @@ using runtime::simir::WriteUpdateDynamicSlice;
 using runtime::simir::WriteUpdateDynamicPartSlice;
 using runtime::simir::WriteUpdateSlice;
 using runtime::simir::Yield;
-template <class... Ts> struct Overloaded : Ts... {
-  using Ts::operator()...;
-};
-template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
 void lower_process(llvm::Module &module, const std::string &symbol,
                    const Process &process,
                    const std::span<const std::uint32_t> signal_widths,
@@ -1205,501 +1201,211 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         index,
         runtime_error_if,
         return_result};
-    std::visit(
-        Overloaded{
-            [&](const LoadConstant& operation) {
-              signal_lowerer.lower(operation);
-            },
-            [&](const WriteProjectedWaveform& operation) {
-              signal_lowerer.lower(operation);
-            },
-            [&](const WriteProjected& operation) {
-              signal_lowerer.lower(operation);
-            },
-            [&](const WriteInertial& operation) {
-              signal_lowerer.lower(operation);
-            },
-            [&](const ReadSignal& operation) {
-              signal_lowerer.lower(operation);
-            },
-            [&](const SignalEvent& operation) {
-              signal_lowerer.lower(operation);
-            },
-            [&](const SignalLastValue& operation) {
-              signal_lowerer.lower(operation);
-            },
-            [&](const SignalLastEvent& operation) {
-              signal_lowerer.lower(operation);
-            },
-            [&](const SignalActive& operation) {
-              signal_lowerer.lower(operation);
-            },
-            [&](const CopyRegister& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const UnaryNot& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const LogicalNot& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const LogicalBinary& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const Reduction& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const CountOnes& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const CountBits& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const Shift& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const Extract& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const DynamicExtract& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const DynamicPartSelect& operation) {
-              value_lowerer.lower(operation); },
-            [&](const Insert& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const DynamicInsert& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const DynamicPartInsert& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const Concatenate& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const Binary& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const IntegerUnary& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const IntegerBinary& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const IntegerCheck& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const ConditionalSelect& operation) {
-              value_lowerer.lower(operation);
-            },
-            [&](const WriteBlocking &operation) {
-              signal_lowerer.lower(operation);
-            },
-            [&](const WriteUpdate &operation) {
-              signal_lowerer.lower(operation);
-            },
-            [&](const WriteAfter &operation) {
-              signal_lowerer.lower(operation);
-            },
-            [&](const WriteBlockingSlice& operation) {
-              signal_lowerer.lower(operation);
-            },
-            [&](const WriteUpdateSlice& operation) {
-              signal_lowerer.lower(operation);
-            },
-            [&](const WriteAfterSlice& operation) {
-              signal_lowerer.lower(operation);
-            },
-            [&](const ForceSignalSlice& operation) {
-              signal_lowerer.lower(operation);
-            },
-            [&](const ReleaseSignalSlice& operation) {
-              signal_lowerer.lower(operation);
-            },
-            [&](const WriteInertialSlice& operation) {
-              const auto signal_kind =
-                  signal_value_kinds.empty()
-                      ? ValueKind::logic4
-                      : signal_value_kinds[operation.signal];
-              const auto source = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.source),
-                  signal_kind);
-              if (signal_kind == ValueKind::logic9) {
-                store_logic9_word(logic9_word_slot, source);
-                builder.CreateCall(
-                    write_inertial_slice_logic9_type,
-                    write_inertial_slice_logic9_callback,
-                    {
-                        context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
-                        llvm::ConstantInt::get(
-                            i32, operation.offset),
-                        llvm::ConstantInt::get(i32, source.width),
-                        logic9_word_slot,
-                        constant_i64(
-                            context, operation.delays.rise),
-                        constant_i64(
-                            context, operation.delays.fall),
-                        constant_i64(
-                            context, operation.delays.turnoff)});
-                branch_to_next();
-                return;
-              }
+    fsim::runtime::simir::visit_operation(
+        [&](const auto& operation) {
+          using OperationType = std::decay_t<decltype(operation)>;
+          if constexpr (std::is_same_v<OperationType, LoadConstant>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveform>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, WriteProjected>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, WriteInertial>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, ReadSignal>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, SignalEvent>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, SignalLastValue>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, SignalLastEvent>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, SignalActive>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, CopyRegister>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, UnaryNot>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, LogicalNot>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, LogicalBinary>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, Reduction>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, CountOnes>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, CountBits>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, Shift>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, Extract>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, DynamicExtract>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, DynamicPartSelect>) {
+            value_lowerer.lower(operation); } else if constexpr (std::is_same_v<OperationType, Insert>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, DynamicInsert>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, DynamicPartInsert>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, Concatenate>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, Binary>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, IntegerUnary>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, IntegerBinary>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, IntegerCheck>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, ConditionalSelect>) {
+            value_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, WriteBlocking>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, WriteUpdate>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, WriteAfter>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, WriteBlockingSlice>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, WriteUpdateSlice>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, WriteAfterSlice>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, ForceSignalSlice>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, ReleaseSignalSlice>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, WriteInertialSlice>) {
+            const auto signal_kind =
+                signal_value_kinds.empty()
+                    ? ValueKind::logic4
+                    : signal_value_kinds[operation.signal];
+            const auto source = coerce_value_kind(
+                builder,
+                load_register(
+                    builder, registers, operation.source),
+                signal_kind);
+            if (signal_kind == ValueKind::logic9) {
+              store_logic9_word(logic9_word_slot, source);
               builder.CreateCall(
-                  write_inertial_slice_type,
-                  write_inertial_slice_callback,
+                  write_inertial_slice_logic9_type,
+                  write_inertial_slice_logic9_callback,
                   {
                       context_pointer,
                       llvm::ConstantInt::get(
                           i32, operation.signal),
                       llvm::ConstantInt::get(
                           i32, operation.offset),
-                      llvm::ConstantInt::get(
-                          i32, source.width),
-                      source.aval,
-                      source.bval,
-                      constant_i64(context, operation.delays.rise),
-                      constant_i64(context, operation.delays.fall),
+                      llvm::ConstantInt::get(i32, source.width),
+                      logic9_word_slot,
+                      constant_i64(
+                          context, operation.delays.rise),
+                      constant_i64(
+                          context, operation.delays.fall),
                       constant_i64(
                           context, operation.delays.turnoff)});
               branch_to_next();
-            },
-            [&](const WriteProjectedSlice& operation) {
-              const auto signal_kind =
-                  signal_value_kinds.empty()
-                      ? ValueKind::logic4
-                      : signal_value_kinds[operation.signal];
-              const auto source = coerce_value_kind(
-                  builder,
-                  load_register(
-                      builder, registers, operation.source),
-                  signal_kind);
-              if (signal_kind == ValueKind::logic9) {
-                store_logic9_word(logic9_word_slot, source);
-                builder.CreateCall(
-                    write_projected_slice_logic9_type,
-                    write_projected_slice_logic9_callback,
-                    {
-                        context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
-                        llvm::ConstantInt::get(
-                            i32, operation.offset),
-                        llvm::ConstantInt::get(i32, source.width),
-                        logic9_word_slot,
-                        constant_i64(
-                            context, operation.delay),
-                        constant_i64(
-                            context, operation.rejection),
-                        llvm::ConstantInt::get(
-                            i32,
-                            static_cast<std::uint32_t>(
-                                operation.mode))});
-                branch_to_next();
-                return;
-              }
+              return;
+            }
+            builder.CreateCall(
+                write_inertial_slice_type,
+                write_inertial_slice_callback,
+                {
+                    context_pointer,
+                    llvm::ConstantInt::get(
+                        i32, operation.signal),
+                    llvm::ConstantInt::get(
+                        i32, operation.offset),
+                    llvm::ConstantInt::get(
+                        i32, source.width),
+                    source.aval,
+                    source.bval,
+                    constant_i64(context, operation.delays.rise),
+                    constant_i64(context, operation.delays.fall),
+                    constant_i64(
+                        context, operation.delays.turnoff)});
+            branch_to_next();
+          } else if constexpr (std::is_same_v<OperationType, WriteProjectedSlice>) {
+            const auto signal_kind =
+                signal_value_kinds.empty()
+                    ? ValueKind::logic4
+                    : signal_value_kinds[operation.signal];
+            const auto source = coerce_value_kind(
+                builder,
+                load_register(
+                    builder, registers, operation.source),
+                signal_kind);
+            if (signal_kind == ValueKind::logic9) {
+              store_logic9_word(logic9_word_slot, source);
               builder.CreateCall(
-                  write_projected_slice_type,
-                  write_projected_slice_callback,
+                  write_projected_slice_logic9_type,
+                  write_projected_slice_logic9_callback,
                   {
                       context_pointer,
                       llvm::ConstantInt::get(
                           i32, operation.signal),
                       llvm::ConstantInt::get(
                           i32, operation.offset),
-                      llvm::ConstantInt::get(
-                          i32, source.width),
-                      source.aval,
-                      source.bval,
-                      constant_i64(context, operation.delay),
-                      constant_i64(context, operation.rejection),
+                      llvm::ConstantInt::get(i32, source.width),
+                      logic9_word_slot,
+                      constant_i64(
+                          context, operation.delay),
+                      constant_i64(
+                          context, operation.rejection),
                       llvm::ConstantInt::get(
                           i32,
                           static_cast<std::uint32_t>(
                               operation.mode))});
               branch_to_next();
-            },
-            [&](const WriteProjectedWaveformSlice& operation) {
-              const auto signal_kind =
-                  signal_value_kinds.empty()
-                      ? ValueKind::logic4
-                      : signal_value_kinds[operation.signal];
-              if (signal_kind == ValueKind::logic9) {
-                auto* array_type = llvm::ArrayType::get(
-                    logic9_projected_element_type,
-                    operation.elements.size());
-                auto* storage = builder.CreateAlloca(
-                    array_type,
-                    nullptr,
-                    "projected.logic9.slice.waveform");
-                for (std::size_t element_index = 0;
-                     element_index < operation.elements.size();
-                     ++element_index) {
-                  const auto& element =
-                      operation.elements[element_index];
-                  auto source = coerce_value_kind(
-                      builder,
-                      load_register(
-                          builder,
-                          registers,
-                          element.source),
-                      ValueKind::logic9);
-                  auto* slot = builder.CreateInBoundsGEP(
-                      array_type,
-                      storage,
-                      {
-                          llvm::ConstantInt::get(i32, 0),
-                          llvm::ConstantInt::get(
-                              i32,
-                              static_cast<std::uint32_t>(
-                                  element_index))});
-                  store_logic9_word(
-                      builder.CreateStructGEP(
-                          logic9_projected_element_type,
-                          slot,
-                          0),
-                      source);
-                  builder.CreateStore(
-                      constant_i64(context, element.delay),
-                      builder.CreateStructGEP(
-                          logic9_projected_element_type,
-                          slot,
-                          1));
-                }
-                const auto first = load_register(
-                    builder,
-                    registers,
-                    operation.elements.front().source);
-                builder.CreateCall(
-                    write_projected_waveform_slice_logic9_type,
-                    write_projected_waveform_slice_logic9_callback,
-                    {
-                        context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
-                        llvm::ConstantInt::get(
-                            i32, operation.offset),
-                        llvm::ConstantInt::get(i32, first.width),
-                        storage,
-                        llvm::ConstantInt::get(
-                            i32,
-                            static_cast<std::uint32_t>(
-                                operation.elements.size())),
-                        constant_i64(
-                            context, operation.rejection),
-                        llvm::ConstantInt::get(
-                            i32,
-                            static_cast<std::uint32_t>(
-                                operation.mode))});
-                branch_to_next();
-                return;
-              }
-              auto* array_type = llvm::ArrayType::get(
-                  projected_element_type, operation.elements.size());
-              auto* storage = builder.CreateAlloca(
-                  array_type, nullptr, "projected.slice.waveform");
-              for (std::size_t element_index = 0;
-                   element_index < operation.elements.size();
-                   ++element_index) {
-                const auto& element =
-                    operation.elements[element_index];
-                const auto source =
-                    load_register(builder, registers, element.source);
-                auto* slot = builder.CreateInBoundsGEP(
-                    array_type,
-                    storage,
-                    {llvm::ConstantInt::get(i32, 0),
-                     llvm::ConstantInt::get(
-                         i32,
-                         static_cast<std::uint32_t>(element_index))});
-                builder.CreateStore(
+              return;
+            }
+            builder.CreateCall(
+                write_projected_slice_type,
+                write_projected_slice_callback,
+                {
+                    context_pointer,
+                    llvm::ConstantInt::get(
+                        i32, operation.signal),
+                    llvm::ConstantInt::get(
+                        i32, operation.offset),
+                    llvm::ConstantInt::get(
+                        i32, source.width),
                     source.aval,
-                    builder.CreateStructGEP(
-                        projected_element_type, slot, 0));
-                builder.CreateStore(
                     source.bval,
-                    builder.CreateStructGEP(
-                        projected_element_type, slot, 1));
-                builder.CreateStore(
-                    constant_i64(context, element.delay),
-                    builder.CreateStructGEP(
-                        projected_element_type, slot, 2));
-              }
-              const auto first = load_register(
-                  builder, registers, operation.elements.front().source);
-              builder.CreateCall(
-                  write_projected_waveform_slice_type,
-                  write_projected_waveform_slice_callback,
-                  {
-                      context_pointer,
-                      llvm::ConstantInt::get(i32, operation.signal),
-                      llvm::ConstantInt::get(i32, operation.offset),
-                      llvm::ConstantInt::get(i32, first.width),
-                      storage,
-                      llvm::ConstantInt::get(
-                          i32,
-                          static_cast<std::uint32_t>(
-                              operation.elements.size())),
-                      constant_i64(context, operation.rejection),
-                      llvm::ConstantInt::get(
-                          i32,
-                          static_cast<std::uint32_t>(
-                              operation.mode))});
-              branch_to_next();
-            },
-            [&](const WriteBlockingDynamicSlice& operation) {
-              emit_dynamic_slice(
-                  operation.signal,
-                  operation.source,
-                  dynamic_offset_i32(operation.selection),
-                  write_blocking_slice_callback,
-                  write_blocking_slice_logic9_callback);
-            },
-            [&](const WriteUpdateDynamicSlice& operation) {
-              emit_dynamic_slice(
-                  operation.signal,
-                  operation.source,
-                  dynamic_offset_i32(operation.selection),
-                  write_update_slice_callback,
-                  write_update_slice_logic9_callback);
-            },
-            [&](const WriteAfterDynamicSlice& operation) {
-              emit_dynamic_after_slice(
-                  operation,
-                  dynamic_offset_i32(operation.selection));
-            },
-            [&](const WriteBlockingDynamicPartSlice& operation) {
-              emit_dynamic_part_slice(
-                  operation.signal,
-                  operation.source,
-                  operation.selection,
-                  write_blocking_slice_callback,
-                  write_blocking_slice_logic9_callback,
-                  std::nullopt);
-            },
-            [&](const WriteUpdateDynamicPartSlice& operation) {
-              emit_dynamic_part_slice(
-                  operation.signal,
-                  operation.source,
-                  operation.selection,
-                  write_update_slice_callback,
-                  write_update_slice_logic9_callback,
-                  std::nullopt);
-            },
-            [&](const WriteAfterDynamicPartSlice& operation) {
-              emit_dynamic_part_slice(
-                  operation.signal,
-                  operation.source,
-                  operation.selection,
-                  write_after_slice_callback,
-                  write_after_slice_logic9_callback,
-                  operation.delay);
-            },
-            [&](const WriteInertialDynamicSlice& operation) {
-              emit_dynamic_inertial_slice(
-                  operation,
-                  dynamic_offset_i32(operation.selection));
-            },
-            [&](const WriteProjectedDynamicSlice& operation) {
-              emit_dynamic_projected_slice(
-                  operation,
-                  dynamic_offset_i32(operation.selection));
-            },
-            [&](const WriteProjectedWaveformDynamicSlice& operation) {
-              const auto signal_kind =
-                  signal_value_kinds.empty()
-                      ? ValueKind::logic4
-                      : signal_value_kinds[operation.signal];
-              auto* offset =
-                  dynamic_offset_i32(operation.selection);
-              if (signal_kind == ValueKind::logic9) {
-                auto* array_type = llvm::ArrayType::get(
-                    logic9_projected_element_type,
-                    operation.elements.size());
-                auto* storage = builder.CreateAlloca(
-                    array_type,
-                    nullptr,
-                    "projected.logic9.dynamic.slice.waveform");
-                for (std::size_t element_index = 0;
-                     element_index < operation.elements.size();
-                     ++element_index) {
-                  const auto& element =
-                      operation.elements[element_index];
-                  auto source = coerce_value_kind(
-                      builder,
-                      load_register(
-                          builder,
-                          registers,
-                          element.source),
-                      ValueKind::logic9);
-                  auto* slot = builder.CreateInBoundsGEP(
-                      array_type,
-                      storage,
-                      {
-                          llvm::ConstantInt::get(i32, 0),
-                          llvm::ConstantInt::get(
-                              i32,
-                              static_cast<std::uint32_t>(
-                                  element_index))});
-                  store_logic9_word(
-                      builder.CreateStructGEP(
-                          logic9_projected_element_type,
-                          slot,
-                          0),
-                      source);
-                  builder.CreateStore(
-                      constant_i64(context, element.delay),
-                      builder.CreateStructGEP(
-                          logic9_projected_element_type,
-                          slot,
-                          1));
-                }
-                const auto first = load_register(
-                    builder,
-                    registers,
-                    operation.elements.front().source);
-                builder.CreateCall(
-                    write_projected_waveform_slice_logic9_type,
-                    write_projected_waveform_slice_logic9_callback,
-                    {
-                        context_pointer,
-                        llvm::ConstantInt::get(
-                            i32, operation.signal),
-                        offset,
-                        llvm::ConstantInt::get(
-                            i32, first.width),
-                        storage,
-                        llvm::ConstantInt::get(
-                            i32,
-                            static_cast<std::uint32_t>(
-                                operation.elements.size())),
-                        constant_i64(
-                            context, operation.rejection),
-                        llvm::ConstantInt::get(
-                            i32,
-                            static_cast<std::uint32_t>(
-                                operation.mode))});
-                branch_to_next();
-                return;
-              }
+                    constant_i64(context, operation.delay),
+                    constant_i64(context, operation.rejection),
+                    llvm::ConstantInt::get(
+                        i32,
+                        static_cast<std::uint32_t>(
+                            operation.mode))});
+            branch_to_next();
+          } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveformSlice>) {
+            const auto signal_kind =
+                signal_value_kinds.empty()
+                    ? ValueKind::logic4
+                    : signal_value_kinds[operation.signal];
+            if (signal_kind == ValueKind::logic9) {
               auto* array_type = llvm::ArrayType::get(
-                  projected_element_type,
+                  logic9_projected_element_type,
                   operation.elements.size());
               auto* storage = builder.CreateAlloca(
                   array_type,
                   nullptr,
-                  "projected.dynamic.slice.waveform");
+                  "projected.logic9.slice.waveform");
               for (std::size_t element_index = 0;
                    element_index < operation.elements.size();
                    ++element_index) {
                 const auto& element =
                     operation.elements[element_index];
-                const auto source = load_register(
-                    builder, registers, element.source);
+                auto source = coerce_value_kind(
+                    builder,
+                    load_register(
+                        builder,
+                        registers,
+                        element.source),
+                    ValueKind::logic9);
                 auto* slot = builder.CreateInBoundsGEP(
                     array_type,
                     storage,
@@ -1709,31 +1415,32 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                             i32,
                             static_cast<std::uint32_t>(
                                 element_index))});
-                builder.CreateStore(
-                    source.aval,
+                store_logic9_word(
                     builder.CreateStructGEP(
-                        projected_element_type, slot, 0));
-                builder.CreateStore(
-                    source.bval,
-                    builder.CreateStructGEP(
-                        projected_element_type, slot, 1));
+                        logic9_projected_element_type,
+                        slot,
+                        0),
+                    source);
                 builder.CreateStore(
                     constant_i64(context, element.delay),
                     builder.CreateStructGEP(
-                        projected_element_type, slot, 2));
+                        logic9_projected_element_type,
+                        slot,
+                        1));
               }
               const auto first = load_register(
                   builder,
                   registers,
                   operation.elements.front().source);
               builder.CreateCall(
-                  write_projected_waveform_slice_type,
-                  write_projected_waveform_slice_callback,
+                  write_projected_waveform_slice_logic9_type,
+                  write_projected_waveform_slice_logic9_callback,
                   {
                       context_pointer,
                       llvm::ConstantInt::get(
                           i32, operation.signal),
-                      offset,
+                      llvm::ConstantInt::get(
+                          i32, operation.offset),
                       llvm::ConstantInt::get(i32, first.width),
                       storage,
                       llvm::ConstantInt::get(
@@ -1747,249 +1454,466 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                           static_cast<std::uint32_t>(
                               operation.mode))});
               branch_to_next();
-            },
-            [&](const Assert &operation) {
-              const auto condition =
-                  load_register(builder, registers, operation.condition);
-              auto *known = builder.CreateICmpEQ(
-                  condition.bval, constant_i64(context, 0));
-              auto *one = builder.CreateICmpEQ(condition.aval,
-                                               constant_i64(context, 1));
-              auto *passed = builder.CreateAnd(known, one);
-              auto *failed_block =
-                  llvm::BasicBlock::Create(
-                      context, "assert.failed." + std::to_string(index),
-                      function);
-              builder.CreateCondBr(
-                  passed, instruction_blocks[index + 1], failed_block);
-
-              builder.SetInsertPoint(failed_block);
-              if (operation.severity
-                  == runtime::simir::AssertionSeverity::failure) {
-                const auto &message =
-                    operation.message.empty()
-                        ? std::string{"assertion failed"}
-                        : operation.message;
-                auto *message_pointer = builder.CreateGlobalString(
-                    message,
-                    symbol + ".assert." + std::to_string(index));
-                builder.CreateCall(
-                    assert_type,
-                    assert_callback,
+              return;
+            }
+            auto* array_type = llvm::ArrayType::get(
+                projected_element_type, operation.elements.size());
+            auto* storage = builder.CreateAlloca(
+                array_type, nullptr, "projected.slice.waveform");
+            for (std::size_t element_index = 0;
+                 element_index < operation.elements.size();
+                 ++element_index) {
+              const auto& element =
+                  operation.elements[element_index];
+              const auto source =
+                  load_register(builder, registers, element.source);
+              auto* slot = builder.CreateInBoundsGEP(
+                  array_type,
+                  storage,
+                  {llvm::ConstantInt::get(i32, 0),
+                   llvm::ConstantInt::get(
+                       i32,
+                       static_cast<std::uint32_t>(element_index))});
+              builder.CreateStore(
+                  source.aval,
+                  builder.CreateStructGEP(
+                      projected_element_type, slot, 0));
+              builder.CreateStore(
+                  source.bval,
+                  builder.CreateStructGEP(
+                      projected_element_type, slot, 1));
+              builder.CreateStore(
+                  constant_i64(context, element.delay),
+                  builder.CreateStructGEP(
+                      projected_element_type, slot, 2));
+            }
+            const auto first = load_register(
+                builder, registers, operation.elements.front().source);
+            builder.CreateCall(
+                write_projected_waveform_slice_type,
+                write_projected_waveform_slice_callback,
+                {
+                    context_pointer,
+                    llvm::ConstantInt::get(i32, operation.signal),
+                    llvm::ConstantInt::get(i32, operation.offset),
+                    llvm::ConstantInt::get(i32, first.width),
+                    storage,
+                    llvm::ConstantInt::get(
+                        i32,
+                        static_cast<std::uint32_t>(
+                            operation.elements.size())),
+                    constant_i64(context, operation.rejection),
+                    llvm::ConstantInt::get(
+                        i32,
+                        static_cast<std::uint32_t>(
+                            operation.mode))});
+            branch_to_next();
+          } else if constexpr (std::is_same_v<OperationType, WriteBlockingDynamicSlice>) {
+            emit_dynamic_slice(
+                operation.signal,
+                operation.source,
+                dynamic_offset_i32(operation.selection),
+                write_blocking_slice_callback,
+                write_blocking_slice_logic9_callback);
+          } else if constexpr (std::is_same_v<OperationType, WriteUpdateDynamicSlice>) {
+            emit_dynamic_slice(
+                operation.signal,
+                operation.source,
+                dynamic_offset_i32(operation.selection),
+                write_update_slice_callback,
+                write_update_slice_logic9_callback);
+          } else if constexpr (std::is_same_v<OperationType, WriteAfterDynamicSlice>) {
+            emit_dynamic_after_slice(
+                operation,
+                dynamic_offset_i32(operation.selection));
+          } else if constexpr (std::is_same_v<OperationType, WriteBlockingDynamicPartSlice>) {
+            emit_dynamic_part_slice(
+                operation.signal,
+                operation.source,
+                operation.selection,
+                write_blocking_slice_callback,
+                write_blocking_slice_logic9_callback,
+                std::nullopt);
+          } else if constexpr (std::is_same_v<OperationType, WriteUpdateDynamicPartSlice>) {
+            emit_dynamic_part_slice(
+                operation.signal,
+                operation.source,
+                operation.selection,
+                write_update_slice_callback,
+                write_update_slice_logic9_callback,
+                std::nullopt);
+          } else if constexpr (std::is_same_v<OperationType, WriteAfterDynamicPartSlice>) {
+            emit_dynamic_part_slice(
+                operation.signal,
+                operation.source,
+                operation.selection,
+                write_after_slice_callback,
+                write_after_slice_logic9_callback,
+                operation.delay);
+          } else if constexpr (std::is_same_v<OperationType, WriteInertialDynamicSlice>) {
+            emit_dynamic_inertial_slice(
+                operation,
+                dynamic_offset_i32(operation.selection));
+          } else if constexpr (std::is_same_v<OperationType, WriteProjectedDynamicSlice>) {
+            emit_dynamic_projected_slice(
+                operation,
+                dynamic_offset_i32(operation.selection));
+          } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveformDynamicSlice>) {
+            const auto signal_kind =
+                signal_value_kinds.empty()
+                    ? ValueKind::logic4
+                    : signal_value_kinds[operation.signal];
+            auto* offset =
+                dynamic_offset_i32(operation.selection);
+            if (signal_kind == ValueKind::logic9) {
+              auto* array_type = llvm::ArrayType::get(
+                  logic9_projected_element_type,
+                  operation.elements.size());
+              auto* storage = builder.CreateAlloca(
+                  array_type,
+                  nullptr,
+                  "projected.logic9.dynamic.slice.waveform");
+              for (std::size_t element_index = 0;
+                   element_index < operation.elements.size();
+                   ++element_index) {
+                const auto& element =
+                    operation.elements[element_index];
+                auto source = coerce_value_kind(
+                    builder,
+                    load_register(
+                        builder,
+                        registers,
+                        element.source),
+                    ValueKind::logic9);
+                auto* slot = builder.CreateInBoundsGEP(
+                    array_type,
+                    storage,
                     {
-                        context_pointer,
-                        llvm::ConstantInt::get(i32, process.id),
-                        llvm::ConstantInt::get(i32, instruction),
-                        message_pointer,
-                        constant_i64(context, message.size()),
-                    });
-                return_result(
-                    FSIM_JIT_RESUME_STATUS_ASSERTION_FAILED,
-                    instruction,
-                    0,
-                    FSIM_JIT_FRAME_STATE_ASSERTION_FAILED,
-                    instruction);
-              } else {
-                builder.CreateCall(
-                    report_type,
-                    report_callback,
-                    {
-                        context_pointer,
-                        llvm::ConstantInt::get(i32, process.id),
-                        llvm::ConstantInt::get(i32, instruction),
-                    });
-                builder.CreateBr(
-                    instruction_blocks[index + 1]);
-              }
-            },
-            [&](const DebugPoint&) {
-              if (debug_instrumentation) {
-                return_result(
-                    FSIM_JIT_RESUME_STATUS_DEBUG_POINT, instruction, 0,
-                    FSIM_JIT_FRAME_STATE_READY, next_instruction);
-              } else {
-                auto* enabled = builder.CreateICmpNE(
-                    builder.CreateAnd(
-                        runtime_flags,
+                        llvm::ConstantInt::get(i32, 0),
                         llvm::ConstantInt::get(
-                            i32, FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS)),
-                    llvm::ConstantInt::get(i32, 0));
-                auto* enabled_block = llvm::BasicBlock::Create(
-                    context,
-                    "debug.enabled." + std::to_string(index),
-                    function);
-                builder.CreateCondBr(
-                    enabled, enabled_block,
-                    instruction_blocks[index + 1]);
-                builder.SetInsertPoint(enabled_block);
-                return_result(
-                    FSIM_JIT_RESUME_STATUS_DEBUG_POINT, instruction, 0,
-                    FSIM_JIT_FRAME_STATE_READY, next_instruction);
+                            i32,
+                            static_cast<std::uint32_t>(
+                                element_index))});
+                store_logic9_word(
+                    builder.CreateStructGEP(
+                        logic9_projected_element_type,
+                        slot,
+                        0),
+                    source);
+                builder.CreateStore(
+                    constant_i64(context, element.delay),
+                    builder.CreateStructGEP(
+                        logic9_projected_element_type,
+                        slot,
+                        1));
               }
-            },
-            [&](const Display& operation) {
-              output_lowerer.lower(operation);
-            },
-            [&](const FormatDisplay& operation) {
-              const auto value =
-                  load_register(builder, registers, operation.source);
-              if (value.kind == ValueKind::logic9) {
-                store_logic9_word(logic9_word_slot, value);
-                builder.CreateCall(
-                    formatted_output_logic9_type,
-                    write_formatted_logic9_callback,
-                    {
-                        context_pointer,
-                        llvm::ConstantInt::get(i32, process.id),
-                        llvm::ConstantInt::get(i32, instruction),
-                        llvm::ConstantInt::get(i32, value.width),
-                        logic9_word_slot});
-                branch_to_next();
-                return;
-              }
+              const auto first = load_register(
+                  builder,
+                  registers,
+                  operation.elements.front().source);
               builder.CreateCall(
-                  formatted_output_type,
-                  formatted_output_callback,
+                  write_projected_waveform_slice_logic9_type,
+                  write_projected_waveform_slice_logic9_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(
+                          i32, operation.signal),
+                      offset,
+                      llvm::ConstantInt::get(
+                          i32, first.width),
+                      storage,
+                      llvm::ConstantInt::get(
+                          i32,
+                          static_cast<std::uint32_t>(
+                              operation.elements.size())),
+                      constant_i64(
+                          context, operation.rejection),
+                      llvm::ConstantInt::get(
+                          i32,
+                          static_cast<std::uint32_t>(
+                              operation.mode))});
+              branch_to_next();
+              return;
+            }
+            auto* array_type = llvm::ArrayType::get(
+                projected_element_type,
+                operation.elements.size());
+            auto* storage = builder.CreateAlloca(
+                array_type,
+                nullptr,
+                "projected.dynamic.slice.waveform");
+            for (std::size_t element_index = 0;
+                 element_index < operation.elements.size();
+                 ++element_index) {
+              const auto& element =
+                  operation.elements[element_index];
+              const auto source = load_register(
+                  builder, registers, element.source);
+              auto* slot = builder.CreateInBoundsGEP(
+                  array_type,
+                  storage,
+                  {
+                      llvm::ConstantInt::get(i32, 0),
+                      llvm::ConstantInt::get(
+                          i32,
+                          static_cast<std::uint32_t>(
+                              element_index))});
+              builder.CreateStore(
+                  source.aval,
+                  builder.CreateStructGEP(
+                      projected_element_type, slot, 0));
+              builder.CreateStore(
+                  source.bval,
+                  builder.CreateStructGEP(
+                      projected_element_type, slot, 1));
+              builder.CreateStore(
+                  constant_i64(context, element.delay),
+                  builder.CreateStructGEP(
+                      projected_element_type, slot, 2));
+            }
+            const auto first = load_register(
+                builder,
+                registers,
+                operation.elements.front().source);
+            builder.CreateCall(
+                write_projected_waveform_slice_type,
+                write_projected_waveform_slice_callback,
+                {
+                    context_pointer,
+                    llvm::ConstantInt::get(
+                        i32, operation.signal),
+                    offset,
+                    llvm::ConstantInt::get(i32, first.width),
+                    storage,
+                    llvm::ConstantInt::get(
+                        i32,
+                        static_cast<std::uint32_t>(
+                            operation.elements.size())),
+                    constant_i64(
+                        context, operation.rejection),
+                    llvm::ConstantInt::get(
+                        i32,
+                        static_cast<std::uint32_t>(
+                            operation.mode))});
+            branch_to_next();
+          } else if constexpr (std::is_same_v<OperationType, Assert>) {
+            const auto condition =
+                load_register(builder, registers, operation.condition);
+            auto *known = builder.CreateICmpEQ(
+                condition.bval, constant_i64(context, 0));
+            auto *one = builder.CreateICmpEQ(condition.aval,
+                                             constant_i64(context, 1));
+            auto *passed = builder.CreateAnd(known, one);
+            auto *failed_block =
+                llvm::BasicBlock::Create(
+                    context, "assert.failed." + std::to_string(index),
+                    function);
+            builder.CreateCondBr(
+                passed, instruction_blocks[index + 1], failed_block);
+
+            builder.SetInsertPoint(failed_block);
+            if (operation.severity
+                == runtime::simir::AssertionSeverity::failure) {
+              const auto &message =
+                  operation.message.empty()
+                      ? std::string{"assertion failed"}
+                      : operation.message;
+              auto *message_pointer = builder.CreateGlobalString(
+                  message,
+                  symbol + ".assert." + std::to_string(index));
+              builder.CreateCall(
+                  assert_type,
+                  assert_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(i32, process.id),
+                      llvm::ConstantInt::get(i32, instruction),
+                      message_pointer,
+                      constant_i64(context, message.size()),
+                  });
+              return_result(
+                  FSIM_JIT_RESUME_STATUS_ASSERTION_FAILED,
+                  instruction,
+                  0,
+                  FSIM_JIT_FRAME_STATE_ASSERTION_FAILED,
+                  instruction);
+            } else {
+              builder.CreateCall(
+                  report_type,
+                  report_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(i32, process.id),
+                      llvm::ConstantInt::get(i32, instruction),
+                  });
+              builder.CreateBr(
+                  instruction_blocks[index + 1]);
+            }
+          } else if constexpr (std::is_same_v<OperationType, DebugPoint>) {
+            if (debug_instrumentation) {
+              return_result(
+                  FSIM_JIT_RESUME_STATUS_DEBUG_POINT, instruction, 0,
+                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
+            } else {
+              auto* enabled = builder.CreateICmpNE(
+                  builder.CreateAnd(
+                      runtime_flags,
+                      llvm::ConstantInt::get(
+                          i32, FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS)),
+                  llvm::ConstantInt::get(i32, 0));
+              auto* enabled_block = llvm::BasicBlock::Create(
+                  context,
+                  "debug.enabled." + std::to_string(index),
+                  function);
+              builder.CreateCondBr(
+                  enabled, enabled_block,
+                  instruction_blocks[index + 1]);
+              builder.SetInsertPoint(enabled_block);
+              return_result(
+                  FSIM_JIT_RESUME_STATUS_DEBUG_POINT, instruction, 0,
+                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
+            }
+          } else if constexpr (std::is_same_v<OperationType, Display>) {
+            output_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, FormatDisplay>) {
+            const auto value =
+                load_register(builder, registers, operation.source);
+            if (value.kind == ValueKind::logic9) {
+              store_logic9_word(logic9_word_slot, value);
+              builder.CreateCall(
+                  formatted_output_logic9_type,
+                  write_formatted_logic9_callback,
                   {
                       context_pointer,
                       llvm::ConstantInt::get(i32, process.id),
                       llvm::ConstantInt::get(i32, instruction),
                       llvm::ConstantInt::get(i32, value.width),
-                      value.aval,
-                      value.bval,
-                  });
+                      logic9_word_slot});
               branch_to_next();
-            },
-            [&](const TimeDisplay& operation) {
-              output_lowerer.lower(operation);
-            },
-            [&](const MonitorInstall& operation) {
-              output_lowerer.lower(operation);
-            },
-            [&](const MonitorControl& operation) {
-              output_lowerer.lower(operation);
-            },
-            [&](const RandomValue& operation) {
-              const auto zero = constant_i64(context, 0);
-              const auto maximum =
-                  operation.maximum
-                      ? load_register(
-                            builder, registers, *operation.maximum)
-                      : EncodedValue{zero, zero, 32};
-              const auto minimum =
-                  operation.minimum
-                      ? load_register(
-                            builder, registers, *operation.minimum)
-                      : EncodedValue{zero, zero, 32};
-              builder.CreateStore(zero, read_bval_slot);
-              auto* aval = builder.CreateCall(
-                  random_value_type,
-                  random_value_callback,
-                  {
-                      context_pointer,
-                      llvm::ConstantInt::get(i32, process.id),
-                      llvm::ConstantInt::get(i32, instruction),
-                      maximum.aval,
-                      maximum.bval,
-                      minimum.aval,
-                      minimum.bval,
-                      read_bval_slot,
-                  });
-              auto* bval = builder.CreateLoad(
-                  i64, read_bval_slot, "random.bval");
-              store_register(
-                  builder,
-                  registers,
-                  operation.destination,
-                  EncodedValue{aval, bval, 32});
-              branch_to_next();
-            },
-            [&](const Report& operation) {
-              output_lowerer.lower(operation);
-            },
-            [&](const Jump &operation) {
-              control_lowerer.lower(operation);
-            },
-            [&](const Call& operation) {
-              control_lowerer.lower(operation);
-            },
-            [&](const Return& operation) {
-              control_lowerer.lower(operation);
-            },
-            [&](const Branch &operation) {
-              control_lowerer.lower(operation);
-            },
-            [&](const WaitFor &operation) {
-              output_lowerer.lower(operation);
-            },
-            [&](const WaitOn &operation) {
-              output_lowerer.lower(operation);
-            },
-            [&](const WaitSensitivity &) {
-              return_result(
-                  FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY, instruction, 0,
-                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
-            },
-            [&](const WaitForever &) {
-              return_result(
-                  FSIM_JIT_RESUME_STATUS_WAIT_FOREVER, instruction, 0,
-                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
-            },
-            [&](const Yield &) {
-              return_result(
-                  FSIM_JIT_RESUME_STATUS_YIELDED, instruction, 0,
-                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
-            },
-            [&](const Fork&) {
-              return_result(
-                  FSIM_JIT_RESUME_STATUS_FORK, instruction, 0,
-                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
-            },
-            [&](const ForkEnd&) {
-              return_result(
-                  FSIM_JIT_RESUME_STATUS_FORK_END, instruction, 0,
-                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
-            },
-            [&](const WaitFork&) {
-              return_result(
-                  FSIM_JIT_RESUME_STATUS_WAIT_FORK, instruction, 0,
-                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
-            },
-            [&](const DisableFork&) {
-              return_result(
-                  FSIM_JIT_RESUME_STATUS_DISABLE_FORK, instruction, 0,
-                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
-            },
-            [&](const Pause &) {
-              return_result(
-                  FSIM_JIT_RESUME_STATUS_PAUSED, instruction, 0,
-                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
-            },
-            [&](const Stop &) {
-              return_result(
-                  FSIM_JIT_RESUME_STATUS_STOPPED, instruction, 0,
-                  FSIM_JIT_FRAME_STATE_STOPPED, next_instruction);
-            },
-            [&](const Halt &) {
-              return_result(
-                  FSIM_JIT_RESUME_STATUS_COMPLETED, instruction, 0,
-                  FSIM_JIT_FRAME_STATE_COMPLETED, next_instruction);
-            },
-            [&](const auto& operation) {
-              if constexpr (
-                  requires { file_lowerer.lower(operation); }) {
-                file_lowerer.lower(operation);
-              } else if constexpr (
-                  requires { string_lowerer.lower(operation); }) {
-                string_lowerer.lower(operation);
-              } else if constexpr (
-                  requires { container_lowerer.lower(operation); }) {
-                container_lowerer.lower(operation);
-              } else {
-                llvm_unreachable(
-                    "unsupported operations were rejected before lowering");
-              }
-            }},
+              return;
+            }
+            builder.CreateCall(
+                formatted_output_type,
+                formatted_output_callback,
+                {
+                    context_pointer,
+                    llvm::ConstantInt::get(i32, process.id),
+                    llvm::ConstantInt::get(i32, instruction),
+                    llvm::ConstantInt::get(i32, value.width),
+                    value.aval,
+                    value.bval,
+                });
+            branch_to_next();
+          } else if constexpr (std::is_same_v<OperationType, TimeDisplay>) {
+            output_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, MonitorInstall>) {
+            output_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, MonitorControl>) {
+            output_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, RandomValue>) {
+            const auto zero = constant_i64(context, 0);
+            const auto maximum =
+                operation.maximum
+                    ? load_register(
+                          builder, registers, *operation.maximum)
+                    : EncodedValue{zero, zero, 32};
+            const auto minimum =
+                operation.minimum
+                    ? load_register(
+                          builder, registers, *operation.minimum)
+                    : EncodedValue{zero, zero, 32};
+            builder.CreateStore(zero, read_bval_slot);
+            auto* aval = builder.CreateCall(
+                random_value_type,
+                random_value_callback,
+                {
+                    context_pointer,
+                    llvm::ConstantInt::get(i32, process.id),
+                    llvm::ConstantInt::get(i32, instruction),
+                    maximum.aval,
+                    maximum.bval,
+                    minimum.aval,
+                    minimum.bval,
+                    read_bval_slot,
+                });
+            auto* bval = builder.CreateLoad(
+                i64, read_bval_slot, "random.bval");
+            store_register(
+                builder,
+                registers,
+                operation.destination,
+                EncodedValue{aval, bval, 32});
+            branch_to_next();
+          } else if constexpr (std::is_same_v<OperationType, Report>) {
+            output_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, Jump>) {
+            control_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, Call>) {
+            control_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, Return>) {
+            control_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, Branch>) {
+            control_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, WaitFor>) {
+            output_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, WaitOn>) {
+            output_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, WaitSensitivity>) {
+            return_result(
+                FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY, instruction, 0,
+                FSIM_JIT_FRAME_STATE_READY, next_instruction);
+          } else if constexpr (std::is_same_v<OperationType, WaitForever>) {
+            return_result(
+                FSIM_JIT_RESUME_STATUS_WAIT_FOREVER, instruction, 0,
+                FSIM_JIT_FRAME_STATE_READY, next_instruction);
+          } else if constexpr (std::is_same_v<OperationType, Yield>) {
+            return_result(
+                FSIM_JIT_RESUME_STATUS_YIELDED, instruction, 0,
+                FSIM_JIT_FRAME_STATE_READY, next_instruction);
+          } else if constexpr (std::is_same_v<OperationType, Fork>) {
+            return_result(
+                FSIM_JIT_RESUME_STATUS_FORK, instruction, 0,
+                FSIM_JIT_FRAME_STATE_READY, next_instruction);
+          } else if constexpr (std::is_same_v<OperationType, ForkEnd>) {
+            return_result(
+                FSIM_JIT_RESUME_STATUS_FORK_END, instruction, 0,
+                FSIM_JIT_FRAME_STATE_READY, next_instruction);
+          } else if constexpr (std::is_same_v<OperationType, WaitFork>) {
+            return_result(
+                FSIM_JIT_RESUME_STATUS_WAIT_FORK, instruction, 0,
+                FSIM_JIT_FRAME_STATE_READY, next_instruction);
+          } else if constexpr (std::is_same_v<OperationType, DisableFork>) {
+            return_result(
+                FSIM_JIT_RESUME_STATUS_DISABLE_FORK, instruction, 0,
+                FSIM_JIT_FRAME_STATE_READY, next_instruction);
+          } else if constexpr (std::is_same_v<OperationType, Pause>) {
+            return_result(
+                FSIM_JIT_RESUME_STATUS_PAUSED, instruction, 0,
+                FSIM_JIT_FRAME_STATE_READY, next_instruction);
+          } else if constexpr (std::is_same_v<OperationType, Stop>) {
+            return_result(
+                FSIM_JIT_RESUME_STATUS_STOPPED, instruction, 0,
+                FSIM_JIT_FRAME_STATE_STOPPED, next_instruction);
+          } else if constexpr (std::is_same_v<OperationType, Halt>) {
+            return_result(
+                FSIM_JIT_RESUME_STATUS_COMPLETED, instruction, 0,
+                FSIM_JIT_FRAME_STATE_COMPLETED, next_instruction);
+          } else {
+            if constexpr (
+                requires { file_lowerer.lower(operation); }) {
+              file_lowerer.lower(operation);
+            } else if constexpr (
+                requires { string_lowerer.lower(operation); }) {
+              string_lowerer.lower(operation);
+            } else if constexpr (
+                requires { container_lowerer.lower(operation); }) {
+              container_lowerer.lower(operation);
+            } else {
+              llvm_unreachable(
+                  "unsupported operations were rejected before lowering");
+            }
+          }
+        },
         process.operations[index]);
   }
 }

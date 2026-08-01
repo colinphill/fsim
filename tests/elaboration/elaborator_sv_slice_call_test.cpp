@@ -112,7 +112,7 @@ endmodule
       std::ranges::count_if(
           process.operations,
           [](const auto& operation) {
-            return std::holds_alternative<
+            return fsim::runtime::simir::operation_holds<
                 CopyContainerRegister>(operation);
           })
       >= 12);

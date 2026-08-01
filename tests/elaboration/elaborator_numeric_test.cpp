@@ -322,7 +322,7 @@ end architecture;
         dynamic_design.processes().front().operations,
         [](const auto& operation) {
           const auto* shift =
-              std::get_if<fsim::runtime::simir::Shift>(
+              fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Shift>(
                   &operation);
           return shift != nullptr && shift->signed_amount;
         });
@@ -331,7 +331,7 @@ end architecture;
         std::ranges::count_if(
             dynamic_design.processes().front().operations,
             [](const auto& operation) {
-              return std::holds_alternative<
+              return fsim::runtime::simir::operation_holds<
                   fsim::runtime::simir::IntegerCheck>(
                   operation);
             })
@@ -340,7 +340,7 @@ end architecture;
         dynamic_design.processes().front().operations,
         [](const auto& operation) {
           const auto* binary =
-              std::get_if<
+              fsim::runtime::simir::operation_get_if<
                   fsim::runtime::simir::IntegerBinary>(
                   &operation);
           return binary != nullptr
@@ -351,7 +351,7 @@ end architecture;
     assert(std::ranges::any_of(
         dynamic_design.processes().front().operations,
         [](const auto& operation) {
-          return std::holds_alternative<
+          return fsim::runtime::simir::operation_holds<
               fsim::runtime::simir::IntegerUnary>(
               operation);
         }));
@@ -535,7 +535,7 @@ end architecture;
                 return std::ranges::any_of(
                     process.operations,
                     [](const auto& operation) {
-                        return std::holds_alternative<
+                        return fsim::runtime::simir::operation_holds<
                             fsim::runtime::simir::IntegerCheck>(
                             operation);
                     });
@@ -819,10 +819,10 @@ end architecture;
                 return std::ranges::any_of(
                     process.operations,
                     [](const auto& operation) {
-                        return std::holds_alternative<
+                        return fsim::runtime::simir::operation_holds<
                                    fsim::runtime::simir::IntegerCheck>(
                                    operation)
-                            || std::holds_alternative<
+                            || fsim::runtime::simir::operation_holds<
                                    fsim::runtime::simir::IntegerBinary>(
                                    operation);
                     });
@@ -1075,7 +1075,7 @@ end architecture;
             return std::ranges::any_of(
                 process.operations,
                 [](const auto& operation) {
-                    return std::holds_alternative<
+                    return fsim::runtime::simir::operation_holds<
                         fsim::runtime::simir::IntegerCheck>(
                         operation);
                 });

@@ -127,7 +127,7 @@ endmodule
        operation_index < process.operations.size();
        ++operation_index) {
     const auto* ordering =
-        std::get_if<OrderContainer>(
+        fsim::runtime::simir::operation_get_if<OrderContainer>(
             &process.operations[operation_index]);
     if (ordering == nullptr) {
       continue;
@@ -140,10 +140,10 @@ endmodule
         && ((type.index_left == 4 && type.index_right == 1)
             || (type.index_left == 1 && type.index_right == 4)));
     const auto* initialize_replacement =
-        std::get_if<CopyContainerRegister>(
+        fsim::runtime::simir::operation_get_if<CopyContainerRegister>(
             &process.operations[operation_index + 1]);
     const auto* commit_replacement =
-        std::get_if<CopyContainerRegister>(
+        fsim::runtime::simir::operation_get_if<CopyContainerRegister>(
             &process.operations[operation_index + 18]);
     assert(
         initialize_replacement != nullptr

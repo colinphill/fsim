@@ -2,12 +2,6 @@
 #include "simir_internal.hpp"
 #include "fsim/runtime/string_methods.hpp"
 namespace fsim::runtime::simir {
-namespace {
-template <class... Ts> struct Overloaded : Ts... {
-  using Ts::operator()...;
-};
-template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
-} // namespace
 struct Interpreter::Impl::ExecutionContext final
     : ProcessExecutionContext {
   Impl& owner;
@@ -629,7 +623,7 @@ void Interpreter::Impl::handle_boundary(
 
   const auto& operation = process.program.operations[instruction];
   process.pc = next_instruction;
-  if (const auto* point = std::get_if<DebugPoint>(&operation)) {
+  if (const auto* point = fsim::runtime::simir::operation_get_if<DebugPoint>(&operation)) {
     clear_wait_timeout(process);
     process.current_source = point->source;
     auto kind = ExecutionPointKind::statement;
@@ -657,7 +651,7 @@ void Interpreter::Impl::handle_boundary(
     }
     return;
   }
-  if (const auto* wait = std::get_if<WaitFor>(&operation)) {
+  if (const auto* wait = fsim::runtime::simir::operation_get_if<WaitFor>(&operation)) {
     clear_wait_timeout(process);
     if (wait->delay == 0) {
       process.queued = true;
@@ -685,7 +679,7 @@ void Interpreter::Impl::handle_boundary(
         process.current_source);
     return;
   }
-  if (const auto* wait = std::get_if<WaitOn>(&operation)) {
+  if (const auto* wait = fsim::runtime::simir::operation_get_if<WaitOn>(&operation)) {
     if (wait->signals.empty() && !wait->timeout) {
       process.pc = instruction;
       fail(
@@ -719,7 +713,7 @@ void Interpreter::Impl::handle_boundary(
             process,
             "WaitOn timeout origin must precede its rearm");
       }
-      const auto* origin = std::get_if<WaitOn>(
+      const auto* origin = fsim::runtime::simir::operation_get_if<WaitOn>(
           &process.program.operations[*wait->timeout_origin]);
       if (origin == nullptr
           || !origin->timeout
@@ -802,7 +796,7 @@ void Interpreter::Impl::handle_boundary(
         process.current_source);
     return;
   }
-  if (std::holds_alternative<WaitSensitivity>(operation)) {
+  if (fsim::runtime::simir::operation_holds<WaitSensitivity>(operation)) {
     clear_wait_timeout(process);
     if (process.program.static_sensitivity.empty()) {
       process.pc = instruction;
@@ -814,14 +808,14 @@ void Interpreter::Impl::handle_boundary(
         process.current_source);
     return;
   }
-  if (std::holds_alternative<WaitForever>(operation)) {
+  if (fsim::runtime::simir::operation_holds<WaitForever>(operation)) {
     clear_wait_timeout(process);
     notify_execution_point(
         process, instruction, ExecutionPointKind::process_suspend,
         process.current_source);
     return;
   }
-  if (std::holds_alternative<Yield>(operation)) {
+  if (fsim::runtime::simir::operation_holds<Yield>(operation)) {
     clear_wait_timeout(process);
     queue_next_delta(process.program.id);
     notify_execution_point(
@@ -832,7 +826,7 @@ void Interpreter::Impl::handle_boundary(
   if (handle_fork_boundary(process, instruction, operation)) {
     return;
   }
-  if (std::holds_alternative<Pause>(operation)) {
+  if (fsim::runtime::simir::operation_holds<Pause>(operation)) {
     clear_wait_timeout(process);
     scheduler.request_stop();
     queue_current(process.program.id);
@@ -841,7 +835,7 @@ void Interpreter::Impl::handle_boundary(
         process.current_source);
     return;
   }
-  if (std::holds_alternative<Stop>(operation)) {
+  if (fsim::runtime::simir::operation_holds<Stop>(operation)) {
     clear_wait_timeout(process);
     process.halted = true;
     stopped_by_design = true;
@@ -851,7 +845,7 @@ void Interpreter::Impl::handle_boundary(
         process.current_source);
     return;
   }
-  if (std::holds_alternative<Halt>(operation)) {
+  if (fsim::runtime::simir::operation_holds<Halt>(operation)) {
     clear_wait_timeout(process);
     notify_execution_point(
         process, instruction, ExecutionPointKind::process_suspend,
@@ -878,7 +872,7 @@ void Interpreter::Impl::execute(ProcessId id) {
       const auto boundary = process.executor->resume(context, process.pc);
       const bool debug_boundary =
           boundary.instruction < process.program.operations.size()
-          && std::holds_alternative<DebugPoint>(
+          && fsim::runtime::simir::operation_holds<DebugPoint>(
               process.program.operations[boundary.instruction]);
       if (boundary.external.kind
           == ExternalSuspendKind::simir_boundary) {
@@ -945,988 +939,735 @@ void Interpreter::Impl::execute(ProcessId id) {
           }
           return static_cast<std::size_t>(word.aval);
         };
-    std::visit(
-        Overloaded{
-            [&](const LoadConstant &op) {
+    fsim::runtime::simir::visit_operation(
+        [&](const auto& op) {
+          using OperationType = std::decay_t<decltype(op)>;
+          if constexpr (std::is_same_v<OperationType, LoadConstant>) {
+            get_register(process, op.destination) =
+                coerce_value_kind(
+                    op.value,
+                    register_value_kind(
+                        process, op.destination));
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, ReadSignal>) {
+            get_register(process, op.destination) =
+                coerce_value_kind(
+                    get_signal(op.signal).initial_value,
+                    register_value_kind(
+                        process, op.destination));
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, SignalEvent>) {
+            (void)get_signal(op.signal);
+            const auto& event = signal_events[op.signal];
+            const auto active =
+                event
+                && event->first == scheduler.now()
+                && event->second == scheduler.delta();
+            get_register(process, op.destination) =
+                PackedLogic4(
+                    1, active ? Logic4::one : Logic4::zero);
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, SignalLastValue>) {
+            (void)get_signal(op.signal);
+            get_register(process, op.destination) =
+                coerce_value_kind(
+                    signal_last_values[op.signal],
+                    register_value_kind(
+                        process, op.destination));
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, SignalLastEvent>) {
+            (void)get_signal(op.signal);
+            const auto& event = signal_events[op.signal];
+            const auto elapsed =
+                event
+                    ? scheduler.now() - event->first
+                    : std::numeric_limits<SimulationTick>::max();
+            get_register(process, op.destination) =
+                PackedLogic4::from_aval_bval(64, elapsed, 0);
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, SignalActive>) {
+            (void)get_signal(op.signal);
+            const auto& transaction = signal_transactions[op.signal];
+            const auto active =
+                transaction
+                && transaction->first == scheduler.now()
+                && transaction->second == scheduler.delta();
+            get_register(process, op.destination) =
+                PackedLogic4(
+                    1, active ? Logic4::one : Logic4::zero);
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, CopyRegister>) {
+            get_register(process, op.destination) =
+                coerce_value_kind(
+                    get_register(process, op.source),
+                    register_value_kind(
+                        process, op.destination));
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, LoadStringConstant>) {
+            if (op.value.size() > maximum_string_bytes) {
+              fail(process, "string literal exceeds 4096-byte limit");
+            }
+            get_string_register(process, op.destination) = op.value;
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, CopyStringRegister>) {
+            get_string_register(process, op.destination) =
+                get_string_register(process, op.source);
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, ReadStringObject>) {
+            get_string_register(process, op.destination) =
+                get_string_object(op.object).initial_value;
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, WriteStringObject>) {
+            get_string_object(op.object).initial_value =
+                get_string_register(process, op.source);
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, ConcatenateStrings>) {
+            std::string result;
+            for (const auto operand : op.operands) {
+              const auto& value =
+                  get_string_register(process, operand);
+              if (value.size()
+                  > maximum_string_bytes - result.size()) {
+                fail(
+                    process,
+                    "string concatenation exceeds 4096-byte limit");
+              }
+              result += value;
+            }
+            get_string_register(process, op.destination) =
+                std::move(result);
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, CompareStrings>) {
+            const bool equal =
+                get_string_register(process, op.lhs)
+                == get_string_register(process, op.rhs);
+            get_register(process, op.destination) =
+                PackedLogic4{
+                    1,
+                    equal != op.not_equal
+                        ? Logic4::one
+                        : Logic4::zero};
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, StringLength>) {
+            const auto size =
+                get_string_register(process, op.source).size();
+            get_register(process, op.destination) =
+                PackedLogic4::from_aval_bval(
+                    32, static_cast<std::uint32_t>(size), 0);
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, StringIndex>) {
+            auto& source =
+                get_string_register(process, op.source);
+            const auto index =
+                known_string_index(
+                    op.index, op.signed_index, source.size());
+            get_register(process, op.destination) =
+                PackedLogic4::from_aval_bval(
+                    8,
+                    static_cast<unsigned char>(source[index]),
+                    0);
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, StringReplaceByte>) {
+            auto& target =
+                get_string_register(process, op.target);
+            const auto index =
+                known_string_index(
+                    op.index, op.signed_index, target.size());
+            const auto byte =
+                get_register(process, op.source).low_word();
+            if (byte.bval != 0) {
+              fail(process, "string replacement byte contains X or Z");
+            }
+            target[index] =
+                static_cast<char>(byte.aval & UINT64_C(0xff));
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, StringMethod>) {
+            execute_string(process, op);
+          } else if constexpr (std::is_same_v<OperationType, UnaryNot>) {
+            get_register(process, op.destination) =
+                unary_not(get_register(process, op.source));
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, LogicalNot>) {
+            get_register(process, op.destination) =
+                logical_not(get_register(process, op.source));
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, LogicalBinary>) {
+            get_register(process, op.destination) =
+                logical_binary(
+                    op.operation,
+                    get_register(process, op.lhs),
+                    get_register(process, op.rhs));
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, Reduction>) {
+            get_register(process, op.destination) =
+                reduce_value(
+                    op.operation,
+                    get_register(process, op.source));
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, CountOnes>) {
+            get_register(process, op.destination) =
+                count_ones_value(
+                    get_register(process, op.source));
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, CountBits>) {
+            get_register(process, op.destination) =
+                count_bits_value(
+                    get_register(process, op.source),
+                    op.state_mask);
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, Shift>) {
+            get_register(process, op.destination) =
+                shift_value(
+                    op.operation,
+                    get_register(process, op.value),
+                    get_register(process, op.amount),
+                    op.signed_amount);
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, Extract>) {
+            try {
               get_register(process, op.destination) =
-                  coerce_value_kind(
-                      op.value,
-                      register_value_kind(
-                          process, op.destination));
-              ++process.pc;
-            },
-            [&](const ReadSignal &op) {
-              get_register(process, op.destination) =
-                  coerce_value_kind(
-                      get_signal(op.signal).initial_value,
-                      register_value_kind(
-                          process, op.destination));
-              ++process.pc;
-            },
-            [&](const SignalEvent& op) {
-              (void)get_signal(op.signal);
-              const auto& event = signal_events[op.signal];
-              const auto active =
-                  event
-                  && event->first == scheduler.now()
-                  && event->second == scheduler.delta();
-              get_register(process, op.destination) =
-                  PackedLogic4(
-                      1, active ? Logic4::one : Logic4::zero);
-              ++process.pc;
-            },
-            [&](const SignalLastValue& op) {
-              (void)get_signal(op.signal);
-              get_register(process, op.destination) =
-                  coerce_value_kind(
-                      signal_last_values[op.signal],
-                      register_value_kind(
-                          process, op.destination));
-              ++process.pc;
-            },
-            [&](const SignalLastEvent& op) {
-              (void)get_signal(op.signal);
-              const auto& event = signal_events[op.signal];
-              const auto elapsed =
-                  event
-                      ? scheduler.now() - event->first
-                      : std::numeric_limits<SimulationTick>::max();
-              get_register(process, op.destination) =
-                  PackedLogic4::from_aval_bval(64, elapsed, 0);
-              ++process.pc;
-            },
-            [&](const SignalActive& op) {
-              (void)get_signal(op.signal);
-              const auto& transaction = signal_transactions[op.signal];
-              const auto active =
-                  transaction
-                  && transaction->first == scheduler.now()
-                  && transaction->second == scheduler.delta();
-              get_register(process, op.destination) =
-                  PackedLogic4(
-                      1, active ? Logic4::one : Logic4::zero);
-              ++process.pc;
-            },
-            [&](const CopyRegister& op) {
-              get_register(process, op.destination) =
-                  coerce_value_kind(
+                  extract_value(
                       get_register(process, op.source),
-                      register_value_kind(
-                          process, op.destination));
-              ++process.pc;
-            },
-            [&](const LoadStringConstant& op) {
-              if (op.value.size() > maximum_string_bytes) {
-                fail(process, "string literal exceeds 4096-byte limit");
-              }
-              get_string_register(process, op.destination) = op.value;
-              ++process.pc;
-            },
-            [&](const CopyStringRegister& op) {
-              get_string_register(process, op.destination) =
-                  get_string_register(process, op.source);
-              ++process.pc;
-            },
-            [&](const ReadStringObject& op) {
-              get_string_register(process, op.destination) =
-                  get_string_object(op.object).initial_value;
-              ++process.pc;
-            },
-            [&](const WriteStringObject& op) {
-              get_string_object(op.object).initial_value =
-                  get_string_register(process, op.source);
-              ++process.pc;
-            },
-            [&](const ConcatenateStrings& op) {
-              std::string result;
-              for (const auto operand : op.operands) {
-                const auto& value =
-                    get_string_register(process, operand);
-                if (value.size()
-                    > maximum_string_bytes - result.size()) {
-                  fail(
-                      process,
-                      "string concatenation exceeds 4096-byte limit");
-                }
-                result += value;
-              }
-              get_string_register(process, op.destination) =
-                  std::move(result);
-              ++process.pc;
-            },
-            [&](const CompareStrings& op) {
-              const bool equal =
-                  get_string_register(process, op.lhs)
-                  == get_string_register(process, op.rhs);
+                      op.offset,
+                      op.width);
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, DynamicExtract>) {
+            try {
               get_register(process, op.destination) =
-                  PackedLogic4{
-                      1,
-                      equal != op.not_equal
-                          ? Logic4::one
-                          : Logic4::zero};
-              ++process.pc;
-            },
-            [&](const StringLength& op) {
-              const auto size =
-                  get_string_register(process, op.source).size();
+                  extract_value(
+                      get_register(process, op.source),
+                      dynamic_index_offset(
+                          get_register(process, op.selection.index),
+                          op.selection),
+                      1);
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, DynamicPartSelect>) {
+            try {
               get_register(process, op.destination) =
-                  PackedLogic4::from_aval_bval(
-                      32, static_cast<std::uint32_t>(size), 0);
-              ++process.pc;
-            },
-            [&](const StringIndex& op) {
-              auto& source =
-                  get_string_register(process, op.source);
-              const auto index =
-                  known_string_index(
-                      op.index, op.signed_index, source.size());
+                  dynamic_part_select_value(
+                      get_register(process, op.source),
+                      get_register(process, op.base),
+                      op.left,
+                      op.right,
+                      op.base_offset,
+                      op.width,
+                      op.increasing,
+                      op.source_descending,
+                      op.two_state);
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, Insert>) {
+            try {
               get_register(process, op.destination) =
-                  PackedLogic4::from_aval_bval(
-                      8,
-                      static_cast<unsigned char>(source[index]),
-                      0);
-              ++process.pc;
-            },
-            [&](const StringReplaceByte& op) {
-              auto& target =
-                  get_string_register(process, op.target);
-              const auto index =
-                  known_string_index(
-                      op.index, op.signed_index, target.size());
-              const auto byte =
-                  get_register(process, op.source).low_word();
-              if (byte.bval != 0) {
-                fail(process, "string replacement byte contains X or Z");
-              }
-              target[index] =
-                  static_cast<char>(byte.aval & UINT64_C(0xff));
-              ++process.pc;
-            },
-            [&](const StringMethod& op) {
-              execute_string(process, op);
-            },
-            [&](const UnaryNot &op) {
+                  insert_value(
+                      get_register(process, op.target),
+                      get_register(process, op.source),
+                      op.offset);
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, DynamicInsert>) {
+            try {
               get_register(process, op.destination) =
-                  unary_not(get_register(process, op.source));
-              ++process.pc;
-            },
-            [&](const LogicalNot& op) {
+                  insert_value(
+                      get_register(process, op.target),
+                      get_register(process, op.source),
+                      dynamic_index_offset(
+                          get_register(process, op.selection.index),
+                          op.selection));
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, DynamicPartInsert>) {
+            try {
               get_register(process, op.destination) =
-                  logical_not(get_register(process, op.source));
-              ++process.pc;
-            },
-            [&](const LogicalBinary& op) {
+                  dynamic_part_insert_value(
+                      get_register(process, op.target),
+                      get_register(process, op.source),
+                      get_register(
+                          process, op.selection.base),
+                      op.selection);
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, Concatenate>) {
+            std::vector<PackedLogic4> operands;
+            operands.reserve(op.operands.size());
+            for (const auto operand : op.operands) {
+              operands.push_back(get_register(process, operand));
+            }
+            try {
               get_register(process, op.destination) =
-                  logical_binary(
+                  concatenate_values(operands, op.width);
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, Binary>) {
+            try {
+              get_register(process, op.destination) =
+                  binary_value(op.operation, get_register(process, op.lhs),
+                               get_register(process, op.rhs));
+            } catch (const std::invalid_argument &error) {
+              fail(process, error.what());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, IntegerUnary>) {
+            try {
+              get_register(process, op.destination) =
+                  integer_unary_value(
+                      op.operation,
+                      get_register(process, op.source));
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, IntegerBinary>) {
+            try {
+              get_register(process, op.destination) =
+                  integer_binary_value(
                       op.operation,
                       get_register(process, op.lhs),
                       get_register(process, op.rhs));
-              ++process.pc;
-            },
-            [&](const Reduction& op) {
-              get_register(process, op.destination) =
-                  reduce_value(
-                      op.operation,
-                      get_register(process, op.source));
-              ++process.pc;
-            },
-            [&](const CountOnes& op) {
-              get_register(process, op.destination) =
-                  count_ones_value(
-                      get_register(process, op.source));
-              ++process.pc;
-            },
-            [&](const CountBits& op) {
-              get_register(process, op.destination) =
-                  count_bits_value(
-                      get_register(process, op.source),
-                      op.state_mask);
-              ++process.pc;
-            },
-            [&](const Shift& op) {
-              get_register(process, op.destination) =
-                  shift_value(
-                      op.operation,
-                      get_register(process, op.value),
-                      get_register(process, op.amount),
-                      op.signed_amount);
-              ++process.pc;
-            },
-            [&](const Extract& op) {
-              try {
-                get_register(process, op.destination) =
-                    extract_value(
-                        get_register(process, op.source),
-                        op.offset,
-                        op.width);
-              } catch (const std::invalid_argument& error) {
-                fail(process, error.what());
-              }
-              ++process.pc;
-            },
-            [&](const DynamicExtract& op) {
-              try {
-                get_register(process, op.destination) =
-                    extract_value(
-                        get_register(process, op.source),
-                        dynamic_index_offset(
-                            get_register(process, op.selection.index),
-                            op.selection),
-                        1);
-              } catch (const std::invalid_argument& error) {
-                fail(process, error.what());
-              }
-              ++process.pc;
-            },
-            [&](const DynamicPartSelect& op) {
-              try {
-                get_register(process, op.destination) =
-                    dynamic_part_select_value(
-                        get_register(process, op.source),
-                        get_register(process, op.base),
-                        op.left,
-                        op.right,
-                        op.base_offset,
-                        op.width,
-                        op.increasing,
-                        op.source_descending,
-                        op.two_state);
-              } catch (const std::invalid_argument& error) {
-                fail(process, error.what());
-              }
-              ++process.pc;
-            },
-            [&](const Insert& op) {
-              try {
-                get_register(process, op.destination) =
-                    insert_value(
-                        get_register(process, op.target),
-                        get_register(process, op.source),
-                        op.offset);
-              } catch (const std::invalid_argument& error) {
-                fail(process, error.what());
-              }
-              ++process.pc;
-            },
-            [&](const DynamicInsert& op) {
-              try {
-                get_register(process, op.destination) =
-                    insert_value(
-                        get_register(process, op.target),
-                        get_register(process, op.source),
-                        dynamic_index_offset(
-                            get_register(process, op.selection.index),
-                            op.selection));
-              } catch (const std::invalid_argument& error) {
-                fail(process, error.what());
-              }
-              ++process.pc;
-            },
-            [&](const DynamicPartInsert& op) {
-              try {
-                get_register(process, op.destination) =
-                    dynamic_part_insert_value(
-                        get_register(process, op.target),
-                        get_register(process, op.source),
-                        get_register(
-                            process, op.selection.base),
-                        op.selection);
-              } catch (const std::invalid_argument& error) {
-                fail(process, error.what());
-              }
-              ++process.pc;
-            },
-            [&](const Concatenate& op) {
-              std::vector<PackedLogic4> operands;
-              operands.reserve(op.operands.size());
-              for (const auto operand : op.operands) {
-                operands.push_back(get_register(process, operand));
-              }
-              try {
-                get_register(process, op.destination) =
-                    concatenate_values(operands, op.width);
-              } catch (const std::invalid_argument& error) {
-                fail(process, error.what());
-              }
-              ++process.pc;
-            },
-            [&](const Binary &op) {
-              try {
-                get_register(process, op.destination) =
-                    binary_value(op.operation, get_register(process, op.lhs),
-                                 get_register(process, op.rhs));
-              } catch (const std::invalid_argument &error) {
-                fail(process, error.what());
-              }
-              ++process.pc;
-            },
-            [&](const IntegerUnary& op) {
-              try {
-                get_register(process, op.destination) =
-                    integer_unary_value(
-                        op.operation,
-                        get_register(process, op.source));
-              } catch (const std::invalid_argument& error) {
-                fail(process, error.what());
-              }
-              ++process.pc;
-            },
-            [&](const IntegerBinary& op) {
-              try {
-                get_register(process, op.destination) =
-                    integer_binary_value(
-                        op.operation,
-                        get_register(process, op.lhs),
-                        get_register(process, op.rhs));
-              } catch (const std::invalid_argument& error) {
-                fail(process, error.what());
-              }
-              ++process.pc;
-            },
-            [&](const IntegerCheck& op) {
-              try {
-                check_integer_range(
-                    get_register(process, op.source),
-                    op.lower,
-                    op.upper);
-              } catch (const std::invalid_argument& error) {
-                fail(process, error.what());
-              }
-              ++process.pc;
-            },
-            [&](const ConditionalSelect& op) {
-              try {
-                get_register(process, op.destination) =
-                    conditional_value(
-                        get_register(process, op.condition),
-                        get_register(process, op.when_true),
-                        get_register(process, op.when_false));
-              } catch (const std::invalid_argument& error) {
-                fail(process, error.what());
-              }
-              ++process.pc;
-            },
-            [&](const WriteBlocking &op) {
-              auto value = get_register(process, op.source);
-              ++process.pc;
-              commit_driver(
-                  process.program.id,
-                  op.signal,
-                  std::move(value));
-            },
-            [&](const WriteUpdate &op) {
-              auto value = get_register(process, op.source);
-              ++process.pc;
-              stage_update(
-                  process.program.id,
-                  op.signal,
-                  std::move(value));
-            },
-            [&](const WriteAfter &op) {
-              auto value = get_register(process, op.source);
-              ++process.pc;
-              scheduler.schedule_after(
-                  op.delay, SchedulerPhase::update, process.program.id,
-                  [this,
-                   driver = process.program.id,
-                   signal = op.signal,
-                   value = std::move(value)](Scheduler &) mutable {
-                    stage_update(
-                        driver, signal, std::move(value));
-                  });
-            },
-            [&](const WriteInertial& op) {
-              auto value = get_register(process, op.source);
-              ++process.pc;
-              schedule_inertial(
-                  process.program.id,
-                  op.signal,
-                  std::move(value),
-                  std::nullopt,
-                  op.delays);
-            },
-            [&](const WriteProjected& op) {
-              auto value = get_register(process, op.source);
-              ++process.pc;
-              schedule_projected(
-                  process.program.id,
-                  op.signal,
-                  value,
-                  std::nullopt,
-                  op.delay,
-                  op.rejection,
-                  op.mode);
-            },
-            [&](const WriteProjectedWaveform& op) {
-              std::vector<ProjectedWaveformValue> elements;
-              elements.reserve(op.elements.size());
-              for (const auto& element : op.elements) {
-                elements.push_back(
-                    {get_register(process, element.source),
-                     element.delay});
-              }
-              ++process.pc;
-              schedule_projected_waveform(
-                  process.program.id,
-                  op.signal,
-                  elements,
-                  std::nullopt,
-                  op.rejection,
-                  op.mode);
-            },
-            [&](const WriteBlockingSlice& op) {
-              auto value = get_register(process, op.source);
-              ++process.pc;
-              commit_driver_slice(
-                  process.program.id,
-                  op.signal,
-                  std::move(value),
-                  op.offset);
-            },
-            [&](const WriteUpdateSlice& op) {
-              auto value = get_register(process, op.source);
-              ++process.pc;
-              stage_update_slice(
-                  process.program.id,
-                  op.signal,
-                  std::move(value),
-                  op.offset);
-            },
-            [&](const WriteAfterSlice& op) {
-              auto value = get_register(process, op.source);
-              ++process.pc;
-              scheduler.schedule_after(
-                  op.delay,
-                  SchedulerPhase::update,
-                  process.program.id,
-                  [this,
-                   driver = process.program.id,
-                   signal = op.signal,
-                   offset = op.offset,
-                   value = std::move(value)](
-                      Scheduler&) mutable {
-                    stage_update_slice(
-                        driver,
-                        signal,
-                        std::move(value),
-                        offset);
-                  });
-            },
-            [&](const WriteInertialSlice& op) {
-              auto value = get_register(process, op.source);
-              ++process.pc;
-              schedule_inertial(
-                  process.program.id,
-                  op.signal,
-                  std::move(value),
-                  op.offset,
-                  op.delays);
-            },
-            [&](const WriteProjectedSlice& op) {
-              auto value = get_register(process, op.source);
-              ++process.pc;
-              schedule_projected(
-                  process.program.id,
-                  op.signal,
-                  value,
-                  op.offset,
-                  op.delay,
-                  op.rejection,
-                  op.mode);
-            },
-            [&](const WriteProjectedWaveformSlice& op) {
-              std::vector<ProjectedWaveformValue> elements;
-              elements.reserve(op.elements.size());
-              for (const auto& element : op.elements) {
-                elements.push_back(
-                    {get_register(process, element.source),
-                     element.delay});
-              }
-              ++process.pc;
-              schedule_projected_waveform(
-                  process.program.id,
-                  op.signal,
-                  elements,
-                  op.offset,
-                  op.rejection,
-                  op.mode);
-            },
-            [&](const WriteBlockingDynamicSlice& op) {
-              auto value = get_register(process, op.source);
-              const auto offset = selected_offset(op.selection);
-              ++process.pc;
-              commit_driver_slice(
-                  process.program.id,
-                  op.signal,
-                  std::move(value),
-                  offset);
-            },
-            [&](const WriteUpdateDynamicSlice& op) {
-              auto value = get_register(process, op.source);
-              const auto offset = selected_offset(op.selection);
-              ++process.pc;
-              stage_update_slice(
-                  process.program.id,
-                  op.signal,
-                  std::move(value),
-                  offset);
-            },
-            [&](const WriteAfterDynamicSlice& op) {
-              auto value = get_register(process, op.source);
-              const auto offset = selected_offset(op.selection);
-              ++process.pc;
-              scheduler.schedule_after(
-                  op.delay,
-                  SchedulerPhase::update,
-                  process.program.id,
-                  [this,
-                   driver = process.program.id,
-                   signal = op.signal,
-                   offset,
-                   value = std::move(value)](
-                      Scheduler&) mutable {
-                    stage_update_slice(
-                        driver,
-                        signal,
-                        std::move(value),
-                        offset);
-                  });
-            },
-            [&](const WriteBlockingDynamicPartSlice& op) {
-              try {
-                const auto write = dynamic_part_write_value(
-                    get_register(process, op.source),
-                    get_register(process, op.selection.base),
-                    op.selection);
-                ++process.pc;
-                if (write) {
-                  commit_driver_slice(
-                      process.program.id,
-                      op.signal,
-                      write->value,
-                      write->offset);
-                }
-              } catch (const std::invalid_argument& error) {
-                fail(process, error.what());
-              }
-            },
-            [&](const WriteUpdateDynamicPartSlice& op) {
-              try {
-                const auto write = dynamic_part_write_value(
-                    get_register(process, op.source),
-                    get_register(process, op.selection.base),
-                    op.selection);
-                ++process.pc;
-                if (write) {
-                  stage_update_slice(
-                      process.program.id,
-                      op.signal,
-                      write->value,
-                      write->offset);
-                }
-              } catch (const std::invalid_argument& error) {
-                fail(process, error.what());
-              }
-            },
-            [&](const WriteAfterDynamicPartSlice& op) {
-              try {
-                auto write = dynamic_part_write_value(
-                    get_register(process, op.source),
-                    get_register(process, op.selection.base),
-                    op.selection);
-                ++process.pc;
-                if (write) {
-                  scheduler.schedule_after(
-                      op.delay,
-                      SchedulerPhase::update,
-                      process.program.id,
-                      [this,
-                       driver = process.program.id,
-                       signal = op.signal,
-                       write = std::move(*write)](
-                          Scheduler&) mutable {
-                        stage_update_slice(
-                            driver,
-                            signal,
-                            std::move(write.value),
-                            write.offset);
-                      });
-                }
-              } catch (const std::invalid_argument& error) {
-                fail(process, error.what());
-              }
-            },
-            [&](const ForceSignalSlice& op) {
-              try {
-                force_slice(
-                    op.signal,
-                    get_register(process, op.source),
-                    op.offset);
-              } catch (const std::invalid_argument& error) {
-                fail(process, error.what());
-              }
-              ++process.pc;
-            },
-            [&](const ReleaseSignalSlice& op) {
-              try {
-                release_slice(
-                    op.signal, op.offset, op.width);
-              } catch (const std::invalid_argument& error) {
-                fail(process, error.what());
-              }
-              ++process.pc;
-            },
-            [&](const WriteInertialDynamicSlice& op) {
-              auto value = get_register(process, op.source);
-              const auto offset = selected_offset(op.selection);
-              ++process.pc;
-              schedule_inertial(
-                  process.program.id,
-                  op.signal,
-                  std::move(value),
-                  offset,
-                  op.delays);
-            },
-            [&](const WriteProjectedDynamicSlice& op) {
-              auto value = get_register(process, op.source);
-              const auto offset = selected_offset(op.selection);
-              ++process.pc;
-              schedule_projected(
-                  process.program.id,
-                  op.signal,
-                  value,
-                  offset,
-                  op.delay,
-                  op.rejection,
-                  op.mode);
-            },
-            [&](const WriteProjectedWaveformDynamicSlice& op) {
-              std::vector<ProjectedWaveformValue> elements;
-              elements.reserve(op.elements.size());
-              for (const auto& element : op.elements) {
-                elements.push_back(
-                    {get_register(process, element.source),
-                     element.delay});
-              }
-              const auto offset = selected_offset(op.selection);
-              ++process.pc;
-              schedule_projected_waveform(
-                  process.program.id,
-                  op.signal,
-                  elements,
-                  offset,
-                  op.rejection,
-                  op.mode);
-            },
-            [&](const WaitFor &op) {
-              (void)op;
-              boundary = true;
-            },
-            [&](const WaitOn &op) {
-              (void)op;
-              boundary = true;
-            },
-            [&](const WaitSensitivity &) {
-              boundary = true;
-            },
-            [&](const WaitForever &) {
-              boundary = true;
-            },
-            [&](const Yield &) {
-              boundary = true;
-            },
-            [&](const Fork&) {
-              boundary = true;
-            },
-            [&](const ForkEnd&) {
-              boundary = true;
-            },
-            [&](const WaitFork&) {
-              boundary = true;
-            },
-            [&](const DisableFork&) {
-              boundary = true;
-            },
-            [&](const Jump &op) {
-              if (op.target >= process.program.operations.size()) {
-                fail(process, "jump target is outside the operation stream");
-              }
-              process.pc = op.target;
-            },
-            [&](const Call& op) {
-              const auto pointer =
-                  get_register(process, op.stack.pointer).low_word();
-              if (pointer.bval != 0) {
-                fail(process, "call-stack pointer is unknown");
-              }
-              if (pointer.aval >= op.stack.capacity) {
-                fail(process, "call-stack capacity is exhausted");
-              }
-              if (op.target >= process.program.operations.size()
-                  || op.return_target
-                      >= process.program.operations.size()) {
-                fail(process, "call target is outside the operation stream");
-              }
-              get_register(
-                  process,
-                  static_cast<RegisterId>(
-                      op.stack.entries + pointer.aval)) =
-                  PackedLogic4::from_aval_bval(
-                      32, op.return_target, 0);
-              get_register(process, op.stack.pointer) =
-                  PackedLogic4::from_aval_bval(
-                      32, pointer.aval + 1U, 0);
-              process.pc = op.target;
-            },
-            [&](const Return& op) {
-              const auto pointer =
-                  get_register(process, op.stack.pointer).low_word();
-              if (pointer.bval != 0) {
-                fail(process, "call-stack pointer is unknown");
-              }
-              if (pointer.aval == 0
-                  || pointer.aval > op.stack.capacity) {
-                fail(process, "call-stack underflow");
-              }
-              const auto next_pointer = pointer.aval - 1U;
-              const auto target =
-                  get_register(
-                      process,
-                      static_cast<RegisterId>(
-                          op.stack.entries + next_pointer)).low_word();
-              if (target.bval != 0
-                  || target.aval
-                      >= process.program.operations.size()) {
-                fail(process, "call-stack return target is invalid");
-              }
-              get_register(process, op.stack.pointer) =
-                  PackedLogic4::from_aval_bval(
-                      32, next_pointer, 0);
-              process.pc =
-                  static_cast<InstructionIndex>(target.aval);
-            },
-            [&](const Branch &op) {
-              const auto &condition = get_register(process, op.condition);
-              if (condition.width() != 1) {
-                fail(process, "branch condition must be scalar");
-              }
-              const auto value = condition.get(0);
-              InstructionIndex target{};
-              if (value != Logic4::zero && value != Logic4::one) {
-                if (op.unknown_policy
-                    == UnknownBranchPolicy::when_false) {
-                  target = op.when_false;
-                } else {
-                  fail(
-                      process,
-                      "branch condition is unknown or high impedance");
-                }
-              } else {
-                target =
-                    value == Logic4::one ? op.when_true : op.when_false;
-              }
-              if (target >= process.program.operations.size()) {
-                fail(process, "branch target is outside the operation stream");
-              }
-              process.pc = target;
-            },
-            [&](const DebugPoint&) {
-              boundary = true;
-            },
-            [&](const Assert &op) {
-              const auto &condition = get_register(process, op.condition);
-              if (condition.width() != 1 ||
-                  condition.get(0) != Logic4::one) {
-                const auto message =
-                    op.message.empty()
-                        ? std::string_view{"assertion failed"}
-                        : std::string_view{op.message};
-                if (op.severity != AssertionSeverity::failure
-                    && report_hook) {
-                  report_hook(
-                      process.program.id,
-                      message,
-                      op.severity,
-                      op.source,
-                      scheduler.now(),
-                      scheduler.delta());
-                }
-                if (op.severity == AssertionSeverity::failure) {
-                  throw AssertionError(
-                      process.program.id,
-                      process.pc,
-                      std::string{message},
-                      op.severity,
-                      op.source);
-                }
-              }
-              ++process.pc;
-            },
-            [&](const Display& op) {
-              if (op.postponed) {
-                scheduler.schedule(
-                    SchedulerPhase::postponed,
-                    process.program.id,
-                    [this,
-                     process_id = process.program.id,
-                     text = op.text,
-                     newline = op.newline](Scheduler& runtime) {
-                      if (output_hook) {
-                        output_hook(
-                            process_id,
-                            text,
-                            newline,
-                            runtime.now(),
-                            runtime.delta());
-                      }
-                    });
-              } else if (output_hook) {
-                output_hook(
-                    process.program.id,
-                    op.text,
-                    op.newline,
-                    scheduler.now(),
-                    scheduler.delta());
-              }
-              ++process.pc;
-            },
-            [&](const FormatDisplay& op) {
-              auto text = make_formatted_output(
-                  op.prefix,
-                  op.suffix,
-                  op.format,
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, IntegerCheck>) {
+            try {
+              check_integer_range(
                   get_register(process, op.source),
-                  op.signed_decimal,
-                  op.suppress_leading_zero,
-                  op.minimum_width,
-                  op.left_justify,
-                  op.zero_pad);
-              if (op.postponed) {
-                scheduler.schedule(
-                    SchedulerPhase::postponed,
-                    process.program.id,
-                    [this,
-                     process_id = process.program.id,
-                     text = std::move(text),
-                     newline = op.newline](Scheduler& runtime) {
-                      if (output_hook) {
-                        output_hook(
-                            process_id,
-                            text,
-                            newline,
-                            runtime.now(),
-                            runtime.delta());
-                      }
-                    });
-              } else if (output_hook) {
-                output_hook(
-                    process.program.id,
-                    text,
-                    op.newline,
-                    scheduler.now(),
-                    scheduler.delta());
-              }
-              ++process.pc;
-            },
-            [&](const StringDisplay& op) {
-              auto text =
-                  op.prefix
-                  + get_string_register(process, op.source)
-                  + op.suffix;
-              if (op.postponed) {
-                scheduler.schedule(
-                    SchedulerPhase::postponed,
-                    process.program.id,
-                    [this,
-                     process_id = process.program.id,
-                     text = std::move(text),
-                     newline = op.newline](Scheduler& runtime) {
-                      if (output_hook) {
-                        output_hook(
-                            process_id,
-                            text,
-                            newline,
-                            runtime.now(),
-                            runtime.delta());
-                      }
-                    });
-              } else if (output_hook) {
-                output_hook(
-                    process.program.id,
-                    text,
-                    op.newline,
-                    scheduler.now(),
-                    scheduler.delta());
-              }
-              ++process.pc;
-            },
-            [&](const TimeDisplay& op) {
-              auto text = make_time_output(
-                  op.prefix,
-                  op.suffix,
-                  scheduler.now(),
-                  op.minimum_width,
-                  op.left_justify,
-                  op.zero_pad);
-              if (op.postponed) {
-                scheduler.schedule(
-                    SchedulerPhase::postponed,
-                    process.program.id,
-                    [this,
-                     process_id = process.program.id,
-                     text = std::move(text),
-                     newline = op.newline](Scheduler& runtime) {
-                      if (output_hook) {
-                        output_hook(
-                            process_id,
-                            text,
-                            newline,
-                            runtime.now(),
-                            runtime.delta());
-                      }
-                    });
-              } else if (output_hook) {
-                output_hook(
-                    process.program.id,
-                    text,
-                    op.newline,
-                    scheduler.now(),
-                    scheduler.delta());
-              }
-              ++process.pc;
-            },
-            [&](const MonitorInstall& op) {
-              install_monitor(process.program.id, op);
-              ++process.pc;
-            },
-            [&](const MonitorControl& op) {
-              set_monitor_enabled(op.enabled);
-              ++process.pc;
-            },
-            [&](const RandomValue& op) {
-              const auto maximum =
-                  op.maximum
-                      ? std::optional<PackedLogic4>{
-                            get_register(process, *op.maximum)}
-                      : std::nullopt;
-              const auto minimum =
-                  op.minimum
-                      ? std::optional<PackedLogic4>{
-                            get_register(process, *op.minimum)}
-                      : std::nullopt;
+                  op.lower,
+                  op.upper);
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, ConditionalSelect>) {
+            try {
               get_register(process, op.destination) =
-                  random_value(
-                      process.program.id,
-                      op.kind,
-                      maximum,
-                      minimum);
+                  conditional_value(
+                      get_register(process, op.condition),
+                      get_register(process, op.when_true),
+                      get_register(process, op.when_false));
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, WriteBlocking>) {
+            auto value = get_register(process, op.source);
+            ++process.pc;
+            commit_driver(
+                process.program.id,
+                op.signal,
+                std::move(value));
+          } else if constexpr (std::is_same_v<OperationType, WriteUpdate>) {
+            auto value = get_register(process, op.source);
+            ++process.pc;
+            stage_update(
+                process.program.id,
+                op.signal,
+                std::move(value));
+          } else if constexpr (std::is_same_v<OperationType, WriteAfter>) {
+            auto value = get_register(process, op.source);
+            ++process.pc;
+            scheduler.schedule_after(
+                op.delay, SchedulerPhase::update, process.program.id,
+                [this,
+                 driver = process.program.id,
+                 signal = op.signal,
+                 value = std::move(value)](Scheduler &) mutable {
+                  stage_update(
+                      driver, signal, std::move(value));
+                });
+          } else if constexpr (std::is_same_v<OperationType, WriteInertial>) {
+            auto value = get_register(process, op.source);
+            ++process.pc;
+            schedule_inertial(
+                process.program.id,
+                op.signal,
+                std::move(value),
+                std::nullopt,
+                op.delays);
+          } else if constexpr (std::is_same_v<OperationType, WriteProjected>) {
+            auto value = get_register(process, op.source);
+            ++process.pc;
+            schedule_projected(
+                process.program.id,
+                op.signal,
+                value,
+                std::nullopt,
+                op.delay,
+                op.rejection,
+                op.mode);
+          } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveform>) {
+            std::vector<ProjectedWaveformValue> elements;
+            elements.reserve(op.elements.size());
+            for (const auto& element : op.elements) {
+              elements.push_back(
+                  {get_register(process, element.source),
+                   element.delay});
+            }
+            ++process.pc;
+            schedule_projected_waveform(
+                process.program.id,
+                op.signal,
+                elements,
+                std::nullopt,
+                op.rejection,
+                op.mode);
+          } else if constexpr (std::is_same_v<OperationType, WriteBlockingSlice>) {
+            auto value = get_register(process, op.source);
+            ++process.pc;
+            commit_driver_slice(
+                process.program.id,
+                op.signal,
+                std::move(value),
+                op.offset);
+          } else if constexpr (std::is_same_v<OperationType, WriteUpdateSlice>) {
+            auto value = get_register(process, op.source);
+            ++process.pc;
+            stage_update_slice(
+                process.program.id,
+                op.signal,
+                std::move(value),
+                op.offset);
+          } else if constexpr (std::is_same_v<OperationType, WriteAfterSlice>) {
+            auto value = get_register(process, op.source);
+            ++process.pc;
+            scheduler.schedule_after(
+                op.delay,
+                SchedulerPhase::update,
+                process.program.id,
+                [this,
+                 driver = process.program.id,
+                 signal = op.signal,
+                 offset = op.offset,
+                 value = std::move(value)](
+                    Scheduler&) mutable {
+                  stage_update_slice(
+                      driver,
+                      signal,
+                      std::move(value),
+                      offset);
+                });
+          } else if constexpr (std::is_same_v<OperationType, WriteInertialSlice>) {
+            auto value = get_register(process, op.source);
+            ++process.pc;
+            schedule_inertial(
+                process.program.id,
+                op.signal,
+                std::move(value),
+                op.offset,
+                op.delays);
+          } else if constexpr (std::is_same_v<OperationType, WriteProjectedSlice>) {
+            auto value = get_register(process, op.source);
+            ++process.pc;
+            schedule_projected(
+                process.program.id,
+                op.signal,
+                value,
+                op.offset,
+                op.delay,
+                op.rejection,
+                op.mode);
+          } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveformSlice>) {
+            std::vector<ProjectedWaveformValue> elements;
+            elements.reserve(op.elements.size());
+            for (const auto& element : op.elements) {
+              elements.push_back(
+                  {get_register(process, element.source),
+                   element.delay});
+            }
+            ++process.pc;
+            schedule_projected_waveform(
+                process.program.id,
+                op.signal,
+                elements,
+                op.offset,
+                op.rejection,
+                op.mode);
+          } else if constexpr (std::is_same_v<OperationType, WriteBlockingDynamicSlice>) {
+            auto value = get_register(process, op.source);
+            const auto offset = selected_offset(op.selection);
+            ++process.pc;
+            commit_driver_slice(
+                process.program.id,
+                op.signal,
+                std::move(value),
+                offset);
+          } else if constexpr (std::is_same_v<OperationType, WriteUpdateDynamicSlice>) {
+            auto value = get_register(process, op.source);
+            const auto offset = selected_offset(op.selection);
+            ++process.pc;
+            stage_update_slice(
+                process.program.id,
+                op.signal,
+                std::move(value),
+                offset);
+          } else if constexpr (std::is_same_v<OperationType, WriteAfterDynamicSlice>) {
+            auto value = get_register(process, op.source);
+            const auto offset = selected_offset(op.selection);
+            ++process.pc;
+            scheduler.schedule_after(
+                op.delay,
+                SchedulerPhase::update,
+                process.program.id,
+                [this,
+                 driver = process.program.id,
+                 signal = op.signal,
+                 offset,
+                 value = std::move(value)](
+                    Scheduler&) mutable {
+                  stage_update_slice(
+                      driver,
+                      signal,
+                      std::move(value),
+                      offset);
+                });
+          } else if constexpr (std::is_same_v<OperationType, WriteBlockingDynamicPartSlice>) {
+            try {
+              const auto write = dynamic_part_write_value(
+                  get_register(process, op.source),
+                  get_register(process, op.selection.base),
+                  op.selection);
               ++process.pc;
-            },
-            [&](const Report& op) {
-              if (report_hook) {
+              if (write) {
+                commit_driver_slice(
+                    process.program.id,
+                    op.signal,
+                    write->value,
+                    write->offset);
+              }
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
+          } else if constexpr (std::is_same_v<OperationType, WriteUpdateDynamicPartSlice>) {
+            try {
+              const auto write = dynamic_part_write_value(
+                  get_register(process, op.source),
+                  get_register(process, op.selection.base),
+                  op.selection);
+              ++process.pc;
+              if (write) {
+                stage_update_slice(
+                    process.program.id,
+                    op.signal,
+                    write->value,
+                    write->offset);
+              }
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
+          } else if constexpr (std::is_same_v<OperationType, WriteAfterDynamicPartSlice>) {
+            try {
+              auto write = dynamic_part_write_value(
+                  get_register(process, op.source),
+                  get_register(process, op.selection.base),
+                  op.selection);
+              ++process.pc;
+              if (write) {
+                scheduler.schedule_after(
+                    op.delay,
+                    SchedulerPhase::update,
+                    process.program.id,
+                    [this,
+                     driver = process.program.id,
+                     signal = op.signal,
+                     write = std::move(*write)](
+                        Scheduler&) mutable {
+                      stage_update_slice(
+                          driver,
+                          signal,
+                          std::move(write.value),
+                          write.offset);
+                    });
+              }
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
+          } else if constexpr (std::is_same_v<OperationType, ForceSignalSlice>) {
+            try {
+              force_slice(
+                  op.signal,
+                  get_register(process, op.source),
+                  op.offset);
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, ReleaseSignalSlice>) {
+            try {
+              release_slice(
+                  op.signal, op.offset, op.width);
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, WriteInertialDynamicSlice>) {
+            auto value = get_register(process, op.source);
+            const auto offset = selected_offset(op.selection);
+            ++process.pc;
+            schedule_inertial(
+                process.program.id,
+                op.signal,
+                std::move(value),
+                offset,
+                op.delays);
+          } else if constexpr (std::is_same_v<OperationType, WriteProjectedDynamicSlice>) {
+            auto value = get_register(process, op.source);
+            const auto offset = selected_offset(op.selection);
+            ++process.pc;
+            schedule_projected(
+                process.program.id,
+                op.signal,
+                value,
+                offset,
+                op.delay,
+                op.rejection,
+                op.mode);
+          } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveformDynamicSlice>) {
+            std::vector<ProjectedWaveformValue> elements;
+            elements.reserve(op.elements.size());
+            for (const auto& element : op.elements) {
+              elements.push_back(
+                  {get_register(process, element.source),
+                   element.delay});
+            }
+            const auto offset = selected_offset(op.selection);
+            ++process.pc;
+            schedule_projected_waveform(
+                process.program.id,
+                op.signal,
+                elements,
+                offset,
+                op.rejection,
+                op.mode);
+          } else if constexpr (std::is_same_v<OperationType, WaitFor>) {
+            (void)op;
+            boundary = true;
+          } else if constexpr (std::is_same_v<OperationType, WaitOn>) {
+            (void)op;
+            boundary = true;
+          } else if constexpr (std::is_same_v<OperationType, WaitSensitivity>) {
+            boundary = true;
+          } else if constexpr (std::is_same_v<OperationType, WaitForever>) {
+            boundary = true;
+          } else if constexpr (std::is_same_v<OperationType, Yield>) {
+            boundary = true;
+          } else if constexpr (std::is_same_v<OperationType, Fork>) {
+            boundary = true;
+          } else if constexpr (std::is_same_v<OperationType, ForkEnd>) {
+            boundary = true;
+          } else if constexpr (std::is_same_v<OperationType, WaitFork>) {
+            boundary = true;
+          } else if constexpr (std::is_same_v<OperationType, DisableFork>) {
+            boundary = true;
+          } else if constexpr (std::is_same_v<OperationType, Jump>) {
+            if (op.target >= process.program.operations.size()) {
+              fail(process, "jump target is outside the operation stream");
+            }
+            process.pc = op.target;
+          } else if constexpr (std::is_same_v<OperationType, Call>) {
+            const auto pointer =
+                get_register(process, op.stack.pointer).low_word();
+            if (pointer.bval != 0) {
+              fail(process, "call-stack pointer is unknown");
+            }
+            if (pointer.aval >= op.stack.capacity) {
+              fail(process, "call-stack capacity is exhausted");
+            }
+            if (op.target >= process.program.operations.size()
+                || op.return_target
+                    >= process.program.operations.size()) {
+              fail(process, "call target is outside the operation stream");
+            }
+            get_register(
+                process,
+                static_cast<RegisterId>(
+                    op.stack.entries + pointer.aval)) =
+                PackedLogic4::from_aval_bval(
+                    32, op.return_target, 0);
+            get_register(process, op.stack.pointer) =
+                PackedLogic4::from_aval_bval(
+                    32, pointer.aval + 1U, 0);
+            process.pc = op.target;
+          } else if constexpr (std::is_same_v<OperationType, Return>) {
+            const auto pointer =
+                get_register(process, op.stack.pointer).low_word();
+            if (pointer.bval != 0) {
+              fail(process, "call-stack pointer is unknown");
+            }
+            if (pointer.aval == 0
+                || pointer.aval > op.stack.capacity) {
+              fail(process, "call-stack underflow");
+            }
+            const auto next_pointer = pointer.aval - 1U;
+            const auto target =
+                get_register(
+                    process,
+                    static_cast<RegisterId>(
+                        op.stack.entries + next_pointer)).low_word();
+            if (target.bval != 0
+                || target.aval
+                    >= process.program.operations.size()) {
+              fail(process, "call-stack return target is invalid");
+            }
+            get_register(process, op.stack.pointer) =
+                PackedLogic4::from_aval_bval(
+                    32, next_pointer, 0);
+            process.pc =
+                static_cast<InstructionIndex>(target.aval);
+          } else if constexpr (std::is_same_v<OperationType, Branch>) {
+            const auto &condition = get_register(process, op.condition);
+            if (condition.width() != 1) {
+              fail(process, "branch condition must be scalar");
+            }
+            const auto value = condition.get(0);
+            InstructionIndex target{};
+            if (value != Logic4::zero && value != Logic4::one) {
+              if (op.unknown_policy
+                  == UnknownBranchPolicy::when_false) {
+                target = op.when_false;
+              } else {
+                fail(
+                    process,
+                    "branch condition is unknown or high impedance");
+              }
+            } else {
+              target =
+                  value == Logic4::one ? op.when_true : op.when_false;
+            }
+            if (target >= process.program.operations.size()) {
+              fail(process, "branch target is outside the operation stream");
+            }
+            process.pc = target;
+          } else if constexpr (std::is_same_v<OperationType, DebugPoint>) {
+            boundary = true;
+          } else if constexpr (std::is_same_v<OperationType, Assert>) {
+            const auto &condition = get_register(process, op.condition);
+            if (condition.width() != 1 ||
+                condition.get(0) != Logic4::one) {
+              const auto message =
+                  op.message.empty()
+                      ? std::string_view{"assertion failed"}
+                      : std::string_view{op.message};
+              if (op.severity != AssertionSeverity::failure
+                  && report_hook) {
                 report_hook(
                     process.program.id,
-                    op.message,
+                    message,
                     op.severity,
                     op.source,
                     scheduler.now(),
@@ -1936,42 +1677,212 @@ void Interpreter::Impl::execute(ProcessId id) {
                 throw AssertionError(
                     process.program.id,
                     process.pc,
-                    op.message.empty() ? "report failure" : op.message,
+                    std::string{message},
                     op.severity,
-                    op.source,
-                    true);
+                    op.source);
               }
-              ++process.pc;
-            },
-            [&](const Pause &) {
-              boundary = true;
-            },
-            [&](const Stop &) {
-              boundary = true;
-            },
-            [&](const Halt &) {
-              boundary = true;
-            },
-            [&](const auto& op) {
-              if constexpr (requires {
-                              execute_file(process, op);
-                            }) {
-                execute_file(process, op);
-              } else if constexpr (requires {
-                                     execute_container(process, op);
-                                   }) {
-                execute_container(process, op);
-              } else {
-                static_assert(
-                    sizeof(op) == 0,
-                    "unhandled SimIR operation");
-              }
-            }},
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, Display>) {
+            if (op.postponed) {
+              scheduler.schedule(
+                  SchedulerPhase::postponed,
+                  process.program.id,
+                  [this,
+                   process_id = process.program.id,
+                   text = op.text,
+                   newline = op.newline](Scheduler& runtime) {
+                    if (output_hook) {
+                      output_hook(
+                          process_id,
+                          text,
+                          newline,
+                          runtime.now(),
+                          runtime.delta());
+                    }
+                  });
+            } else if (output_hook) {
+              output_hook(
+                  process.program.id,
+                  op.text,
+                  op.newline,
+                  scheduler.now(),
+                  scheduler.delta());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, FormatDisplay>) {
+            auto text = make_formatted_output(
+                op.prefix,
+                op.suffix,
+                op.format,
+                get_register(process, op.source),
+                op.signed_decimal,
+                op.suppress_leading_zero,
+                op.minimum_width,
+                op.left_justify,
+                op.zero_pad);
+            if (op.postponed) {
+              scheduler.schedule(
+                  SchedulerPhase::postponed,
+                  process.program.id,
+                  [this,
+                   process_id = process.program.id,
+                   text = std::move(text),
+                   newline = op.newline](Scheduler& runtime) {
+                    if (output_hook) {
+                      output_hook(
+                          process_id,
+                          text,
+                          newline,
+                          runtime.now(),
+                          runtime.delta());
+                    }
+                  });
+            } else if (output_hook) {
+              output_hook(
+                  process.program.id,
+                  text,
+                  op.newline,
+                  scheduler.now(),
+                  scheduler.delta());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, StringDisplay>) {
+            auto text =
+                op.prefix
+                + get_string_register(process, op.source)
+                + op.suffix;
+            if (op.postponed) {
+              scheduler.schedule(
+                  SchedulerPhase::postponed,
+                  process.program.id,
+                  [this,
+                   process_id = process.program.id,
+                   text = std::move(text),
+                   newline = op.newline](Scheduler& runtime) {
+                    if (output_hook) {
+                      output_hook(
+                          process_id,
+                          text,
+                          newline,
+                          runtime.now(),
+                          runtime.delta());
+                    }
+                  });
+            } else if (output_hook) {
+              output_hook(
+                  process.program.id,
+                  text,
+                  op.newline,
+                  scheduler.now(),
+                  scheduler.delta());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, TimeDisplay>) {
+            auto text = make_time_output(
+                op.prefix,
+                op.suffix,
+                scheduler.now(),
+                op.minimum_width,
+                op.left_justify,
+                op.zero_pad);
+            if (op.postponed) {
+              scheduler.schedule(
+                  SchedulerPhase::postponed,
+                  process.program.id,
+                  [this,
+                   process_id = process.program.id,
+                   text = std::move(text),
+                   newline = op.newline](Scheduler& runtime) {
+                    if (output_hook) {
+                      output_hook(
+                          process_id,
+                          text,
+                          newline,
+                          runtime.now(),
+                          runtime.delta());
+                    }
+                  });
+            } else if (output_hook) {
+              output_hook(
+                  process.program.id,
+                  text,
+                  op.newline,
+                  scheduler.now(),
+                  scheduler.delta());
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, MonitorInstall>) {
+            install_monitor(process.program.id, op);
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, MonitorControl>) {
+            set_monitor_enabled(op.enabled);
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, RandomValue>) {
+            const auto maximum =
+                op.maximum
+                    ? std::optional<PackedLogic4>{
+                          get_register(process, *op.maximum)}
+                    : std::nullopt;
+            const auto minimum =
+                op.minimum
+                    ? std::optional<PackedLogic4>{
+                          get_register(process, *op.minimum)}
+                    : std::nullopt;
+            get_register(process, op.destination) =
+                random_value(
+                    process.program.id,
+                    op.kind,
+                    maximum,
+                    minimum);
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, Report>) {
+            if (report_hook) {
+              report_hook(
+                  process.program.id,
+                  op.message,
+                  op.severity,
+                  op.source,
+                  scheduler.now(),
+                  scheduler.delta());
+            }
+            if (op.severity == AssertionSeverity::failure) {
+              throw AssertionError(
+                  process.program.id,
+                  process.pc,
+                  op.message.empty() ? "report failure" : op.message,
+                  op.severity,
+                  op.source,
+                  true);
+            }
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, Pause>) {
+            boundary = true;
+          } else if constexpr (std::is_same_v<OperationType, Stop>) {
+            boundary = true;
+          } else if constexpr (std::is_same_v<OperationType, Halt>) {
+            boundary = true;
+          } else {
+            if constexpr (requires {
+                            execute_file(process, op);
+                          }) {
+              execute_file(process, op);
+            } else if constexpr (requires {
+                                   execute_container(process, op);
+                                 }) {
+              execute_container(process, op);
+            } else {
+              static_assert(
+                  sizeof(op) == 0,
+                  "unhandled SimIR operation");
+            }
+          }
+        },
         operation);
 
     if (boundary) {
       const bool debug_boundary =
-          std::holds_alternative<DebugPoint>(operation);
+          fsim::runtime::simir::operation_holds<DebugPoint>(operation);
       handle_boundary(process, instruction, instruction + 1);
       if (!debug_boundary || scheduler.stop_requested()) {
         return;

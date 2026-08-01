@@ -1314,10 +1314,10 @@ void test_signal_waits_at_level(
   assert(frame.program_counter == 1);
   assert(frame.last_instruction == 0);
   assert(frame.state == FSIM_JIT_FRAME_STATE_READY);
-  assert((std::get<WaitOn>(process.operations[0]).signals ==
+  assert((fsim::runtime::simir::operation_get<WaitOn>(process.operations[0]).signals ==
           std::vector<SignalId>{2, 0, 2}));
   assert((
-      std::get<WaitOn>(process.operations[0]).edges
+      fsim::runtime::simir::operation_get<WaitOn>(process.operations[0]).edges
       == std::vector<EdgeKind>{
           EdgeKind::any, EdgeKind::posedge, EdgeKind::any}));
 

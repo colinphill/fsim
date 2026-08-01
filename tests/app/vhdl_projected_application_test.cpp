@@ -448,4 +448,5 @@ end architecture;
   }
   verify_invalid_rejection(directory.path);
   std::cout << "VHDL projected waveform application tests passed\n";
+  return 0;
 }

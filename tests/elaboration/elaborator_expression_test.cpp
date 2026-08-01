@@ -43,7 +43,7 @@ endmodule
             .operations.end(),
         [](const fsim::runtime::simir::Operation& operation) {
             const auto* binary =
-                std::get_if<fsim::runtime::simir::Binary>(
+                fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Binary>(
                     &operation);
             return binary != nullptr
                 && binary->operation
@@ -86,7 +86,7 @@ endmodule
                 .operations.end(),
             [&](const fsim::runtime::simir::Operation& operation) {
                 const auto* binary =
-                    std::get_if<fsim::runtime::simir::Binary>(
+                    fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Binary>(
                         &operation);
                 return binary != nullptr
                     && binary->operation == expected_operator;
@@ -372,7 +372,7 @@ endmodule
             .operations.end(),
         [](const fsim::runtime::simir::Operation& operation) {
           const auto* binary =
-              std::get_if<fsim::runtime::simir::Binary>(&operation);
+              fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Binary>(&operation);
           return binary != nullptr
               && binary->operation
                   == fsim::runtime::simir::BinaryOperator::
@@ -822,7 +822,7 @@ endmodule
             signedness_operations.end(),
             [](const fsim::runtime::simir::Operation& operation) {
               const auto* point =
-                  std::get_if<
+                  fsim::runtime::simir::operation_get_if<
                       fsim::runtime::simir::DebugPoint>(
                       &operation);
               return point != nullptr
@@ -1643,7 +1643,7 @@ endmodule
         process.operations,
         [](const fsim::runtime::simir::Operation& operation) {
           const auto* binary =
-              std::get_if<fsim::runtime::simir::Binary>(&operation);
+              fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Binary>(&operation);
           return binary != nullptr
               && binary->operation
                   == fsim::runtime::simir::BinaryOperator::wildcard_equal;
@@ -1651,13 +1651,13 @@ endmodule
     assert(std::ranges::any_of(
         process.operations,
         [](const fsim::runtime::simir::Operation& operation) {
-          return std::holds_alternative<
+          return fsim::runtime::simir::operation_holds<
               fsim::runtime::simir::Branch>(operation);
         }));
     const auto membership_calls = std::ranges::count_if(
         process.operations,
         [](const fsim::runtime::simir::Operation& operation) {
-          return std::holds_alternative<
+          return fsim::runtime::simir::operation_holds<
               fsim::runtime::simir::Call>(operation);
         });
     if (membership_calls != 4) {
@@ -1834,7 +1834,7 @@ endmodule
         process.operations,
         [](const fsim::runtime::simir::Operation& operation) {
           const auto* binary =
-              std::get_if<fsim::runtime::simir::Binary>(&operation);
+              fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Binary>(&operation);
           return binary != nullptr
               && binary->operation
                   == fsim::runtime::simir::BinaryOperator::wildcard_equal;
@@ -1842,7 +1842,7 @@ endmodule
     const auto case_calls = std::ranges::count_if(
         process.operations,
         [](const fsim::runtime::simir::Operation& operation) {
-          return std::holds_alternative<fsim::runtime::simir::Call>(
+          return fsim::runtime::simir::operation_holds<fsim::runtime::simir::Call>(
               operation);
         });
     assert(case_calls == 4);

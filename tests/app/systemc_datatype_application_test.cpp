@@ -327,4 +327,5 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       hdl_source,
       systemc_source,
       fsim::project::Optimization::o2);
+  return 0;
 }

@@ -450,8 +450,8 @@ and test:
   and for CI/workflow changes;
 - use at least eight parallel workers for every local project, test-support,
   and fetched-dependency build, including focused interim builds; GitHub
-  Actions is the explicit exception and uses two workers to avoid hosted-VM
-  memory pressure; and
+  Actions is the explicit exception and uses four workers after the operation-
+  storage footprint repair; and
 - at every tenth numbered feature batch, inspect the pushed GitHub Actions
   handoff, fix all actionable failures, rerun the affected local gates, push
   the repair, and confirm the replacement checks before continuing.
@@ -5453,8 +5453,9 @@ timeouts without sanitizer findings while every ordinary job remained green.
 The root repair `d2f216e` removes redundant compiled-engine and O2 aliases only
 when LLVM is disabled, retaining one complete semantic, suspension, debugger,
 cache, and VCD pass under ASan/UBSan and the full interpreter/JIT O0/O2 matrix
-in LLVM builds. It restores a diagnostic 1,200-second container limit; every
-GitHub build remains at parallelism two.
+in LLVM builds. It restores a diagnostic 1,200-second container limit. Those
+runs used parallelism two; current GitHub builds use four after the operation-
+storage footprint repair.
 
 Final replacement run
 [`30656887493`](https://github.com/colinphill/fsim/actions/runs/30656887493)
@@ -5965,6 +5966,34 @@ diagnostic catalog covers 1,407 production codes, and the source gate covers
 mandatory Batch 110 non-documentation CI inspection remains pending at the
 user-requested stop boundary after the feature commit and push.
 
+#### Post-Batch-110 Debug-footprint and test-link repair
+
+The 115-alternative SimIR `Operation` is now stored as an outer variant of
+eight semantic groups with flat construction, query, and visitation helpers.
+Five high-instantiation visitors use one typed dispatch body apiece, and the
+standalone application sources link into four selector-driven hosts while
+retaining every named CTest as a separate process. GCC Debug compilation uses
+`-Og` plus compressed DWARF, and Ninja link/archive concurrency remains eight.
+
+Exact single-action measurements reduced `lowerer_process.cpp` peak Debug
+compilation memory from 5,003,456 KiB to 911,748 KiB,
+`runtime_execution_tests.cpp` from 7,789,344 KiB to 954,596 KiB, and one GNU
+ld.bfd application-host link from 5,309,296 KiB to 1,398,856 KiB. The final
+Debug tree is 3,748,237,353 bytes; four application hosts total 338,591,400
+bytes, and the elaboration archive is 230,510,732 bytes.
+
+The optimized gate exposed an invalid-free path in GCC 13 nested-variant
+temporary construction; the selected group is now constructed in place. It
+also made a latent fork
+runtime use-after-free deterministic: child insertion could relocate the
+process vector before the next read through the parent reference, so immutable
+parent metadata is snapshotted before growth. Focused LLVM-disabled ASan/UBSan
+elaboration and file-application tests pass. The exact LLVM 22.1.8 Debug and
+Release regressions pass 64/64 in 114.51 and 95.40 seconds, with scoped locals
+in 1.07/1.17 seconds. The source gate covers 334 authored files with an empty
+allowlist and a 2,000-line maximum. GitHub Actions build parallelism is four;
+local builds and the Ninja linker pool remain eight.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the
@@ -6011,7 +6040,7 @@ section and the resume handoff must be amended explicitly before proceeding.
 
 Batches 100, 110, 120, and 130 are mandatory non-documentation GitHub CI
 inspection boundaries. Local builds use at least eight workers; GitHub Actions
-builds remain at parallelism two. Documentation-only Actions runs do not
+builds use parallelism four. Documentation-only Actions runs do not
 require monitoring. The explicitly deferred rows in the feature matrix remain
 outside this sequence unless the v1 contract is deliberately amended.
 

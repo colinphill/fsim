@@ -91,11 +91,11 @@ Capture run_once(
   for (const auto& process : project->design.processes()) {
     for (const auto& operation : process.operations) {
       if (const auto* report =
-              std::get_if<fsim::runtime::simir::Report>(&operation)) {
+              fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Report>(&operation)) {
         capture.report_source = report->source;
       }
       if (const auto* point =
-              std::get_if<fsim::runtime::simir::DebugPoint>(&operation);
+              fsim::runtime::simir::operation_get_if<fsim::runtime::simir::DebugPoint>(&operation);
           point != nullptr
           && point->kind
               == fsim::runtime::simir::DebugPointKind::statement
@@ -207,4 +207,5 @@ int main() {
       source,
       fsim::project::Optimization::o2);
   std::cout << "line directive application tests passed\n";
+  return 0;
 }

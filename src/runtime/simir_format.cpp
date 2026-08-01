@@ -13,87 +13,61 @@ namespace fsim::runtime::simir {
   return result.str();
 }
 
-template <class... Ts> struct Overloaded : Ts... {
-  using Ts::operator()...;
-};
-template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
-
 [[nodiscard]] std::optional<SignalId> output_signal(
     const Operation& operation) {
-  return std::visit(
-      Overloaded{
-          [](const WriteBlocking& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteUpdate& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteAfter& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteInertial& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteProjected& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteProjectedWaveform& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteBlockingSlice& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteUpdateSlice& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteAfterSlice& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteInertialSlice& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteProjectedSlice& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteProjectedWaveformSlice& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteBlockingDynamicSlice& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteUpdateDynamicSlice& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteAfterDynamicSlice& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteBlockingDynamicPartSlice& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteUpdateDynamicPartSlice& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteAfterDynamicPartSlice& value) {
-            return std::optional{value.signal};
-          },
-          [](const ForceSignalSlice& value) {
-            return std::optional{value.signal};
-          },
-          [](const ReleaseSignalSlice& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteInertialDynamicSlice& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteProjectedDynamicSlice& value) {
-            return std::optional{value.signal};
-          },
-          [](const WriteProjectedWaveformDynamicSlice& value) {
-            return std::optional{value.signal};
-          },
-          [](const auto&) -> std::optional<SignalId> {
-            return std::nullopt;
-          }},
+  return fsim::runtime::simir::visit_operation(
+      [&](const auto& value) -> std::optional<SignalId> {
+        using OperationType = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<OperationType, WriteBlocking>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteUpdate>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteAfter>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteInertial>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteProjected>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveform>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteBlockingSlice>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteUpdateSlice>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteAfterSlice>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteInertialSlice>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteProjectedSlice>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveformSlice>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteBlockingDynamicSlice>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteUpdateDynamicSlice>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteAfterDynamicSlice>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteBlockingDynamicPartSlice>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteUpdateDynamicPartSlice>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteAfterDynamicPartSlice>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, ForceSignalSlice>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, ReleaseSignalSlice>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteInertialDynamicSlice>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteProjectedDynamicSlice>) {
+          return std::optional{value.signal};
+        } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveformDynamicSlice>) {
+          return std::optional{value.signal};
+        } else {
+          return {};
+        }
+      },
       operation);
 }
 

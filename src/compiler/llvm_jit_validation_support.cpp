@@ -100,16 +100,16 @@ void validate_fork_operation(
 [[nodiscard]] bool is_resume_boundary(
     const runtime::simir::Operation& operation) noexcept {
   using namespace runtime::simir;
-  return std::holds_alternative<WaitFor>(operation)
-      || std::holds_alternative<WaitOn>(operation)
-      || std::holds_alternative<WaitSensitivity>(operation)
-      || std::holds_alternative<WaitForever>(operation)
-      || std::holds_alternative<Yield>(operation)
-      || std::holds_alternative<Fork>(operation)
-      || std::holds_alternative<ForkEnd>(operation)
-      || std::holds_alternative<WaitFork>(operation)
-      || std::holds_alternative<DisableFork>(operation)
-      || std::holds_alternative<Pause>(operation);
+  return fsim::runtime::simir::operation_holds<WaitFor>(operation)
+      || fsim::runtime::simir::operation_holds<WaitOn>(operation)
+      || fsim::runtime::simir::operation_holds<WaitSensitivity>(operation)
+      || fsim::runtime::simir::operation_holds<WaitForever>(operation)
+      || fsim::runtime::simir::operation_holds<Yield>(operation)
+      || fsim::runtime::simir::operation_holds<Fork>(operation)
+      || fsim::runtime::simir::operation_holds<ForkEnd>(operation)
+      || fsim::runtime::simir::operation_holds<WaitFork>(operation)
+      || fsim::runtime::simir::operation_holds<DisableFork>(operation)
+      || fsim::runtime::simir::operation_holds<Pause>(operation);
 }
 
 [[nodiscard]] bool valid_symbol(const std::string_view symbol) noexcept {

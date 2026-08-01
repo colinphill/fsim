@@ -169,4 +169,5 @@ endmodule
   test_call_safe_points(
       directory.path, source, fsim::project::Optimization::o2);
   std::cout << "call safe-point application tests passed\n";
+  return 0;
 }

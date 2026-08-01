@@ -1650,4 +1650,5 @@ endmodule
         config, fsim::app::SimulationEngine::compiled);
 #endif
   }
+  return 0;
 }

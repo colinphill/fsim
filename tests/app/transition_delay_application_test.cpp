@@ -730,4 +730,5 @@ endmodule
       directory.path, source);
   verify_parameterized_delays(directory.path, source);
   std::cout << "transition delay application tests passed\n";
+  return 0;
 }

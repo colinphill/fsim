@@ -84,7 +84,7 @@ endmodule
         return std::ranges::count_if(
             operations,
             [](const auto& operation) {
-              return std::holds_alternative<Type>(operation);
+              return fsim::runtime::simir::operation_holds<Type>(operation);
             });
       };
   assert(count(FileOpen{}) == 1);
@@ -103,7 +103,7 @@ endmodule
       operations,
       [](const auto& operation) {
         const auto* value =
-            std::get_if<FileWriteFormatted>(&operation);
+            fsim::runtime::simir::operation_get_if<FileWriteFormatted>(&operation);
         return value != nullptr
             && value->width == 32
             && value->format == OutputFormat::decimal
@@ -113,14 +113,14 @@ endmodule
   assert(std::ranges::count_if(
       operations,
       [](const auto& operation) {
-        const auto* value = std::get_if<FileReadLine>(&operation);
+        const auto* value = fsim::runtime::simir::operation_get_if<FileReadLine>(&operation);
         return value != nullptr
             && value->kind != FileReadKind::line;
       }) == 2);
   assert(std::ranges::any_of(
       operations,
       [](const auto& operation) {
-        const auto* value = std::get_if<FileScan>(&operation);
+        const auto* value = fsim::runtime::simir::operation_get_if<FileScan>(&operation);
         return value != nullptr && value->string_source
             && value->conversions.size() == 2
             && value->conversions[0].format
@@ -131,7 +131,7 @@ endmodule
   assert(std::ranges::any_of(
       operations,
       [](const auto& operation) {
-        const auto* value = std::get_if<FileBinaryRead>(&operation);
+        const auto* value = fsim::runtime::simir::operation_get_if<FileBinaryRead>(&operation);
         return value != nullptr
             && value->target_kind
                 == FileBinaryTargetKind::packed_signal
@@ -140,7 +140,7 @@ endmodule
   assert(std::ranges::any_of(
       operations,
       [](const auto& operation) {
-        const auto* value = std::get_if<FileBinaryRead>(&operation);
+        const auto* value = fsim::runtime::simir::operation_get_if<FileBinaryRead>(&operation);
         return value != nullptr
             && value->target_kind
                 == FileBinaryTargetKind::container_object
@@ -150,20 +150,20 @@ endmodule
   assert(std::ranges::any_of(
       operations,
       [](const auto& operation) {
-        const auto* value = std::get_if<FilePosition>(&operation);
+        const auto* value = fsim::runtime::simir::operation_get_if<FilePosition>(&operation);
         return value != nullptr && value->kind == FilePositionKind::seek
             && value->offset != value->origin;
       }));
   assert(std::ranges::count_if(
       operations,
       [](const auto& operation) {
-        const auto* value = std::get_if<FileFlush>(&operation);
+        const auto* value = fsim::runtime::simir::operation_get_if<FileFlush>(&operation);
         return value != nullptr && value->all;
       }) == 1);
   assert(std::ranges::count_if(
       operations,
       [](const auto& operation) {
-        const auto* value = std::get_if<LoadMemory>(&operation);
+        const auto* value = fsim::runtime::simir::operation_get_if<LoadMemory>(&operation);
         return value != nullptr && value->write;
       }) == 3);
 

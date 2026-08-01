@@ -227,7 +227,7 @@ namespace fsim::app::application_detail {
             result.instruction, "completion");
         break;
       case compiler::JitResumeStatus::assertion_failed: {
-        const auto* assertion = std::get_if<runtime::simir::Assert>(
+        const auto* assertion = fsim::runtime::simir::operation_get_if<runtime::simir::Assert>(
             &process_.operations[result.instruction]);
         if (assertion != nullptr) {
           throw runtime::simir::AssertionError(
@@ -239,7 +239,7 @@ namespace fsim::app::application_detail {
               assertion->severity,
               assertion->source);
         }
-        const auto* report = std::get_if<runtime::simir::Report>(
+        const auto* report = fsim::runtime::simir::operation_get_if<runtime::simir::Report>(
             &process_.operations[result.instruction]);
         if (report != nullptr
             && report->severity
@@ -259,7 +259,7 @@ namespace fsim::app::application_detail {
             "instruction");
       }
       case compiler::JitResumeStatus::wait_for: {
-        const auto* wait = std::get_if<runtime::simir::WaitFor>(
+        const auto* wait = fsim::runtime::simir::operation_get_if<runtime::simir::WaitFor>(
             &process_.operations[result.instruction]);
         if (wait == nullptr) {
           throw compiler::LlvmJitError(
@@ -273,7 +273,7 @@ namespace fsim::app::application_detail {
         break;
       }
       case compiler::JitResumeStatus::wait_on: {
-        const auto* wait = std::get_if<
+        const auto* wait = fsim::runtime::simir::operation_get_if<
             runtime::simir::WaitOn>(
             &process_.operations[result.instruction]);
         if (wait == nullptr) {
@@ -395,7 +395,7 @@ template <typename Boundary>
 void LlvmProcessExecutor::require_boundary(
     const runtime::simir::InstructionIndex instruction,
     const std::string_view status) const  {
-    if (!std::holds_alternative<Boundary>(
+    if (!fsim::runtime::simir::operation_holds<Boundary>(
             process_.operations[instruction])) {
       throw compiler::LlvmJitError(
           "compiled process reported " + std::string{status}
@@ -1689,7 +1689,7 @@ void LlvmProcessExecutor::write_report(
             "invalid generated report callback"};
       }
       const auto* report =
-          std::get_if<runtime::simir::Report>(
+          fsim::runtime::simir::operation_get_if<runtime::simir::Report>(
               &state.process->operations[instruction]);
       if (report != nullptr) {
         state.context->report(
@@ -1699,7 +1699,7 @@ void LlvmProcessExecutor::write_report(
         return;
       }
       const auto* assertion =
-          std::get_if<runtime::simir::Assert>(
+          fsim::runtime::simir::operation_get_if<runtime::simir::Assert>(
               &state.process->operations[instruction]);
       if (assertion == nullptr
           || assertion->severity
@@ -1741,7 +1741,7 @@ void LlvmProcessExecutor::write_formatted(
             "invalid generated formatted-output callback"};
       }
       const auto* operation =
-          std::get_if<runtime::simir::FormatDisplay>(
+          fsim::runtime::simir::operation_get_if<runtime::simir::FormatDisplay>(
               &state.process->operations[instruction]);
       if (operation == nullptr) {
         throw std::logic_error{
@@ -1788,7 +1788,7 @@ void LlvmProcessExecutor::write_formatted_logic9(
             "invalid generated Logic9 formatted-output callback"};
       }
       const auto* operation =
-          std::get_if<runtime::simir::FormatDisplay>(
+          fsim::runtime::simir::operation_get_if<runtime::simir::FormatDisplay>(
               &state.process->operations[instruction]);
       if (operation == nullptr) {
         throw std::logic_error{
@@ -1837,7 +1837,7 @@ void LlvmProcessExecutor::write_time(
             "invalid generated time-output callback"};
       }
       const auto* operation =
-          std::get_if<runtime::simir::TimeDisplay>(
+          fsim::runtime::simir::operation_get_if<runtime::simir::TimeDisplay>(
               &state.process->operations[instruction]);
       if (operation == nullptr) {
         throw std::logic_error{
@@ -1874,7 +1874,7 @@ void LlvmProcessExecutor::install_monitor(
             "invalid generated monitor-install callback"};
       }
       const auto* operation =
-          std::get_if<runtime::simir::MonitorInstall>(
+          fsim::runtime::simir::operation_get_if<runtime::simir::MonitorInstall>(
               &state.process->operations[instruction]);
       if (operation == nullptr) {
         throw std::logic_error{
@@ -1904,7 +1904,7 @@ void LlvmProcessExecutor::control_monitor(
             "invalid generated monitor-control callback"};
       }
       const auto* operation =
-          std::get_if<runtime::simir::MonitorControl>(
+          fsim::runtime::simir::operation_get_if<runtime::simir::MonitorControl>(
               &state.process->operations[instruction]);
       if (operation == nullptr) {
         throw std::logic_error{
@@ -1939,7 +1939,7 @@ std::uint64_t LlvmProcessExecutor::random_value(
             "invalid generated random-value callback"};
       }
       const auto* operation =
-          std::get_if<runtime::simir::RandomValue>(
+          fsim::runtime::simir::operation_get_if<runtime::simir::RandomValue>(
               &state.process->operations[instruction]);
       if (operation == nullptr) {
         throw std::logic_error{

@@ -205,4 +205,5 @@ endmodule
   test_optimization(
       directory.path, source, fsim::project::Optimization::o2);
   std::cout << "fork application tests passed\n";
+  return 0;
 }

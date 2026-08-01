@@ -312,4 +312,5 @@ end architecture;
     assert(cold.compiled_modules == 0);
 #endif
   }
+  return 0;
 }

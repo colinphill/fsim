@@ -508,4 +508,5 @@ endmodule
     verify_bad_path(
         config, source, fsim::app::SimulationEngine::compiled);
   }
+  return 0;
 }

@@ -461,10 +461,6 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                     expression.span);
                 return std::nullopt;
             }
-            const auto contextual_width =
-                binary_context_type != nullptr
-                    ? binary_context_type->width()
-                    : std::nullopt;
             const auto inferred_lhs_width =
                 infer_width(expression.operands[0])
                     .value_or(expected_width);
@@ -488,24 +484,27 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 language_
                     == frontend::Language::SystemVerilog2017
                 && expression.text == "**";
-            const auto width =
-                contextual_width
-                    ? static_cast<std::size_t>(*contextual_width)
-                    : language_
-                            == frontend::Language::Vhdl2008
-                        ? infer_width(expression)
-                              .value_or(expected_width)
-                        : systemverilog_power
-                            ? std::max(
-                                  expected_width,
-                                  inferred_lhs_width)
-                            : std::max(
-                                  scalar_result_operator
-                                      ? std::size_t{0}
-                                      : expected_width,
-                                  std::max(
-                                      inferred_lhs_width,
-                                      inferred_rhs_width));
+            const auto inferred_width =
+                language_ == frontend::Language::Vhdl2008
+                    ? infer_width(expression).value_or(expected_width)
+                    : systemverilog_power
+                        ? std::max(expected_width, inferred_lhs_width)
+                        : std::max(
+                              scalar_result_operator
+                                  ? std::size_t{0}
+                                  : expected_width,
+                              std::max(
+                                  inferred_lhs_width,
+                                  inferred_rhs_width));
+            auto width = inferred_width;
+            if (binary_context_type != nullptr) {
+                const auto contextual_width =
+                    binary_context_type->width();
+                if (contextual_width.has_value()) {
+                    width = static_cast<std::size_t>(
+                        contextual_width.value());
+                }
+            }
             const auto operation_width =
                 systemverilog_power
                     ? std::max(width, inferred_rhs_width)

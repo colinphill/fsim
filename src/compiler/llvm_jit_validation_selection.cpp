@@ -118,33 +118,33 @@ validate_selection_operation_bounds(
   for (std::size_t index = 0; index < process.operations.size(); ++index) {
     const auto& operation = process.operations[index];
     std::optional<std::string> error;
-    if (const auto* extract = std::get_if<Extract>(&operation)) {
+    if (const auto* extract = fsim::runtime::simir::operation_get_if<Extract>(&operation)) {
       error = validate_extract_bounds(
           *extract, register_widths[extract->source]);
     } else if (const auto* dynamic_extract =
-                   std::get_if<DynamicExtract>(&operation)) {
+                   fsim::runtime::simir::operation_get_if<DynamicExtract>(&operation)) {
       error = validate_dynamic_index_bounds(
           dynamic_extract->selection,
           register_widths[dynamic_extract->source]);
     } else if (const auto* part_select =
-                   std::get_if<DynamicPartSelect>(&operation)) {
+                   fsim::runtime::simir::operation_get_if<DynamicPartSelect>(&operation)) {
       error = validate_dynamic_part_select_source_width(
           *part_select, register_widths[part_select->source]);
-    } else if (const auto* insert = std::get_if<Insert>(&operation)) {
+    } else if (const auto* insert = fsim::runtime::simir::operation_get_if<Insert>(&operation)) {
       error = validate_insert_bounds(
           *insert, register_widths[insert->target],
           register_widths[insert->source]);
     } else if (const auto* dynamic_insert =
-                   std::get_if<DynamicInsert>(&operation)) {
+                   fsim::runtime::simir::operation_get_if<DynamicInsert>(&operation)) {
       error = validate_dynamic_index_bounds(
           dynamic_insert->selection,
           register_widths[dynamic_insert->target]);
     } else if (const auto* part_insert =
-                   std::get_if<DynamicPartInsert>(&operation)) {
+                   fsim::runtime::simir::operation_get_if<DynamicPartInsert>(&operation)) {
       error = validate_dynamic_part_index_bounds(
           part_insert->selection, register_widths[part_insert->target]);
     } else if (const auto* force =
-                   std::get_if<ForceSignalSlice>(&operation)) {
+                   fsim::runtime::simir::operation_get_if<ForceSignalSlice>(&operation)) {
       const auto target_width = signal_widths[force->signal];
       const auto source_width = register_widths[force->source];
       if (force->offset > target_width
@@ -152,7 +152,7 @@ validate_selection_operation_bounds(
         error = "ForceSignalSlice range is outside its signal";
       }
     } else if (const auto* release =
-                   std::get_if<ReleaseSignalSlice>(&operation)) {
+                   fsim::runtime::simir::operation_get_if<ReleaseSignalSlice>(&operation)) {
       const auto target_width = signal_widths[release->signal];
       if (release->offset > target_width
           || release->width > target_width - release->offset) {

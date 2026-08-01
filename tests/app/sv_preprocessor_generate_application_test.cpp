@@ -258,4 +258,5 @@ endmodule
   assert(edited.cache.misses > 0);
 #endif
   std::cout << "SystemVerilog preprocessor/generate application tests passed\n";
+  return 0;
 }

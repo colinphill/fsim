@@ -1738,7 +1738,7 @@ void test_simir_fork_process_lifecycle() {
             ValueKind::logic4, {}},
     };
     for (auto& operation : operations) {
-      if (auto* write = std::get_if<WriteBlocking>(&operation)) {
+      if (auto* write = fsim::runtime::simir::operation_get_if<WriteBlocking>(&operation)) {
         write->signal = output;
       }
     }

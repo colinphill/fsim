@@ -1918,7 +1918,7 @@ using namespace elaboration_detail;
                               branches[index] + 1)
                         : skip_body;
                 const auto& operation =
-                    std::get<Branch>(process_.operations[branches[index]]);
+                    fsim::runtime::simir::operation_get<Branch>(process_.operations[branches[index]]);
                 process_.operations[branches[index]] = Branch{
                     operation.condition,
                     body_start,

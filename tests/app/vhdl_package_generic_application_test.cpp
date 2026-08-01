@@ -399,4 +399,5 @@ end architecture;
         == key_for(changed, "package_top.stable_instance"));
 #endif
   }
+  return 0;
 }

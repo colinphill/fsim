@@ -513,4 +513,5 @@ end configuration;
     assert(nested_changed.cache.misses > 0);
 #endif
   }
+  return 0;
 }

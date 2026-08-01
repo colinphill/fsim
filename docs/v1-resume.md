@@ -12,9 +12,30 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 - Implementation baseline: completed feature-batch-110 SystemVerilog string,
   file, container, memory, same-language string-port, and release-row closure
   on top of Batch 109 commit `95fb09b`.
-- The source-size refactor is complete: all 332 authored C/C++ source, header,
+- The source-size refactor is complete: all 334 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
+- The post-Batch-110 Debug-footprint repair partitions the 115-alternative
+  SimIR `Operation` into eight semantic storage groups while retaining flat
+  construction, query, and visitation helpers. Five large visitors now use a
+  single typed dispatch body rather than a 115-lambda overload set, and the
+  application inventory is linked into four selector-driven hosts while every
+  named CTest remains a separate process. GCC Debug uses `-Og` and compressed
+  DWARF; Ninja link/archive concurrency remains eight.
+- Exact single-action measurements after the partition reduced
+  `lowerer_process.cpp` from 5,003,456 KiB to 911,748 KiB peak compilation
+  memory, `runtime_execution_tests.cpp` from 7,789,344 KiB to 954,596 KiB,
+  and a representative GNU ld.bfd application-host link from 5,309,296 KiB
+  to 1,398,856 KiB. The completed Debug tree is 3,748,237,353 bytes; its four
+  application hosts total 338,591,400 bytes and the elaboration archive is
+  230,510,732 bytes.
+- After an optimized-only nested-variant temporary-lifetime failure was
+  repaired with in-place group construction, the exact LLVM 22.1.8 Debug and
+  Release regressions passed 64/64 in 114.51 and 95.40 seconds. Scoped locals
+  completed in 1.07/1.17 seconds, files in 0.95/0.87 seconds, and containers
+  in 114.51/95.40 seconds. Focused LLVM-disabled ASan/UBSan elaboration and
+  file-application tests also pass after repairing a fork-parent reference
+  invalidated by dynamic-process vector growth.
 - The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 64
   configured tests in 485.70 seconds, and Release passed all 64 configured
   tests in 159.27 seconds on 2026-08-01. Debug/Release scoped locals completed
@@ -34,7 +55,8 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   builds retain the full interpreter/JIT O0/O2 matrix. Final run `30656887493`
   passed all 12 jobs. ASan/UBSan passed 58/58 in 876.53 seconds with containers
   in 588.70 seconds; Windows MSVC Debug passed 58/58 in 336.76 seconds with
-  scoped locals in 0.33 seconds. GitHub builds remain at parallelism two.
+  scoped locals in 0.33 seconds. GitHub builds now use parallelism four after
+  the operation-storage footprint repair reduced compiler and linker memory.
 - The feature-batch-70 boundary inspection found remote CI run
   `30542845249` failing non-LLVM GCC Debug, Release, and ASan/UBSan because
   LLVM-only cache-key test helpers were unguarded. The first repair guarded
@@ -46,7 +68,9 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   translation in SystemVerilog file streams plus Debug frontend stack
   exhaustion. Binary stream transport and an 8 MiB Windows Debug stack for
   the accumulated frontend matrix were repaired, and workflow builds returned
-  to two workers to avoid hosted Ubuntu memory pressure. Replacement run
+  to two workers to avoid hosted Ubuntu memory pressure. The later operation-
+  storage footprint repair permits the current four-worker setting.
+  Replacement run
   `30555745832` passed all 12 Linux and Windows jobs.
 - The Batch 80 boundary inspection found that Batch 72 had embedded four
   memory-load expressions in every recursive statement and a two-expression
@@ -1454,8 +1478,8 @@ the monolithic application in 40.66 seconds. Release passed all 64 tests in
 mutable strings in 0.41 seconds, files in 0.68 seconds, containers in 99.00
 seconds, and the monolithic application in 14.10 seconds. The exact current
 stopping point is immediately before the mandatory Batch 110
-non-documentation CI inspection, as requested by the user. GitHub CI remains
-at parallelism two and documentation-only runs are not monitored.
+non-documentation CI inspection, as requested by the user. GitHub CI uses
+parallelism four and documentation-only runs are not monitored.
 
 #### Earlier checkpoint history
 
@@ -1590,7 +1614,7 @@ audit; and exact Debug/Release gates.
 
 Do not inspect Actions yet. Batch 110 remains the mandatory non-documentation
 CI boundary after its complete ten-feature commit and push; local builds use at
-least eight workers, while GitHub Actions builds use parallelism two.
+least eight workers, while GitHub Actions builds use parallelism four.
 
 1. Audit every SystemVerilog v1 matrix row against live parser, elaborator,
    interpreter, LLVM, cache, debugger, VCD, and diagnostic evidence; record
@@ -1616,8 +1640,8 @@ least eight workers, while GitHub Actions builds use parallelism two.
    and source/diagnostic gates.
 10. Commit and push Batch 110, inspect its non-documentation GitHub Actions
     jobs, repair every actionable failure locally with at least eight build
-    workers, push repairs, and confirm replacement checks. GitHub builds remain
-    at parallelism two; documentation-only runs do not require monitoring.
+    workers, push repairs, and confirm replacement checks. GitHub builds use
+    parallelism four; documentation-only runs do not require monitoring.
 
 The authoritative Batch 99 through 130 language-closure sequence is recorded
 under **Forward language-closure feature batches** in the implementation plan;
@@ -1631,8 +1655,9 @@ preserve that order unless both documents are explicitly amended.
 - Use at least eight parallel workers for every local project, test-support,
   and fetched-dependency build, including interim builds. Prefer
   `cmake --build <tree> --parallel 8` (or a larger value). GitHub Actions is
-  the explicit exception: its hosted-VM builds use `--parallel 2` to avoid
-  memory pressure.
+  the explicit exception: its hosted-VM builds use `--parallel 4`; the
+  structurally partitioned operation storage keeps that setting within the
+  intended memory envelope.
 - At the tenth feature, run the exact LLVM 22.1.8 Debug and Release regression
   appropriate to the batch, update the plan/support/matrix documents, commit,
   and push the branch. A feature batch is not handed off as complete until its

@@ -50,13 +50,13 @@ endmodule
   assert(std::ranges::any_of(
       operations,
       [](const auto& operation) {
-        return std::holds_alternative<
+        return fsim::runtime::simir::operation_holds<
             fsim::runtime::simir::Call>(operation);
       }));
   assert(std::ranges::any_of(
       operations,
       [](const auto& operation) {
-        return std::holds_alternative<
+        return fsim::runtime::simir::operation_holds<
             fsim::runtime::simir::Return>(operation);
       }));
 
@@ -484,14 +484,14 @@ endmodule
   assert(std::ranges::count_if(
              fixed_process.operations,
              [](const auto& operation) {
-               return std::holds_alternative<
+               return fsim::runtime::simir::operation_holds<
                    fsim::runtime::simir::Call>(operation);
              })
          == 17);
   assert(std::ranges::count_if(
              fixed_process.operations,
              [](const auto& operation) {
-               return std::holds_alternative<
+               return fsim::runtime::simir::operation_holds<
                    fsim::runtime::simir::ConditionalContainerSelect>(
                    operation);
              })
@@ -696,14 +696,14 @@ endmodule
   assert(std::ranges::count_if(
              nonstatic_process.operations,
              [](const auto& operation) {
-               return std::holds_alternative<
+               return fsim::runtime::simir::operation_holds<
                    fsim::runtime::simir::Call>(operation);
              })
          == 30);
   assert(std::ranges::count_if(
              nonstatic_process.operations,
              [](const auto& operation) {
-               return std::holds_alternative<
+               return fsim::runtime::simir::operation_holds<
                    fsim::runtime::simir::ConditionalContainerSelect>(
                    operation);
              })

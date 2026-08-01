@@ -681,4 +681,5 @@ end architecture;
             "component_runtime_top.defaulted_child"));
 #endif
   }
+  return 0;
 }

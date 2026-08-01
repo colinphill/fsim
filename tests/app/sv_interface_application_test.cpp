@@ -295,4 +295,5 @@ endmodule
   assert(export_edit.cache.misses > 0);
 #endif
   std::cout << "SystemVerilog interface application tests passed\n";
+  return 0;
 }

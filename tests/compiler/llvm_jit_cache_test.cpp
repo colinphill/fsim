@@ -841,7 +841,7 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
     LlvmJit changed_timeout{options};
     auto timed_wait =
         make_cached_wait_process(false, {0, 1});
-    std::get<WaitOn>(timed_wait.operations.front()).timeout = 5;
+    fsim::runtime::simir::operation_get<WaitOn>(timed_wait.operations.front()).timeout = 5;
     changed_timeout.add_process(
         wait_symbol, timed_wait, wait_widths);
     materialize_cached_wait_process(

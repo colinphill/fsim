@@ -506,4 +506,5 @@ end architecture;
             changed, "procedure_top.package_instance.nested"));
 #endif
   }
+  return 0;
 }

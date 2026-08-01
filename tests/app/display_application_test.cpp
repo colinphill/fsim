@@ -585,4 +585,5 @@ end architecture;
       failure_report_source,
       fsim::project::Optimization::o2);
   std::cout << "display application tests passed\n";
+  return 0;
 }

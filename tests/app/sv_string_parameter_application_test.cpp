@@ -291,4 +291,5 @@ endmodule
   assert(changed.cache.misses == 2);
   assert(changed.cache.stores == 2);
 #endif
+  return 0;
 }

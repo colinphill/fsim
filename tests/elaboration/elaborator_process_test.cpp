@@ -117,7 +117,7 @@ endmodule
                 operations.begin(),
                 operations.end(),
                 [](const auto& operation) {
-                    return std::holds_alternative<OperationType>(
+                    return fsim::runtime::simir::operation_holds<OperationType>(
                         operation);
                 });
             assert(found != operations.end());
@@ -130,7 +130,7 @@ endmodule
                 operations.begin(),
                 operations.end(),
                 [](const auto& operation) {
-                    const auto* point = std::get_if<
+                    const auto* point = fsim::runtime::simir::operation_get_if<
                         fsim::runtime::simir::DebugPoint>(
                         &operation);
                     return point != nullptr
@@ -164,7 +164,7 @@ endmodule
               .operator()<fsim::runtime::simir::WriteBlocking>(
                   delayed_blocking_operations));
     const auto* blocking_wait =
-        std::get_if<fsim::runtime::simir::WaitFor>(
+        fsim::runtime::simir::operation_get_if<fsim::runtime::simir::WaitFor>(
             &delayed_blocking_operations[
                 operation_index
                     .operator()<fsim::runtime::simir::WaitFor>(
@@ -179,13 +179,13 @@ endmodule
         delayed_slice_operations.begin(),
         delayed_slice_operations.end(),
         [](const auto& operation) {
-            return std::holds_alternative<
+            return fsim::runtime::simir::operation_holds<
                 fsim::runtime::simir::WriteAfterSlice>(
                     operation);
         });
     assert(delayed_slice != delayed_slice_operations.end());
     const auto& delayed_slice_write =
-        std::get<fsim::runtime::simir::WriteAfterSlice>(
+        fsim::runtime::simir::operation_get<fsim::runtime::simir::WriteAfterSlice>(
             *delayed_slice);
     assert(
         delayed_slice_write.delay == 2
@@ -194,7 +194,7 @@ endmodule
         std::ranges::none_of(
             delayed_slice_operations,
             [](const auto& operation) {
-                return std::holds_alternative<
+                return fsim::runtime::simir::operation_holds<
                     fsim::runtime::simir::WaitFor>(operation);
             }));
 
@@ -232,7 +232,7 @@ endmodule
                               operations));
             }
             const auto& wait =
-                std::get<fsim::runtime::simir::WaitOn>(
+                fsim::runtime::simir::operation_get<fsim::runtime::simir::WaitOn>(
                     operations[wait_index]);
             assert(wait.signals.size() == sensitivity_count);
         };
@@ -240,7 +240,7 @@ endmodule
     verify_event_assignment(3, true, 2);
     verify_event_assignment(4, true, 1);
     const auto& wildcard_wait =
-        std::get<fsim::runtime::simir::WaitOn>(
+        fsim::runtime::simir::operation_get<fsim::runtime::simir::WaitOn>(
             elaborated_assignment_timing.design
                 ->processes()[4]
                 .operations[
@@ -727,7 +727,7 @@ endmodule
         local_process.operations.begin(),
         local_process.operations.end(),
         [](const fsim::runtime::simir::Operation& operation) {
-          return std::holds_alternative<
+          return fsim::runtime::simir::operation_holds<
               fsim::runtime::simir::CopyRegister>(operation);
         }));
     auto local_interpreter =
@@ -931,7 +931,7 @@ end architecture;
             .operations.end(),
         [](const fsim::runtime::simir::Operation& operation) {
           const auto* point =
-              std::get_if<fsim::runtime::simir::DebugPoint>(
+              fsim::runtime::simir::operation_get_if<fsim::runtime::simir::DebugPoint>(
                   &operation);
           return point != nullptr
               && point->kind
@@ -973,7 +973,7 @@ end architecture;
                vhdl_local_process.operations.begin(),
                vhdl_local_process.operations.end(),
                [](const fsim::runtime::simir::Operation& operation) {
-                 return std::holds_alternative<
+                 return fsim::runtime::simir::operation_holds<
                      fsim::runtime::simir::CopyRegister>(operation);
                })
            >= 2);
@@ -1034,13 +1034,13 @@ end architecture;
                vhdl_wait_process.operations.begin(),
                vhdl_wait_process.operations.end(),
                [](const fsim::runtime::simir::Operation& operation) {
-                 return std::holds_alternative<
+                 return fsim::runtime::simir::operation_holds<
                             fsim::runtime::simir::WaitFor>(operation)
-                     || std::holds_alternative<
+                     || fsim::runtime::simir::operation_holds<
                             fsim::runtime::simir::WaitOn>(operation);
                })
            == 3);
-    assert(std::holds_alternative<fsim::runtime::simir::Jump>(
+    assert(fsim::runtime::simir::operation_holds<fsim::runtime::simir::Jump>(
         vhdl_wait_process.operations.back()));
     auto vhdl_wait_interpreter =
         elaborated_vhdl_waits.design->create_interpreter();
@@ -1104,7 +1104,7 @@ endmodule
                observer_process.operations.begin(),
                observer_process.operations.end(),
                [](const fsim::runtime::simir::Operation& operation) {
-                 return std::holds_alternative<
+                 return fsim::runtime::simir::operation_holds<
                      fsim::runtime::simir::WaitOn>(operation);
                })
            == 2);
@@ -1112,21 +1112,21 @@ endmodule
         observer_process.operations.begin(),
         observer_process.operations.end(),
         [](const fsim::runtime::simir::Operation& operation) {
-          return std::holds_alternative<
+          return fsim::runtime::simir::operation_holds<
               fsim::runtime::simir::WaitOn>(operation);
         });
     const auto second_dynamic_wait_operation = std::find_if(
         std::next(first_dynamic_wait_operation),
         observer_process.operations.end(),
         [](const fsim::runtime::simir::Operation& operation) {
-          return std::holds_alternative<
+          return fsim::runtime::simir::operation_holds<
               fsim::runtime::simir::WaitOn>(operation);
         });
     const auto& first_dynamic_wait =
-        std::get<fsim::runtime::simir::WaitOn>(
+        fsim::runtime::simir::operation_get<fsim::runtime::simir::WaitOn>(
             *first_dynamic_wait_operation);
     const auto& second_dynamic_wait =
-        std::get<fsim::runtime::simir::WaitOn>(
+        fsim::runtime::simir::operation_get<fsim::runtime::simir::WaitOn>(
             *second_dynamic_wait_operation);
     assert(
         first_dynamic_wait.edges.size() == 1
@@ -1192,7 +1192,7 @@ end architecture;
             vhdl_condition_wait_process.operations.begin(),
             vhdl_condition_wait_process.operations.end(),
             [](const fsim::runtime::simir::Operation& operation) {
-              return std::holds_alternative<
+              return fsim::runtime::simir::operation_holds<
                   fsim::runtime::simir::WaitOn>(operation);
             })
         == 3);
@@ -1290,7 +1290,7 @@ end architecture;
         combined_wait_observer.operations,
         [](const fsim::runtime::simir::Operation& operation) {
             const auto* wait =
-                std::get_if<fsim::runtime::simir::WaitOn>(
+                fsim::runtime::simir::operation_get_if<fsim::runtime::simir::WaitOn>(
                     &operation);
             return wait != nullptr
                 && wait->timeout
@@ -1300,7 +1300,7 @@ end architecture;
     assert(std::ranges::any_of(
         combined_wait_observer.operations,
         [](const fsim::runtime::simir::Operation& operation) {
-            return std::holds_alternative<
+            return fsim::runtime::simir::operation_holds<
                 fsim::runtime::simir::WaitForever>(
                     operation);
         }));
@@ -1418,7 +1418,7 @@ endmodule
           return std::ranges::any_of(
               process.operations,
               [](const fsim::runtime::simir::Operation& operation) {
-                const auto* wait = std::get_if<
+                const auto* wait = fsim::runtime::simir::operation_get_if<
                     fsim::runtime::simir::WaitOn>(
                     &operation);
                 return wait != nullptr

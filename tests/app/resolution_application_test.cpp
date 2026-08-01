@@ -54,7 +54,7 @@ bool writes_signal(
   return std::ranges::any_of(
       process.operations,
       [signal](const fsim::runtime::simir::Operation& operation) {
-        return std::visit(
+        return fsim::runtime::simir::visit_operation(
             [signal](const auto& op) {
               using T = std::decay_t<decltype(op)>;
               if constexpr (
@@ -336,4 +336,5 @@ end architecture;
       sv_source,
       vhdl_source,
       fsim::project::Optimization::o2);
+  return 0;
 }

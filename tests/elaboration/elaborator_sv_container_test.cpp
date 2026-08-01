@@ -359,30 +359,30 @@ endmodule
   assert(std::ranges::any_of(
       process.operations,
       [](const auto& operation) {
-        const auto* resize = std::get_if<ResizeContainer>(&operation);
+        const auto* resize = fsim::runtime::simir::operation_get_if<ResizeContainer>(&operation);
         return resize != nullptr && resize->initializer.has_value();
       }));
   assert(std::ranges::any_of(
       process.operations,
       [](const auto& operation) {
-        const auto* push = std::get_if<PushContainer>(&operation);
+        const auto* push = fsim::runtime::simir::operation_get_if<PushContainer>(&operation);
         return push != nullptr && push->index.has_value();
       }));
   assert(std::ranges::any_of(
       process.operations,
       [](const auto& operation) {
-        return std::holds_alternative<ContainerExists>(operation);
+        return fsim::runtime::simir::operation_holds<ContainerExists>(operation);
       }));
   assert(std::ranges::any_of(
       process.operations,
       [](const auto& operation) {
-        return std::holds_alternative<TraverseContainer>(operation);
+        return fsim::runtime::simir::operation_holds<TraverseContainer>(operation);
       }));
   assert(
       std::ranges::count_if(
           process.operations,
           [](const auto& operation) {
-            return std::holds_alternative<
+            return fsim::runtime::simir::operation_holds<
                 ContainerReduction>(operation);
           })
       >= 12);
@@ -390,7 +390,7 @@ endmodule
       process.operations,
       [](const auto& operation) {
         const auto* reduction =
-            std::get_if<ContainerReduction>(&operation);
+            fsim::runtime::simir::operation_get_if<ContainerReduction>(&operation);
         if (reduction == nullptr
             || reduction->transformation.empty()) {
           return false;
@@ -422,7 +422,7 @@ endmodule
       std::ranges::count_if(
           process.operations,
           [](const auto& operation) {
-            return std::holds_alternative<
+            return fsim::runtime::simir::operation_holds<
                 OrderContainer>(operation);
           })
       >= 16);
@@ -430,7 +430,7 @@ endmodule
       process.operations,
       [](const auto& operation) {
         const auto* ordering =
-            std::get_if<OrderContainer>(&operation);
+            fsim::runtime::simir::operation_get_if<OrderContainer>(&operation);
         if (ordering == nullptr || ordering->key.empty()) {
           return false;
         }
@@ -459,7 +459,7 @@ endmodule
       std::ranges::count_if(
           process.operations,
           [](const auto& operation) {
-            return std::holds_alternative<
+            return fsim::runtime::simir::operation_holds<
                 LocateContainer>(operation);
           })
       >= 10);
@@ -468,7 +468,7 @@ endmodule
           process.operations,
           [](const auto& operation) {
             const auto* locator =
-                std::get_if<LocateContainer>(&operation);
+                fsim::runtime::simir::operation_get_if<LocateContainer>(&operation);
             return locator != nullptr
                 && !locator->predicate.empty();
           })
@@ -477,7 +477,7 @@ endmodule
       process.operations,
       [](const auto& operation) {
         const auto* locator =
-            std::get_if<LocateContainer>(&operation);
+            fsim::runtime::simir::operation_get_if<LocateContainer>(&operation);
         return locator != nullptr
             && std::ranges::any_of(
                 locator->predicate,
@@ -501,7 +501,7 @@ endmodule
   std::vector<const LocateContainer*> predicate_locators;
   for (const auto& operation : process.operations) {
     if (const auto* locator =
-            std::get_if<LocateContainer>(&operation);
+            fsim::runtime::simir::operation_get_if<LocateContainer>(&operation);
         locator && !locator->predicate.empty()) {
       predicate_locators.push_back(locator);
     }
@@ -527,7 +527,7 @@ endmodule
   std::vector<const ContainerReduction*> transformed_reductions;
   for (const auto& operation : process.operations) {
     if (const auto* reduction =
-            std::get_if<ContainerReduction>(&operation);
+            fsim::runtime::simir::operation_get_if<ContainerReduction>(&operation);
         reduction && !reduction->transformation.empty()) {
       transformed_reductions.push_back(reduction);
     }
@@ -553,7 +553,7 @@ endmodule
   std::vector<const LocateContainer*> transformed_locators;
   for (const auto& operation : process.operations) {
     if (const auto* locator =
-            std::get_if<LocateContainer>(&operation);
+            fsim::runtime::simir::operation_get_if<LocateContainer>(&operation);
         locator && !locator->transformation.empty()) {
       transformed_locators.push_back(locator);
     }
@@ -565,7 +565,7 @@ endmodule
   std::vector<const OrderContainer*> keyed_orderings;
   for (const auto& operation : process.operations) {
     if (const auto* ordering =
-            std::get_if<OrderContainer>(&operation);
+            fsim::runtime::simir::operation_get_if<OrderContainer>(&operation);
         ordering && !ordering->key.empty()) {
       keyed_orderings.push_back(ordering);
     }
@@ -655,15 +655,15 @@ endmodule
     const auto& operation =
         atomic_process.operations[position];
     if (const auto* copy =
-            std::get_if<CopyContainerRegister>(&operation)) {
+            fsim::runtime::simir::operation_get_if<CopyContainerRegister>(&operation)) {
       assert(atomic_copy == nullptr);
       atomic_copy = copy;
       atomic_copy_position = position;
     } else if (
-        std::holds_alternative<ContainerWrite>(operation)) {
+        fsim::runtime::simir::operation_holds<ContainerWrite>(operation)) {
       atomic_element_writes.push_back(position);
     } else if (
-        std::holds_alternative<WriteContainerObject>(operation)) {
+        fsim::runtime::simir::operation_holds<WriteContainerObject>(operation)) {
       atomic_object_write_position = position;
     }
   }
@@ -674,7 +674,7 @@ endmodule
           atomic_element_writes,
           [&](const auto position) {
             const auto& write =
-                std::get<ContainerWrite>(
+                fsim::runtime::simir::operation_get<ContainerWrite>(
                     atomic_process.operations[position]);
             return write.target == atomic_copy->source
                 && position < atomic_copy_position;
@@ -859,7 +859,7 @@ endmodule
       std::ranges::count_if(
           slice_process.operations,
           [](const auto& operation) {
-            return std::holds_alternative<
+            return fsim::runtime::simir::operation_holds<
                 ContainerRead>(operation);
           })
       >= 13);
@@ -867,7 +867,7 @@ endmodule
       std::ranges::count_if(
           slice_process.operations,
           [](const auto& operation) {
-            return std::holds_alternative<
+            return fsim::runtime::simir::operation_holds<
                 ContainerWrite>(operation);
           })
       >= 13);
@@ -937,17 +937,17 @@ endmodule
        ++position) {
     const auto& operation =
         atomic_slice_process.operations[position];
-    if (std::holds_alternative<ContainerRead>(operation)) {
+    if (fsim::runtime::simir::operation_holds<ContainerRead>(operation)) {
       atomic_slice_reads.push_back(position);
     } else if (
-        std::holds_alternative<ContainerWrite>(operation)) {
+        fsim::runtime::simir::operation_holds<ContainerWrite>(operation)) {
       atomic_slice_writes.push_back(position);
     } else if (
         const auto* copy =
-            std::get_if<CopyContainerRegister>(&operation)) {
+            fsim::runtime::simir::operation_get_if<CopyContainerRegister>(&operation)) {
       atomic_slice_copies.emplace_back(position, copy);
     } else if (
-        std::holds_alternative<WriteContainerObject>(
+        fsim::runtime::simir::operation_holds<WriteContainerObject>(
             operation)) {
       atomic_slice_object_write = position;
     }
@@ -981,7 +981,7 @@ endmodule
           atomic_slice_process.operations,
           [&](const auto& operation) {
             const auto* write =
-                std::get_if<ContainerWrite>(&operation);
+                fsim::runtime::simir::operation_get_if<ContainerWrite>(&operation);
             return write != nullptr
                 && write->target
                     == commit_copy->destination;

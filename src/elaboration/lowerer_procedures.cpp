@@ -240,7 +240,7 @@ void Lowerer::lower_procedure_call(const Statement& statement) {
         static_cast<InstructionIndex>(call_site + 1U),
         procedure_call_stack_});
     if (frame.target) {
-        std::get<Call>(process_.operations[call_site]).target =
+        fsim::runtime::simir::operation_get<Call>(process_.operations[call_site]).target =
             *frame.target;
     } else {
         frame.call_sites.push_back(call_site);
@@ -320,7 +320,7 @@ void Lowerer::lower_procedure_body(
     frame.target = static_cast<InstructionIndex>(
         process_.operations.size());
     for (const auto call_site : frame.call_sites) {
-        std::get<Call>(process_.operations[call_site]).target =
+        fsim::runtime::simir::operation_get<Call>(process_.operations[call_site]).target =
             *frame.target;
     }
     frame.call_sites.clear();

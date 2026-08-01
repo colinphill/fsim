@@ -544,4 +544,5 @@ end architecture;
             "generic_subprogram_top.stable_instance"));
 #endif
   }
+  return 0;
 }

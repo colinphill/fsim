@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -1151,52 +1152,7 @@ struct Pause {};
 
 struct Halt {};
 
-using Operation =
-    std::variant<LoadConstant, ReadSignal, SignalEvent, SignalLastValue,
-                 SignalLastEvent, SignalActive, CopyRegister,
-                 LoadStringConstant, CopyStringRegister, ReadStringObject,
-                 WriteStringObject, ConcatenateStrings, CompareStrings,
-                 StringLength, StringIndex, StringReplaceByte, StringMethod,
-                 ResizeContainer, CopyContainerRegister,
-                 ConditionalContainerSelect,
-                 CompareContainers,
-                 ReadContainerObject, WriteContainerObject,
-                 ContainerSize, ContainerReduction,
-                 OrderContainer, LocateContainer,
-                 ContainerRead, ContainerWrite,
-                 DeleteContainer, ContainerExists, TraverseContainer,
-                 LoadMemory, PushContainer, PopContainer, FileOpen,
-                 FileClose, FileWriteLiteral, FileWriteFormatted,
-                 FileWriteString, FileReadLine, FileEndOfFile,
-                 FileErrorStatus, FileScan, FileBinaryRead,
-                 FilePosition, FileFlush, UnaryNot,
-                 LogicalNot, LogicalBinary, Reduction, CountOnes, CountBits,
-                 Shift, Extract, DynamicExtract, DynamicPartSelect,
-                 Concatenate, Binary, Insert, DynamicInsert,
-                 DynamicPartInsert,
-                 IntegerUnary, IntegerBinary, IntegerCheck,
-                 ConditionalSelect, WriteBlocking, WriteUpdate, WriteAfter,
-                 WriteInertial, WriteProjected, WriteProjectedWaveform,
-                 WriteBlockingSlice,
-                 WriteUpdateSlice,
-                 WriteAfterSlice, WriteInertialSlice,
-                 WriteProjectedSlice, WriteProjectedWaveformSlice,
-                 WriteBlockingDynamicSlice,
-                 WriteUpdateDynamicSlice,
-                 WriteAfterDynamicSlice,
-                 WriteBlockingDynamicPartSlice,
-                 WriteUpdateDynamicPartSlice,
-                 WriteAfterDynamicPartSlice,
-                 ForceSignalSlice, ReleaseSignalSlice,
-                 WriteInertialDynamicSlice,
-                 WriteProjectedDynamicSlice,
-                 WriteProjectedWaveformDynamicSlice,
-                 WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield,
-                 Fork, ForkEnd, WaitFork, DisableFork, Jump,
-                 Call, Return, Branch, DebugPoint, Assert, Display, FormatDisplay,
-                 StringDisplay, TimeDisplay, MonitorInstall, MonitorControl,
-                 RandomValue,
-                 Report, Pause, Stop, Halt>;
+#include "fsim/runtime/simir_operation_storage.hpp"
 
 enum class ResolutionKind : std::uint8_t {
   none,

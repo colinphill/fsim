@@ -112,19 +112,19 @@ Capture run_once(
                     return value != nullptr
                         && value->signal == *resolved_signal;
                   };
-              return writes(std::get_if<
+              return writes(fsim::runtime::simir::operation_get_if<
                             fsim::runtime::simir::WriteBlocking>(
                             &operation))
-                  || writes(std::get_if<
+                  || writes(fsim::runtime::simir::operation_get_if<
                             fsim::runtime::simir::WriteUpdate>(
                             &operation))
-                  || writes(std::get_if<
+                  || writes(fsim::runtime::simir::operation_get_if<
                             fsim::runtime::simir::WriteAfter>(
                             &operation))
-                  || writes(std::get_if<
+                  || writes(fsim::runtime::simir::operation_get_if<
                             fsim::runtime::simir::WriteProjected>(
                             &operation))
-                  || writes(std::get_if<
+                  || writes(fsim::runtime::simir::operation_get_if<
                             fsim::runtime::simir::
                                 WriteProjectedWaveform>(
                             &operation));

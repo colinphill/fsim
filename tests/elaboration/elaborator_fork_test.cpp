@@ -51,25 +51,25 @@ endmodule
       std::count_if(
           operations.begin(), operations.end(),
           [](const auto& operation) {
-            return std::holds_alternative<Fork>(operation);
+            return fsim::runtime::simir::operation_holds<Fork>(operation);
           })
       == 3);
   assert(
       std::count_if(
           operations.begin(), operations.end(),
           [](const auto& operation) {
-            return std::holds_alternative<ForkEnd>(operation);
+            return fsim::runtime::simir::operation_holds<ForkEnd>(operation);
           })
       == 5);
   assert(std::any_of(
       operations.begin(), operations.end(),
       [](const auto& operation) {
-        return std::holds_alternative<WaitFork>(operation);
+        return fsim::runtime::simir::operation_holds<WaitFork>(operation);
       }));
   assert(std::any_of(
       operations.begin(), operations.end(),
       [](const auto& operation) {
-        return std::holds_alternative<DisableFork>(operation);
+        return fsim::runtime::simir::operation_holds<DisableFork>(operation);
       }));
 
   const auto result = elaborated.design->find_signal("result");

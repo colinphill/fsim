@@ -174,7 +174,7 @@ endmodule
             trigger_process.operations.begin(),
             trigger_process.operations.end(),
             [](const fsim::runtime::simir::Operation& operation) {
-              return std::holds_alternative<
+              return fsim::runtime::simir::operation_holds<
                   fsim::runtime::simir::WriteBlocking>(operation);
             })
         == 1);
@@ -184,7 +184,7 @@ endmodule
             trigger_process.operations.end(),
             [](const fsim::runtime::simir::Operation& operation) {
               const auto* delayed =
-                  std::get_if<fsim::runtime::simir::WriteAfter>(
+                  fsim::runtime::simir::operation_get_if<fsim::runtime::simir::WriteAfter>(
                       &operation);
               return delayed != nullptr && delayed->delay == 2;
             })
@@ -194,7 +194,7 @@ endmodule
             trigger_process.operations.begin(),
             trigger_process.operations.end(),
             [](const fsim::runtime::simir::Operation& operation) {
-              return std::holds_alternative<
+              return fsim::runtime::simir::operation_holds<
                   fsim::runtime::simir::WriteUpdate>(operation);
             })
         == 1);
@@ -205,7 +205,7 @@ endmodule
             waiting_process.operations.begin(),
             waiting_process.operations.end(),
             [](const fsim::runtime::simir::Operation& operation) {
-              return std::holds_alternative<
+              return fsim::runtime::simir::operation_holds<
                   fsim::runtime::simir::WaitOn>(operation);
             })
         == 1);
@@ -259,7 +259,7 @@ endmodule
     std::vector<fsim::runtime::simir::Display> displays;
     for (const auto& operation : display_operations) {
         if (const auto* display =
-                std::get_if<fsim::runtime::simir::Display>(
+                fsim::runtime::simir::operation_get_if<fsim::runtime::simir::Display>(
                     &operation)) {
             displays.push_back(*display);
         }
@@ -279,7 +279,7 @@ endmodule
     std::vector<fsim::runtime::simir::MonitorInstall> monitors;
     for (const auto& operation : display_operations) {
         if (const auto* monitor =
-                std::get_if<fsim::runtime::simir::MonitorInstall>(
+                fsim::runtime::simir::operation_get_if<fsim::runtime::simir::MonitorInstall>(
                     &operation)) {
             monitors.push_back(*monitor);
         }
@@ -303,7 +303,7 @@ endmodule
     std::vector<bool> monitor_controls;
     for (const auto& operation : display_operations) {
         if (const auto* control =
-                std::get_if<fsim::runtime::simir::MonitorControl>(
+                fsim::runtime::simir::operation_get_if<fsim::runtime::simir::MonitorControl>(
                     &operation)) {
             monitor_controls.push_back(control->enabled);
         }
@@ -495,7 +495,7 @@ end architecture;
                 process.operations.begin(),
                 process.operations.end(),
                 [](const auto& operation) {
-                    return std::holds_alternative<
+                    return fsim::runtime::simir::operation_holds<
                         fsim::runtime::simir::Insert>(operation);
                 }));
     }
@@ -1068,21 +1068,21 @@ end architecture;
         for (const auto& operation : process.operations) {
             found_dynamic_extract =
                 found_dynamic_extract
-                || std::holds_alternative<
+                || fsim::runtime::simir::operation_holds<
                     fsim::runtime::simir::DynamicExtract>(
                     operation);
             found_dynamic_insert =
                 found_dynamic_insert
-                || std::holds_alternative<
+                || fsim::runtime::simir::operation_holds<
                     fsim::runtime::simir::DynamicInsert>(
                     operation);
             found_dynamic_write =
                 found_dynamic_write
-                || std::holds_alternative<
+                || fsim::runtime::simir::operation_holds<
                     fsim::runtime::simir::
                         WriteUpdateDynamicSlice>(
                     operation)
-                || std::holds_alternative<
+                || fsim::runtime::simir::operation_holds<
                     fsim::runtime::simir::
                         WriteProjectedDynamicSlice>(
                     operation);
@@ -1464,7 +1464,7 @@ endmodule
     for (const auto& operation :
          random_design.design->processes().front().operations) {
         if (const auto* random =
-                std::get_if<fsim::runtime::simir::RandomValue>(
+                fsim::runtime::simir::operation_get_if<fsim::runtime::simir::RandomValue>(
                     &operation)) {
             random_operations.push_back(*random);
         }
@@ -1530,7 +1530,7 @@ endmodule
         verilog_random_design.design->processes().front().operations,
         [](const auto& operation) {
           const auto* random =
-              std::get_if<fsim::runtime::simir::RandomValue>(
+              fsim::runtime::simir::operation_get_if<fsim::runtime::simir::RandomValue>(
                   &operation);
           return random
               && random->kind

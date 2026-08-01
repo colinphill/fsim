@@ -61,14 +61,14 @@ endmodule
   assert(std::ranges::count_if(
              operations,
              [](const auto& operation) {
-               return std::holds_alternative<
+               return fsim::runtime::simir::operation_holds<
                    fsim::runtime::simir::Call>(operation);
              })
          >= 3);
   assert(std::ranges::count_if(
              operations,
              [](const auto& operation) {
-               return std::holds_alternative<
+               return fsim::runtime::simir::operation_holds<
                    fsim::runtime::simir::Return>(operation);
              })
          >= 3);
@@ -273,21 +273,21 @@ endmodule
     calls += std::ranges::count_if(
         process.operations,
         [](const auto& operation) {
-          return std::holds_alternative<
+          return fsim::runtime::simir::operation_holds<
               fsim::runtime::simir::Call>(operation);
         });
     returns += std::ranges::count_if(
         process.operations,
         [](const auto& operation) {
-          return std::holds_alternative<
+          return fsim::runtime::simir::operation_holds<
               fsim::runtime::simir::Return>(operation);
         });
     waits += std::ranges::count_if(
         process.operations,
         [](const auto& operation) {
-          return std::holds_alternative<
+          return fsim::runtime::simir::operation_holds<
                      fsim::runtime::simir::WaitFor>(operation)
-              || std::holds_alternative<
+              || fsim::runtime::simir::operation_holds<
                      fsim::runtime::simir::WaitOn>(operation);
         });
   }

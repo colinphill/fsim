@@ -322,7 +322,7 @@ Lowerer::lower_string_expression(
             static_cast<InstructionIndex>(call_site + 1U),
             function_call_stack_});
     if (frame.target) {
-      std::get<Call>(
+      fsim::runtime::simir::operation_get<Call>(
           process_.operations[call_site]).target = *frame.target;
     } else {
       frame.call_sites.push_back(call_site);

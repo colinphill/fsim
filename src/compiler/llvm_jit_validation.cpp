@@ -11,8 +11,6 @@
 namespace fsim::compiler::llvm_detail {
 using runtime::Logic9;
 using namespace runtime::simir;
-template <class... Ts> struct Overloaded : Ts... { using Ts::operator()...; };
-template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
 [[nodiscard]] ValidatedProcess
 validate_process(
     const Process &process, const std::span<const std::uint32_t> signal_widths,
@@ -222,7 +220,7 @@ validate_process(
   const auto first_wait_sensitivity = std::find_if(
       process.operations.begin(), process.operations.end(),
       [](const Operation &operation) {
-        return std::holds_alternative<WaitSensitivity>(operation);
+        return fsim::runtime::simir::operation_holds<WaitSensitivity>(operation);
       });
   const auto sensitivity_instruction =
       first_wait_sensitivity == process.operations.end()
@@ -251,1473 +249,1361 @@ validate_process(
     }
   }
   for (std::size_t index = 0; index < process.operations.size(); ++index) {
-    std::visit(
-        Overloaded{
-            [&](const LoadConstant &operation) {
-              if (operation.value.width() == 0) {
-                reject(process, index,
-                       "LoadConstant width must be greater than zero");
+    fsim::runtime::simir::visit_operation(
+        [&](const auto& operation) {
+          using OperationType = std::decay_t<decltype(operation)>;
+          if constexpr (std::is_same_v<OperationType, LoadConstant>) {
+            if (operation.value.width() == 0) {
+              reject(process, index,
+                     "LoadConstant width must be greater than zero");
+            }
+            if (operation.value.width() > 64) {
+              record_unsupported(
+                  index,
+                  "LoadConstant width is outside the supported [1, 64] "
+                  "range");
+            }
+            result.uses_logic9 =
+                result.uses_logic9
+                || operation.value.is_logic9();
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, operation.value.width(),
+                            index);
+          } else if constexpr (std::is_same_v<OperationType, ReadSignal>) {
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination,
+                            signal_width(operation.signal, index), index);
+          } else if constexpr (std::is_same_v<OperationType, SignalEvent>) {
+            result.uses_signal_event = true;
+            (void)signal_width(operation.signal, index);
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 1U, index);
+          } else if constexpr (std::is_same_v<OperationType, SignalLastValue>) {
+            result.uses_signal_last_value = true;
+            record_definition(operation.destination, index);
+            constrain_width(
+                operation.destination,
+                signal_width(operation.signal, index),
+                index);
+          } else if constexpr (std::is_same_v<OperationType, SignalLastEvent>) {
+            result.uses_signal_last_event = true;
+            (void)signal_width(operation.signal, index);
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 64U, index);
+          } else if constexpr (std::is_same_v<OperationType, SignalActive>) {
+            result.uses_signal_active = true;
+            (void)signal_width(operation.signal, index);
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 1U, index);
+          } else if constexpr (std::is_same_v<OperationType, CopyRegister>) {
+            record_definition(operation.destination, index);
+            record_use(operation.source, index);
+            unify_registers(
+                operation.destination, operation.source, index);
+          } else if constexpr (std::is_same_v<OperationType, LoadStringConstant>) {
+            result.uses_strings = true;
+            validate_string_register(
+                operation.destination, index, "destination");
+            if (operation.value.size() > maximum_string_bytes) {
+              reject(
+                  process,
+                  index,
+                  "LoadStringConstant exceeds the byte limit");
+            }
+          } else if constexpr (std::is_same_v<OperationType, CopyStringRegister>) {
+            result.uses_strings = true;
+            validate_string_register(
+                operation.destination, index, "destination");
+            validate_string_register(operation.source, index, "source");
+          } else if constexpr (std::is_same_v<OperationType, ReadStringObject>) {
+            result.uses_strings = true;
+            validate_string_register(
+                operation.destination, index, "destination");
+            (void)operation.object;
+          } else if constexpr (std::is_same_v<OperationType, WriteStringObject>) {
+            result.uses_strings = true;
+            validate_string_register(operation.source, index, "source");
+            (void)operation.object;
+          } else if constexpr (std::is_same_v<OperationType, ConcatenateStrings>) {
+            result.uses_strings = true;
+            validate_string_register(
+                operation.destination, index, "destination");
+            for (const auto operand : operation.operands) {
+              validate_string_register(
+                  operand, index, "source");
+            }
+          } else if constexpr (std::is_same_v<OperationType, CompareStrings>) {
+            result.uses_strings = true;
+            validate_string_register(
+                operation.lhs, index, "left");
+            validate_string_register(
+                operation.rhs, index, "right");
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 1U, index);
+          } else if constexpr (std::is_same_v<OperationType, StringLength>) {
+            result.uses_strings = true;
+            validate_string_register(
+                operation.source, index, "source");
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, StringIndex>) {
+            result.uses_strings = true;
+            validate_string_register(
+                operation.source, index, "source");
+            record_use(operation.index, index);
+            constrain_width(operation.index, 32U, index);
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 8U, index);
+          } else if constexpr (std::is_same_v<OperationType, StringReplaceByte>) {
+            result.uses_strings = true;
+            validate_string_register(
+                operation.target, index, "target");
+            record_use(operation.index, index);
+            record_use(operation.source, index);
+            constrain_width(operation.index, 32U, index);
+            constrain_width(operation.source, 8U, index);
+          } else if constexpr (std::is_same_v<OperationType, StringMethod>) {
+            result.uses_strings = true;
+            std::vector<PackedRegisterValidation> registers;
+            if (const auto error = validate_string_method_metadata(
+                    operation, process, registers)) reject(process, index, *error);
+            for (const auto& value : registers) {
+              if (value.definition) record_definition(value.id, index);
+              else record_use(value.id, index);
+              if (value.width != 0) constrain_width(value.id, value.width, index);
+            }
+          } else if constexpr (std::is_same_v<OperationType, ResizeContainer>) {
+            result.uses_containers = true;
+            validate_container_register(operation.target, index, "target");
+            if (operation.initializer) validate_container_register(*operation.initializer, index, "initializer");
+            record_use(operation.size, index);
+            constrain_width(operation.size, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, CopyContainerRegister>) {
+            result.uses_containers = true;
+            validate_container_register(
+                operation.destination, index, "destination");
+            validate_container_register(
+                operation.source, index, "source");
+          } else if constexpr (std::is_same_v<OperationType, ConditionalContainerSelect>) {
+            result.uses_containers = true;
+            validate_container_register(
+                operation.destination, index, "destination");
+            validate_container_register(
+                operation.when_true, index, "when_true");
+            validate_container_register(
+                operation.when_false, index, "when_false");
+            record_use(operation.condition, index);
+            constrain_width(operation.condition, 1U, index);
+            if (operation.destination
+                    < process.container_register_types.size()
+                && operation.when_true
+                    < process.container_register_types.size()
+                && operation.when_false
+                    < process.container_register_types.size()
+                && (process.container_register_types[
+                        operation.destination]
+                        != process.container_register_types[
+                            operation.when_true]
+                    || process.container_register_types[
+                           operation.destination]
+                        != process.container_register_types[
+                            operation.when_false])) {
+              reject(
+                  process, index,
+                  "ConditionalContainerSelect profiles differ");
+            }
+          } else if constexpr (std::is_same_v<OperationType, CompareContainers>) {
+            result.uses_containers = true;
+            validate_container_register(operation.lhs, index, "lhs");
+            validate_container_register(operation.rhs, index, "rhs");
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 1U, index);
+            if (operation.lhs < process.container_register_types.size()
+                && operation.rhs < process.container_register_types.size()
+                && process.container_register_types[operation.lhs]
+                    != process.container_register_types[operation.rhs]) {
+              reject(process, index, "CompareContainers profiles differ");
+            }
+          } else if constexpr (std::is_same_v<OperationType, ReadContainerObject>) {
+            result.uses_containers = true;
+            validate_container_register(
+                operation.destination, index, "destination");
+            (void)operation.object;
+          } else if constexpr (std::is_same_v<OperationType, WriteContainerObject>) {
+            result.uses_containers = true;
+            validate_container_register(
+                operation.source, index, "source");
+            (void)operation.object;
+          } else if constexpr (std::is_same_v<OperationType, ContainerSize>) {
+            result.uses_containers = true;
+            validate_container_register(
+                operation.source, index, "source");
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, ContainerReduction>) {
+            result.uses_containers = true;
+            validate_container_register(operation.source, index, "source");
+            if (static_cast<std::uint8_t>(operation.operation) >
+                static_cast<std::uint8_t>(
+                    ContainerReductionOperator::bit_xor)) {
+              reject(process, index, "ContainerReduction has an invalid operator");
+            }
+            record_definition(operation.destination, index);
+            if (operation.source
+                < process.container_register_types.size()) {
+              if (const auto error =
+                      validate_container_reduction_metadata(
+                          operation,
+                          process.container_register_types[
+                              operation.source])) {
+                reject(process, index, *error);
               }
-              if (operation.value.width() > 64) {
-                record_unsupported(
-                    index,
-                    "LoadConstant width is outside the supported [1, 64] "
-                    "range");
-              }
-              result.uses_logic9 =
-                  result.uses_logic9
-                  || operation.value.is_logic9();
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination, operation.value.width(),
-                              index);
-            },
-            [&](const ReadSignal &operation) {
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination,
-                              signal_width(operation.signal, index), index);
-            },
-            [&](const SignalEvent& operation) {
-              result.uses_signal_event = true;
-              (void)signal_width(operation.signal, index);
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination, 1U, index);
-            },
-            [&](const SignalLastValue& operation) {
-              result.uses_signal_last_value = true;
-              record_definition(operation.destination, index);
               constrain_width(
                   operation.destination,
-                  signal_width(operation.signal, index),
-                  index);
-            },
-            [&](const SignalLastEvent& operation) {
-              result.uses_signal_last_event = true;
-              (void)signal_width(operation.signal, index);
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination, 64U, index);
-            },
-            [&](const SignalActive& operation) {
-              result.uses_signal_active = true;
-              (void)signal_width(operation.signal, index);
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination, 1U, index);
-            },
-            [&](const CopyRegister& operation) {
-              record_definition(operation.destination, index);
-              record_use(operation.source, index);
-              unify_registers(
-                  operation.destination, operation.source, index);
-            },
-            [&](const LoadStringConstant& operation) {
-              result.uses_strings = true;
-              validate_string_register(
-                  operation.destination, index, "destination");
-              if (operation.value.size() > maximum_string_bytes) {
-                reject(
-                    process,
-                    index,
-                    "LoadStringConstant exceeds the byte limit");
+                  process.container_register_types[operation.source]
+                      .element_width, index);
+            }
+          } else if constexpr (std::is_same_v<OperationType, OrderContainer>) {
+            result.uses_containers = true;
+            validate_container_register(operation.target, index, "target");
+            if (static_cast<std::uint8_t>(operation.operation) >
+                static_cast<std::uint8_t>(
+                    ContainerOrderingOperator::descending)) {
+              reject(process, index, "OrderContainer has an invalid operator");
+            }
+            if (operation.target < process.container_register_types.size()
+                && process.container_register_types[operation.target]
+                       .associative) {
+              reject(process, index,
+                     "OrderContainer does not support associative arrays");
+            }
+            if (operation.target
+                < process.container_register_types.size()) {
+              if (const auto error =
+                      validate_container_ordering_metadata(
+                          operation,
+                          process.container_register_types[
+                              operation.target])) {
+                reject(process, index, *error);
               }
-            },
-            [&](const CopyStringRegister& operation) {
-              result.uses_strings = true;
-              validate_string_register(
-                  operation.destination, index, "destination");
-              validate_string_register(operation.source, index, "source");
-            },
-            [&](const ReadStringObject& operation) {
-              result.uses_strings = true;
-              validate_string_register(
-                  operation.destination, index, "destination");
-              (void)operation.object;
-            },
-            [&](const WriteStringObject& operation) {
-              result.uses_strings = true;
-              validate_string_register(operation.source, index, "source");
-              (void)operation.object;
-            },
-            [&](const ConcatenateStrings& operation) {
-              result.uses_strings = true;
-              validate_string_register(
-                  operation.destination, index, "destination");
-              for (const auto operand : operation.operands) {
-                validate_string_register(
-                    operand, index, "source");
-              }
-            },
-            [&](const CompareStrings& operation) {
-              result.uses_strings = true;
-              validate_string_register(
-                  operation.lhs, index, "left");
-              validate_string_register(
-                  operation.rhs, index, "right");
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination, 1U, index);
-            },
-            [&](const StringLength& operation) {
-              result.uses_strings = true;
-              validate_string_register(
-                  operation.source, index, "source");
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination, 32U, index);
-            },
-            [&](const StringIndex& operation) {
-              result.uses_strings = true;
-              validate_string_register(
-                  operation.source, index, "source");
-              record_use(operation.index, index);
-              constrain_width(operation.index, 32U, index);
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination, 8U, index);
-            },
-            [&](const StringReplaceByte& operation) {
-              result.uses_strings = true;
-              validate_string_register(
-                  operation.target, index, "target");
-              record_use(operation.index, index);
-              record_use(operation.source, index);
-              constrain_width(operation.index, 32U, index);
-              constrain_width(operation.source, 8U, index);
-            },
-            [&](const StringMethod& operation) {
-              result.uses_strings = true;
-              std::vector<PackedRegisterValidation> registers;
-              if (const auto error = validate_string_method_metadata(
-                      operation, process, registers)) reject(process, index, *error);
-              for (const auto& value : registers) {
-                if (value.definition) record_definition(value.id, index);
-                else record_use(value.id, index);
-                if (value.width != 0) constrain_width(value.id, value.width, index);
-              }
-            },
-            [&](const ResizeContainer& operation) {
-              result.uses_containers = true;
-              validate_container_register(operation.target, index, "target");
-              if (operation.initializer) validate_container_register(*operation.initializer, index, "initializer");
-              record_use(operation.size, index);
-              constrain_width(operation.size, 32U, index);
-            },
-            [&](const CopyContainerRegister& operation) {
-              result.uses_containers = true;
-              validate_container_register(
-                  operation.destination, index, "destination");
-              validate_container_register(
-                  operation.source, index, "source");
-            },
-            [&](const ConditionalContainerSelect& operation) {
-              result.uses_containers = true;
-              validate_container_register(
-                  operation.destination, index, "destination");
-              validate_container_register(
-                  operation.when_true, index, "when_true");
-              validate_container_register(
-                  operation.when_false, index, "when_false");
-              record_use(operation.condition, index);
-              constrain_width(operation.condition, 1U, index);
-              if (operation.destination
-                      < process.container_register_types.size()
-                  && operation.when_true
-                      < process.container_register_types.size()
-                  && operation.when_false
-                      < process.container_register_types.size()
-                  && (process.container_register_types[
-                          operation.destination]
-                          != process.container_register_types[
-                              operation.when_true]
-                      || process.container_register_types[
-                             operation.destination]
-                          != process.container_register_types[
-                              operation.when_false])) {
-                reject(
-                    process, index,
-                    "ConditionalContainerSelect profiles differ");
-              }
-            },
-            [&](const CompareContainers& operation) {
-              result.uses_containers = true;
-              validate_container_register(operation.lhs, index, "lhs");
-              validate_container_register(operation.rhs, index, "rhs");
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination, 1U, index);
-              if (operation.lhs < process.container_register_types.size()
-                  && operation.rhs < process.container_register_types.size()
-                  && process.container_register_types[operation.lhs]
-                      != process.container_register_types[operation.rhs]) {
-                reject(process, index, "CompareContainers profiles differ");
-              }
-            },
-            [&](const ReadContainerObject& operation) {
-              result.uses_containers = true;
-              validate_container_register(
-                  operation.destination, index, "destination");
-              (void)operation.object;
-            },
-            [&](const WriteContainerObject& operation) {
-              result.uses_containers = true;
-              validate_container_register(
-                  operation.source, index, "source");
-              (void)operation.object;
-            },
-            [&](const ContainerSize& operation) {
-              result.uses_containers = true;
-              validate_container_register(
-                  operation.source, index, "source");
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination, 32U, index);
-            },
-            [&](const ContainerReduction& operation) {
-              result.uses_containers = true;
-              validate_container_register(operation.source, index, "source");
-              if (static_cast<std::uint8_t>(operation.operation) >
-                  static_cast<std::uint8_t>(
-                      ContainerReductionOperator::bit_xor)) {
-                reject(process, index, "ContainerReduction has an invalid operator");
-              }
-              record_definition(operation.destination, index);
-              if (operation.source
-                  < process.container_register_types.size()) {
-                if (const auto error =
-                        validate_container_reduction_metadata(
-                            operation,
-                            process.container_register_types[
-                                operation.source])) {
-                  reject(process, index, *error);
-                }
-                constrain_width(
-                    operation.destination,
-                    process.container_register_types[operation.source]
-                        .element_width, index);
-              }
-            },
-            [&](const OrderContainer& operation) {
-              result.uses_containers = true;
-              validate_container_register(operation.target, index, "target");
-              if (static_cast<std::uint8_t>(operation.operation) >
-                  static_cast<std::uint8_t>(
-                      ContainerOrderingOperator::descending)) {
-                reject(process, index, "OrderContainer has an invalid operator");
-              }
-              if (operation.target < process.container_register_types.size()
-                  && process.container_register_types[operation.target]
-                         .associative) {
-                reject(process, index,
-                       "OrderContainer does not support associative arrays");
-              }
-              if (operation.target
-                  < process.container_register_types.size()) {
-                if (const auto error =
-                        validate_container_ordering_metadata(
-                            operation,
-                            process.container_register_types[
-                                operation.target])) {
-                  reject(process, index, *error);
-                }
-              }
-            },
-            [&](const LocateContainer& operation) {
-              result.uses_containers = true;
-              validate_container_register(operation.destination, index,
-                                          "destination");
-              validate_container_register(operation.source, index, "source");
-              if (operation.destination
-                      < process.container_register_types.size()
-                  && operation.source
-                      < process.container_register_types.size()) {
-                if (const auto error =
-                        validate_container_locator_metadata(
-                            operation,
-                            process.container_register_types[
-                                operation.destination],
-                            process.container_register_types[
-                                operation.source])) {
-                  reject(process, index, *error);
-                }
-                if (const auto error =
-                        validate_container_locator_transformation_metadata(
-                            operation,
-                            process.container_register_types[
-                                operation.source])) {
-                  reject(process, index, *error);
-                }
-              }
-            },
-            [&](const ContainerRead& operation) {
-              result.uses_containers = true;
-              validate_container_register(
-                  operation.source, index, "source");
-              record_use(operation.index, index);
-              if (operation.source
-                  < process.container_register_types.size()
-                  && (process.container_register_types[
-                          operation.source].associative
-                      || process.container_register_types[
-                             operation.source].fixed)) {
-                constrain_width(
-                    operation.index,
-                    process.container_register_types[
-                            operation.source].fixed
-                        ? 32U
-                        : process.container_register_types[
-                              operation.source].index_width,
-                    index);
-              }
-              record_definition(operation.destination, index);
-              constrain_width(
-                  operation.destination,
-                  process.container_register_types[
-                      operation.source].element_width,
-                  index);
-            },
-            [&](const ContainerWrite& operation) {
-              result.uses_containers = true;
-              validate_container_register(
-                  operation.target, index, "target");
-              record_use(operation.index, index);
-              if (operation.target
-                  < process.container_register_types.size()
-                  && (process.container_register_types[
-                          operation.target].associative
-                      || process.container_register_types[
-                             operation.target].fixed)) {
-                constrain_width(
-                    operation.index,
-                    process.container_register_types[
-                            operation.target].fixed
-                        ? 32U
-                        : process.container_register_types[
-                              operation.target].index_width,
-                    index);
-              }
-              record_use(operation.source, index);
-              constrain_width(
-                  operation.source,
-                  process.container_register_types[
-                      operation.target].element_width,
-                  index);
-            },
-            [&](const DeleteContainer& operation) {
-              result.uses_containers = true;
-              validate_container_register(
-                  operation.target, index, "target");
-              if (operation.index) {
-                record_use(*operation.index, index);
-                if (operation.target
+            }
+          } else if constexpr (std::is_same_v<OperationType, LocateContainer>) {
+            result.uses_containers = true;
+            validate_container_register(operation.destination, index,
+                                        "destination");
+            validate_container_register(operation.source, index, "source");
+            if (operation.destination
+                    < process.container_register_types.size()
+                && operation.source
                     < process.container_register_types.size()) {
-                  constrain_width(
-                      *operation.index,
-                      process.container_register_types[
-                          operation.target].index_width,
-                      index);
-                }
+              if (const auto error =
+                      validate_container_locator_metadata(
+                          operation,
+                          process.container_register_types[
+                              operation.destination],
+                          process.container_register_types[
+                              operation.source])) {
+                reject(process, index, *error);
               }
-            },
-            [&](const ContainerExists& operation) {
-              result.uses_containers = true;
-              validate_container_register(
-                  operation.source, index, "source");
-              record_use(operation.index, index);
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination, 32U, index);
-              if (operation.source
+              if (const auto error =
+                      validate_container_locator_transformation_metadata(
+                          operation,
+                          process.container_register_types[
+                              operation.source])) {
+                reject(process, index, *error);
+              }
+            }
+          } else if constexpr (std::is_same_v<OperationType, ContainerRead>) {
+            result.uses_containers = true;
+            validate_container_register(
+                operation.source, index, "source");
+            record_use(operation.index, index);
+            if (operation.source
+                < process.container_register_types.size()
+                && (process.container_register_types[
+                        operation.source].associative
+                    || process.container_register_types[
+                           operation.source].fixed)) {
+              constrain_width(
+                  operation.index,
+                  process.container_register_types[
+                          operation.source].fixed
+                      ? 32U
+                      : process.container_register_types[
+                            operation.source].index_width,
+                  index);
+            }
+            record_definition(operation.destination, index);
+            constrain_width(
+                operation.destination,
+                process.container_register_types[
+                    operation.source].element_width,
+                index);
+          } else if constexpr (std::is_same_v<OperationType, ContainerWrite>) {
+            result.uses_containers = true;
+            validate_container_register(
+                operation.target, index, "target");
+            record_use(operation.index, index);
+            if (operation.target
+                < process.container_register_types.size()
+                && (process.container_register_types[
+                        operation.target].associative
+                    || process.container_register_types[
+                           operation.target].fixed)) {
+              constrain_width(
+                  operation.index,
+                  process.container_register_types[
+                          operation.target].fixed
+                      ? 32U
+                      : process.container_register_types[
+                            operation.target].index_width,
+                  index);
+            }
+            record_use(operation.source, index);
+            constrain_width(
+                operation.source,
+                process.container_register_types[
+                    operation.target].element_width,
+                index);
+          } else if constexpr (std::is_same_v<OperationType, DeleteContainer>) {
+            result.uses_containers = true;
+            validate_container_register(
+                operation.target, index, "target");
+            if (operation.index) {
+              record_use(*operation.index, index);
+              if (operation.target
                   < process.container_register_types.size()) {
                 constrain_width(
-                    operation.index,
+                    *operation.index,
                     process.container_register_types[
-                        operation.source].index_width,
+                        operation.target].index_width,
                     index);
               }
-            },
-            [&](const TraverseContainer& operation) {
-              result.uses_containers = true;
-              validate_container_register(
-                  operation.source, index, "source");
-              record_use(operation.index, index);
-              record_definition(operation.index, index);
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination, 32U, index);
-              if (operation.source
-                  < process.container_register_types.size()) {
-                constrain_width(
-                    operation.index,
-                    process.container_register_types[
-                        operation.source].index_width,
-                    index);
-              }
-            },
-            [&](const LoadMemory& operation) {
-              result.uses_containers = true;
-              result.uses_strings = true;
-              result.uses_files = true;
-              validate_container_register(
-                  operation.target, index, "target");
-              validate_string_register(
-                  operation.path, index, "path");
-              if (operation.target < process.container_register_types.size()) {
-                const auto& type =
-                    process.container_register_types[operation.target];
-                if (!type.fixed) reject(process, index,
-                    "LoadMemory target must be a fixed static array");
-                if (type.dimensions.size() > 1U) reject(process, index,
-                    "LoadMemory target must be one-dimensional");
-              }
-              for (const auto source :
-                   {operation.start, operation.finish}) {
-                if (source) {
-                  record_use(*source, index);
-                  constrain_width(*source, 32U, index);
-                }
-              }
-            },
-            [&](const PushContainer& operation) {
-              result.uses_containers = true;
-              validate_container_register(
-                  operation.target, index, "target");
-              record_use(operation.source, index);
+            }
+          } else if constexpr (std::is_same_v<OperationType, ContainerExists>) {
+            result.uses_containers = true;
+            validate_container_register(
+                operation.source, index, "source");
+            record_use(operation.index, index);
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 32U, index);
+            if (operation.source
+                < process.container_register_types.size()) {
               constrain_width(
-                  operation.source,
+                  operation.index,
                   process.container_register_types[
-                      operation.target].element_width,
+                      operation.source].index_width,
                   index);
-              if (operation.index) {
-                record_use(*operation.index, index); constrain_width(*operation.index, 32U, index);
-              }
-            },
-            [&](const PopContainer& operation) {
-              result.uses_containers = true;
-              validate_container_register(
-                  operation.target, index, "target");
-              record_definition(operation.destination, index);
+            }
+          } else if constexpr (std::is_same_v<OperationType, TraverseContainer>) {
+            result.uses_containers = true;
+            validate_container_register(
+                operation.source, index, "source");
+            record_use(operation.index, index);
+            record_definition(operation.index, index);
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 32U, index);
+            if (operation.source
+                < process.container_register_types.size()) {
               constrain_width(
-                  operation.destination,
+                  operation.index,
                   process.container_register_types[
-                      operation.target].element_width,
+                      operation.source].index_width,
                   index);
-            },
-            [&](const FileOpen& operation) {
-              result.uses_files = true;
+            }
+          } else if constexpr (std::is_same_v<OperationType, LoadMemory>) {
+            result.uses_containers = true;
+            result.uses_strings = true;
+            result.uses_files = true;
+            validate_container_register(
+                operation.target, index, "target");
+            validate_string_register(
+                operation.path, index, "path");
+            if (operation.target < process.container_register_types.size()) {
+              const auto& type =
+                  process.container_register_types[operation.target];
+              if (!type.fixed) reject(process, index,
+                  "LoadMemory target must be a fixed static array");
+              if (type.dimensions.size() > 1U) reject(process, index,
+                  "LoadMemory target must be one-dimensional");
+            }
+            for (const auto source :
+                 {operation.start, operation.finish}) {
+              if (source) {
+                record_use(*source, index);
+                constrain_width(*source, 32U, index);
+              }
+            }
+          } else if constexpr (std::is_same_v<OperationType, PushContainer>) {
+            result.uses_containers = true;
+            validate_container_register(
+                operation.target, index, "target");
+            record_use(operation.source, index);
+            constrain_width(
+                operation.source,
+                process.container_register_types[
+                    operation.target].element_width,
+                index);
+            if (operation.index) {
+              record_use(*operation.index, index); constrain_width(*operation.index, 32U, index);
+            }
+          } else if constexpr (std::is_same_v<OperationType, PopContainer>) {
+            result.uses_containers = true;
+            validate_container_register(
+                operation.target, index, "target");
+            record_definition(operation.destination, index);
+            constrain_width(
+                operation.destination,
+                process.container_register_types[
+                    operation.target].element_width,
+                index);
+          } else if constexpr (std::is_same_v<OperationType, FileOpen>) {
+            result.uses_files = true;
+            result.uses_strings = true;
+            validate_string_register(
+                operation.path, index, "path");
+            validate_string_register(
+                operation.mode, index, "mode");
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, FileClose>) {
+            result.uses_files = true;
+            record_use(operation.handle, index); constrain_width(operation.handle, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, FileWriteLiteral>) {
+            result.uses_files = true;
+            record_use(operation.handle, index);
+            constrain_width(operation.handle, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, FileWriteFormatted>) {
+            result.uses_files = true;
+            if (operation.width == 0 || operation.width > 64) {
+              reject(
+                  process, index,
+                  "FileWriteFormatted width must be in [1, 64]");
+            }
+            record_use(operation.handle, index);
+            constrain_width(operation.handle, 32U, index);
+            record_use(operation.source, index);
+            constrain_width(operation.source, operation.width, index);
+          } else if constexpr (std::is_same_v<OperationType, FileWriteString>) {
+            result.uses_files = true;
+            result.uses_strings = true;
+            record_use(operation.handle, index);
+            constrain_width(operation.handle, 32U, index);
+            validate_string_register(
+                operation.source, index, "source");
+          } else if constexpr (std::is_same_v<OperationType, FileReadLine>) {
+            result.uses_files = true;
+            if (operation.kind > FileReadKind::unget)
+              reject(process, index, "FileReadLine kind is invalid");
+            record_use(operation.handle, index);
+            constrain_width(operation.handle, 32U, index);
+            if (operation.kind == FileReadKind::line) {
               result.uses_strings = true;
-              validate_string_register(
-                  operation.path, index, "path");
-              validate_string_register(
-                  operation.mode, index, "mode");
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination, 32U, index);
-            },
-            [&](const FileClose& operation) {
-              result.uses_files = true;
-              record_use(operation.handle, index); constrain_width(operation.handle, 32U, index);
-            },
-            [&](const FileWriteLiteral& operation) {
-              result.uses_files = true;
+              validate_string_register(operation.target, index, "target");
+            } else if (operation.kind == FileReadKind::unget) {
+              record_use(operation.source, index); constrain_width(operation.source, 32U, index);
+            }
+            record_definition(operation.destination, index); constrain_width(operation.destination, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, FileEndOfFile>) {
+            result.uses_files = true;
+            record_use(operation.handle, index); constrain_width(operation.handle, 32U, index);
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, FileErrorStatus>) {
+            result.uses_files = true;
+            result.uses_strings = true;
+            record_use(operation.handle, index);
+            constrain_width(operation.handle, 32U, index);
+            validate_string_register(
+                operation.target, index, "target");
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, FileScan>) {
+            if (!operation.string_source) result.uses_files = true;
+            result.uses_strings = true;
+            if (!operation.string_source) {
               record_use(operation.handle, index);
               constrain_width(operation.handle, 32U, index);
-            },
-            [&](const FileWriteFormatted& operation) {
-              result.uses_files = true;
-              if (operation.width == 0 || operation.width > 64) {
-                reject(
-                    process, index,
-                    "FileWriteFormatted width must be in [1, 64]");
-              }
+            }
+            std::vector<PackedRegisterValidation> registers;
+            if (const auto error = validate_file_scan_metadata(
+                    operation, process, signal_widths,
+                    signal_value_kinds, registers))
+              reject(process, index, *error);
+            for (const auto& value : registers) {
+              record_definition(value.id, index);
+              constrain_width(value.id, value.width, index);
+            }
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, FileBinaryRead>) {
+            result.uses_files = true;
+            result.uses_containers |= operation.target_kind
+                >= FileBinaryTargetKind::container_register;
+            std::vector<PackedRegisterValidation> registers;
+            const auto error = validate_file_binary_metadata(
+                operation, process, signal_widths, registers);
+            if (error)
+              reject(process, index, *error);
+            for (const auto& value : registers) {
+              if (value.definition) record_definition(value.id, index);
+              else record_use(value.id, index);
+              constrain_width(value.id, value.width, index);
+            }
+          } else if constexpr (std::is_same_v<OperationType, FilePosition>) {
+            result.uses_files = true;
+            std::vector<PackedRegisterValidation> registers;
+            if (const auto error = validate_file_position_metadata(
+                    operation, registers)) reject(process, index, *error);
+            for (const auto& value : registers) {
+              if (value.definition) record_definition(value.id, index);
+              else record_use(value.id, index);
+              constrain_width(value.id, value.width, index);
+            }
+          } else if constexpr (std::is_same_v<OperationType, FileFlush>) {
+            result.uses_files = true;
+            if (!operation.all) {
               record_use(operation.handle, index);
               constrain_width(operation.handle, 32U, index);
-              record_use(operation.source, index);
-              constrain_width(operation.source, operation.width, index);
-            },
-            [&](const FileWriteString& operation) {
-              result.uses_files = true;
-              result.uses_strings = true;
-              record_use(operation.handle, index);
-              constrain_width(operation.handle, 32U, index);
-              validate_string_register(
-                  operation.source, index, "source");
-            },
-            [&](const FileReadLine& operation) {
-              result.uses_files = true;
-              if (operation.kind > FileReadKind::unget)
-                reject(process, index, "FileReadLine kind is invalid");
-              record_use(operation.handle, index);
-              constrain_width(operation.handle, 32U, index);
-              if (operation.kind == FileReadKind::line) {
-                result.uses_strings = true;
-                validate_string_register(operation.target, index, "target");
-              } else if (operation.kind == FileReadKind::unget) {
-                record_use(operation.source, index); constrain_width(operation.source, 32U, index);
-              }
-              record_definition(operation.destination, index); constrain_width(operation.destination, 32U, index);
-            },
-            [&](const FileEndOfFile& operation) {
-              result.uses_files = true;
-              record_use(operation.handle, index); constrain_width(operation.handle, 32U, index);
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination, 32U, index);
-            },
-            [&](const FileErrorStatus& operation) {
-              result.uses_files = true;
-              result.uses_strings = true;
-              record_use(operation.handle, index);
-              constrain_width(operation.handle, 32U, index);
-              validate_string_register(
-                  operation.target, index, "target");
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination, 32U, index);
-            },
-            [&](const FileScan& operation) {
-              if (!operation.string_source) result.uses_files = true;
-              result.uses_strings = true;
-              if (!operation.string_source) {
-                record_use(operation.handle, index);
-                constrain_width(operation.handle, 32U, index);
-              }
-              std::vector<PackedRegisterValidation> registers;
-              if (const auto error = validate_file_scan_metadata(
-                      operation, process, signal_widths,
-                      signal_value_kinds, registers))
-                reject(process, index, *error);
-              for (const auto& value : registers) {
-                record_definition(value.id, index);
-                constrain_width(value.id, value.width, index);
-              }
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination, 32U, index);
-            },
-            [&](const FileBinaryRead& operation) {
-              result.uses_files = true;
-              result.uses_containers |= operation.target_kind
-                  >= FileBinaryTargetKind::container_register;
-              std::vector<PackedRegisterValidation> registers;
-              const auto error = validate_file_binary_metadata(
-                  operation, process, signal_widths, registers);
-              if (error)
-                reject(process, index, *error);
-              for (const auto& value : registers) {
-                if (value.definition) record_definition(value.id, index);
-                else record_use(value.id, index);
-                constrain_width(value.id, value.width, index);
-              }
-            },
-            [&](const FilePosition& operation) {
-              result.uses_files = true;
-              std::vector<PackedRegisterValidation> registers;
-              if (const auto error = validate_file_position_metadata(
-                      operation, registers)) reject(process, index, *error);
-              for (const auto& value : registers) {
-                if (value.definition) record_definition(value.id, index);
-                else record_use(value.id, index);
-                constrain_width(value.id, value.width, index);
-              }
-            },
-            [&](const FileFlush& operation) {
-              result.uses_files = true;
-              if (!operation.all) {
-                record_use(operation.handle, index);
-                constrain_width(operation.handle, 32U, index);
-              }
-            },
-            [&](const StringDisplay& operation) {
-              result.uses_strings = true;
-              result.uses_output = result.uses_output
-                  || !operation.postponed;
-              result.uses_postponed_output =
-                  result.uses_postponed_output
-                  || operation.postponed;
-              validate_string_register(
-                  operation.source, index, "source");
-            },
-            [&](const UnaryNot &operation) {
-              record_definition(operation.destination, index);
-              record_use(operation.source, index);
-              unify_registers(operation.destination, operation.source, index);
-            },
-            [&](const LogicalNot& operation) {
-              record_definition(operation.destination, index);
-              record_use(operation.source, index);
+            }
+          } else if constexpr (std::is_same_v<OperationType, StringDisplay>) {
+            result.uses_strings = true;
+            result.uses_output = result.uses_output
+                || !operation.postponed;
+            result.uses_postponed_output =
+                result.uses_postponed_output
+                || operation.postponed;
+            validate_string_register(
+                operation.source, index, "source");
+          } else if constexpr (std::is_same_v<OperationType, UnaryNot>) {
+            record_definition(operation.destination, index);
+            record_use(operation.source, index);
+            unify_registers(operation.destination, operation.source, index);
+          } else if constexpr (std::is_same_v<OperationType, LogicalNot>) {
+            record_definition(operation.destination, index);
+            record_use(operation.source, index);
+            constrain_width(operation.destination, 1U, index);
+          } else if constexpr (std::is_same_v<OperationType, LogicalBinary>) {
+            switch (operation.operation) {
+            case LogicalBinaryOperator::logical_and:
+            case LogicalBinaryOperator::logical_or:
+              break;
+            default:
+              reject(
+                  process, index,
+                  "LogicalBinary has an invalid operator");
+            }
+            record_definition(operation.destination, index);
+            record_use(operation.lhs, index);
+            record_use(operation.rhs, index);
+            constrain_width(operation.destination, 1U, index);
+          } else if constexpr (std::is_same_v<OperationType, Reduction>) {
+            switch (operation.operation) {
+            case ReductionOperator::bit_and:
+            case ReductionOperator::bit_or:
+            case ReductionOperator::bit_xor:
+            case ReductionOperator::one_hot:
+            case ReductionOperator::one_hot_or_zero:
+              break;
+            default:
+              reject(
+                  process, index,
+                  "Reduction has an invalid operator");
+            }
+            record_definition(operation.destination, index);
+            record_use(operation.source, index);
+            constrain_width(operation.destination, 1U, index);
+          } else if constexpr (std::is_same_v<OperationType, CountOnes>) {
+            record_definition(operation.destination, index);
+            record_use(operation.source, index);
+            constrain_width(operation.destination, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, CountBits>) {
+            if (operation.state_mask == 0
+                || (operation.state_mask
+                    & static_cast<std::uint8_t>(~0x0FU))
+                    != 0) {
+              reject(
+                  process,
+                  index,
+                  "CountBits has an invalid state mask");
+            }
+            record_definition(operation.destination, index);
+            record_use(operation.source, index);
+            constrain_width(operation.destination, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, Shift>) {
+            switch (operation.operation) {
+            case ShiftOperator::logical_left:
+            case ShiftOperator::logical_right:
+            case ShiftOperator::arithmetic_right:
+            case ShiftOperator::arithmetic_left:
+            case ShiftOperator::rotate_left:
+            case ShiftOperator::rotate_right:
+              break;
+            default:
+              reject(
+                  process, index, "Shift has an invalid operator");
+            }
+            record_definition(operation.destination, index);
+            record_use(operation.value, index);
+            record_use(operation.amount, index);
+            unify_registers(
+                operation.destination, operation.value, index);
+          } else if constexpr (std::is_same_v<OperationType, Extract>) {
+            if (operation.width == 0) {
+              reject(
+                  process, index,
+                  "Extract width must be greater than zero");
+            }
+            record_definition(operation.destination, index);
+            record_use(operation.source, index);
+            constrain_width(
+                operation.destination, operation.width, index);
+          } else if constexpr (std::is_same_v<OperationType, DynamicExtract>) {
+            if (const auto error =
+                    validate_dynamic_index_metadata(operation.selection)) {
+              reject(process, index, *error);
+            }
+            record_definition(operation.destination, index);
+            record_use(operation.source, index);
+            record_use(operation.selection.index, index);
+            constrain_width(operation.destination, 1U, index);
+            constrain_width(
+                operation.selection.index, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, DynamicPartSelect>) {
+            if (const auto error =
+                    validate_dynamic_part_select_metadata(operation)) {
+              reject(process, index, *error);
+            }
+            record_definition(operation.destination, index);
+            record_use(operation.source, index);
+            record_use(operation.base, index);
+            constrain_width(
+                operation.destination, operation.width, index);
+            constrain_width(operation.base, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, Insert>) {
+            record_definition(operation.destination, index);
+            record_use(operation.target, index);
+            record_use(operation.source, index);
+            unify_registers(
+                operation.destination, operation.target, index);
+          } else if constexpr (std::is_same_v<OperationType, DynamicInsert>) {
+            if (const auto error =
+                    validate_dynamic_index_metadata(operation.selection)) {
+              reject(process, index, *error);
+            }
+            record_definition(operation.destination, index);
+            record_use(operation.target, index);
+            record_use(operation.source, index);
+            record_use(operation.selection.index, index);
+            constrain_width(operation.source, 1U, index);
+            constrain_width(
+                operation.selection.index, 32U, index);
+            unify_registers(
+                operation.destination, operation.target, index);
+          } else if constexpr (std::is_same_v<OperationType, DynamicPartInsert>) {
+            if (const auto error =
+                    validate_dynamic_part_index_metadata(
+                        operation.selection)) {
+              reject(process, index, *error);
+            }
+            record_definition(operation.destination, index);
+            record_use(operation.target, index);
+            record_use(operation.source, index);
+            record_use(operation.selection.base, index);
+            constrain_width(
+                operation.source, operation.selection.width, index);
+            constrain_width(operation.selection.base, 32U, index);
+            unify_registers(
+                operation.destination, operation.target, index);
+          } else if constexpr (std::is_same_v<OperationType, Concatenate>) {
+            if (operation.operands.empty()) {
+              reject(
+                  process, index,
+                  "Concatenate requires at least one operand");
+            }
+            if (operation.width == 0) {
+              reject(
+                  process, index,
+                  "Concatenate width must be greater than zero");
+            }
+            record_definition(operation.destination, index);
+            for (const auto operand : operation.operands) {
+              record_use(operand, index);
+            }
+            constrain_width(
+                operation.destination, operation.width, index);
+          } else if constexpr (std::is_same_v<OperationType, Binary>) {
+            switch (operation.operation) {
+            case BinaryOperator::bit_and:
+            case BinaryOperator::bit_or:
+            case BinaryOperator::bit_xor:
+            case BinaryOperator::add_unsigned:
+            case BinaryOperator::subtract_unsigned:
+            case BinaryOperator::multiply_unsigned:
+            case BinaryOperator::power_unsigned:
+            case BinaryOperator::divide_unsigned:
+            case BinaryOperator::modulo_unsigned:
+            case BinaryOperator::add_signed:
+            case BinaryOperator::subtract_signed:
+            case BinaryOperator::multiply_signed:
+            case BinaryOperator::power_signed:
+            case BinaryOperator::divide_signed:
+            case BinaryOperator::remainder_signed:
+            case BinaryOperator::modulo_signed:
+            case BinaryOperator::equal:
+            case BinaryOperator::case_equal:
+            case BinaryOperator::casez_equal:
+            case BinaryOperator::casex_equal:
+            case BinaryOperator::wildcard_equal:
+            case BinaryOperator::not_equal:
+            case BinaryOperator::less_unsigned:
+            case BinaryOperator::less_equal_unsigned:
+            case BinaryOperator::greater_unsigned:
+            case BinaryOperator::greater_equal_unsigned:
+            case BinaryOperator::less_signed:
+            case BinaryOperator::less_equal_signed:
+            case BinaryOperator::greater_signed:
+            case BinaryOperator::greater_equal_signed:
+              break;
+            default:
+              reject(process, index,
+                     "Binary has an invalid operator");
+            }
+            record_definition(operation.destination, index);
+            record_use(operation.lhs, index);
+            record_use(operation.rhs, index);
+            unify_registers(operation.lhs, operation.rhs, index);
+            if (operation.operation == BinaryOperator::equal
+                || operation.operation == BinaryOperator::case_equal
+                || operation.operation == BinaryOperator::casez_equal
+                || operation.operation == BinaryOperator::casex_equal
+                || operation.operation == BinaryOperator::wildcard_equal
+                || operation.operation == BinaryOperator::not_equal
+                || operation.operation
+                    == BinaryOperator::less_unsigned
+                || operation.operation
+                    == BinaryOperator::less_equal_unsigned
+                || operation.operation
+                    == BinaryOperator::greater_unsigned
+                || operation.operation
+                    == BinaryOperator::greater_equal_unsigned
+                || operation.operation
+                    == BinaryOperator::less_signed
+                || operation.operation
+                    == BinaryOperator::less_equal_signed
+                || operation.operation
+                    == BinaryOperator::greater_signed
+                || operation.operation
+                    == BinaryOperator::greater_equal_signed) {
               constrain_width(operation.destination, 1U, index);
-            },
-            [&](const LogicalBinary& operation) {
-              switch (operation.operation) {
-              case LogicalBinaryOperator::logical_and:
-              case LogicalBinaryOperator::logical_or:
-                break;
-              default:
-                reject(
-                    process, index,
-                    "LogicalBinary has an invalid operator");
-              }
-              record_definition(operation.destination, index);
-              record_use(operation.lhs, index);
-              record_use(operation.rhs, index);
-              constrain_width(operation.destination, 1U, index);
-            },
-            [&](const Reduction& operation) {
-              switch (operation.operation) {
-              case ReductionOperator::bit_and:
-              case ReductionOperator::bit_or:
-              case ReductionOperator::bit_xor:
-              case ReductionOperator::one_hot:
-              case ReductionOperator::one_hot_or_zero:
-                break;
-              default:
-                reject(
-                    process, index,
-                    "Reduction has an invalid operator");
-              }
-              record_definition(operation.destination, index);
-              record_use(operation.source, index);
-              constrain_width(operation.destination, 1U, index);
-            },
-            [&](const CountOnes& operation) {
-              record_definition(operation.destination, index);
-              record_use(operation.source, index);
-              constrain_width(operation.destination, 32U, index);
-            },
-            [&](const CountBits& operation) {
-              if (operation.state_mask == 0
-                  || (operation.state_mask
-                      & static_cast<std::uint8_t>(~0x0FU))
-                      != 0) {
-                reject(
-                    process,
-                    index,
-                    "CountBits has an invalid state mask");
-              }
-              record_definition(operation.destination, index);
-              record_use(operation.source, index);
-              constrain_width(operation.destination, 32U, index);
-            },
-            [&](const Shift& operation) {
-              switch (operation.operation) {
-              case ShiftOperator::logical_left:
-              case ShiftOperator::logical_right:
-              case ShiftOperator::arithmetic_right:
-              case ShiftOperator::arithmetic_left:
-              case ShiftOperator::rotate_left:
-              case ShiftOperator::rotate_right:
-                break;
-              default:
-                reject(
-                    process, index, "Shift has an invalid operator");
-              }
-              record_definition(operation.destination, index);
-              record_use(operation.value, index);
-              record_use(operation.amount, index);
-              unify_registers(
-                  operation.destination, operation.value, index);
-            },
-            [&](const Extract& operation) {
-              if (operation.width == 0) {
-                reject(
-                    process, index,
-                    "Extract width must be greater than zero");
-              }
-              record_definition(operation.destination, index);
-              record_use(operation.source, index);
-              constrain_width(
-                  operation.destination, operation.width, index);
-            },
-            [&](const DynamicExtract& operation) {
-              if (const auto error =
-                      validate_dynamic_index_metadata(operation.selection)) {
-                reject(process, index, *error);
-              }
-              record_definition(operation.destination, index);
-              record_use(operation.source, index);
-              record_use(operation.selection.index, index);
-              constrain_width(operation.destination, 1U, index);
-              constrain_width(
-                  operation.selection.index, 32U, index);
-            },
-            [&](const DynamicPartSelect& operation) {
-              if (const auto error =
-                      validate_dynamic_part_select_metadata(operation)) {
-                reject(process, index, *error);
-              }
-              record_definition(operation.destination, index);
-              record_use(operation.source, index);
-              record_use(operation.base, index);
-              constrain_width(
-                  operation.destination, operation.width, index);
-              constrain_width(operation.base, 32U, index);
-            },
-            [&](const Insert& operation) {
-              record_definition(operation.destination, index);
-              record_use(operation.target, index);
-              record_use(operation.source, index);
-              unify_registers(
-                  operation.destination, operation.target, index);
-            },
-            [&](const DynamicInsert& operation) {
-              if (const auto error =
-                      validate_dynamic_index_metadata(operation.selection)) {
-                reject(process, index, *error);
-              }
-              record_definition(operation.destination, index);
-              record_use(operation.target, index);
-              record_use(operation.source, index);
-              record_use(operation.selection.index, index);
-              constrain_width(operation.source, 1U, index);
-              constrain_width(
-                  operation.selection.index, 32U, index);
-              unify_registers(
-                  operation.destination, operation.target, index);
-            },
-            [&](const DynamicPartInsert& operation) {
-              if (const auto error =
-                      validate_dynamic_part_index_metadata(
-                          operation.selection)) {
-                reject(process, index, *error);
-              }
-              record_definition(operation.destination, index);
-              record_use(operation.target, index);
-              record_use(operation.source, index);
-              record_use(operation.selection.base, index);
-              constrain_width(
-                  operation.source, operation.selection.width, index);
-              constrain_width(operation.selection.base, 32U, index);
-              unify_registers(
-                  operation.destination, operation.target, index);
-            },
-            [&](const Concatenate& operation) {
-              if (operation.operands.empty()) {
-                reject(
-                    process, index,
-                    "Concatenate requires at least one operand");
-              }
-              if (operation.width == 0) {
-                reject(
-                    process, index,
-                    "Concatenate width must be greater than zero");
-              }
-              record_definition(operation.destination, index);
-              for (const auto operand : operation.operands) {
-                record_use(operand, index);
-              }
-              constrain_width(
-                  operation.destination, operation.width, index);
-            },
-            [&](const Binary &operation) {
-              switch (operation.operation) {
-              case BinaryOperator::bit_and:
-              case BinaryOperator::bit_or:
-              case BinaryOperator::bit_xor:
-              case BinaryOperator::add_unsigned:
-              case BinaryOperator::subtract_unsigned:
-              case BinaryOperator::multiply_unsigned:
-              case BinaryOperator::power_unsigned:
-              case BinaryOperator::divide_unsigned:
-              case BinaryOperator::modulo_unsigned:
-              case BinaryOperator::add_signed:
-              case BinaryOperator::subtract_signed:
-              case BinaryOperator::multiply_signed:
-              case BinaryOperator::power_signed:
-              case BinaryOperator::divide_signed:
-              case BinaryOperator::remainder_signed:
-              case BinaryOperator::modulo_signed:
-              case BinaryOperator::equal:
-              case BinaryOperator::case_equal:
-              case BinaryOperator::casez_equal:
-              case BinaryOperator::casex_equal:
-              case BinaryOperator::wildcard_equal:
-              case BinaryOperator::not_equal:
-              case BinaryOperator::less_unsigned:
-              case BinaryOperator::less_equal_unsigned:
-              case BinaryOperator::greater_unsigned:
-              case BinaryOperator::greater_equal_unsigned:
-              case BinaryOperator::less_signed:
-              case BinaryOperator::less_equal_signed:
-              case BinaryOperator::greater_signed:
-              case BinaryOperator::greater_equal_signed:
-                break;
-              default:
-                reject(process, index,
-                       "Binary has an invalid operator");
-              }
-              record_definition(operation.destination, index);
-              record_use(operation.lhs, index);
-              record_use(operation.rhs, index);
-              unify_registers(operation.lhs, operation.rhs, index);
-              if (operation.operation == BinaryOperator::equal
-                  || operation.operation == BinaryOperator::case_equal
-                  || operation.operation == BinaryOperator::casez_equal
-                  || operation.operation == BinaryOperator::casex_equal
-                  || operation.operation == BinaryOperator::wildcard_equal
-                  || operation.operation == BinaryOperator::not_equal
-                  || operation.operation
-                      == BinaryOperator::less_unsigned
-                  || operation.operation
-                      == BinaryOperator::less_equal_unsigned
-                  || operation.operation
-                      == BinaryOperator::greater_unsigned
-                  || operation.operation
-                      == BinaryOperator::greater_equal_unsigned
-                  || operation.operation
-                      == BinaryOperator::less_signed
-                  || operation.operation
-                      == BinaryOperator::less_equal_signed
-                  || operation.operation
-                      == BinaryOperator::greater_signed
-                  || operation.operation
-                      == BinaryOperator::greater_equal_signed) {
-                constrain_width(operation.destination, 1U, index);
-              } else {
-                unify_registers(operation.destination, operation.lhs, index);
-              }
-            },
-            [&](const IntegerUnary& operation) {
-              switch (operation.operation) {
-              case IntegerUnaryOperator::negate:
-              case IntegerUnaryOperator::absolute:
-                break;
-              default:
-                reject(
-                    process, index,
-                    "IntegerUnary has an invalid operator");
-              }
-              record_definition(operation.destination, index);
-              record_use(operation.source, index);
-              constrain_width(operation.destination, 32U, index);
-              constrain_width(operation.source, 32U, index);
-            },
-            [&](const IntegerBinary& operation) {
-              switch (operation.operation) {
-              case IntegerBinaryOperator::add:
-              case IntegerBinaryOperator::subtract:
-              case IntegerBinaryOperator::multiply:
-              case IntegerBinaryOperator::power:
-              case IntegerBinaryOperator::divide:
-              case IntegerBinaryOperator::remainder:
-              case IntegerBinaryOperator::modulo:
-                break;
-              default:
-                reject(
-                    process, index,
-                    "IntegerBinary has an invalid operator");
-              }
-              record_definition(operation.destination, index);
-              record_use(operation.lhs, index);
-              record_use(operation.rhs, index);
-              constrain_width(operation.destination, 32U, index);
-              constrain_width(operation.lhs, 32U, index);
-              constrain_width(operation.rhs, 32U, index);
-            },
-            [&](const IntegerCheck& operation) {
-              if (operation.lower > operation.upper) {
-                reject(
-                    process, index,
-                    "IntegerCheck has an inverted range");
-              }
-              record_use(operation.source, index);
-              constrain_width(operation.source, 32U, index);
-            },
-            [&](const ConditionalSelect& operation) {
-              record_definition(operation.destination, index);
-              record_use(operation.condition, index);
-              record_use(operation.when_true, index);
-              record_use(operation.when_false, index);
-              constrain_width(operation.condition, 1U, index);
-              unify_registers(
-                  operation.when_true, operation.when_false, index);
-              unify_registers(
-                  operation.destination, operation.when_true, index);
-            },
-            [&](const WriteBlocking &operation) {
-              record_use(operation.source, index);
-              constrain_width(operation.source,
-                              signal_width(operation.signal, index), index);
-            },
-            [&](const Assert &operation) {
-              record_use(operation.condition, index);
-              constrain_width(operation.condition, 1U, index);
-              if (operation.severity
-                  != runtime::simir::AssertionSeverity::failure) {
-                result.uses_report = true;
-              }
-            },
-            [&](const DebugPoint&) {
-              result.uses_debug_points = true;
-            },
-            [&](const Display& operation) {
-              if (operation.postponed) {
-                result.uses_postponed_output = true;
-              } else {
-                result.uses_output = true;
-              }
-            },
-            [&](const FormatDisplay& operation) {
-              record_use(operation.source, index);
-              result.uses_formatted_output = true;
-            },
-            [&](const TimeDisplay&) {
-              result.uses_time_output = true;
-            },
-            [&](const MonitorInstall& operation) {
-              for (const auto& value : operation.values) {
-                if (value.kind == MonitorValueKind::signal) {
-                  (void)signal_width(value.signal, index);
-                }
-              }
-              result.uses_monitor_install = true;
-            },
-            [&](const MonitorControl&) {
-              result.uses_monitor_control = true;
-            },
-            [&](const RandomValue& operation) {
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination, 32U, index);
-              if (operation.maximum) {
-                record_use(*operation.maximum, index);
-              }
-              if (operation.minimum) {
-                record_use(*operation.minimum, index);
-              }
-              if (operation.minimum && !operation.maximum) {
-                reject(
-                    process,
-                    index,
-                    "random minimum requires a maximum");
-              }
-              result.uses_random_value = true;
-            },
-            [&](const Report&) {
+            } else {
+              unify_registers(operation.destination, operation.lhs, index);
+            }
+          } else if constexpr (std::is_same_v<OperationType, IntegerUnary>) {
+            switch (operation.operation) {
+            case IntegerUnaryOperator::negate:
+            case IntegerUnaryOperator::absolute:
+              break;
+            default:
+              reject(
+                  process, index,
+                  "IntegerUnary has an invalid operator");
+            }
+            record_definition(operation.destination, index);
+            record_use(operation.source, index);
+            constrain_width(operation.destination, 32U, index);
+            constrain_width(operation.source, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, IntegerBinary>) {
+            switch (operation.operation) {
+            case IntegerBinaryOperator::add:
+            case IntegerBinaryOperator::subtract:
+            case IntegerBinaryOperator::multiply:
+            case IntegerBinaryOperator::power:
+            case IntegerBinaryOperator::divide:
+            case IntegerBinaryOperator::remainder:
+            case IntegerBinaryOperator::modulo:
+              break;
+            default:
+              reject(
+                  process, index,
+                  "IntegerBinary has an invalid operator");
+            }
+            record_definition(operation.destination, index);
+            record_use(operation.lhs, index);
+            record_use(operation.rhs, index);
+            constrain_width(operation.destination, 32U, index);
+            constrain_width(operation.lhs, 32U, index);
+            constrain_width(operation.rhs, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, IntegerCheck>) {
+            if (operation.lower > operation.upper) {
+              reject(
+                  process, index,
+                  "IntegerCheck has an inverted range");
+            }
+            record_use(operation.source, index);
+            constrain_width(operation.source, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, ConditionalSelect>) {
+            record_definition(operation.destination, index);
+            record_use(operation.condition, index);
+            record_use(operation.when_true, index);
+            record_use(operation.when_false, index);
+            constrain_width(operation.condition, 1U, index);
+            unify_registers(
+                operation.when_true, operation.when_false, index);
+            unify_registers(
+                operation.destination, operation.when_true, index);
+          } else if constexpr (std::is_same_v<OperationType, WriteBlocking>) {
+            record_use(operation.source, index);
+            constrain_width(operation.source,
+                            signal_width(operation.signal, index), index);
+          } else if constexpr (std::is_same_v<OperationType, Assert>) {
+            record_use(operation.condition, index);
+            constrain_width(operation.condition, 1U, index);
+            if (operation.severity
+                != runtime::simir::AssertionSeverity::failure) {
               result.uses_report = true;
-            },
-            [&](const Jump &operation) {
-              validate_target(operation.target, index, "jump");
-            },
-            [&](const Call& operation) {
-              validate_target(operation.target, index, "call");
-              validate_target(
-                  operation.return_target, index, "call return");
-              validate_call_stack(operation.stack, index);
-            },
-            [&](const Return& operation) {
-              validate_call_stack(operation.stack, index);
-            },
-            [&](const Branch &operation) {
-              record_use(operation.condition, index);
-              constrain_width(operation.condition, 1U, index);
-              validate_target(operation.when_true, index, "branch true");
-              validate_target(operation.when_false, index, "branch false");
-              switch (operation.unknown_policy) {
-              case UnknownBranchPolicy::error:
-              case UnknownBranchPolicy::when_false:
-                break;
-              default:
-                reject(process, index, "branch has an invalid unknown policy");
+            }
+          } else if constexpr (std::is_same_v<OperationType, DebugPoint>) {
+            result.uses_debug_points = true;
+          } else if constexpr (std::is_same_v<OperationType, Display>) {
+            if (operation.postponed) {
+              result.uses_postponed_output = true;
+            } else {
+              result.uses_output = true;
+            }
+          } else if constexpr (std::is_same_v<OperationType, FormatDisplay>) {
+            record_use(operation.source, index);
+            result.uses_formatted_output = true;
+          } else if constexpr (std::is_same_v<OperationType, TimeDisplay>) {
+            result.uses_time_output = true;
+          } else if constexpr (std::is_same_v<OperationType, MonitorInstall>) {
+            for (const auto& value : operation.values) {
+              if (value.kind == MonitorValueKind::signal) {
+                (void)signal_width(value.signal, index);
               }
-            },
-            [&](const Halt &) {},
-            [&](const WriteUpdate &operation) {
-              record_use(operation.source, index);
-              constrain_width(operation.source,
-                              signal_width(operation.signal, index), index);
-              result.uses_write_update = true;
-            },
-            [&](const WriteAfter &operation) {
-              record_use(operation.source, index);
-              constrain_width(operation.source,
-                              signal_width(operation.signal, index), index);
-              result.uses_write_after = true;
-            },
-            [&](const WriteInertial& operation) {
-              record_use(operation.source, index);
-              constrain_width(
-                  operation.source,
-                  signal_width(operation.signal, index),
-                  index);
-              result.uses_write_inertial = true;
-            },
-            [&](const WriteProjected& operation) {
-              record_use(operation.source, index);
-              constrain_width(
-                  operation.source,
-                  signal_width(operation.signal, index),
-                  index);
-              switch (operation.mode) {
-                case runtime::simir::ProjectedDelayMode::transport:
-                case runtime::simir::ProjectedDelayMode::inertial:
-                  break;
-                default:
-                  reject(
-                      process,
-                      index,
-                      "projected write has an invalid delay mode");
-              }
-              if (operation.mode
-                      == runtime::simir::ProjectedDelayMode::inertial
-                  && operation.rejection > operation.delay) {
-                reject(
-                    process,
-                    index,
-                    "projected-write rejection exceeds its delay");
-              }
-              if (operation.mode
-                      == runtime::simir::ProjectedDelayMode::transport
-                  && operation.rejection != 0) {
-                reject(
-                    process,
-                    index,
-                    "transport projected write has a rejection limit");
-              }
-              result.uses_write_projected = true;
-            },
-            [&](const WriteProjectedWaveform& operation) {
-              const auto target_width =
-                  signal_width(operation.signal, index);
-              if (operation.elements.size() < 2) {
-                reject(
-                    process,
-                    index,
-                    "projected waveform requires at least two elements");
-              }
-              if (operation.elements.size()
-                  > std::numeric_limits<std::uint32_t>::max()) {
-                reject(
-                    process,
-                    index,
-                    "projected waveform has too many elements for the "
-                    "runtime ABI");
-              }
-              std::optional<runtime::SimulationTick> previous_delay;
-              for (const auto& element : operation.elements) {
-                record_use(element.source, index);
-                constrain_width(
-                    element.source, target_width, index);
-                if (previous_delay
-                    && element.delay <= *previous_delay) {
-                  reject(
-                      process,
-                      index,
-                      "projected-waveform delays must be strictly "
-                      "ascending");
-                }
-                previous_delay = element.delay;
-              }
-              switch (operation.mode) {
+            }
+            result.uses_monitor_install = true;
+          } else if constexpr (std::is_same_v<OperationType, MonitorControl>) {
+            result.uses_monitor_control = true;
+          } else if constexpr (std::is_same_v<OperationType, RandomValue>) {
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 32U, index);
+            if (operation.maximum) {
+              record_use(*operation.maximum, index);
+            }
+            if (operation.minimum) {
+              record_use(*operation.minimum, index);
+            }
+            if (operation.minimum && !operation.maximum) {
+              reject(
+                  process,
+                  index,
+                  "random minimum requires a maximum");
+            }
+            result.uses_random_value = true;
+          } else if constexpr (std::is_same_v<OperationType, Report>) {
+            result.uses_report = true;
+          } else if constexpr (std::is_same_v<OperationType, Jump>) {
+            validate_target(operation.target, index, "jump");
+          } else if constexpr (std::is_same_v<OperationType, Call>) {
+            validate_target(operation.target, index, "call");
+            validate_target(
+                operation.return_target, index, "call return");
+            validate_call_stack(operation.stack, index);
+          } else if constexpr (std::is_same_v<OperationType, Return>) {
+            validate_call_stack(operation.stack, index);
+          } else if constexpr (std::is_same_v<OperationType, Branch>) {
+            record_use(operation.condition, index);
+            constrain_width(operation.condition, 1U, index);
+            validate_target(operation.when_true, index, "branch true");
+            validate_target(operation.when_false, index, "branch false");
+            switch (operation.unknown_policy) {
+            case UnknownBranchPolicy::error:
+            case UnknownBranchPolicy::when_false:
+              break;
+            default:
+              reject(process, index, "branch has an invalid unknown policy");
+            }
+          } else if constexpr (std::is_same_v<OperationType, Halt>) {} else if constexpr (std::is_same_v<OperationType, WriteUpdate>) {
+            record_use(operation.source, index);
+            constrain_width(operation.source,
+                            signal_width(operation.signal, index), index);
+            result.uses_write_update = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteAfter>) {
+            record_use(operation.source, index);
+            constrain_width(operation.source,
+                            signal_width(operation.signal, index), index);
+            result.uses_write_after = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteInertial>) {
+            record_use(operation.source, index);
+            constrain_width(
+                operation.source,
+                signal_width(operation.signal, index),
+                index);
+            result.uses_write_inertial = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteProjected>) {
+            record_use(operation.source, index);
+            constrain_width(
+                operation.source,
+                signal_width(operation.signal, index),
+                index);
+            switch (operation.mode) {
               case runtime::simir::ProjectedDelayMode::transport:
-                if (operation.rejection != 0) {
-                  reject(
-                      process,
-                      index,
-                      "transport projected waveform has a rejection limit");
-                }
-                break;
               case runtime::simir::ProjectedDelayMode::inertial:
-                if (operation.rejection
-                    > operation.elements.front().delay) {
-                  reject(
-                      process,
-                      index,
-                      "projected-waveform rejection exceeds its first "
-                      "delay");
-                }
                 break;
               default:
                 reject(
                     process,
                     index,
-                    "projected waveform has an invalid delay mode");
-              }
-              result.uses_write_projected_waveform = true;
-            },
-            [&](const WriteBlockingSlice& operation) {
-              record_use(operation.source, index);
-              (void)signal_width(operation.signal, index);
-              result.uses_write_blocking_slice = true;
-            },
-            [&](const WriteUpdateSlice& operation) {
-              record_use(operation.source, index);
-              (void)signal_width(operation.signal, index);
-              result.uses_write_update_slice = true;
-            },
-            [&](const WriteAfterSlice& operation) {
-              record_use(operation.source, index);
-              (void)signal_width(operation.signal, index);
-              result.uses_write_after_slice = true;
-            },
-            [&](const WriteInertialSlice& operation) {
-              record_use(operation.source, index);
-              (void)signal_width(operation.signal, index);
-              result.uses_write_inertial_slice = true;
-            },
-            [&](const WriteProjectedSlice& operation) {
-              record_use(operation.source, index);
-              (void)signal_width(operation.signal, index);
-              switch (operation.mode) {
-                case runtime::simir::ProjectedDelayMode::transport:
-                case runtime::simir::ProjectedDelayMode::inertial:
-                  break;
-                default:
-                  reject(
-                      process,
-                      index,
-                      "projected slice has an invalid delay mode");
-              }
-              if (operation.mode
-                      == runtime::simir::ProjectedDelayMode::inertial
-                  && operation.rejection > operation.delay) {
-                reject(
-                    process,
-                    index,
-                    "projected slice rejection exceeds its delay");
-              }
-              if (operation.mode
-                      == runtime::simir::ProjectedDelayMode::transport
-                  && operation.rejection != 0) {
-                reject(
-                    process,
-                    index,
-                    "transport projected slice has a rejection limit");
-              }
-              result.uses_write_projected_slice = true;
-            },
-            [&](const WriteProjectedWaveformSlice& operation) {
-              (void)signal_width(operation.signal, index);
-              if (operation.elements.size() < 2) {
-                reject(
-                    process,
-                    index,
-                    "projected slice waveform requires at least two "
-                    "elements");
-              }
-              if (operation.elements.size()
-                  > std::numeric_limits<std::uint32_t>::max()) {
-                reject(
-                    process,
-                    index,
-                    "projected slice waveform has too many elements for the "
-                    "runtime ABI");
-              }
-              std::optional<runtime::SimulationTick> previous_delay;
-              std::optional<RegisterId> first_source;
-              for (const auto& element : operation.elements) {
-                record_use(element.source, index);
-                if (first_source) {
-                  unify_registers(
-                      *first_source, element.source, index);
-                } else {
-                  first_source = element.source;
-                }
-                if (previous_delay
-                    && element.delay <= *previous_delay) {
-                  reject(
-                      process,
-                      index,
-                      "projected slice waveform delays must be strictly "
-                      "ascending");
-                }
-                previous_delay = element.delay;
-              }
-              switch (operation.mode) {
-              case runtime::simir::ProjectedDelayMode::transport:
-                if (operation.rejection != 0) {
-                  reject(
-                      process,
-                      index,
-                      "transport projected slice waveform has a rejection "
-                      "limit");
-                }
-                break;
-              case runtime::simir::ProjectedDelayMode::inertial:
-                if (operation.rejection
-                    > operation.elements.front().delay) {
-                  reject(
-                      process,
-                      index,
-                      "projected slice waveform rejection exceeds its first "
-                      "delay");
-                }
-                break;
-              default:
-                reject(
-                    process,
-                    index,
-                    "projected slice waveform has an invalid delay mode");
-              }
-              result.uses_write_projected_waveform_slice = true;
-            },
-            [&](const WriteBlockingDynamicSlice& operation) {
-              const auto target_width =
-                  signal_width(operation.signal, index);
-              record_use(operation.source, index);
-              constrain_width(operation.source, 1U, index);
-              validate_dynamic_selection(
-                  operation.selection, target_width, index);
-              result.uses_write_blocking_slice = true;
-            },
-            [&](const WriteUpdateDynamicSlice& operation) {
-              const auto target_width =
-                  signal_width(operation.signal, index);
-              record_use(operation.source, index);
-              constrain_width(operation.source, 1U, index);
-              validate_dynamic_selection(
-                  operation.selection, target_width, index);
-              result.uses_write_update_slice = true;
-            },
-            [&](const WriteAfterDynamicSlice& operation) {
-              const auto target_width =
-                  signal_width(operation.signal, index);
-              record_use(operation.source, index);
-              constrain_width(operation.source, 1U, index);
-              validate_dynamic_selection(
-                  operation.selection, target_width, index);
-              result.uses_write_after_slice = true;
-            },
-            [&](const WriteBlockingDynamicPartSlice& operation) {
-              const auto target_width =
-                  signal_width(operation.signal, index);
-              record_use(operation.source, index);
+                    "projected write has an invalid delay mode");
+            }
+            if (operation.mode
+                    == runtime::simir::ProjectedDelayMode::inertial
+                && operation.rejection > operation.delay) {
+              reject(
+                  process,
+                  index,
+                  "projected-write rejection exceeds its delay");
+            }
+            if (operation.mode
+                    == runtime::simir::ProjectedDelayMode::transport
+                && operation.rejection != 0) {
+              reject(
+                  process,
+                  index,
+                  "transport projected write has a rejection limit");
+            }
+            result.uses_write_projected = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveform>) {
+            const auto target_width =
+                signal_width(operation.signal, index);
+            if (operation.elements.size() < 2) {
+              reject(
+                  process,
+                  index,
+                  "projected waveform requires at least two elements");
+            }
+            if (operation.elements.size()
+                > std::numeric_limits<std::uint32_t>::max()) {
+              reject(
+                  process,
+                  index,
+                  "projected waveform has too many elements for the "
+                  "runtime ABI");
+            }
+            std::optional<runtime::SimulationTick> previous_delay;
+            for (const auto& element : operation.elements) {
+              record_use(element.source, index);
               constrain_width(
-                  operation.source, operation.selection.width, index);
-              validate_dynamic_part_selection(
-                  operation.selection, target_width, index);
-              result.uses_write_blocking_slice = true;
-            },
-            [&](const WriteUpdateDynamicPartSlice& operation) {
-              const auto target_width =
-                  signal_width(operation.signal, index);
-              record_use(operation.source, index);
-              constrain_width(
-                  operation.source, operation.selection.width, index);
-              validate_dynamic_part_selection(
-                  operation.selection, target_width, index);
-              result.uses_write_update_slice = true;
-            },
-            [&](const WriteAfterDynamicPartSlice& operation) {
-              const auto target_width =
-                  signal_width(operation.signal, index);
-              record_use(operation.source, index);
-              constrain_width(
-                  operation.source, operation.selection.width, index);
-              validate_dynamic_part_selection(
-                  operation.selection, target_width, index);
-              result.uses_write_after_slice = true;
-            },
-            [&](const ForceSignalSlice& operation) {
-              record_use(operation.source, index);
-              (void)signal_width(operation.signal, index);
-              result.uses_force_signal_slice = true;
-            },
-            [&](const ReleaseSignalSlice& operation) {
-              (void)signal_width(operation.signal, index);
-              if (operation.width == 0) {
+                  element.source, target_width, index);
+              if (previous_delay
+                  && element.delay <= *previous_delay) {
                 reject(
-                    process, index,
-                    "ReleaseSignalSlice width must be greater than zero");
+                    process,
+                    index,
+                    "projected-waveform delays must be strictly "
+                    "ascending");
               }
-              result.uses_release_signal_slice = true;
-            },
-            [&](const WriteInertialDynamicSlice& operation) {
-              const auto target_width =
-                  signal_width(operation.signal, index);
-              record_use(operation.source, index);
-              constrain_width(operation.source, 1U, index);
-              validate_dynamic_selection(
-                  operation.selection, target_width, index);
-              result.uses_write_inertial_slice = true;
-            },
-            [&](const WriteProjectedDynamicSlice& operation) {
-              const auto target_width =
-                  signal_width(operation.signal, index);
-              record_use(operation.source, index);
-              constrain_width(operation.source, 1U, index);
-              validate_dynamic_selection(
-                  operation.selection, target_width, index);
-              switch (operation.mode) {
+              previous_delay = element.delay;
+            }
+            switch (operation.mode) {
+            case runtime::simir::ProjectedDelayMode::transport:
+              if (operation.rejection != 0) {
+                reject(
+                    process,
+                    index,
+                    "transport projected waveform has a rejection limit");
+              }
+              break;
+            case runtime::simir::ProjectedDelayMode::inertial:
+              if (operation.rejection
+                  > operation.elements.front().delay) {
+                reject(
+                    process,
+                    index,
+                    "projected-waveform rejection exceeds its first "
+                    "delay");
+              }
+              break;
+            default:
+              reject(
+                  process,
+                  index,
+                  "projected waveform has an invalid delay mode");
+            }
+            result.uses_write_projected_waveform = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteBlockingSlice>) {
+            record_use(operation.source, index);
+            (void)signal_width(operation.signal, index);
+            result.uses_write_blocking_slice = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteUpdateSlice>) {
+            record_use(operation.source, index);
+            (void)signal_width(operation.signal, index);
+            result.uses_write_update_slice = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteAfterSlice>) {
+            record_use(operation.source, index);
+            (void)signal_width(operation.signal, index);
+            result.uses_write_after_slice = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteInertialSlice>) {
+            record_use(operation.source, index);
+            (void)signal_width(operation.signal, index);
+            result.uses_write_inertial_slice = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteProjectedSlice>) {
+            record_use(operation.source, index);
+            (void)signal_width(operation.signal, index);
+            switch (operation.mode) {
               case runtime::simir::ProjectedDelayMode::transport:
-                if (operation.rejection != 0) {
-                  reject(
-                      process,
-                      index,
-                      "transport projected dynamic slice has a rejection "
-                      "limit");
-                }
-                break;
               case runtime::simir::ProjectedDelayMode::inertial:
-                if (operation.rejection > operation.delay) {
-                  reject(
-                      process,
-                      index,
-                      "projected dynamic-slice rejection exceeds its "
-                      "delay");
-                }
                 break;
               default:
                 reject(
                     process,
                     index,
-                    "projected dynamic slice has an invalid delay mode");
+                    "projected slice has an invalid delay mode");
+            }
+            if (operation.mode
+                    == runtime::simir::ProjectedDelayMode::inertial
+                && operation.rejection > operation.delay) {
+              reject(
+                  process,
+                  index,
+                  "projected slice rejection exceeds its delay");
+            }
+            if (operation.mode
+                    == runtime::simir::ProjectedDelayMode::transport
+                && operation.rejection != 0) {
+              reject(
+                  process,
+                  index,
+                  "transport projected slice has a rejection limit");
+            }
+            result.uses_write_projected_slice = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveformSlice>) {
+            (void)signal_width(operation.signal, index);
+            if (operation.elements.size() < 2) {
+              reject(
+                  process,
+                  index,
+                  "projected slice waveform requires at least two "
+                  "elements");
+            }
+            if (operation.elements.size()
+                > std::numeric_limits<std::uint32_t>::max()) {
+              reject(
+                  process,
+                  index,
+                  "projected slice waveform has too many elements for the "
+                  "runtime ABI");
+            }
+            std::optional<runtime::SimulationTick> previous_delay;
+            std::optional<RegisterId> first_source;
+            for (const auto& element : operation.elements) {
+              record_use(element.source, index);
+              if (first_source) {
+                unify_registers(
+                    *first_source, element.source, index);
+              } else {
+                first_source = element.source;
               }
-              result.uses_write_projected_slice = true;
-            },
-            [&](const WriteProjectedWaveformDynamicSlice& operation) {
-              const auto target_width =
-                  signal_width(operation.signal, index);
-              validate_dynamic_selection(
-                  operation.selection, target_width, index);
-              if (operation.elements.size() < 2) {
+              if (previous_delay
+                  && element.delay <= *previous_delay) {
                 reject(
                     process,
                     index,
-                    "projected dynamic-slice waveform requires at least "
-                    "two elements");
+                    "projected slice waveform delays must be strictly "
+                    "ascending");
               }
-              if (operation.elements.size()
-                  > std::numeric_limits<std::uint32_t>::max()) {
+              previous_delay = element.delay;
+            }
+            switch (operation.mode) {
+            case runtime::simir::ProjectedDelayMode::transport:
+              if (operation.rejection != 0) {
                 reject(
                     process,
                     index,
-                    "projected dynamic-slice waveform has too many "
-                    "elements for the runtime ABI");
+                    "transport projected slice waveform has a rejection "
+                    "limit");
               }
-              std::optional<runtime::SimulationTick> previous_delay;
-              for (const auto& element : operation.elements) {
-                record_use(element.source, index);
-                constrain_width(element.source, 1U, index);
-                if (previous_delay
-                    && element.delay <= *previous_delay) {
-                  reject(
-                      process,
-                      index,
-                      "projected dynamic-slice waveform delays must be "
-                      "strictly ascending");
-                }
-                previous_delay = element.delay;
+              break;
+            case runtime::simir::ProjectedDelayMode::inertial:
+              if (operation.rejection
+                  > operation.elements.front().delay) {
+                reject(
+                    process,
+                    index,
+                    "projected slice waveform rejection exceeds its first "
+                    "delay");
               }
-              switch (operation.mode) {
-              case runtime::simir::ProjectedDelayMode::transport:
-                if (operation.rejection != 0) {
-                  reject(
-                      process,
-                      index,
-                      "transport projected dynamic-slice waveform has a "
-                      "rejection limit");
-                }
+              break;
+            default:
+              reject(
+                  process,
+                  index,
+                  "projected slice waveform has an invalid delay mode");
+            }
+            result.uses_write_projected_waveform_slice = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteBlockingDynamicSlice>) {
+            const auto target_width =
+                signal_width(operation.signal, index);
+            record_use(operation.source, index);
+            constrain_width(operation.source, 1U, index);
+            validate_dynamic_selection(
+                operation.selection, target_width, index);
+            result.uses_write_blocking_slice = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteUpdateDynamicSlice>) {
+            const auto target_width =
+                signal_width(operation.signal, index);
+            record_use(operation.source, index);
+            constrain_width(operation.source, 1U, index);
+            validate_dynamic_selection(
+                operation.selection, target_width, index);
+            result.uses_write_update_slice = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteAfterDynamicSlice>) {
+            const auto target_width =
+                signal_width(operation.signal, index);
+            record_use(operation.source, index);
+            constrain_width(operation.source, 1U, index);
+            validate_dynamic_selection(
+                operation.selection, target_width, index);
+            result.uses_write_after_slice = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteBlockingDynamicPartSlice>) {
+            const auto target_width =
+                signal_width(operation.signal, index);
+            record_use(operation.source, index);
+            constrain_width(
+                operation.source, operation.selection.width, index);
+            validate_dynamic_part_selection(
+                operation.selection, target_width, index);
+            result.uses_write_blocking_slice = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteUpdateDynamicPartSlice>) {
+            const auto target_width =
+                signal_width(operation.signal, index);
+            record_use(operation.source, index);
+            constrain_width(
+                operation.source, operation.selection.width, index);
+            validate_dynamic_part_selection(
+                operation.selection, target_width, index);
+            result.uses_write_update_slice = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteAfterDynamicPartSlice>) {
+            const auto target_width =
+                signal_width(operation.signal, index);
+            record_use(operation.source, index);
+            constrain_width(
+                operation.source, operation.selection.width, index);
+            validate_dynamic_part_selection(
+                operation.selection, target_width, index);
+            result.uses_write_after_slice = true;
+          } else if constexpr (std::is_same_v<OperationType, ForceSignalSlice>) {
+            record_use(operation.source, index);
+            (void)signal_width(operation.signal, index);
+            result.uses_force_signal_slice = true;
+          } else if constexpr (std::is_same_v<OperationType, ReleaseSignalSlice>) {
+            (void)signal_width(operation.signal, index);
+            if (operation.width == 0) {
+              reject(
+                  process, index,
+                  "ReleaseSignalSlice width must be greater than zero");
+            }
+            result.uses_release_signal_slice = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteInertialDynamicSlice>) {
+            const auto target_width =
+                signal_width(operation.signal, index);
+            record_use(operation.source, index);
+            constrain_width(operation.source, 1U, index);
+            validate_dynamic_selection(
+                operation.selection, target_width, index);
+            result.uses_write_inertial_slice = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteProjectedDynamicSlice>) {
+            const auto target_width =
+                signal_width(operation.signal, index);
+            record_use(operation.source, index);
+            constrain_width(operation.source, 1U, index);
+            validate_dynamic_selection(
+                operation.selection, target_width, index);
+            switch (operation.mode) {
+            case runtime::simir::ProjectedDelayMode::transport:
+              if (operation.rejection != 0) {
+                reject(
+                    process,
+                    index,
+                    "transport projected dynamic slice has a rejection "
+                    "limit");
+              }
+              break;
+            case runtime::simir::ProjectedDelayMode::inertial:
+              if (operation.rejection > operation.delay) {
+                reject(
+                    process,
+                    index,
+                    "projected dynamic-slice rejection exceeds its "
+                    "delay");
+              }
+              break;
+            default:
+              reject(
+                  process,
+                  index,
+                  "projected dynamic slice has an invalid delay mode");
+            }
+            result.uses_write_projected_slice = true;
+          } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveformDynamicSlice>) {
+            const auto target_width =
+                signal_width(operation.signal, index);
+            validate_dynamic_selection(
+                operation.selection, target_width, index);
+            if (operation.elements.size() < 2) {
+              reject(
+                  process,
+                  index,
+                  "projected dynamic-slice waveform requires at least "
+                  "two elements");
+            }
+            if (operation.elements.size()
+                > std::numeric_limits<std::uint32_t>::max()) {
+              reject(
+                  process,
+                  index,
+                  "projected dynamic-slice waveform has too many "
+                  "elements for the runtime ABI");
+            }
+            std::optional<runtime::SimulationTick> previous_delay;
+            for (const auto& element : operation.elements) {
+              record_use(element.source, index);
+              constrain_width(element.source, 1U, index);
+              if (previous_delay
+                  && element.delay <= *previous_delay) {
+                reject(
+                    process,
+                    index,
+                    "projected dynamic-slice waveform delays must be "
+                    "strictly ascending");
+              }
+              previous_delay = element.delay;
+            }
+            switch (operation.mode) {
+            case runtime::simir::ProjectedDelayMode::transport:
+              if (operation.rejection != 0) {
+                reject(
+                    process,
+                    index,
+                    "transport projected dynamic-slice waveform has a "
+                    "rejection limit");
+              }
+              break;
+            case runtime::simir::ProjectedDelayMode::inertial:
+              if (operation.rejection
+                  > operation.elements.front().delay) {
+                reject(
+                    process,
+                    index,
+                    "projected dynamic-slice waveform rejection exceeds "
+                    "its first delay");
+              }
+              break;
+            default:
+              reject(
+                  process,
+                  index,
+                  "projected dynamic-slice waveform has an invalid delay "
+                  "mode");
+            }
+            result.uses_write_projected_waveform_slice = true;
+          } else if constexpr (std::is_same_v<OperationType, WaitFor>) {} else if constexpr (std::is_same_v<OperationType, WaitOn>) {
+            if (operation.signals.empty()
+                && !operation.timeout) {
+              reject(
+                  process, index,
+                  "WaitOn requires at least one signal or a timeout");
+            }
+            if (!operation.edges.empty()
+                && operation.edges.size()
+                    != operation.signals.size()) {
+              reject(
+                  process, index,
+                  "WaitOn edge count must match its signal count");
+            }
+            if (!operation.timeout
+                && (operation.timeout_result
+                    || operation.timeout_origin)) {
+              reject(
+                  process,
+                  index,
+                  "WaitOn timeout metadata requires a timeout");
+            }
+            if (operation.timeout_origin
+                && !operation.timeout_result) {
+              reject(
+                  process,
+                  index,
+                  "WaitOn timeout rearm requires a result register");
+            }
+            if (operation.timeout_result) {
+              record_definition(
+                  *operation.timeout_result, index);
+              constrain_width(
+                  *operation.timeout_result, 1U, index);
+            }
+            if (operation.timeout_origin) {
+              if (*operation.timeout_origin >= index) {
+                reject(
+                    process,
+                    index,
+                    "WaitOn timeout origin must precede its rearm");
+              }
+              const auto* origin = fsim::runtime::simir::operation_get_if<WaitOn>(
+                  &process.operations[*operation.timeout_origin]);
+              if (origin == nullptr
+                  || !origin->timeout
+                  || origin->timeout_origin
+                  || origin->timeout
+                      != operation.timeout
+                  || origin->timeout_result
+                      != operation.timeout_result
+                  || origin->signals
+                      != operation.signals
+                  || origin->edges
+                      != operation.edges) {
+                reject(
+                    process,
+                    index,
+                    "WaitOn timeout rearm does not match its origin");
+              }
+            }
+            for (std::size_t signal_index = 0;
+                 signal_index < operation.signals.size();
+                 ++signal_index) {
+              const auto width = referenced_signal_width(
+                  operation.signals[signal_index], index);
+              const auto edge =
+                  operation.edges.empty()
+                      ? EdgeKind::any
+                      : operation.edges[signal_index];
+              switch (edge) {
+              case EdgeKind::any:
                 break;
-              case runtime::simir::ProjectedDelayMode::inertial:
-                if (operation.rejection
-                    > operation.elements.front().delay) {
-                  reject(
-                      process,
-                      index,
-                      "projected dynamic-slice waveform rejection exceeds "
-                      "its first delay");
-                }
-                break;
-              default:
-                reject(
-                    process,
-                    index,
-                    "projected dynamic-slice waveform has an invalid delay "
-                    "mode");
-              }
-              result.uses_write_projected_waveform_slice = true;
-            },
-            [&](const WaitFor &) {},
-            [&](const WaitOn &operation) {
-              if (operation.signals.empty()
-                  && !operation.timeout) {
-                reject(
-                    process, index,
-                    "WaitOn requires at least one signal or a timeout");
-              }
-              if (!operation.edges.empty()
-                  && operation.edges.size()
-                      != operation.signals.size()) {
-                reject(
-                    process, index,
-                    "WaitOn edge count must match its signal count");
-              }
-              if (!operation.timeout
-                  && (operation.timeout_result
-                      || operation.timeout_origin)) {
-                reject(
-                    process,
-                    index,
-                    "WaitOn timeout metadata requires a timeout");
-              }
-              if (operation.timeout_origin
-                  && !operation.timeout_result) {
-                reject(
-                    process,
-                    index,
-                    "WaitOn timeout rearm requires a result register");
-              }
-              if (operation.timeout_result) {
-                record_definition(
-                    *operation.timeout_result, index);
-                constrain_width(
-                    *operation.timeout_result, 1U, index);
-              }
-              if (operation.timeout_origin) {
-                if (*operation.timeout_origin >= index) {
-                  reject(
-                      process,
-                      index,
-                      "WaitOn timeout origin must precede its rearm");
-                }
-                const auto* origin = std::get_if<WaitOn>(
-                    &process.operations[*operation.timeout_origin]);
-                if (origin == nullptr
-                    || !origin->timeout
-                    || origin->timeout_origin
-                    || origin->timeout
-                        != operation.timeout
-                    || origin->timeout_result
-                        != operation.timeout_result
-                    || origin->signals
-                        != operation.signals
-                    || origin->edges
-                        != operation.edges) {
-                  reject(
-                      process,
-                      index,
-                      "WaitOn timeout rearm does not match its origin");
-                }
-              }
-              for (std::size_t signal_index = 0;
-                   signal_index < operation.signals.size();
-                   ++signal_index) {
-                const auto width = referenced_signal_width(
-                    operation.signals[signal_index], index);
-                const auto edge =
-                    operation.edges.empty()
-                        ? EdgeKind::any
-                        : operation.edges[signal_index];
-                switch (edge) {
-                case EdgeKind::any:
-                  break;
-                case EdgeKind::posedge:
-                case EdgeKind::negedge:
-                  if (width != 1) {
-                    reject(
-                        process, index,
-                        "WaitOn edge requires a scalar signal");
-                  }
-                  break;
-                default:
+              case EdgeKind::posedge:
+              case EdgeKind::negedge:
+                if (width != 1) {
                   reject(
                       process, index,
-                      "WaitOn has an invalid edge kind");
+                      "WaitOn edge requires a scalar signal");
                 }
+                break;
+              default:
+                reject(
+                    process, index,
+                    "WaitOn has an invalid edge kind");
               }
-            },
-            [&](const WaitSensitivity &) {
-              if (process.static_sensitivity.empty()) {
-                reject(process, index,
-                       "WaitSensitivity requires a static sensitivity list");
-              }
-            },
-            [&](const WaitForever &) {},
-            [&](const Yield &) {},
-            [&](const Fork& operation) {
-              validate_fork_operation(process, index, operation);
-            },
-            [&](const ForkEnd&) {},
-            [&](const WaitFork&) {},
-            [&](const DisableFork&) {},
-            [&](const Pause &) {},
-            [&](const Stop &) {}},
+            }
+          } else if constexpr (std::is_same_v<OperationType, WaitSensitivity>) {
+            if (process.static_sensitivity.empty()) {
+              reject(process, index,
+                     "WaitSensitivity requires a static sensitivity list");
+            }
+          } else if constexpr (std::is_same_v<OperationType, WaitForever>) {} else if constexpr (std::is_same_v<OperationType, Yield>) {} else if constexpr (std::is_same_v<OperationType, Fork>) {
+            validate_fork_operation(process, index, operation);
+          } else if constexpr (std::is_same_v<OperationType, ForkEnd>) {} else if constexpr (std::is_same_v<OperationType, WaitFork>) {} else if constexpr (std::is_same_v<OperationType, DisableFork>) {} else if constexpr (std::is_same_v<OperationType, Pause>) {} else if constexpr (std::is_same_v<OperationType, Stop>) {}
+        },
         process.operations[index]);
   }
   for (std::size_t index = 0; index < process.register_count; ++index) {
@@ -1746,7 +1632,7 @@ validate_process(
       }
     }
     if (const auto* concatenate =
-            std::get_if<Concatenate>(&process.operations[index])) {
+            fsim::runtime::simir::operation_get_if<Concatenate>(&process.operations[index])) {
       std::uint64_t width = 0;
       for (const auto operand : concatenate->operands) {
         width += result.register_widths[operand];
@@ -1772,27 +1658,27 @@ validate_process(
           }
         };
     if (const auto* blocking_write =
-            std::get_if<WriteBlockingSlice>(
+            fsim::runtime::simir::operation_get_if<WriteBlockingSlice>(
                 &process.operations[index])) {
       validate_slice_write(*blocking_write);
     } else if (const auto* update_write =
-                   std::get_if<WriteUpdateSlice>(
+                   fsim::runtime::simir::operation_get_if<WriteUpdateSlice>(
                        &process.operations[index])) {
       validate_slice_write(*update_write);
     } else if (const auto* delayed_write =
-                   std::get_if<WriteAfterSlice>(
+                   fsim::runtime::simir::operation_get_if<WriteAfterSlice>(
                        &process.operations[index])) {
       validate_slice_write(*delayed_write);
     } else if (const auto* inertial_write =
-                   std::get_if<WriteInertialSlice>(
+                   fsim::runtime::simir::operation_get_if<WriteInertialSlice>(
                        &process.operations[index])) {
       validate_slice_write(*inertial_write);
     } else if (const auto* projected_write =
-                   std::get_if<WriteProjectedSlice>(
+                   fsim::runtime::simir::operation_get_if<WriteProjectedSlice>(
                        &process.operations[index])) {
       validate_slice_write(*projected_write);
     } else if (const auto* waveform_write =
-                   std::get_if<WriteProjectedWaveformSlice>(
+                   fsim::runtime::simir::operation_get_if<WriteProjectedWaveformSlice>(
                        &process.operations[index])) {
       const auto target_width =
           signal_widths[waveform_write->signal];
@@ -1816,25 +1702,25 @@ validate_process(
       process.operations.size());
   for (std::size_t index = 0; index < process.operations.size(); ++index) {
     const auto &operation = process.operations[index];
-    if (std::holds_alternative<Halt>(operation) ||
-        std::holds_alternative<Stop>(operation) ||
-        std::holds_alternative<Return>(operation) ||
-        std::holds_alternative<ForkEnd>(operation)) {
+    if (fsim::runtime::simir::operation_holds<Halt>(operation) ||
+        fsim::runtime::simir::operation_holds<Stop>(operation) ||
+        fsim::runtime::simir::operation_holds<Return>(operation) ||
+        fsim::runtime::simir::operation_holds<ForkEnd>(operation)) {
       continue;
     }
-    if (const auto* fork = std::get_if<Fork>(&operation)) {
+    if (const auto* fork = fsim::runtime::simir::operation_get_if<Fork>(&operation)) {
       successors[index].insert(
           successors[index].end(),
           fork->branches.begin(), fork->branches.end());
       successors[index].push_back(index + 1);
-    } else if (const auto *jump = std::get_if<Jump>(&operation)) {
+    } else if (const auto *jump = fsim::runtime::simir::operation_get_if<Jump>(&operation)) {
       successors[index].push_back(jump->target);
-    } else if (const auto* call = std::get_if<Call>(&operation)) {
+    } else if (const auto* call = fsim::runtime::simir::operation_get_if<Call>(&operation)) {
       successors[index].push_back(call->target);
       if (call->return_target != call->target) {
         successors[index].push_back(call->return_target);
       }
-    } else if (const auto *branch = std::get_if<Branch>(&operation)) {
+    } else if (const auto *branch = fsim::runtime::simir::operation_get_if<Branch>(&operation)) {
       successors[index].push_back(branch->when_true);
       if (branch->when_false != branch->when_true) {
         successors[index].push_back(branch->when_false);
@@ -1865,7 +1751,7 @@ validate_process(
   const auto is_cycle_safe_point =
       [&](const Operation& operation) {
         return is_resume_boundary(operation)
-            || std::holds_alternative<DebugPoint>(operation);
+            || fsim::runtime::simir::operation_holds<DebugPoint>(operation);
       };
   for (std::size_t index = 0; index < process.operations.size(); ++index) {
     if (reachable[index]
@@ -1880,8 +1766,8 @@ validate_process(
   for (std::size_t index = 0; index < process.operations.size(); ++index) {
     if (!reachable[index] ||
         is_cycle_safe_point(process.operations[index]) ||
-        std::holds_alternative<Stop>(process.operations[index]) ||
-        std::holds_alternative<Halt>(process.operations[index])) {
+        fsim::runtime::simir::operation_holds<Stop>(process.operations[index]) ||
+        fsim::runtime::simir::operation_holds<Halt>(process.operations[index])) {
       continue;
     }
     invocation_successors[index] = successors[index];

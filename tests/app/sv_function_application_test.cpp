@@ -109,7 +109,7 @@ Capture run_once(
   capture.call_operations = std::ranges::count_if(
       project->design.processes().front().operations,
       [](const auto& operation) {
-        return std::holds_alternative<
+        return fsim::runtime::simir::operation_holds<
             fsim::runtime::simir::Call>(operation);
       });
   for (const auto& local :
@@ -783,4 +783,5 @@ endmodule
   assert(changed.cache.misses == 1);
   assert(changed.cache.stores == 1);
 #endif
+  return 0;
 }

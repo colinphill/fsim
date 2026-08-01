@@ -293,4 +293,5 @@ endmodule
       directory.path, source, fsim::project::Optimization::o2);
   test_cli_seed_selection(directory.path, manifest);
   std::cout << "random application tests passed\n";
+  return 0;
 }

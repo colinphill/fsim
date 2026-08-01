@@ -76,46 +76,46 @@ void HierarchyBuilder::validate_process_drivers() {
         std::set<SignalId> process_outputs;
         for (const auto& operation : process.operations) {
             if (const auto* blocking =
-                    std::get_if<WriteBlocking>(&operation)) {
+                    fsim::runtime::simir::operation_get_if<WriteBlocking>(&operation)) {
                 process_outputs.insert(blocking->signal);
             } else if (const auto* update =
-                           std::get_if<WriteUpdate>(&operation)) {
+                           fsim::runtime::simir::operation_get_if<WriteUpdate>(&operation)) {
                 process_outputs.insert(update->signal);
             } else if (const auto* delayed =
-                           std::get_if<WriteAfter>(&operation)) {
+                           fsim::runtime::simir::operation_get_if<WriteAfter>(&operation)) {
                 process_outputs.insert(delayed->signal);
             } else if (const auto* inertial =
-                           std::get_if<WriteInertial>(&operation)) {
+                           fsim::runtime::simir::operation_get_if<WriteInertial>(&operation)) {
                 process_outputs.insert(inertial->signal);
             } else if (const auto* projected =
-                           std::get_if<WriteProjected>(&operation)) {
+                           fsim::runtime::simir::operation_get_if<WriteProjected>(&operation)) {
                 process_outputs.insert(projected->signal);
             } else if (const auto* waveform =
-                           std::get_if<WriteProjectedWaveform>(
+                           fsim::runtime::simir::operation_get_if<WriteProjectedWaveform>(
                                &operation)) {
                 process_outputs.insert(waveform->signal);
             } else if (const auto* blocking_slice =
-                           std::get_if<WriteBlockingSlice>(
+                           fsim::runtime::simir::operation_get_if<WriteBlockingSlice>(
                                &operation)) {
                 process_outputs.insert(blocking_slice->signal);
             } else if (const auto* update_slice =
-                           std::get_if<WriteUpdateSlice>(
+                           fsim::runtime::simir::operation_get_if<WriteUpdateSlice>(
                                &operation)) {
                 process_outputs.insert(update_slice->signal);
             } else if (const auto* delayed_slice =
-                           std::get_if<WriteAfterSlice>(
+                           fsim::runtime::simir::operation_get_if<WriteAfterSlice>(
                                &operation)) {
                 process_outputs.insert(delayed_slice->signal);
             } else if (const auto* inertial_slice =
-                           std::get_if<WriteInertialSlice>(
+                           fsim::runtime::simir::operation_get_if<WriteInertialSlice>(
                                &operation)) {
                 process_outputs.insert(inertial_slice->signal);
             } else if (const auto* projected_slice =
-                           std::get_if<WriteProjectedSlice>(
+                           fsim::runtime::simir::operation_get_if<WriteProjectedSlice>(
                                &operation)) {
                 process_outputs.insert(projected_slice->signal);
             } else if (const auto* waveform_slice =
-                           std::get_if<WriteProjectedWaveformSlice>(
+                           fsim::runtime::simir::operation_get_if<WriteProjectedWaveformSlice>(
                                &operation)) {
                 process_outputs.insert(waveform_slice->signal);
             }

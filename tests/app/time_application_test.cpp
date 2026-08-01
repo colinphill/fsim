@@ -259,4 +259,5 @@ endmodule
   verify_resolution_diagnostic(directory.path, source);
   verify_overflow_diagnostic(directory.path, source);
   std::cout << "time application tests passed\n";
+  return 0;
 }

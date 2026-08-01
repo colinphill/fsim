@@ -382,4 +382,5 @@ end architecture;
             "function_top.package_instance.nested"));
 #endif
   }
+  return 0;
 }

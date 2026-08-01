@@ -22,4 +22,5 @@ int main() {
   fixture.test_preprocessing_debug_and_cli();
   checkpoint("complete");
   std::cout << "application tests passed\n";
+  return 0;
 }

@@ -1585,4 +1585,5 @@ end architecture;
       directory.path,
       attribute_source,
       fsim::project::Optimization::o2);
+  return 0;
 }

@@ -400,4 +400,5 @@ endmodule
   assert(changed.cache.misses == 1);
   assert(changed.cache.stores == 1);
 #endif
+  return 0;
 }

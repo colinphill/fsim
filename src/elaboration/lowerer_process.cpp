@@ -80,7 +80,7 @@ void Lowerer::validate_read_only_signal_writes(
     }
   };
   for (const auto& operation : process_.operations) {
-    std::visit(
+    fsim::runtime::simir::visit_operation(
         [&](const auto& candidate) {
           using Operation = std::decay_t<decltype(candidate)>;
           if constexpr (
@@ -290,7 +290,7 @@ void Lowerer::validate_read_only_signal_writes(
             process_.operations.size());
         if (event_filter_branch && event_wait_entry) {
             process_.operations[*event_filter_branch] = Branch{
-                std::get<Branch>(
+                fsim::runtime::simir::operation_get<Branch>(
                     process_.operations[*event_filter_branch])
                     .condition,
                 *event_wait_entry,

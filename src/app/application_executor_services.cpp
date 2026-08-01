@@ -175,7 +175,7 @@ std::uint32_t LlvmProcessExecutor::file_open(
           "compiled file-open result pointer is null"};
     }
     const auto* operation =
-        std::get_if<runtime::simir::FileOpen>(
+        fsim::runtime::simir::operation_get_if<runtime::simir::FileOpen>(
             &callback_operation(state, process, instruction));
     if (operation == nullptr) {
       throw compiler::LlvmJitError{
@@ -202,7 +202,7 @@ std::uint32_t LlvmProcessExecutor::file_close(
     return 1;
   }
   try {
-    if (!std::holds_alternative<runtime::simir::FileClose>(
+    if (!fsim::runtime::simir::operation_holds<runtime::simir::FileClose>(
             callback_operation(state, process, instruction))) {
       throw compiler::LlvmJitError{
           "compiled file-close callback has the wrong operation"};
@@ -232,14 +232,14 @@ std::uint32_t LlvmProcessExecutor::file_write(
     const auto& operation =
         callback_operation(state, process, instruction);
     if (const auto* literal =
-            std::get_if<runtime::simir::FileWriteLiteral>(
+            fsim::runtime::simir::operation_get_if<runtime::simir::FileWriteLiteral>(
                 &operation)) {
       state.context->write_file(
           handle, literal->text, literal->newline);
       return 0;
     }
     if (const auto* formatted =
-            std::get_if<runtime::simir::FileWriteFormatted>(
+            fsim::runtime::simir::operation_get_if<runtime::simir::FileWriteFormatted>(
                 &operation)) {
       const auto value = runtime::PackedLogic4::from_aval_bval(
           formatted->width,
@@ -262,7 +262,7 @@ std::uint32_t LlvmProcessExecutor::file_write(
       return 0;
     }
     if (const auto* string =
-            std::get_if<runtime::simir::FileWriteString>(
+            fsim::runtime::simir::operation_get_if<runtime::simir::FileWriteString>(
                 &operation)) {
       state.context->write_file(
           handle,
@@ -297,7 +297,7 @@ std::uint32_t LlvmProcessExecutor::file_read_line(
           "compiled file-read result pointer is null"};
     }
     const auto* operation =
-        std::get_if<runtime::simir::FileReadLine>(
+        fsim::runtime::simir::operation_get_if<runtime::simir::FileReadLine>(
             &callback_operation(state, process, instruction));
     if (operation == nullptr) {
       throw compiler::LlvmJitError{
@@ -327,7 +327,7 @@ std::uint32_t LlvmProcessExecutor::file_end_of_file(
   }
   try {
     if (result == nullptr
-        || !std::holds_alternative<
+        || !fsim::runtime::simir::operation_holds<
             runtime::simir::FileEndOfFile>(
             callback_operation(state, process, instruction))) {
       throw compiler::LlvmJitError{
@@ -360,7 +360,7 @@ std::uint32_t LlvmProcessExecutor::file_error(
           "compiled file-error result pointer is null"};
     }
     const auto* operation =
-        std::get_if<runtime::simir::FileErrorStatus>(
+        fsim::runtime::simir::operation_get_if<runtime::simir::FileErrorStatus>(
             &callback_operation(state, process, instruction));
     if (operation == nullptr) {
       throw compiler::LlvmJitError{
@@ -405,7 +405,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
     const auto& operation =
         callback_operation(state, process, instruction);
     if (const auto* method =
-            std::get_if<runtime::simir::StringMethod>(&operation)) {
+            fsim::runtime::simir::operation_get_if<runtime::simir::StringMethod>(&operation)) {
       auto& source =
           state.executor->string_registers_.at(method->source);
       if (method->operation
@@ -465,7 +465,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       return 0;
     }
     if (const auto* file =
-            std::get_if<runtime::simir::FileReadLine>(&operation);
+            fsim::runtime::simir::operation_get_if<runtime::simir::FileReadLine>(&operation);
         file != nullptr
         && file->kind != runtime::simir::FileReadKind::line) {
       const auto handle = checked_file_handle(input0_aval, input0_bval);
@@ -484,7 +484,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       return 0;
     }
     if (const auto* position =
-            std::get_if<runtime::simir::FilePosition>(&operation)) {
+            fsim::runtime::simir::operation_get_if<runtime::simir::FilePosition>(&operation)) {
       const auto known = [](const std::uint64_t aval,
                             const std::uint64_t bval) {
         if (bval != 0) {
@@ -507,7 +507,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       return 0;
     }
     if (const auto* flush =
-            std::get_if<runtime::simir::FileFlush>(&operation)) {
+            fsim::runtime::simir::operation_get_if<runtime::simir::FileFlush>(&operation)) {
       std::optional<runtime::simir::FileHandle> handle;
       if (!flush->all) {
         const auto word = state.executor
@@ -518,7 +518,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       return 0;
     }
     if (const auto* scan =
-            std::get_if<runtime::simir::FileScan>(&operation)) {
+            fsim::runtime::simir::operation_get_if<runtime::simir::FileScan>(&operation)) {
       runtime::simir::InputScanResult scanned;
       if (scan->string_source) {
         scanned = runtime::simir::scan_formatted_string(
@@ -559,7 +559,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       return 0;
     }
     if (const auto* binary =
-            std::get_if<runtime::simir::FileBinaryRead>(&operation)) {
+            fsim::runtime::simir::operation_get_if<runtime::simir::FileBinaryRead>(&operation)) {
       const auto known_integer = [&](const runtime::simir::RegisterId id) {
         const auto value = state.executor->read_register(id, 32).low_word();
         if (value.bval != 0) {
@@ -728,7 +728,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
               == right.low_word().aval;
         };
     if (const auto* resize =
-            std::get_if<runtime::simir::ResizeContainer>(
+            fsim::runtime::simir::operation_get_if<runtime::simir::ResizeContainer>(
                 &operation)) {
       auto& target = registers.at(resize->target);
       if (target.type.queue || target.type.associative
@@ -767,7 +767,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
           preserved.begin(), std::min(size, preserved.size()),
           target.elements.begin());
     } else if (const auto* copy =
-                   std::get_if<
+                   fsim::runtime::simir::operation_get_if<
                        runtime::simir::CopyContainerRegister>(
                        &operation)) {
       auto& target = registers.at(copy->destination);
@@ -776,7 +776,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       target.elements = source.elements;
       target.keys = source.keys;
     } else if (const auto* conditional =
-                   std::get_if<
+                   fsim::runtime::simir::operation_get_if<
                        runtime::simir::ConditionalContainerSelect>(
                        &operation)) {
       auto& target = registers.at(conditional->destination);
@@ -789,7 +789,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
           when_true,
           when_false);
     } else if (const auto* comparison =
-                   std::get_if<runtime::simir::CompareContainers>(
+                   fsim::runtime::simir::operation_get_if<runtime::simir::CompareContainers>(
                        &operation)) {
       const auto result = runtime::simir::compare_container_values(
           registers.at(comparison->lhs),
@@ -799,7 +799,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       *result_aval = word.aval;
       *result_bval = word.bval;
     } else if (const auto* read_object =
-                   std::get_if<
+                   fsim::runtime::simir::operation_get_if<
                        runtime::simir::ReadContainerObject>(
                        &operation)) {
       auto& target = registers.at(read_object->destination);
@@ -809,18 +809,18 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       target.elements = source.elements;
       target.keys = source.keys;
     } else if (const auto* write_object =
-                   std::get_if<
+                   fsim::runtime::simir::operation_get_if<
                        runtime::simir::WriteContainerObject>(
                        &operation)) {
       state.context->write_container_object(
           write_object->object,
           registers.at(write_object->source));
     } else if (const auto* size =
-                   std::get_if<runtime::simir::ContainerSize>(
+                   fsim::runtime::simir::operation_get_if<runtime::simir::ContainerSize>(
                        &operation)) {
       *result_aval = registers.at(size->source).elements.size();
     } else if (const auto* reduction =
-                   std::get_if<runtime::simir::ContainerReduction>(
+                   fsim::runtime::simir::operation_get_if<runtime::simir::ContainerReduction>(
                        &operation)) {
       const auto result = runtime::simir::reduce_container_value(
           registers.at(reduction->source),
@@ -830,13 +830,13 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       *result_aval = word.aval;
       *result_bval = word.bval;
     } else if (const auto* ordering =
-                   std::get_if<runtime::simir::OrderContainer>(
+                   fsim::runtime::simir::operation_get_if<runtime::simir::OrderContainer>(
                        &operation)) {
       runtime::simir::order_container_value(
           registers.at(ordering->target),
           ordering->operation, ordering->key);
     } else if (const auto* locator =
-                   std::get_if<runtime::simir::LocateContainer>(
+                   fsim::runtime::simir::operation_get_if<runtime::simir::LocateContainer>(
                        &operation)) {
       runtime::simir::locate_container_values(
           registers.at(locator->destination),
@@ -845,7 +845,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
           locator->predicate,
           locator->transformation);
     } else if (const auto* read =
-                   std::get_if<runtime::simir::ContainerRead>(
+                   fsim::runtime::simir::operation_get_if<runtime::simir::ContainerRead>(
                        &operation)) {
       const auto& source = registers.at(read->source);
       if (source.type.associative) {
@@ -879,7 +879,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       *result_aval = word.aval;
       *result_bval = word.bval;
     } else if (const auto* write =
-                   std::get_if<runtime::simir::ContainerWrite>(
+                   fsim::runtime::simir::operation_get_if<runtime::simir::ContainerWrite>(
                        &operation)) {
       auto& target = registers.at(write->target);
       if (target.type.associative) {
@@ -922,7 +922,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       target.elements[at] =
           element(target, input1_aval, input1_bval);
     } else if (const auto* erase =
-                   std::get_if<runtime::simir::DeleteContainer>(
+                   fsim::runtime::simir::operation_get_if<runtime::simir::DeleteContainer>(
                        &operation)) {
       auto& target = registers.at(erase->target);
       if (erase->index) {
@@ -956,7 +956,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         target.keys.clear();
       }
     } else if (const auto* load =
-                   std::get_if<runtime::simir::LoadMemory>(
+                   fsim::runtime::simir::operation_get_if<runtime::simir::LoadMemory>(
                        &operation)) {
       const auto known_optional =
           [&](const std::optional<runtime::simir::RegisterId> source,
@@ -1026,7 +1026,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
           registers.at(load->target), text, load->hexadecimal,
           start, finish);
     } else if (const auto* exists =
-                   std::get_if<runtime::simir::ContainerExists>(
+                   fsim::runtime::simir::operation_get_if<runtime::simir::ContainerExists>(
                        &operation)) {
       const auto& source = registers.at(exists->source);
       const auto sought =
@@ -1038,7 +1038,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
           ? 1U
           : 0U;
     } else if (const auto* traverse =
-                   std::get_if<runtime::simir::TraverseContainer>(
+                   fsim::runtime::simir::operation_get_if<runtime::simir::TraverseContainer>(
                        &operation)) {
       const auto& source = registers.at(traverse->source);
       if (!source.type.associative) {
@@ -1087,7 +1087,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         *result_aval = selected ? 1U : 0U;
       }
     } else if (const auto* push =
-                   std::get_if<runtime::simir::PushContainer>(
+                   fsim::runtime::simir::operation_get_if<runtime::simir::PushContainer>(
                        &operation)) {
       auto& target = registers.at(push->target);
       if (!target.type.queue) {
@@ -1122,7 +1122,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         target.elements.pop_back();
       }
     } else if (const auto* pop =
-                   std::get_if<runtime::simir::PopContainer>(
+                   fsim::runtime::simir::operation_get_if<runtime::simir::PopContainer>(
                        &operation)) {
       auto& target = registers.at(pop->target);
       if (!target.type.queue || target.elements.empty()) {

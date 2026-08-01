@@ -100,7 +100,7 @@ const fsim::runtime::simir::SourceLocation* process_source(
   const fsim::runtime::simir::SourceLocation* first = nullptr;
   for (const auto& operation : process.operations) {
     const auto* point =
-        std::get_if<fsim::runtime::simir::DebugPoint>(&operation);
+        fsim::runtime::simir::operation_get_if<fsim::runtime::simir::DebugPoint>(&operation);
     if (point == nullptr) {
       continue;
     }
@@ -118,42 +118,42 @@ const fsim::runtime::simir::SourceLocation* process_source(
 std::optional<fsim::runtime::simir::SignalId> output_signal(
     const fsim::runtime::simir::Operation& operation) {
   using namespace fsim::runtime::simir;
-  if (const auto* value = std::get_if<WriteBlocking>(&operation)) {
+  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteBlocking>(&operation)) {
     return value->signal;
   }
-  if (const auto* value = std::get_if<WriteUpdate>(&operation)) {
+  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteUpdate>(&operation)) {
     return value->signal;
   }
-  if (const auto* value = std::get_if<WriteAfter>(&operation)) {
+  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteAfter>(&operation)) {
     return value->signal;
   }
-  if (const auto* value = std::get_if<WriteInertial>(&operation)) {
+  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteInertial>(&operation)) {
     return value->signal;
   }
-  if (const auto* value = std::get_if<WriteProjected>(&operation)) {
-    return value->signal;
-  }
-  if (const auto* value =
-          std::get_if<WriteProjectedWaveform>(&operation)) {
-    return value->signal;
-  }
-  if (const auto* value = std::get_if<WriteBlockingSlice>(&operation)) {
-    return value->signal;
-  }
-  if (const auto* value = std::get_if<WriteUpdateSlice>(&operation)) {
-    return value->signal;
-  }
-  if (const auto* value = std::get_if<WriteAfterSlice>(&operation)) {
-    return value->signal;
-  }
-  if (const auto* value = std::get_if<WriteInertialSlice>(&operation)) {
-    return value->signal;
-  }
-  if (const auto* value = std::get_if<WriteProjectedSlice>(&operation)) {
+  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteProjected>(&operation)) {
     return value->signal;
   }
   if (const auto* value =
-          std::get_if<WriteProjectedWaveformSlice>(&operation)) {
+          fsim::runtime::simir::operation_get_if<WriteProjectedWaveform>(&operation)) {
+    return value->signal;
+  }
+  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteBlockingSlice>(&operation)) {
+    return value->signal;
+  }
+  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteUpdateSlice>(&operation)) {
+    return value->signal;
+  }
+  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteAfterSlice>(&operation)) {
+    return value->signal;
+  }
+  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteInertialSlice>(&operation)) {
+    return value->signal;
+  }
+  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteProjectedSlice>(&operation)) {
+    return value->signal;
+  }
+  if (const auto* value =
+          fsim::runtime::simir::operation_get_if<WriteProjectedWaveformSlice>(&operation)) {
     return value->signal;
   }
   return std::nullopt;
