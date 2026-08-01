@@ -1444,6 +1444,7 @@ therefore excluded.
 | `FSIM-ELAB-BIND-027` | error | A boundary actual is not a whole signal, an input is illegally open, or a required VHDL direct-entity input is unassociated. |
 | `FSIM-ELAB-BIND-028` | error | A boundary actual names an unknown parent signal. |
 | `FSIM-ELAB-BIND-030` | error | A cross-language `inout` lacks an explicit resolver. |
+| `FSIM-ELAB-BIND-031` | error | Same-language VHDL packed-array boundary bounds or direction differ. |
 | `FSIM-ELAB-BIND-032` | error | More than one preconstructed SystemC description names the same instance path. |
 | `FSIM-ELAB-BIND-033` | error | A preconstructed SystemC instance was not reached from the selected top. |
 | `FSIM-ELAB-BIND-034` | error | A SystemC foreign child declares a port absent from its bound HDL target. |

@@ -124,6 +124,42 @@ end architecture;
     assert(!dynamic_result.ok());
     assert(has_diagnostic(
         dynamic_result, "FSIM-ELAB-GENERIC-004"));
+
+    const auto invalid_boundaries = frontend::parse_text(
+        "invalid_dependent_boundaries.vhd",
+        R"(
+entity dependent_boundary_leaf is
+  generic (width : positive := 4);
+  port (input_value : in bit_vector(width - 1 downto 0));
+end entity;
+architecture rtl of dependent_boundary_leaf is
+begin
+end architecture;
+entity dependent_boundary_top is
+end entity;
+architecture rtl of dependent_boundary_top is
+  signal ascending_value : bit_vector(0 to 3);
+  signal narrow_value : bit_vector(2 downto 0);
+begin
+  direction_child: entity work.dependent_boundary_leaf(rtl)
+    generic map (width => 4)
+    port map (input_value => ascending_value);
+  width_child: entity work.dependent_boundary_leaf(rtl)
+    generic map (width => 4)
+    port map (input_value => narrow_value);
+end architecture;
+)",
+        frontend::Language::Vhdl2008);
+    assert(invalid_boundaries.ok());
+    const auto invalid_boundary_result =
+        fsim::elaboration::elaborate(
+            invalid_boundaries.design,
+            "vhdl:work.dependent_boundary_top(rtl)");
+    assert(!invalid_boundary_result.ok());
+    assert(has_diagnostic(
+        invalid_boundary_result, "FSIM-ELAB-BIND-020"));
+    assert(has_diagnostic(
+        invalid_boundary_result, "FSIM-ELAB-BIND-031"));
 }
 
 }  // namespace fsim::tests::elaboration

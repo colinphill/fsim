@@ -6216,7 +6216,7 @@ expressions require writable signal names. The partitioned port-boundary
 implementation keeps `hierarchy_types.cpp` at 2,000 lines. The focused frontend,
 elaboration, component interpreter/LLVM O0/O2 cache differential, diagnostic
 catalog, and 343-source line-budget evidence passes in the LLVM Debug tree.
-The remaining implementation work is in Tasks 5, 8, 9, and 10; these bounded
+The remaining implementation work is in Tasks 5, 9, and 10; these bounded
 slices are not yet the complete batch claim.
 
 Task 1 now has focused implementation evidence. Implicit and explicit VHDL
@@ -6289,6 +6289,19 @@ Non-input expression actuals remain illegal. The focused interpreter and LLVM
 O0/O2 cold/warm differential observes exact output/buffer values. The latest
 catalog has 1,438 production codes and all 343 authored sources pass the line
 budget. Task 7 is focused-complete; Batch 113 remains **in progress**.
+
+Task 8 now has complete focused evidence. Generic-selected scalar and packed
+array constraints specialize entity ports, component views, direct instances,
+and hierarchy aliases before connection. The elaboration matrix proves that
+4-element component aliases and a 9-element defaulted direct alias share the
+exact parent signal identities. Same-language packed-array boundaries now
+reject a width mismatch with `FSIM-ELAB-BIND-020` and reject equal-width bound
+or direction mismatches with `FSIM-ELAB-BIND-031`, preventing silently
+misindexed aliases. The application executes separate 4-bit component and
+8-bit direct specializations across interpreter and LLVM O0/O2 cold/warm runs
+with exact results and cache keys. The latest catalog has 1,439 production
+codes and all 343 authored sources pass the line budget. Task 8 is
+focused-complete; Batch 113 remains **in progress**.
 
 ## Forward language-closure feature batches
 

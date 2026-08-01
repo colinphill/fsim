@@ -793,6 +793,21 @@ void HierarchyBuilder::validate_boundary_type(
             + std::to_string(actual.width),
         source);
   }
+  if (!cross_language
+      && port.type.packed_range
+      && actual.packed_range
+      && (port.type.packed_range->left
+              != actual.packed_range->left
+          || port.type.packed_range->right
+              != actual.packed_range->right
+          || port.type.packed_range->descending
+              != actual.packed_range->descending)) {
+    report(
+        "FSIM-ELAB-BIND-031",
+        "VHDL packed-array bounds or direction differ on boundary '"
+            + path + "." + port.name + "'",
+        source);
+  }
   if (port.type.is_signed != actual.is_signed && width > 1) {
     report(
         "FSIM-ELAB-BIND-021",

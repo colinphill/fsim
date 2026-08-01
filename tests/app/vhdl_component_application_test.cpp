@@ -40,6 +40,7 @@ struct Capture {
   std::array<std::string, 2> static_generic_outputs;
   std::array<std::string, 2> composite_expression_outputs;
   std::array<std::string, 2> open_mode_outputs;
+  std::array<std::string, 2> dependent_port_outputs;
   std::vector<std::pair<std::string, std::string>> keys;
   std::vector<fsim::runtime::simir::ExecutionPoint> points;
   fsim::app::NativeCacheStatistics cache;
@@ -119,7 +120,7 @@ Capture run_once(
     }
   }
   assert(project);
-  assert(project->design.specializations().size() == 21);
+  assert(project->design.specializations().size() == 23);
   for (const auto path : {
            "component_runtime_top.positional_child",
            "component_runtime_top.default_child"}) {
@@ -349,6 +350,29 @@ Capture run_once(
     assert(output);
     static_output_ids[index] = *output;
   }
+  constexpr std::array<std::string_view, 2> dependent_port_inputs{
+      "component_runtime_top.component_width_input",
+      "component_runtime_top.direct_width_input"};
+  constexpr std::array<std::string_view, 2> dependent_port_outputs{
+      "component_runtime_top.component_width_output",
+      "component_runtime_top.direct_width_output"};
+  constexpr std::array<std::string_view, 2> dependent_port_values{
+      "1010", "11001010"};
+  std::array<fsim::runtime::simir::SignalId, 2>
+      dependent_port_output_ids{};
+  for (std::size_t index = 0;
+       index < dependent_port_inputs.size(); ++index) {
+    const auto input = simulation.find_signal(
+        dependent_port_inputs[index]);
+    const auto output = simulation.find_signal(
+        dependent_port_outputs[index]);
+    assert(input && output);
+    simulation.deposit_signal(
+        *input,
+        fsim::runtime::PackedLogic4::from_msb_string(
+            dependent_port_values[index]));
+    dependent_port_output_ids[index] = *output;
+  }
 
   capture.result = simulation.run();
   for (std::size_t index = 0; index < output_ids.size(); ++index) {
@@ -377,6 +401,11 @@ Capture run_once(
        index < static_output_ids.size(); ++index) {
     capture.static_generic_outputs[index] =
         simulation.read_signal(static_output_ids[index]).to_msb_string();
+  }
+  for (std::size_t index = 0;
+       index < dependent_port_output_ids.size(); ++index) {
+    capture.dependent_port_outputs[index] = simulation.read_signal(
+        dependent_port_output_ids[index]).to_msb_string();
   }
   capture.nonvalue =
       simulation.read_signal(*nonvalue_output).to_msb_string();
@@ -451,6 +480,8 @@ void verify(
           == std::array<std::string, 2>{bits(13), bits(13)}));
   assert((capture.open_mode_outputs
           == std::array<std::string, 2>{bits(5), bits(7)}));
+  assert((capture.dependent_port_outputs
+          == std::array<std::string, 2>{"1010", "11001010"}));
   assert((capture.dependent_generic_outputs
           == std::array<std::string, 3>{bits(8), bits(6), bits(6)}));
   assert((capture.aggregate_generic_outputs
@@ -573,6 +604,17 @@ begin
   buffer_value <= 7;
 end architecture;
 
+entity component_runtime_width is
+  generic (width : positive := 4);
+  port (
+    input_value : in bit_vector(width - 1 downto 0);
+    output_value : out bit_vector(width - 1 downto 0));
+end entity;
+architecture rtl of component_runtime_width is
+begin
+  output_value <= input_value;
+end architecture;
+
 entity component_runtime_generic_defaults is
   generic (
     constant base_value : in integer := 4;
@@ -663,6 +705,12 @@ package component_runtime_profiles is
       component_input : in component_t;
       component_output : out component_t);
   end component;
+  component component_runtime_width is
+    generic (width : positive := 4);
+    port (
+      input_value : in bit_vector(width - 1 downto 0);
+      output_value : out bit_vector(width - 1 downto 0));
+  end component;
 end package;
 
 package body component_runtime_profiles is
@@ -746,6 +794,10 @@ architecture rtl of component_runtime_top is
   signal aggregate_generic_explicit_output : mask_t;
   signal static_generic_default_output : integer;
   signal static_generic_override_output : integer;
+  signal component_width_input : bit_vector(3 downto 0);
+  signal component_width_output : bit_vector(3 downto 0);
+  signal direct_width_input : bit_vector(7 downto 0);
+  signal direct_width_output : bit_vector(7 downto 0);
 begin
   positional_child: component_runtime_leaf
     generic map (5)
@@ -804,6 +856,16 @@ begin
     port map (
       output_value => open,
       buffer_value => open);
+  component_width_child: component_runtime_width
+    generic map (width => 4)
+    port map (
+      input_value => component_width_input,
+      output_value => component_width_output);
+  direct_width_child: entity work.component_runtime_width(rtl)
+    generic map (width => 8)
+    port map (
+      input_value => direct_width_input,
+      output_value => direct_width_output);
   direct_default_omitted: entity work.component_runtime_defaulted(rtl)
     port map (entity_default_output => open);
   direct_default_open: entity work.component_runtime_defaulted(rtl)
@@ -873,6 +935,10 @@ end architecture;
     assert(cold.direct_default_inputs == warm.direct_default_inputs);
     assert(reference.open_mode_outputs == cold.open_mode_outputs);
     assert(cold.open_mode_outputs == warm.open_mode_outputs);
+    assert(reference.dependent_port_outputs
+           == cold.dependent_port_outputs);
+    assert(cold.dependent_port_outputs
+           == warm.dependent_port_outputs);
     assert(reference.dependent_generic_outputs
            == cold.dependent_generic_outputs);
     assert(cold.dependent_generic_outputs

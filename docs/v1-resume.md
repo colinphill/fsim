@@ -1557,7 +1557,7 @@ output/buffer/inout expressions require writable names. `hierarchy_ports.cpp`
 holds the new boundary implementation and `hierarchy_types.cpp` remains exactly
 2,000 lines. The focused frontend, elaboration, component interpreter/LLVM
 O0/O2/cache, catalog, and 343-source line-budget evidence passes in the LLVM
-Debug tree. Batch 113 remains in progress; Tasks 5, 8, 9, and 10 remain.
+Debug tree. Batch 113 remains in progress; Tasks 5, 9, and 10 remain.
 
 Task 1 now has focused implementation evidence: implicit/explicit value
 generics retain normalized constant class and input mode, invalid classes/modes
@@ -1617,7 +1617,18 @@ ports execute through child-local signals without a parent driver. The
 component interpreter and LLVM O0/O2 cold/warm differential observes values 5
 and 7 from open output and buffer formals. The current catalog covers 1,438
 codes and the source gate accepts all 343 authored sources. Batch 113 remains
-**in progress** with Tasks 5, 8, 9, and 10 outstanding.
+**in progress** with Tasks 5, 9, and 10 outstanding.
+
+Task 8 is now focused-complete. Generic-dependent port constraints specialize
+component views and direct instances before connection, with child hierarchy
+names aliasing the exact parent signals. Wrong widths retain
+`FSIM-ELAB-BIND-020`; equal-width VHDL packed arrays with mismatched bounds or
+direction now report `FSIM-ELAB-BIND-031` rather than silently aliasing
+different index maps. The component application executes distinct 4-bit and
+8-bit component/direct specializations across interpreter and LLVM O0/O2
+cold/warm paths. The catalog now covers 1,439 codes and all 343 authored
+sources pass the line gate. Batch 113 remains **in progress** with Tasks 5, 9,
+and 10 outstanding.
 
 Batch 110 has advanced through these validated features:
 

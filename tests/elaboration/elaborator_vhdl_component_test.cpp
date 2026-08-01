@@ -134,6 +134,19 @@ end architecture;
           return value.first == "entity_width"
               && value.second == "9";
         }));
+    for (const auto& [parent, child] :
+         std::array<std::pair<std::string_view, std::string_view>, 3>{
+             {{"component_top.first_input",
+               "component_top.positional_child.entity_input"},
+              {"component_top.second_input",
+               "component_top.default_child.entity_input"},
+              {"component_top.direct_input",
+               "component_top.direct_open_child.entity_input"}}}) {
+        assert(positive.design->find_signal(parent));
+        assert(
+            positive.design->find_signal(parent)
+            == positive.design->find_signal(child));
+    }
 
     const auto required_open = elaborate_text(
         "required_open_generic.vhd",
