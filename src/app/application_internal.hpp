@@ -657,6 +657,10 @@ std::shared_ptr<systemc::HierarchyRegistry> load_systemc_plugin(
 
 std::string unit_key(const frontend::DesignUnit& unit);
 
+void validate_vhdl_analysis_order(
+    std::span<const frontend::DesignUnit> units,
+    diagnostic::Engine& diagnostics);
+
 std::string selected_top(
     const project::Config& config,
     const frontend::ParsedDesign& parsed,

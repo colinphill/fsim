@@ -6012,6 +6012,50 @@ in 1.07/1.17 seconds. The source gate covers 334 authored files with an empty
 allowlist and a 2,000-line maximum. GitHub Actions build parallelism is four;
 local builds and the Ninja linker pool remain eight.
 
+### One-hundred-eleventh feature batch — VHDL analysis order, packages/bodies, contexts, and configurations
+
+VHDL files remain independently parsed, including with eight parser workers,
+but their design units now enter semantic analysis in exact source-set, file,
+and within-file order. A project-level validator requires an earlier
+same-library entity for each architecture, an earlier declaration for each
+package body, earlier project packages and contexts for use/context clauses,
+and earlier entity, architecture, or configuration targets for explicit
+configuration bindings. `work` is resolved relative to each referencing unit,
+external `ieee`/`std` visibility remains available, and recursive block
+configurations receive the same checks. Eight stable `FSIM-FE-VHORDER-*`
+diagnostics distinguish the dependency classes.
+
+The audit also found that package-body context clauses were retained in HIR
+but context expansion used only the declaration's context. Declaration and
+body contexts now compose before package specialization. Body-local imports
+therefore participate in callable evaluation, and body plus transitive package
+source dependencies follow exported functions, procedures, and generic
+subprogram templates through callable binding into native-cache provenance.
+The function-package differential imports a helper constant only from its
+body, edits that helper, proves the runtime result changes in the interpreter
+and LLVM O0/O2, and proves only the dependent specialization key changes.
+
+Previously permissive configuration/component application fixtures were
+reordered into legal analysis sequences; the recursive configuration fixture
+was split so its referenced wrapper configuration precedes the architecture
+specification that names it. Feature-matrix rows VH-190 through VH-199 are the
+detailed positive, negative, elaboration, runtime, cache, debug, and
+portability evidence. The diagnostic catalog covers 1,415 production codes,
+and the source gate covers 336 authored files with an empty allowlist and a
+2,000-line maximum.
+
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 65 tests
+in 112.30 seconds, including analysis order in 0.02 seconds, package-body
+function provenance in 0.32 seconds, configurations in 0.27 seconds,
+components in 0.40 seconds, scoped locals in 0.98 seconds, and containers in
+112.30 seconds. Release passed all 65 tests in 97.27 seconds, including
+analysis order in 0.02 seconds, package-body function provenance in 0.32
+seconds, configurations in 0.25 seconds, components in 0.39 seconds, scoped
+locals in 1.03 seconds, and containers in 97.27 seconds, on 2026-08-01. Batch
+111-focused LLVM-disabled ASan/UBSan elaboration, analysis-order, package-body,
+configuration, and component tests also pass. Batch 111 is not a ten-batch
+CI-inspection boundary, so no Actions run was inspected.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the

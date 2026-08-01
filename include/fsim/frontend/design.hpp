@@ -1057,6 +1057,8 @@ struct FunctionDeclaration {
   // Nonempty only for an elaborated generic-subprogram instance.
   std::string specialization_identity;
   SourceSpan span;
+  // Package/body/context sources required to specialize this callable.
+  std::vector<std::string> source_dependencies;
 };
 
 struct TaskArgument {
@@ -1112,6 +1114,8 @@ struct ProcedureDeclaration {
   // Nonempty only for an elaborated generic-subprogram instance.
   std::string specialization_identity;
   SourceSpan span;
+  // Package/body/context sources required to specialize this callable.
+  std::vector<std::string> source_dependencies;
 };
 
 /// Retained VHDL-2008 generic function template.

@@ -64,7 +64,9 @@ struct BuiltProject {
 
 /// Parse all HDL source files in deterministic manifest order. Independent
 /// compilation units may be analyzed concurrently; roots within a shared
-/// Verilog/SV unit remain ordered. Units are merged back into source order.
+/// Verilog/SV unit remain ordered. Units are merged back into source order;
+/// VHDL primary, secondary, visibility, and binding dependencies must name
+/// previously analyzed units.
 [[nodiscard]] std::optional<CheckedProject> check_project(
     const project::Config& config,
     diagnostic::Engine& diagnostics);

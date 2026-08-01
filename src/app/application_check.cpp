@@ -224,6 +224,7 @@ std::optional<CheckedProject> check_project(
       checked.parsed.units.push_back(std::move(ordered.unit));
     }
   }
+  validate_vhdl_analysis_order(checked.parsed.units, diagnostics);
   if (diagnostics.has_error()) {
     return std::nullopt;
   }

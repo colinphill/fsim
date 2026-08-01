@@ -9,9 +9,9 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-110 SystemVerilog string,
-  file, container, memory, same-language string-port, and release-row closure
-  on top of Batch 109 commit `95fb09b`.
+- Implementation baseline: completed feature-batch-111 VHDL analysis-order,
+  package/body context, transitive callable provenance, and recursive
+  configuration-binding closure on top of the closed Batch 110 CI boundary.
 - The source-size refactor is complete: all 334 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
@@ -43,7 +43,18 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   seconds, files in 2.11/0.68 seconds, containers in 375.83/99.00 seconds, and
   the monolithic application in 40.66/14.10 seconds. Debug aggregate/
   multidimensional execution completed in 2.03 seconds.
-- The diagnostic catalog covers all 1,407 production codes.
+- The diagnostic catalog covers all 1,415 production codes.
+- Batch 111 requires deterministic VHDL semantic analysis in manifest order
+  after parallel parsing. Architectures, package bodies, use/context clauses,
+  configuration declarations, and explicit entity/configuration bindings now
+  require their dependencies to have been analyzed earlier in the selected
+  library. Eight stable order diagnostics cover forward dependencies. The
+  package-body audit also fixed body-only context expansion and carries its
+  transitive sources through exported callable provenance and selective native
+  cache invalidation. Exact LLVM 22.1.8 Debug and Release passed 65/65 tests in
+  112.30/97.27 seconds; analysis order took 0.02 seconds in both and scoped
+  locals remained 0.98/1.03 seconds. Focused LLVM-disabled ASan/UBSan tests
+  also pass. Batch 111 is not a CI boundary, so no Actions run was inspected.
 - Batch 110 and its mandatory non-documentation CI boundary are closed.
   Initial run `30709270776` showed Windows' default 1 MiB test-executable
   stack was no longer sufficient after the operation/test-host refactor:
@@ -56,8 +67,8 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   elaboration in 0.32 seconds, scoped locals in 0.25 seconds, and the API in
   0.29 seconds. MSVC LLVM Debug passed 64/64 in 1,092.19 seconds, and
   ASan/UBSan passed 63/63 in 516.76 seconds.
-- Resume with Batch 111: complete VHDL library analysis order, packages and
-  bodies, contexts, and configuration binding.
+- Resume with Batch 112: complete VHDL name and overload resolution,
+  visibility, constant evaluation, legality, and resolution functions.
 - The Batch 100 boundary is closed at repair commit `d2f216e`. Initial run
   `30640792808` and replacements `30647570353`/`30651503050` passed every
   ordinary job but exposed exact 1,500.27/1,800.14/2,400.12-second sanitizer
@@ -1365,15 +1376,15 @@ memories release audit**:
 
 #### Latest continuation state (supersedes the older stopping point below)
 
-Batch 110 is complete. The exact LLVM 22.1.8 warnings-as-errors Debug
-regression passed all 64 tests in 485.70 seconds, and Release passed all 64 in
-159.27 seconds. Scoped locals remained quick at 0.92/0.79 seconds. The
-diagnostic catalog covers 1,407 production codes, and all 332 authored files
-pass the empty-allowlist 2,000-line source gate. Feature and footprint-repair
-commits are pushed, and replacement GitHub Actions run `30710421676` passed
-all 12 jobs after the Windows test-stack repair. Resume with Batch 111. The older checkpoint
-narrative below is retained as implementation history, but its uncommitted and
-unvalidated claims are obsolete.
+Batch 111 is complete. The exact LLVM 22.1.8 warnings-as-errors Debug and
+Release regressions passed all 65 tests in 112.30 and 97.27 seconds. Scoped
+locals remained quick at 0.98/1.03 seconds. The diagnostic catalog covers
+1,415 production codes, and all 336 authored files pass the empty-allowlist
+2,000-line source gate. Batch 110 feature/footprint repairs and its 12-job CI
+closure are pushed; Batch 111 implementation and handoff are complete. Resume
+with Batch 112. The older checkpoint narrative below is
+retained as implementation history, but its uncommitted and unvalidated claims
+are obsolete.
 
 Batch 110 has advanced through these validated features:
 
@@ -1490,7 +1501,8 @@ mutable strings in 0.41 seconds, files in 0.68 seconds, containers in 99.00
 seconds, and the monolithic application in 14.10 seconds. The mandatory Batch
 110 non-documentation boundary is closed by repair commit `a5d69e0` and
 12-job replacement run `30710421676`. GitHub CI uses parallelism four and
-documentation-only runs are not monitored. Resume with Batch 111.
+documentation-only runs are not monitored. At that checkpoint the next batch
+was Batch 111.
 
 #### Earlier checkpoint history
 

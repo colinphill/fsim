@@ -599,6 +599,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_analysis.cpp
       src/app/application_build.cpp
       src/app/application_check.cpp
+      src/app/application_vhdl_analysis.cpp
       src/app/application_debug_control.cpp
       src/app/application_debugger.cpp
       src/app/application_executor_frame.cpp

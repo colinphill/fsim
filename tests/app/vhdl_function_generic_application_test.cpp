@@ -36,6 +36,7 @@ struct Capture {
 
 fsim::project::Config make_config(
     const std::filesystem::path& directory,
+    const std::filesystem::path& body_values_source,
     const std::filesystem::path& package_declaration_source,
     const std::filesystem::path& package_body_source,
     const std::filesystem::path& leaf_source,
@@ -60,6 +61,7 @@ fsim::project::Config make_config(
   sources.library = "work";
   sources.compilation_unit = "file";
   sources.files = {
+      body_values_source,
       package_declaration_source,
       package_body_source,
       leaf_source,
@@ -97,7 +99,12 @@ Capture run_once(
   assert(
       std::ranges::find(
           package_specialization->source_dependencies,
-          config.source_sets.front().files[1].string())
+          config.source_sets.front().files[2].string())
+      != package_specialization->source_dependencies.end());
+  assert(
+      std::ranges::find(
+          package_specialization->source_dependencies,
+          config.source_sets.front().files[0].string())
       != package_specialization->source_dependencies.end());
 
   Capture capture;
@@ -152,7 +159,8 @@ Capture run_once(
 
 void verify(
     const Capture& capture,
-    const std::uint32_t increment) {
+    const std::uint32_t increment,
+    const std::uint32_t package_increment = 2) {
   assert(
       capture.result.status
       == fsim::runtime::RunStatus::completed);
@@ -162,7 +170,7 @@ void verify(
               bits(5 + increment),
               bits(10 + increment),
               bits(20 + increment),
-              bits(32)}));
+              bits(30 + package_increment)}));
   assert(
       std::ranges::count_if(
           capture.points,
@@ -199,12 +207,27 @@ int main() {
          + std::to_string(serial))};
   std::filesystem::create_directories(directory.path);
   const auto leaf_source = directory.path / "function_leaf.vhd";
+  const auto body_values_source =
+      directory.path / "function_body_values.vhd";
   const auto package_declaration_source =
       directory.path / "function_package.vhd";
   const auto package_body_source =
       directory.path / "function_package_body.vhd";
   const auto top_source = directory.path / "function_top.vhd";
 
+  const auto write_body_values =
+      [&](const std::uint32_t increment) {
+        std::ofstream output(
+            body_values_source,
+            std::ios::binary | std::ios::trunc);
+        output << R"(
+package function_body_values is
+  constant body_increment : integer := )"
+               << increment << R"(;
+end package;
+)";
+        assert(output.good());
+      };
   {
     std::ofstream output(
         package_declaration_source, std::ios::binary);
@@ -218,10 +241,11 @@ end package;
   {
     std::ofstream output(package_body_source, std::ios::binary);
     output << R"(
+use work.function_body_values.all;
 package body function_pkg is
   function package_increment(value : integer) return integer is
   begin
-    return value + 2;
+    return value + body_increment;
   end function;
 end package body;
 )";
@@ -328,9 +352,11 @@ end architecture;
   for (const auto optimization :
        {fsim::project::Optimization::o0,
         fsim::project::Optimization::o2}) {
+    write_body_values(2);
     write_top(1);
     const auto config = make_config(
         directory.path,
+        body_values_source,
         package_declaration_source,
         package_body_source,
         leaf_source,
@@ -379,6 +405,24 @@ end architecture;
             "function_top.package_instance.nested")
         == key_for(
             changed,
+            "function_top.package_instance.nested"));
+
+    write_body_values(3);
+    const auto body_changed_reference = run_once(
+        config, fsim::app::SimulationEngine::interpreter);
+    const auto body_changed = run_once(
+        config, fsim::app::SimulationEngine::compiled);
+    verify(body_changed_reference, 2, 3);
+    verify(body_changed, 2, 3);
+    assert(
+        key_for(changed, "function_top.direct_instance")
+        == key_for(body_changed, "function_top.direct_instance"));
+    assert(
+        key_for(
+            changed,
+            "function_top.package_instance.nested")
+        != key_for(
+            body_changed,
             "function_top.package_instance.nested"));
 #endif
   }

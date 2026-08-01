@@ -67,7 +67,7 @@ fsim::project::Config make_config(
   sources.library = "work";
   sources.compilation_unit = "file";
   sources.files = {
-      leaf, profiles, default_profiles, hierarchy};
+      profiles, leaf, default_profiles, hierarchy};
   config.source_sets.push_back(std::move(sources));
   return config;
 }
@@ -121,7 +121,7 @@ Capture run_once(
         == "vhdl:work.component_runtime_leaf(rtl)");
     assert(std::ranges::find(
                selected.source_dependencies,
-               config.source_sets.front().files[1].string())
+               config.source_sets.front().files[0].string())
            != selected.source_dependencies.end());
     assert(std::ranges::any_of(
         selected.parameter_identity_values,
@@ -148,7 +148,7 @@ Capture run_once(
                  *project,
                  "component_runtime_top.direct_child")
                  .source_dependencies,
-             config.source_sets.front().files[1].string())
+             config.source_sets.front().files[0].string())
          == specialization(
                 *project,
                 "component_runtime_top.direct_child")
@@ -159,7 +159,7 @@ Capture run_once(
       nonvalue.unit
       == "vhdl:work.component_runtime_nonvalue(rtl)");
   for (const auto& dependency :
-       {config.source_sets.front().files[1].string(),
+       {config.source_sets.front().files[0].string(),
         config.source_sets.front().files[3].string()}) {
     assert(std::ranges::find(
                nonvalue.source_dependencies,

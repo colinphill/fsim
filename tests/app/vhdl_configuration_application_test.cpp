@@ -41,8 +41,9 @@ std::string bits(const std::uint32_t value) {
 fsim::project::Config make_config(
     const std::filesystem::path& directory,
     const std::filesystem::path& leaf,
-    const std::filesystem::path& hierarchy,
+    const std::filesystem::path& wrapper_hierarchy,
     const std::filesystem::path& wrapper_configuration,
+    const std::filesystem::path& top_hierarchy,
     const std::filesystem::path& configuration,
     const fsim::project::Optimization optimization) {
   fsim::project::Config config;
@@ -64,7 +65,8 @@ fsim::project::Config make_config(
   sources.library = "work";
   sources.compilation_unit = "file";
   sources.files = {
-      leaf, hierarchy, wrapper_configuration, configuration};
+      leaf, wrapper_hierarchy, wrapper_configuration,
+      top_hierarchy, configuration};
   config.source_sets.push_back(std::move(sources));
   return config;
 }
@@ -135,14 +137,14 @@ Capture run_once(
       }));
   assert(std::ranges::find(
       root.source_dependencies,
-      config.source_sets.front().files[3].string())
+      config.source_sets.front().files[4].string())
       != root.source_dependencies.end());
   for (const auto path : {
            "runtime_configuration.configured_child",
            "runtime_configuration.remaining_child"}) {
     assert(std::ranges::find(
         specialization(*project, path).source_dependencies,
-        config.source_sets.front().files[3].string())
+        config.source_sets.front().files[4].string())
         != specialization(*project, path)
                .source_dependencies.end());
   }
@@ -151,7 +153,7 @@ Capture run_once(
           *project,
           "runtime_configuration.direct_child")
           .source_dependencies,
-      config.source_sets.front().files[3].string())
+      config.source_sets.front().files[4].string())
       == specialization(
              *project,
              "runtime_configuration.direct_child")
@@ -269,10 +271,12 @@ int main() {
 
   const auto leaf =
       directory.path / "configuration_leaf.vhd";
-  const auto hierarchy =
-      directory.path / "configuration_hierarchy.vhd";
+  const auto wrapper_hierarchy =
+      directory.path / "configuration_wrapper.vhd";
   const auto wrapper_configuration =
       directory.path / "wrapper_configuration.vhd";
+  const auto top_hierarchy =
+      directory.path / "configuration_top.vhd";
   const auto configuration =
       directory.path / "runtime_configuration.vhd";
 
@@ -308,7 +312,7 @@ end architecture;
   }
 
   {
-    std::ofstream output(hierarchy, std::ios::binary);
+    std::ofstream output(wrapper_hierarchy, std::ios::binary);
     output << R"(
 entity configuration_wrapper is
 end entity;
@@ -329,7 +333,13 @@ begin
       input_value => input_value,
       output_value => output_value);
 end architecture;
+)";
+    assert(output.good());
+  }
 
+  {
+    std::ofstream output(top_hierarchy, std::ios::binary);
+    output << R"(
 entity configuration_top is
 end entity;
 architecture rtl of configuration_top is
@@ -433,8 +443,9 @@ end configuration;
     const auto config = make_config(
         directory.path,
         leaf,
-        hierarchy,
+        wrapper_hierarchy,
         wrapper_configuration,
+        top_hierarchy,
         configuration,
         optimization);
     const auto reference = run_once(

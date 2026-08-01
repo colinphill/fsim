@@ -81,6 +81,7 @@ int fsim_application_case_vhdl_procedure_generics();
 int fsim_application_case_vhdl_package_generics();
 int fsim_application_case_vhdl_generic_subprograms();
 int fsim_application_case_vhdl_configurations();
+int fsim_application_case_vhdl_analysis_order();
 int fsim_application_case_vhdl_components();
 int fsim_application_case_vhdl_integer_shifts();
 int fsim_application_case_vhdl_logic9();
@@ -95,6 +96,7 @@ constexpr NamedApplicationCase application_cases[] = {
     {"vhdl_generic_subprograms",
      fsim_application_case_vhdl_generic_subprograms},
     {"vhdl_configurations", fsim_application_case_vhdl_configurations},
+    {"vhdl_analysis_order", fsim_application_case_vhdl_analysis_order},
     {"vhdl_components", fsim_application_case_vhdl_components},
     {"vhdl_integer_shifts", fsim_application_case_vhdl_integer_shifts},
     {"vhdl_logic9", fsim_application_case_vhdl_logic9},

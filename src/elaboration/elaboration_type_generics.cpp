@@ -299,6 +299,14 @@ void append_function_dependency_closure(
         if (!visited.insert(caller->name).second) {
             continue;
         }
+        for (const auto& dependency :
+             caller->source_dependencies) {
+            if (std::ranges::find(
+                    unit.source_dependencies, dependency)
+                == unit.source_dependencies.end()) {
+                unit.source_dependencies.push_back(dependency);
+            }
+        }
         for (const auto& candidate : visible) {
             const bool called =
                 std::ranges::any_of(
@@ -348,6 +356,14 @@ void append_procedure_dependency_closure(
         pending.pop_back();
         if (!visited.insert(caller->name).second) {
             continue;
+        }
+        for (const auto& dependency :
+             caller->source_dependencies) {
+            if (std::ranges::find(
+                    unit.source_dependencies, dependency)
+                == unit.source_dependencies.end()) {
+                unit.source_dependencies.push_back(dependency);
+            }
         }
         for (const auto& function : functions) {
             const bool called =

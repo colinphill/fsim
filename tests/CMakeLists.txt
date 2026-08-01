@@ -429,6 +429,10 @@ if(TARGET fsim_application)
       fsim.application.vhdl_configurations
       fast configurations vhdl cache hierarchy debugger)
     fsim_add_application_case(
+      2 vhdl_analysis_order app/vhdl_analysis_order_application_test.cpp
+      fsim.application.vhdl_analysis_order
+      fast analysis-order packages contexts configurations vhdl)
+    fsim_add_application_case(
       2 vhdl_components app/vhdl_component_application_test.cpp
       fsim.application.vhdl_components
       fast components vhdl cache hierarchy debugger)

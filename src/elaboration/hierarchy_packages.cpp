@@ -924,7 +924,7 @@ HierarchyBuilder::HierarchyBuilder(
                 : effective_package.library;
         expand_vhdl_context_references(
             effective_package,
-            package.vhdl_context,
+            effective_package.vhdl_context,
             expanded_package_context,
             context_stack,
             effective_package_library);
@@ -938,6 +938,36 @@ HierarchyBuilder::HierarchyBuilder(
             effective_package, import_stack);
         import_qualified_vhdl_package_types(
             effective_package, type_environment, import_stack);
+        const auto append_callable_dependencies =
+            [&](auto& callable) {
+              for (const auto& dependency :
+                   effective_package.source_dependencies) {
+                if (std::ranges::find(
+                        callable.source_dependencies,
+                        dependency)
+                    == callable.source_dependencies.end()) {
+                  callable.source_dependencies.push_back(dependency);
+                }
+              }
+            };
+        for (auto& function : effective_package.functions) {
+            if (function.defined) {
+                append_callable_dependencies(function);
+            }
+        }
+        for (auto& procedure : effective_package.procedures) {
+            if (procedure.defined) {
+                append_callable_dependencies(procedure);
+            }
+        }
+        for (auto& generic :
+             effective_package.generic_function_templates) {
+            append_callable_dependencies(generic.function);
+        }
+        for (auto& generic :
+             effective_package.generic_procedure_templates) {
+            append_callable_dependencies(generic.procedure);
+        }
         for (const auto& parameter :
              effective_package.parameters) {
             if (parameter.kind
