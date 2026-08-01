@@ -635,7 +635,7 @@ std::string component_identity(
         normalized_ports) {
     const auto names = generic_placeholders(declaration.generics);
     std::ostringstream output;
-    output << "vhdl-component-binding-v5;name="
+    output << "vhdl-component-binding-v6;name="
            << declaration.name
            << ";region="
            << static_cast<int>(declaration.region)
@@ -680,15 +680,15 @@ std::string component_identity(
     }
     for (const auto& actual : normalized_ports) {
         output << ";mapped-port="
-               << (actual.port
-                       ? *actual.port
-                       : std::string{"<positional>"})
-               << ":state="
-               << static_cast<int>(actual.kind);
-        if (actual.kind != frontend::PortActualKind::Open) {
-            output << ":actual="
-                   << expression_profile(actual.value, names);
-        }
+               << (actual.port ? *actual.port : "<positional>")
+               << ":state=" << static_cast<int>(actual.kind);
+        if (actual.kind == frontend::PortActualKind::Open) continue;
+        // Parent-local signal names do not specialize the aliased child.
+        const bool signal_alias = actual.kind ==
+                frontend::PortActualKind::Expression
+            && actual.value.kind == frontend::ExpressionKind::Identifier;
+        output << ":actual=" << (signal_alias ? std::string{"<signal-alias>"}
+            : expression_profile(actual.value, names));
     }
     return output.str();
 }

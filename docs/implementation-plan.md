@@ -6216,8 +6216,8 @@ expressions require writable signal names. The partitioned port-boundary
 implementation keeps `hierarchy_types.cpp` at 2,000 lines. The focused frontend,
 elaboration, component interpreter/LLVM O0/O2 cache differential, diagnostic
 catalog, and 343-source line-budget evidence passes in the LLVM Debug tree.
-The remaining implementation work is in Tasks 5, 9, and 10; these bounded
-slices are not yet the complete batch claim.
+The remaining closure work is Task 10; this bounded evidence is not yet the
+complete batch claim.
 
 Task 1 now has focused implementation evidence. Implicit and explicit VHDL
 value-generic interfaces normalize to retained constant class and input mode;
@@ -6302,6 +6302,28 @@ misindexed aliases. The application executes separate 4-bit component and
 with exact results and cache keys. The latest catalog has 1,439 production
 codes and all 343 authored sources pass the line budget. Task 8 is
 focused-complete; Batch 113 remains **in progress**.
+
+Task 5 now has complete focused evidence. Versioned
+`vhdl-component-binding-v6` identity retains the complete component profile,
+effective value/type/function/procedure/package actual identities, defaults,
+selected target, binding/configuration identity, and transitive physical-source
+provenance. Direct signal actuals are represented as specialization-neutral
+aliases because their parent-local spelling is connected after child
+specialization. Two width-4 component instances connected to differently named
+parent signals therefore share one deterministic specialization key, while an
+otherwise equivalent width-8 direct instance remains distinct. Existing
+default, callable, profile, and configuration edits continue to invalidate only
+their affected consumers, and warm native-cache reuse remains exact.
+
+Task 9 now has complete focused evidence. The component application elaborates
+two equivalent width-4 component instances and a distinct width-8 direct
+instance, proves their exact hierarchy aliases and final values, records source
+debugger execution points, and emits deterministic VCD for all three specialized
+outputs. Interpreter, LLVM O0, and LLVM O2 cold/warm runs produce identical
+values and VCD, reuse warm native objects, and preserve the existing selective
+default, callable, component-profile, and configuration source-edit
+invalidation evidence. Batch 113 remains **in progress** pending Task 10's full
+closure gates.
 
 ## Forward language-closure feature batches
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/runtime/vcd_writer.hpp"
 
 #include <algorithm>
 #include <array>
@@ -9,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -40,7 +42,8 @@ struct Capture {
   std::array<std::string, 2> static_generic_outputs;
   std::array<std::string, 2> composite_expression_outputs;
   std::array<std::string, 2> open_mode_outputs;
-  std::array<std::string, 2> dependent_port_outputs;
+  std::array<std::string, 3> dependent_port_outputs;
+  std::string vcd;
   std::vector<std::pair<std::string, std::string>> keys;
   std::vector<fsim::runtime::simir::ExecutionPoint> points;
   fsim::app::NativeCacheStatistics cache;
@@ -120,7 +123,7 @@ Capture run_once(
     }
   }
   assert(project);
-  assert(project->design.specializations().size() == 23);
+  assert(project->design.specializations().size() == 24);
   for (const auto path : {
            "component_runtime_top.positional_child",
            "component_runtime_top.default_child"}) {
@@ -137,7 +140,7 @@ Capture run_once(
         [](const auto& item) {
           return item.first == "__component"
               && item.second.starts_with(
-                  "vhdl-component-binding-v5")
+                  "vhdl-component-binding-v6")
               && item.second.find(
                      "region=2;scope=;owner=work."
                      "component_runtime_profiles")
@@ -180,7 +183,7 @@ Capture run_once(
       [](const auto& item) {
         return item.first == "__component"
             && item.second.starts_with(
-                "vhdl-component-binding-v5")
+                "vhdl-component-binding-v6")
             && item.second.find(
                    "actual=component_t:vhdl-type-v1")
                 != std::string::npos
@@ -208,7 +211,7 @@ Capture run_once(
       [](const auto& item) {
         return item.first == "__component"
             && item.second.starts_with(
-                "vhdl-component-binding-v5")
+                "vhdl-component-binding-v6")
             && item.second.find("state=1")
                 != std::string::npos
             && item.second.find("state=2")
@@ -350,15 +353,17 @@ Capture run_once(
     assert(output);
     static_output_ids[index] = *output;
   }
-  constexpr std::array<std::string_view, 2> dependent_port_inputs{
+  constexpr std::array<std::string_view, 3> dependent_port_inputs{
       "component_runtime_top.component_width_input",
+      "component_runtime_top.component_width_twin_input",
       "component_runtime_top.direct_width_input"};
-  constexpr std::array<std::string_view, 2> dependent_port_outputs{
+  constexpr std::array<std::string_view, 3> dependent_port_outputs{
       "component_runtime_top.component_width_output",
+      "component_runtime_top.component_width_twin_output",
       "component_runtime_top.direct_width_output"};
-  constexpr std::array<std::string_view, 2> dependent_port_values{
-      "1010", "11001010"};
-  std::array<fsim::runtime::simir::SignalId, 2>
+  constexpr std::array<std::string_view, 3> dependent_port_values{
+      "1010", "0110", "11001010"};
+  std::array<fsim::runtime::simir::SignalId, 3>
       dependent_port_output_ids{};
   for (std::size_t index = 0;
        index < dependent_port_inputs.size(); ++index) {
@@ -374,6 +379,39 @@ Capture run_once(
     dependent_port_output_ids[index] = *output;
   }
 
+  constexpr std::array<std::uint32_t, 3> dependent_port_widths{
+      4, 4, 8};
+  std::array<fsim::runtime::VcdSignal, 3> dependent_port_traces{};
+  std::ostringstream vcd_output;
+  fsim::runtime::VcdWriter vcd{vcd_output, "1ns", 32};
+  for (std::size_t index = 0;
+       index < dependent_port_outputs.size(); ++index) {
+    dependent_port_traces[index] = vcd.declare_signal(
+        std::string{dependent_port_outputs[index]},
+        dependent_port_widths[index]);
+  }
+  vcd.begin(simulation.now());
+  for (std::size_t index = 0;
+       index < dependent_port_output_ids.size(); ++index) {
+    vcd.change(
+        dependent_port_traces[index],
+        simulation.read_signal(dependent_port_output_ids[index]));
+  }
+  simulation.set_signal_change_hook(
+      [&](const fsim::runtime::simir::SignalId signal,
+          const fsim::runtime::PackedLogic4& value,
+          const fsim::runtime::SimulationTick time,
+          const std::uint64_t) {
+        const auto found = std::ranges::find(
+            dependent_port_output_ids, signal);
+        if (found == dependent_port_output_ids.end()) {
+          return;
+        }
+        const auto index = static_cast<std::size_t>(
+            std::distance(dependent_port_output_ids.begin(), found));
+        vcd.set_time(time);
+        vcd.change(dependent_port_traces[index], value);
+      });
   capture.result = simulation.run();
   for (std::size_t index = 0; index < output_ids.size(); ++index) {
     capture.values[index] =
@@ -452,6 +490,8 @@ Capture run_once(
     capture.open_mode_outputs[index] =
         simulation.read_signal(*signal).to_msb_string();
   }
+  vcd.flush();
+  capture.vcd = vcd_output.str();
   return capture;
 }
 
@@ -481,7 +521,23 @@ void verify(
   assert((capture.open_mode_outputs
           == std::array<std::string, 2>{bits(5), bits(7)}));
   assert((capture.dependent_port_outputs
-          == std::array<std::string, 2>{"1010", "11001010"}));
+          == std::array<std::string, 3>{
+              "1010", "0110", "11001010"}));
+  assert(
+      capture.vcd.find("$timescale 1ns $end")
+      != std::string::npos);
+  assert(
+      capture.vcd.find("component_width_output")
+      != std::string::npos);
+  assert(
+      capture.vcd.find("component_width_twin_output")
+      != std::string::npos);
+  assert(
+      capture.vcd.find("direct_width_output")
+      != std::string::npos);
+  assert(capture.vcd.find("b1010") != std::string::npos);
+  assert(capture.vcd.find("b0110") != std::string::npos);
+  assert(capture.vcd.find("b11001010") != std::string::npos);
   assert((capture.dependent_generic_outputs
           == std::array<std::string, 3>{bits(8), bits(6), bits(6)}));
   assert((capture.aggregate_generic_outputs
@@ -796,6 +852,8 @@ architecture rtl of component_runtime_top is
   signal static_generic_override_output : integer;
   signal component_width_input : bit_vector(3 downto 0);
   signal component_width_output : bit_vector(3 downto 0);
+  signal component_width_twin_input : bit_vector(3 downto 0);
+  signal component_width_twin_output : bit_vector(3 downto 0);
   signal direct_width_input : bit_vector(7 downto 0);
   signal direct_width_output : bit_vector(7 downto 0);
 begin
@@ -861,6 +919,11 @@ begin
     port map (
       input_value => component_width_input,
       output_value => component_width_output);
+  component_width_twin: component_runtime_width
+    generic map (width => 4)
+    port map (
+      input_value => component_width_twin_input,
+      output_value => component_width_twin_output);
   direct_width_child: entity work.component_runtime_width(rtl)
     generic map (width => 8)
     port map (
@@ -939,6 +1002,8 @@ end architecture;
            == cold.dependent_port_outputs);
     assert(cold.dependent_port_outputs
            == warm.dependent_port_outputs);
+    assert(reference.vcd == cold.vcd);
+    assert(cold.vcd == warm.vcd);
     assert(reference.dependent_generic_outputs
            == cold.dependent_generic_outputs);
     assert(cold.dependent_generic_outputs
@@ -962,6 +1027,12 @@ end architecture;
 #if defined(FSIM_HAS_LLVM)
     assert(cold.cache.misses > 0);
     assert(cold.cache.stores == cold.cache.misses);
+    assert(
+        key_for(cold, "component_runtime_top.component_width_child")
+        == key_for(cold, "component_runtime_top.component_width_twin"));
+    assert(
+        key_for(cold, "component_runtime_top.component_width_child")
+        != key_for(cold, "component_runtime_top.direct_width_child"));
     assert(warm.cache.hits > 0);
     assert(warm.cache.misses == 0);
 

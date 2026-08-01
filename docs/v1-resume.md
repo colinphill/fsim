@@ -1557,7 +1557,7 @@ output/buffer/inout expressions require writable names. `hierarchy_ports.cpp`
 holds the new boundary implementation and `hierarchy_types.cpp` remains exactly
 2,000 lines. The focused frontend, elaboration, component interpreter/LLVM
 O0/O2/cache, catalog, and 343-source line-budget evidence passes in the LLVM
-Debug tree. Batch 113 remains in progress; Tasks 5, 9, and 10 remain.
+Debug tree. Batch 113 remains in progress; only Task 10 remains.
 
 Task 1 now has focused implementation evidence: implicit/explicit value
 generics retain normalized constant class and input mode, invalid classes/modes
@@ -1617,7 +1617,7 @@ ports execute through child-local signals without a parent driver. The
 component interpreter and LLVM O0/O2 cold/warm differential observes values 5
 and 7 from open output and buffer formals. The current catalog covers 1,438
 codes and the source gate accepts all 343 authored sources. Batch 113 remains
-**in progress** with Tasks 5, 9, and 10 outstanding.
+**in progress** with Task 10 outstanding.
 
 Task 8 is now focused-complete. Generic-dependent port constraints specialize
 component views and direct instances before connection, with child hierarchy
@@ -1627,8 +1627,26 @@ direction now report `FSIM-ELAB-BIND-031` rather than silently aliasing
 different index maps. The component application executes distinct 4-bit and
 8-bit component/direct specializations across interpreter and LLVM O0/O2
 cold/warm paths. The catalog now covers 1,439 codes and all 343 authored
-sources pass the line gate. Batch 113 remains **in progress** with Tasks 5, 9,
-and 10 outstanding.
+sources pass the line gate. Batch 113 remains **in progress** with Task 10
+outstanding.
+
+Task 5 is now focused-complete. `vhdl-component-binding-v6` retains effective
+value/type/function/procedure/package bindings, component profiles, defaults,
+selected targets, binding/configuration identity, and transitive source
+provenance while treating a direct parent signal actual as a per-instance alias
+rather than specialization content. Two width-4 component instances connected
+to differently named parent signals now have identical specialization keys; a
+width-8 direct instance remains distinct. Warm-cache reuse and the existing
+selective default, callable, profile, and configuration-edit invalidation
+checks remain exact.
+
+Task 9 is now focused-complete. The component application executes the two
+width-4 component instances and one width-8 direct instance identically in the
+interpreter and LLVM O0/O2 cold/warm paths, checks exact hierarchy aliases and
+source debugger points, and compares deterministic VCD containing all three
+specialized outputs. Existing source-edit differentials retain selective key
+invalidation and warm native-cache hits. Batch 113 remains **in progress**
+pending Task 10's focused/full gates, documentation closure, commit, and push.
 
 Batch 110 has advanced through these validated features:
 
