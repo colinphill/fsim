@@ -1556,8 +1556,8 @@ execute through owned boundary signals and per-instance VHDL drivers, while
 output/buffer/inout expressions require writable names. `hierarchy_ports.cpp`
 holds the new boundary implementation and `hierarchy_types.cpp` remains exactly
 2,000 lines. The focused frontend, elaboration, component interpreter/LLVM
-O0/O2/cache, catalog, and 342-source line-budget evidence passes in the LLVM
-Debug tree. Batch 113 and Tasks 2, 6, and 7 remain in progress.
+O0/O2/cache, catalog, and 343-source line-budget evidence passes in the LLVM
+Debug tree. Batch 113 and Tasks 6 and 7 remain in progress.
 
 Task 1 now has focused implementation evidence: implicit/explicit value
 generics retain normalized constant class and input mode, invalid classes/modes
@@ -1585,9 +1585,18 @@ configuration cache identity. Missing and ambiguous declarations retain
 application proves interpreter and LLVM O0/O2 cold/warm equivalence and
 configuration-edit selective invalidation for the direct form. The latest
 focused frontend, elaboration, analysis-order, configuration-application,
-1,436-code catalog, and 342-source line-budget gates pass in the LLVM Debug
+1,436-code catalog, and 343-source line-budget gates pass in the LLVM Debug
 tree. The current ten-task Batch 113 record remains **in progress**; do not
 mark it complete until all tasks close and the Batch 114 list is created.
+
+Task 2 is now focused-complete. The parser and elaborator jointly cover legal
+positional, named, positional-then-named, explicit `open`, conversions, and
+dependent static actuals, plus deterministic rejection of unknown, excessive,
+duplicate, named-then-positional, missing/defaultless-open, and non-static
+associations. The elaboration matrix directly checks
+`FSIM-ELAB-GENERIC-001` through `004`; the existing component application
+retains interpreter and LLVM O0/O2 execution evidence for the supported forms.
+Batch 113 remains **in progress**.
 
 Batch 110 has advanced through these validated features:
 

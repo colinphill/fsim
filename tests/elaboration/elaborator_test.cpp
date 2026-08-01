@@ -36,6 +36,7 @@ int main() {
   test_vhdl_interface_procedure_generics();
   test_vhdl_interface_package_generics();
   test_vhdl_generic_subprograms();
+  test_vhdl_generic_associations();
   test_vhdl_components();
   test_vhdl_configurations();
   std::cout << "elaborator tests passed\n";

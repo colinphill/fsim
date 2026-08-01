@@ -123,6 +123,7 @@ void test_vhdl_callable_overloads();
 void test_vhdl_interface_procedure_generics();
 void test_vhdl_interface_package_generics();
 void test_vhdl_generic_subprograms();
+void test_vhdl_generic_associations();
 void test_vhdl_components();
 void test_vhdl_configurations();
 

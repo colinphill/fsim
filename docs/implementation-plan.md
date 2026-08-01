@@ -6215,8 +6215,8 @@ owned boundary signals and per-instance VHDL drivers, while output/buffer/inout
 expressions require writable signal names. The partitioned port-boundary
 implementation keeps `hierarchy_types.cpp` at 2,000 lines. The focused frontend,
 elaboration, component interpreter/LLVM O0/O2 cache differential, diagnostic
-catalog, and 342-source line-budget evidence passes in the LLVM Debug tree.
-Tasks 2, 6, and 7 remain in progress; these bounded slices are not yet the
+catalog, and 343-source line-budget evidence passes in the LLVM Debug tree.
+Tasks 6 and 7 remain in progress; these bounded slices are not yet the
 complete task claims.
 
 Task 1 now has focused implementation evidence. Implicit and explicit VHDL
@@ -6251,8 +6251,19 @@ including instances nested in generate bodies. The runtime configuration
 differential now exercises direct configuration instances across interpreter
 and LLVM O0/O2 cold/warm builds and proves selective invalidation after the
 selected configuration changes. The focused frontend, elaboration, analysis
-order, configuration application, 1,436-code catalog, and 342-source line
+order, configuration application, 1,436-code catalog, and 343-source line
 budget gates pass in the LLVM Debug tree. Batch 113 remains **in progress**.
+
+Task 2 now has complete focused evidence. Parser HIR and diagnostics cover
+positional associations followed by named associations, forbidden
+named-then-positional ordering, case-normalized names, repeated names, and
+explicit `open`. Elaboration independently rejects unknown and excessive
+actuals, duplicate formal coverage, invalid association order, missing or
+defaultless `open` formals, and non-static expressions with stable
+`FSIM-ELAB-GENERIC-001` through `004` diagnostics. Positive direct/component
+execution covers positional, named, mixed positional-then-named, default/open,
+integer-subtype conversion, and declaration-dependent maps. Task 2 is
+focused-complete; Batch 113 remains **in progress**.
 
 ## Forward language-closure feature batches
 
