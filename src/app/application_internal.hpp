@@ -92,6 +92,10 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       std::span<const std::uint32_t> signal_widths,
       std::span<const runtime::simir::ValueKind> signal_value_kinds);
 
+  [[nodiscard]] std::unique_ptr<runtime::simir::ProcessExecutor>
+  fork_clone(
+      runtime::simir::InstructionIndex start_instruction) override;
+
   [[nodiscard]] runtime::simir::ProcessResumeResult resume(
       runtime::simir::ProcessExecutionContext& context,
       const runtime::simir::InstructionIndex start_instruction) override;
@@ -117,6 +121,26 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       const runtime::simir::ContainerValue& value) override;
 
  private:
+  struct FrameStorage {
+    std::vector<std::uint64_t> register_aval;
+    std::vector<std::uint64_t> register_bval;
+    std::vector<std::uint64_t> register_logic9_plane2;
+    std::vector<std::uint64_t> register_logic9_plane3;
+    std::vector<std::uint8_t> register_initialized;
+    std::vector<std::string> string_registers;
+    std::vector<runtime::simir::ContainerValue> container_registers;
+  };
+
+  LlvmProcessExecutor(
+      compiler::LlvmJit& jit,
+      compiler::JitProcessHandle handle,
+      const runtime::simir::Process& process,
+      std::span<const std::uint32_t> signal_widths,
+      std::span<const runtime::simir::ValueKind> signal_value_kinds,
+      std::shared_ptr<FrameStorage> storage,
+      const fsim_jit_frame_v1& parent_frame,
+      runtime::simir::InstructionIndex start_instruction);
+
   struct CallbackState {
     LlvmProcessExecutor* executor{};
     runtime::simir::ProcessExecutionContext* context{};
@@ -546,14 +570,15 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
   const runtime::simir::Process& process_;
   std::span<const std::uint32_t> signal_widths_;
   std::span<const runtime::simir::ValueKind> signal_value_kinds_;
+  std::shared_ptr<FrameStorage> storage_;
   fsim_jit_frame_v1 frame_{};
-  std::vector<std::uint64_t> register_aval_;
-  std::vector<std::uint64_t> register_bval_;
-  std::vector<std::uint64_t> register_logic9_plane2_;
-  std::vector<std::uint64_t> register_logic9_plane3_;
-  std::vector<std::uint8_t> register_initialized_;
-  std::vector<std::string> string_registers_;
-  std::vector<runtime::simir::ContainerValue> container_registers_;
+  std::vector<std::uint64_t>& register_aval_;
+  std::vector<std::uint64_t>& register_bval_;
+  std::vector<std::uint64_t>& register_logic9_plane2_;
+  std::vector<std::uint64_t>& register_logic9_plane3_;
+  std::vector<std::uint8_t>& register_initialized_;
+  std::vector<std::string>& string_registers_;
+  std::vector<runtime::simir::ContainerValue>& container_registers_;
 };
 
 [[nodiscard]] compiler::JitOptimizationLevel jit_optimization(

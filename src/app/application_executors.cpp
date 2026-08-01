@@ -5,41 +5,6 @@ namespace fsim::app::application_detail {
 
 #if defined(FSIM_HAS_LLVM)
 
-LlvmProcessExecutor::LlvmProcessExecutor(
-     compiler::LlvmJit& jit,
-     const compiler::JitProcessHandle handle,
-     const runtime::simir::Process& process,
-     std::span<const std::uint32_t> signal_widths,
-     std::span<const runtime::simir::ValueKind> signal_value_kinds)
-     : jit_(jit),
-       handle_(handle),
-       process_(process),
-       signal_widths_(signal_widths),
-       signal_value_kinds_(signal_value_kinds)  {
-    const auto layout = jit_.frame_layout(handle_);
-    register_aval_.resize(layout.register_count);
-    register_bval_.resize(layout.register_count);
-    if (layout.uses_logic9) {
-      register_logic9_plane2_.resize(layout.register_count);
-      register_logic9_plane3_.resize(layout.register_count);
-    }
-    register_initialized_.resize(layout.register_count);
-    string_registers_.resize(layout.string_register_count);
-    container_registers_.reserve(process.container_register_types.size());
-    for (const auto& type : process.container_register_types) {
-      container_registers_.push_back(
-          runtime::simir::default_container_value(type));
-    }
-    jit_.initialize_frame(
-        handle_,
-        frame_,
-        register_aval_,
-        register_bval_,
-        register_initialized_,
-        register_logic9_plane2_,
-        register_logic9_plane3_);
-  }
-
 [[nodiscard]] runtime::simir::ProcessResumeResult LlvmProcessExecutor::resume(
     runtime::simir::ProcessExecutionContext& context,
     const runtime::simir::InstructionIndex start_instruction)  {
@@ -333,6 +298,22 @@ LlvmProcessExecutor::LlvmProcessExecutor(
       case compiler::JitResumeStatus::yielded:
         require_boundary<runtime::simir::Yield>(
             result.instruction, "yield");
+        break;
+      case compiler::JitResumeStatus::fork:
+        require_boundary<runtime::simir::Fork>(
+            result.instruction, "fork");
+        break;
+      case compiler::JitResumeStatus::fork_end:
+        require_boundary<runtime::simir::ForkEnd>(
+            result.instruction, "fork end");
+        break;
+      case compiler::JitResumeStatus::wait_fork:
+        require_boundary<runtime::simir::WaitFork>(
+            result.instruction, "wait fork");
+        break;
+      case compiler::JitResumeStatus::disable_fork:
+        require_boundary<runtime::simir::DisableFork>(
+            result.instruction, "disable fork");
         break;
       case compiler::JitResumeStatus::debug_point:
         require_boundary<runtime::simir::DebugPoint>(

@@ -660,6 +660,7 @@ class VerilogParser final : private detail::ParserBase {
   Statement parse_do_while_statement(const Token& start);
 
   Statement parse_forever_statement(const Token& start);
+  Statement parse_fork_statement(const Token& start);
 
   void parse_fatal_arguments(Statement& statement);
 

@@ -92,6 +92,7 @@ int main() {
     test_runtime_loop_statements();
     test_loop_control_statements();
     test_systemverilog_do_while_statements();
+    test_fork_process_statements();
     test_systemverilog_conditional_expression();
     test_systemverilog_comparison_expressions();
     test_systemverilog_membership_expressions();

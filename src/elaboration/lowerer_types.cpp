@@ -871,6 +871,9 @@ using namespace elaboration_detail;
             case StatementKind::Report:
             case StatementKind::Pause:
             case StatementKind::Finish:
+            case StatementKind::Fork:
+            case StatementKind::WaitFork:
+            case StatementKind::DisableFork:
             case StatementKind::Block:
             case StatementKind::Null:
                 break;

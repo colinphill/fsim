@@ -528,7 +528,8 @@ void DebuggerSession::show_locals()  {
     }
     const auto process_id = current_execution_point_->process;
     const auto& process =
-        simulation_.design().processes().at(process_id);
+        simulation_.design().processes().at(
+            current_execution_point_->design_process);
     if (process.debug_locals.empty()
         && process.debug_string_locals.empty()
         && process.debug_container_locals.empty()) {
@@ -893,7 +894,8 @@ void DebuggerSession::report_execution_point()  {
     }
     const auto& point = *current_execution_point_;
     output_ << "process "
-            << simulation_.design().processes().at(point.process).name
+            << simulation_.design().processes().at(
+                   point.design_process).name
             << " at " << point.source.path << ':' << point.source.line
             << ':' << point.source.column << '\n';
   }

@@ -5679,6 +5679,62 @@ events in 0.78 seconds, containers in 85.25 seconds, and the monolithic
 application in 13.45 seconds, on 2026-07-31. Batch 104 is not a ten-batch
 CI-inspection boundary, so no Actions run was inspected.
 
+### One-hundred-fifth feature batch — SystemVerilog fork/process and NBA ordering closure
+
+SystemVerilog process HIR now retains named and anonymous `fork` scopes,
+fork-scope declarations, ordered branches, exact `join`, `join_any`, or
+`join_none` kind, matching closing labels, `wait fork`, and `disable fork`.
+The checked lowerer initializes the lexical fork scope once, emits explicit
+parent continuation and child-entry PCs, and rejects fork escape from the
+bounded callable frame model.
+
+The common kernel creates dense dynamic child identities with independent
+program counters and a shared lexical frame. `join` waits for every child,
+`join_any` resumes on the deterministic first completion while retaining the
+other children, and `join_none` continues immediately. `wait fork` observes
+all live immediate children; `disable fork` recursively cancels descendants,
+including grandchildren whose intermediate child already completed, and
+clears their waits and group ownership. One live activation per lexical fork
+site remains the explicit bounded lifetime rule. Interpreter and compiled
+children share the same typed frame storage while retaining independent native
+resume state.
+
+Named-event evidence now fixes trigger/wait races in source order: a blocking
+trigger before its waiter is missed, a waiter armed before a blocking trigger
+is caught, and ordinary or zero-delay nonblocking triggers wake already armed
+waiters. Dynamic fork children prove stable same-slot NBA ordering, while the
+active, inactive `#0`, update/NBA, and postponed regions preserve their exact
+order. `$strobe` now samples supported direct packed-signal operands in the
+postponed region, after same-slot NBA publication, rather than formatting an
+active-region snapshot.
+
+Dynamic child execution points carry both runtime and static design-process
+identity, so debugger process names and local schemas remain bounds-safe while
+local reads address the child's live shared frame. The dedicated fork
+application proves join variants, cancellation, shared scoped locals, child
+safe points, callbacks, normalized VCD, interpreter/LLVM O0/O2 parity, and
+cold/warm native reuse. Append-only native resume statuses 11 through 14 cover
+fork creation/end/wait/disable; schema 57 records ordered branches, join kind,
+one-shot postponed observation, operations, and provenance. Branch and join
+edits prove cache invalidation without changing the runtime-v1 callback
+structure.
+
+Stable frontend, elaboration, SimIR, and LLVM checks cover language modes,
+labels, terminators, callable lifetime, ownership, branch targets, duplicate
+entries, parent continuation, join kind, and boundary status. The diagnostic
+catalog covers all 1,324 production codes, and the source gate covers 310
+authored files with an empty allowlist and a 2,000-line maximum. The exact
+LLVM 22.1.8 warnings-as-errors Debug regression passed all 61 tests in 450.47
+seconds, including scoped locals in 0.91 seconds, LLVM in 4.99 seconds, named
+events in 1.01 seconds, fork in 0.14 seconds, procedural assignments in 2.55
+seconds, containers in 347.55 seconds, and the monolithic application in 40.41
+seconds. Release passed all 61 tests in 140.49 seconds, including scoped
+locals in 0.81 seconds, LLVM in 3.33 seconds, named events in 0.83 seconds,
+fork in 0.08 seconds, procedural assignments in 1.90 seconds, containers in
+83.33 seconds, and the monolithic application in 14.11 seconds, on
+2026-07-31. Batch 105 is not a ten-batch CI-inspection boundary, so no Actions
+run was inspected.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the

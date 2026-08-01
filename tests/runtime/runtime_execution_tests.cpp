@@ -1716,4 +1716,192 @@ void test_simir_mutable_strings() {
   }
 }
 
+void test_simir_fork_process_lifecycle() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  const auto run_fork = [](
+      std::vector<Operation> operations,
+      const std::string_view expected,
+      const SimulationTick expected_time,
+      const std::uint64_t expected_register) {
+    Interpreter interpreter;
+    const auto output = interpreter.add_signal(
+        Signal{"fork.output", PackedLogic4::from_msb_string("00")});
+    Process process;
+    process.id = 0;
+    process.name = "fork_lifecycle";
+    process.register_count = 1;
+    process.debug_locals = {
+        DebugLocal{
+            "shared", "logic [1:0]", 0, 2, {}, {}, {},
+            ValueKind::logic4, {}},
+    };
+    for (auto& operation : operations) {
+      if (auto* write = std::get_if<WriteBlocking>(&operation)) {
+        write->signal = output;
+      }
+    }
+    process.operations = std::move(operations);
+    (void)interpreter.add_process(std::move(process));
+    const auto result = interpreter.run();
+    require(
+        result.status == RunStatus::completed
+            && result.time == expected_time
+            && interpreter.signal_value(output).to_msb_string()
+                == expected
+            && interpreter.read_debug_local(0, 0).low_word().aval
+                == expected_register,
+        "fork lifecycle, shared frame, and deterministic completion");
+  };
+
+  run_fork(
+      {
+          LoadConstant{0, PackedLogic4::from_aval_bval(2, 0, 0)},
+          Fork{{4, 7}, ForkJoinKind::all},
+          WriteBlocking{0, 0},
+          Halt{},
+          WaitFor{2},
+          LoadConstant{0, PackedLogic4::from_aval_bval(2, 1, 0)},
+          ForkEnd{},
+          WaitFor{1},
+          LoadConstant{0, PackedLogic4::from_aval_bval(2, 2, 0)},
+          ForkEnd{},
+      },
+      "01", 2, 1);
+
+  run_fork(
+      {
+          LoadConstant{0, PackedLogic4::from_aval_bval(2, 0, 0)},
+          Fork{{5, 8}, ForkJoinKind::any},
+          WriteBlocking{0, 0},
+          WaitFork{},
+          Halt{},
+          WaitFor{1},
+          LoadConstant{0, PackedLogic4::from_aval_bval(2, 1, 0)},
+          ForkEnd{},
+          WaitFor{2},
+          LoadConstant{0, PackedLogic4::from_aval_bval(2, 2, 0)},
+          ForkEnd{},
+      },
+      "01", 2, 2);
+
+  run_fork(
+      {
+          LoadConstant{0, PackedLogic4::from_aval_bval(2, 0, 0)},
+          Fork{{6, 9}, ForkJoinKind::none},
+          LoadConstant{0, PackedLogic4::from_aval_bval(2, 3, 0)},
+          WaitFork{},
+          WriteBlocking{0, 0},
+          Halt{},
+          WaitFor{2},
+          LoadConstant{0, PackedLogic4::from_aval_bval(2, 1, 0)},
+          ForkEnd{},
+          WaitFor{1},
+          LoadConstant{0, PackedLogic4::from_aval_bval(2, 2, 0)},
+          ForkEnd{},
+      },
+      "01", 2, 1);
+
+  run_fork(
+      {
+          LoadConstant{0, PackedLogic4::from_aval_bval(2, 0, 0)},
+          Fork{{5}, ForkJoinKind::none},
+          DisableFork{},
+          WaitFor{2},
+          Halt{},
+          WaitFor{1},
+          LoadConstant{0, PackedLogic4::from_aval_bval(2, 3, 0)},
+          WriteBlocking{0, 0},
+          ForkEnd{},
+      },
+      "00", 2, 0);
+
+  run_fork(
+      {
+          LoadConstant{0, PackedLogic4::from_aval_bval(2, 0, 0)},
+          Fork{{4}, ForkJoinKind::any},
+          DisableFork{},
+          Halt{},
+          Fork{{7}, ForkJoinKind::none},
+          ForkEnd{},
+          Halt{},
+          WaitFor{1},
+          LoadConstant{0, PackedLogic4::from_aval_bval(2, 3, 0)},
+          WriteBlocking{0, 0},
+          ForkEnd{},
+      },
+      "00", 0, 0);
+
+  {
+    Interpreter interpreter;
+    const auto trigger = interpreter.add_signal(
+        Signal{"fork.trigger", PackedLogic4::from_msb_string("0")});
+    const auto observed = interpreter.add_signal(
+        Signal{"fork.observed", PackedLogic4::from_msb_string("0")});
+    Process process;
+    process.id = 0;
+    process.name = "fork_static_sensitivity";
+    process.register_count = 1;
+    process.static_sensitivity = {{trigger, EdgeKind::any}};
+    process.operations = {
+        Fork{{3, 7}, ForkJoinKind::all},
+        Halt{},
+        Halt{},
+        WaitSensitivity{},
+        LoadConstant{0, PackedLogic4::from_msb_string("1")},
+        WriteBlocking{observed, 0},
+        ForkEnd{},
+        WaitFor{1},
+        LoadConstant{0, PackedLogic4::from_msb_string("1")},
+        WriteBlocking{trigger, 0},
+        ForkEnd{},
+    };
+    (void)interpreter.add_process(std::move(process));
+    const auto result = interpreter.run();
+    require(
+        result.status == RunStatus::completed
+            && result.time == 1
+            && interpreter.signal_value(observed).to_msb_string() == "1",
+        "dynamic fork children register inherited static sensitivity");
+  }
+
+  const auto expect_malformed = [](
+      std::vector<Operation> operations,
+      const std::string_view message) {
+    Interpreter interpreter;
+    Process process;
+    process.id = 0;
+    process.name = "malformed_fork";
+    process.operations = std::move(operations);
+    (void)interpreter.add_process(std::move(process));
+    bool rejected = false;
+    try {
+      (void)interpreter.run();
+    } catch (const InterpreterError& error) {
+      rejected = std::string_view{error.what()}.find(message)
+          != std::string_view::npos;
+    }
+    require(rejected, "malformed fork SimIR must be rejected");
+  };
+  expect_malformed(
+      {ForkEnd{}, Halt{}},
+      "ForkEnd requires a dynamically spawned fork child");
+  expect_malformed(
+      {Fork{{2, 2}, ForkJoinKind::all}, Halt{}, ForkEnd{}},
+      "fork branch entry is duplicated");
+  expect_malformed(
+      {Fork{{1}, ForkJoinKind::all}, ForkEnd{}},
+      "fork branch must follow its parent continuation");
+  expect_malformed(
+      {Fork{{}, ForkJoinKind::all}},
+      "fork parent continuation is outside the operation stream");
+  expect_malformed(
+      {
+          Fork{{2}, static_cast<ForkJoinKind>(99)},
+          Halt{}, ForkEnd{},
+      },
+      "fork has an invalid join kind");
+}
+
 } // namespace fsim::tests::runtime

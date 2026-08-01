@@ -131,6 +131,12 @@ validate_selection_operation_bounds(
     const runtime::simir::Process& process,
     std::size_t instruction,
     std::string_view message);
+void validate_fork_operation(
+    const runtime::simir::Process& process,
+    std::size_t instruction,
+    const runtime::simir::Fork& operation);
+[[nodiscard]] bool is_resume_boundary(
+    const runtime::simir::Operation& operation) noexcept;
 
 [[nodiscard]] ValidatedProcess validate_process(
     const runtime::simir::Process& process,

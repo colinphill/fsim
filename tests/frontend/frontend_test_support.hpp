@@ -64,6 +64,7 @@ void test_verilog_repeat_statements();
 void test_runtime_loop_statements();
 void test_loop_control_statements();
 void test_systemverilog_do_while_statements();
+void test_fork_process_statements();
 void test_systemverilog_conditional_expression();
 void test_systemverilog_comparison_expressions();
 void test_systemverilog_membership_expressions();

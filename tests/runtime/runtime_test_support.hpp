@@ -31,6 +31,7 @@ void test_simir_force_release();
 void test_simir_design_stop_identity();
 void test_simir_pause_resume_lifecycle();
 void test_simir_final_process_lifecycle();
+void test_simir_fork_process_lifecycle();
 void test_simir_alternate_executor_context_and_boundaries();
 void test_simir_alternate_executor_dynamic_wait();
 void test_simir_timed_dynamic_wait_rearm();

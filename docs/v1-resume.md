@@ -9,19 +9,20 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-31.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-104 SystemVerilog
-  always/procedural-control closure on top of Batch 103 commit `eddb0cb`; the
-  current handoff commit is the Batch 104 baseline.
-- The source-size refactor is complete: all 304 authored C/C++ source, header,
+- Implementation baseline: completed feature-batch-105 SystemVerilog
+  fork/process and NBA-ordering closure on top of Batch 104 commit `deae784`;
+  the current handoff commit is the Batch 105 baseline.
+- The source-size refactor is complete: all 310 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
-- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 60
-  configured tests in 447.24 seconds, and Release passed all 60 configured
-  tests in 139.06 seconds on 2026-07-31. Debug/Release scoped locals completed
-  in 0.86/0.81 seconds, LLVM in 3.61/2.46 seconds, named events in 0.92/0.78
-  seconds, containers in 348.34/85.25 seconds, and the monolithic application
-  in 39.88/13.45 seconds.
-- The diagnostic catalog covers all 1,315 production codes.
+- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 61
+  configured tests in 450.47 seconds, and Release passed all 61 configured
+  tests in 140.49 seconds on 2026-07-31. Debug/Release scoped locals completed
+  in 0.91/0.81 seconds, LLVM in 4.99/3.33 seconds, named events in 1.01/0.83
+  seconds, fork in 0.14/0.08 seconds, procedural assignments in 2.55/1.90
+  seconds, containers in 347.55/83.33 seconds, and the monolithic application
+  in 40.41/14.11 seconds.
+- The diagnostic catalog covers all 1,324 production codes.
 - The Batch 100 boundary is closed at repair commit `d2f216e`. Initial run
   `30640792808` and replacements `30647570353`/`30651503050` passed every
   ordinary job but exposed exact 1,500.27/1,800.14/2,400.12-second sanitizer
@@ -1189,7 +1190,7 @@ assertions in 8.06/7.71 seconds, and the monolithic application in 39.44/13.12
 seconds. Batch 101 feature commit `5e713cc` was pushed without monitoring its
 non-boundary run.
 
-## Completed feature batches 102 through 104
+## Completed feature batches 102 through 105
 
 Batch 102 closes the bounded procedural-lvalue scope with one checked target
 capture for whole, member, static/chained, dynamic-bit, and runtime-base
@@ -1228,36 +1229,51 @@ diagnostics, the 304-file source gate, and both 60-test full regressions pass.
 Feature-matrix rows SV-601 through SV-610 are the detailed release evidence.
 Batch 104 is not a CI-inspection boundary.
 
-Resume with **feature batch 105: SystemVerilog fork/process and NBA ordering
-closure**:
+Batch 105 closes bounded SystemVerilog fork/process and NBA ordering.
+Named/anonymous `fork` scopes, leading declarations, `join`, `join_any`,
+`join_none`, `wait fork`, and recursive `disable fork` execute through dynamic
+child processes with independent PCs and a shared lexical frame. A completed
+intermediate child does not shield live grandchildren from cancellation. One
+live activation per lexical fork site remains the checked bounded lifetime
+rule, and fork inside a callable is rejected. Named-event blocking/nonblocking
+races, stable dynamic-child NBA order, active/inactive/update/postponed region
+interactions, and postponed direct-signal `$strobe` sampling now have exact
+evidence. Child runtime/static identities keep debugger names and local reads
+bounds-safe. Interpreter/LLVM O0/O2, callbacks, safe points, normalized VCD,
+append-only resume statuses 11 through 14, schema-57 cold/warm/edit cache
+identity, 1,324 diagnostics, the 310-file source gate, and both 61-test full
+regressions pass. Feature-matrix rows SV-611 through SV-620 are the detailed
+release evidence. Batch 105 is not a CI-inspection boundary.
 
-1. Audit accepted fork, event-trigger, NBA, and process-completion paths against
-   the scheduler-region and lifecycle contract.
-2. Add bounded `fork ... join` child creation, suspension, completion, and
-   lexical child-scope lifetime.
-3. Add bounded `join_any` first-completion wakeup while preserving remaining
-   child execution and deterministic tie ordering.
-4. Add bounded `join_none` detached-child lifetime and parent continuation.
-5. Complete `wait fork` and `disable fork` ownership, cancellation, unwinding,
-   and descendant cleanup for the admitted fork scope.
-6. Complete named-event blocking/nonblocking trigger and wait race semantics,
-   including same-time and same-delta ordering.
-7. Close the blocking, NBA, inactive, update, and postponed interaction matrix
-   across multiple processes, repeated writes, and zero-delay controls.
-8. Prove process creation/completion/cancellation safe points, debugger scope,
-   scheduling observations, and VCD-visible effects across interpreter and
-   LLVM O0/O2.
-9. Add stable frontend/elaboration/native diagnostics for unsupported fork or
-   process controls, unsafe lifetimes, malformed ownership, and malformed
-   HIR/SimIR.
-10. Version the complete fork/process/NBA graph in native-cache identity, add
-    full positive/negative/differential evidence, run Debug/Release gates, and
-    push the non-boundary batch.
+Resume with **feature batch 106: SystemVerilog delay, primitive, and
+continuous-assignment closure**:
 
-Keep Batch 105 to fork/join variants, process completion/control, event races,
-and the complete NBA/delta ordering matrix. Parameterized/net delays, gate
-arrays, remaining primitives, and continuous-assignment closure remain Batch
-106.
+1. Audit parameterized delays, net delays, primitive instances/arrays, and
+   continuous assignments against the v1 scheduling and driver contract.
+2. Add bounded constant-parameter and localparam delay expressions with exact
+   timeunit/timeprecision selection, rounding, overflow, and cache identity.
+3. Complete net-declaration delays and their initialization/driver semantics
+   for supported scalar and packed nets.
+4. Add statically bounded built-in gate-instance arrays with exact range,
+   ordinal connection, naming, hierarchy, and delay behavior.
+5. Complete the remaining nondeferred built-in primitive families admitted by
+   v1, including four-state truth tables and checked terminal legality.
+6. Close continuous-assignment whole/slice driver ownership, reevaluation,
+   multi-driver resolution, and same-value transaction behavior.
+7. Complete rise/fall/turnoff selection, inertial cancellation, parameterized
+   delay changes, zero-delay ordering, and packed mixed-transition behavior.
+8. Prove primitive/continuous safe points, hierarchy/debug metadata, signal
+   callbacks, scheduling observations, and normalized VCD across interpreter
+   and LLVM O0/O2.
+9. Add stable frontend/elaboration/native diagnostics for malformed delay,
+   primitive-array, terminal, driver, and malformed HIR/SimIR forms.
+10. Version the complete delay/primitive/continuous graph in native-cache
+    identity, add full positive/negative/differential evidence, run
+    Debug/Release gates, and push the non-boundary batch.
+
+Keep Batch 106 to parameterized/net delays, gate arrays, remaining nondeferred
+primitives, and continuous-assignment closure. Interfaces, modports, package
+exports, and package/interface visibility remain Batch 107.
 
 The authoritative Batch 99 through 130 language-closure sequence is recorded
 under **Forward language-closure feature batches** in the implementation plan;
@@ -1341,9 +1357,10 @@ sizing, short-circuit, dynamic-read-selection, and streaming-concatenation
 handoff, followed by the Batch 102 procedural-lvalue, timed-update,
 expression-increment, and selected-force/release handoff and the Batch 103
 function/task lifetime, association, reference, static-local, and generated-
-callable handoff. Treat the newest pushed commit on the same branch as the
-authoritative continuation and read this file from that checkout before doing
-work.
+callable handoff, followed by the Batch 104 always/procedural-control handoff
+and the Batch 105 fork/process/NBA-ordering handoff. Treat the newest pushed
+commit on the same branch as the authoritative continuation and read this
+file from that checkout before doing work.
 
 Configure the exact warnings-as-errors build pair:
 
@@ -1374,7 +1391,7 @@ ctest --test-dir build/llvm22-ninja-release --output-on-failure
 
 The recorded timings above are evidence from the previous development host,
 not performance expectations for the new machine. After the baseline passes,
-resume Batch 105 below and return to focused tests until its tenth feature.
+resume Batch 106 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -1392,15 +1409,15 @@ For a clean-context restart:
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
    bounded SystemVerilog string, text-file, and container implementations.
-3. Begin Batch 105 from the completed always/procedural-control baseline described
-   above.
+3. Begin Batch 106 from the completed fork/process/NBA-ordering baseline
+   described above.
    Inspect the live tree first and rerun focused evidence if the host changed.
-4. Keep Batch 105 within bounded SystemVerilog fork/join variants, process
-   completion/control, event races, and NBA/delta ordering. Record
-   intentional scope changes in this handoff before implementation.
+4. Keep Batch 106 within bounded SystemVerilog parameterized/net delays, gate
+   arrays, remaining nondeferred primitives, and continuous assignments.
+   Record intentional scope changes in this handoff before implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
    after all ten features, update the four documents named above, commit, and
-   push. Batch 105 is not a CI-inspection boundary.
+   push. Batch 106 is not a CI-inspection boundary.
 
 The existing exact-LLVM build trees on the recorded development host are:
 
@@ -1409,17 +1426,17 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while Batch 105 is in progress, extending the
-frontend, process/event elaboration, scheduler/native cache, and
-application/debug/VCD tests as fork/process behavior lands:
+Use a narrow test expression while Batch 106 is in progress, extending the
+frontend, delay/primitive elaboration, scheduler/native cache, and
+application/debug/VCD tests as continuous-driver behavior lands:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
-  -R 'fsim\.(frontend|runtime|elaboration|llvm|application$|application\.expressions|application\.named_events|application\.sv_functions|application\.sv_tasks|diagnostics-catalog|source-line-budget)'
+  -R 'fsim\.(frontend|runtime|elaboration|llvm|application$|application\.delay_modes|application\.transition_delays|application\.resolution|diagnostics-catalog|source-line-budget)'
 ```
 
 Both warnings-as-errors Ninja trees link the exact LLVM 22.1.8 backend. Their
-recorded 60-test inventories are clean after the local feature-batch-104 gates.
+recorded 61-test inventories are clean after the local feature-batch-105 gates.
 
 Before declaring any row complete, consult:
 

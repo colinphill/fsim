@@ -1702,6 +1702,12 @@ validate_process(const Process &process,
             },
             [&](const WaitForever &) {},
             [&](const Yield &) {},
+            [&](const Fork& operation) {
+              validate_fork_operation(process, index, operation);
+            },
+            [&](const ForkEnd&) {},
+            [&](const WaitFork&) {},
+            [&](const DisableFork&) {},
             [&](const Pause &) {},
             [&](const Stop &) {}},
         process.operations[index]);
@@ -1806,10 +1812,16 @@ validate_process(const Process &process,
     const auto &operation = process.operations[index];
     if (std::holds_alternative<Halt>(operation) ||
         std::holds_alternative<Stop>(operation) ||
-        std::holds_alternative<Return>(operation)) {
+        std::holds_alternative<Return>(operation) ||
+        std::holds_alternative<ForkEnd>(operation)) {
       continue;
     }
-    if (const auto *jump = std::get_if<Jump>(&operation)) {
+    if (const auto* fork = std::get_if<Fork>(&operation)) {
+      successors[index].insert(
+          successors[index].end(),
+          fork->branches.begin(), fork->branches.end());
+      successors[index].push_back(index + 1);
+    } else if (const auto *jump = std::get_if<Jump>(&operation)) {
       successors[index].push_back(jump->target);
     } else if (const auto* call = std::get_if<Call>(&operation)) {
       successors[index].push_back(call->target);
@@ -1845,21 +1857,14 @@ validate_process(const Process &process,
     pending.insert(pending.end(), successors[instruction].begin(),
                    successors[instruction].end());
   }
-  const auto is_suspension = [](const Operation &operation) {
-    return std::holds_alternative<WaitFor>(operation) ||
-           std::holds_alternative<WaitOn>(operation) ||
-           std::holds_alternative<WaitSensitivity>(operation) ||
-           std::holds_alternative<WaitForever>(operation) ||
-           std::holds_alternative<Yield>(operation) ||
-           std::holds_alternative<Pause>(operation);
-  };
   const auto is_cycle_safe_point =
       [&](const Operation& operation) {
-        return is_suspension(operation)
+        return is_resume_boundary(operation)
             || std::holds_alternative<DebugPoint>(operation);
       };
   for (std::size_t index = 0; index < process.operations.size(); ++index) {
-    if (reachable[index] && is_suspension(process.operations[index])) {
+    if (reachable[index]
+        && is_resume_boundary(process.operations[index])) {
       result.requires_resume = true;
     }
   }

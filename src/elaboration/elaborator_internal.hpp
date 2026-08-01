@@ -817,6 +817,8 @@ private:
 
     void lower_block(const Statement& statement);
 
+    void lower_fork(const Statement& statement);
+
     void lower_event_trigger(const Statement& statement);
 
     static const Statement* recognized_vhdl_edge_guard(

@@ -29,6 +29,10 @@ extern "C" {
 #define FSIM_JIT_RESUME_STATUS_DEBUG_POINT UINT32_C(8)
 #define FSIM_JIT_RESUME_STATUS_WAIT_FOREVER UINT32_C(9)
 #define FSIM_JIT_RESUME_STATUS_PAUSED UINT32_C(10)
+#define FSIM_JIT_RESUME_STATUS_FORK UINT32_C(11)
+#define FSIM_JIT_RESUME_STATUS_FORK_END UINT32_C(12)
+#define FSIM_JIT_RESUME_STATUS_WAIT_FORK UINT32_C(13)
+#define FSIM_JIT_RESUME_STATUS_DISABLE_FORK UINT32_C(14)
 
 #define FSIM_JIT_INVALID_INSTRUCTION UINT32_MAX
 #define FSIM_JIT_RUNTIME_FLAG_DEBUG_POINTS UINT32_C(1)
@@ -569,9 +573,9 @@ typedef struct fsim_jit_frame_v1 {
 
 /*
  * Caller-owned result for one invocation. status mirrors the generated
- * function's return value. delay is meaningful only for WAIT_FOR. WAIT_ON,
- * WAIT_SENSITIVITY, WAIT_FOREVER, and DEBUG_POINT identify their immutable
- * SimIR boundary through instruction.
+ * function's return value. delay is meaningful only for WAIT_FOR. Every wait,
+ * debug, fork, and process-control status identifies its immutable SimIR
+ * boundary through instruction.
  */
 typedef struct fsim_jit_resume_result_v1 {
   uint32_t abi_version;

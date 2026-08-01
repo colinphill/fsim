@@ -1441,6 +1441,64 @@ void test_signal_waits_at_level(
   assert(timed_result.instruction == 0);
   assert(timed_result.delay == 7);
   assert(timed_frame.program_counter == 1);
+
+  Process fork_process;
+  fork_process.id = 11;
+  fork_process.name = "fork_boundaries";
+  fork_process.operations = {
+      Fork{{4}, ForkJoinKind::none},
+      WaitFork{},
+      DisableFork{},
+      Halt{},
+      ForkEnd{}};
+  const auto fork_symbol =
+      std::string{symbol_prefix} + "_fork_boundaries";
+  jit.add_process(fork_symbol, fork_process, {});
+  const auto fork_handle = jit.lookup(fork_symbol);
+  fsim_jit_frame_v1 fork_frame{};
+  jit.initialize_frame(
+      fork_handle, fork_frame, register_aval, register_bval,
+      register_initialized);
+  auto fork_result = new_resume_result();
+  assert(
+      jit.resume(
+          fork_handle, descriptor, fork_frame, fork_result)
+      == JitResumeStatus::fork);
+  assert(
+      fork_result.status == FSIM_JIT_RESUME_STATUS_FORK
+      && fork_result.instruction == 0
+      && fork_frame.program_counter == 1);
+  assert(
+      jit.resume(
+          fork_handle, descriptor, fork_frame, fork_result)
+      == JitResumeStatus::wait_fork);
+  assert(
+      fork_result.status == FSIM_JIT_RESUME_STATUS_WAIT_FORK
+      && fork_result.instruction == 1
+      && fork_frame.program_counter == 2);
+  assert(
+      jit.resume(
+          fork_handle, descriptor, fork_frame, fork_result)
+      == JitResumeStatus::disable_fork);
+  assert(
+      fork_result.status == FSIM_JIT_RESUME_STATUS_DISABLE_FORK
+      && fork_result.instruction == 2
+      && fork_frame.program_counter == 3);
+
+  fsim_jit_frame_v1 child_frame{};
+  jit.initialize_frame(
+      fork_handle, child_frame, register_aval, register_bval,
+      register_initialized);
+  child_frame.program_counter = 4;
+  auto child_result = new_resume_result();
+  assert(
+      jit.resume(
+          fork_handle, descriptor, child_frame, child_result)
+      == JitResumeStatus::fork_end);
+  assert(
+      child_result.status == FSIM_JIT_RESUME_STATUS_FORK_END
+      && child_result.instruction == 4
+      && child_frame.program_counter == 5);
 }
 
 } // namespace fsim::tests::compiler

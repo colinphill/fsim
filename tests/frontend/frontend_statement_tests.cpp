@@ -1122,6 +1122,101 @@ endmodule
   }
 }
 
+void test_fork_process_statements() {
+  const auto parsed = parse_text(
+      "fork_processes.sv",
+      R"(
+module fork_processes;
+  logic result;
+  initial begin
+    fork : workers
+      logic local_value = 1'b0;
+      begin
+        #1 local_value = 1'b1;
+        result = local_value;
+      end
+      #2 result = 1'b0;
+    join : workers
+    fork
+      #1 result = 1'b1;
+      #2 result = 1'b0;
+    join_any
+    wait fork;
+    fork
+      #1 result = 1'b1;
+    join_none
+    disable fork;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(parsed.ok(), "fork process controls must parse");
+  const auto& statements =
+      parsed.design.units.front().processes.front().statements;
+  require(
+      statements.size() == 5
+          && statements[0].kind == StatementKind::Fork
+          && statements[0].label == "workers"
+          && statements[0].declarations.size() == 1
+          && statements[0].statements.size() == 2
+          && statements[0].fork_join_kind == ForkJoinKind::All
+          && statements[1].kind == StatementKind::Fork
+          && statements[1].fork_join_kind == ForkJoinKind::Any
+          && statements[2].kind == StatementKind::WaitFork
+          && statements[3].kind == StatementKind::Fork
+          && statements[3].fork_join_kind == ForkJoinKind::None
+          && statements[4].kind == StatementKind::DisableFork,
+      "fork/join HIR retains branches, scope, and process controls");
+
+  const auto verilog_join_any = parse_text(
+      "fork_join_any.v",
+      R"(
+module fork_join_any;
+  initial fork ; join_any
+endmodule
+)",
+      Language::Verilog2005);
+  require(
+      std::ranges::any_of(
+          verilog_join_any.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-108";
+          }),
+      "join_any requires SystemVerilog");
+
+  const auto invalid_labels = parse_text(
+      "fork_labels.sv",
+      R"(
+module fork_labels;
+  initial fork : left ; join : right
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::any_of(
+          invalid_labels.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-109";
+          }),
+      "fork closing labels must match");
+
+  const auto invalid_disable = parse_text(
+      "disable_name.sv",
+      R"(
+module disable_name;
+  initial disable named_block;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::any_of(
+          invalid_disable.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-208";
+          }),
+      "bounded disable control must select fork");
+}
+
 void test_systemverilog_conditional_expression() {
   const auto result = parse_text(
       "conditional.sv",

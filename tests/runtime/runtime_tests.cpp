@@ -36,6 +36,7 @@ int main() {
     test_simir_design_stop_identity();
     test_simir_pause_resume_lifecycle();
     test_simir_final_process_lifecycle();
+    test_simir_fork_process_lifecycle();
     test_simir_alternate_executor_context_and_boundaries();
     test_simir_alternate_executor_dynamic_wait();
     test_simir_timed_dynamic_wait_rearm();

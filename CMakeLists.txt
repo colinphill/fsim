@@ -300,6 +300,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_functions.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_processes.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_events.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_fork.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_units.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_concurrent.cpp"
@@ -322,9 +323,10 @@ add_library(
     src/runtime/packed_value.cpp
     src/runtime/scheduler.cpp
     src/runtime/simir.cpp
-  src/runtime/simir_arithmetic.cpp
-  src/runtime/simir_containers.cpp
-  src/runtime/simir_execution.cpp
+    src/runtime/simir_arithmetic.cpp
+    src/runtime/simir_containers.cpp
+    src/runtime/simir_execution.cpp
+    src/runtime/simir_fork.cpp
     src/runtime/simir_files.cpp
     src/runtime/simir_format.cpp
     src/runtime/simir_interpreter.cpp
@@ -374,6 +376,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_callables.cpp
       src/elaboration/lowerer_procedures.cpp
       src/elaboration/lowerer_process.cpp
+      src/elaboration/lowerer_fork.cpp
       src/elaboration/lowerer_events.cpp
       src/elaboration/lowerer_tasks.cpp
       src/elaboration/lowerer_types.cpp
@@ -573,6 +576,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_check.cpp
       src/app/application_debug_control.cpp
       src/app/application_debugger.cpp
+      src/app/application_executor_frame.cpp
       src/app/application_executors.cpp
       src/app/application_executor_services.cpp
       src/app/application_run.cpp

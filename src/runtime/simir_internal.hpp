@@ -211,12 +211,17 @@ void validate_container_value(const ContainerValue& value);
 struct Interpreter::Impl {
   struct ExecutionContext;
 
-  struct ProcessState {
-    Process program;
-    InstructionIndex pc{};
+  struct ProcessFrame {
     std::vector<PackedLogic4> registers;
     std::vector<std::string> string_registers;
     std::vector<ContainerValue> container_registers;
+  };
+
+  struct ProcessState {
+    Process program;
+    ProcessId design_process{};
+    InstructionIndex pc{};
+    std::shared_ptr<ProcessFrame> frame;
     std::unique_ptr<ProcessExecutor> executor;
     std::vector<Sensitivity> dynamic_sensitivity;
     std::vector<bool> dynamic_triggered;
@@ -231,6 +236,20 @@ struct Interpreter::Impl {
     std::uint64_t wait_timeout_generation{};
     std::uint64_t random_state{};
     bool halted{};
+    std::optional<ProcessId> fork_parent;
+    std::optional<std::uint64_t> fork_group;
+    std::set<ProcessId> live_children;
+    std::map<InstructionIndex, std::set<ProcessId>> active_fork_sites;
+    bool waiting_for_children{};
+    std::optional<std::uint64_t> waiting_fork_group;
+  };
+
+  struct ForkGroup {
+    ProcessId parent{};
+    InstructionIndex site{};
+    ForkJoinKind join{ForkJoinKind::all};
+    std::set<ProcessId> children;
+    bool parent_resumed{};
   };
 
   struct Fanout {
@@ -334,6 +353,8 @@ struct Interpreter::Impl {
   std::vector<std::optional<PackedLogic4>> forced_values;
   std::vector<PackedLogic4> forced_masks;
   std::vector<ProcessState> processes;
+  std::map<std::uint64_t, ForkGroup> fork_groups;
+  std::uint64_t next_fork_group{1};
   std::vector<std::vector<Fanout>> static_fanout;
   std::vector<std::vector<Fanout>> dynamic_fanout;
   std::vector<EventState> event_states;
@@ -512,6 +533,17 @@ struct Interpreter::Impl {
 
   void queue_active_current(ProcessId id);
 
+  [[nodiscard]] bool handle_fork_boundary(
+      ProcessState& process,
+      InstructionIndex instruction,
+      const Operation& operation);
+  void spawn_fork(
+      ProcessState& parent,
+      InstructionIndex instruction,
+      const Fork& operation);
+  void complete_fork_child(ProcessState& child);
+  void cancel_fork_descendants(ProcessState& parent);
+
   void trigger_event(const SignalId event);
 
   [[nodiscard]] std::uint64_t invalidate_event(
@@ -534,7 +566,8 @@ struct Interpreter::Impl {
   [[nodiscard]] bool monitor_watches(
       const SignalId signal) const;
 
-  [[nodiscard]] std::string render_monitor() const;
+  [[nodiscard]] std::string render_monitor(
+      const MonitorInstall& registration) const;
 
   void schedule_monitor_publication();
 

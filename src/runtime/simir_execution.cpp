@@ -820,6 +820,9 @@ void Interpreter::Impl::handle_boundary(
         process.current_source);
     return;
   }
+  if (handle_fork_boundary(process, instruction, operation)) {
+    return;
+  }
   if (std::holds_alternative<Pause>(operation)) {
     clear_wait_timeout(process);
     scheduler.request_stop();
@@ -841,10 +844,14 @@ void Interpreter::Impl::handle_boundary(
   }
   if (std::holds_alternative<Halt>(operation)) {
     clear_wait_timeout(process);
-    process.halted = true;
     notify_execution_point(
         process, instruction, ExecutionPointKind::process_suspend,
         process.current_source);
+    if (process.fork_parent) {
+      complete_fork_child(process);
+    } else {
+      process.halted = true;
+    }
     return;
   }
 
@@ -860,6 +867,10 @@ void Interpreter::Impl::execute(ProcessId id) {
     ExecutionContext context{*this, id};
     while (!process.halted) {
       const auto boundary = process.executor->resume(context, process.pc);
+      const bool debug_boundary =
+          boundary.instruction < process.program.operations.size()
+          && std::holds_alternative<DebugPoint>(
+              process.program.operations[boundary.instruction]);
       if (boundary.external.kind
           == ExternalSuspendKind::simir_boundary) {
         handle_boundary(
@@ -871,9 +882,7 @@ void Interpreter::Impl::execute(ProcessId id) {
             boundary.next_instruction,
             boundary.external);
       }
-      if (!std::holds_alternative<DebugPoint>(
-              process.program.operations[boundary.instruction])
-          || scheduler.stop_requested()) {
+      if (!debug_boundary || scheduler.stop_requested()) {
         return;
       }
     }
@@ -1614,6 +1623,18 @@ void Interpreter::Impl::execute(ProcessId id) {
             [&](const Yield &) {
               boundary = true;
             },
+            [&](const Fork&) {
+              boundary = true;
+            },
+            [&](const ForkEnd&) {
+              boundary = true;
+            },
+            [&](const WaitFork&) {
+              boundary = true;
+            },
+            [&](const DisableFork&) {
+              boundary = true;
+            },
             [&](const Jump &op) {
               if (op.target >= process.program.operations.size()) {
                 fail(process, "jump target is outside the operation stream");
@@ -1937,9 +1958,10 @@ void Interpreter::Impl::execute(ProcessId id) {
         operation);
 
     if (boundary) {
+      const bool debug_boundary =
+          std::holds_alternative<DebugPoint>(operation);
       handle_boundary(process, instruction, instruction + 1);
-      if (!std::holds_alternative<DebugPoint>(operation)
-          || scheduler.stop_requested()) {
+      if (!debug_boundary || scheduler.stop_requested()) {
         return;
       }
     }

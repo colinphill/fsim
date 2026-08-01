@@ -59,21 +59,21 @@ Interpreter::Impl::get_process(ProcessId id) {
 
 [[nodiscard]] PackedLogic4 &Interpreter::Impl::get_register(ProcessState &process,
                                          RegisterId id)  {
-    if (id >= process.registers.size()) {
+    if (!process.frame || id >= process.frame->registers.size()) {
       throw InterpreterError(process.program.id, process.pc,
                              "invalid register ID");
     }
-    return process.registers[id];
+    return process.frame->registers[id];
   }
 
 [[nodiscard]] std::string& Interpreter::Impl::get_string_register(
     ProcessState& process,
     const StringRegisterId id) {
-  if (id >= process.string_registers.size()) {
+  if (!process.frame || id >= process.frame->string_registers.size()) {
     throw InterpreterError(
         process.program.id, process.pc, "invalid string register ID");
   }
-  return process.string_registers[id];
+  return process.frame->string_registers[id];
 }
 
 [[nodiscard]] StringObject& Interpreter::Impl::get_string_object(
@@ -96,12 +96,12 @@ Interpreter::Impl::get_process(ProcessId id) {
 Interpreter::Impl::get_container_register(
     ProcessState& process,
     const ContainerRegisterId id) {
-  if (id >= process.container_registers.size()) {
+  if (!process.frame || id >= process.frame->container_registers.size()) {
     throw InterpreterError(
         process.program.id, process.pc,
         "invalid container register ID");
   }
-  return process.container_registers[id];
+  return process.frame->container_registers[id];
 }
 
 [[nodiscard]] ContainerObject& Interpreter::Impl::get_container_object(
@@ -529,7 +529,8 @@ void Interpreter::Impl::notify_execution_point(
       execution_point_hook(
           scheduler,
           ExecutionPoint{
-              process.program.id, instruction, kind, source});
+              process.program.id, process.design_process,
+              instruction, kind, source});
     }
   }
 
@@ -544,12 +545,10 @@ void Interpreter::Impl::notify_execution_point(
             });
   }
 
-[[nodiscard]] std::string Interpreter::Impl::render_monitor() const  {
-    if (!monitor) {
-      return {};
-    }
+[[nodiscard]] std::string Interpreter::Impl::render_monitor(
+    const MonitorInstall& registration) const  {
     std::string text;
-    for (const auto& value : monitor->values) {
+    for (const auto& value : registration.values) {
       if (value.kind == MonitorValueKind::time) {
         text += make_time_output(
             value.prefix,
@@ -571,7 +570,7 @@ void Interpreter::Impl::notify_execution_point(
             value.zero_pad);
       }
     }
-    text += monitor->trailing_text;
+    text += registration.trailing_text;
     return text;
   }
 
@@ -599,7 +598,7 @@ void Interpreter::Impl::schedule_monitor_publication()  {
           if (output_hook) {
             output_hook(
                 process,
-                render_monitor(),
+                render_monitor(*monitor),
                 monitor->newline,
                 runtime.now(),
                 runtime.delta());
@@ -610,6 +609,22 @@ void Interpreter::Impl::schedule_monitor_publication()  {
 void Interpreter::Impl::install_monitor(
     const ProcessId process,
     const MonitorInstall& registration)  {
+    if (registration.one_shot) {
+      scheduler.schedule(
+          SchedulerPhase::postponed,
+          process,
+          [this, process, registration](Scheduler& runtime) {
+            if (output_hook) {
+              output_hook(
+                  process,
+                  render_monitor(registration),
+                  registration.newline,
+                  runtime.now(),
+                  runtime.delta());
+            }
+          });
+      return;
+    }
     if (monitor_generation
         == std::numeric_limits<std::uint64_t>::max()) {
       throw std::overflow_error{"monitor generation overflow"};

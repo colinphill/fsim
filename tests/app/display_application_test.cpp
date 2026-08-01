@@ -273,8 +273,8 @@ void test_display(
   assert(!reference.output[23].newline);
   assert(reference.output[24].text == " q=0011");
   assert(reference.output[24].newline);
-  assert(reference.output[25].text == "post=10xz");
-  assert(reference.output[26].text == "mon=0011 t=0");
+  assert(reference.output[25].text == "post=1110");
+  assert(reference.output[26].text == "mon=1110 t=0");
   assert(reference.output[26].time == 0);
   assert(reference.output[27].text == "mon=0101 t=1");
   assert(reference.output[27].time == 1);
@@ -457,6 +457,7 @@ module display_test;
     $display("compact=%0h", 16'h00a5);
     $strobe("post=%b", q);
     q = 4'b0011;
+    q <= 4'b1110;
     $monitor("mon=%b t=%t", q);
     $display("upper=%X", n);
     $display("width=%6h", n);
@@ -557,7 +558,7 @@ end architecture;
             "upper=a5\nwidth=    a5\nleft=a5    !\n"
             "zero=-00001\nmulti=0011/a5 tail=-1\n3165\n"
             "scope=display_test q=0011\n"
-            "post=10xz\nmon=0011 t=0\nmon=0101 t=1\n"
+            "post=1110\nmon=1110 t=0\nmon=0101 t=1\n"
             "mon=0111 t=3\ntime=0004\nsecond\n"
             "simulation stopped at tick 4")
         != std::string::npos);

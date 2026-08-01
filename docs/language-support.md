@@ -557,8 +557,37 @@ Named-event status update: Verilog-2005/SystemVerilog module-level `event`
 declarations, comma groups, immediate `->` triggers, static `@event`, dynamic
 `@(event)`, and repeated wakeups now execute. SystemVerilog `->>` publishes
 through the common update phase and `->> #delay` publishes at a future
-timestamp; event arguments and general event expressions remain deferred. This update
+timestamp. Same-delta source ordering deterministically distinguishes a missed
+blocking trigger before its waiter, a caught waiter before a blocking trigger,
+and nonblocking or zero-delay nonblocking triggers after waiters arm. Event
+arguments and general event expressions remain deferred. This update
 supersedes the older broad “named events” limitation in the compact table.
+
+SystemVerilog fork/process status update: named or anonymous bounded
+`fork` blocks may contain leading packed declarations and ordered procedural
+branches terminated by `join`, `join_any`, or `join_none`; matching closing
+labels, `wait fork`, and `disable fork` are retained. Children start in stable
+source order with independent PCs and one shared lexical frame. `join` waits
+for every child, `join_any` resumes on first completion while the others
+continue, `join_none` continues immediately, `wait fork` waits for live
+immediate children, and `disable fork` recursively cancels all live
+descendants even through a completed intermediate child. Dynamic child safe
+points retain a distinct runtime ID and the static design-process identity for
+bounds-safe debugger names and local schemas. Interpreter and LLVM O0/O2 share
+the same frame/lifecycle behavior, callback order, VCD, and cache identity.
+One live activation per lexical fork site is admitted; fork inside callables,
+re-entry of a site with live children, and broader automatic per-activation
+fork storage remain explicitly diagnosed bounded exclusions. This update
+supersedes the compact table's blanket `fork` limitation.
+
+SystemVerilog NBA/postponed status update: dynamic fork children stage
+same-slot NBAs in stable source order, with the last staged assignment winning.
+Active blocking writes, inactive `#0` work, update/NBA publication, and
+postponed observation retain their exact region order. `$strobe` samples
+supported direct packed-signal operands in the postponed region after NBA
+publication rather than retaining an active-region formatted snapshot.
+Compound or otherwise computed `$strobe` operands remain deferred with a
+checked diagnostic.
 
 SystemVerilog function status update: module, package, and selected generated
 functions with automatic, static, or implicit lifetime, bounded integral, byte-string, supported

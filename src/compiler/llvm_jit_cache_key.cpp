@@ -122,10 +122,15 @@ using runtime::simir::WriteUpdateDynamicPartSlice;
 using runtime::simir::WriteUpdateSlice;
 using runtime::simir::WriteStringObject;
 using runtime::simir::Yield;
+using runtime::simir::Fork;
+using runtime::simir::ForkEnd;
+using runtime::simir::ForkJoinKind;
+using runtime::simir::WaitFork;
+using runtime::simir::DisableFork;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v56";
+    "fsim-llvm-native-object-v57";
 
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
@@ -1359,6 +1364,8 @@ void add_dynamic_part_index_key(
               builder.add("trailing-text", value.trailing_text);
               add_key_u64(
                   builder, "newline", value.newline ? 1U : 0U);
+              add_key_u64(
+                  builder, "one-shot", value.one_shot ? 1U : 0U);
             },
             [&](const MonitorControl& value) {
               builder.add("operation", "MonitorControl");
@@ -1520,6 +1527,27 @@ void add_dynamic_part_index_key(
             },
             [&](const Yield &) {
               builder.add("operation", "Yield");
+            },
+            [&](const Fork& value) {
+              builder.add("operation", "Fork");
+              add_key_u64(
+                  builder, "fork-join",
+                  static_cast<std::underlying_type_t<ForkJoinKind>>(
+                      value.join));
+              add_key_u64(
+                  builder, "fork-branch-count", value.branches.size());
+              for (const auto branch : value.branches) {
+                add_key_u64(builder, "fork-branch", branch);
+              }
+            },
+            [&](const ForkEnd&) {
+              builder.add("operation", "ForkEnd");
+            },
+            [&](const WaitFork&) {
+              builder.add("operation", "WaitFork");
+            },
+            [&](const DisableFork&) {
+              builder.add("operation", "DisableFork");
             },
             [&](const Pause &) {
               builder.add("operation", "Pause");

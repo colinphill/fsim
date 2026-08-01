@@ -265,20 +265,17 @@ endmodule
         }
     }
     assert(
-        displays.size() == 5
+        displays.size() == 4
         && displays[0].text == "first"
         && displays[0].newline
         && !displays[0].postponed
-        && displays[1].text == "postponed"
-        && displays[1].newline
-        && displays[1].postponed
-        && displays[2].text == "continued"
-        && !displays[2].newline
-        && !displays[2].postponed
+        && displays[1].text == "continued"
+        && !displays[1].newline
+        && !displays[1].postponed
+        && displays[2].text.empty()
+        && displays[2].newline
         && displays[3].text.empty()
-        && displays[3].newline
-        && displays[4].text.empty()
-        && !displays[4].newline);
+        && !displays[3].newline);
     std::vector<fsim::runtime::simir::MonitorInstall> monitors;
     for (const auto& operation : display_operations) {
         if (const auto* monitor =
@@ -288,10 +285,14 @@ endmodule
         }
     }
     assert(
-        monitors.size() == 2
+        monitors.size() == 3
         && monitors[0].values.empty()
-        && monitors[0].trailing_text == "literal replacement");
-    const auto& monitor = monitors[1];
+        && monitors[0].trailing_text == "postponed"
+        && monitors[0].one_shot
+        && monitors[1].values.empty()
+        && monitors[1].trailing_text == "literal replacement"
+        && !monitors[1].one_shot);
+    const auto& monitor = monitors[2];
     assert(
         monitor.values.size() == 1
         && monitor.values.front().kind

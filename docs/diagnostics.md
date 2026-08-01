@@ -576,6 +576,10 @@ therefore excluded.
 | `FSIM-SV-PARSE-203` | error | A repeated intra-assignment event control is missing its opening parenthesis. |
 | `FSIM-SV-PARSE-204` | error | A repeated intra-assignment event control is missing its closing parenthesis. |
 | `FSIM-SV-PARSE-205` | error | A repeated intra-assignment event control is missing its `@` event marker. |
+| `FSIM-SV-PARSE-206` | error | A procedural `fork` block is missing its terminating `join`, `join_any`, or `join_none`. |
+| `FSIM-SV-PARSE-207` | error | A `wait fork` statement is missing its terminating semicolon. |
+| `FSIM-SV-PARSE-208` | error | A bounded `disable` process-control statement does not select `fork`. |
+| `FSIM-SV-PARSE-209` | error | A `disable fork` statement is missing its terminating semicolon. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -721,6 +725,9 @@ therefore excluded.
 | `FSIM-SV-SEM-104` | error | An edge-qualified event expression is not a direct scalar signal in the bounded expression-control slice. |
 | `FSIM-SV-SEM-105` | error | A general packed event expression is mixed with another event-list item. |
 | `FSIM-SV-SEM-106` | error | A body-timed `always` process has a reachable re-entry path without suspension or termination. |
+| `FSIM-SV-SEM-107` | error | `wait fork` or `disable fork` is used outside SystemVerilog-2017 input. |
+| `FSIM-SV-SEM-108` | error | `join_any` or `join_none` is used outside SystemVerilog-2017 input. |
+| `FSIM-SV-SEM-109` | error | A procedural fork closing label has no opening label or does not match it. |
 | `FSIM-SV-SEM-030` | error | A reachable `forever` path can take its backedge without suspending, exiting, or terminating the simulation. |
 | `FSIM-SV-SEM-031` | error | A SystemVerilog `break` or `continue` statement appears outside a procedural loop. |
 | `FSIM-SV-SEM-032` | error | A SystemVerilog `final` procedure contains a timing control, wait, or `$finish`. |
@@ -904,6 +911,8 @@ therefore excluded.
 | `FSIM-ELAB-104` | error | A random system function is used in an unsupported language or with an invalid argument count. |
 | `FSIM-ELAB-105` | error | Procedural assignment timing-control HIR has an inconsistent control kind, delay, or event payload. |
 | `FSIM-ELAB-106` | error | Procedural update metadata is inconsistent with its normalized expression or captured lvalue. |
+| `FSIM-ELAB-107` | error | A bounded fork appears inside a callable whose shared call frame cannot safely outlive the caller. |
+| `FSIM-ELAB-108` | error | A postponed `$strobe` operand is not yet a direct packed-signal reference. |
 | `FSIM-ELAB-DRV-001` | error | An unresolved variable has multiple process drivers. |
 | `FSIM-ELAB-DRV-002` | error | A wired-AND or wired-OR net requires an unsupported resolution policy. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |

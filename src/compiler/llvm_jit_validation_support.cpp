@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <set>
 #include <sstream>
 
 namespace fsim::compiler::llvm_detail {
@@ -34,6 +35,51 @@ namespace {
     const std::string_view message) {
   throw LlvmJitUnsupportedError(
       instruction_error(process, instruction, message));
+}
+
+void validate_fork_operation(
+    const runtime::simir::Process& process,
+    const std::size_t instruction,
+    const runtime::simir::Fork& operation) {
+  if (instruction + 1 >= process.operations.size()) {
+    reject(
+        process, instruction,
+        "fork parent continuation is outside the operation stream");
+  }
+  std::set<runtime::simir::InstructionIndex> branches;
+  for (const auto branch : operation.branches) {
+    if (branch >= process.operations.size()) {
+      reject(process, instruction, "fork branch target is out of range");
+    }
+    if (branch <= instruction + 1) {
+      reject(
+          process, instruction,
+          "fork branch must follow its parent continuation");
+    }
+    if (!branches.insert(branch).second) {
+      reject(process, instruction, "fork branch target is duplicated");
+    }
+  }
+  if (operation.join != runtime::simir::ForkJoinKind::all
+      && operation.join != runtime::simir::ForkJoinKind::any
+      && operation.join != runtime::simir::ForkJoinKind::none) {
+    reject(process, instruction, "fork has an invalid join kind");
+  }
+}
+
+[[nodiscard]] bool is_resume_boundary(
+    const runtime::simir::Operation& operation) noexcept {
+  using namespace runtime::simir;
+  return std::holds_alternative<WaitFor>(operation)
+      || std::holds_alternative<WaitOn>(operation)
+      || std::holds_alternative<WaitSensitivity>(operation)
+      || std::holds_alternative<WaitForever>(operation)
+      || std::holds_alternative<Yield>(operation)
+      || std::holds_alternative<Fork>(operation)
+      || std::holds_alternative<ForkEnd>(operation)
+      || std::holds_alternative<WaitFork>(operation)
+      || std::holds_alternative<DisableFork>(operation)
+      || std::holds_alternative<Pause>(operation);
 }
 
 [[nodiscard]] bool valid_symbol(const std::string_view symbol) noexcept {

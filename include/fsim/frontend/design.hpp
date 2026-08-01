@@ -749,6 +749,9 @@ enum class StatementKind {
   WaitOn,
   WaitUntil,
   EventTrigger,
+  Fork,
+  WaitFork,
+  DisableFork,
   Display,
   FileClose,
   FileDisplay,
@@ -760,6 +763,12 @@ enum class StatementKind {
   Finish,
   Block,
   Null,
+};
+
+enum class ForkJoinKind {
+  All,
+  Any,
+  None,
 };
 
 struct SubprogramAssociation {
@@ -874,6 +883,9 @@ struct Statement {
   // SystemVerilog do-while evaluates its condition after the body. Other
   // runtime loops use the default pre-test form.
   bool loop_post_test{};
+  // A parallel procedural block stores one child statement per branch.
+  // Declarations and label belong to the lexical fork scope.
+  ForkJoinKind fork_join_kind{ForkJoinKind::All};
   // True only for an If node synthesized from a VHDL conditional signal
   // assignment, preserving its distinct legality diagnostic.
   bool vhdl_conditional_assignment{};

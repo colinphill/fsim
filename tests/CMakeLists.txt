@@ -100,6 +100,7 @@ add_executable(
   elaboration/elaborator_generate_test.cpp
   elaboration/elaborator_mixed_test.cpp
   elaboration/elaborator_process_test.cpp
+  elaboration/elaborator_fork_test.cpp
   elaboration/elaborator_function_test.cpp
   elaboration/elaborator_task_test.cpp
   elaboration/elaborator_case_qualifier_test.cpp
@@ -656,6 +657,24 @@ set_tests_properties(
   set_tests_properties(
     fsim.application.named_events
     PROPERTIES LABELS "fast;named-events"
+  )
+
+  add_executable(
+    fsim_fork_application_tests
+    app/fork_application_test.cpp
+  )
+  fsim_configure_test(fsim_fork_application_tests)
+  target_link_libraries(
+    fsim_fork_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.fork
+    COMMAND fsim_fork_application_tests
+  )
+  set_tests_properties(
+    fsim.application.fork
+    PROPERTIES LABELS "fast;fork;systemverilog;cache;debugger"
   )
 
   add_executable(

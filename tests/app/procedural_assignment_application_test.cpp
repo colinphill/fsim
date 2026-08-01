@@ -93,7 +93,7 @@ Capture run_once(
   capture.compiled_processes = simulation.compiled_process_count();
   capture.native_cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 34> names{
+  constexpr std::array<std::string_view, 36> names{
       "procedural_assignments.delayed_nba",
       "procedural_assignments.delayed_blocking",
       "procedural_assignments.event_blocking",
@@ -127,12 +127,15 @@ Capture run_once(
       "procedural_assignments.chained_target",
       "procedural_assignments.delayed_compound",
       "procedural_assignments.event_compound",
-      "procedural_assignments.event_vector"};
+      "procedural_assignments.event_vector",
+      "procedural_assignments.cross_slot",
+      "procedural_assignments.inactive_nba"};
   constexpr std::array<std::uint32_t, names.size()> widths{
       1, 1, 1, 1, 1, 1, 4, 4, 1, 1, 1,
       16, 16, 16, 16, 16, 32,
       8, 8, 8, 1, 32,
-      4, 4, 4, 4, 4, 4, 4, 4, 8, 4, 4, 4};
+      4, 4, 4, 4, 4, 4, 4, 4, 8, 4, 4, 4,
+      1, 3};
   std::array<fsim::runtime::simir::SignalId, names.size()> signals{};
   std::array<fsim::runtime::VcdSignal, names.size()> vcd_signals{};
   std::ostringstream vcd_output;
@@ -244,6 +247,13 @@ void verify_reference(const Capture& capture) {
       changes_for(capture, "procedural_assignments.zero_slot")
       == std::vector<TimedValue>{{"1", 0}}));
   assert((
+      changes_for(capture, "procedural_assignments.cross_slot")
+      == std::vector<TimedValue>{{"1", 0}}));
+  assert((
+      changes_for(capture, "procedural_assignments.inactive_nba")
+      == std::vector<TimedValue>{
+          {"000", 0}, {"010", 0}, {"001", 0}}));
+  assert((
       changes_for(
           capture, "procedural_assignments.equal_deadline")
       == std::vector<TimedValue>{{"1", 6}}));
@@ -331,11 +341,11 @@ void verify_mode(
     assert(reference.debugger == actual->debugger);
   }
 #if defined(FSIM_HAS_LLVM)
-  assert(cold.compiled_processes == 13);
+  assert(cold.compiled_processes == 15);
   assert(cold.native_cache.hits == 0);
   assert(cold.native_cache.misses == 1);
   assert(cold.native_cache.stores == 1);
-  assert(warm.compiled_processes == 13);
+  assert(warm.compiled_processes == 15);
   assert(warm.native_cache.hits == 1);
   assert(warm.native_cache.misses == 0);
 #else
@@ -396,6 +406,8 @@ module procedural_assignments;
   logic [3:0] delayed_compound;
   logic [3:0] event_compound;
   logic [3:0] event_vector;
+  logic cross_slot;
+  logic [2:0] inactive_nba;
   logic [3:0] compound_rhs;
   logic signed [31:0] event_index;
 
@@ -481,6 +493,16 @@ module procedural_assignments;
     chained_target = 8'h00;
     chained_target[7:2][3:1] = 3'b101;
     chained_target[7:2][3:1] += 3'b001;
+  end
+
+  initial fork
+    cross_slot <= 1'b0;
+    cross_slot <= 1'b1;
+  join
+  initial begin
+    inactive_nba = 3'd0;
+    inactive_nba <= 3'd1;
+    #0 inactive_nba = 3'd2;
   end
   initial begin
     overlap <= 4'b1010;

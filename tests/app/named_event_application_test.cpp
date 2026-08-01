@@ -42,6 +42,10 @@ struct Capture {
   std::string controlled;
   std::string body_clock;
   std::string repeat_count_calls;
+  std::string blocking_missed;
+  std::string blocking_caught;
+  std::string nba_caught;
+  std::string zero_nba_caught;
   std::string vcd;
   std::vector<Change> event_changes;
   std::vector<Change> observed_changes;
@@ -70,11 +74,22 @@ Capture execute(
       simulation.find_signal("named_event_test.body_clock");
   const auto repeat_count_calls =
       simulation.find_signal("named_event_test.repeat_count_calls");
+  const auto blocking_missed =
+      simulation.find_signal("named_event_test.blocking_missed");
+  const auto blocking_caught =
+      simulation.find_signal("named_event_test.blocking_caught");
+  const auto nba_caught =
+      simulation.find_signal("named_event_test.nba_caught");
+  const auto zero_nba_caught =
+      simulation.find_signal("named_event_test.zero_nba_caught");
   assert(
       event && observed && repeated
       && function_observed && task_observed
       && expression_observed && controlled && body_clock
       && repeat_count_calls);
+  assert(
+      blocking_missed && blocking_caught
+      && nba_caught && zero_nba_caught);
 
   Capture capture;
   capture.compiled_processes = simulation.compiled_process_count();
@@ -143,6 +158,14 @@ Capture execute(
       simulation.read_signal(*body_clock).to_msb_string();
   capture.repeat_count_calls =
       simulation.read_signal(*repeat_count_calls).to_msb_string();
+  capture.blocking_missed =
+      simulation.read_signal(*blocking_missed).to_msb_string();
+  capture.blocking_caught =
+      simulation.read_signal(*blocking_caught).to_msb_string();
+  capture.nba_caught =
+      simulation.read_signal(*nba_caught).to_msb_string();
+  capture.zero_nba_caught =
+      simulation.read_signal(*zero_nba_caught).to_msb_string();
   vcd.flush();
   capture.vcd = vcd_text.str();
   return capture;
@@ -205,6 +228,10 @@ void test_named_events(
     assert(capture->controlled == "11");
     assert(capture->body_clock == "0");
     assert(capture->repeat_count_calls == "01");
+    assert(capture->blocking_missed == "0");
+    assert(capture->blocking_caught == "1");
+    assert(capture->nba_caught == "1");
+    assert(capture->zero_nba_caught == "1");
     assert(capture->event_changes.size() == 2);
     assert(capture->event_changes[0].time == 1);
     assert(capture->event_changes[0].value == "1");
@@ -228,7 +255,7 @@ void test_named_events(
   assert(reference.vcd == compiled.vcd);
   assert(reference.vcd.find("#4") != std::string::npos);
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 8);
+  assert(compiled.compiled_processes == 16);
 #else
   assert(compiled.compiled_processes == 0);
 #endif
@@ -259,6 +286,14 @@ module named_event_test;
   bit [1:0] controlled;
   bit body_clock;
   bit [1:0] repeat_count_calls;
+  event blocking_race_missed;
+  event blocking_race_caught;
+  event nba_race;
+  event zero_nba_race;
+  bit blocking_missed;
+  bit blocking_caught;
+  bit nba_caught;
+  bit zero_nba_caught;
   function automatic logic read_a_leaf;
     return source_a;
   endfunction
@@ -282,6 +317,26 @@ module named_event_test;
     expression_observed = expression_observed + 1'b1;
   initial controlled <= repeat (2) @(fired) 2'b11;
   always #1 body_clock = ~body_clock;
+  initial -> blocking_race_missed;
+  initial begin
+    @(blocking_race_missed);
+    blocking_missed = 1'b1;
+  end
+  initial begin
+    @(blocking_race_caught);
+    blocking_caught = 1'b1;
+  end
+  initial -> blocking_race_caught;
+  initial ->> nba_race;
+  initial begin
+    @(nba_race);
+    nba_caught = 1'b1;
+  end
+  initial ->> #0 zero_nba_race;
+  initial begin
+    @(zero_nba_race);
+    zero_nba_caught = 1'b1;
+  end
   initial begin
     #1 -> fired;
     #1 ->> #1 fired;

@@ -973,7 +973,15 @@ struct WaitForever {};
 
 /// Suspend and resume in the active phase of the next delta cycle.
 struct Yield {};
-
+enum class ForkJoinKind : std::uint8_t { all, any, none };
+/// Spawn child PCs sharing the lexical frame; each ends at ForkEnd.
+struct Fork {
+  std::vector<InstructionIndex> branches;
+  ForkJoinKind join{ForkJoinKind::all};
+};
+struct ForkEnd {};
+struct WaitFork {};
+struct DisableFork {};
 struct Jump {
   InstructionIndex target{};
 };
@@ -1155,6 +1163,7 @@ struct MonitorInstall {
   std::vector<MonitorValue> values;
   std::string trailing_text;
   bool newline{true};
+  bool one_shot{};
 };
 
 /// Enable or disable the current monitor without discarding its registration.
@@ -1232,7 +1241,8 @@ using Operation =
                  WriteInertialDynamicSlice,
                  WriteProjectedDynamicSlice,
                  WriteProjectedWaveformDynamicSlice,
-                 WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield, Jump,
+                 WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield,
+                 Fork, ForkEnd, WaitFork, DisableFork, Jump,
                  Call, Return, Branch, DebugPoint, Assert, Display, FormatDisplay,
                  StringDisplay, TimeDisplay, MonitorInstall, MonitorControl,
                  RandomValue,
@@ -1745,26 +1755,14 @@ enum class ExternalSuspendKind : std::uint8_t {
   halt,
 };
 
-/// A dynamic suspension selected by an alternate language executor.
-///
-/// This is deliberately expressed in common-kernel terms. The executor may
-/// choose the boundary at run time (for example SystemC `next_trigger`) but
-/// cannot schedule or own fanout itself.
+/// Common-kernel suspension selected by an alternate language executor.
 struct ExternalSuspension {
   ExternalSuspendKind kind{ExternalSuspendKind::simir_boundary};
   SimulationTick delay{};
   std::vector<Sensitivity> sensitivity;
   bool wait_all{};
 };
-
-/// Describes the boundary at which an alternate executor returned control.
-///
-/// `instruction` identifies a WaitFor, WaitOn, WaitSensitivity, WaitForever,
-/// Yield, Stop, or Halt operation. `next_instruction` is the executor's
-/// persistent resume PC and must be exactly the following operation for the
-/// current SimIR.
-/// `external` overrides the placeholder SimIR boundary for an executor whose
-/// suspension kind is selected dynamically.
+/// Alternate-executor boundary and its exact sequential resume PC.
 struct ProcessResumeResult {
   ProcessResumeResult() = default;
   constexpr ProcessResumeResult(
@@ -1772,7 +1770,6 @@ struct ProcessResumeResult {
       const InstructionIndex resume_instruction) noexcept
       : instruction(boundary_instruction),
         next_instruction(resume_instruction) {}
-
   InstructionIndex instruction{};
   InstructionIndex next_instruction{};
   ExternalSuspension external;
@@ -1788,16 +1785,19 @@ enum class ExecutionPointKind : std::uint8_t {
 };
 
 struct ExecutionPoint {
-  ProcessId process{};
+  ProcessId process{}, design_process{};
   InstructionIndex instruction{};
   ExecutionPointKind kind{ExecutionPointKind::statement};
   SourceLocation source;
 };
-
 class ProcessExecutor {
 public:
   virtual ~ProcessExecutor() = default;
-
+  /// Share the lexical frame with a child owning an independent PC.
+  [[nodiscard]] virtual std::unique_ptr<ProcessExecutor> fork_clone(
+      InstructionIndex) {
+    throw std::logic_error{"executor does not support fork cloning"};
+  }
   /// Execute from start_instruction until the next SimIR kernel boundary.
   ///
   /// Implementations own their register/frame storage. Exceptions must be

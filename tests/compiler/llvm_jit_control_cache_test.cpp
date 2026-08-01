@@ -58,6 +58,61 @@ void test_process_control_cache_identity() {
       const auto statistics = changed.cache_statistics();
       assert(statistics.misses == 1 && statistics.stores == 1);
     }
+
+    const auto fork_directory = directory / "fork";
+    const auto fork_options =
+        LlvmJitOptions{optimization, fork_directory};
+    const auto make_fork_process = [](
+        const InstructionIndex branch,
+        const ForkJoinKind join) {
+      Process process;
+      process.id = 0;
+      process.name = "fork_cache";
+      process.register_count = 1;
+      process.operations = {
+          Fork{{branch}, join},
+          Jump{4},
+          LoadConstant{0, PackedLogic4::from_msb_string("1")},
+          ForkEnd{},
+          Halt{}};
+      return process;
+    };
+    {
+      LlvmJit cold{fork_options};
+      cold.add_process(
+          "fork_cache",
+          make_fork_process(2, ForkJoinKind::all), {});
+      assert(cold.lookup("fork_cache"));
+      const auto statistics = cold.cache_statistics();
+      assert(statistics.misses == 1 && statistics.stores == 1);
+    }
+    {
+      LlvmJit warm{fork_options};
+      warm.add_process(
+          "fork_cache",
+          make_fork_process(2, ForkJoinKind::all), {});
+      assert(warm.lookup("fork_cache"));
+      const auto statistics = warm.cache_statistics();
+      assert(statistics.hits == 1 && statistics.misses == 0);
+    }
+    {
+      LlvmJit changed_branch{fork_options};
+      changed_branch.add_process(
+          "fork_cache",
+          make_fork_process(3, ForkJoinKind::all), {});
+      assert(changed_branch.lookup("fork_cache"));
+      const auto statistics = changed_branch.cache_statistics();
+      assert(statistics.misses == 1 && statistics.stores == 1);
+    }
+    {
+      LlvmJit changed_join{fork_options};
+      changed_join.add_process(
+          "fork_cache",
+          make_fork_process(2, ForkJoinKind::any), {});
+      assert(changed_join.lookup("fork_cache"));
+      const auto statistics = changed_join.cache_statistics();
+      assert(statistics.misses == 1 && statistics.stores == 1);
+    }
   }
   std::filesystem::remove_all(root, error);
   assert(!error);

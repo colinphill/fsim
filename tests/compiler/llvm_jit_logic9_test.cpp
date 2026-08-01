@@ -1252,6 +1252,40 @@ void test_rejections() {
       [&] { jit.add_process("bad_branch", bad_branch, no_signals); },
       "branch false target is outside");
 
+  Process bad_fork;
+  bad_fork.id = 0;
+  bad_fork.name = "bad_fork";
+  bad_fork.operations = {Fork{{1}, ForkJoinKind::all}, ForkEnd{}};
+  expect_fatal_error(
+      [&] { jit.add_process("bad_fork", bad_fork, no_signals); },
+      "fork branch must follow its parent continuation");
+
+  Process fork_without_continuation;
+  fork_without_continuation.id = 0;
+  fork_without_continuation.name = "fork_without_continuation";
+  fork_without_continuation.operations = {
+      Fork{{}, ForkJoinKind::all}};
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "fork_without_continuation",
+            fork_without_continuation,
+            no_signals);
+      },
+      "fork parent continuation is outside");
+
+  Process invalid_fork_join;
+  invalid_fork_join.id = 0;
+  invalid_fork_join.name = "invalid_fork_join";
+  invalid_fork_join.operations = {
+      Fork{{2}, static_cast<ForkJoinKind>(99)}, Halt{}, ForkEnd{}};
+  expect_fatal_error(
+      [&] {
+        jit.add_process(
+            "invalid_fork_join", invalid_fork_join, no_signals);
+      },
+      "fork has an invalid join kind");
+
   Process path_use_before_definition;
   path_use_before_definition.id = 0;
   path_use_before_definition.name = "path_use_before_definition";

@@ -766,6 +766,20 @@ std::optional<Statement> VerilogParser::parse_statement() {
   if (match_keyword("wait")) {
     const auto start = previous();
     Statement statement;
+    if (match_keyword("fork")) {
+      statement.kind = StatementKind::WaitFork;
+      if (language_ != Language::SystemVerilog2017) {
+        error(
+            start, "FSIM-SV-SEM-107",
+            "wait fork requires SystemVerilog");
+      }
+      expect(
+          TokenKind::Semicolon,
+          "';' after wait fork",
+          "FSIM-SV-PARSE-207");
+      statement.span = span_from(start, previous());
+      return statement;
+    }
     statement.kind = StatementKind::WaitUntil;
     expect(
         TokenKind::LeftParen,
@@ -780,6 +794,30 @@ std::optional<Statement> VerilogParser::parse_statement() {
       statement.statements.push_back(
           std::move(*controlled));
     }
+    statement.span = span_from(start, previous());
+    return statement;
+  }
+  if (match_keyword("fork")) {
+    return parse_fork_statement(previous());
+  }
+  if (match_keyword("disable")) {
+    const auto start = previous();
+    Statement statement;
+    statement.kind = StatementKind::DisableFork;
+    if (!match_keyword("fork")) {
+      error(
+          current(), "FSIM-SV-PARSE-208",
+          "bounded process control requires 'disable fork'");
+    }
+    if (language_ != Language::SystemVerilog2017) {
+      error(
+          start, "FSIM-SV-SEM-107",
+          "disable fork requires SystemVerilog");
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after disable fork",
+        "FSIM-SV-PARSE-209");
     statement.span = span_from(start, previous());
     return statement;
   }

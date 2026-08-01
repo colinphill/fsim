@@ -46,6 +46,8 @@ using runtime::simir::EdgeKind;
 using runtime::simir::Extract;
 using runtime::simir::FormatDisplay;
 using runtime::simir::ForceSignalSlice;
+using runtime::simir::Fork;
+using runtime::simir::ForkEnd;
 using runtime::simir::Halt;
 using runtime::simir::InstructionIndex;
 using runtime::simir::Insert;
@@ -88,6 +90,8 @@ using runtime::simir::WaitFor;
 using runtime::simir::WaitOn;
 using runtime::simir::WaitSensitivity;
 using runtime::simir::WaitForever;
+using runtime::simir::WaitFork;
+using runtime::simir::DisableFork;
 using runtime::simir::WriteAfter;
 using runtime::simir::WriteAfterDynamicSlice;
 using runtime::simir::WriteAfterDynamicPartSlice;
@@ -1934,6 +1938,26 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             [&](const Yield &) {
               return_result(
                   FSIM_JIT_RESUME_STATUS_YIELDED, instruction, 0,
+                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
+            },
+            [&](const Fork&) {
+              return_result(
+                  FSIM_JIT_RESUME_STATUS_FORK, instruction, 0,
+                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
+            },
+            [&](const ForkEnd&) {
+              return_result(
+                  FSIM_JIT_RESUME_STATUS_FORK_END, instruction, 0,
+                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
+            },
+            [&](const WaitFork&) {
+              return_result(
+                  FSIM_JIT_RESUME_STATUS_WAIT_FORK, instruction, 0,
+                  FSIM_JIT_FRAME_STATE_READY, next_instruction);
+            },
+            [&](const DisableFork&) {
+              return_result(
+                  FSIM_JIT_RESUME_STATUS_DISABLE_FORK, instruction, 0,
                   FSIM_JIT_FRAME_STATE_READY, next_instruction);
             },
             [&](const Pause &) {

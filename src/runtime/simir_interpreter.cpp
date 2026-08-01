@@ -211,16 +211,20 @@ ProcessId Interpreter::add_process(Process process) {
   }
 
   Impl::ProcessState state;
-  state.registers.assign(process.register_count, PackedLogic4{});
-  state.string_registers.assign(process.string_register_count, {});
-  state.container_registers.reserve(
+  state.frame = std::make_shared<Impl::ProcessFrame>();
+  state.frame->registers.assign(
+      process.register_count, PackedLogic4{});
+  state.frame->string_registers.assign(
+      process.string_register_count, {});
+  state.frame->container_registers.reserve(
       process.container_register_count);
   for (const auto& type : process.container_register_types) {
-    state.container_registers.push_back(
+    state.frame->container_registers.push_back(
         default_container_value(type));
   }
   state.random_state = Impl::initial_random_state(
       impl_->root_seed, id);
+  state.design_process = id;
   state.waiting_on_static = !process.initialize;
   state.program = std::move(process);
   impl_->processes.push_back(std::move(state));
@@ -410,7 +414,7 @@ PackedLogic4 Interpreter::read_debug_local(
     return state.executor->read_register(
         local.register_id, local.width);
   }
-  const auto& value = state.registers.at(local.register_id);
+  const auto& value = state.frame->registers.at(local.register_id);
   if (value.width() != local.width) {
     throw std::logic_error{"SimIR debug local has not been initialized"};
   }
@@ -429,7 +433,7 @@ std::string Interpreter::read_debug_string_local(
   if (state.executor) {
     return state.executor->read_string_register(local.register_id);
   }
-  return state.string_registers.at(local.register_id);
+  return state.frame->string_registers.at(local.register_id);
 }
 
 ContainerValue Interpreter::read_debug_container_local(
@@ -445,7 +449,7 @@ ContainerValue Interpreter::read_debug_container_local(
   if (state.executor) {
     return state.executor->read_container_register(local.register_id);
   }
-  return state.container_registers.at(local.register_id);
+  return state.frame->container_registers.at(local.register_id);
 }
 
 bool Interpreter::stopped_by_design() const noexcept {

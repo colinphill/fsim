@@ -1386,18 +1386,24 @@ Lowerer::Lowerer(
             break;
         }
         case StatementKind::Display: {
-            if (statement.output_monitor) {
+            if (statement.output_monitor
+                || statement.output_postponed) {
                 if (statement.output_values.empty()
                     && !statement.output_format) {
                     process_.operations.emplace_back(
                         MonitorInstall{
                             {},
                             statement.output_text,
-                            statement.output_newline});
+                            statement.output_newline,
+                            statement.output_postponed
+                                && !statement.output_monitor});
                     break;
                 }
                 MonitorInstall monitor;
                 monitor.newline = statement.output_newline;
+                monitor.one_shot =
+                    statement.output_postponed
+                    && !statement.output_monitor;
                 std::string pending_prefix;
                 const auto append_value =
                     [&](const frontend::OutputValue& output) {
@@ -1423,8 +1429,13 @@ Lowerer::Lowerer(
                             if (output.value.kind
                                 != frontend::ExpressionKind::Identifier) {
                                 report(
-                                    "FSIM-ELAB-103",
-                                    "$monitor currently requires direct "
+                                    monitor.one_shot
+                                        ? "FSIM-ELAB-108"
+                                        : "FSIM-ELAB-103",
+                                    monitor.one_shot
+                                        ? "$strobe currently requires direct "
+                                          "packed-signal value expressions"
+                                        : "$monitor currently requires direct "
                                     "packed-signal value expressions",
                                     output.value.span);
                                 return;
@@ -1652,6 +1663,15 @@ Lowerer::Lowerer(
             break;
         case StatementKind::Finish:
             process_.operations.emplace_back(Stop{});
+            break;
+        case StatementKind::Fork:
+            lower_fork(statement);
+            break;
+        case StatementKind::WaitFork:
+            process_.operations.emplace_back(WaitFork{});
+            break;
+        case StatementKind::DisableFork:
+            process_.operations.emplace_back(DisableFork{});
             break;
         case StatementKind::Block:
             lower_block(statement);

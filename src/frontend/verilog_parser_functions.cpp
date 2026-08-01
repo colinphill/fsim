@@ -363,6 +363,9 @@ void VerilogParser::validate_function_body(
               || statement.kind == StatementKind::WaitOn
               || statement.kind == StatementKind::WaitUntil
               || statement.kind == StatementKind::EventTrigger
+              || statement.kind == StatementKind::Fork
+              || statement.kind == StatementKind::WaitFork
+              || statement.kind == StatementKind::DisableFork
               || statement.kind == StatementKind::TaskCall
               || statement.kind == StatementKind::Display
               || statement.kind == StatementKind::MonitorControl

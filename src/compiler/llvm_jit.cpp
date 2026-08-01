@@ -1214,6 +1214,26 @@ LlvmJit::resume(const JitProcessHandle process,
       throw LlvmJitError("generated process returned an invalid frame state");
     }
     return JitResumeStatus::paused;
+  case FSIM_JIT_RESUME_STATUS_FORK:
+    if (frame.state != FSIM_JIT_FRAME_STATE_READY) {
+      throw LlvmJitError("generated process returned an invalid frame state");
+    }
+    return JitResumeStatus::fork;
+  case FSIM_JIT_RESUME_STATUS_FORK_END:
+    if (frame.state != FSIM_JIT_FRAME_STATE_READY) {
+      throw LlvmJitError("generated process returned an invalid frame state");
+    }
+    return JitResumeStatus::fork_end;
+  case FSIM_JIT_RESUME_STATUS_WAIT_FORK:
+    if (frame.state != FSIM_JIT_FRAME_STATE_READY) {
+      throw LlvmJitError("generated process returned an invalid frame state");
+    }
+    return JitResumeStatus::wait_fork;
+  case FSIM_JIT_RESUME_STATUS_DISABLE_FORK:
+    if (frame.state != FSIM_JIT_FRAME_STATE_READY) {
+      throw LlvmJitError("generated process returned an invalid frame state");
+    }
+    return JitResumeStatus::disable_fork;
   case FSIM_JIT_RESUME_STATUS_STOPPED:
     if (frame.state != FSIM_JIT_FRAME_STATE_STOPPED) {
       throw LlvmJitError("generated process returned an invalid frame state");
@@ -1294,6 +1314,10 @@ LlvmJit::execute(const JitProcessHandle process,
   case JitResumeStatus::yielded:
   case JitResumeStatus::debug_point:
   case JitResumeStatus::paused:
+  case JitResumeStatus::fork:
+  case JitResumeStatus::fork_end:
+  case JitResumeStatus::wait_fork:
+  case JitResumeStatus::disable_fork:
     throw LlvmJitError(
         "compiled process suspended during one-shot execution");
   default:

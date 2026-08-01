@@ -12,6 +12,7 @@ int main() {
   test_generate_elaboration();
   test_mixed_language_and_systemc();
   test_process_and_wait_lowering();
+  test_systemverilog_fork_lowering();
   test_systemverilog_function_lowering();
   test_systemverilog_task_lowering();
   test_systemverilog_file_lowering();
