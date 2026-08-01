@@ -5,6 +5,13 @@ This is the short entry point for resuming v1 implementation. The
 [implementation plan](implementation-plan.md) remains the chronological record,
 and the [feature matrix](feature-matrix.md) remains the release authority.
 
+Maintain a Batch 101-style numbered list of exactly ten implementation tasks
+for the current feature batch in both this handoff and the implementation plan.
+Keep the current batch explicitly **in progress** and update its task evidence
+as work lands. Before moving on, retain that batch's list, mark it
+**complete**, and create the next batch's ten-task list as the new current
+**in progress** record.
+
 ## Snapshot
 
 - Recorded: 2026-08-01.
@@ -45,7 +52,7 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
   seconds, files in 2.11/0.68 seconds, containers in 375.83/99.00 seconds, and
   the monolithic application in 40.66/14.10 seconds. Debug aggregate/
   multidimensional execution completed in 2.03 seconds.
-- The diagnostic catalog covers all 1,415 production codes.
+- The diagnostic catalog covers all 1,445 production codes.
 - Batch 111 requires deterministic VHDL semantic analysis in manifest order
   after parallel parsing. Architectures, package bodies, use/context clauses,
   configuration declarations, and explicit entity/configuration bindings now
@@ -1694,6 +1701,20 @@ focused frontend/elaboration evidence and interpreter plus LLVM O0/O2 cold/warm
 application differential prove false-to-true activation, scheduling,
 normalized VCD, hierarchy, and cache reuse. Batch 114 remains **in progress**
 with Tasks 3 through 10 outstanding.
+
+Task 3 has focused partial evidence for bounded value-generic block
+interfaces. The retained generic/port clauses and maps support
+positional-then-named associations, declaration-ordered defaults, explicit
+`open`, and generic-dependent port constraints. Expansion creates scoped
+owned signals for defaulted/open formals and exact hierarchy aliases for
+direct enclosing-signal actuals. Stable diagnostics reject association,
+formal-mode, writable-actual, and profile errors. Frontend, catalog,
+source-budget, elaboration, and the merged application test pass; the latter
+proves interpreter and LLVM O0/O2 cold/warm values, VCD, cache reuse, and a
+generic-map edit that changes behavior and the specialization key. The catalog
+covers 1,445 production codes and all 343 authored sources remain within the
+2,000-line limit. Task 3 remains **in progress** until type, subprogram, and
+package block generics and maps receive equivalent evidence.
 
 Batch 110 has advanced through these validated features:
 

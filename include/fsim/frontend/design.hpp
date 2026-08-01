@@ -491,6 +491,16 @@ struct ProcedureArgument {
   std::optional<Expression> default_value;
 };
 
+// A lexical VHDL block-port alias created during generate expansion. The
+// alias name is scope-qualified while `actual` names the enclosing signal.
+struct SignalAliasDeclaration {
+  std::string name;
+  std::string actual;
+  Type type;
+  PortDirection direction{PortDirection::Unknown};
+  SourceSpan span;
+};
+
 struct InterfaceFunctionProfile {
   Type return_type;
   std::vector<FunctionArgument> arguments;
@@ -1193,6 +1203,7 @@ struct GenerateBody {
   std::vector<ParameterDeclaration> constants;
   std::vector<TypeAliasDeclaration> type_aliases;
   std::vector<SignalDeclaration> signals;
+  std::vector<SignalAliasDeclaration> signal_aliases;
   std::vector<FunctionDeclaration> functions;
   std::vector<TaskDeclaration> tasks;
   std::vector<VhdlComponentDeclaration> vhdl_component_declarations;
@@ -1236,6 +1247,12 @@ struct GenerateRegion {
   GenerateBody then_body;
   GenerateBody else_body;
   std::vector<GenerateAlternative> alternatives;
+  // VHDL block-header interfaces and association aspects. Other generate
+  // kinds and SystemVerilog static regions leave these collections empty.
+  std::vector<ParameterDeclaration> block_generics;
+  std::vector<ParameterOverride> block_generic_map;
+  std::vector<SignalDeclaration> block_ports;
+  std::vector<PortConnection> block_port_map;
   SourceSpan span;
 };
 
@@ -1315,6 +1332,7 @@ struct DesignUnit {
   std::vector<ParameterDeclaration> parameters;
   std::vector<SignalDeclaration> ports;
   std::vector<SignalDeclaration> signals;
+  std::vector<SignalAliasDeclaration> signal_aliases;
   // SystemVerilog module-scope variable objects that do not have net/signal
   // semantics. Mutable strings live here so later DesignIR lowering can give
   // them stable object identities without pretending they are packed nets.

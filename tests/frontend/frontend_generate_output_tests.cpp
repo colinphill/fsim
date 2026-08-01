@@ -799,8 +799,23 @@ end architecture;
       R"(
 architecture rtl of guarded is
   signal enabled : boolean;
+  signal source_value : bit;
+  signal result_value : bit;
 begin
   guarded_scope: block (enabled and true) is
+    generic (
+      width : natural := 4;
+      offset : natural := 1
+    );
+    generic map (width => 8, offset => open);
+    port (
+      input_value : in bit;
+      output_value : out bit
+    );
+    port map (
+      input_value => source_value,
+      output_value => result_value
+    );
   begin
   end block guarded_scope;
 end architecture;
@@ -815,8 +830,64 @@ end architecture;
           && guarded_region.condition.kind == ExpressionKind::Binary
           && guarded_region.condition.text == "and"
           && guarded_region.condition.operands.size() == 2
-          && guarded_region.condition.operands.front().text == "enabled",
-      "guarded VHDL block retains its expression and scope");
+          && guarded_region.condition.operands.front().text == "enabled"
+          && guarded_region.block_generics.size() == 2
+          && guarded_region.block_generics.front().name == "width"
+          && guarded_region.block_generic_map.size() == 2
+          && guarded_region.block_generic_map.front().name
+              == std::optional<std::string>{"width"}
+          && guarded_region.block_generic_map.back().default_box
+          && guarded_region.block_ports.size() == 2
+          && guarded_region.block_ports.front().name == "input_value"
+          && guarded_region.block_port_map.size() == 2
+          && guarded_region.block_port_map.back().port
+              == std::optional<std::string>{"output_value"},
+      "guarded VHDL block retains its expression, interface, and maps");
+
+  const auto missing_block_generic_map_semicolon = parse_text(
+      "missing_block_generic_map_semicolon.vhd",
+      R"(
+architecture rtl of malformed is
+begin
+  malformed_scope: block is
+    generic (width : natural := 4);
+    generic map (width => open)
+  begin
+  end block malformed_scope;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !missing_block_generic_map_semicolon.ok()
+          && std::ranges::any_of(
+              missing_block_generic_map_semicolon.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-PARSE-232";
+              }),
+      "VHDL block generic map requires a trailing semicolon");
+
+  const auto missing_block_port_map_semicolon = parse_text(
+      "missing_block_port_map_semicolon.vhd",
+      R"(
+architecture rtl of malformed is
+  signal source_value : bit;
+begin
+  malformed_scope: block is
+    port (input_value : in bit);
+    port map (input_value => source_value)
+  begin
+  end block malformed_scope;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !missing_block_port_map_semicolon.ok()
+          && std::ranges::any_of(
+              missing_block_port_map_semicolon.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-PARSE-233";
+              }),
+      "VHDL block port map requires a trailing semicolon");
 
   const auto malformed_vhdl_guard = parse_text(
       "malformed_guarded_block.vhd",

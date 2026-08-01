@@ -435,6 +435,9 @@ void visit_generate_body_types(
     for (auto& signal : body.signals) {
         visitor(signal.type);
     }
+    for (auto& alias : body.signal_aliases) {
+        visitor(alias.type);
+    }
     for (auto& function : body.functions) {
         visitor(function.return_type);
         for (auto& argument : function.arguments) {
@@ -478,6 +481,12 @@ template <typename Regions, typename Visitor>
 void visit_generate_types(
     Regions& regions, Visitor& visitor) {
     for (auto& region : regions) {
+        for (auto& generic : region.block_generics) {
+            visitor(generic.type);
+        }
+        for (auto& port : region.block_ports) {
+            visitor(port.type);
+        }
         visit_generate_body_types(
             region.then_body, visitor);
         visit_generate_body_types(
@@ -507,6 +516,9 @@ void visit_declared_types(
     }
     for (auto& signal : unit.signals) {
         visitor(signal.type);
+    }
+    for (auto& alias : unit.signal_aliases) {
+        visitor(alias.type);
     }
     for (auto& component :
          unit.vhdl_component_declarations) {

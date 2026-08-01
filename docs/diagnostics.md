@@ -310,6 +310,8 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-229` | error | An indexed generate block configuration is missing its closing parenthesis. |
 | `FSIM-VHDL-PARSE-230` | error | A default-box generic association is missing its closing angle bracket. |
 | `FSIM-VHDL-PARSE-231` | error | Expected `)` after a VHDL block guard expression. |
+| `FSIM-VHDL-PARSE-232` | error | Expected `;` after a VHDL block generic-map aspect. |
+| `FSIM-VHDL-PARSE-233` | error | Expected `;` after a VHDL block port-map aspect. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -986,6 +988,9 @@ therefore excluded.
 | `FSIM-ELAB-GEN-011` | error | A generated constant or parameter cannot be evaluated in its declaration-order environment. |
 | `FSIM-ELAB-GEN-012` | error | A generated constant/parameter violates a bounded scalar subtype or exceeds the 64-bit integral width. |
 | `FSIM-ELAB-GEN-013` | error | A VHDL block guard expression has a non-Boolean type. |
+| `FSIM-ELAB-VHBLOCK-001` | error | A VHDL block generic map is missing, excessive, duplicated, unknown, misordered, or selects an unavailable default. |
+| `FSIM-ELAB-VHBLOCK-002` | error | A VHDL block port map is missing, excessive, duplicated, unknown, misordered, or uses an illegal actual for the formal mode. |
+| `FSIM-ELAB-VHBLOCK-003` | error | A VHDL block port alias names an unknown or profile-incompatible enclosing signal. |
 | `FSIM-ELAB-PKG-001` | error | A bounded VHDL package import is not `library.package.all` or `library.package.constant`. |
 | `FSIM-ELAB-PKG-002` | error | A project VHDL package named by a use clause was not found in the selected library. |
 | `FSIM-ELAB-PKG-003` | error | A selected package constant or type named by a use clause does not exist. |

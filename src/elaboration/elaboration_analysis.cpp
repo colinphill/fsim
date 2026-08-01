@@ -83,7 +83,6 @@ std::string generated_scope(
         : std::string{parent_scope} + "." + std::string{local_scope};
 }
 
-
 void substitute_parameters(
     frontend::VariableDeclaration& declaration,
     const ConstantEnvironment& environment,
@@ -126,8 +125,6 @@ void substitute_parameters(
             language);
     }
 }
-
-
 
 void substitute_parameters(
     std::vector<Statement>& statements,
@@ -217,9 +214,6 @@ void substitute_parameters(
             language);
     }
 }
-
-
-
 void substitute_parameters(
     std::vector<frontend::Instance>& instances,
     const ConstantEnvironment& environment,
@@ -236,9 +230,6 @@ void substitute_parameters(
         }
     }
 }
-
-
-
 void substitute_parameters(
     frontend::GenerateBody& body,
     const ConstantEnvironment& environment,
@@ -278,6 +269,14 @@ void substitute_parameters(
     for (auto& signal : body.signals) {
         substitute_parameters(
             signal,
+            environment,
+            domains,
+            diagnostics,
+            language);
+    }
+    for (auto& alias : body.signal_aliases) {
+        substitute_parameters(
+            alias.type,
             environment,
             domains,
             diagnostics,
@@ -389,9 +388,6 @@ void substitute_parameters(
         language,
         diagnostics);
 }
-
-
-
 void substitute_parameters(
     std::vector<frontend::GenerateRegion>& generates,
     const ConstantEnvironment& environment,
@@ -399,6 +395,14 @@ void substitute_parameters(
     const frontend::Language language,
     std::vector<Diagnostic>& diagnostics) {
     for (auto& generate : generates) {
+        for (auto& actual : generate.block_generic_map) {
+            substitute_parameters(
+                actual.value, environment, domains, language);
+        }
+        for (auto& actual : generate.block_port_map) {
+            substitute_parameters(
+                actual.value, environment, domains, language);
+        }
         substitute_parameters(
             generate.initial, environment, domains, language);
         auto body_environment = environment;
@@ -453,9 +457,6 @@ void substitute_parameters(
         }
     }
 }
-
-
-
 void collect_qualified_identifiers(
     const Expression& expression,
     QualifiedIdentifierMap& identifiers) {
@@ -478,9 +479,6 @@ void collect_qualified_identifiers(
         collect_qualified_identifiers(operand, identifiers);
     }
 }
-
-
-
 void collect_qualified_identifiers(
     const frontend::Type& type,
     QualifiedIdentifierMap& identifiers) {
@@ -563,9 +561,6 @@ void collect_qualified_identifiers(
     collect_qualified_identifiers(
         type.packed_range_expression->right, identifiers);
 }
-
-
-
 void collect_qualified_identifiers(
     const std::vector<Statement>& statements,
     QualifiedIdentifierMap& identifiers) {
@@ -628,9 +623,6 @@ void collect_qualified_identifiers(
             statement.else_statements, identifiers);
     }
 }
-
-
-
 void collect_qualified_identifiers(
     const frontend::GenerateBody& body,
     QualifiedIdentifierMap& identifiers) {
@@ -731,13 +723,32 @@ void collect_qualified_identifiers(
     collect_qualified_identifiers(
         body.generate_regions, identifiers);
 }
-
-
-
 void collect_qualified_identifiers(
     const std::vector<frontend::GenerateRegion>& generates,
     QualifiedIdentifierMap& identifiers) {
     for (const auto& generate : generates) {
+        for (const auto& generic : generate.block_generics) {
+            collect_qualified_identifiers(generic.type, identifiers);
+            collect_qualified_identifiers(
+                generic.default_value, identifiers);
+        }
+        for (const auto& actual : generate.block_generic_map) {
+            collect_qualified_identifiers(actual.value, identifiers);
+            if (actual.type_value) {
+                collect_qualified_identifiers(
+                    *actual.type_value, identifiers);
+            }
+        }
+        for (const auto& port : generate.block_ports) {
+            collect_qualified_identifiers(port.type, identifiers);
+            if (port.default_value) {
+                collect_qualified_identifiers(
+                    *port.default_value, identifiers);
+            }
+        }
+        for (const auto& actual : generate.block_port_map) {
+            collect_qualified_identifiers(actual.value, identifiers);
+        }
         collect_qualified_identifiers(
             generate.initial, identifiers);
         collect_qualified_identifiers(
@@ -763,9 +774,6 @@ void collect_qualified_identifiers(
         }
     }
 }
-
-
-
 QualifiedIdentifierMap qualified_identifiers(
     const DesignUnit& unit) {
     QualifiedIdentifierMap result;
@@ -961,9 +969,6 @@ QualifiedIdentifierMap qualified_identifiers(
     collect_qualified_identifiers(unit.generate_regions, result);
     return result;
 }
-
-
-
 void qualify_generated_expression(
     Expression& expression,
     const GeneratedNameEnvironment& names) {
@@ -984,7 +989,6 @@ void qualify_generated_expression(
         qualify_generated_expression(operand, names);
     }
 }
-
 void qualify_generated_type(
     frontend::Type& type,
     const GeneratedNameEnvironment& names) {
@@ -1004,9 +1008,6 @@ void qualify_generated_type(
             names);
     }
 }
-
-
-
 void qualify_generated_statement(
     Statement& statement,
     const GeneratedNameEnvironment& names) {
@@ -1052,9 +1053,6 @@ void qualify_generated_statement(
     qualify_generated_statements(
         statement.else_statements, body_names);
 }
-
-
-
 void qualify_generated_statements(
     std::vector<Statement>& statements,
     const GeneratedNameEnvironment& names) {
@@ -1062,9 +1060,6 @@ void qualify_generated_statements(
         qualify_generated_statement(statement, names);
     }
 }
-
-
-
 void qualify_generated_process(
     frontend::Process& process,
     const GeneratedNameEnvironment& names,
@@ -1091,7 +1086,6 @@ void qualify_generated_process(
     }
     qualify_generated_statements(process.statements, process_names);
 }
-
 void qualify_generated_function(
     frontend::FunctionDeclaration& function,
     const GeneratedNameEnvironment& names,
@@ -1118,7 +1112,6 @@ void qualify_generated_function(
     }
     qualify_generated_statements(function.statements, function_names);
 }
-
 void qualify_generated_task(
     frontend::TaskDeclaration& task,
     const GeneratedNameEnvironment& names,
@@ -1144,9 +1137,6 @@ void qualify_generated_task(
     }
     qualify_generated_statements(task.statements, task_names);
 }
-
-
-
 void qualify_generated_instance(
     frontend::Instance& instance,
     const GeneratedNameEnvironment& names,
@@ -1159,9 +1149,6 @@ void qualify_generated_instance(
         qualify_generated_expression(connection.value, names);
     }
 }
-
-
-
 void evaluate_generated_constants(
     frontend::GenerateBody& body,
     ConstantEnvironment& environment,
@@ -1243,9 +1230,6 @@ void evaluate_generated_constants(
             constant.type.nominal_type};
     }
 }
-
-
-
 void append_generated_body(
     frontend::GenerateBody body,
     const ConstantEnvironment& environment,
@@ -1297,6 +1281,13 @@ void append_generated_body(
         body_names[local_name] = signal.name;
         unit.signals.push_back(std::move(signal));
     }
+    for (auto& alias : body.signal_aliases) {
+        const auto local_name = alias.name;
+        qualify_generated_type(alias.type, body_names);
+        alias.name = generated_scope(scope, local_name);
+        body_names[local_name] = alias.name;
+        unit.signal_aliases.push_back(std::move(alias));
+    }
     for (const auto& function : body.functions) {
         body_names[function.name] = generated_scope(scope, function.name);
     }
@@ -1312,7 +1303,12 @@ void append_generated_body(
         unit.tasks.push_back(std::move(task));
     }
     for (auto& statement : body.concurrent_statements) {
-        qualify_generated_statement(statement, body_names);
+        if (statement.label == "@vhdl-block-input-driver") {
+            qualify_generated_expression(statement.target, body_names);
+            statement.label.clear();
+        } else {
+            qualify_generated_statement(statement, body_names);
+        }
         unit.concurrent_statements.push_back(std::move(statement));
     }
     for (auto& process : body.processes) {
@@ -1396,7 +1392,271 @@ std::optional<frontend::ValueDomain> vhdl_guard_domain(
     return std::nullopt;
 }
 
+bool prepare_vhdl_block_interface(
+    const frontend::GenerateRegion& region,
+    frontend::GenerateBody& body,
+    const GeneratedNameEnvironment& visible_names,
+    std::vector<Diagnostic>& diagnostics) {
+    bool valid = true;
+    const auto report = [&](const std::string_view code,
+                            std::string message,
+                            const frontend::SourceSpan& span) {
+      diagnostics.push_back(
+          {std::string{code}, std::move(message), span});
+      valid = false;
+    };
+    const auto writes_formal = [&](const std::string_view name) {
+      std::function<bool(const std::vector<frontend::Statement>&)> writes;
+      writes = [&](const auto& statements) {
+        return std::ranges::any_of(statements, [&](const auto& statement) {
+          if ((statement.kind == frontend::StatementKind::Assignment
+               && statement.target.text == name)
+              || writes(statement.statements)
+              || writes(statement.else_statements)) {
+              return true;
+          }
+          return std::ranges::any_of(
+              statement.case_alternatives, [&](const auto& alternative) {
+                return writes(alternative.statements);
+              });
+        });
+      };
+      return writes(body.concurrent_statements)
+          || std::ranges::any_of(body.processes, [&](const auto& process) {
+               return writes(process.statements);
+             });
+    };
 
+    std::vector<const frontend::ParameterOverride*> generic_actuals(
+        region.block_generics.size());
+    std::size_t positional = 0;
+    bool saw_named = false;
+    for (const auto& actual : region.block_generic_map) {
+        std::size_t index = region.block_generics.size();
+        if (actual.name) {
+            saw_named = true;
+            const auto found = std::ranges::find(
+                region.block_generics, *actual.name,
+                &frontend::ParameterDeclaration::name);
+            if (found != region.block_generics.end()) {
+                index = static_cast<std::size_t>(std::distance(
+                    region.block_generics.begin(), found));
+            }
+        } else if (saw_named) {
+            report(
+                "FSIM-ELAB-VHBLOCK-001",
+                "a positional block generic actual follows a named actual",
+                actual.span);
+            continue;
+        } else {
+            index = positional++;
+        }
+        if (index >= generic_actuals.size()) {
+            report(
+                "FSIM-ELAB-VHBLOCK-001",
+                actual.name
+                    ? "unknown block generic formal '" + *actual.name + "'"
+                    : "too many positional block generic actuals",
+                actual.span);
+        } else if (generic_actuals[index] != nullptr) {
+            report(
+                "FSIM-ELAB-VHBLOCK-001",
+                "block generic formal '"
+                    + region.block_generics[index].name
+                    + "' is associated more than once",
+                actual.span);
+        } else {
+            generic_actuals[index] = &actual;
+        }
+    }
+
+    std::vector<frontend::ParameterDeclaration> constants;
+    constants.reserve(region.block_generics.size());
+    for (std::size_t index = 0;
+         index < region.block_generics.size(); ++index) {
+        auto constant = region.block_generics[index];
+        if (constant.kind != frontend::ParameterKind::Value) {
+            report(
+                "FSIM-ELAB-VHBLOCK-001",
+                "block generic formal '" + constant.name
+                    + "' is not a bounded value generic",
+                constant.span);
+            continue;
+        }
+        const auto* actual = generic_actuals[index];
+        if (actual != nullptr && !actual->default_box) {
+            if (actual->type_value || !actual->value.valid()) {
+                report(
+                    "FSIM-ELAB-VHBLOCK-001",
+                    "block value generic '" + constant.name
+                        + "' requires an expression actual",
+                    actual->span);
+                continue;
+            }
+            constant.default_value = actual->value;
+        } else if (!constant.default_value.valid()) {
+            report(
+                "FSIM-ELAB-VHBLOCK-001",
+                "required block generic '" + constant.name
+                    + "' has no actual or default",
+                actual ? actual->span : constant.span);
+            continue;
+        }
+        constant.local = true;
+        constants.push_back(std::move(constant));
+    }
+    body.constants.insert(
+        body.constants.begin(),
+        std::make_move_iterator(constants.begin()),
+        std::make_move_iterator(constants.end()));
+
+    std::vector<const frontend::PortConnection*> port_actuals(
+        region.block_ports.size());
+    positional = 0;
+    saw_named = false;
+    for (const auto& actual : region.block_port_map) {
+        std::size_t index = region.block_ports.size();
+        if (actual.port) {
+            saw_named = true;
+            const auto found = std::ranges::find(
+                region.block_ports, *actual.port,
+                &frontend::SignalDeclaration::name);
+            if (found != region.block_ports.end()) {
+                index = static_cast<std::size_t>(std::distance(
+                    region.block_ports.begin(), found));
+            }
+        } else if (saw_named) {
+            report(
+                "FSIM-ELAB-VHBLOCK-002",
+                "a positional block port actual follows a named actual",
+                actual.span);
+            continue;
+        } else {
+            index = positional++;
+        }
+        if (index >= port_actuals.size()) {
+            report(
+                "FSIM-ELAB-VHBLOCK-002",
+                actual.port
+                    ? "unknown block port formal '" + *actual.port + "'"
+                    : "too many positional block port actuals",
+                actual.span);
+        } else if (port_actuals[index] != nullptr) {
+            report(
+                "FSIM-ELAB-VHBLOCK-002",
+                "block port formal '" + region.block_ports[index].name
+                    + "' is associated more than once",
+                actual.span);
+        } else {
+            port_actuals[index] = &actual;
+        }
+    }
+
+    for (std::size_t index = 0;
+         index < region.block_ports.size(); ++index) {
+        auto port = region.block_ports[index];
+        if (port.direction == frontend::PortDirection::Input
+            && writes_formal(port.name)) {
+            report(
+                "FSIM-ELAB-VHBLOCK-002",
+                "input block port '" + port.name
+                    + "' is read-only within the block",
+                port.span);
+            continue;
+        }
+        const auto* actual = port_actuals[index];
+        frontend::PortConnection effective;
+        if (actual != nullptr) {
+            effective = *actual;
+        } else if (port.direction == frontend::PortDirection::Input
+                   && port.default_value) {
+            effective.kind = frontend::PortActualKind::Default;
+            effective.value = *port.default_value;
+            effective.span = port.span;
+        } else if (port.direction != frontend::PortDirection::Input) {
+            effective.kind = frontend::PortActualKind::Open;
+            effective.span = port.span;
+        } else {
+            report(
+                "FSIM-ELAB-VHBLOCK-002",
+                "required input block port '" + port.name
+                    + "' has no actual or default",
+                port.span);
+            continue;
+        }
+        if (effective.kind == frontend::PortActualKind::Open
+            && port.direction == frontend::PortDirection::Input) {
+            if (!port.default_value) {
+                report(
+                    "FSIM-ELAB-VHBLOCK-002",
+                    "input block port '" + port.name
+                        + "' is open but has no default",
+                    effective.span);
+                continue;
+            }
+            effective.kind = frontend::PortActualKind::Default;
+            effective.value = *port.default_value;
+        }
+        const bool conflicts = std::ranges::any_of(
+            body.signals,
+            [&](const frontend::SignalDeclaration& signal) {
+              return signal.name == port.name;
+            });
+        if (conflicts) {
+            report(
+                "FSIM-ELAB-VHBLOCK-002",
+                "block port '" + port.name
+                    + "' conflicts with a local signal declaration",
+                port.span);
+            continue;
+        }
+        if (effective.kind == frontend::PortActualKind::Expression
+            && effective.value.kind
+                == frontend::ExpressionKind::Identifier) {
+            auto actual_expression = effective.value;
+            qualify_generated_expression(
+                actual_expression, visible_names);
+            body.signal_aliases.push_back(
+                frontend::SignalAliasDeclaration{
+                    port.name,
+                    std::move(actual_expression.text),
+                    port.type,
+                    port.direction,
+                    effective.span});
+            continue;
+        }
+        if (effective.kind == frontend::PortActualKind::Expression
+            && port.direction != frontend::PortDirection::Input) {
+            report(
+                "FSIM-ELAB-VHBLOCK-002",
+                "output, buffer, or inout block port '" + port.name
+                    + "' requires a writable signal actual",
+                effective.span);
+            continue;
+        }
+        port.is_port = false;
+        body.signals.insert(body.signals.begin(), port);
+        if (effective.kind == frontend::PortActualKind::Open) {
+            continue;
+        }
+        auto value = effective.value;
+        qualify_generated_expression(value, visible_names);
+        frontend::Statement driver;
+        driver.kind = frontend::StatementKind::Assignment;
+        driver.assignment_kind = frontend::AssignmentKind::Continuous;
+        driver.target = frontend::Expression{
+            frontend::ExpressionKind::Identifier,
+            port.name, {}, effective.span};
+        driver.value = std::move(value);
+        driver.vhdl_delay_mechanism =
+            frontend::VhdlDelayMechanism::ImplicitInertial;
+        driver.span = effective.span;
+        driver.label = "@vhdl-block-input-driver";
+        body.concurrent_statements.insert(
+            body.concurrent_statements.begin(), std::move(driver));
+    }
+    return valid;
+}
 
 void expand_generate_regions(
     const std::vector<frontend::GenerateRegion>& generates,
@@ -1410,6 +1670,15 @@ void expand_generate_regions(
     for (const auto& generate : generates) {
         if (generate.kind == frontend::GenerateKind::StaticBlock) {
             auto body = generate.then_body;
+            if (language == frontend::Language::Vhdl2008
+                && (!generate.block_generics.empty()
+                    || !generate.block_generic_map.empty()
+                    || !generate.block_ports.empty()
+                    || !generate.block_port_map.empty())
+                && !prepare_vhdl_block_interface(
+                    generate, body, visible_names, diagnostics)) {
+                continue;
+            }
             if (language == frontend::Language::Vhdl2008
                 && generate.condition.valid()) {
                 const auto domain = vhdl_guard_domain(

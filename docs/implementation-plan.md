@@ -8,7 +8,7 @@ evidence-backed progress of the current repository. It complements the
 [feature matrix](feature-matrix.md), which tracks individual language and
 runtime features.
 
-Last updated: 2026-07-29.
+Last updated: 2026-08-01.
 
 The repository is currently a pre-alpha architecture vertical slice. It is not
 the fsim v1 release, and a milestone is not complete merely because its
@@ -25,6 +25,13 @@ The concise entry point for a new implementation session is the
   or more milestone outcomes remain.
 - **Pending**: implementation is absent or limited to enabling infrastructure.
 - **Deferred**: intentionally outside the v1 scope.
+
+Every active feature batch has a checked-in numbered list of exactly ten
+implementation tasks, following the Batch 101 record format. Keep that list
+and its evidence current while the batch is **In progress**. When all ten
+tasks and required gates close, retain the list in the chronological record,
+change its status to **Complete**, and add the next batch's ten-task list as
+the sole current **In progress** batch.
 
 ## Locked architecture decisions
 
@@ -6383,6 +6390,20 @@ the exact `guarded_scope.guard` hierarchy and false-to-true activation. The
 application differential agrees across interpreter and LLVM O0/O2 cold/warm
 runs, including scheduling, normalized VCD, and cache reuse. Batch 114 remains
 **in progress** with Tasks 3 through 10 outstanding.
+
+Task 3 now has focused partial evidence for bounded value-generic block
+interfaces. Block generic and port clauses/maps retain positional-then-named
+associations, declaration-ordered defaults, explicit `open`, and dependent
+port constraints. Elaboration creates scoped owned signals for defaulted/open
+formals and exact hierarchy aliases for direct enclosing-signal actuals,
+rejects unknown/duplicate/misordered/missing associations, nonwritable output
+actuals, writes through input formals, and width/range-direction mismatches.
+The interpreter and LLVM O0/O2 cold/warm application differential agrees on
+values and VCD; a generic-map edit changes behavior and specialization-cache
+identity. The focused frontend, 1,445-code catalog, 343-source line budget,
+elaboration, and merged-application gate passes. Task 3 remains **in progress**
+until type, subprogram, and package block generics plus their maps have
+equivalent evidence.
 
 ## Forward language-closure feature batches
 

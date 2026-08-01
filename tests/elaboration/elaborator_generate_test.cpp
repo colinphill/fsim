@@ -390,6 +390,78 @@ begin
   end block static_scope;
 end architecture;
 
+entity generated_vhdl_block_interface is
+  port (
+    source_value : in unsigned(3 downto 0);
+    result_value : out unsigned(3 downto 0);
+    default_result : out unsigned(3 downto 0)
+  );
+end entity;
+architecture rtl of generated_vhdl_block_interface is
+begin
+  interface_scope: block is
+    generic (
+      width : natural := 4;
+      increment : natural := width - 2
+    );
+    generic map (open, increment => open);
+    port (
+      input_value : in unsigned(width - 1 downto 0);
+      default_value : in unsigned(width - 1 downto 0) := "0011";
+      output_value : out unsigned(width - 1 downto 0);
+      unused_output : out unsigned(width - 1 downto 0)
+    );
+    port map (
+      source_value,
+      default_value => open,
+      output_value => result_value,
+      unused_output => open
+    );
+  begin
+    output_value <= input_value + increment;
+    default_result <= default_value;
+  end block interface_scope;
+end architecture;
+
+entity generated_vhdl_bad_block_generic is
+end entity;
+architecture rtl of generated_vhdl_bad_block_generic is
+begin
+  invalid_scope: block is
+    generic (required_value : natural);
+    generic map (unknown_value => 1);
+  begin
+  end block invalid_scope;
+end architecture;
+
+entity generated_vhdl_bad_block_port is
+  port (source_value : in unsigned(7 downto 0));
+end entity;
+architecture rtl of generated_vhdl_bad_block_port is
+begin
+  invalid_scope: block is
+    port (
+      required_input : in unsigned(3 downto 0);
+      output_value : out unsigned(3 downto 0)
+    );
+    port map (required_input => open, output_value => source_value + 1);
+  begin
+    required_input <= 0;
+  end block invalid_scope;
+end architecture;
+
+entity generated_vhdl_bad_block_profile is
+  port (source_value : in unsigned(7 downto 0));
+end entity;
+architecture rtl of generated_vhdl_bad_block_profile is
+begin
+  invalid_scope: block is
+    port (input_value : in unsigned(0 to 3));
+    port map (input_value => source_value);
+  begin
+  end block invalid_scope;
+end architecture;
+
 entity generated_vhdl_guarded_behavior is
   port (
     enabled : in boolean;
@@ -1009,6 +1081,68 @@ end architecture;
             ->signal_value(*generated_vhdl_block_observed)
             .to_msb_string()
         == "1000");
+
+    const auto block_interface = fsim::elaboration::elaborate(
+        generated_design,
+        "vhdl:work.generated_vhdl_block_interface(rtl)");
+    for (const auto& diagnostic : block_interface.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+    assert(block_interface.ok());
+    const auto source_value =
+        block_interface.design->find_signal("source_value");
+    const auto input_alias = block_interface.design->find_signal(
+        "interface_scope.input_value");
+    const auto result_value =
+        block_interface.design->find_signal("result_value");
+    const auto output_alias = block_interface.design->find_signal(
+        "interface_scope.output_value");
+    const auto default_value = block_interface.design->find_signal(
+        "interface_scope.default_value");
+    const auto unused_output = block_interface.design->find_signal(
+        "interface_scope.unused_output");
+    const auto default_result =
+        block_interface.design->find_signal("default_result");
+    assert(source_value);
+    assert(input_alias && *source_value == *input_alias);
+    assert(result_value);
+    assert(output_alias && *result_value == *output_alias);
+    assert(default_value);
+    assert(unused_output);
+    assert(default_result);
+    auto block_interpreter = block_interface.design->create_interpreter();
+    block_interpreter->deposit_signal(
+        *source_value,
+        fsim::runtime::PackedLogic4::from_msb_string("0101"));
+    assert(
+        block_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        block_interpreter->signal_value(*result_value).to_msb_string()
+        == "0111");
+    assert(
+        block_interpreter->signal_value(*default_result).to_msb_string()
+        == "0011");
+
+    const auto bad_block_generic = fsim::elaboration::elaborate(
+        generated_design,
+        "vhdl:work.generated_vhdl_bad_block_generic(rtl)");
+    assert(!bad_block_generic.ok());
+    assert(has_diagnostic(
+        bad_block_generic, "FSIM-ELAB-VHBLOCK-001"));
+    const auto bad_block_port = fsim::elaboration::elaborate(
+        generated_design,
+        "vhdl:work.generated_vhdl_bad_block_port(rtl)");
+    assert(!bad_block_port.ok());
+    assert(has_diagnostic(
+        bad_block_port, "FSIM-ELAB-VHBLOCK-002"));
+    const auto bad_block_profile = fsim::elaboration::elaborate(
+        generated_design,
+        "vhdl:work.generated_vhdl_bad_block_profile(rtl)");
+    assert(!bad_block_profile.ok());
+    assert(has_diagnostic(
+        bad_block_profile, "FSIM-ELAB-VHBLOCK-003"));
 
     const auto guarded = fsim::elaboration::elaborate(
         generated_design,

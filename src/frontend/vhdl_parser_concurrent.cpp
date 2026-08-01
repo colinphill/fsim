@@ -229,6 +229,33 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
         "FSIM-VHDL-PARSE-231");
   }
   (void)match_keyword("is", true);
+  DesignUnit interface;
+  Instance associations;
+  if (match_keyword("generic", true)) {
+    parse_vhdl_generics(interface, previous());
+    if (match_keyword("generic", true)) {
+      parse_vhdl_generic_map(associations, previous());
+      expect(
+          TokenKind::Semicolon,
+          "';' after a block generic map aspect",
+          "FSIM-VHDL-PARSE-232");
+    }
+  }
+  if (match_keyword("port", true)) {
+    parse_vhdl_ports(interface);
+    if (match_keyword("port", true)) {
+      parse_vhdl_port_map(associations.connections, previous());
+      expect(
+          TokenKind::Semicolon,
+          "';' after a block port map aspect",
+          "FSIM-VHDL-PARSE-233");
+    }
+  }
+  result.block_generics = std::move(interface.parameters);
+  result.block_generic_map =
+      std::move(associations.parameter_overrides);
+  result.block_ports = std::move(interface.ports);
+  result.block_port_map = std::move(associations.connections);
   parse_vhdl_generate_declarations(
       result.then_body,
       VhdlComponentDeclarationRegion::Block);
@@ -469,15 +496,21 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
     instance.span = span_from(label, previous());
     return instance;
   }
-  expect_keyword("map", true, "FSIM-VHDL-PARSE-040");
-  if (!match(TokenKind::LeftParen)) {
-    error(current(), "FSIM-VHDL-PARSE-041",
-          "expected '(' after port map");
-    skip_to_semicolon();
-    instance.span = span_from(label, previous());
-    return instance;
-  }
+  parse_vhdl_port_map(instance.connections, previous());
+  expect(TokenKind::Semicolon, "';' after VHDL instance",
+         "FSIM-VHDL-PARSE-043");
+  instance.span = span_from(label, previous());
+  return instance;
+}
 
+void VhdlParser::parse_vhdl_port_map(
+    std::vector<PortConnection>& connections,
+    const Token& start) {
+  expect_keyword("map", true, "FSIM-VHDL-PARSE-040");
+  expect(
+      TokenKind::LeftParen,
+      "'(' after port map",
+      "FSIM-VHDL-PARSE-041");
   bool saw_named_port = false;
   while (!at_end() && !at(TokenKind::RightParen)) {
     const auto actual_start = current();
@@ -485,7 +518,7 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
     if (connection.port) {
       saw_named_port = true;
       if (std::ranges::any_of(
-              instance.connections,
+              connections,
               [&](const PortConnection& existing) {
                 return existing.port == connection.port;
               })) {
@@ -501,17 +534,14 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
           "FSIM-VHDL-SEM-079",
           "a positional port actual cannot follow a named actual");
     }
-    instance.connections.push_back(std::move(connection));
+    connections.push_back(std::move(connection));
     if (!match(TokenKind::Comma)) {
       break;
     }
   }
   expect(TokenKind::RightParen, "')' after port map",
          "FSIM-VHDL-PARSE-042");
-  expect(TokenKind::Semicolon, "';' after VHDL instance",
-         "FSIM-VHDL-PARSE-043");
-  instance.span = span_from(label, previous());
-  return instance;
+  (void)start;
 }
 
 void VhdlParser::parse_vhdl_generic_map(

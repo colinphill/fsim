@@ -385,6 +385,41 @@ begin
   end block static_scope;
 end architecture;
 
+entity generated_block_interface_vhdl is
+  port (
+    observed : out unsigned(3 downto 0);
+    default_observed : out unsigned(3 downto 0)
+  );
+end entity;
+
+architecture rtl of generated_block_interface_vhdl is
+  signal source_value : unsigned(3 downto 0);
+begin
+  source_value <= 5;
+  interface_scope: block is
+    generic (
+      width : natural := 4;
+      increment : natural := width - 2
+    );
+    generic map (open, increment => open);
+    port (
+      input_value : in unsigned(width - 1 downto 0);
+      default_value : in unsigned(width - 1 downto 0) := "0011";
+      output_value : out unsigned(width - 1 downto 0);
+      unused_output : out unsigned(width - 1 downto 0)
+    );
+    port map (
+      source_value,
+      default_value => open,
+      output_value => observed,
+      unused_output => open
+    );
+  begin
+    output_value <= input_value + increment;
+    default_observed <= default_value;
+  end block interface_scope;
+end architecture;
+
 entity generated_guarded_behavior_vhdl is
   port (
     observed : out boolean

@@ -785,6 +785,76 @@ using namespace elaboration_detail;
                 path + "." + signal.name, &signal.type);
             (void)add_owned_signal(signal, path, local);
         }
+        for (const auto& alias : unit.signal_aliases) {
+            expose_type_mark(alias.type.spelling, alias.type);
+            visible_types.emplace(alias.name, &alias.type);
+            visible_types.emplace(path + "." + alias.name, &alias.type);
+            const auto actual = local.find(alias.actual);
+            if (actual == local.end()) {
+                report(
+                    "FSIM-ELAB-VHBLOCK-003",
+                    "unknown enclosing signal '" + alias.actual
+                        + "' for block port '" + alias.name + "'",
+                    alias.span);
+                continue;
+            }
+            const auto& info = design_.signal_info_.at(actual->second);
+            const auto width = alias.type.width();
+            const auto same_packed_range = [&]() {
+              if (alias.type.packed_range.has_value()
+                  != info.packed_range.has_value()) {
+                  return false;
+              }
+              if (!alias.type.packed_range) {
+                  return true;
+              }
+              return alias.type.packed_range->left
+                         == info.packed_range->left
+                  && alias.type.packed_range->right
+                         == info.packed_range->right
+                  && alias.type.packed_range->descending
+                         == info.packed_range->descending;
+            };
+            if (!width || *width != info.width
+                || alias.type.domain != info.source_domain
+                || alias.type.is_signed != info.is_signed
+                || !same_packed_range()
+                || (!alias.type.nominal_type.empty()
+                    && alias.type.nominal_type
+                        != info.nominal_type)) {
+                report(
+                    "FSIM-ELAB-VHBLOCK-003",
+                    "block port '" + alias.name
+                        + "' does not match enclosing signal '"
+                        + alias.actual + "'",
+                    alias.span);
+                continue;
+            }
+            const frontend::SignalDeclaration formal{
+                alias.name,
+                alias.type,
+                alias.direction,
+                true,
+                alias.span};
+            const auto diagnostics_before = diagnostics_.size();
+            validate_boundary_type(
+                formal, info, path, alias.span, false);
+            if (diagnostics_.size() != diagnostics_before) {
+                continue;
+            }
+            local.emplace(alias.name, actual->second);
+            if (!path.empty()) {
+                local.emplace(
+                    path + "." + alias.name, actual->second);
+            }
+            design_.signal_by_name_.emplace(
+                alias.name, actual->second);
+            if (!path.empty()) {
+                design_.signal_by_name_.emplace(
+                    path + "." + alias.name,
+                    actual->second);
+            }
+        }
         SystemVerilogStringEnvironment string_values;
         for (const auto& variable : unit.variables) {
             visible_types.emplace(

@@ -488,6 +488,9 @@ using namespace elaboration_detail;
                 for (auto& signal : body.signals) {
                     resolve_declaration(signal);
                 }
+                for (auto& alias : body.signal_aliases) {
+                    (void)resolve_type(alias.type);
+                }
                 for (auto& component :
                      body.vhdl_component_declarations) {
                     resolve_component(component);
@@ -532,6 +535,12 @@ using namespace elaboration_detail;
             [&](std::vector<frontend::GenerateRegion>&
                     regions) {
                 for (auto& region : regions) {
+                    for (auto& generic : region.block_generics) {
+                        resolve_declaration(generic);
+                    }
+                    for (auto& port : region.block_ports) {
+                        resolve_declaration(port);
+                    }
                     resolve_generate_body(region.then_body);
                     resolve_generate_body(region.else_body);
                     for (auto& alternative :

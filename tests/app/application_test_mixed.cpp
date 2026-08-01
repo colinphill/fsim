@@ -678,6 +678,20 @@ auto generated_block_behavior_vhdl_config =
         "vhdl:work.generated_block_behavior_vhdl(rtl)",
         fsim::project::Language::vhdl,
         generated_block_behavior_vhdl_source);
+auto generated_block_interface_vhdl_config =
+    make_generated_behavior_config(
+        "generated-block-interface-vhdl-test",
+        "vhdl:work.generated_block_interface_vhdl(rtl)",
+        fsim::project::Language::vhdl,
+        generated_block_behavior_vhdl_source);
+auto generated_block_interface_vhdl_o0_config =
+    generated_block_interface_vhdl_config;
+generated_block_interface_vhdl_o0_config.project.name =
+    "generated-block-interface-vhdl-o0-test";
+generated_block_interface_vhdl_o0_config.build.optimization =
+    fsim::project::Optimization::o0;
+generated_block_interface_vhdl_o0_config.build.cache_path =
+    directory / "generated-block-interface-vhdl-o0-test-cache";
 auto generated_guarded_behavior_vhdl_config =
     make_generated_behavior_config(
         "generated-guarded-behavior-vhdl-test",
@@ -737,6 +751,13 @@ const auto verify_generated_behavior =
           cold.simulation.result.status
           == fsim::runtime::RunStatus::completed);
       assert(cold.simulation.result.time == expected_time);
+      if (cold.simulation.final_values != expected_values) {
+        std::cerr << behavior_config.project.name << " values:";
+        for (const auto& value : cold.simulation.final_values) {
+          std::cerr << ' ' << value;
+        }
+        std::cerr << '\n';
+      }
       assert(cold.simulation.final_values == expected_values);
       assert(cold.simulation.process_count == expected_processes);
       for (const auto local_path : local_paths) {
@@ -777,6 +798,7 @@ const auto verify_generated_behavior =
       assert(warm.simulation.native_cache.hits == 1);
       assert(warm.simulation.native_cache.misses == 0);
 #endif
+      return cold;
     };
 verify_generated_behavior(
     generated_behavior_sv_config,
@@ -808,6 +830,18 @@ verify_generated_behavior(
     {"static_scope.generated_value"},
     {"1000", "0111"},
     2);
+const auto block_interface_baseline = verify_generated_behavior(
+    generated_block_interface_vhdl_config,
+    {"interface_scope.default_value",
+     "interface_scope.unused_output"},
+    {"0111", "0011", "0101", "UUUU", "0011"},
+    4);
+verify_generated_behavior(
+    generated_block_interface_vhdl_o0_config,
+    {"interface_scope.default_value",
+     "interface_scope.unused_output"},
+    {"0111", "0011", "0101", "UUUU", "0011"},
+    4);
 verify_generated_behavior(
     generated_guarded_behavior_vhdl_config,
     {"enabled", "guarded_scope.guard"},
@@ -820,6 +854,38 @@ verify_generated_behavior(
     {"1", "1", "1"},
     3,
     1);
+
+std::ifstream block_source_input(
+    generated_block_behavior_vhdl_source,
+    std::ios::binary);
+std::string edited_block_source{
+    std::istreambuf_iterator<char>{block_source_input},
+    std::istreambuf_iterator<char>{}};
+block_source_input.close();
+const auto old_map = edited_block_source.find("increment => open");
+assert(old_map != std::string::npos);
+edited_block_source.replace(
+    old_map,
+    std::string_view{"increment => open"}.size(),
+    "increment => 3");
+std::ofstream block_source_output(
+    generated_block_behavior_vhdl_source,
+    std::ios::binary | std::ios::trunc);
+block_source_output << edited_block_source;
+block_source_output.close();
+const auto block_interface_edited = run_generated_behavior(
+    generated_block_interface_vhdl_config,
+    fsim::app::SimulationEngine::compiled,
+    {"interface_scope.default_value",
+     "interface_scope.unused_output"});
+assert(block_interface_edited.keys != block_interface_baseline.keys);
+assert((block_interface_edited.simulation.final_values
+        == std::vector<std::string>{
+            "1000", "0011", "0101", "UUUU", "0011"}));
+#if defined(FSIM_HAS_LLVM)
+assert(block_interface_edited.simulation.native_cache.hits == 0);
+assert(block_interface_edited.simulation.native_cache.misses == 1);
+#endif
 
 }
 

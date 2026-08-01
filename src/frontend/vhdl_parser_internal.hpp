@@ -235,6 +235,10 @@ class VhdlParser final : private detail::ParserBase {
       Instance& instance,
       const Token& start);
 
+  void parse_vhdl_port_map(
+      std::vector<PortConnection>& connections,
+      const Token& start);
+
   PortConnection parse_vhdl_port_connection();
 
   void skip_vhdl_connection_actual();
