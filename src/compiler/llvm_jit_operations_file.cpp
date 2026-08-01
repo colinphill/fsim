@@ -62,6 +62,14 @@ FileOperationLowerer::FileOperationLowerer(
       llvm::FunctionType::get(
           i32, {pointer, i32, i32, i64, i64, pointer}, false),
   };
+  generic_callback = builder.CreateLoad(
+      pointer,
+      builder.CreateStructGEP(runtime_type, runtime_argument, 62U),
+      "file.generic.callback");
+  generic_callback_type = llvm::FunctionType::get(
+      i32,
+      {pointer, i32, i32, i64, i64, i64, i64, pointer, pointer},
+      false);
 }
 
 void FileOperationLowerer::check(
@@ -155,6 +163,34 @@ void FileOperationLowerer::lower_result(
 
 void FileOperationLowerer::lower(
     const runtime::simir::FileReadLine& operation) {
+  if (operation.kind != runtime::simir::FileReadKind::line) {
+    const auto handle = load_register(
+        builder, registers, operation.handle);
+    llvm::Value* source_aval = constant_i64(context, 0);
+    llvm::Value* source_bval = constant_i64(context, 0);
+    if (operation.kind == runtime::simir::FileReadKind::unget) {
+      const auto source = load_register(
+          builder, registers, operation.source);
+      source_aval = source.aval;
+      source_bval = source.bval;
+    }
+    auto* result_aval = builder.CreateAlloca(i64, nullptr, "file.char.aval");
+    auto* result_bval = builder.CreateAlloca(i64, nullptr, "file.char.bval");
+    check(
+        builder.CreateCall(
+            generic_callback_type, generic_callback,
+            {context_pointer, id(i32, process), id(i32, instruction),
+             handle.aval, handle.bval, source_aval, source_bval,
+             result_aval, result_bval}),
+        operation.kind == runtime::simir::FileReadKind::character
+            ? "file.read.character" : "file.unread.character");
+    store_register(
+        builder, registers, operation.destination,
+        {builder.CreateLoad(i64, result_aval),
+         builder.CreateLoad(i64, result_bval), 32});
+    branch_to_next();
+    return;
+  }
   lower_result(
       operation.destination, operation.handle, 3, "file.read.line");
 }
@@ -169,6 +205,95 @@ void FileOperationLowerer::lower(
     const runtime::simir::FileErrorStatus& operation) {
   lower_result(
       operation.destination, operation.handle, 5, "file.error");
+}
+
+void FileOperationLowerer::lower(
+    const runtime::simir::FileScan& operation) {
+  auto* zero = constant_i64(context, 0);
+  const auto handle = operation.string_source
+      ? EncodedValue{zero, zero, 32}
+      : load_register(builder, registers, operation.handle);
+  auto* result_aval = builder.CreateAlloca(i64, nullptr, "file.scan.aval");
+  auto* result_bval = builder.CreateAlloca(i64, nullptr, "file.scan.bval");
+  builder.CreateStore(zero, result_aval);
+  builder.CreateStore(zero, result_bval);
+  check(
+      builder.CreateCall(
+          generic_callback_type, generic_callback,
+          {context_pointer, id(i32, process), id(i32, instruction),
+           handle.aval, handle.bval, zero, zero, result_aval, result_bval}),
+      operation.string_source ? "string.scan" : "file.scan");
+  store_register(
+      builder, registers, operation.destination,
+      {builder.CreateLoad(i64, result_aval),
+       builder.CreateLoad(i64, result_bval), 32});
+  branch_to_next();
+}
+
+void FileOperationLowerer::lower(
+    const runtime::simir::FileBinaryRead& operation) {
+  const auto handle = load_register(builder, registers, operation.handle);
+  auto* zero = constant_i64(context, 0);
+  auto* result_aval = builder.CreateAlloca(i64, nullptr, "file.binary.aval");
+  auto* result_bval = builder.CreateAlloca(i64, nullptr, "file.binary.bval");
+  builder.CreateStore(zero, result_aval);
+  builder.CreateStore(zero, result_bval);
+  check(
+      builder.CreateCall(
+          generic_callback_type, generic_callback,
+          {context_pointer, id(i32, process), id(i32, instruction),
+           handle.aval, handle.bval, zero, zero, result_aval, result_bval}),
+      "file.binary-read");
+  store_register(
+      builder, registers, operation.destination,
+      {builder.CreateLoad(i64, result_aval),
+       builder.CreateLoad(i64, result_bval), 32});
+  branch_to_next();
+}
+
+void FileOperationLowerer::lower(
+    const runtime::simir::FilePosition& operation) {
+  auto* zero = constant_i64(context, 0);
+  const auto offset = operation.kind
+          == runtime::simir::FilePositionKind::seek
+      ? load_register(builder, registers, operation.offset)
+      : EncodedValue{zero, zero, 32};
+  const auto origin = operation.kind
+          == runtime::simir::FilePositionKind::seek
+      ? load_register(builder, registers, operation.origin)
+      : EncodedValue{zero, zero, 32};
+  auto* result_aval = builder.CreateAlloca(i64, nullptr, "file.position.aval");
+  auto* result_bval = builder.CreateAlloca(i64, nullptr, "file.position.bval");
+  builder.CreateStore(zero, result_aval);
+  builder.CreateStore(zero, result_bval);
+  check(
+      builder.CreateCall(
+          generic_callback_type, generic_callback,
+          {context_pointer, id(i32, process), id(i32, instruction),
+           offset.aval, offset.bval, origin.aval, origin.bval,
+           result_aval, result_bval}),
+      "file.position");
+  store_register(
+      builder, registers, operation.destination,
+      {builder.CreateLoad(i64, result_aval),
+       builder.CreateLoad(i64, result_bval), 32});
+  branch_to_next();
+}
+
+void FileOperationLowerer::lower(
+    const runtime::simir::FileFlush&) {
+  auto* zero = constant_i64(context, 0);
+  auto* result_aval = builder.CreateAlloca(i64, nullptr, "file.flush.aval");
+  auto* result_bval = builder.CreateAlloca(i64, nullptr, "file.flush.bval");
+  builder.CreateStore(zero, result_aval);
+  builder.CreateStore(zero, result_bval);
+  check(
+      builder.CreateCall(
+          generic_callback_type, generic_callback,
+          {context_pointer, id(i32, process), id(i32, instruction),
+           zero, zero, zero, zero, result_aval, result_bval}),
+      "file.flush");
+  branch_to_next();
 }
 
 }  // namespace fsim::compiler::llvm_detail

@@ -37,6 +37,8 @@ Lowerer::Lowerer(
         const std::unordered_set<SignalId>& read_only_signals,
         const std::unordered_map<std::string, StringObjectId>&
             string_objects,
+        const std::unordered_set<StringObjectId>&
+            read_only_string_objects,
         const std::unordered_map<std::string, ContainerObjectId>&
             container_objects,
         const std::unordered_set<std::string>&
@@ -53,6 +55,7 @@ Lowerer::Lowerer(
           signals_(signals),
           read_only_signals_(read_only_signals),
           string_objects_(string_objects),
+          read_only_string_objects_(read_only_string_objects),
           container_objects_(container_objects),
           read_only_container_objects_(
               read_only_container_objects),
@@ -1123,6 +1126,7 @@ void Lowerer::validate_read_only_signal_writes(
             } else if (
                 statement.kind == StatementKind::Display
                 || statement.kind == StatementKind::FileClose
+                || statement.kind == StatementKind::FileFlush
                 || statement.kind == StatementKind::FileDisplay
                 || statement.kind == StatementKind::MemoryLoad
                 || statement.kind == StatementKind::Report
@@ -1233,6 +1237,35 @@ void Lowerer::validate_read_only_signal_writes(
             process_.operations.emplace_back(FileClose{*handle});
             break;
         }
+        case StatementKind::FileFlush: {
+            if (statement.file_handle.kind == ExpressionKind::Invalid) {
+                process_.operations.emplace_back(FileFlush{0, true});
+                break;
+            }
+            const auto* type = statement.file_handle.kind
+                    == ExpressionKind::Identifier
+                ? object_type(statement.file_handle.text) : nullptr;
+            if (!(statement.file_handle.kind
+                      == ExpressionKind::IntegerLiteral
+                  || (type != nullptr
+                      && type->domain == frontend::ValueDomain::Integer)
+                  || is_integer_expression(statement.file_handle))) {
+                report(
+                    "FSIM-ELAB-SVFILE-016",
+                    "$fflush handle must be a 32-bit integer expression",
+                    statement.file_handle.span);
+                break;
+            }
+            auto handle = lower_expression(statement.file_handle, 32);
+            if (!handle) break;
+            if (register_width(*handle) != 32) {
+                *handle = resize_register(
+                    *handle, 32,
+                    is_signed_expression(statement.file_handle));
+            }
+            process_.operations.emplace_back(FileFlush{*handle, false});
+            break;
+        }
         case StatementKind::FileDisplay: {
             const auto* type =
                 statement.file_handle.kind
@@ -1320,7 +1353,7 @@ void Lowerer::validate_read_only_signal_writes(
                     != frontend::Language::SystemVerilog2017) {
                 report(
                     "FSIM-ELAB-SVMEMORY-001",
-                    "$readmemb/$readmemh requires "
+                    "$readmem*/$writemem* requires "
                     "SystemVerilog-2017",
                     statement.span);
                 break;
@@ -1330,7 +1363,7 @@ void Lowerer::validate_read_only_signal_writes(
             if (!path) {
                 report(
                     "FSIM-ELAB-SVMEMORY-002",
-                    "read-memory file name must be a string expression",
+                    "memory-file name must be a string expression",
                     statement.value.span);
                 break;
             }
@@ -1338,12 +1371,13 @@ void Lowerer::validate_read_only_signal_writes(
                     != ExpressionKind::Identifier) {
                 report(
                     "FSIM-ELAB-SVMEMORY-003",
-                    "read-memory target must be a direct static-array "
+                    "memory-file operand must be a direct static-array "
                     "object",
                     statement.target.span);
                 break;
             }
-            if (read_only_container_objects_.contains(
+            if (!statement.memory_write
+                && read_only_container_objects_.contains(
                     statement.target.text)) {
                 report(
                     "FSIM-ELAB-SVPORT-009",
@@ -1366,11 +1400,12 @@ void Lowerer::validate_read_only_signal_writes(
             if (!target || !runtime_type) {
                 break;
             }
-            if (!runtime_type->fixed) {
+            if (!runtime_type->fixed
+                || runtime_type->dimensions.size() != 1U) {
                 report(
                     "FSIM-ELAB-SVMEMORY-003",
-                    "$readmemb/$readmemh target must be a bounded static "
-                    "unpacked array",
+                    "$readmem*/$writemem* requires a bounded "
+                    "one-dimensional static unpacked array",
                     statement.target.span);
                 break;
             }
@@ -1407,7 +1442,7 @@ void Lowerer::validate_read_only_signal_writes(
                 || (finish_expression && !finish)) {
                 report(
                     "FSIM-ELAB-SVMEMORY-004",
-                    "read-memory start and finish must be integral "
+                    "memory-file start and finish must be integral "
                     "expressions",
                     statement.span);
                 break;
@@ -1415,14 +1450,17 @@ void Lowerer::validate_read_only_signal_writes(
             process_.operations.emplace_back(
                 LoadMemory{
                     *target, *path, start, finish,
-                    statement.memory_hex});
-            if (const auto object =
+                    statement.memory_hex,
+                    statement.memory_write});
+            if (!statement.memory_write) {
+              if (const auto object =
                     container_objects_.find(
                         statement.target.text);
-                object != container_objects_.end()) {
+                  object != container_objects_.end()) {
                 process_.operations.emplace_back(
                     WriteContainerObject{
                         object->second, *target});
+              }
             }
             break;
         }

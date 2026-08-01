@@ -1984,6 +1984,7 @@ void test_persistent_object_cache() {
   test_expression_selection_cache_identity(
       root / "expression-selection");
   test_procedural_update_cache_identity(root / "procedural-update");
+  test_container_construction_cache_identity(root / "container-construction");
   test_container_predicate_cache_identity(
       root / "container-predicate");
   test_container_reduction_cache_identity(
@@ -1996,5 +1997,4 @@ void test_persistent_object_cache() {
   std::filesystem::remove_all(root, error);
   assert(!error);
 }
-
 } // namespace fsim::tests::compiler

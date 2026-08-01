@@ -26,7 +26,7 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 5> values;
+  std::array<std::string, 7> values;
   std::string vcd;
   std::string debugger;
   std::size_t compiled{};
@@ -57,6 +57,10 @@ package aggregate_types;
     outer_t packed_value;
     logic [1:0] count;
   } record_t;
+  typedef struct packed {
+    logic [3:0] tag;
+    logic [3:0] data;
+  } packet_t;
 endpackage
 
 module matrix_child(
@@ -79,9 +83,20 @@ module aggregate_child(
   end
 endmodule
 
+module packet_matrix_child(
+  input aggregate_types::packet_t matrix[1:0][0:1],
+  output logic [7:0] observed
+);
+  initial begin
+    #1;
+    observed = matrix[0][1];
+  end
+endmodule
+
 import aggregate_types::*;
 module aggregate_multidimensional_top #(
-  parameter type VALUE_T = record_t
+  parameter type VALUE_T = record_t,
+  parameter type PACKET_T = packet_t
 );
   VALUE_T aggregate;
   logic [3:0] matrix[1:0][0:2];
@@ -90,6 +105,12 @@ module aggregate_multidimensional_top #(
   logic [3:0] dynamic_observed;
   logic [3:0] child_observed;
   logic [7:0] aggregate_child_observed;
+  PACKET_T packets[1:0];
+  PACKET_T packet_matrix[1:0][0:1];
+  PACKET_T dynamic_packets[];
+  PACKET_T pending_packets[$:3];
+  logic [63:0] container_observed;
+  logic [7:0] packet_child_observed;
   int row;
   int column;
 
@@ -104,9 +125,21 @@ module aggregate_multidimensional_top #(
     return value;
   endfunction
 
+  function automatic PACKET_T packet_pick(
+      input PACKET_T value[1:0][0:1],
+      input int selected_row,
+      input int selected_column);
+    return value[selected_row][selected_column];
+  endfunction
+
   task automatic replace(
       inout logic [3:0] value[1:0][0:2]);
     value[1][1] = 4'h)" << replacement << R"(;
+  endtask
+
+  task automatic replace_packet(
+      inout PACKET_T value[1:0][0:1]);
+    value[0][1] = '{tag: 4'h7, data: 4'he};
   endtask
 
   generate
@@ -118,6 +151,10 @@ module aggregate_multidimensional_top #(
       aggregate_child aggregate_instance(
         .value(aggregate),
         .observed(aggregate_child_observed)
+      );
+      packet_matrix_child packet_instance(
+        .matrix(packet_matrix),
+        .observed(packet_child_observed)
       );
     end
   endgenerate
@@ -144,6 +181,42 @@ module aggregate_multidimensional_top #(
     row = 0;
     column = 1;
     dynamic_observed = pick(matrix, row, column);
+    packets = '{
+      '{tag: 4'h1, data: 4'h2},
+      '{tag: 4'h3, data: 4'h4}
+    };
+    packets[0] = '{tag: 4'h3, data: 4'h5};
+    packet_matrix = '{
+      '{
+        '{tag: 4'h4, data: 4'h6},
+        '{tag: 4'h5, data: 4'h7}
+      },
+      '{
+        '{tag: 4'h6, data: 4'h8},
+        '{tag: 4'h7, data: 4'h9}
+      }
+    };
+    replace_packet(packet_matrix);
+    dynamic_packets = '{
+      '{tag: 4'h8, data: 4'ha},
+      '{tag: 4'h9, data: 4'hb}
+    };
+    dynamic_packets = new[3](dynamic_packets);
+    assert ($isunknown(dynamic_packets[2]));
+    pending_packets = '{
+      '{tag: 4'ha, data: 4'hb},
+      '{tag: 4'hb, data: 4'hc}
+    };
+    pending_packets.insert(
+        1, '{tag: 4'hc, data: 4'hd});
+    pending_packets.delete(0);
+    container_observed = {
+      packets[1], packets[0],
+      packet_matrix[1][0], packet_matrix[1][1],
+      packet_matrix[0][0],
+      packet_pick(packet_matrix, 0, 1),
+      dynamic_packets[0], pending_packets[0]
+    };
     #2 $finish;
   end
 endmodule
@@ -196,12 +269,14 @@ Capture execute(
   Capture capture;
   capture.compiled = simulation.compiled_process_count();
   capture.cache = simulation.native_cache_statistics();
-  constexpr std::array<std::string_view, 5> names{
+  constexpr std::array<std::string_view, 7> names{
       "aggregate_multidimensional_top.aggregate_observed",
       "aggregate_multidimensional_top.matrix_observed",
       "aggregate_multidimensional_top.dynamic_observed",
       "aggregate_multidimensional_top.child_observed",
-      "aggregate_multidimensional_top.aggregate_child_observed"};
+      "aggregate_multidimensional_top.aggregate_child_observed",
+      "aggregate_multidimensional_top.container_observed",
+      "aggregate_multidimensional_top.packet_child_observed"};
   std::array<fsim::runtime::simir::SignalId, names.size()> signals{};
   std::array<fsim::runtime::VcdSignal, names.size()> traces{};
   std::ostringstream vcd_text;
@@ -240,6 +315,7 @@ Capture execute(
   fsim::app::DebuggerControl debugger{
       simulation, debugger_output, debugger_error};
   debugger.execute({"show", "matrix"});
+  debugger.execute({"show", "packet_matrix"});
   assert(debugger_error.str().empty());
   capture.debugger = debugger_output.str();
   return capture;
@@ -265,8 +341,13 @@ void verify(
   assert(capture.values[2] == "0101");
   assert(capture.values[3] == replacement_bits);
   assert(capture.values[4] == "11010110");
+  assert(
+      capture.values[5]
+      == "0001001000110101010001100101011101101000011111101000101011001101");
+  assert(capture.values[6] == "01111110");
   assert(capture.vcd.find("#1") != std::string::npos);
   assert(capture.debugger.find("matrix = [") != std::string::npos);
+  assert(capture.debugger.find("packet_matrix = [") != std::string::npos);
 }
 
 } // namespace

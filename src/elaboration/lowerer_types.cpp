@@ -74,9 +74,14 @@ using namespace elaboration_detail;
         }
         if (expression.kind == ExpressionKind::Index
             && expression.operands.size() == 2) {
-            return is_string_expression(expression.operands.front())
-                ? std::size_t{8}
-                : std::size_t{1};
+            if (is_string_expression(expression.operands.front())) {
+                return std::size_t{8};
+            }
+            if (const auto* type = container_expression_type(
+                    expression.operands.front())) {
+                return type->width();
+            }
+            return std::size_t{1};
         }
         if (expression.kind == ExpressionKind::Slice
             && expression.operands.size() == 3) {
@@ -197,9 +202,16 @@ using namespace elaboration_detail;
             return infer_width(expression.operands[2]);
         }
         if (expression.kind == ExpressionKind::Call
-            && expression.text == ".len"
-            && expression.operands.size() == 1) {
-            return std::size_t{32};
+            && (expression.text == ".len"
+                || expression.text == ".compare"
+                || expression.text == ".icompare"
+                || expression.text == ".getc"
+                || expression.text == ".atoi"
+                || expression.text == ".atohex"
+                || expression.text == ".atooct"
+                || expression.text == ".atobin")) {
+            return expression.text == ".getc"
+                ? std::size_t{8} : std::size_t{32};
         }
         if (expression.kind == ExpressionKind::Call
             && expression.text == "$isunknown") {
@@ -311,6 +323,21 @@ using namespace elaboration_detail;
             && (expression.text == "$urandom"
                 || expression.text == "$random"
                 || expression.text == "$urandom_range")) {
+            return std::size_t{32};
+        }
+        if (expression.kind == ExpressionKind::Call
+            && (expression.text == "$fopen"
+                || expression.text == "$fgets"
+                || expression.text == "$fgetc"
+                || expression.text == "$ungetc"
+                || expression.text == "$feof"
+                || expression.text == "$ferror"
+                || expression.text == "$fscanf"
+                || expression.text == "$sscanf"
+                || expression.text == "$fread"
+                || expression.text == "$fseek"
+                || expression.text == "$ftell"
+                || expression.text == "$rewind")) {
             return std::size_t{32};
         }
         if (expression.kind == ExpressionKind::Call) {
@@ -557,6 +584,22 @@ using namespace elaboration_detail;
                 && expression.operands.size() == 1
                 && expression.text == "$unsigned") {
                 return false;
+            }
+            if (language_
+                    == frontend::Language::SystemVerilog2017
+                && (expression.text == "$fopen"
+                    || expression.text == "$fgets"
+                    || expression.text == "$fgetc"
+                    || expression.text == "$ungetc"
+                    || expression.text == "$feof"
+                    || expression.text == "$ferror"
+                    || expression.text == "$fscanf"
+                    || expression.text == "$sscanf"
+                    || expression.text == "$fread"
+                    || expression.text == "$fseek"
+                    || expression.text == "$ftell"
+                    || expression.text == "$rewind")) {
+                return true;
             }
             if (language_
                     == frontend::Language::SystemVerilog2017
@@ -847,6 +890,7 @@ using namespace elaboration_detail;
                 }
                 break;
             case StatementKind::FileClose:
+            case StatementKind::FileFlush:
                 collect_identifiers(
                     statement.file_handle, output);
                 break;

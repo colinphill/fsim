@@ -1134,6 +1134,16 @@ module container_top;
     int located[$];
     int locations[$];
     logic [7:0] logic_located[$];
+    int preserved[];
+    logic [7:0] fresh[];
+    preserved = '{4, 5};
+    preserved = new[4](preserved);
+    assert (preserved.size() == 4);
+    assert (preserved[0] == 4);
+    assert (preserved[1] == 5);
+    assert (preserved[2] == 0);
+    fresh = new[2];
+    assert ($isunknown(fresh[0]));
     port_source[3] = 8'h31;
     port_source[0] = 8'h04;
     slice_source = '{
@@ -1365,6 +1375,13 @@ module container_top;
     assert (
         pending.product(empty_item) with (
             empty_item.index >= 0 ? empty_item : 1) == 1);
+    pending = '{1, 2};
+    pending.insert(1, 9);
+    assert (pending.size() == 3);
+    assert (pending[1] == 9);
+    pending.delete(0);
+    assert (pending.size() == 2);
+    assert (pending[0] == 9);
     pending = '{1, 2};
     mutate(pending);
     assert (pending.sum() == 6);

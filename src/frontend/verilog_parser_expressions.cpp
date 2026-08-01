@@ -489,7 +489,7 @@ Expression VerilogParser::parse_primary() {
         ExpressionKind::StringLiteral, token.text, {}, token.span};
     expression.decoded_string =
         decoded_string_literal_text(token);
-    return expression;
+    return parse_postfix(std::move(expression));
   }
   if (at(TokenKind::Identifier)) {
     const auto name = advance();
@@ -580,10 +580,47 @@ Expression VerilogParser::parse_primary() {
         require_file_call(2, "a filename and text mode");
       } else if (canonical == "$fgets") {
         require_file_call(2, "a string target and file handle");
+      } else if (canonical == "$fgetc") {
+        require_file_call(1, "one file handle");
+      } else if (canonical == "$ungetc") {
+        require_file_call(2, "a character and file handle");
       } else if (canonical == "$feof") {
         require_file_call(1, "one file handle");
       } else if (canonical == "$ferror") {
         require_file_call(2, "a file handle and string target");
+      } else if (canonical == "$fscanf" || canonical == "$sscanf") {
+        if (language_ != Language::SystemVerilog2017) {
+          error(
+              name,
+              "FSIM-SV-SEM-074",
+              canonical + " requires SystemVerilog-2017");
+        }
+        if (expression.operands.size() < 2U) {
+          error(
+              name,
+              "FSIM-SV-SEM-075",
+              canonical + " requires a source and literal format");
+        }
+      } else if (canonical == "$fread") {
+        if (language_ != Language::SystemVerilog2017) {
+          error(
+              name,
+              "FSIM-SV-SEM-074",
+              "$fread requires SystemVerilog-2017");
+        }
+        if (expression.operands.size() < 2U
+            || expression.operands.size() > 4U) {
+          error(
+              name,
+              "FSIM-SV-SEM-075",
+              "$fread requires a target, handle, and optional start/count");
+        }
+      } else if (canonical == "$fseek") {
+        require_file_call(3, "a handle, offset, and origin");
+      } else if (canonical == "$ftell") {
+        require_file_call(1, "one file handle");
+      } else if (canonical == "$rewind") {
+        require_file_call(1, "one file handle");
       }
       return parse_postfix(std::move(expression));
     }
@@ -610,7 +647,7 @@ Expression VerilogParser::parse_primary() {
     expect(TokenKind::RightParen, "')' after expression",
            "FSIM-SV-PARSE-029");
     expression.span = span_from(open, previous());
-    return expression;
+    return parse_postfix(std::move(expression));
   }
   if (match(TokenKind::LeftBrace)) {
     const auto open = previous();
@@ -777,20 +814,39 @@ Expression VerilogParser::parse_postfix(Expression expression) {
               operands[1].text);
         }
         const auto expected_arguments =
-            member.text == "push_front"
+            member.text == "insert"
+                ? std::optional<std::size_t>{2}
+            : member.text == "push_front"
                     || member.text == "push_back"
                     || member.text == "exists"
                     || member.text == "first"
                     || member.text == "last"
                     || member.text == "next"
                     || member.text == "prev"
+                    || member.text == "getc"
+                    || member.text == "compare"
+                    || member.text == "icompare"
+                    || member.text == "itoa"
+                    || member.text == "hextoa"
+                    || member.text == "octtoa"
+                    || member.text == "bintoa"
                 ? std::optional<std::size_t>{1}
             : member.text == "size"
                     || member.text == "pop_front"
                     || member.text == "pop_back"
                     || member.text == "reverse"
+                    || member.text == "len"
+                    || member.text == "toupper"
+                    || member.text == "tolower"
+                    || member.text == "atoi"
+                    || member.text == "atohex"
+                    || member.text == "atooct"
+                    || member.text == "atobin"
                     || unsupported_shuffle
                 ? std::optional<std::size_t>{0}
+            : member.text == "substr"
+                    || member.text == "putc"
+                ? std::optional<std::size_t>{2}
             : member.text == "delete"
                 ? (argument_count <= 1
                        ? std::optional<std::size_t>{argument_count}
@@ -798,10 +854,20 @@ Expression VerilogParser::parse_postfix(Expression expression) {
                 : std::nullopt;
         if (expected_arguments
             && argument_count != *expected_arguments) {
+          const bool string_method =
+              member.text == "getc" || member.text == "compare"
+              || member.text == "icompare" || member.text == "len"
+              || member.text == "toupper" || member.text == "tolower"
+              || member.text == "substr" || member.text == "putc"
+              || member.text == "atoi" || member.text == "atohex"
+              || member.text == "atooct" || member.text == "atobin"
+              || member.text == "itoa" || member.text == "hextoa"
+              || member.text == "octtoa" || member.text == "bintoa";
           error(
               member,
-              "FSIM-SV-SEM-081",
-              "container method '" + member.text + "' requires "
+              string_method ? "FSIM-SV-SEM-127" : "FSIM-SV-SEM-081",
+              std::string{string_method ? "string" : "container"}
+                  + " method '" + member.text + "' requires "
                   + std::to_string(*expected_arguments)
                   + " argument(s)");
         }
@@ -1106,6 +1172,33 @@ Expression VerilogParser::parse_postfix(Expression expression) {
                        {std::move(expression), std::move(first)},
                        cover(expression.span, previous().span)};
       }
+    } else if (
+        at(TokenKind::LeftParen)
+        && expression.kind == ExpressionKind::Index
+        && expression.operands.size() == 2U
+        && expression.operands[0].kind == ExpressionKind::Identifier
+        && expression.operands[0].text == "new") {
+      const auto expression_span = expression.span;
+      std::vector<Expression> operands;
+      operands.push_back(std::move(expression.operands[1]));
+      advance();
+      if (!at(TokenKind::RightParen)) {
+        do {
+          operands.push_back(parse_expression());
+        } while (match(TokenKind::Comma));
+      }
+      expect(
+          TokenKind::RightParen,
+          "')' after dynamic-array initialization",
+          "FSIM-SV-PARSE-223");
+      if (operands.size() != 2U) {
+        error(
+            previous(), "FSIM-SV-SEM-128",
+            "new[size](initializer) requires exactly one initializer");
+      }
+      expression = Expression{
+          ExpressionKind::Call, "@new-array", std::move(operands),
+          cover(expression_span, previous().span)};
     } else if (match(TokenKind::PlusPlus)
                || match(TokenKind::MinusMinus)) {
       const auto operation = previous();

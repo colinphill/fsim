@@ -9,6 +9,12 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
         const Expression& expression,
         const std::size_t expected_width,
         const frontend::Type* expected_type) {
+        if (auto binary = lower_file_binary_read(expression); binary.handled) {
+            return binary;
+        }
+        if (auto scan = lower_file_scan(expression); scan.handled) {
+            return scan;
+        }
         if (expression.kind == ExpressionKind::Call
             && (expression.text == "@stream-left"
                 || expression.text == "@stream-right")) {
@@ -111,8 +117,16 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
                   || (handle.kind == ExpressionKind::Call
                       && (handle.text == "$fopen"
                           || handle.text == "$fgets"
+                          || handle.text == "$fgetc"
+                          || handle.text == "$ungetc"
                           || handle.text == "$feof"
-                          || handle.text == "$ferror"))
+                          || handle.text == "$ferror"
+                          || handle.text == "$fscanf"
+                          || handle.text == "$sscanf"
+                          || handle.text == "$fread"
+                          || handle.text == "$fseek"
+                          || handle.text == "$ftell"
+                          || handle.text == "$rewind"))
                   || is_integer_expression(handle);
               if (!integer_handle) {
                 report(
@@ -151,6 +165,13 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
               if (const auto object =
                       string_objects_.find(target.text);
                   object != string_objects_.end()) {
+                if (read_only_string_objects_.contains(object->second)) {
+                  report(
+                      "FSIM-ELAB-SVPORT-011",
+                      "an input mutable string port is read-only",
+                      target.span);
+                  return std::nullopt;
+                }
                 return std::pair{
                     allocate_string_register(),
                     std::optional{object->second}};
@@ -207,11 +228,63 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
           const auto destination =
               allocate_register(32, frontend::ValueDomain::Bit2);
           process_.operations.emplace_back(
-              FileReadLine{destination, *handle, target->first});
+              FileReadLine{
+                  destination, *handle, target->first, 0,
+                  FileReadKind::line});
           if (target->second) {
             process_.operations.emplace_back(
                 WriteStringObject{*target->second, target->first});
           }
+          return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "$fgetc") {
+          if (language_ != frontend::Language::SystemVerilog2017
+              || expression.operands.size() != 1) {
+            report(
+                "FSIM-ELAB-SVFILE-009",
+                "$fgetc requires one integer handle",
+                expression.span);
+            return std::nullopt;
+          }
+          const auto handle = lower_handle(expression.operands[0]);
+          if (!handle) {
+            return std::nullopt;
+          }
+          const auto destination =
+              allocate_register(32, frontend::ValueDomain::Bit2);
+          process_.operations.emplace_back(
+              FileReadLine{
+                  destination, *handle, 0, 0,
+                  FileReadKind::character});
+          return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && expression.text == "$ungetc") {
+          if (language_ != frontend::Language::SystemVerilog2017
+              || expression.operands.size() != 2) {
+            report(
+                "FSIM-ELAB-SVFILE-010",
+                "$ungetc requires a character and integer handle",
+                expression.span);
+            return std::nullopt;
+          }
+          auto character = lower_expression(expression.operands[0], 32);
+          const auto handle = lower_handle(expression.operands[1]);
+          if (!character || !handle) {
+            return std::nullopt;
+          }
+          if (register_width(*character) != 32) {
+            *character = resize_register(
+                *character, 32,
+                is_signed_expression(expression.operands[0]));
+          }
+          const auto destination =
+              allocate_register(32, frontend::ValueDomain::Bit2);
+          process_.operations.emplace_back(
+              FileReadLine{
+                  destination, *handle, 0, *character,
+                  FileReadKind::unget});
           return destination;
         }
         if (expression.kind == ExpressionKind::Call
@@ -260,6 +333,66 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
                 WriteStringObject{*target->second, target->first});
           }
           return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && (expression.text == "$fseek"
+                || expression.text == "$ftell"
+                || expression.text == "$rewind")) {
+          const bool seek = expression.text == "$fseek";
+          const bool named = std::ranges::any_of(
+              expression.call_argument_names,
+              [](const std::string& name) { return !name.empty(); });
+          if (language_ != frontend::Language::SystemVerilog2017
+              || named
+              || expression.operands.size() != (seek ? 3U : 1U)) {
+            report(
+                "FSIM-ELAB-SVFILE-015",
+                expression.text
+                    + " requires an integer handle"
+                      + (seek ? ", offset, and origin" : ""),
+                expression.span);
+            return std::nullopt;
+          }
+          const auto handle = lower_handle(expression.operands[0]);
+          if (!handle) return std::nullopt;
+          FilePosition operation;
+          operation.handle = *handle;
+          operation.kind = expression.text == "$fseek"
+              ? FilePositionKind::seek
+              : expression.text == "$ftell"
+                  ? FilePositionKind::tell
+                  : FilePositionKind::rewind;
+          const auto lower_integer = [&](const std::size_t operand)
+              -> std::optional<RegisterId> {
+            const auto& value_expression = expression.operands[operand];
+            const auto width = infer_width(value_expression);
+            if (!width || *width == 0 || *width > 64
+                || is_string_expression(value_expression)
+                || is_container_expression(value_expression)) {
+              report(
+                  "FSIM-ELAB-SVFILE-015",
+                  "$fseek offset and origin must be integer expressions",
+                  value_expression.span);
+              return std::nullopt;
+            }
+            auto value = lower_expression(value_expression, 32);
+            if (value && register_width(*value) != 32) {
+              *value = resize_register(
+                  *value, 32, is_signed_expression(value_expression));
+            }
+            return value;
+          };
+          if (seek) {
+            const auto offset = lower_integer(1);
+            const auto origin = lower_integer(2);
+            if (!offset || !origin) return std::nullopt;
+            operation.offset = *offset;
+            operation.origin = *origin;
+          }
+          operation.destination =
+              allocate_register(32, frontend::ValueDomain::Bit2);
+          process_.operations.emplace_back(operation);
+          return operation.destination;
         }
         if (expression.kind == ExpressionKind::Call
             && (expression.text == "$dimensions"

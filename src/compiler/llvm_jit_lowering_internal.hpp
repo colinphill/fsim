@@ -224,6 +224,8 @@ struct FileOperationLowerer {
   std::uint32_t instruction;
   std::array<llvm::Value*, 6> callbacks;
   std::array<llvm::FunctionType*, 6> callback_types;
+  llvm::Value* generic_callback{};
+  llvm::FunctionType* generic_callback_type{};
   std::function<void(
       llvm::Value*,
       JitGeneratedRuntimeErrorReason,
@@ -255,6 +257,10 @@ struct FileOperationLowerer {
   void lower(const runtime::simir::FileReadLine& operation);
   void lower(const runtime::simir::FileEndOfFile& operation);
   void lower(const runtime::simir::FileErrorStatus& operation);
+  void lower(const runtime::simir::FileScan& operation);
+  void lower(const runtime::simir::FileBinaryRead& operation);
+  void lower(const runtime::simir::FilePosition& operation);
+  void lower(const runtime::simir::FileFlush& operation);
 
 private:
   void lower_handle_only(
@@ -321,6 +327,7 @@ struct ContainerOperationLowerer {
   void lower(const runtime::simir::LoadMemory&);
   void lower(const runtime::simir::PushContainer&);
   void lower(const runtime::simir::PopContainer&);
+  void lower(const runtime::simir::StringMethod&);
 
 private:
   void invoke(

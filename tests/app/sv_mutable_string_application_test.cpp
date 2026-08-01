@@ -6,6 +6,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -64,6 +65,12 @@ Capture run_once(
     const fsim::app::SimulationEngine engine) {
   fsim::diagnostic::Engine diagnostics;
   auto project = fsim::app::build_project(config, diagnostics);
+  if (!project) {
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
   assert(project);
   Capture capture;
   capture.keys = project->specialization_cache_keys;
@@ -150,11 +157,15 @@ void verify_debugger_policy(const fsim::project::Config& config) {
   std::ostringstream error;
   fsim::app::DebuggerControl debugger{simulation, output, error};
   debugger.execute({"show", "worker.title"});
+  debugger.execute({"show", "worker.bridge.source"});
   debugger.execute({"force", "worker.title", "bad"});
   debugger.execute({"deposit", "worker.title", std::string{"A\nB"}});
   debugger.execute({"show", "worker.title"});
   const auto text = output.str();
   assert(text.find("mutable_top.worker.title = \"fsim\"")
+         != std::string::npos);
+  assert(text.find(
+             "mutable_top.worker.bridge.source = \"input\"")
          != std::string::npos);
   assert(text.find(
              "force is not supported for mutable string objects; "
@@ -189,8 +200,21 @@ endmodule
     std::ofstream output(
         mutable_source, std::ios::binary | std::ios::trunc);
     output << R"(
+module string_port_child(
+    input string source,
+    output string sink,
+    inout string shared);
+  initial begin
+    sink = {source, ":port"};
+    shared.putc(0, 8'h53);
+  end
+endmodule
 module mutable_child;
   string title = "fsim";
+  string port_source = "input";
+  string port_sink;
+  string port_shared = "shared";
+  string_port_child bridge(port_source, port_sink, port_shared);
   function automatic string decorate(input string value);
     return {value, ")"
            << suffix << R"("};
@@ -203,11 +227,43 @@ module mutable_child;
   endtask
   initial begin : worker
     string copy;
+    string upper;
+    string lower;
+    string middle;
+    string mutated;
+    string decimal_text;
+    string hex_text;
+    string octal_text;
+    string binary_text;
+    string formatted;
+    string written;
+    string functional;
     remember(decorate(title), copy);
     copy[0] = "F";
     if (copy.len() == 8 && copy != "")
       title = copy;
-    $display("%s", title);
+    upper = copy.toupper();
+    lower = upper.tolower();
+    middle = copy.substr(1, 3);
+    mutated = middle;
+    mutated.putc(0, 8'h53);
+    decimal_text.itoa(-42);
+    hex_text.hextoa(255);
+    octal_text.octtoa(9);
+    binary_text.bintoa(5);
+    $sformat(
+      formatted, "fmt=%0d/%s/%m/%04t", 42, mutated);
+    $swrite(written, "%s:%02h", lower, 8'h0a);
+    functional = $sformatf("%-5s|%b|%%", middle, 4'b0011);
+    $display(
+      "%s|%s|%s|%s|%s|%s|%s|%s|%s|%0d|%0d|%0d|%0d|%0d|%0d|%0d|%0d",
+      title, upper, lower, middle, mutated,
+      decimal_text, hex_text, octal_text, binary_text,
+      copy.compare(title), copy.icompare(upper),
+      copy.getc(0), copy.getc(99),
+      "12_3".atoi(), "ff".atohex(), "17".atooct(), "101".atobin());
+    $display("|%s|%s|%s", formatted, written, functional);
+    $display("|%s|%s", port_sink, port_shared);
   end
 endmodule
 module mutable_top;
@@ -233,18 +289,31 @@ endmodule
     assert(reference.result.status
            == fsim::runtime::RunStatus::completed);
     assert(reference.result.time == 1);
-    assert(reference.output == std::vector<std::string>(
-        {"stable", "Fsim-v1!"}));
+    auto expected = std::vector<std::string>{
+        "stable", "Fsim-v1!", "|FSIM-V1!", "|fsim-v1!", "|sim",
+        "|Sim", "|-42", "|ff", "|11", "|101",
+        "|0", "|0", "|70", "|0", "|123", "|255", "|15", "|5"};
+    const auto formatted_expected = std::vector<std::string>{
+        "|fmt=42/Sim/mutable_top.worker/0001",
+        "|fsim-v1!:0a", "|sim  |0011|%", "|input:port", "|Shared"};
+    expected.insert(
+        expected.end(), formatted_expected.begin(), formatted_expected.end());
+    if (reference.output != expected) {
+      for (const auto& line : reference.output) {
+        std::cerr << '[' << line << "]\n";
+      }
+    }
+    assert(reference.output == expected);
     assert(reference.title == "Fsim-v1!");
     assert(reference.output == cold.output);
     assert(cold.output == warm.output);
     assert(reference.title == cold.title && cold.title == warm.title);
     assert(reference.keys == cold.keys && cold.keys == warm.keys);
 #if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 2);
-    assert(cold.compiled_modules == 2);
-    assert(cold.cache.misses == 2 && cold.cache.stores == 2);
-    assert(warm.cache.hits == 2);
+    assert(cold.compiled_processes == 3);
+    assert(cold.compiled_modules == 3);
+    assert(cold.cache.misses == 3 && cold.cache.stores == 3);
+    assert(warm.cache.hits == 3);
 #endif
     inspect_suspended(
         config, fsim::app::SimulationEngine::interpreter);
@@ -269,11 +338,15 @@ endmodule
           fsim::project::Optimization::o2),
       fsim::app::SimulationEngine::compiled);
   assert(changed.output == std::vector<std::string>(
-      {"stable", "Fsim-v2!"}));
+      {"stable", "Fsim-v2!", "|FSIM-V2!", "|fsim-v2!", "|sim",
+       "|Sim", "|-42", "|ff", "|11", "|101",
+       "|0", "|0", "|70", "|0", "|123", "|255", "|15", "|5",
+       "|fmt=42/Sim/mutable_top.worker/0001",
+       "|fsim-v2!:0a", "|sim  |0011|%", "|input:port", "|Shared"}));
   assert(changed.keys != baseline.keys);
 #if defined(FSIM_HAS_LLVM)
   assert(changed.cache.hits == 1);
-  assert(changed.cache.misses == 1);
-  assert(changed.cache.stores == 1);
+  assert(changed.cache.misses == 2);
+  assert(changed.cache.stores == 2);
 #endif
 }

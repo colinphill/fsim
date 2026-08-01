@@ -423,6 +423,34 @@ boundary. Wildcard/string/composite keys, multidimensional unpacked arrays,
 dynamic static-array bounds, nonintegral/aggregate/string elements,
 mixed-language transfer, and unrestricted allocation remain unsupported.
 
+Batch 110 string/file/container/memory audit update: mutable byte strings now
+cover deterministic standard methods, integer conversions, `$swrite`,
+`$sformat`, and `$sformatf`; direct same-language input/output/inout string
+ports alias one object through hierarchy with read-only input and writer
+ownership checks. Manifest-confined files additionally cover character
+pushback, formatted scans, binary `$fread`, positioned access, explicit/all-
+file flush, and binary mode aliases. `$writememb` and `$writememh` provide the
+checked inverse of the supported memory-load path.
+
+The earlier integral-element-only container limits are superseded for bounded
+named packed aggregate elements. Exact
+one-through-64-bit packed struct, union, and enum identity now follows static,
+dynamic, queue, associative, and one-through-four-dimensional static
+containers through nested patterns, element mutation, initialized dynamic
+allocation, indexed queue insertion/deletion, full-rank indexing, generated
+same-language ports, type parameters, automatic callables, debugger reads,
+callbacks, and VCD-observed results. Distinct nominal element types remain
+incompatible even when their layouts match. One-dimensional fixed arrays of
+those packed words support `$fread`, `$readmemb`/`$readmemh`, and
+`$writememb`/`$writememh`; multidimensional memory-file operands and string or
+unpacked-aggregate elements remain checked exclusions. Native schema 68 and
+container semantic revision 28 retain exact aggregate identity,
+construction/mutation operands, string-port aliases, dimensions, source, and
+debug provenance. Unicode/real string conversions, standard or multichannel
+descriptors, `$fstrobe`/`$fmonitor`, string-element containers, and
+multidimensional memory-file operands remain explicitly deferred by the v1
+matrix rather than silently accepted.
+
 VHDL array-aggregate status update: constrained one-dimensional
 scalar-element user arrays now accept contextually typed positional,
 locally-static discrete/range/choice-list, and final `others` associations in

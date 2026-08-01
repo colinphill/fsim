@@ -71,6 +71,16 @@ void test_simir_containers() {
                  reduction_values, unequal_size, true)
               == value(1, 0),
       "container logical and case equality preserve shape and X policy");
+  try {
+    auto distinct_type = queue_type;
+    distinct_type.element_nominal_type = "other_packet_t";
+    (void)compare_container_values(
+        reduction_values,
+        ContainerValue{distinct_type, reduction_values.elements, {}},
+        true);
+    require(false, "distinct aggregate element identities must not compare");
+  } catch (const std::invalid_argument&) {
+  }
   require(
       reduce_container_value(
           reduction_values,
@@ -748,7 +758,9 @@ void test_simir_containers() {
       LoadConstant{2, value(32, 33)},
       ContainerWrite{0, 1, 2, true},
       CopyContainerRegister{2, 0},
-      WriteContainerObject{array_object, 2},
+      LoadConstant{0, value(32, 5)},
+      ResizeContainer{0, 0, 2},
+      WriteContainerObject{array_object, 0},
       LoadConstant{3, value(8, 1)},
       PushContainer{1, 3, false},
       LoadConstant{3, value(8, 2)},
@@ -759,6 +771,11 @@ void test_simir_containers() {
       PushContainer{1, 3, false},
       LoadConstant{3, value(8, 9)},
       PushContainer{1, 3, true},
+      LoadConstant{4, value(32, 1)},
+      LoadConstant{3, value(8, 7)},
+      PushContainer{1, 3, false, 4},
+      LoadConstant{4, value(32, 2)},
+      DeleteContainer{1, 4},
       ContainerSize{5, 1},
       PopContainer{6, 1, false},
       WriteContainerObject{queue_object, 1},
@@ -772,24 +789,48 @@ void test_simir_containers() {
   require(
       array.elements
           == std::vector<PackedLogic4>{
-              value(32, 11), value(32, 0), value(32, 33)},
-      "dynamic arrays resize, index-write, and copy by value");
+              value(32, 11), value(32, 0), value(32, 33),
+              value(32, 0), value(32, 0)},
+      "dynamic-array initialization preserves source elements and defaults "
+      "the expanded tail");
   const auto& queue =
       interpreter.container_object_value(queue_object);
   require(
       queue.elements
-          == std::vector<PackedLogic4>{
-              value(8, 9), value(8, 1)},
-      "bounded queue overflow and pop ordering are deterministic");
+          == std::vector<PackedLogic4>{value(8, 9)},
+      "bounded queue insert, indexed delete, overflow, and pop ordering are "
+      "deterministic");
   require(
-      interpreter.read_debug_local(0, 0) == value(32, 3)
+      interpreter.read_debug_local(0, 0) == value(32, 2)
           && interpreter.read_debug_local(0, 1)
-              == value(8, 2),
+              == value(8, 7),
       "size and pop results retain exact scalar types");
   require(
       interpreter.read_debug_container_local(0, 0).elements
           == array.elements,
       "container locals remain debugger-visible");
+
+  ContainerType logic_array_type;
+  logic_array_type.element_width = 8;
+  Interpreter logic_defaults;
+  const auto logic_object = logic_defaults.add_container_object(
+      {"logic_values", ContainerValue{logic_array_type, {}, {}},
+       std::nullopt});
+  Process logic_process;
+  logic_process.id = 0;
+  logic_process.name = "logic-dynamic-default";
+  logic_process.register_count = 1;
+  logic_process.container_register_count = 1;
+  logic_process.container_register_types = {logic_array_type};
+  logic_process.operations = {
+      LoadConstant{0, value(32, 2)}, ResizeContainer{0, 0},
+      WriteContainerObject{logic_object, 0}, Halt{}};
+  (void)logic_defaults.add_process(std::move(logic_process));
+  require(
+      logic_defaults.run().status == RunStatus::completed
+          && logic_defaults.container_object_value(logic_object)
+                 .elements[1].to_msb_string() == "XXXXXXXX",
+      "new[size] defaults four-state dynamic-array elements to X");
 
   ContainerType conditional_type;
   conditional_type.element_width = 8;
@@ -1129,6 +1170,7 @@ void test_simir_containers() {
 
   ContainerType memory_type;
   memory_type.element_width = 8;
+  memory_type.element_nominal_type = "packet_t";
   memory_type.fixed = true;
   memory_type.index_left = 3;
   memory_type.index_right = 0;
@@ -1155,6 +1197,22 @@ void test_simir_containers() {
           && memory.elements[3].to_msb_string()
               == "00000011",
       "$readmemb optional bounds use declared indices and retain Z bits");
+  require(
+      write_memory_text(memory, true)
+          == "03\n0x\nxx\n0f\n",
+      "$writememh emits numeric address order and deterministic unknown "
+      "nibbles");
+  const auto binary_dump =
+      write_memory_text(memory, false, 1, 0);
+  require(
+      binary_dump == "000010Z1\n00000011\n",
+      "$writememb preserves exact four-state bits and descending bounds");
+  auto binary_round_trip = default_container_value(memory_type);
+  load_memory_text(binary_round_trip, binary_dump, false, 1, 0);
+  require(
+      binary_round_trip.elements[2] == memory.elements[2]
+          && binary_round_trip.elements[3] == memory.elements[3],
+      "bounded binary memory text round trips selected elements");
   try {
     load_memory_text(memory, "@7 00", true);
     require(false, "out-of-range read-memory address must fail");
@@ -1172,6 +1230,19 @@ void test_simir_containers() {
         false);
     require(false, "oversized read-memory input must fail");
   } catch (const std::length_error&) {
+  }
+  try {
+    auto matrix_type = memory_type;
+    matrix_type.dimensions = {{1, 0}, {0, 1}};
+    auto matrix = default_container_value(matrix_type);
+    load_memory_text(matrix, "00", true);
+    require(false, "multidimensional read-memory target must fail");
+  } catch (const std::invalid_argument&) {
+  }
+  try {
+    (void)write_memory_text(memory, true, 7, 0);
+    require(false, "out-of-range write-memory bounds must fail");
+  } catch (const std::out_of_range&) {
   }
 
   const auto expect_failure =
@@ -1221,6 +1292,12 @@ void test_simir_containers() {
       queue_type,
       {PopContainer{0, 0, true}, Halt{}},
       "empty queue");
+  expect_failure(
+      queue_type,
+      {LoadConstant{0, value(8, 1)},
+       LoadConstant{1, value(32, 1)},
+       PushContainer{0, 0, false, 1}, Halt{}},
+      "insert index is out of range");
   expect_failure(
       associative_type,
       {LoadConstant{

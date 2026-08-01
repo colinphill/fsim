@@ -5922,6 +5922,49 @@ seconds, the aggregate/multidimensional differential in 0.32 seconds, and the
 monolithic application in 13.64 seconds, on 2026-07-31. Batch 109 is not a
 ten-batch CI-inspection boundary, so no Actions run was inspected.
 
+### One-hundred-tenth feature batch — SystemVerilog string, file, container, memory, and release-row closure
+
+The final bounded SystemVerilog v1 audit closes ten related slices. Mutable
+byte strings now execute the standard non-real methods and integer
+conversions, bounded `$swrite`/`$sformat`/`$sformatf`, and direct same-language
+input/output/inout module-port aliases with input read-only and path-aware
+writer ownership. Character pushback, formatted scanning, binary `$fread`,
+position/query/rewind/flush operations, and binary mode aliases extend the
+manifest-confined file service without exposing host descriptors.
+
+`$writememb` and `$writememh` serialize exact one-dimensional fixed memories.
+Dynamic-array `new[size](initializer)` snapshots aliased initializers and
+applies domain-correct tail defaults, while queues execute checked indexed
+`insert` and `delete`. One-through-64-bit nominal packed struct, union, and
+enum elements now traverse every supported static/dynamic/queue/associative
+container and one-dimensional memory-file operation. The aggregate,
+multidimensional, generated-hierarchy, type-parameter, callable, debugger,
+callback, VCD, interpreter, LLVM O0/O2, cold/warm, HDL-edit, and external-file-
+edit matrices retain exact nominal identity and deterministic behavior.
+
+Feature-matrix rows SV-661 through SV-670 are the detailed evidence. The
+release-row audit moves V1-SV-01 through V1-SV-08 beside V1-SV-09 in the
+completed v1 group. The bounded contract explicitly defers real/Unicode and
+wider-than-64-bit runtime data, string-element containers, multidimensional
+memory-file operands, standard/multichannel and postponed-monitor file
+extensions, unsupported primitive families, and the listed general control/
+callable extensions; none is silently accepted. Native-object schema 68 and
+container semantic revision 28 record the final supported graph without a
+public runtime ABI change.
+
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 64 tests
+in 485.70 seconds, including scoped locals in 0.92 seconds, LLVM in 3.10
+seconds, mutable strings in 0.94 seconds, files in 2.11 seconds, aggregate/
+multidimensional execution in 2.03 seconds, containers in 375.83 seconds, and
+the monolithic application in 40.66 seconds. Release passed all 64 tests in
+159.27 seconds, including scoped locals in 0.79 seconds, LLVM in 2.71 seconds,
+mutable strings in 0.41 seconds, files in 0.68 seconds, containers in 99.00
+seconds, and the monolithic application in 14.10 seconds, on 2026-08-01. The
+diagnostic catalog covers 1,407 production codes, and the source gate covers
+332 authored files with an empty allowlist and a 2,000-line maximum. The
+mandatory Batch 110 non-documentation CI inspection remains pending at the
+user-requested stop boundary after the feature commit and push.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the

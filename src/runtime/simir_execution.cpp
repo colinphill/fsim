@@ -1,38 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
-
+#include "fsim/runtime/string_methods.hpp"
 namespace fsim::runtime::simir {
-
 namespace {
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
 };
 template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
 } // namespace
-
 struct Interpreter::Impl::ExecutionContext final
     : ProcessExecutionContext {
   Impl& owner;
   ProcessId process;
-
   ExecutionContext(Impl& owner_value, const ProcessId process_value)
       : owner(owner_value), process(process_value) {}
-
   [[nodiscard]] PackedLogic4
   read_signal(const SignalId signal) const override {
     return owner.get_signal(signal).initial_value;
   }
-
   [[nodiscard]] Logic4Word
   read_signal_word(const SignalId signal) const override {
     return owner.get_signal(signal).initial_value.low_word();
   }
-
   [[nodiscard]] std::string
   read_string_object(const StringObjectId object) const override {
     return owner.get_string_object(object).initial_value;
   }
-
   void write_string_object(
       const StringObjectId object,
       const std::string_view value) override {
@@ -51,7 +44,6 @@ struct Interpreter::Impl::ExecutionContext final
       const ContainerValue& value) override {
     owner.write_container_object_value(object, value);
   }
-
   [[nodiscard]] FileHandle open_file(
       const std::string_view path,
       const std::string_view mode) override {
@@ -97,6 +89,15 @@ struct Interpreter::Impl::ExecutionContext final
       std::uint32_t& count) override {
     return owner.read_file_line(process, handle, count);
   }
+  [[nodiscard]] std::int32_t read_file_character(
+      const FileHandle handle) override {
+    return owner.read_file_character(process, handle);
+  }
+  [[nodiscard]] std::int32_t unread_file_character(
+      const FileHandle handle,
+      const std::int32_t character) override {
+    return owner.unread_file_character(process, handle, character);
+  }
   [[nodiscard]] bool file_end_of_file(
       const FileHandle handle) override {
     return owner.file_end_of_file(process, handle);
@@ -106,16 +107,24 @@ struct Interpreter::Impl::ExecutionContext final
       bool& has_error) override {
     return owner.file_error(process, handle, has_error);
   }
+  [[nodiscard]] std::int32_t position_file(
+      const FileHandle handle,
+      const FilePositionKind kind,
+      const std::int32_t offset,
+      const std::int32_t origin) override {
+    return owner.position_file(process, handle, kind, offset, origin);
+  }
+  void flush_file(const std::optional<FileHandle> handle) override {
+    owner.flush_file(process, handle);
+  }
   [[nodiscard]] Logic9Word
   read_signal_logic9_word(const SignalId signal) const override {
     return owner.get_signal(signal).initial_value.logic9_low_word();
   }
-
   void write_blocking(
       const SignalId signal, PackedLogic4 value) override {
     owner.commit_driver(process, signal, std::move(value));
   }
-
   void write_blocking_word(
       const SignalId signal,
       const Logic4Word value) override {
@@ -125,7 +134,6 @@ struct Interpreter::Impl::ExecutionContext final
         PackedLogic4::from_aval_bval(
             value.width, value.aval, value.bval));
   }
-
   void write_blocking_slice(
       const SignalId signal,
       PackedLogic4 value,
@@ -133,7 +141,6 @@ struct Interpreter::Impl::ExecutionContext final
     owner.commit_driver_slice(
         process, signal, std::move(value), offset);
   }
-
   void write_blocking_slice_word(
       const SignalId signal,
       const Logic4Word value,
@@ -145,14 +152,12 @@ struct Interpreter::Impl::ExecutionContext final
             value.width, value.aval, value.bval),
         offset);
   }
-
   void force_signal_slice(
       const SignalId signal,
       PackedLogic4 value,
       const std::size_t offset) override {
     owner.force_slice(signal, std::move(value), offset);
   }
-
   void release_signal_slice(
       const SignalId signal,
       const std::size_t offset,
@@ -435,7 +440,11 @@ struct Interpreter::Impl::ExecutionContext final
                 scheduler.now(),
                 scheduler.delta());
           }
-        });
+    });
+  }
+
+  [[nodiscard]] SimulationTick current_time() const noexcept override {
+    return owner.scheduler.now();
   }
 
   void display_formatted(
@@ -1066,7 +1075,7 @@ void Interpreter::Impl::execute(ProcessId id) {
               ++process.pc;
             },
             [&](const StringIndex& op) {
-              const auto& source =
+              auto& source =
                   get_string_register(process, op.source);
               const auto index =
                   known_string_index(
@@ -1092,6 +1101,9 @@ void Interpreter::Impl::execute(ProcessId id) {
               target[index] =
                   static_cast<char>(byte.aval & UINT64_C(0xff));
               ++process.pc;
+            },
+            [&](const StringMethod& op) {
+              execute_string(process, op);
             },
             [&](const UnaryNot &op) {
               get_register(process, op.destination) =

@@ -465,8 +465,20 @@ module mutable_strings;
     if (title != "")
       title[0] = "F";
     if (title.len() == 0)
-      title = empty;
+      title = title.tolower().substr(0, 2);
+    $sformat(title, "%s", scratch);
+    title = $sformatf("%s", title);
   end
+endmodule
+module string_ports(
+    input string incoming,
+    output string outgoing,
+    inout string shared);
+endmodule
+module classic_string_ports(incoming, outgoing, shared);
+  input string incoming;
+  output string outgoing;
+  inout string shared;
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -487,6 +499,34 @@ endmodule
               == std::optional<std::string>{"fsim"}
           && !mutable_unit->variables[1].initializer,
       "module string variables retain distinct type and initialization");
+  const auto* string_port_unit =
+      mutable_strings.design.find(
+          UnitKind::VerilogModule, "string_ports");
+  const auto* classic_string_port_unit =
+      mutable_strings.design.find(
+          UnitKind::VerilogModule, "classic_string_ports");
+  require(
+      string_port_unit != nullptr
+          && string_port_unit->ports.size() == 3
+          && std::ranges::all_of(
+              string_port_unit->ports,
+              [](const auto& port) {
+                return port.type.domain == ValueDomain::String;
+              })
+          && string_port_unit->ports[0].direction
+              == PortDirection::Input
+          && string_port_unit->ports[1].direction
+              == PortDirection::Output
+          && string_port_unit->ports[2].direction
+              == PortDirection::Inout
+          && classic_string_port_unit != nullptr
+          && classic_string_port_unit->ports.size() == 3
+          && std::ranges::all_of(
+              classic_string_port_unit->ports,
+              [](const auto& port) {
+                return port.type.domain == ValueDomain::String;
+              }),
+      "ANSI and classic mutable string ports retain type and direction");
   require(
       mutable_unit != nullptr
           && mutable_unit->functions.size() == 1
@@ -521,7 +561,7 @@ endmodule
                  .declarations[0].type.domain
               == ValueDomain::String
           && mutable_unit->processes[0].statements[0]
-                 .statements.size() == 3
+                 .statements.size() == 5
           && mutable_unit->processes[0].statements[0]
                  .statements[2].condition.operands[0].kind
               == ExpressionKind::Call
@@ -529,6 +569,30 @@ endmodule
                  .statements[2].condition.operands[0].text
               == ".len",
       "block string declarations and len method retain executable HIR");
+  require(
+      mutable_unit != nullptr
+          && mutable_unit->processes[0].statements[0]
+                 .statements[3].kind == StatementKind::TaskCall
+          && mutable_unit->processes[0].statements[0]
+                 .statements[3].task_name == "$sformat"
+          && mutable_unit->processes[0].statements[0]
+                 .statements[4].value.kind == ExpressionKind::Call
+          && mutable_unit->processes[0].statements[0]
+                 .statements[4].value.text == "$sformatf",
+      "string formatting tasks and functions retain ordinary compact HIR");
+
+  const auto invalid_string_method = parse_text(
+      "invalid-string-method.sv",
+      "module bad; string value; initial value = value.substr(0); endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !invalid_string_method.ok()
+          && std::ranges::any_of(
+              invalid_string_method.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-127";
+              }),
+      "string method arity has a targeted diagnostic");
 
   const auto invalid_string_escape = parse_text(
       "invalid-string-escape.sv",

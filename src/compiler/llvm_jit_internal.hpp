@@ -102,6 +102,10 @@ validate_dynamic_part_index_bounds(
 [[nodiscard]] std::optional<std::string>
 validate_expression_profile_metadata(
     std::span<const runtime::simir::ExpressionProfile> profiles);
+void validate_process_shape(
+    const runtime::simir::Process& process,
+    std::span<const std::uint32_t> signal_widths,
+    std::span<const runtime::simir::ValueKind> signal_value_kinds);
 [[nodiscard]] std::optional<std::string>
 validate_extract_bounds(
     const runtime::simir::Extract& operation,
@@ -116,6 +120,30 @@ struct OperationValidationError {
   std::size_t instruction{};
   std::string message;
 };
+
+struct PackedRegisterValidation {
+  runtime::simir::RegisterId id{};
+  std::uint32_t width{};
+  bool definition{};
+};
+[[nodiscard]] std::optional<std::string> validate_string_method_metadata(
+    const runtime::simir::StringMethod& operation,
+    const runtime::simir::Process& process,
+    std::vector<PackedRegisterValidation>& registers);
+[[nodiscard]] std::optional<std::string> validate_file_scan_metadata(
+    const runtime::simir::FileScan& operation,
+    const runtime::simir::Process& process,
+    std::span<const std::uint32_t> signal_widths,
+    std::span<const runtime::simir::ValueKind> signal_value_kinds,
+    std::vector<PackedRegisterValidation>& registers);
+[[nodiscard]] std::optional<std::string> validate_file_binary_metadata(
+    const runtime::simir::FileBinaryRead& operation,
+    const runtime::simir::Process& process,
+    std::span<const std::uint32_t> signal_widths,
+    std::vector<PackedRegisterValidation>& registers);
+[[nodiscard]] std::optional<std::string> validate_file_position_metadata(
+    const runtime::simir::FilePosition& operation,
+    std::vector<PackedRegisterValidation>& registers);
 
 [[nodiscard]] std::optional<OperationValidationError>
 validate_selection_operation_bounds(

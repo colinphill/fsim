@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/runtime/file_binary.hpp"
+#include "fsim/runtime/file_scanning.hpp"
+#include "fsim/runtime/string_methods.hpp"
 
 namespace fsim::app::application_detail {
 
@@ -399,9 +402,211 @@ std::uint32_t LlvmProcessExecutor::container_operation(
     }
     *result_aval = 0;
     *result_bval = 0;
-    auto& registers = state.executor->container_registers_;
     const auto& operation =
         callback_operation(state, process, instruction);
+    if (const auto* method =
+            std::get_if<runtime::simir::StringMethod>(&operation)) {
+      auto& source =
+          state.executor->string_registers_.at(method->source);
+      if (method->operation
+          >= runtime::simir::StringMethodOperator::format_packed) {
+        if (method->operation
+                == runtime::simir::StringMethodOperator::format_packed
+            && (input1_bval != 0 || input1_aval == 0
+                || input1_aval > 64)) {
+          throw compiler::LlvmJitError{
+              "compiled string format width is invalid"};
+        }
+        const auto packed = method->operation
+                == runtime::simir::StringMethodOperator::format_packed
+            ? runtime::PackedLogic4::from_aval_bval(
+                  static_cast<std::size_t>(input1_aval),
+                  input0_aval, input0_bval)
+            : runtime::PackedLogic4{1, runtime::Logic4::zero};
+        runtime::simir::execute_string_format(
+            *method, source, packed,
+            method->operation
+                    == runtime::simir::StringMethodOperator::format_string
+                ? std::string_view{
+                      state.executor->string_registers_.at(method->argument)}
+                : std::string_view{},
+            state.context->current_time());
+        return 0;
+      }
+      const auto signed32 = [](
+          const std::uint64_t aval,
+          const std::uint64_t bval) -> std::optional<std::int32_t> {
+        return bval == 0
+            ? std::optional<std::int32_t>{
+                  static_cast<std::int32_t>(
+                      static_cast<std::uint32_t>(aval))}
+            : std::nullopt;
+      };
+      const bool compare =
+          method->operation
+              == runtime::simir::StringMethodOperator::compare
+          || method->operation
+              == runtime::simir::StringMethodOperator::icompare;
+      const auto result = runtime::simir::execute_string_method(
+          method->operation, source,
+          compare
+              ? std::string_view{state.executor->string_registers_.at(
+                    method->argument)}
+              : std::string_view{},
+          signed32(input0_aval, input0_bval),
+          signed32(input1_aval, input1_bval));
+      if (result.integer) {
+        *result_aval = *result.integer;
+      }
+      if (result.string) {
+        state.executor->write_string_register(
+            method->string_destination, *result.string);
+      }
+      return 0;
+    }
+    if (const auto* file =
+            std::get_if<runtime::simir::FileReadLine>(&operation);
+        file != nullptr
+        && file->kind != runtime::simir::FileReadKind::line) {
+      const auto handle = checked_file_handle(input0_aval, input0_bval);
+      std::int32_t result{};
+      if (file->kind == runtime::simir::FileReadKind::character) {
+        result = state.context->read_file_character(handle);
+      } else {
+        result = input1_bval == 0
+            ? state.context->unread_file_character(
+                  handle,
+                  static_cast<std::int32_t>(
+                      static_cast<std::uint32_t>(input1_aval)))
+            : -1;
+      }
+      *result_aval = static_cast<std::uint32_t>(result);
+      return 0;
+    }
+    if (const auto* position =
+            std::get_if<runtime::simir::FilePosition>(&operation)) {
+      const auto known = [](const std::uint64_t aval,
+                            const std::uint64_t bval) {
+        if (bval != 0) {
+          throw compiler::LlvmJitError{
+              "compiled file position operand is unknown"};
+        }
+        return static_cast<std::int32_t>(
+            static_cast<std::uint32_t>(aval));
+      };
+      const auto handle = state.executor
+          ->read_register(position->handle, 32).low_word();
+      const auto result = state.context->position_file(
+          checked_file_handle(handle.aval, handle.bval),
+          position->kind,
+          position->kind == runtime::simir::FilePositionKind::seek
+              ? known(input0_aval, input0_bval) : 0,
+          position->kind == runtime::simir::FilePositionKind::seek
+              ? known(input1_aval, input1_bval) : 0);
+      *result_aval = static_cast<std::uint32_t>(result);
+      return 0;
+    }
+    if (const auto* flush =
+            std::get_if<runtime::simir::FileFlush>(&operation)) {
+      std::optional<runtime::simir::FileHandle> handle;
+      if (!flush->all) {
+        const auto word = state.executor
+            ->read_register(flush->handle, 32).low_word();
+        handle = checked_file_handle(word.aval, word.bval);
+      }
+      state.context->flush_file(handle);
+      return 0;
+    }
+    if (const auto* scan =
+            std::get_if<runtime::simir::FileScan>(&operation)) {
+      runtime::simir::InputScanResult scanned;
+      if (scan->string_source) {
+        scanned = runtime::simir::scan_formatted_string(
+            *scan, state.executor->string_registers_.at(scan->source));
+      } else {
+        const auto handle = checked_file_handle(input0_aval, input0_bval);
+        const std::function<std::int32_t()> read = [&] {
+          return state.context->read_file_character(handle);
+        };
+        const std::function<void(std::int32_t)> unread = [&](const auto value) {
+          if (state.context->unread_file_character(handle, value) != value) {
+            throw compiler::LlvmJitError{
+                "compiled file scan could not preserve lookahead"};
+          }
+        };
+        scanned = runtime::simir::scan_formatted_input(*scan, read, unread);
+      }
+      for (std::size_t index = 0; index < scanned.values.size(); ++index) {
+        if (!scanned.values[index]) continue;
+        const auto& target = scan->conversions[index].target;
+        auto& value = *scanned.values[index];
+        switch (target.kind) {
+        case runtime::simir::InputScanTargetKind::packed_register:
+          state.executor->write_register(target.id, value.packed);
+          break;
+        case runtime::simir::InputScanTargetKind::packed_signal:
+          state.context->write_blocking(target.id, std::move(value.packed));
+          break;
+        case runtime::simir::InputScanTargetKind::string_register:
+          state.executor->write_string_register(target.id, value.text);
+          break;
+        case runtime::simir::InputScanTargetKind::string_object:
+          state.context->write_string_object(target.id, value.text);
+          break;
+        }
+      }
+      *result_aval = static_cast<std::uint32_t>(scanned.assignments);
+      return 0;
+    }
+    if (const auto* binary =
+            std::get_if<runtime::simir::FileBinaryRead>(&operation)) {
+      const auto known_integer = [&](const runtime::simir::RegisterId id) {
+        const auto value = state.executor->read_register(id, 32).low_word();
+        if (value.bval != 0) {
+          throw compiler::LlvmJitError{
+              "compiled $fread bound is not a known integer"};
+        }
+        return static_cast<std::int32_t>(
+            static_cast<std::uint32_t>(value.aval));
+      };
+      std::optional<runtime::simir::ContainerValue> container;
+      if (binary->target_kind
+          == runtime::simir::FileBinaryTargetKind::container_register) {
+        container = state.executor->container_registers_.at(binary->target);
+      } else if (binary->target_kind
+                 == runtime::simir::FileBinaryTargetKind::container_object) {
+        container = state.context->read_container_object(binary->target);
+      }
+      const auto handle = checked_file_handle(input0_aval, input0_bval);
+      const std::function<std::int32_t()> read = [&] {
+        return state.context->read_file_character(handle);
+      };
+      auto value = runtime::simir::read_binary_file(
+          *binary, std::move(container),
+          binary->has_start
+              ? std::optional{known_integer(binary->start)} : std::nullopt,
+          binary->has_count
+              ? std::optional{known_integer(binary->count)} : std::nullopt,
+          read);
+      switch (binary->target_kind) {
+      case runtime::simir::FileBinaryTargetKind::packed_register:
+        state.executor->write_register(binary->target, value.packed);
+        break;
+      case runtime::simir::FileBinaryTargetKind::packed_signal:
+        state.context->write_blocking(binary->target, std::move(value.packed));
+        break;
+      case runtime::simir::FileBinaryTargetKind::container_register:
+        state.executor->write_container_register(
+            binary->target, *value.container);
+        break;
+      case runtime::simir::FileBinaryTargetKind::container_object:
+        state.context->write_container_object(binary->target, *value.container);
+        break;
+      }
+      *result_aval = value.bytes;
+      return 0;
+    }
+    auto& registers = state.executor->container_registers_;
     const auto index =
         [&](const std::uint64_t aval,
             const std::uint64_t bval,
@@ -544,10 +749,23 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             process, instruction,
             "dynamic-array size exceeds the 4096-element limit"};
       }
+      std::vector<PackedLogic4> preserved;
+      if (resize->initializer) {
+        const auto& source = registers.at(*resize->initializer);
+        require_same(target, source);
+        preserved = source.elements;
+      }
+      const auto initial = target.type.two_state
+          ? PackedLogic4::from_aval_bval(
+                target.type.element_width, 0, 0)
+          : PackedLogic4{
+                target.type.element_width,
+                runtime::Logic4::x};
       target.elements.assign(
-          size,
-          PackedLogic4::from_aval_bval(
-              target.type.element_width, 0, 0));
+          size, initial);
+      std::ranges::copy_n(
+          preserved.begin(), std::min(size, preserved.size()),
+          target.elements.begin());
     } else if (const auto* copy =
                    std::get_if<
                        runtime::simir::CopyContainerRegister>(
@@ -708,13 +926,25 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                        &operation)) {
       auto& target = registers.at(erase->target);
       if (erase->index) {
-        const auto sought =
-            key(target, input0_aval, input0_bval);
-        const auto at = lower_key(target, sought);
-        if (at < target.keys.size()
-            && key_equal(target.keys[at], sought)) {
-          target.keys.erase(target.keys.begin() + at);
+        if (target.type.queue) {
+          const auto at = index(
+              input0_aval, input0_bval, true,
+              "queue delete index");
+          if (at >= target.elements.size()) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                "queue delete index is out of range"};
+          }
           target.elements.erase(target.elements.begin() + at);
+        } else {
+          const auto sought =
+              key(target, input0_aval, input0_bval);
+          const auto at = lower_key(target, sought);
+          if (at < target.keys.size()
+              && key_equal(target.keys[at], sought)) {
+            target.keys.erase(target.keys.begin() + at);
+            target.elements.erase(target.elements.begin() + at);
+          }
         }
       } else {
         if (target.type.fixed) {
@@ -746,6 +976,29 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             return static_cast<std::int32_t>(
                 static_cast<std::uint32_t>(aval));
           };
+      const auto start = known_optional(
+          load->start, input0_aval, input0_bval,
+          load->write ? "write-memory start" : "read-memory start");
+      const auto finish = known_optional(
+          load->finish, input1_aval, input1_bval,
+          load->write ? "write-memory finish" : "read-memory finish");
+      if (load->write) {
+        const auto text = runtime::simir::write_memory_text(
+            registers.at(load->target), load->hexadecimal, start, finish);
+        const auto handle = state.context->open_file(
+            state.executor->string_registers_.at(load->path), "w");
+        try {
+          state.context->write_file(handle, text, false);
+          state.context->close_file(handle);
+        } catch (...) {
+          try {
+            state.context->close_file(handle);
+          } catch (...) {
+          }
+          throw;
+        }
+        return 0;
+      }
       const auto handle = state.context->open_file(
           state.executor->string_registers_.at(load->path), "r");
       std::string text;
@@ -771,12 +1024,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       }
       runtime::simir::load_memory_text(
           registers.at(load->target), text, load->hexadecimal,
-          known_optional(
-              load->start, input0_aval, input0_bval,
-              "read-memory start"),
-          known_optional(
-              load->finish, input1_aval, input1_bval,
-              "read-memory finish"));
+          start, finish);
     } else if (const auto* exists =
                    std::get_if<runtime::simir::ContainerExists>(
                        &operation)) {
@@ -851,7 +1099,17 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       }
       const auto source =
           element(target, input0_aval, input0_bval);
-      if (push->front) {
+      if (push->index) {
+        const auto at = index(
+            input1_aval, input1_bval, true,
+            "queue insert index");
+        if (at > target.elements.size()) {
+          throw runtime::simir::InterpreterError{
+              process, instruction,
+              "queue insert index is out of range"};
+        }
+        target.elements.insert(target.elements.begin() + at, source);
+      } else if (push->front) {
         target.elements.insert(target.elements.begin(), source);
       } else {
         target.elements.push_back(source);

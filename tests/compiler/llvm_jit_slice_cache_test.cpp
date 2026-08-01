@@ -1290,4 +1290,82 @@ void test_procedural_update_cache_identity(
   assert(slice_cached_object_count(cache_directory) == 7);
 }
 
+void test_container_construction_cache_identity(
+    const std::filesystem::path& cache_directory) {
+  const std::array<std::uint32_t, 0> no_signals{};
+  const auto materialize = [&]<typename MakeProcess>(
+      const std::filesystem::path& directory,
+      const std::string_view symbol,
+      MakeProcess&& make_process,
+      const std::uint64_t hits,
+      const std::uint64_t misses) {
+    LlvmJit jit{LlvmJitOptions{
+        JitOptimizationLevel::o2, directory}};
+    jit.add_process(symbol, make_process(), no_signals);
+    assert(jit.lookup(symbol));
+    expect_slice_cache_statistics(jit, hits, misses);
+  };
+  const auto resize = [](
+      const std::optional<ContainerRegisterId> initializer,
+      std::string nominal_type = {}) {
+    ContainerType dynamic;
+    dynamic.element_width = 8;
+    dynamic.two_state = true;
+    dynamic.element_nominal_type = std::move(nominal_type);
+    Process process;
+    process.id = 104;
+    process.name = "cached_dynamic_construction";
+    process.register_count = 1;
+    process.container_register_count = 2;
+    process.container_register_types = {dynamic, dynamic};
+    process.operations = {
+        LoadConstant{0, PackedLogic4::from_aval_bval(32, 3, 0)},
+        ResizeContainer{0, 0, initializer}, Halt{}};
+    return process;
+  };
+  const auto resize_directory = cache_directory / "resize";
+  materialize(
+      resize_directory, "cached_dynamic_construction",
+      [&] { return resize(std::nullopt); }, 0, 1);
+  materialize(
+      resize_directory, "cached_dynamic_construction",
+      [&] { return resize(std::nullopt); }, 1, 0);
+  materialize(
+      resize_directory, "cached_dynamic_construction",
+      [&] { return resize(1); }, 0, 1);
+  materialize(
+      resize_directory, "cached_dynamic_construction",
+      [&] { return resize(std::nullopt, "packet_t"); }, 0, 1);
+  assert(slice_cached_object_count(resize_directory) == 3);
+
+  const auto push = [](
+      const std::optional<RegisterId> index) {
+    ContainerType queue;
+    queue.element_width = 8;
+    queue.queue = true;
+    Process process;
+    process.id = 105;
+    process.name = "cached_queue_insert";
+    process.register_count = 2;
+    process.container_register_count = 1;
+    process.container_register_types = {queue};
+    process.operations = {
+        LoadConstant{0, PackedLogic4::from_aval_bval(8, 7, 0)},
+        LoadConstant{1, PackedLogic4::from_aval_bval(32, 0, 0)},
+        PushContainer{0, 0, false, index}, Halt{}};
+    return process;
+  };
+  const auto push_directory = cache_directory / "push";
+  materialize(
+      push_directory, "cached_queue_insert",
+      [&] { return push(std::nullopt); }, 0, 1);
+  materialize(
+      push_directory, "cached_queue_insert",
+      [&] { return push(std::nullopt); }, 1, 0);
+  materialize(
+      push_directory, "cached_queue_insert",
+      [&] { return push(1); }, 0, 1);
+  assert(slice_cached_object_count(push_directory) == 2);
+}
+
 }  // namespace fsim::tests::compiler

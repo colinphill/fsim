@@ -833,6 +833,90 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 StringLength{destination, *source});
             return destination;
         }
+        if (expression.kind == ExpressionKind::Call
+            && (expression.text == ".getc"
+                || expression.text == ".compare"
+                || expression.text == ".icompare"
+                || expression.text == ".atoi"
+                || expression.text == ".atohex"
+                || expression.text == ".atooct"
+                || expression.text == ".atobin")
+            && !expression.operands.empty()
+            && is_string_expression(expression.operands.front())) {
+            const bool conversion =
+                expression.text == ".atoi"
+                || expression.text == ".atohex"
+                || expression.text == ".atooct"
+                || expression.text == ".atobin";
+            if (expression.operands.size() != (conversion ? 1U : 2U)) {
+                report(
+                    "FSIM-ELAB-SVSTRING-018",
+                    "runtime string method '" + expression.text
+                        + (conversion
+                               ? "' takes no arguments"
+                               : "' requires one argument"),
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto source = lower_string_expression(
+                expression.operands.front());
+            if (!source) {
+                return std::nullopt;
+            }
+            StringMethod method;
+            method.source = *source;
+            method.destination = allocate_register(
+                expression.text == ".getc" ? 8U : 32U,
+                expression.text == ".getc"
+                    ? frontend::ValueDomain::Bit2
+                    : frontend::ValueDomain::Integer);
+            if (conversion) {
+                method.operation =
+                    expression.text == ".atoi"
+                        ? StringMethodOperator::atoi
+                        : expression.text == ".atohex"
+                              ? StringMethodOperator::atohex
+                              : expression.text == ".atooct"
+                                    ? StringMethodOperator::atooct
+                                    : StringMethodOperator::atobin;
+            } else if (expression.text == ".getc") {
+                auto index = lower_expression(
+                    expression.operands[1], 32);
+                if (!index) {
+                    report(
+                        "FSIM-ELAB-SVSTRING-018",
+                        "getc index must be a signed 32-bit integral value",
+                        expression.operands[1].span);
+                    return std::nullopt;
+                }
+                if (register_width(*index) != 32) {
+                    *index = resize_register(
+                        *index, 32,
+                        is_signed_expression(expression.operands[1]));
+                }
+                method.operation = StringMethodOperator::getc;
+                method.first = *index;
+            } else {
+                if (!is_string_expression(expression.operands[1])) {
+                    report(
+                        "FSIM-ELAB-SVSTRING-018",
+                        "compare argument must be a runtime string value",
+                        expression.operands[1].span);
+                    return std::nullopt;
+                }
+                const auto argument = lower_string_expression(
+                    expression.operands[1]);
+                if (!argument) {
+                    return std::nullopt;
+                }
+                method.operation = expression.text == ".compare"
+                    ? StringMethodOperator::compare
+                    : StringMethodOperator::icompare;
+                method.argument = *argument;
+            }
+            process_.operations.emplace_back(method);
+            return method.destination;
+        }
         if (expression.kind == ExpressionKind::Index
             && expression.operands.size() == 2
             && is_string_expression(expression.operands.front())) {

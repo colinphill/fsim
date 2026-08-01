@@ -744,6 +744,8 @@ public:
         const std::unordered_set<SignalId>& read_only_signals,
         const std::unordered_map<std::string, StringObjectId>&
             string_objects,
+        const std::unordered_set<StringObjectId>&
+            read_only_string_objects,
         const std::unordered_map<std::string, ContainerObjectId>&
             container_objects,
         const std::unordered_set<std::string>&
@@ -982,6 +984,15 @@ private:
 
     std::optional<StringRegisterId> lower_string_expression(
         const Expression& expression);
+    bool lower_string_method_statement(const Statement& statement);
+    std::optional<StringRegisterId> lower_string_format(
+        const std::vector<Expression>& arguments,
+        std::size_t format_index,
+        std::string_view call_name,
+        const frontend::SourceSpan& span);
+    bool lower_string_format_task(const Statement& statement);
+    ExpressionAttempt lower_file_scan(const Expression& expression);
+    ExpressionAttempt lower_file_binary_read(const Expression& expression);
     std::optional<ContainerRegisterId> lower_container_expression(
         const Expression& expression);
     std::optional<ContainerRegisterId>
@@ -1006,6 +1017,10 @@ private:
         const Expression& expression);
     std::optional<ContainerRegisterId>
     lower_static_container_assignment_value(
+        const Expression& expression,
+        const ContainerType& destination_type);
+    void lower_nonstatic_container_assignment(
+        ContainerRegisterId target,
         const Expression& expression,
         const ContainerType& destination_type);
     bool lower_static_container_slice_assignment(
@@ -1220,6 +1235,8 @@ private:
     const std::unordered_set<SignalId>& read_only_signals_;
     const std::unordered_map<std::string, StringObjectId>&
         string_objects_;
+    const std::unordered_set<StringObjectId>&
+        read_only_string_objects_;
     const std::unordered_map<std::string, ContainerObjectId>&
         container_objects_;
     const std::unordered_set<std::string>&
@@ -1365,14 +1382,18 @@ public:
 
 private:
     using SignalMap = std::unordered_map<std::string, SignalId>;
+    using StringMap =
+        std::unordered_map<std::string, StringObjectId>;
     using ContainerMap =
         std::unordered_map<std::string, ContainerObjectId>;
     using ObjectMap = std::unordered_map<std::uint64_t, SignalId>;
 
     struct PortAliases {
         SignalMap signals;
+        StringMap strings;
         ContainerMap containers;
         std::unordered_set<SignalId> read_only_signals;
+        std::unordered_set<StringObjectId> read_only_strings;
     };
 
     struct ContainerBoundaryDriver {
@@ -1571,6 +1592,20 @@ private:
         const std::string_view path,
         SignalMap& local);
 
+    std::optional<StringObjectId> add_owned_string_port(
+        const frontend::SignalDeclaration& declaration,
+        const std::string_view path,
+        StringMap& local);
+
+    std::optional<StringObjectId> connect_string_port(
+        const frontend::SignalDeclaration& port,
+        const frontend::PortConnection& connection,
+        const std::string& path,
+        const StringMap& parent_strings,
+        const std::unordered_set<StringObjectId>&
+            parent_read_only_strings,
+        bool cross_language);
+
     std::optional<ContainerType> container_port_type(
         const frontend::Type& type,
         const frontend::SourceSpan& source,
@@ -1618,6 +1653,9 @@ private:
         const std::vector<frontend::SignalDeclaration>& ports,
         const std::string& path,
         const SignalMap& parent_signals,
+        const StringMap& parent_strings,
+        const std::unordered_set<StringObjectId>&
+            parent_read_only_strings,
         const ContainerMap& parent_containers,
         const std::unordered_set<std::string>&
             parent_read_only_containers,
@@ -1631,6 +1669,9 @@ private:
         DesignUnit& target,
         const std::string& path,
         const SignalMap& parent_signals,
+        const StringMap& parent_strings,
+        const std::unordered_set<StringObjectId>&
+            parent_read_only_strings,
         const ContainerMap& parent_containers,
         const std::unordered_set<std::string>&
             parent_read_only_containers,
@@ -1679,8 +1720,10 @@ private:
         const DesignUnit& unit,
         const std::string& path,
         SignalMap aliases,
+        StringMap string_aliases,
         ContainerMap container_aliases,
         std::unordered_set<SignalId> read_only_signals,
+        std::unordered_set<StringObjectId> read_only_strings,
         ConstantEnvironment parameter_environment,
         std::vector<std::pair<std::string, std::string>>
             parameter_values,
@@ -1729,6 +1772,8 @@ private:
         ContainerObjectId,
         std::vector<ContainerBoundaryDriver>>
         container_boundary_driver_paths_;
+    std::unordered_map<StringObjectId, std::vector<std::string>>
+        string_boundary_driver_paths_;
 };
 
 } // namespace fsim::elaboration

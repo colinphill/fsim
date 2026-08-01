@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-
+#include "fsim/runtime/file_operations.hpp"
 #include "fsim/runtime/packed_value.hpp"
 #include "fsim/runtime/scheduler.hpp"
 
@@ -19,7 +19,6 @@
 #include <vector>
 
 namespace fsim::runtime::simir {
-
 using RegisterId = std::uint32_t;
 using StringRegisterId = std::uint32_t;
 using StringObjectId = std::uint32_t;
@@ -29,14 +28,12 @@ using FileHandle = std::uint32_t;
 using SignalId = std::uint32_t;
 using ProcessId = std::uint32_t;
 using InstructionIndex = std::uint32_t;
-
 enum class OutputFormat : std::uint8_t;
 
 struct LoadConstant {
   RegisterId destination{};
   PackedLogic4 value;
 };
-
 struct ReadSignal {
   RegisterId destination{};
   SignalId signal{};
@@ -92,6 +89,7 @@ struct ContainerType {
   std::int32_t index_right{};
   std::optional<std::uint32_t> maximum_elements;
   std::vector<ContainerDimension> dimensions;
+  std::string element_nominal_type;
   friend bool operator==(const ContainerType&,
                          const ContainerType&) = default;
 };
@@ -125,36 +123,27 @@ void select_container_value(
     const ContainerValue& rhs,
     bool case_equal);
 
-/// Construct a process-local byte string from immutable SimIR literal bytes.
 struct LoadStringConstant {
   StringRegisterId destination{};
   std::string value;
 };
-
-/// Value-copy one process-local byte string.
 struct CopyStringRegister {
   StringRegisterId destination{};
   StringRegisterId source{};
 };
-
-/// Read or replace one module-owned mutable string object.
 struct ReadStringObject {
   StringRegisterId destination{};
   StringObjectId object{};
 };
-
 struct WriteStringObject {
   StringObjectId object{};
   StringRegisterId source{};
 };
-
-/// Concatenate byte strings in source order.
 struct ConcatenateStrings {
   StringRegisterId destination{};
   std::vector<StringRegisterId> operands;
 };
 
-/// Compare two byte strings and produce a known scalar logic result.
 struct CompareStrings {
   RegisterId destination{};
   StringRegisterId lhs{};
@@ -162,13 +151,11 @@ struct CompareStrings {
   bool not_equal{};
 };
 
-/// Produce a known 32-bit two-state byte count.
 struct StringLength {
   RegisterId destination{};
   StringRegisterId source{};
 };
 
-/// Read or replace one byte selected by a known, in-range integral index.
 struct StringIndex {
   RegisterId destination{};
   StringRegisterId source{};
@@ -182,10 +169,20 @@ struct StringReplaceByte {
   RegisterId source{};
   bool signed_index{true};
 };
-
+enum class StringMethodOperator : std::uint8_t {
+  getc, putc, toupper, tolower, compare, icompare, substr, atoi, atohex,
+  atooct, atobin, itoa, hextoa, octtoa, bintoa, format_packed, format_string,
+  format_time};
+struct StringMethod {
+  StringMethodOperator operation{}; RegisterId destination{}, first{}, second{};
+  StringRegisterId string_destination{}, source{}, argument{};
+  OutputFormat format{}; std::uint32_t minimum_width{};
+  bool signed_decimal{}, suppress_leading_zero{}, left_justify{}, zero_pad{};
+};
 struct ResizeContainer {
   ContainerRegisterId target{};
   RegisterId size{};
+  std::optional<ContainerRegisterId> initializer{};
 };
 
 struct CopyContainerRegister {
@@ -357,7 +354,7 @@ struct ContainerWrite {
 
 struct DeleteContainer {
   ContainerRegisterId target{};
-  std::optional<RegisterId> index;
+  std::optional<RegisterId> index{};
 };
 
 struct ContainerExists {
@@ -386,6 +383,7 @@ struct LoadMemory {
   std::optional<RegisterId> start;
   std::optional<RegisterId> finish;
   bool hexadecimal{};
+  bool write{};
 };
 
 /// Parse bounded IEEE-style read-memory text into a fixed unpacked array.
@@ -397,74 +395,25 @@ void load_memory_text(
     std::optional<std::int32_t> start = std::nullopt,
     std::optional<std::int32_t> finish = std::nullopt);
 
+/// Serialize a selected fixed unpacked-array range in deterministic
+/// IEEE-style binary or hexadecimal memory-file form.
+[[nodiscard]] std::string write_memory_text(
+    const ContainerValue& source,
+    bool hexadecimal,
+    std::optional<std::int32_t> start = std::nullopt,
+    std::optional<std::int32_t> finish = std::nullopt);
+
 struct PushContainer {
   ContainerRegisterId target{};
   RegisterId source{};
   bool front{};
+  std::optional<RegisterId> index{};
 };
 
 struct PopContainer {
   RegisterId destination{};
   ContainerRegisterId target{};
   bool front{};
-};
-
-/// Open one manifest-root-relative text file. Host stream and descriptor
-/// identities remain owned by the interpreter execution context.
-struct FileOpen {
-  RegisterId destination{};
-  StringRegisterId path{};
-  StringRegisterId mode{};
-};
-
-struct FileClose {
-  RegisterId handle{};
-};
-
-struct FileWriteLiteral {
-  RegisterId handle{};
-  std::string text;
-  bool newline{true};
-};
-
-struct FileWriteFormatted {
-  RegisterId handle{};
-  RegisterId source{};
-  std::uint32_t width{};
-  OutputFormat format{};
-  std::string prefix;
-  std::string suffix;
-  bool newline{true};
-  bool signed_decimal{};
-  bool suppress_leading_zero{};
-  std::uint32_t minimum_width{};
-  bool left_justify{};
-  bool zero_pad{};
-};
-
-struct FileWriteString {
-  RegisterId handle{};
-  StringRegisterId source{};
-  std::string prefix;
-  std::string suffix;
-  bool newline{true};
-};
-
-struct FileReadLine {
-  RegisterId destination{};
-  RegisterId handle{};
-  StringRegisterId target{};
-};
-
-struct FileEndOfFile {
-  RegisterId destination{};
-  RegisterId handle{};
-};
-
-struct FileErrorStatus {
-  RegisterId destination{};
-  RegisterId handle{};
-  StringRegisterId target{};
 };
 
 struct UnaryNot {
@@ -1207,7 +1156,7 @@ using Operation =
                  SignalLastEvent, SignalActive, CopyRegister,
                  LoadStringConstant, CopyStringRegister, ReadStringObject,
                  WriteStringObject, ConcatenateStrings, CompareStrings,
-                 StringLength, StringIndex, StringReplaceByte,
+                 StringLength, StringIndex, StringReplaceByte, StringMethod,
                  ResizeContainer, CopyContainerRegister,
                  ConditionalContainerSelect,
                  CompareContainers,
@@ -1219,7 +1168,8 @@ using Operation =
                  LoadMemory, PushContainer, PopContainer, FileOpen,
                  FileClose, FileWriteLiteral, FileWriteFormatted,
                  FileWriteString, FileReadLine, FileEndOfFile,
-                 FileErrorStatus, UnaryNot,
+                 FileErrorStatus, FileScan, FileBinaryRead,
+                 FilePosition, FileFlush, UnaryNot,
                  LogicalNot, LogicalBinary, Reduction, CountOnes, CountBits,
                  Shift, Extract, DynamicExtract, DynamicPartSelect,
                  Concatenate, Binary, Insert, DynamicInsert,
@@ -1414,17 +1364,31 @@ public:
   }
   [[nodiscard]] virtual std::string read_file_line(
       FileHandle, std::uint32_t&) {
-    throw std::logic_error{
-        "alternate process executor does not support file reads"};
+    throw std::logic_error{"alternate process executor does not support file reads"};
+  }
+  [[nodiscard]] virtual std::int32_t read_file_character(FileHandle) {
+    throw std::logic_error{"alternate process executor does not support character reads"};
+  }
+  [[nodiscard]] virtual std::int32_t unread_file_character(
+      FileHandle, std::int32_t) {
+    throw std::logic_error{"alternate process executor does not support character pushback"};
   }
   [[nodiscard]] virtual bool file_end_of_file(FileHandle) {
-    throw std::logic_error{
-        "alternate process executor does not support file status"};
+    throw std::logic_error{"alternate process executor does not support file status"};
   }
   [[nodiscard]] virtual std::string file_error(
       FileHandle, bool&) {
     throw std::logic_error{
         "alternate process executor does not support file errors"};
+  }
+  [[nodiscard]] virtual std::int32_t position_file(
+      FileHandle, FilePositionKind, std::int32_t, std::int32_t) {
+    throw std::logic_error{
+        "alternate process executor does not support file positioning"};
+  }
+  virtual void flush_file(std::optional<FileHandle>) {
+    throw std::logic_error{
+        "alternate process executor does not support file flushing"};
   }
 
   /// Allocation-free single-word access used by generated scalar/vector code.
@@ -1706,6 +1670,7 @@ public:
 
   virtual void display(std::string_view, bool) {}
   virtual void postpone_display(std::string_view, bool) {}
+  [[nodiscard]] virtual SimulationTick current_time() const noexcept { return 0; }
   virtual void display_formatted(
       std::string_view,
       std::string_view,

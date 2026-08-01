@@ -5,6 +5,114 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
+std::optional<StringObjectId> HierarchyBuilder::add_owned_string_port(
+    const frontend::SignalDeclaration& declaration,
+    const std::string_view path,
+    StringMap& local) {
+  if (const auto existing = local.find(declaration.name);
+      existing != local.end()) {
+    return existing->second;
+  }
+  if (declaration.type.domain != frontend::ValueDomain::String
+      || declaration.type.systemverilog_container) {
+    report(
+        "FSIM-ELAB-SVPORT-010",
+        "a mutable string port must use the direct SystemVerilog string "
+        "data type",
+        declaration.span);
+    return std::nullopt;
+  }
+  const auto index = design_.string_objects_.size();
+  const auto id = static_cast<StringObjectId>(index);
+  if (static_cast<std::size_t>(id) != index) {
+    throw std::length_error{"too many elaborated string objects"};
+  }
+  const auto full_name = std::string{path} + "." + declaration.name;
+  design_.string_object_info_.push_back(
+      StringObjectInfo{
+          id, full_name, declaration.span, true,
+          declaration.direction});
+  design_.string_objects_.push_back(StringObject{full_name, {}});
+  local.emplace(declaration.name, id);
+  local.emplace(full_name, id);
+  design_.string_by_name_.emplace(full_name, id);
+  if (path == design_.top_) {
+    design_.string_by_name_.emplace(declaration.name, id);
+  }
+  return id;
+}
+
+std::optional<StringObjectId> HierarchyBuilder::connect_string_port(
+    const frontend::SignalDeclaration& port,
+    const frontend::PortConnection& connection,
+    const std::string& path,
+    const StringMap& parent_strings,
+    const std::unordered_set<StringObjectId>& parent_read_only_strings,
+    const bool cross_language) {
+  if (cross_language) {
+    report(
+        "FSIM-ELAB-SVPORT-010",
+        "SystemVerilog mutable string ports cannot cross a language "
+        "boundary at '" + path + "." + port.name + "'",
+        connection.span);
+    return std::nullopt;
+  }
+  if (port.type.domain != frontend::ValueDomain::String
+      || port.type.systemverilog_container
+      || connection.value.kind
+          != frontend::ExpressionKind::Identifier) {
+    report(
+        "FSIM-ELAB-SVPORT-010",
+        "a mutable string port requires a direct same-language string "
+        "object actual",
+        connection.span);
+    return std::nullopt;
+  }
+  const auto actual = parent_strings.find(connection.value.text);
+  if (actual == parent_strings.end()) {
+    report(
+        "FSIM-ELAB-SVPORT-010",
+        "unknown mutable string port actual '"
+            + connection.value.text + "' on instance '" + path + "'",
+        connection.span);
+    return std::nullopt;
+  }
+  if ((port.direction == frontend::PortDirection::Output
+       || port.direction == frontend::PortDirection::Inout)
+      && parent_read_only_strings.contains(actual->second)) {
+    report(
+        "FSIM-ELAB-SVPORT-011",
+        "an input mutable string port cannot be connected to a descendant "
+        "output or inout port",
+        connection.span);
+    return std::nullopt;
+  }
+  if (port.direction == frontend::PortDirection::Output
+      || port.direction == frontend::PortDirection::Inout) {
+    auto& drivers = string_boundary_driver_paths_[actual->second];
+    const auto nested_with =
+        [](const std::string_view left, const std::string_view right) {
+          const auto left_prefix = std::string{left} + ".";
+          const auto right_prefix = std::string{right} + ".";
+          return left.starts_with(right_prefix)
+              || right.starts_with(left_prefix);
+        };
+    if (std::ranges::any_of(
+            drivers,
+            [&](const std::string& driver) {
+              return !nested_with(path, driver);
+            })) {
+      report(
+          "FSIM-ELAB-SVPORT-012",
+          "a mutable string object has conflicting output/inout module "
+          "port drivers",
+          connection.span);
+    }
+    drivers.push_back(path);
+  }
+  return actual->second;
+}
+
 std::optional<ContainerType> HierarchyBuilder::container_port_type(
     const frontend::Type& type,
     const frontend::SourceSpan& source,
@@ -12,18 +120,20 @@ std::optional<ContainerType> HierarchyBuilder::container_port_type(
   const auto width = type.width();
   if (!type.systemverilog_container
       || !width || *width == 0 || *width > 64
-      || !type.packed_members.empty()
+      || type.packed_aggregate
+          == frontend::PackedAggregateKind::UnpackedStruct
       || type.domain == frontend::ValueDomain::String
       || type.domain == frontend::ValueDomain::Unknown) {
     report(
         "FSIM-ELAB-SVPORT-001",
-        "SystemVerilog container ports require integral elements with "
-        "width in 1..64",
+        "SystemVerilog container ports require bounded integral, enum, or "
+        "packed aggregate elements with width in 1..64",
         source);
     return std::nullopt;
   }
   ContainerType result;
   result.element_width = static_cast<std::uint32_t>(*width);
+  result.element_nominal_type = type.nominal_type;
   result.two_state = is_two_state_domain(type.domain);
   result.signed_elements = type.is_signed;
   result.queue =
@@ -752,6 +862,9 @@ HierarchyBuilder::PortAliases HierarchyBuilder::connect_instance(
     DesignUnit& target,
     const std::string& path,
     const SignalMap& parent_signals,
+    const StringMap& parent_strings,
+    const std::unordered_set<StringObjectId>&
+        parent_read_only_strings,
     const ContainerMap& parent_containers,
     const std::unordered_set<std::string>&
         parent_read_only_containers,
@@ -771,6 +884,8 @@ HierarchyBuilder::PortAliases HierarchyBuilder::connect_instance(
       *ports,
       path,
       parent_signals,
+      parent_strings,
+      parent_read_only_strings,
       parent_containers,
       parent_read_only_containers,
       binding,

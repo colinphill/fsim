@@ -186,6 +186,9 @@ struct StringObjectInfo {
     runtime::simir::StringObjectId id{};
     std::string name;
     frontend::SourceSpan declaration_span;
+    bool is_port{};
+    frontend::PortDirection direction{
+        frontend::PortDirection::Unknown};
 };
 
 struct ContainerObjectInfo {
@@ -348,6 +351,9 @@ private:
     std::vector<SystemCInstanceInfo> systemc_instances_;
     std::vector<SystemCProcessInfo> systemc_processes_;
     std::unordered_map<std::string, runtime::simir::SignalId> signal_by_name_;
+    std::unordered_map<
+        std::string, runtime::simir::StringObjectId>
+        string_by_name_;
     std::unordered_map<
         std::string, runtime::simir::ContainerObjectId>
         container_by_name_;

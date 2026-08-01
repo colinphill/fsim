@@ -160,6 +160,103 @@ endmodule
             "string_top.selected.case_chosen.case_selected");
     assert(case_selected_signal);
 
+    const auto mutable_ports = fsim::frontend::parse_text(
+        "sv-string-ports.sv",
+        R"(
+module string_port_child(
+    input string source,
+    output string sink,
+    inout string shared);
+  initial begin
+    sink = {source, "!"};
+    shared = {shared, "?"};
+  end
+endmodule
+module string_port_top;
+  string source = "fsim";
+  string sink;
+  string shared = "v1";
+  string_port_child child(source, sink, shared);
+  initial begin
+    #1;
+    $finish;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(mutable_ports.ok());
+    const auto elaborated_ports = fsim::elaboration::elaborate(
+        mutable_ports.design, "sv:work.string_port_top");
+    assert(elaborated_ports.ok());
+    const auto find_string = [&](const std::string_view name) {
+      return std::ranges::find_if(
+          elaborated_ports.design->string_objects(),
+          [&](const auto& object) { return object.name == name; });
+    };
+    const auto source = find_string("string_port_top.source");
+    const auto source_port =
+        find_string("string_port_top.child.source");
+    const auto sink = find_string("string_port_top.sink");
+    const auto sink_port =
+        find_string("string_port_top.child.sink");
+    const auto shared = find_string("string_port_top.shared");
+    const auto shared_port =
+        find_string("string_port_top.child.shared");
+    const auto string_end =
+        elaborated_ports.design->string_objects().end();
+    assert(
+        source != string_end && source_port != string_end
+        && sink != string_end && sink_port != string_end
+        && shared != string_end && shared_port != string_end
+        && source->id == source_port->id
+        && sink->id == sink_port->id
+        && shared->id == shared_port->id
+        && source_port->is_port
+        && source_port->direction
+            == fsim::frontend::PortDirection::Input
+        && sink_port->direction
+            == fsim::frontend::PortDirection::Output
+        && shared_port->direction
+            == fsim::frontend::PortDirection::Inout);
+    auto port_interpreter =
+        elaborated_ports.design->create_interpreter();
+    const auto port_result = port_interpreter->run();
+    assert(
+        port_result.status == fsim::runtime::RunStatus::stopped
+        && port_interpreter->string_object_value(sink->id)
+            == "fsim!"
+        && port_interpreter->string_object_value(shared->id)
+            == "v1?");
+
+    const auto invalid_ports = fsim::frontend::parse_text(
+        "sv-string-port-invalid.sv",
+        R"(
+module writes_input(input string value);
+  initial value = "bad";
+endmodule
+module writes_output(output string value);
+  initial value = "written";
+endmodule
+module invalid_string_port_top;
+  string source;
+  string driven;
+  writes_input bad_input(source);
+  writes_output first(driven);
+  writes_output second(driven);
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_ports.ok());
+    const auto rejected_ports = fsim::elaboration::elaborate(
+        invalid_ports.design,
+        "sv:work.invalid_string_port_top");
+    assert(
+        !rejected_ports.ok()
+        && has_diagnostic(
+            rejected_ports, "FSIM-ELAB-SVPORT-011")
+        && has_diagnostic(
+            rejected_ports, "FSIM-ELAB-SVPORT-012"));
+
     const auto invalid_parsed = fsim::frontend::parse_text(
         "sv-string-invalid.sv",
         R"(
@@ -180,6 +277,14 @@ endmodule
 module bad_output #(parameter VALUE = 1) ();
   initial $info(VALUE);
 endmodule
+module bad_format;
+  string result;
+  initial begin
+    $sformat(result, "%d");
+    result = $sformatf(result, 1);
+    $swrite(1, "%d", 1);
+  end
+endmodule
 module invalid_top;
   integral_child #(.VALUE("wrong")) integral_mismatch();
   string_child #(.LABEL(7)) string_mismatch();
@@ -187,6 +292,7 @@ module invalid_top;
   bad_operator operator_mismatch();
   bad_cycle cycle();
   bad_output output_mismatch();
+  bad_format format_mismatch();
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
@@ -200,7 +306,11 @@ endmodule
         && has_diagnostic(
             invalid, "FSIM-ELAB-SVSTRING-002")
         && has_diagnostic(
-            invalid, "FSIM-ELAB-SVSTRING-003"));
+            invalid, "FSIM-ELAB-SVSTRING-003")
+        && has_diagnostic(
+            invalid, "FSIM-ELAB-SVSTRING-019")
+        && has_diagnostic(
+            invalid, "FSIM-ELAB-SVSTRING-020"));
 
     auto boundary_vhdl = fsim::frontend::parse_text(
         "sv-string-boundary.vhd",

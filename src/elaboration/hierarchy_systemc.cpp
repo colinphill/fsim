@@ -618,6 +618,8 @@ using namespace elaboration_detail;
                 std::move(child_aliases),
                 {},
                 {},
+                {},
+                {},
                 std::move(specialized.environment),
                 std::move(specialized.values),
                 std::move(specialized.identity_values),
@@ -632,8 +634,10 @@ using namespace elaboration_detail;
         const DesignUnit& unit,
         const std::string& path,
         SignalMap aliases,
+        StringMap string_aliases,
         ContainerMap container_aliases,
         std::unordered_set<SignalId> read_only_signals,
+        std::unordered_set<StringObjectId> read_only_strings,
         ConstantEnvironment parameter_environment,
         std::vector<std::pair<std::string, std::string>>
             parameter_values,
@@ -684,6 +688,8 @@ using namespace elaboration_detail;
         stack_.push_back(identity);
 
         SignalMap local = std::move(aliases);
+        StringMap local_string_objects =
+            std::move(string_aliases);
         ContainerMap local_container_objects =
             std::move(container_aliases);
         std::unordered_set<std::string>
@@ -737,6 +743,18 @@ using namespace elaboration_detail;
               || port.type.spelling == "interface") {
             continue;
           }
+            if (port.type.domain
+                == frontend::ValueDomain::String) {
+                const auto object =
+                    add_owned_string_port(
+                        port, path, local_string_objects);
+                if (object
+                    && port.direction
+                        == frontend::PortDirection::Input) {
+                    read_only_strings.insert(*object);
+                }
+                continue;
+            }
             if (port.type.systemverilog_container) {
                 if (!local_container_objects.contains(
                         port.name)) {
@@ -766,8 +784,6 @@ using namespace elaboration_detail;
                 path + "." + signal.name, &signal.type);
             (void)add_owned_signal(signal, path, local);
         }
-        std::unordered_map<std::string, StringObjectId>
-            local_string_objects;
         SystemVerilogStringEnvironment string_values;
         for (const auto& variable : unit.variables) {
             visible_types.emplace(
@@ -777,19 +793,23 @@ using namespace elaboration_detail;
             if (variable.type.systemverilog_container) {
                 const auto width = variable.type.width();
                 if (!width || *width == 0 || *width > 64
-                    || !variable.type.packed_members.empty()
+                    || variable.type.packed_aggregate
+                        == frontend::PackedAggregateKind::UnpackedStruct
                     || variable.type.domain
                         == frontend::ValueDomain::String) {
                     report(
                         "FSIM-ELAB-SVCONTAINER-003",
-                        "container elements must be non-aggregate integral "
-                        "values with an executable width in 1..64",
+                        "container elements must be bounded integral, enum, "
+                        "or packed aggregate values with an executable "
+                        "width in 1..64",
                         variable.span);
                     continue;
                 }
                 ContainerType type;
                 type.element_width =
                     static_cast<std::uint32_t>(*width);
+                type.element_nominal_type =
+                    variable.type.nominal_type;
                 type.two_state =
                     is_two_state_domain(variable.type.domain);
                 type.signed_elements = variable.type.is_signed;
@@ -1076,13 +1096,23 @@ using namespace elaboration_detail;
             const auto full_name =
                 path + "." + variable.name;
             design_.string_object_info_.push_back(
-                StringObjectInfo{id, full_name, variable.span});
+                StringObjectInfo{
+                    id,
+                    full_name,
+                    variable.span,
+                    false,
+                    frontend::PortDirection::Unknown});
             design_.string_objects_.push_back(
                 StringObject{full_name, initial.bytes});
             local_string_objects.emplace(
                 variable.name, id);
             local_string_objects.emplace(
                 full_name, id);
+            design_.string_by_name_.emplace(full_name, id);
+            if (path == design_.top_) {
+                design_.string_by_name_.emplace(
+                    variable.name, id);
+            }
             string_values.emplace(
                 variable.name, std::move(initial));
         }
@@ -1135,6 +1165,7 @@ using namespace elaboration_detail;
             local,
             read_only_signals,
             local_string_objects,
+            read_only_strings,
             local_container_objects,
             read_only_container_objects,
             visible_types,
@@ -1260,6 +1291,8 @@ using namespace elaboration_detail;
                 child_specialized.unit,
                 child_path,
                 local,
+                local_string_objects,
+                read_only_strings,
                 local_container_objects,
                 read_only_container_objects,
                 binding,
@@ -1272,8 +1305,10 @@ using namespace elaboration_detail;
                 child_specialized.unit,
                 child_path,
                 std::move(child_aliases.signals),
+                std::move(child_aliases.strings),
                 std::move(child_aliases.containers),
                 std::move(child_aliases.read_only_signals),
+                std::move(child_aliases.read_only_strings),
                 std::move(child_specialized.environment),
                 std::move(child_specialized.values),
                 std::move(child_specialized.identity_values),
@@ -1302,7 +1337,8 @@ using namespace elaboration_detail;
             ports.push_back(external_port_declaration(port));
         }
         auto aliases = connect_ports(
-            instance, ports, path, parent_signals, {}, {}, binding, true);
+            instance, ports, path, parent_signals, {}, {}, {}, {},
+            binding, true);
         ObjectMap objects;
         for (const auto& port : target.ports) {
             if (const auto signal = aliases.signals.find(port.name);

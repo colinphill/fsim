@@ -13,17 +13,19 @@ std::optional<ContainerType> Lowerer::container_type(
   }
   const auto width = type.width();
   if (!width || *width == 0 || *width > 64
-      || !type.packed_members.empty()
+      || type.packed_aggregate
+          == frontend::PackedAggregateKind::UnpackedStruct
       || type.domain == frontend::ValueDomain::String) {
     report(
         "FSIM-ELAB-SVCONTAINER-003",
-        "container elements must be non-aggregate integral values with "
-        "an executable width in 1..64",
+        "container elements must be bounded integral, enum, or packed "
+        "aggregate values with an executable width in 1..64",
         span);
     return std::nullopt;
   }
   ContainerType result;
   result.element_width = static_cast<std::uint32_t>(*width);
+  result.element_nominal_type = type.nominal_type;
   result.two_state = is_two_state_domain(type.domain);
   result.signed_elements = type.is_signed;
   result.queue =
@@ -353,6 +355,83 @@ Lowerer::lower_container_expression(
   process_.operations.emplace_back(
       ReadContainerObject{destination, object->second});
   return destination;
+}
+
+void Lowerer::lower_nonstatic_container_assignment(
+    const ContainerRegisterId target,
+    const Expression& expression,
+    const ContainerType& destination_type) {
+  const bool plain_new =
+      expression.kind == ExpressionKind::Index
+      && expression.operands.size() == 2U
+      && expression.operands[0].kind == ExpressionKind::Identifier
+      && expression.operands[0].text == "new";
+  const bool initialized_new =
+      expression.kind == ExpressionKind::Call
+      && expression.text == "@new-array";
+  if (plain_new || initialized_new) {
+    if (destination_type.associative || destination_type.fixed
+        || destination_type.queue) {
+      report(
+          "FSIM-ELAB-SVCONTAINER-014",
+          destination_type.fixed
+              ? "new[size] cannot resize a static array"
+          : destination_type.associative
+              ? "new[size] cannot resize an associative array"
+              : "new[size] cannot resize a queue",
+          expression.span);
+      return;
+    }
+    if (initialized_new && expression.operands.size() != 2U) {
+      return;
+    }
+    const auto& size_expression =
+        expression.operands[plain_new ? 1U : 0U];
+    const auto size = lower_expression(
+        size_expression,
+        infer_width(size_expression).value_or(std::size_t{32}));
+    if (!size) {
+      return;
+    }
+    std::optional<ContainerRegisterId> initializer;
+    if (initialized_new) {
+      initializer = lower_container_expression(expression.operands[1]);
+      if (!initializer
+          || process_.container_register_types.at(*initializer)
+              != destination_type) {
+        report(
+            "FSIM-ELAB-SVCONTAINER-023",
+            "new[size](initializer) requires an exactly compatible "
+            "dynamic-array value",
+            expression.operands[1].span);
+        return;
+      }
+    }
+    process_.operations.emplace_back(
+        ResizeContainer{target, *size, initializer});
+    return;
+  }
+  const auto value = lower_container_expression(expression);
+  if (!value) {
+    report(
+        "FSIM-ELAB-SVCONTAINER-010",
+        "whole-container assignment requires new[size], "
+        "new[size](initializer), or a compatible container value",
+        expression.span);
+    return;
+  }
+  if (process_.container_register_types.at(*value) != destination_type) {
+    report(
+        expression.kind == ExpressionKind::Call
+            ? "FSIM-ELAB-SVFUNC-008"
+            : "FSIM-ELAB-SVCONTAINER-010",
+        "whole-container assignment requires an exactly compatible kind "
+        "and profile",
+        expression.span);
+    return;
+  }
+  process_.operations.emplace_back(
+      CopyContainerRegister{target, *value});
 }
 
 Lowerer::ExpressionAttempt Lowerer::lower_container_query(
@@ -1542,6 +1621,9 @@ bool Lowerer::lower_container_locator(
 
 void Lowerer::lower_container_method(
     const Statement& statement) {
+  if (lower_string_method_statement(statement)) {
+    return;
+  }
   const auto& call = statement.value;
   const bool ordering_method =
       call.kind == ExpressionKind::Call
@@ -1670,6 +1752,7 @@ void Lowerer::lower_container_method(
           : receiver;
   const auto mutates_receiver =
       call.text == ".delete"
+      || call.text == ".insert"
       || call.text == ".push_front"
       || call.text == ".push_back"
       || call.text == ".pop_front"
@@ -1699,18 +1782,21 @@ void Lowerer::lower_container_method(
   }
   if (call.text == ".delete") {
     if (call.operands.size() == 2) {
-      if (!runtime_type->associative) {
+      if (!runtime_type->associative && !runtime_type->queue) {
         report(
             "FSIM-ELAB-SVCONTAINER-018",
-            "delete(index) requires an associative-array receiver",
+            "delete(index) requires a queue or associative-array receiver",
             call.span);
         return;
       }
       const auto index = lower_expression(
           call.operands[1],
-          runtime_type->index_width,
-          type->systemverilog_container
-              ->associative_index_type.get());
+          runtime_type->associative
+              ? runtime_type->index_width : 32U,
+          runtime_type->associative
+              ? type->systemverilog_container
+                    ->associative_index_type.get()
+              : nullptr);
       if (!index) {
         return;
       }
@@ -1727,6 +1813,23 @@ void Lowerer::lower_container_method(
       process_.operations.emplace_back(
           DeleteContainer{*target, std::nullopt});
     }
+  } else if (call.text == ".insert") {
+    if (!runtime_type->queue) {
+      report(
+          "FSIM-ELAB-SVCONTAINER-019",
+          "insert requires a queue receiver", call.span);
+      return;
+    }
+    if (call.operands.size() != 3U) {
+      return;
+    }
+    const auto index = lower_expression(call.operands[1], 32);
+    const auto value = lower_expression(call.operands[2], *width, type);
+    if (!index || !value) {
+      return;
+    }
+    process_.operations.emplace_back(
+        PushContainer{*target, *value, false, *index});
   } else if (
       call.text == ".push_front"
       || call.text == ".push_back") {

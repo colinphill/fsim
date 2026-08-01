@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
+#include "fsim/runtime/file_binary.hpp"
+#include "fsim/runtime/file_scanning.hpp"
 
 #include <system_error>
 
@@ -41,28 +43,31 @@ struct Mode {
 [[nodiscard]] std::optional<Mode> file_mode(
     const std::string_view spelling) {
   using std::ios;
-  if (spelling == "r") {
+  if (spelling == "r" || spelling == "rb") {
     return Mode{ios::in | ios::binary, true, false};
   }
-  if (spelling == "w") {
+  if (spelling == "w" || spelling == "wb") {
     return Mode{
         ios::out | ios::trunc | ios::binary, false, true};
   }
-  if (spelling == "a") {
+  if (spelling == "a" || spelling == "ab") {
     return Mode{
         ios::out | ios::app | ios::binary, false, true};
   }
-  if (spelling == "r+") {
+  if (spelling == "r+" || spelling == "r+b"
+      || spelling == "rb+") {
     return Mode{
         ios::in | ios::out | ios::binary, true, true};
   }
-  if (spelling == "w+") {
+  if (spelling == "w+" || spelling == "w+b"
+      || spelling == "wb+") {
     return Mode{
         ios::in | ios::out | ios::trunc | ios::binary,
         true,
         true};
   }
-  if (spelling == "a+") {
+  if (spelling == "a+" || spelling == "a+b"
+      || spelling == "ab+") {
     return Mode{
         ios::in | ios::out | ios::app | ios::binary,
         true,
@@ -164,6 +169,7 @@ FileHandle Interpreter::Impl::open_file(
           std::move(checked),
           std::string{mode_text},
           std::move(stream),
+          std::nullopt,
           {},
           false,
           mode->readable,
@@ -248,39 +254,87 @@ std::string Interpreter::Impl::read_file_line(
         "SystemVerilog file handle is not open for reading"};
   }
   std::string line;
-  if (!std::getline(*file.stream, line)) {
-    count = 0;
-    if (file.stream->eof()) {
+  line.reserve(128);
+  while (line.size() < maximum_string_bytes) {
+    const auto character = read_file_character(process, handle);
+    if (character < 0) {
+      if (file.stream->eof()) {
+        count = static_cast<std::uint32_t>(line.size());
+        return line;
+      }
+      count = 0;
       return {};
     }
-    file.last_error = "failed to read SystemVerilog text file";
-    return {};
+    line.push_back(static_cast<char>(character));
+    if (character == '\n') {
+      count = static_cast<std::uint32_t>(line.size());
+      return line;
+    }
   }
-  if (line.size() == maximum_string_bytes
-      && !file.stream->eof()) {
-    file.last_error =
-        "SystemVerilog input line exceeds the 4096-byte limit";
+  const auto extra = read_file_character(process, handle);
+  if (extra < 0) {
+    if (file.stream->eof()) {
+      count = static_cast<std::uint32_t>(line.size());
+      return line;
+    }
     count = 0;
     return {};
   }
-  if (line.size() > maximum_string_bytes) {
-    file.last_error =
-        "SystemVerilog input line exceeds the 4096-byte limit";
-    count = 0;
-    return {};
+  auto character = extra;
+  while (character >= 0 && character != '\n') {
+    character = read_file_character(process, handle);
   }
-  count = static_cast<std::uint32_t>(line.size());
+  file.last_error =
+      "SystemVerilog input line exceeds the 4096-byte limit";
+  count = 0;
+  return {};
+}
+
+std::int32_t Interpreter::Impl::read_file_character(
+    const ProcessId process,
+    const FileHandle handle) {
+  auto& file = checked_file(process, handle);
+  if (!file.readable) {
+    throw std::runtime_error{
+        "SystemVerilog file handle is not open for reading"};
+  }
+  if (file.pushback) {
+    const auto character = *file.pushback;
+    file.pushback.reset();
+    return character;
+  }
+  const auto character = file.stream->get();
+  if (character != std::char_traits<char>::eof()) {
+    return static_cast<unsigned char>(character);
+  }
   if (!file.stream->eof()) {
-    line.push_back('\n');
-    ++count;
+    file.last_error = "failed to read SystemVerilog text file character";
   }
-  return line;
+  return -1;
+}
+
+std::int32_t Interpreter::Impl::unread_file_character(
+    const ProcessId process,
+    const FileHandle handle,
+    const std::int32_t character) {
+  auto& file = checked_file(process, handle);
+  if (!file.readable) {
+    throw std::runtime_error{
+        "SystemVerilog file handle is not open for reading"};
+  }
+  if (file.pushback || character < 0 || character > 255) {
+    return -1;
+  }
+  file.stream->clear();
+  file.pushback = static_cast<std::uint8_t>(character);
+  return character;
 }
 
 bool Interpreter::Impl::file_end_of_file(
     const ProcessId process,
     const FileHandle handle) {
-  return checked_file(process, handle).stream->eof();
+  const auto& file = checked_file(process, handle);
+  return !file.pushback && file.stream->eof();
 }
 
 std::string Interpreter::Impl::file_error(
@@ -290,6 +344,68 @@ std::string Interpreter::Impl::file_error(
   auto& file = checked_file(process, handle);
   has_error = !file.last_error.empty();
   return file.last_error;
+}
+
+std::int32_t Interpreter::Impl::position_file(
+    const ProcessId process,
+    const FileHandle handle,
+    const FilePositionKind kind,
+    std::int32_t offset,
+    std::int32_t origin) {
+  auto& file = checked_file(process, handle);
+  const auto fail = [&](const std::string_view message) {
+    file.last_error = message;
+    return std::int32_t{-1};
+  };
+  if (kind == FilePositionKind::tell) {
+    const auto position = file.readable
+        ? file.stream->tellg() : file.stream->tellp();
+    if (position == std::streampos{-1})
+      return fail("failed to query SystemVerilog file position");
+    auto value = static_cast<std::streamoff>(position);
+    if (file.pushback) --value;
+    if (value < 0 || value > std::numeric_limits<std::int32_t>::max())
+      return fail("SystemVerilog file position exceeds 32-bit range");
+    return static_cast<std::int32_t>(value);
+  }
+  if (kind == FilePositionKind::rewind) {
+    offset = 0;
+    origin = 0;
+  }
+  std::ios::seekdir direction;
+  if (origin == 0) direction = std::ios::beg;
+  else if (origin == 1) direction = std::ios::cur;
+  else if (origin == 2) direction = std::ios::end;
+  else return fail("$fseek origin must be 0, 1, or 2");
+  file.stream->clear();
+  if (file.writable) file.stream->flush();
+  file.pushback.reset();
+  if (file.readable) file.stream->seekg(offset, direction);
+  else file.stream->seekp(offset, direction);
+  if (!file.stream->good())
+    return fail("failed to seek SystemVerilog file");
+  return 0;
+}
+
+void Interpreter::Impl::flush_file(
+    const ProcessId process,
+    const std::optional<FileHandle> handle) {
+  const auto flush = [](FileState& file) {
+    if (!file.writable) return;
+    file.stream->flush();
+    if (!file.stream->good()) {
+      file.last_error = "failed to flush SystemVerilog file";
+      throw std::runtime_error{file.last_error};
+    }
+  };
+  if (handle) {
+    flush(checked_file(process, *handle));
+    return;
+  }
+  for (auto& [id, file] : files) {
+    static_cast<void>(id);
+    if (file.owner == process && !file.closed && file.stream) flush(file);
+  }
 }
 
 FileHandle Interpreter::Impl::known_file_handle(
@@ -413,15 +529,27 @@ void Interpreter::Impl::execute_file(
     ProcessState& process,
     const FileReadLine& operation) {
   try {
-    std::uint32_t count{};
-    auto line = read_file_line(
-        process.program.id,
-        known_file_handle(process, operation.handle),
-        count);
-    get_string_register(process, operation.target) =
-        std::move(line);
+    std::int32_t result{};
+    const auto handle = known_file_handle(process, operation.handle);
+    if (operation.kind == FileReadKind::line) {
+      std::uint32_t count{};
+      auto line = read_file_line(process.program.id, handle, count);
+      get_string_register(process, operation.target) = std::move(line);
+      result = static_cast<std::int32_t>(count);
+    } else if (operation.kind == FileReadKind::character) {
+      result = read_file_character(process.program.id, handle);
+    } else {
+      const auto character = get_register(process, operation.source).low_word();
+      result = character.bval == 0
+          ? unread_file_character(
+                process.program.id, handle,
+                static_cast<std::int32_t>(
+                    static_cast<std::uint32_t>(character.aval)))
+          : -1;
+    }
     get_register(process, operation.destination) =
-        PackedLogic4::from_aval_bval(32, count, 0);
+        PackedLogic4::from_aval_bval(
+            32, static_cast<std::uint32_t>(result), 0);
     ++process.pc;
   } catch (const InterpreterError&) {
     throw;
@@ -470,6 +598,155 @@ void Interpreter::Impl::execute_file(
   } catch (const std::exception& error) {
     throw InterpreterError{
         process.program.id, process.pc, error.what()};
+  }
+}
+
+void Interpreter::Impl::execute_file(
+    ProcessState& process, const FileScan& operation) {
+  try {
+    InputScanResult scanned;
+    if (operation.string_source) {
+      scanned = scan_formatted_string(
+          operation, get_string_register(process, operation.source));
+    } else {
+      const auto handle = known_file_handle(process, operation.handle);
+      const std::function<std::int32_t()> read = [&] {
+        return read_file_character(process.program.id, handle);
+      };
+      const std::function<void(std::int32_t)> unread = [&](const auto value) {
+        if (unread_file_character(process.program.id, handle, value) != value) {
+          throw std::runtime_error{"failed to preserve file scan lookahead"};
+        }
+      };
+      scanned = scan_formatted_input(operation, read, unread);
+    }
+    for (std::size_t index = 0; index < scanned.values.size(); ++index) {
+      if (!scanned.values[index]) continue;
+      const auto& target = operation.conversions[index].target;
+      auto& value = *scanned.values[index];
+      switch (target.kind) {
+      case InputScanTargetKind::packed_register:
+        get_register(process, target.id) = std::move(value.packed);
+        break;
+      case InputScanTargetKind::packed_signal:
+        commit_driver(process.program.id, target.id, std::move(value.packed));
+        break;
+      case InputScanTargetKind::string_register:
+        get_string_register(process, target.id) = std::move(value.text);
+        break;
+      case InputScanTargetKind::string_object:
+        get_string_object(target.id).initial_value = std::move(value.text);
+        break;
+      }
+    }
+    get_register(process, operation.destination) =
+        PackedLogic4::from_aval_bval(
+            32, static_cast<std::uint32_t>(scanned.assignments), 0);
+    ++process.pc;
+  } catch (const InterpreterError&) {
+    throw;
+  } catch (const std::exception& error) {
+    throw InterpreterError{process.program.id, process.pc, error.what()};
+  }
+}
+
+void Interpreter::Impl::execute_file(
+    ProcessState& process, const FileBinaryRead& operation) {
+  try {
+    const auto known_integer = [&](const RegisterId id) {
+      const auto word = get_register(process, id).low_word();
+      if (word.width != 32 || word.bval != 0) {
+        throw std::runtime_error{"$fread bounds must be known 32-bit integers"};
+      }
+      return static_cast<std::int32_t>(static_cast<std::uint32_t>(word.aval));
+    };
+    std::optional<ContainerValue> container;
+    if (operation.target_kind == FileBinaryTargetKind::container_register) {
+      container = get_container_register(process, operation.target);
+    } else if (operation.target_kind
+               == FileBinaryTargetKind::container_object) {
+      container = read_container_object_value(operation.target);
+    }
+    const auto handle = known_file_handle(process, operation.handle);
+    const std::function<std::int32_t()> read = [&] {
+      return read_file_character(process.program.id, handle);
+    };
+    auto result = read_binary_file(
+        operation, std::move(container),
+        operation.has_start
+            ? std::optional{known_integer(operation.start)} : std::nullopt,
+        operation.has_count
+            ? std::optional{known_integer(operation.count)} : std::nullopt,
+        read);
+    switch (operation.target_kind) {
+    case FileBinaryTargetKind::packed_register:
+      get_register(process, operation.target) = std::move(result.packed);
+      break;
+    case FileBinaryTargetKind::packed_signal:
+      commit_driver(
+          process.program.id, operation.target, std::move(result.packed));
+      break;
+    case FileBinaryTargetKind::container_register:
+      get_container_register(process, operation.target) =
+          std::move(*result.container);
+      break;
+    case FileBinaryTargetKind::container_object:
+      write_container_object_value(operation.target, *result.container);
+      break;
+    }
+    get_register(process, operation.destination) =
+        PackedLogic4::from_aval_bval(32, result.bytes, 0);
+    ++process.pc;
+  } catch (const InterpreterError&) {
+    throw;
+  } catch (const std::exception& error) {
+    throw InterpreterError{process.program.id, process.pc, error.what()};
+  }
+}
+
+void Interpreter::Impl::execute_file(
+    ProcessState& process, const FilePosition& operation) {
+  try {
+    const auto known_integer = [&](const RegisterId id) {
+      const auto word = get_register(process, id).low_word();
+      if (word.width != 32 || word.bval != 0)
+        throw std::runtime_error{
+            "file position operands must be known 32-bit integers"};
+      return static_cast<std::int32_t>(
+          static_cast<std::uint32_t>(word.aval));
+    };
+    const auto result = position_file(
+        process.program.id,
+        known_file_handle(process, operation.handle),
+        operation.kind,
+        operation.kind == FilePositionKind::seek
+            ? known_integer(operation.offset) : 0,
+        operation.kind == FilePositionKind::seek
+            ? known_integer(operation.origin) : 0);
+    get_register(process, operation.destination) =
+        PackedLogic4::from_aval_bval(
+            32, static_cast<std::uint32_t>(result), 0);
+    ++process.pc;
+  } catch (const InterpreterError&) {
+    throw;
+  } catch (const std::exception& error) {
+    throw InterpreterError{process.program.id, process.pc, error.what()};
+  }
+}
+
+void Interpreter::Impl::execute_file(
+    ProcessState& process, const FileFlush& operation) {
+  try {
+    flush_file(
+        process.program.id,
+        operation.all
+            ? std::nullopt
+            : std::optional{known_file_handle(process, operation.handle)});
+    ++process.pc;
+  } catch (const InterpreterError&) {
+    throw;
+  } catch (const std::exception& error) {
+    throw InterpreterError{process.program.id, process.pc, error.what()};
   }
 }
 

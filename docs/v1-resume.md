@@ -7,24 +7,25 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 ## Snapshot
 
-- Recorded: 2026-07-31.
+- Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-109 SystemVerilog
-  aggregate, multidimensional-array, pattern, cast, and nominal-legality
-  closure on top of Batch 108 commit `a7bfb0d`; the current handoff commit is
-  the Batch 109 baseline.
-- The source-size refactor is complete: all 319 authored C/C++ source, header,
+- Implementation baseline: completed feature-batch-110 SystemVerilog string,
+  file, container, memory, same-language string-port, and release-row closure
+  on top of Batch 109 commit `95fb09b`.
+- The source-size refactor is complete: all 332 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 64
-  configured tests in 446.15 seconds, and Release passed all 64 configured
-  tests in 145.46 seconds on 2026-07-31. Debug/Release scoped locals completed
-  in 0.89/0.80 seconds, preprocessing and generate specialization in
-  1.20/1.13 seconds, interfaces in 1.84/1.51 seconds, LLVM in 3.86/2.70
-  seconds, containers in 342.38/87.53 seconds, aggregate/multidimensional
-  execution in 0.70/0.32 seconds, and the monolithic application in
-  39.75/13.64 seconds.
-- The diagnostic catalog covers all 1,393 production codes.
+  configured tests in 485.70 seconds, and Release passed all 64 configured
+  tests in 159.27 seconds on 2026-08-01. Debug/Release scoped locals completed
+  in 0.92/0.79 seconds, LLVM in 3.10/2.71 seconds, mutable strings in 0.94/0.41
+  seconds, files in 2.11/0.68 seconds, containers in 375.83/99.00 seconds, and
+  the monolithic application in 40.66/14.10 seconds. Debug aggregate/
+  multidimensional execution completed in 2.03 seconds.
+- The diagnostic catalog covers all 1,407 production codes.
+- Batch 110 is the mandatory non-documentation CI-inspection boundary. Its
+  local feature commit is pushed by this handoff, but CI inspection is
+  deliberately pending because the user requested a stop before monitoring.
 - The Batch 100 boundary is closed at repair commit `d2f216e`. Initial run
   `30640792808` and replacements `30647570353`/`30651503050` passed every
   ordinary job but exposed exact 1,500.27/1,800.14/2,400.12-second sanitizer
@@ -1324,6 +1325,272 @@ Batch 109 is not a CI-inspection boundary.
 
 Resume with **feature batch 110: SystemVerilog strings, files, containers, and
 memories release audit**:
+
+### Emergency restart checkpoint — 2026-08-01
+
+#### Latest continuation state (supersedes the older stopping point below)
+
+Batch 110 is complete locally. The exact LLVM 22.1.8 warnings-as-errors Debug
+regression passed all 64 tests in 485.70 seconds, and Release passed all 64 in
+159.27 seconds. Scoped locals remained quick at 0.92/0.79 seconds. The
+diagnostic catalog covers 1,407 production codes, and all 332 authored files
+pass the empty-allowlist 2,000-line source gate. The feature commit is pushed
+by this handoff; do not start another feature batch before performing the
+pending Batch 110 non-documentation CI inspection. The older checkpoint
+narrative below is retained as implementation history, but its uncommitted and
+unvalidated claims are obsolete.
+
+Batch 110 has advanced through these validated features:
+
+1. deterministic string expression and mutation/conversion methods;
+2. bounded `$swrite`, `$sformat`, and `$sformatf` formatting;
+3. `$fgetc`, `$ungetc`, `$fscanf`, and `$sscanf` input;
+4. binary `$fread`, including binary fopen aliases, packed and fixed-memory
+   targets, partial reads, interpreter and LLVM O0/O2 execution, cold/warm
+   cache reuse, and external input edits; and
+5. `$fseek`, `$ftell`, `$rewind`, and explicit/all-file `$fflush`, including
+   pushback-aware positioning and compiled application evidence.
+
+After file positioning/flush, the complete focused eight-test gate passed:
+frontend, diagnostics catalog, source-line budget, elaboration, LLVM,
+mutable-string application, file application, and runtime. The file
+application covered interpreter and compiled O0/O2 paths plus cold/warm and
+edited-input cache behavior. The protected source counts at the latest live
+check are 1,962 lines for `include/fsim/runtime/simir.hpp`, 1,996 for
+`src/compiler/llvm_jit_validation.cpp`, and 1,982 for
+`src/runtime/simir_execution.cpp`.
+
+Feature 6, `$writememb` and `$writememh`, is implemented and validated. The
+worktree contains:
+
+- parser recognition and `frontend::Statement::memory_write` metadata;
+- `runtime::simir::LoadMemory::write` plus deterministic
+  `write_memory_text` serialization;
+- elaborator, interpreter/application service, LLVM label/validation,
+  cache-key, and fixed one-dimensional source handling;
+- native cache schema 65 with container identity
+  `bounded-static-associative-v26-memory-write`;
+- frontend and elaboration positive and negative tests;
+- runtime serialization, selected descending bounds, round-trip, and invalid
+  bounds tests in `tests/runtime/runtime_container_tests.cpp`;
+- application dumps for interpreter and compiled O0/O2 execution, cold/warm
+  reuse, and edited binary input content; and
+- generalized checked parser, semantic, and elaboration diagnostic text for
+  both memory-file directions.
+
+The complete nine-test focused gate passed again after restart on 2026-08-01:
+frontend, diagnostics catalog, source-line budget, general and container
+elaboration, LLVM, mutable-string application, file application, and runtime.
+The file application passed in 1.72 seconds and the complete gate in 6.25
+seconds. Keep `llvm_jit_validation.cpp` below 2,000 lines and do not enlarge
+recursive frontend structures.
+
+Feature 7, bounded dynamic-array construction and indexed queue mutation, is
+implemented and validated. `new[size](initializer)` requires an exactly
+compatible dynamic-array value, snapshots aliased initializers before resize,
+copies the retained prefix, and defaults an expanded two-state tail to zero or
+a four-state tail to X. Queues add checked `insert(index, item)` and
+`delete(index)`, allow insertion at the current size, retain deterministic
+bounded-queue back eviction, and reject negative, unknown, or out-of-range
+indices. Parser/elaboration diagnostics, interpreter/native callbacks,
+validation, and native cache identity all distinguish initialized resize and
+indexed mutation. The Debug container application passed in 361.70 seconds;
+the fast frontend/elaboration/LLVM/runtime regressions and a focused cold/warm
+cache-identity test also passed.
+
+Feature 8, nominal packed-aggregate container and memory interactions, is
+implemented and validated. One-through-64-bit named packed struct/union/enum
+elements now retain nominal identity through static, dynamic, queue,
+associative, and one-through-four-dimensional static containers. Nested
+patterns, element writes, `new[size](initializer)`, indexed queue mutation,
+full-rank runtime indexing, generated same-language ports, type parameters,
+automatic functions/tasks, debugger reads, callbacks, and normalized VCD
+observation agree across interpreter and LLVM O0/O2. One-dimensional packed
+aggregate memories also execute through `$fread`, `$readmemb`/`$readmemh`, and
+`$writememb`/`$writememh`; edited external inputs reuse native objects while
+changing exact word values. Distinct nominal aggregate element types are not
+whole-container compatible. Multidimensional memory-file operands remain a
+checked exclusion in both elaboration and the public runtime helper. Native
+schema 67 and container semantic revision 28 record aggregate element identity
+plus the construction/mutation operations without a public ABI change.
+
+The complete feature-8 nine-test gate passed on 2026-08-01: frontend,
+diagnostics catalog, source-line budget, general and focused container
+elaboration, LLVM, file application, aggregate/multidimensional application,
+and runtime. The two application differentials passed in 2.03 and 1.99 seconds.
+The current protected source counts are 1,965 lines for
+`include/fsim/runtime/simir.hpp`, 1,999 for
+`src/compiler/llvm_jit_validation.cpp`, 1,982 for
+`src/runtime/simir_execution.cpp`, 1,977 for
+`src/elaboration/lowerer_sv_containers.cpp`, and 1,911 for
+`tests/elaboration/elaborator_sv_container_test.cpp` after extracting the new
+aggregate fixture into its own translation unit.
+
+Feature 9, same-language mutable-string module ports, is implemented and
+validated. ANSI and classic input/output/inout string ports alias one runtime
+object through nested hierarchy, expose child aliases to the debugger, make
+input ports read-only, reject descendant writes and independent sibling
+writers, and preserve interpreter/LLVM O0/O2 cold/warm/source-edit behavior.
+The focused frontend, elaboration, diagnostics-catalog, source-line-budget,
+and mutable-string application gate passed; the application completed in 0.91
+seconds. Native-object schema is now 68.
+
+Feature 10, the SystemVerilog release-row audit, is complete. New
+feature-matrix rows SV-661 through SV-670 record the ten Batch 110 slices, and
+required rows V1-SV-01 through V1-SV-08 now join V1-SV-09 in the completed v1
+group. The formal deferred table now names every audited checked exclusion,
+including real/Unicode and wider runtime data, string-element containers,
+multidimensional memory-file operands, standard/multichannel and postponed-
+monitor file extensions, unsupported primitive families, and the bounded
+control/callable exclusions. No audited accepted syntax is left parser-only or
+silently discarded.
+
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 64 tests
+in 485.70 seconds, including scoped locals in 0.92 seconds, LLVM in 3.10
+seconds, mutable strings in 0.94 seconds, files in 2.11 seconds, aggregate/
+multidimensional execution in 2.03 seconds, containers in 375.83 seconds, and
+the monolithic application in 40.66 seconds. Release passed all 64 tests in
+159.27 seconds, including scoped locals in 0.79 seconds, LLVM in 2.71 seconds,
+mutable strings in 0.41 seconds, files in 0.68 seconds, containers in 99.00
+seconds, and the monolithic application in 14.10 seconds. The exact current
+stopping point is immediately before the mandatory Batch 110
+non-documentation CI inspection, as requested by the user. GitHub CI remains
+at parallelism two and documentation-only runs are not monitored.
+
+#### Earlier checkpoint history
+
+Batch 110 is active and intentionally uncommitted on
+`codex/resumable-jit`. `HEAD` and `origin/codex/resumable-jit` are both Batch
+109 commit `95fb09b5f11765154b1864c06d27d9f84878b208`; preserve the complete
+dirty worktree, including all twelve untracked source/header files. The
+worktree passes `git diff --check`. No build, test, commit, push, or CI
+inspection was started for this emergency checkpoint.
+
+The first three bounded features are implemented in the worktree:
+
+1. Deterministic byte-string expression methods `getc`, `toupper`, `tolower`,
+   `compare`, `icompare`, and inclusive `substr` use a shared runtime helper
+   and the existing generic native container callback without changing the
+   public JIT ABI.
+2. Mutating `putc`, `itoa`, `hextoa`, `octtoa`, and `bintoa`, plus expression
+   conversions `atoi`, `atohex`, `atooct`, and `atobin`, have parser,
+   elaborator, interpreter, LLVM, cache-key, and application coverage. Postfix
+   calls now also parse on string literals and parenthesized expressions.
+3. Bounded `$swrite`, `$sformat`, and `$sformatf` share one public output-format
+   parser and deterministic packed/string/time formatter. They cover width,
+   padding, literal percent, hierarchy, interpreter, LLVM O0/O2, and cold,
+   warm, and edited cache behavior. Cache schema 62 records exact format
+   metadata. Checked malformed-format and target diagnostics are
+   `FSIM-ELAB-SVSTRING-019` and `FSIM-ELAB-SVSTRING-020`.
+
+The twelve untracked files are:
+
+- `include/fsim/frontend/input_format.hpp`;
+- `include/fsim/frontend/output_format.hpp`;
+- `include/fsim/runtime/file_binary.hpp`;
+- `include/fsim/runtime/file_operations.hpp`;
+- `include/fsim/runtime/file_scanning.hpp`;
+- `include/fsim/runtime/string_methods.hpp`;
+- `src/elaboration/lowerer_sv_file_binary.cpp`;
+- `src/elaboration/lowerer_sv_file_scan.cpp`;
+- `src/elaboration/lowerer_sv_string_format.cpp`;
+- `src/runtime/simir_file_binary.cpp`;
+- `src/runtime/simir_file_scanning.cpp`; and
+- `src/runtime/simir_string_methods.cpp`.
+
+Verify the complete tracked and untracked list with `git status --short` after
+restart and do not normalize or discard any part of it.
+
+Feature 4, file character input and pushback, is implemented and validated.
+`$fgetc` and `$ungetc` reuse the existing `FileReadLine` operation with
+explicit line/character/unget modes and the generic native callback, without
+adding a public JIT ABI entry. Runtime file state has a deterministic one-byte
+pushback slot; successful pushback clears EOF, `$feof` respects pending
+pushback, and `$fgets` consumes it, including a pushed newline. The final
+`FileReadLine` aggregate-order regression was repaired, and
+`read_file_line` now consumes through `read_file_character`. The complete
+eight-test focused gate passed: frontend, diagnostics catalog, source-line
+budget, elaboration, LLVM, mutable-string application, file application, and
+runtime.
+
+Feature 5a, bounded formatted input scanning, is implemented and validated.
+`$fscanf` and `$sscanf` support at most 64 conversions, `%%`, field widths,
+assignment suppression, literal/whitespace matching, `%b/%o/%d/%i/%u/%h/%x`,
+`%c`, and `%s`, with direct writable packed or string targets. Input is bounded
+to 4,096 bytes and X/Z digits convert deterministically for two-state targets.
+The interpreter, LLVM generic callback, exact cache metadata, parser arity,
+checked diagnostics, runtime unit tests, and cold/warm/edited-input application
+paths are present. The file application test passed in 0.98 seconds across its
+interpreter/O0/O2/cache cases. Cache schema is now 63, and file semantic
+identity is `simir-text-file-v2-scan-binary`.
+
+Feature 5b, binary `$fread`, is the exact unvalidated stopping point. The
+worktree contains the new `FileBinaryRead` SimIR operation, bounded binary
+runtime helper, interpreter path, LLVM lowering/callback/validation, cache-key
+metadata, parser arity checks, elaborator lowering, CMake entries, and checked
+diagnostics `FSIM-ELAB-SVFILE-013` and `FSIM-ELAB-SVFILE-014`. Intended
+semantics are big-endian/MSB-first packed placement plus direction-aware
+one-dimensional fixed-memory targets with optional start/count and a 1 MiB
+read bound. None of these newest `$fread` edits has been compiled or tested;
+do not describe them as working until the gates below pass.
+
+At the checkpoint, the protected source counts are 1,943 lines for
+`include/fsim/runtime/simir.hpp`, 2,007 for
+`src/compiler/llvm_jit_validation.cpp`, and 1,972 for
+`src/runtime/simir_execution.cpp`. Split or compact the LLVM validator below
+2,000 before the source gate. Keep recursive frontend expression/statement
+structures compact to protect Windows MSVC Debug
+`fsim.application.scoped_locals` performance.
+
+On restart, read this file and verify live Git state, then resume exactly here:
+
+```sh
+git status --short --branch
+git log -3 --oneline --decorate
+git rev-parse HEAD
+git rev-parse origin/codex/resumable-jit
+git diff --check
+wc -l include/fsim/runtime/simir.hpp \
+  src/compiler/llvm_jit_validation.cpp \
+  src/runtime/simir_execution.cpp
+cmake --build build/llvm22-ninja-debug --parallel 8 \
+  --target fsim_frontend_tests fsim_elaboration_tests fsim_llvm_tests \
+    fsim_runtime_tests fsim_sv_file_application_tests
+ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
+  -R 'fsim\.(frontend|elaboration|llvm|runtime|application\.sv_files)$'
+```
+
+Before that first build, inspect and complete these known `$fread` loose ends:
+
+1. Add binary `fopen` mode aliases (`rb`, `wb`, `ab`, `rb+`, `r+b`, and their
+   write/append forms) in `file_mode()` without weakening existing invalid-mode
+   tests.
+2. Add `$fscanf`, `$sscanf`, and `$fread` to the integer-result system-function
+   recognition used by `lower_handle` in `lowerer_expression_system.cpp`.
+3. Add frontend positive/arity tests, elaboration positive/negative metadata
+   tests, runtime packed/fixed-memory byte-order and partial-read tests, and an
+   application binary fixture covering interpreter, LLVM O0/O2, cold/warm
+   cache reuse, and external input-content edits.
+4. Recheck validator size after the new `FileBinaryRead` visitor; extract the
+   handler rather than exceeding the 2,000-line hard limit.
+5. Search for stale schema-62 expectations before finalizing schema 63.
+
+Potential correctness points to retain during review: avoid undefined shifts
+on zero-byte reads; partial packed reads are placed at the most-significant
+end; container writes must validate exact type/profile; optional count without
+start is invalid; start/count are memory-only; and the runtime helper, not the
+process-only validator, must validate the live container profile.
+
+After `$fread` passes, rerun the focused frontend, elaboration, LLVM, runtime,
+file/mutable-string application, diagnostics-catalog, and source-line-budget
+tests. Then continue in the approved order: file positioning/flush;
+`$writemem*`; container construction/mutation; aggregate/multidimensional
+memory-container interactions; the complete row/diagnostic/cache/debug/VCD
+audit; and exact Debug/Release gates.
+
+Do not inspect Actions yet. Batch 110 remains the mandatory non-documentation
+CI boundary after its complete ten-feature commit and push; local builds use at
+least eight workers, while GitHub Actions builds use parallelism two.
 
 1. Audit every SystemVerilog v1 matrix row against live parser, elaborator,
    interpreter, LLVM, cache, debugger, VCD, and diagnostic evidence; record

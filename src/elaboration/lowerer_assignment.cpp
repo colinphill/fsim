@@ -448,79 +448,12 @@ using namespace elaboration_detail;
                     process_.operations.emplace_back(
                         CopyContainerRegister{target, *value});
                 } else {
-                    const bool is_new =
-                        statement.value.kind
-                                == ExpressionKind::Index
-                        && statement.value.operands.size() == 2
-                        && statement.value.operands.front().kind
-                                == ExpressionKind::Identifier
-                        && statement.value.operands.front().text
-                                == "new";
-                    if (is_new) {
-                        if (runtime_type->associative
-                            || runtime_type->fixed) {
-                            report(
-                                "FSIM-ELAB-SVCONTAINER-014",
-                                runtime_type->fixed
-                                    ? "new[size] cannot resize a static "
-                                      "array"
-                                    : "new[size] cannot resize an "
-                                      "associative array",
-                                statement.value.span);
-                            return;
-                        }
-                        const auto size_width =
-                            infer_width(statement.value.operands[1])
-                                .value_or(std::size_t{32});
-                        const auto size = lower_expression(
-                            statement.value.operands[1], size_width);
-                        if (!size) {
-                            return;
-                        }
-                        process_.operations.emplace_back(
-                            ResizeContainer{target, *size});
-                    } else {
-                        const auto value =
-                            lower_container_expression(
-                                statement.value);
-                        if (!value) {
-                            report(
-                                "FSIM-ELAB-SVCONTAINER-010",
-                                "whole-container assignment requires "
-                                "new[size] or a compatible container "
-                                "value",
-                                statement.value.span);
-                            return;
-                        }
-                        if (process_.container_register_types.at(*value)
-                            != *runtime_type) {
-                            report(
-                                statement.value.kind
-                                        == ExpressionKind::Call
-                                    ? "FSIM-ELAB-SVFUNC-008"
-                                    : "FSIM-ELAB-SVCONTAINER-010",
-                                "whole-container assignment requires "
-                                "an exactly compatible kind and profile",
-                                statement.value.span);
-                            return;
-                        }
-                        process_.operations.emplace_back(
-                            CopyContainerRegister{target, *value});
-                    }
+                    lower_nonstatic_container_assignment(
+                        target, statement.value, *runtime_type);
                 }
             } else if (
                 statement.target.kind == ExpressionKind::Index
                 && statement.target.operands.size() == 2) {
-                if (statement.value.kind
-                        == ExpressionKind::Aggregate
-                    && statement.value.text == "sv-pattern") {
-                    report(
-                        "FSIM-ELAB-SVPATTERN-001",
-                        "a container assignment pattern requires a "
-                        "direct whole-container target",
-                        statement.target.span);
-                    return;
-                }
                 const auto index_width =
                     runtime_type->associative
                         ? static_cast<std::size_t>(
@@ -539,8 +472,10 @@ using namespace elaboration_detail;
                     statement.target.operands[1],
                     index_width,
                     index_type);
+                auto element_type = *source_type;
+                element_type.systemverilog_container.reset();
                 auto value = lower_expression(
-                    statement.value, *element_width, source_type);
+                    statement.value, *element_width, &element_type);
                 if (!index || !value) {
                     return;
                 }
@@ -599,6 +534,15 @@ using namespace elaboration_detail;
             string_objects_.find(target_name);
         if (string_local != string_locals_.end()
             || string_object != string_objects_.end()) {
+            if (string_object != string_objects_.end()
+                && read_only_string_objects_.contains(
+                    string_object->second)) {
+                report(
+                    "FSIM-ELAB-SVPORT-011",
+                    "an input mutable string port is read-only",
+                    statement.target.span);
+                return;
+            }
             if (statement.assignment_kind
                     != AssignmentKind::Blocking
                 || statement.procedural_assignment_control

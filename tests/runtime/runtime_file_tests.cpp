@@ -83,14 +83,16 @@ void test_simir_text_files() {
           "value=", "", true},
       LoadStringConstant{3, "body"},
       FileWriteString{0, 3, "<", ">", false},
+      FileFlush{0, false},
+      FileFlush{0, true},
       FileClose{0},
       LoadStringConstant{2, "r"},
       FileOpen{2, 0, 2},
-      FileReadLine{3, 2, 4},
+      FileReadLine{3, 2, 4, 0, FileReadKind::line},
       WriteStringObject{first, 4},
-      FileReadLine{3, 2, 4},
+      FileReadLine{3, 2, 4, 0, FileReadKind::line},
       WriteStringObject{second, 4},
-      FileReadLine{3, 2, 4},
+      FileReadLine{3, 2, 4, 0, FileReadKind::line},
       WriteStringObject{third, 4},
       FileEndOfFile{4, 2},
       FileErrorStatus{5, 2, 5},
@@ -131,6 +133,183 @@ void test_simir_text_files() {
       contents == "head\nvalue=42\n<body>",
       "file writes flush in deterministic operation order");
 
+  Interpreter scanner;
+  const auto scanned_text =
+      scanner.add_string_object({"scanned", {}});
+  Process scan_process;
+  scan_process.id = 0;
+  scan_process.name = "formatted_string_scan";
+  scan_process.register_count = 3;
+  scan_process.string_register_count = 2;
+  scan_process.debug_locals = {
+      {"count", "integer", 0, 32, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}},
+      {"hex", "logic [15:0]", 1, 16, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}},
+      {"decimal", "integer", 2, 32, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}}};
+  scan_process.operations = {
+      LoadStringConstant{0, "  tag=2a name=alpha % 17"},
+      FileScan{
+          0, 0, 0, true,
+          {
+              {" tag=", InputScanFormat::hexadecimal, 0, false,
+               {InputScanTargetKind::packed_register, 1, 16, false}},
+              {" name=", InputScanFormat::string, 0, false,
+               {InputScanTargetKind::string_register, 1, 1, false}},
+              {" % ", InputScanFormat::decimal, 0, false,
+               {InputScanTargetKind::packed_register, 2, 32, true}},
+          },
+          {}},
+      WriteStringObject{scanned_text, 1},
+      Halt{}};
+  (void)scanner.add_process(std::move(scan_process));
+  require(
+      scanner.run().status == RunStatus::completed,
+      "formatted string scan completes");
+  require(
+      scanner.read_debug_local(0, 0) == number(3),
+      "formatted scan reports three assignments");
+  require(
+      scanner.read_debug_local(0, 1)
+          == PackedLogic4::from_aval_bval(16, 0x2a, 0),
+      "formatted hexadecimal scan preserves target width");
+  require(
+      scanner.read_debug_local(0, 2) == number(17),
+      "formatted decimal scan stores its value");
+  require(
+      scanner.string_object_value(scanned_text) == "alpha",
+      "formatted string scan stores bounded text");
+
+  {
+    std::ofstream binary(
+        files.path / "binary.bin",
+        std::ios::binary | std::ios::trunc);
+    const std::string bytes{"\x12\x34\x56\x78\x9a", 5};
+    binary.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    require(binary.good(), "binary input fixture is writable");
+  }
+  ContainerType memory_type;
+  memory_type.element_width = 8;
+  memory_type.fixed = true;
+  memory_type.index_left = 3;
+  memory_type.index_right = 0;
+  memory_type.dimensions = {{3, 0}};
+  Interpreter binary_reader;
+  binary_reader.set_file_root(files.path);
+  const auto binary_memory = binary_reader.add_container_object(
+      {"binary-memory", default_container_value(memory_type), std::nullopt});
+  Process binary_process;
+  binary_process.id = 0;
+  binary_process.name = "binary_file_read";
+  binary_process.register_count = 18;
+  binary_process.string_register_count = 2;
+  binary_process.container_register_count = 1;
+  binary_process.container_register_types = {memory_type};
+  binary_process.debug_locals = {
+      {"packed-bytes", "integer", 1, 32, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}},
+      {"packed", "logic [15:0]", 2, 16, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}},
+      {"memory-bytes", "integer", 3, 32, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}},
+      {"partial", "logic [15:0]", 6, 16, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}},
+      {"partial-bytes", "integer", 7, 32, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}},
+      {"tell", "integer", 8, 32, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}},
+      {"invalid-seek", "integer", 11, 32, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}},
+      {"seek", "integer", 17, 32, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}},
+      {"positioned", "byte", 12, 8, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}},
+      {"positioned-bytes", "integer", 13, 32, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}},
+      {"rewind", "integer", 14, 32, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}},
+      {"rewound", "byte", 15, 8, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}},
+      {"rewound-bytes", "integer", 16, 32, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}}};
+  binary_process.operations = {
+      LoadStringConstant{0, "binary.bin"},
+      LoadStringConstant{1, "rb"},
+      FileOpen{0, 0, 1},
+      FileBinaryRead{
+          1, 0, 2, FileBinaryTargetKind::packed_register,
+          16, false, 0, 0, false, false},
+      LoadConstant{4, number(2)},
+      LoadConstant{5, number(2)},
+      FileBinaryRead{
+          3, 0, 0, FileBinaryTargetKind::container_register,
+          8, false, 4, 5, true, true},
+      WriteContainerObject{binary_memory, 0},
+      FilePosition{8, 0, 0, 0, FilePositionKind::tell},
+      FileBinaryRead{
+          7, 0, 6, FileBinaryTargetKind::packed_register,
+          16, false, 0, 0, false, false},
+      LoadConstant{
+          9, number(static_cast<std::uint32_t>(-3))},
+      LoadConstant{10, number(3)},
+      FilePosition{11, 0, 9, 10, FilePositionKind::seek},
+      LoadConstant{10, number(1)},
+      FilePosition{17, 0, 9, 10, FilePositionKind::seek},
+      FileBinaryRead{
+          13, 0, 12, FileBinaryTargetKind::packed_register,
+          8, false, 0, 0, false, false},
+      FilePosition{14, 0, 0, 0, FilePositionKind::rewind},
+      FileBinaryRead{
+          16, 0, 15, FileBinaryTargetKind::packed_register,
+          8, false, 0, 0, false, false},
+      FileFlush{0, false},
+      FileFlush{0, true},
+      FileClose{0},
+      Halt{}};
+  (void)binary_reader.add_process(std::move(binary_process));
+  require(
+      binary_reader.run().status == RunStatus::completed,
+      "binary file read completes");
+  require(
+      binary_reader.read_debug_local(0, 0) == number(2)
+          && binary_reader.read_debug_local(0, 1)
+              == PackedLogic4::from_aval_bval(16, 0x1234, 0),
+      "packed $fread reports bytes and stores big-endian data");
+  const auto& loaded_memory =
+      binary_reader.container_object_value(binary_memory);
+  require(
+      binary_reader.read_debug_local(0, 2) == number(2)
+          && loaded_memory.elements[0]
+              == PackedLogic4{8, Logic4::x}
+          && loaded_memory.elements[1]
+              == PackedLogic4::from_aval_bval(8, 0x56, 0)
+          && loaded_memory.elements[2]
+              == PackedLogic4::from_aval_bval(8, 0x78, 0)
+          && loaded_memory.elements[3]
+              == PackedLogic4{8, Logic4::x},
+      "memory $fread honors declared direction, start, and count");
+  require(
+      binary_reader.read_debug_local(0, 3)
+              == PackedLogic4::from_aval_bval(16, 0x9a00, 0)
+          && binary_reader.read_debug_local(0, 4) == number(1),
+      "partial packed $fread fills from the most-significant byte");
+  require(
+      binary_reader.read_debug_local(0, 5) == number(4)
+          && binary_reader.read_debug_local(0, 6)
+              == number(static_cast<std::uint32_t>(-1))
+          && binary_reader.read_debug_local(0, 7) == number(0)
+          && binary_reader.read_debug_local(0, 8)
+              == PackedLogic4::from_aval_bval(8, 0x56, 0)
+          && binary_reader.read_debug_local(0, 9) == number(1),
+      "$ftell and $fseek report invalid origins and preserve byte positions");
+  require(
+      binary_reader.read_debug_local(0, 10) == number(0)
+          && binary_reader.read_debug_local(0, 11)
+              == PackedLogic4::from_aval_bval(8, 0x12, 0)
+          && binary_reader.read_debug_local(0, 12) == number(1),
+      "$rewind restores the beginning before the next binary read");
+
   {
     std::ofstream oversized(
         files.path / "oversized.txt",
@@ -152,7 +331,7 @@ void test_simir_text_files() {
       LoadStringConstant{0, "oversized.txt"},
       LoadStringConstant{1, "r"},
       FileOpen{0, 0, 1},
-      FileReadLine{1, 0, 2},
+      FileReadLine{1, 0, 2, 0, FileReadKind::line},
       FileErrorStatus{2, 0, 3},
       WriteStringObject{bounded_error, 3},
       FileClose{0},
@@ -210,7 +389,7 @@ void test_simir_text_files() {
       "cannot open SystemVerilog text file");
   expect_failure(
       {LoadStringConstant{0, "invalid.txt"},
-       LoadStringConstant{1, "rb"},
+       LoadStringConstant{1, "rt"},
        FileOpen{0, 0, 1},
        Halt{}},
       "unsupported SystemVerilog text file mode");

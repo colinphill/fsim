@@ -25,6 +25,15 @@ bool Lowerer::is_string_expression(
             });
   }
   if (expression.kind == ExpressionKind::Call) {
+    if (expression.text == "$sformatf") {
+      return true;
+    }
+    if (!expression.operands.empty()
+        && (expression.text == ".toupper"
+            || expression.text == ".tolower"
+            || expression.text == ".substr")) {
+      return is_string_expression(expression.operands.front());
+    }
     const auto* function = visible_function(expression.text);
     return function != nullptr
         && function->return_type.domain
@@ -106,6 +115,64 @@ Lowerer::lower_string_expression(
     return destination;
   }
   if (expression.kind == ExpressionKind::Call) {
+    if (expression.text == "$sformatf") {
+      return lower_string_format(
+          expression.operands, 0U, expression.text, expression.span);
+    }
+    if ((expression.text == ".toupper"
+         || expression.text == ".tolower"
+         || expression.text == ".substr")
+        && !expression.operands.empty()
+        && is_string_expression(expression.operands.front())) {
+      const auto expected = expression.text == ".substr" ? 3U : 1U;
+      if (expression.operands.size() != expected) {
+        report(
+            "FSIM-ELAB-SVSTRING-018",
+            "runtime string method '" + expression.text
+                + "' has an incompatible argument count",
+            expression.span);
+        return std::nullopt;
+      }
+      const auto source =
+          lower_string_expression(expression.operands.front());
+      if (!source) {
+        return std::nullopt;
+      }
+      StringMethod method;
+      method.operation =
+          expression.text == ".toupper"
+              ? StringMethodOperator::toupper
+              : expression.text == ".tolower"
+                    ? StringMethodOperator::tolower
+                    : StringMethodOperator::substr;
+      method.source = *source;
+      method.string_destination = allocate_string_register();
+      if (expression.text == ".substr") {
+        auto first = lower_expression(expression.operands[1], 32);
+        auto second = lower_expression(expression.operands[2], 32);
+        if (!first || !second) {
+          report(
+              "FSIM-ELAB-SVSTRING-018",
+              "substr indices must be signed 32-bit integral values",
+              expression.span);
+          return std::nullopt;
+        }
+        if (register_width(*first) != 32) {
+          *first = resize_register(
+              *first, 32,
+              is_signed_expression(expression.operands[1]));
+        }
+        if (register_width(*second) != 32) {
+          *second = resize_register(
+              *second, 32,
+              is_signed_expression(expression.operands[2]));
+        }
+        method.first = *first;
+        method.second = *second;
+      }
+      process_.operations.emplace_back(method);
+      return method.string_destination;
+    }
     const auto found =
         function_indices_.find(expression.text);
     if (!function_support_initialized_
@@ -296,6 +363,96 @@ Lowerer::lower_string_expression(
       "expression does not produce a runtime string value",
       expression.span);
   return std::nullopt;
+}
+
+bool Lowerer::lower_string_method_statement(
+    const Statement& statement) {
+  const auto& call = statement.value;
+  if (call.kind != ExpressionKind::Call
+      || (call.text != ".putc" && call.text != ".itoa"
+          && call.text != ".hextoa" && call.text != ".octtoa"
+          && call.text != ".bintoa")) {
+    return false;
+  }
+  if (language_ != frontend::Language::SystemVerilog2017
+      || call.operands.empty()
+      || call.operands.front().kind != ExpressionKind::Identifier
+      || !is_string_expression(call.operands.front())) {
+    report(
+        "FSIM-ELAB-SVSTRING-018",
+        "mutating string methods require a direct writable string object",
+        call.span);
+    return true;
+  }
+  if (const auto object =
+          string_objects_.find(call.operands.front().text);
+      object != string_objects_.end()
+      && read_only_string_objects_.contains(object->second)) {
+    report(
+        "FSIM-ELAB-SVPORT-011",
+        "an input mutable string port is read-only",
+        call.operands.front().span);
+    return true;
+  }
+  const auto expected = call.text == ".putc" ? 3U : 2U;
+  if (call.operands.size() != expected) {
+    report(
+        "FSIM-ELAB-SVSTRING-018",
+        "runtime string method '" + call.text
+            + "' has an incompatible argument count",
+        call.span);
+    return true;
+  }
+  const auto target = lower_string_expression(call.operands.front());
+  auto first = lower_expression(call.operands[1], 32);
+  if (!target || !first) {
+    report(
+        "FSIM-ELAB-SVSTRING-018",
+        "mutating string method argument must be a 32-bit integral value",
+        call.operands[1].span);
+    return true;
+  }
+  if (register_width(*first) != 32) {
+    *first = resize_register(
+        *first, 32, is_signed_expression(call.operands[1]));
+  }
+  StringMethod method;
+  method.source = *target;
+  method.first = *first;
+  if (call.text == ".putc") {
+    auto character = lower_expression(call.operands[2], 8);
+    if (!character) {
+      report(
+          "FSIM-ELAB-SVSTRING-018",
+          "putc character must be an 8-bit integral value",
+          call.operands[2].span);
+      return true;
+    }
+    if (register_width(*character) != 8) {
+      *character = resize_register(
+          *character, 8,
+          is_signed_expression(call.operands[2]));
+    }
+    method.operation = StringMethodOperator::putc;
+    method.second = *character;
+  } else {
+    method.operation =
+        call.text == ".itoa"
+            ? StringMethodOperator::itoa
+            : call.text == ".hextoa"
+                  ? StringMethodOperator::hextoa
+                  : call.text == ".octtoa"
+                        ? StringMethodOperator::octtoa
+                        : StringMethodOperator::bintoa;
+  }
+  process_.operations.emplace_back(method);
+  if (const auto object =
+          string_objects_.find(call.operands.front().text);
+      object != string_objects_.end()) {
+    process_.operations.emplace_back(
+        WriteStringObject{object->second, *target});
+  }
+  return true;
 }
 
 } // namespace fsim::elaboration

@@ -328,6 +328,7 @@ struct Interpreter::Impl {
     std::filesystem::path path;
     std::string mode;
     std::unique_ptr<std::fstream> stream;
+    std::optional<std::uint8_t> pushback;
     std::string last_error;
     bool closed{};
     bool readable{};
@@ -434,10 +435,21 @@ struct Interpreter::Impl {
       ProcessId process,
       FileHandle handle,
       std::uint32_t& count);
+  [[nodiscard]] std::int32_t read_file_character(
+      ProcessId process, FileHandle handle);
+  [[nodiscard]] std::int32_t unread_file_character(
+      ProcessId process, FileHandle handle, std::int32_t character);
   [[nodiscard]] bool file_end_of_file(
       ProcessId process, FileHandle handle);
   [[nodiscard]] std::string file_error(
       ProcessId process, FileHandle handle, bool& has_error);
+  [[nodiscard]] std::int32_t position_file(
+      ProcessId process,
+      FileHandle handle,
+      FilePositionKind kind,
+      std::int32_t offset,
+      std::int32_t origin);
+  void flush_file(ProcessId process, std::optional<FileHandle> handle);
   [[nodiscard]] FileHandle known_file_handle(
       ProcessState&, RegisterId);
   void execute_file(ProcessState&, const FileOpen&);
@@ -448,6 +460,10 @@ struct Interpreter::Impl {
   void execute_file(ProcessState&, const FileReadLine&);
   void execute_file(ProcessState&, const FileEndOfFile&);
   void execute_file(ProcessState&, const FileErrorStatus&);
+  void execute_file(ProcessState&, const FileScan&);
+  void execute_file(ProcessState&, const FileBinaryRead&);
+  void execute_file(ProcessState&, const FilePosition&);
+  void execute_file(ProcessState&, const FileFlush&);
 
   void execute_container(ProcessState&, const ResizeContainer&);
   void execute_container(ProcessState&, const CopyContainerRegister&);
@@ -467,6 +483,7 @@ struct Interpreter::Impl {
   void execute_container(ProcessState&, const LoadMemory&);
   void execute_container(ProcessState&, const PushContainer&);
   void execute_container(ProcessState&, const PopContainer&);
+  void execute_string(ProcessState&, const StringMethod&);
 
   [[nodiscard]] static ValueKind register_value_kind(
       const ProcessState& process,

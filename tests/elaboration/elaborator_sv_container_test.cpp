@@ -88,6 +88,16 @@ module container_lowering #(
     key_t key;
     int located[$];
     int locations[$];
+    int preserved[];
+    logic [7:0] fresh[];
+    preserved = '{4, 5};
+    preserved = new[4](preserved);
+    assert (preserved.size() == 4);
+    assert (preserved[0] == 4);
+    assert (preserved[1] == 5);
+    assert (preserved[2] == 0);
+    fresh = new[2];
+    assert ($isunknown(fresh[1]));
     values = '{};
     assert ($size(values) == 0);
     assert (values.sum() == 0);
@@ -208,6 +218,11 @@ module container_lowering #(
     values.rsort();
     assert (values[0] == 8);
     values.reverse();
+    pending = '{1, 2};
+    pending.insert(1, 9);
+    assert (pending[1] == 9);
+    pending.delete(0);
+    assert (pending[0] == 9);
     pending = '{1, 2};
     locations =
         pending.find_index(byte_entry) with (
@@ -344,7 +359,14 @@ endmodule
   assert(std::ranges::any_of(
       process.operations,
       [](const auto& operation) {
-        return std::holds_alternative<ResizeContainer>(operation);
+        const auto* resize = std::get_if<ResizeContainer>(&operation);
+        return resize != nullptr && resize->initializer.has_value();
+      }));
+  assert(std::ranges::any_of(
+      process.operations,
+      [](const auto& operation) {
+        const auto* push = std::get_if<PushContainer>(&operation);
+        return push != nullptr && push->index.has_value();
       }));
   assert(std::ranges::any_of(
       process.operations,
@@ -1297,6 +1319,7 @@ module container_invalid_lowering;
   } pair_t;
   byte composite_key[pair_t];
   pair_t composite_element[int];
+  logic [64:0] too_wide_elements[];
   byte lookup[int];
   byte dynamic[];
   byte fixed[1:0];
@@ -1396,9 +1419,12 @@ module container_invalid_lowering;
     fixed.find() with (item);
     lookup[0] <= 1;
     dynamic.delete(0);
+    dynamic.insert(0, 1);
     fixed.delete();
     fixed = new[2];
+    dynamic = new[2](fixed);
     $readmemh("invalid.hex", dynamic);
+    $writememh("invalid-out.hex", dynamic);
   end
 endmodule
 )",
@@ -1477,6 +1503,8 @@ endmodule
       rejected, "FSIM-ELAB-SVCONTAINER-021"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVCONTAINER-014"));
+  assert(has_diagnostic(
+      rejected, "FSIM-ELAB-SVCONTAINER-023"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVMEMORY-003"));
 

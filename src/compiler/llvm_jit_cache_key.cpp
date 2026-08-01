@@ -42,10 +42,14 @@ using runtime::simir::Extract;
 using runtime::simir::ExpressionSizingKind;
 using runtime::simir::ExpressionValueDomain;
 using runtime::simir::FileClose;
+using runtime::simir::FileBinaryRead;
 using runtime::simir::FileEndOfFile;
 using runtime::simir::FileErrorStatus;
+using runtime::simir::FileFlush;
 using runtime::simir::FileOpen;
+using runtime::simir::FilePosition;
 using runtime::simir::FileReadLine;
+using runtime::simir::FileScan;
 using runtime::simir::FileWriteFormatted;
 using runtime::simir::FileWriteLiteral;
 using runtime::simir::FileWriteString;
@@ -90,6 +94,7 @@ using runtime::simir::Stop;
 using runtime::simir::StringDisplay;
 using runtime::simir::StringIndex;
 using runtime::simir::StringLength;
+using runtime::simir::StringMethod;
 using runtime::simir::StringReplaceByte;
 using runtime::simir::TimeDisplay;
 using runtime::simir::UnaryNot;
@@ -130,7 +135,7 @@ using runtime::simir::DisableFork;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v61";
+    "fsim-llvm-native-object-v68";
 
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;
@@ -230,6 +235,7 @@ void add_dynamic_part_index_key(
       process.container_register_count);
   for (const auto& type : process.container_register_types) {
     add_key_u64(builder, "container-element-width", type.element_width);
+    builder.add("container-element-nominal-type", type.element_nominal_type);
     add_key_u64(builder, "container-two-state", type.two_state ? 1U : 0U);
     add_key_u64(
         builder, "container-signed", type.signed_elements ? 1U : 0U);
@@ -272,7 +278,7 @@ void add_dynamic_part_index_key(
   }
   builder.add(
       "container-semantics",
-      "bounded-static-associative-v25-multidimensional-aggregate");
+      "bounded-static-associative-v28-aggregate-elements");
   add_key_u64(
       builder,
       "container-entry-limit",
@@ -282,7 +288,7 @@ void add_dynamic_part_index_key(
       "read-memory-byte-limit",
       runtime::simir::maximum_memory_file_bytes);
   builder.add("mutable-string-semantics", "simir-string-layout-v1");
-  builder.add("text-file-semantics", "simir-text-file-v1");
+  builder.add("text-file-semantics", "simir-text-file-v3-position-flush");
   add_key_u64(
       builder,
       "mutable-string-byte-limit",
@@ -474,10 +480,46 @@ void add_dynamic_part_index_key(
                   "signed-index",
                   value.signed_index ? 1U : 0U);
             },
+            [&](const StringMethod& value) {
+              builder.add("operation", "StringMethod");
+              add_key_u64(
+                  builder, "kind",
+                  static_cast<std::uint8_t>(value.operation));
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(
+                  builder, "string-destination",
+                  value.string_destination);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(builder, "argument", value.argument);
+              add_key_u64(builder, "first", value.first);
+              add_key_u64(builder, "second", value.second);
+              add_key_u64(
+                  builder, "format",
+                  static_cast<std::uint8_t>(value.format));
+              add_key_u64(
+                  builder, "minimum-width", value.minimum_width);
+              add_key_u64(
+                  builder, "signed-decimal",
+                  value.signed_decimal ? 1U : 0U);
+              add_key_u64(
+                  builder, "suppress-leading-zero",
+                  value.suppress_leading_zero ? 1U : 0U);
+              add_key_u64(
+                  builder, "left-justify",
+                  value.left_justify ? 1U : 0U);
+              add_key_u64(
+                  builder, "zero-pad", value.zero_pad ? 1U : 0U);
+            },
             [&](const runtime::simir::ResizeContainer& value) {
               builder.add("operation", "ResizeContainer");
               add_key_u64(builder, "target", value.target);
               add_key_u64(builder, "size", value.size);
+              add_key_u64(
+                  builder, "has-initializer",
+                  value.initializer ? 1U : 0U);
+              add_key_u64(
+                  builder, "initializer",
+                  value.initializer.value_or(0));
             },
             [&](const runtime::simir::CopyContainerRegister& value) {
               builder.add("operation", "CopyContainerRegister");
@@ -726,12 +768,18 @@ void add_dynamic_part_index_key(
               add_key_u64(
                   builder, "hexadecimal",
                   value.hexadecimal ? 1U : 0U);
+              add_key_u64(
+                  builder, "write", value.write ? 1U : 0U);
             },
             [&](const runtime::simir::PushContainer& value) {
               builder.add("operation", "PushContainer");
               add_key_u64(builder, "target", value.target);
               add_key_u64(builder, "source", value.source);
               add_key_u64(builder, "front", value.front ? 1U : 0U);
+              add_key_u64(
+                  builder, "has-index", value.index ? 1U : 0U);
+              add_key_u64(
+                  builder, "index", value.index.value_or(0));
             },
             [&](const runtime::simir::PopContainer& value) {
               builder.add("operation", "PopContainer");
@@ -799,6 +847,10 @@ void add_dynamic_part_index_key(
               add_key_u64(builder, "destination", value.destination);
               add_key_u64(builder, "handle", value.handle);
               add_key_u64(builder, "target", value.target);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(
+                  builder, "kind",
+                  static_cast<std::uint8_t>(value.kind));
             },
             [&](const FileEndOfFile& value) {
               builder.add("operation", "FileEndOfFile");
@@ -810,6 +862,61 @@ void add_dynamic_part_index_key(
               add_key_u64(builder, "destination", value.destination);
               add_key_u64(builder, "handle", value.handle);
               add_key_u64(builder, "target", value.target);
+            },
+            [&](const FileScan& value) {
+              builder.add("operation", "FileScan");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "handle", value.handle);
+              add_key_u64(builder, "source", value.source);
+              add_key_u64(
+                  builder, "string-source", value.string_source ? 1U : 0U);
+              add_key_u64(
+                  builder, "conversion-count", value.conversions.size());
+              for (const auto& conversion : value.conversions) {
+                builder.add("scan-prefix", conversion.prefix);
+                add_key_u64(builder, "scan-format",
+                    static_cast<std::uint8_t>(conversion.format));
+                add_key_u64(builder, "scan-maximum",
+                    conversion.maximum_characters);
+                add_key_u64(builder, "scan-suppress",
+                    conversion.suppress ? 1U : 0U);
+                add_key_u64(builder, "scan-target-kind",
+                    static_cast<std::uint8_t>(conversion.target.kind));
+                add_key_u64(builder, "scan-target-id", conversion.target.id);
+                add_key_u64(
+                    builder, "scan-target-width", conversion.target.width);
+                add_key_u64(builder, "scan-target-two-state",
+                    conversion.target.two_state ? 1U : 0U);
+              }
+              builder.add("scan-trailing", value.trailing_text);
+            },
+            [&](const FileBinaryRead& value) {
+              builder.add("operation", "FileBinaryRead");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "handle", value.handle);
+              add_key_u64(builder, "target", value.target);
+              add_key_u64(builder, "target-kind",
+                  static_cast<std::uint8_t>(value.target_kind));
+              add_key_u64(builder, "width", value.width);
+              add_key_u64(builder, "two-state", value.two_state ? 1U : 0U);
+              add_key_u64(builder, "start", value.start);
+              add_key_u64(builder, "count", value.count);
+              add_key_u64(builder, "has-start", value.has_start ? 1U : 0U);
+              add_key_u64(builder, "has-count", value.has_count ? 1U : 0U);
+            },
+            [&](const FilePosition& value) {
+              builder.add("operation", "FilePosition");
+              add_key_u64(builder, "destination", value.destination);
+              add_key_u64(builder, "handle", value.handle);
+              add_key_u64(builder, "offset", value.offset);
+              add_key_u64(builder, "origin", value.origin);
+              add_key_u64(builder, "kind",
+                  static_cast<std::uint8_t>(value.kind));
+            },
+            [&](const FileFlush& value) {
+              builder.add("operation", "FileFlush");
+              add_key_u64(builder, "handle", value.handle);
+              add_key_u64(builder, "all", value.all ? 1U : 0U);
             },
             [&](const UnaryNot &value) {
               builder.add("operation", "UnaryNot");

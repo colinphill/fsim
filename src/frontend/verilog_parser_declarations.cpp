@@ -143,8 +143,11 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
         declared_here = true;
         const bool explicit_type =
             is_net_type_keyword()
+            || keyword("string")
             || is_named_type_reference_start();
-        if (is_named_type_reference_start()) {
+        if (keyword("string")) {
+          spec.type = parse_parameter_type();
+        } else if (is_named_type_reference_start()) {
           spec.type = parse_named_type();
         } else {
           parse_optional_net_type(spec.type);
@@ -1117,8 +1120,11 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     spec.type = default_port_net_type();
     const bool explicit_type =
         is_net_type_keyword()
+        || keyword("string")
         || is_named_type_reference_start();
-    if (is_named_type_reference_start()) {
+    if (keyword("string")) {
+      spec.type = parse_parameter_type();
+    } else if (is_named_type_reference_start()) {
       spec.type = parse_named_type();
     } else {
       parse_optional_net_type(spec.type);
@@ -1168,8 +1174,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
 
     if (declaration_type.domain == ValueDomain::String
         || declaration_type.systemverilog_container) {
-      if (declaration_type.systemverilog_container
-          && spec.direction != PortDirection::Unknown) {
+      if (spec.direction != PortDirection::Unknown) {
         SignalDeclaration declaration{
             name.text,
             std::move(declaration_type),

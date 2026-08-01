@@ -1429,6 +1429,9 @@ using namespace elaboration_detail;
         const std::vector<frontend::SignalDeclaration>& ports,
         const std::string& path,
         const SignalMap& parent_signals,
+        const StringMap& parent_strings,
+        const std::unordered_set<StringObjectId>&
+            parent_read_only_strings,
         const ContainerMap& parent_containers,
         const std::unordered_set<std::string>&
             parent_read_only_containers,
@@ -1438,6 +1441,7 @@ using namespace elaboration_detail;
         DesignUnit* dependency_owner) {
         PortAliases result;
         auto& aliases = result.signals;
+        auto& string_aliases = result.strings;
         auto& container_aliases = result.containers;
         std::vector<bool> connected(ports.size());
         std::size_t positional = 0;
@@ -1843,6 +1847,35 @@ using namespace elaboration_detail;
                 }
                 continue;
             }
+            if (port.type.domain
+                == frontend::ValueDomain::String) {
+                const auto object = connect_string_port(
+                    port,
+                    connection,
+                    path,
+                    parent_strings,
+                    parent_read_only_strings,
+                    cross_language);
+                if (object) {
+                    string_aliases.emplace(port.name, *object);
+                    string_aliases.emplace(
+                        path + "." + port.name, *object);
+                    design_.string_by_name_.emplace(
+                        path + "." + port.name, *object);
+                    design_.string_object_info_.push_back(
+                        StringObjectInfo{
+                            *object,
+                            path + "." + port.name,
+                            port.span,
+                            true,
+                            port.direction});
+                    if (port.direction
+                        == frontend::PortDirection::Input) {
+                      result.read_only_strings.insert(*object);
+                    }
+                }
+                continue;
+            }
             if (connection.value.kind != frontend::ExpressionKind::Identifier) {
                 report(
                     "FSIM-ELAB-BIND-027",
@@ -1900,6 +1933,8 @@ using namespace elaboration_detail;
                 if (connected[port_index]
                     || port.direction
                         != frontend::PortDirection::Input
+                    || port.type.domain
+                        == frontend::ValueDomain::String
                     || port.type.systemverilog_container) {
                     continue;
                 }
@@ -1916,7 +1951,9 @@ using namespace elaboration_detail;
             || std::ranges::any_of(
                 ports,
                 [](const auto& port) {
-                  return port.type.systemverilog_container
+                  return (port.type.systemverilog_container
+                          || port.type.domain
+                              == frontend::ValueDomain::String)
                       && port.direction
                           == frontend::PortDirection::Input;
                 })) {
@@ -1926,12 +1963,18 @@ using namespace elaboration_detail;
                     && ports[port_index].direction
                         == frontend::PortDirection::Input) {
                     report(
-                        ports[port_index].type.systemverilog_container
+                        ports[port_index].type.domain
+                                    == frontend::ValueDomain::String
+                            ? "FSIM-ELAB-SVPORT-010"
+                        : ports[port_index].type.systemverilog_container
                             ? "FSIM-ELAB-SVPORT-006"
                             : "FSIM-ELAB-BIND-027",
                         std::string{
-                            ports[port_index].type
-                                    .systemverilog_container
+                            ports[port_index].type.domain
+                                    == frontend::ValueDomain::String
+                                ? "required mutable string input port '"
+                            : ports[port_index].type
+                                      .systemverilog_container
                                 ? "required container input port '"
                                 : "required VHDL input port '"}
                             + path + "." + ports[port_index].name

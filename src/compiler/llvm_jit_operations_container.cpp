@@ -155,6 +155,31 @@ void ContainerOperationLowerer::lower(
   invoke(value.index, value.source, std::nullopt, "container.write");
 }
 void ContainerOperationLowerer::lower(
+    const runtime::simir::StringMethod& value) {
+  using runtime::simir::StringMethodOperator;
+  const auto first =
+      value.operation == StringMethodOperator::getc
+              || value.operation == StringMethodOperator::putc
+              || value.operation == StringMethodOperator::substr
+              || (value.operation >= StringMethodOperator::itoa
+                  && value.operation <= StringMethodOperator::bintoa)
+              || value.operation == StringMethodOperator::format_packed
+          ? std::optional{value.first} : std::nullopt;
+  const auto second =
+      value.operation == StringMethodOperator::putc
+              || value.operation == StringMethodOperator::substr
+              || value.operation == StringMethodOperator::format_packed
+      ? std::optional{value.second} : std::nullopt;
+  const auto destination =
+      value.operation == StringMethodOperator::getc
+              || value.operation == StringMethodOperator::compare
+              || value.operation == StringMethodOperator::icompare
+              || (value.operation >= StringMethodOperator::atoi
+                  && value.operation <= StringMethodOperator::atobin)
+          ? std::optional{value.destination} : std::nullopt;
+  invoke(first, second, destination, "string.method");
+}
+void ContainerOperationLowerer::lower(
     const runtime::simir::DeleteContainer& value) {
   invoke(value.index, std::nullopt, std::nullopt, "container.delete");
 }
@@ -232,12 +257,17 @@ void ContainerOperationLowerer::lower(
     const runtime::simir::LoadMemory& value) {
   invoke(
       value.start, value.finish, std::nullopt,
-      value.hexadecimal ? "container.readmemh"
-                        : "container.readmemb");
+      value.write
+          ? value.hexadecimal ? "container.writememh"
+                              : "container.writememb"
+          : value.hexadecimal ? "container.readmemh"
+                              : "container.readmemb");
 }
 void ContainerOperationLowerer::lower(
     const runtime::simir::PushContainer& value) {
-  invoke(value.source, std::nullopt, std::nullopt, "container.push");
+  invoke(
+      value.source, value.index, std::nullopt,
+      value.index ? "container.insert" : "container.push");
 }
 void ContainerOperationLowerer::lower(
     const runtime::simir::PopContainer& value) {

@@ -993,9 +993,10 @@ void load_memory_text(
     const std::optional<std::int32_t> start,
     const std::optional<std::int32_t> finish) {
   validate_container_value(target);
-  if (!target.type.fixed) {
+  if (!target.type.fixed || target.type.dimensions.size() > 1U) {
     throw std::invalid_argument{
-        "$readmemb/$readmemh target must be a static unpacked array"};
+        "$readmemb/$readmemh target must be a one-dimensional static "
+        "unpacked array"};
   }
   if (text.size() > maximum_memory_file_bytes) {
     throw std::length_error{
@@ -1202,6 +1203,68 @@ void load_memory_text(
   }
 }
 
+std::string write_memory_text(
+    const ContainerValue& source,
+    const bool hexadecimal,
+    const std::optional<std::int32_t> start,
+    const std::optional<std::int32_t> finish) {
+  validate_container_value(source);
+  if (!source.type.fixed || source.type.dimensions.size() > 1U) {
+    throw std::invalid_argument{
+        "$writememb/$writememh source must be a one-dimensional "
+        "static unpacked array"};
+  }
+  const auto low = std::min(source.type.index_left, source.type.index_right);
+  const auto high = std::max(source.type.index_left, source.type.index_right);
+  const auto first = start.value_or(low);
+  const auto last = finish.value_or(high);
+  const auto in_range = [&](const std::int32_t index) {
+    return index >= low && index <= high;
+  };
+  if (!in_range(first) || !in_range(last)) {
+    throw std::out_of_range{
+        "write-memory start/finish is outside the source range"};
+  }
+  const auto format = [&](const PackedLogic4& value) {
+    auto bits = value.to_msb_string();
+    if (!hexadecimal) return bits;
+    bits.insert(0, (4U - bits.size() % 4U) % 4U, '0');
+    std::string text;
+    text.reserve(bits.size() / 4U);
+    constexpr std::string_view digits = "0123456789abcdef";
+    for (std::size_t offset = 0; offset < bits.size(); offset += 4U) {
+      const auto nibble = std::string_view{bits}.substr(offset, 4U);
+      const bool unknown = nibble.find('X') != std::string_view::npos;
+      const bool high_z = nibble.find('Z') != std::string_view::npos;
+      if (unknown || high_z) {
+        text.push_back(!unknown && std::ranges::all_of(
+            nibble, [](const char bit) { return bit == 'Z'; }) ? 'z' : 'x');
+        continue;
+      }
+      unsigned digit{};
+      for (const auto bit : nibble)
+        digit = (digit << 1U) | static_cast<unsigned>(bit == '1');
+      text.push_back(digits[digit]);
+    }
+    return text;
+  };
+  std::string result;
+  const auto step = first <= last ? 1 : -1;
+  for (auto index = first;; index += step) {
+    const auto offset = source.type.index_left >= source.type.index_right
+        ? static_cast<std::size_t>(
+              static_cast<std::int64_t>(source.type.index_left) - index)
+        : static_cast<std::size_t>(
+              static_cast<std::int64_t>(index) - source.type.index_left);
+    result += format(source.elements[offset]);
+    result.push_back('\n');
+    if (index == last) break;
+  }
+  if (result.size() > maximum_memory_file_bytes)
+    throw std::length_error{"write-memory file exceeds the 1 MiB limit"};
+  return result;
+}
+
 void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ResizeContainer& operation) {
@@ -1225,8 +1288,25 @@ void Interpreter::Impl::execute_container(
         process.program.id, process.pc,
         "dynamic-array size exceeds the 4096-element limit");
   }
+  std::vector<PackedLogic4> preserved;
+  if (operation.initializer) {
+    const auto& source =
+        get_container_register(process, *operation.initializer);
+    if (source.type != target.type) {
+      container_error(
+          process.program.id, process.pc,
+          "dynamic-array initializer type mismatch");
+    }
+    preserved = source.elements;
+  }
+  const auto initial = target.type.two_state
+      ? default_container_element(target.type)
+      : PackedLogic4{target.type.element_width, Logic4::x};
   target.elements.assign(
-      size, default_container_element(target.type));
+      size, initial);
+  std::ranges::copy_n(
+      preserved.begin(), std::min(size, preserved.size()),
+      target.elements.begin());
   ++process.pc;
 }
 
@@ -1482,16 +1562,29 @@ void Interpreter::Impl::execute_container(
   auto& target =
       get_container_register(process, operation.target);
   if (operation.index) {
-    require_associative(
-        process.program.id, process.pc, target, "delete(index)");
-    const auto key = associative_key(
-        process.program.id, process.pc, target.type,
-        get_register(process, *operation.index));
-    const auto at = lower_key(target, key);
-    if (at < target.keys.size()
-        && key_equal(target.keys[at], key)) {
-      target.keys.erase(target.keys.begin() + at);
+    if (target.type.queue) {
+      const auto at = known_index(
+          process.program.id, process.pc,
+          get_register(process, *operation.index), true,
+          "queue delete index");
+      if (at >= target.elements.size()) {
+        container_error(
+            process.program.id, process.pc,
+            "queue delete index is out of range");
+      }
       target.elements.erase(target.elements.begin() + at);
+    } else {
+      require_associative(
+          process.program.id, process.pc, target, "delete(index)");
+      const auto key = associative_key(
+          process.program.id, process.pc, target.type,
+          get_register(process, *operation.index));
+      const auto at = lower_key(target, key);
+      if (at < target.keys.size()
+          && key_equal(target.keys[at], key)) {
+        target.keys.erase(target.keys.begin() + at);
+        target.elements.erase(target.elements.begin() + at);
+      }
     }
   } else {
     if (target.type.fixed) {
@@ -1528,6 +1621,31 @@ void Interpreter::Impl::execute_container(
         return static_cast<std::int32_t>(
             static_cast<std::uint32_t>(word.aval));
       };
+  const auto start = optional_integer(
+      operation.start, operation.write ? "write-memory start"
+                                       : "read-memory start");
+  const auto finish = optional_integer(
+      operation.finish, operation.write ? "write-memory finish"
+                                        : "read-memory finish");
+  if (operation.write) {
+    const auto text = write_memory_text(
+        target, operation.hexadecimal, start, finish);
+    const auto handle = open_file(
+        process.program.id,
+        get_string_register(process, operation.path), "w");
+    try {
+      write_file(process.program.id, handle, text, false);
+      close_file(process.program.id, handle);
+    } catch (...) {
+      try {
+        close_file(process.program.id, handle);
+      } catch (...) {
+      }
+      throw;
+    }
+    ++process.pc;
+    return;
+  }
   const auto handle = open_file(
       process.program.id,
       get_string_register(process, operation.path), "r");
@@ -1555,8 +1673,7 @@ void Interpreter::Impl::execute_container(
   try {
     load_memory_text(
         target, text, operation.hexadecimal,
-        optional_integer(operation.start, "read-memory start"),
-        optional_integer(operation.finish, "read-memory finish"));
+        start, finish);
   } catch (const std::exception& error) {
     container_error(
         process.program.id, process.pc, error.what());
@@ -1639,7 +1756,18 @@ void Interpreter::Impl::execute_container(
         process.program.id, process.pc,
         "queue element write type mismatch");
   }
-  if (operation.front) {
+  if (operation.index) {
+    const auto at = known_index(
+        process.program.id, process.pc,
+        get_register(process, *operation.index), true,
+        "queue insert index");
+    if (at > target.elements.size()) {
+      container_error(
+          process.program.id, process.pc,
+          "queue insert index is out of range");
+    }
+    target.elements.insert(target.elements.begin() + at, source);
+  } else if (operation.front) {
     target.elements.insert(target.elements.begin(), source);
   } else {
     target.elements.push_back(source);

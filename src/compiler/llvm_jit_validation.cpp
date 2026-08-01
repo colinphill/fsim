@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "llvm_jit_internal.hpp"
-
 #include <algorithm>
 #include <limits>
 #include <optional>
@@ -9,57 +8,16 @@
 #include <utility>
 #include <variant>
 #include <vector>
-
 namespace fsim::compiler::llvm_detail {
-
-
 using runtime::Logic9;
 using namespace runtime::simir;
-
-
-template <class... Ts> struct Overloaded : Ts... {
-  using Ts::operator()...;
-};
+template <class... Ts> struct Overloaded : Ts... { using Ts::operator()...; };
 template <class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
-
-
 [[nodiscard]] ValidatedProcess
-validate_process(const Process &process,
-                 const std::span<const std::uint32_t> signal_widths,
-                 const std::span<const ValueKind>
-                     signal_value_kinds) {
-  if (process.operations.empty()) {
-    throw LlvmJitError("cannot JIT an empty SimIR process");
-  }
-  if (process.operations.size() >
-      static_cast<std::size_t>(
-          std::numeric_limits<InstructionIndex>::max())) {
-    throw LlvmJitUnsupportedError(
-        "SimIR process has too many instructions for the resumable JIT ABI");
-  }
-  if (process.register_count >
-      static_cast<std::size_t>(std::numeric_limits<RegisterId>::max())) {
-    throw LlvmJitUnsupportedError(
-        "SimIR process has too many registers for the JIT ABI");
-  }
-  if (!process.register_value_kinds.empty()
-      && process.register_value_kinds.size()
-          != process.register_count) {
-    throw LlvmJitError(
-        "SimIR register value-domain metadata count does not match "
-        "register_count");
-  }
-  if (!signal_value_kinds.empty()
-      && signal_value_kinds.size() != signal_widths.size()) {
-    throw LlvmJitError(
-        "SimIR signal value-domain metadata count does not match "
-        "signal_widths");
-  }
-  if (const auto error = validate_expression_profile_metadata(
-          process.expression_profiles)) {
-    throw LlvmJitError(*error);
-  }
-
+validate_process(
+    const Process &process, const std::span<const std::uint32_t> signal_widths,
+    const std::span<const ValueKind> signal_value_kinds) {
+  validate_process_shape(process, signal_widths, signal_value_kinds);
   ValidatedProcess result;
   result.uses_logic9 = std::ranges::any_of(
       process.register_value_kinds,
@@ -78,14 +36,12 @@ validate_process(const Process &process,
   std::vector<std::vector<RegisterId>> instruction_uses(
       process.operations.size());
   std::optional<std::pair<std::size_t, std::string>> unsupported;
-
   const auto record_unsupported =
       [&](const std::size_t instruction, const std::string_view message) {
         if (!unsupported) {
           unsupported.emplace(instruction, message);
         }
       };
-
   const auto referenced_signal_width =
       [&](const std::uint32_t signal,
           const std::size_t instruction) -> std::uint32_t {
@@ -98,7 +54,6 @@ validate_process(const Process &process,
     }
     return width;
   };
-
   const auto signal_width =
       [&](const std::uint32_t signal,
           const std::size_t instruction) -> std::uint32_t {
@@ -114,7 +69,6 @@ validate_process(const Process &process,
     }
     return width;
   };
-
   const auto validate_register =
       [&](const RegisterId id, const std::size_t instruction,
           const std::string_view role) {
@@ -123,7 +77,6 @@ validate_process(const Process &process,
              std::string{role} + " register ID is out of range");
     }
   };
-
   const auto validate_string_register =
       [&](const StringRegisterId id,
           const std::size_t instruction,
@@ -149,7 +102,6 @@ validate_process(const Process &process,
                   + " container register is out of range");
         }
       };
-
   const auto find_root = [&](const RegisterId id) {
     auto root = id;
     while (parents[root] != root) {
@@ -163,7 +115,6 @@ validate_process(const Process &process,
     }
     return root;
   };
-
   const auto constrain_width =
       [&](const RegisterId id, const std::size_t width,
           const std::size_t instruction) {
@@ -183,7 +134,6 @@ validate_process(const Process &process,
     }
     root_widths[root] = width;
   };
-
   const auto unify_registers =
       [&](const RegisterId lhs, const RegisterId rhs,
           const std::size_t instruction) {
@@ -204,20 +154,17 @@ validate_process(const Process &process,
       root_widths[left_root] = root_widths[right_root];
     }
   };
-
   const auto record_use = [&](const RegisterId id,
                               const std::size_t instruction) {
     validate_register(id, instruction, "source");
     instruction_uses[instruction].push_back(id);
   };
-
   const auto record_definition = [&](const RegisterId id,
                                      const std::size_t instruction) {
     validate_register(id, instruction, "destination");
     instruction_definitions[instruction].push_back(id);
     defined[id] = true;
   };
-
   const auto validate_dynamic_selection =
       [&](const DynamicIndex& selection,
           const std::uint64_t target_width,
@@ -229,7 +176,6 @@ validate_process(const Process &process,
           reject(process, instruction, *error);
         }
       };
-
   const auto validate_dynamic_part_selection =
       [&](const DynamicPartIndex& selection,
           const std::uint64_t target_width,
@@ -242,7 +188,6 @@ validate_process(const Process &process,
           reject(process, instruction, *error);
         }
       };
-
   const auto validate_target = [&](const InstructionIndex target,
                                    const std::size_t instruction,
                                    const std::string_view kind) {
@@ -251,7 +196,6 @@ validate_process(const Process &process,
              std::string{kind} + " target is outside the operation stream");
     }
   };
-
   const auto validate_call_stack =
       [&](const CallStack& stack, const std::size_t instruction) {
         if (stack.capacity == 0) {
@@ -275,7 +219,6 @@ validate_process(const Process &process,
           constrain_width(entry, 32U, instruction);
         }
       };
-
   const auto first_wait_sensitivity = std::find_if(
       process.operations.begin(), process.operations.end(),
       [](const Operation &operation) {
@@ -307,7 +250,6 @@ validate_process(const Process &process,
           "static sensitivity has an invalid edge kind");
     }
   }
-
   for (std::size_t index = 0; index < process.operations.size(); ++index) {
     std::visit(
         Overloaded{
@@ -381,8 +323,7 @@ validate_process(const Process &process,
               result.uses_strings = true;
               validate_string_register(
                   operation.destination, index, "destination");
-              validate_string_register(
-                  operation.source, index, "source");
+              validate_string_register(operation.source, index, "source");
             },
             [&](const ReadStringObject& operation) {
               result.uses_strings = true;
@@ -392,8 +333,7 @@ validate_process(const Process &process,
             },
             [&](const WriteStringObject& operation) {
               result.uses_strings = true;
-              validate_string_register(
-                  operation.source, index, "source");
+              validate_string_register(operation.source, index, "source");
               (void)operation.object;
             },
             [&](const ConcatenateStrings& operation) {
@@ -439,10 +379,21 @@ validate_process(const Process &process,
               constrain_width(operation.index, 32U, index);
               constrain_width(operation.source, 8U, index);
             },
+            [&](const StringMethod& operation) {
+              result.uses_strings = true;
+              std::vector<PackedRegisterValidation> registers;
+              if (const auto error = validate_string_method_metadata(
+                      operation, process, registers)) reject(process, index, *error);
+              for (const auto& value : registers) {
+                if (value.definition) record_definition(value.id, index);
+                else record_use(value.id, index);
+                if (value.width != 0) constrain_width(value.id, value.width, index);
+              }
+            },
             [&](const ResizeContainer& operation) {
               result.uses_containers = true;
-              validate_container_register(
-                  operation.target, index, "target");
+              validate_container_register(operation.target, index, "target");
+              if (operation.initializer) validate_container_register(*operation.initializer, index, "initializer");
               record_use(operation.size, index);
               constrain_width(operation.size, 32U, index);
             },
@@ -701,13 +652,13 @@ validate_process(const Process &process,
                   operation.target, index, "target");
               validate_string_register(
                   operation.path, index, "path");
-              if (operation.target
-                      < process.container_register_types.size()
-                  && !process.container_register_types[
-                          operation.target].fixed) {
-                reject(
-                    process, index,
+              if (operation.target < process.container_register_types.size()) {
+                const auto& type =
+                    process.container_register_types[operation.target];
+                if (!type.fixed) reject(process, index,
                     "LoadMemory target must be a fixed static array");
+                if (type.dimensions.size() > 1U) reject(process, index,
+                    "LoadMemory target must be one-dimensional");
               }
               for (const auto source :
                    {operation.start, operation.finish}) {
@@ -727,6 +678,9 @@ validate_process(const Process &process,
                   process.container_register_types[
                       operation.target].element_width,
                   index);
+              if (operation.index) {
+                record_use(*operation.index, index); constrain_width(*operation.index, 32U, index);
+              }
             },
             [&](const PopContainer& operation) {
               result.uses_containers = true;
@@ -751,8 +705,7 @@ validate_process(const Process &process,
             },
             [&](const FileClose& operation) {
               result.uses_files = true;
-              record_use(operation.handle, index);
-              constrain_width(operation.handle, 32U, index);
+              record_use(operation.handle, index); constrain_width(operation.handle, 32U, index);
             },
             [&](const FileWriteLiteral& operation) {
               result.uses_files = true;
@@ -781,18 +734,21 @@ validate_process(const Process &process,
             },
             [&](const FileReadLine& operation) {
               result.uses_files = true;
-              result.uses_strings = true;
+              if (operation.kind > FileReadKind::unget)
+                reject(process, index, "FileReadLine kind is invalid");
               record_use(operation.handle, index);
               constrain_width(operation.handle, 32U, index);
-              validate_string_register(
-                  operation.target, index, "target");
-              record_definition(operation.destination, index);
-              constrain_width(operation.destination, 32U, index);
+              if (operation.kind == FileReadKind::line) {
+                result.uses_strings = true;
+                validate_string_register(operation.target, index, "target");
+              } else if (operation.kind == FileReadKind::unget) {
+                record_use(operation.source, index); constrain_width(operation.source, 32U, index);
+              }
+              record_definition(operation.destination, index); constrain_width(operation.destination, 32U, index);
             },
             [&](const FileEndOfFile& operation) {
               result.uses_files = true;
-              record_use(operation.handle, index);
-              constrain_width(operation.handle, 32U, index);
+              record_use(operation.handle, index); constrain_width(operation.handle, 32U, index);
               record_definition(operation.destination, index);
               constrain_width(operation.destination, 32U, index);
             },
@@ -805,6 +761,58 @@ validate_process(const Process &process,
                   operation.target, index, "target");
               record_definition(operation.destination, index);
               constrain_width(operation.destination, 32U, index);
+            },
+            [&](const FileScan& operation) {
+              if (!operation.string_source) result.uses_files = true;
+              result.uses_strings = true;
+              if (!operation.string_source) {
+                record_use(operation.handle, index);
+                constrain_width(operation.handle, 32U, index);
+              }
+              std::vector<PackedRegisterValidation> registers;
+              if (const auto error = validate_file_scan_metadata(
+                      operation, process, signal_widths,
+                      signal_value_kinds, registers))
+                reject(process, index, *error);
+              for (const auto& value : registers) {
+                record_definition(value.id, index);
+                constrain_width(value.id, value.width, index);
+              }
+              record_definition(operation.destination, index);
+              constrain_width(operation.destination, 32U, index);
+            },
+            [&](const FileBinaryRead& operation) {
+              result.uses_files = true;
+              result.uses_containers |= operation.target_kind
+                  >= FileBinaryTargetKind::container_register;
+              std::vector<PackedRegisterValidation> registers;
+              const auto error = validate_file_binary_metadata(
+                  operation, process, signal_widths, registers);
+              if (error)
+                reject(process, index, *error);
+              for (const auto& value : registers) {
+                if (value.definition) record_definition(value.id, index);
+                else record_use(value.id, index);
+                constrain_width(value.id, value.width, index);
+              }
+            },
+            [&](const FilePosition& operation) {
+              result.uses_files = true;
+              std::vector<PackedRegisterValidation> registers;
+              if (const auto error = validate_file_position_metadata(
+                      operation, registers)) reject(process, index, *error);
+              for (const auto& value : registers) {
+                if (value.definition) record_definition(value.id, index);
+                else record_use(value.id, index);
+                constrain_width(value.id, value.width, index);
+              }
+            },
+            [&](const FileFlush& operation) {
+              result.uses_files = true;
+              if (!operation.all) {
+                record_use(operation.handle, index);
+                constrain_width(operation.handle, 32U, index);
+              }
             },
             [&](const StringDisplay& operation) {
               result.uses_strings = true;
@@ -1712,7 +1720,6 @@ validate_process(const Process &process,
             [&](const Stop &) {}},
         process.operations[index]);
   }
-
   for (std::size_t index = 0; index < process.register_count; ++index) {
     const auto width =
         root_widths[find_root(static_cast<RegisterId>(index))];
@@ -1803,7 +1810,6 @@ validate_process(const Process &process,
       }
     }
   }
-
   std::vector<std::vector<std::size_t>> successors(
       process.operations.size());
   std::vector<std::vector<std::size_t>> predecessors(
@@ -1844,7 +1850,6 @@ validate_process(const Process &process,
       predecessors[successor].push_back(index);
     }
   }
-
   std::vector<bool> reachable(process.operations.size());
   std::vector<std::size_t> pending{0};
   while (!pending.empty()) {
@@ -1868,7 +1873,6 @@ validate_process(const Process &process,
       result.requires_resume = true;
     }
   }
-
   std::vector<std::vector<std::size_t>> invocation_successors(
       process.operations.size());
   std::vector<std::vector<std::size_t>> invocation_predecessors(
@@ -1929,7 +1933,6 @@ validate_process(const Process &process,
             std::distance(remaining_predecessors.begin(), cycle)),
         "reachable control-flow cycle has no suspension safe point");
   }
-
   std::vector<std::vector<bool>> definitely_defined_in(
       process.operations.size(),
       std::vector<bool>(process.register_count, true));
@@ -1975,7 +1978,6 @@ validate_process(const Process &process,
       }
     }
   }
-
   for (std::size_t index = 0; index < process.operations.size(); ++index) {
     if (!reachable[index]) {
       continue;
@@ -1994,5 +1996,4 @@ validate_process(const Process &process,
   }
   return result;
 }
-
 }  // namespace fsim::compiler::llvm_detail

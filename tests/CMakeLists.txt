@@ -120,6 +120,7 @@ add_executable(
   elaboration/elaborator_vhdl_configuration_test.cpp
   elaboration/elaborator_sv_file_test.cpp
   elaboration/elaborator_sv_container_test.cpp
+  elaboration/elaborator_sv_aggregate_container_test.cpp
   elaboration/elaborator_sv_slice_call_test.cpp
   elaboration/elaborator_sv_slice_order_test.cpp
   elaboration/elaborator_sv_slice_port_test.cpp
@@ -148,6 +149,7 @@ add_executable(
   fsim_sv_container_elaboration_tests
   elaboration/elaborator_sv_container_main.cpp
   elaboration/elaborator_sv_container_test.cpp
+  elaboration/elaborator_sv_aggregate_container_test.cpp
   elaboration/elaborator_sv_slice_call_test.cpp
   elaboration/elaborator_sv_slice_order_test.cpp
   elaboration/elaborator_sv_slice_port_test.cpp

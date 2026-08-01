@@ -326,13 +326,16 @@ add_library(
     src/runtime/simir_arithmetic.cpp
     src/runtime/simir_containers.cpp
     src/runtime/simir_execution.cpp
+    src/runtime/simir_file_binary.cpp
+    src/runtime/simir_file_scanning.cpp
     src/runtime/simir_fork.cpp
     src/runtime/simir_files.cpp
     src/runtime/simir_format.cpp
     src/runtime/simir_interpreter.cpp
     src/runtime/simir_logic.cpp
-    src/runtime/simir_scheduling.cpp
-    src/runtime/simir_state.cpp
+      src/runtime/simir_scheduling.cpp
+      src/runtime/simir_string_methods.cpp
+      src/runtime/simir_state.cpp
     src/runtime/vcd_writer.cpp
 )
 add_library(fsim::runtime ALIAS fsim_runtime)
@@ -382,9 +385,12 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_events.cpp
       src/elaboration/lowerer_tasks.cpp
       src/elaboration/lowerer_types.cpp
+      src/elaboration/lowerer_sv_string_format.cpp
       src/elaboration/lowerer_sv_strings.cpp
       src/elaboration/lowerer_sv_container_slices.cpp
       src/elaboration/lowerer_sv_containers.cpp
+      src/elaboration/lowerer_sv_file_binary.cpp
+      src/elaboration/lowerer_sv_file_scan.cpp
       src/elaboration/lowerer_sv_multidimensional.cpp
   )
 add_library(fsim::elaboration ALIAS fsim_elaboration)

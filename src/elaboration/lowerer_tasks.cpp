@@ -131,6 +131,9 @@ void Lowerer::initialize_task_support() {
 }
 
 void Lowerer::lower_task_call(const Statement& statement) {
+    if (lower_string_format_task(statement)) {
+        return;
+    }
     if (!task_support_initialized_) {
         report(
             "FSIM-ELAB-SVTASK-001",

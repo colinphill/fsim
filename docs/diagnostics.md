@@ -534,10 +534,10 @@ therefore excluded.
 | `FSIM-SV-PARSE-156` | error | Expected `;` after a supported container method call. |
 | `FSIM-SV-PARSE-157` | error | Expected `]` after a SystemVerilog associative-array index type. |
 | `FSIM-SV-PARSE-158` | error | Expected `]` after a SystemVerilog static unpacked-array range. |
-| `FSIM-SV-PARSE-159` | error | Expected `(` after `$readmemb` or `$readmemh`. |
-| `FSIM-SV-PARSE-160` | error | Expected `,` after a read-memory file name. |
-| `FSIM-SV-PARSE-161` | error | Expected `)` after read-memory arguments. |
-| `FSIM-SV-PARSE-162` | error | Expected `;` after a read-memory task. |
+| `FSIM-SV-PARSE-159` | error | Expected `(` after a `$readmem*` or `$writemem*` task name. |
+| `FSIM-SV-PARSE-160` | error | Expected `,` after a memory-file task file name. |
+| `FSIM-SV-PARSE-161` | error | Expected `)` after memory-file task arguments. |
+| `FSIM-SV-PARSE-162` | error | Expected `;` after a memory-file task. |
 | `FSIM-SV-PARSE-163` | error | Expected `{` after a SystemVerilog assignment-pattern apostrophe. |
 | `FSIM-SV-PARSE-164` | error | Expected `}` after a SystemVerilog assignment pattern. |
 | `FSIM-SV-PARSE-165` | error | Expected `(` after a predicate container locator's `with` keyword. |
@@ -598,6 +598,7 @@ therefore excluded.
 | `FSIM-SV-PARSE-220` | error | Expected `)` after a SystemVerilog cast expression. |
 | `FSIM-SV-PARSE-221` | error | Expected `:` in a multidimensional static unpacked range. |
 | `FSIM-SV-PARSE-222` | error | Expected `]` after a multidimensional static unpacked range. |
+| `FSIM-SV-PARSE-223` | error | Expected `)` after a dynamic-array `new[size](initializer)` expression. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -762,6 +763,8 @@ therefore excluded.
 | `FSIM-SV-SEM-124` | error | A generated typedef or enum literal conflicts with another declaration in the same generated body. |
 | `FSIM-SV-SEM-125` | error | A type cast appears outside SystemVerilog-2017 input. |
 | `FSIM-SV-SEM-126` | error | A bounded static unpacked array declares more than four dimensions. |
+| `FSIM-SV-SEM-127` | error | A bounded SystemVerilog string method has the wrong number of arguments. |
+| `FSIM-SV-SEM-128` | error | A dynamic-array `new[size](initializer)` expression has other than one initializer. |
 | `FSIM-ELAB-SVIFACE-006` | error | A process writes through a read-only modport input member. |
 | `FSIM-ELAB-SVIFACE-007` | error | A retained interface callable cannot be materialized at its same-language module boundary. |
 | `FSIM-ELAB-SVIFACE-008` | error | An interface callable is visible more than once through the same module port. |
@@ -818,7 +821,7 @@ therefore excluded.
 | `FSIM-SV-SEM-080` | error | A bounded SystemVerilog container declares more than one unpacked dimension. |
 | `FSIM-SV-SEM-081` | error | A supported container method has the wrong argument count. |
 | `FSIM-SV-SEM-082` | error | An associative array uses a string index type. |
-| `FSIM-SV-SEM-083` | error | `$readmemb` or `$readmemh` is used outside SystemVerilog-2017. |
+| `FSIM-SV-SEM-083` | error | A `$readmem*` or `$writemem*` task is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-084` | error | An assignment pattern is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-085` | error | An unpacked-container reduction method is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-086` | error | An unpacked-container ordering method is used outside SystemVerilog-2017. |
@@ -1189,9 +1192,17 @@ therefore excluded.
 | `FSIM-ELAB-SVFILE-006` | error | `$ferror` does not have an integer handle and mutable string target. |
 | `FSIM-ELAB-SVFILE-007` | error | A bounded formatted file-output value cannot be lowered. |
 | `FSIM-ELAB-SVFILE-008` | error | A module integer initializer is not a known 32-bit constant. |
+| `FSIM-ELAB-SVFILE-009` | error | `$fgetc` does not have one integer file handle. |
+| `FSIM-ELAB-SVFILE-010` | error | `$ungetc` does not have a character expression and integer file handle. |
+| `FSIM-ELAB-SVFILE-011` | error | `$fscanf` or `$sscanf` has an invalid source, format, arity, or bounded conversion list. |
+| `FSIM-ELAB-SVFILE-012` | error | A formatted scan target is not a direct writable compatible packed or string variable. |
+| `FSIM-ELAB-SVFILE-013` | error | `$fread` does not have a compatible integer handle and optional bounded start/count expressions. |
+| `FSIM-ELAB-SVFILE-014` | error | A binary-read target is not a direct writable 1..64-bit packed value or one-dimensional fixed integral memory. |
+| `FSIM-ELAB-SVFILE-015` | error | `$fseek`, `$ftell`, or `$rewind` has an invalid handle, arity, offset, or origin expression. |
+| `FSIM-ELAB-SVFILE-016` | error | `$fflush` has a nonintegral explicit file handle. |
 | `FSIM-ELAB-SVCONTAINER-001` | error | A container local is duplicated in one automatic scope. |
 | `FSIM-ELAB-SVCONTAINER-002` | error | A container element expression has no resolvable element type. |
-| `FSIM-ELAB-SVCONTAINER-003` | error | A container element is aggregate, nonintegral, or outside the executable 1-to-64-bit range. |
+| `FSIM-ELAB-SVCONTAINER-003` | error | A container element is a string, unpacked aggregate, unresolved, or outside the executable 1-to-64-bit scalar, enum, or packed-aggregate range. |
 | `FSIM-ELAB-SVCONTAINER-004` | error | A bounded queue maximum index is unknown or outside 0 through 4,095. |
 | `FSIM-ELAB-SVCONTAINER-005` | error | A container value is not a direct supported object reference. |
 | `FSIM-ELAB-SVCONTAINER-006` | error | A container expression references an unknown container object. |
@@ -1206,11 +1217,12 @@ therefore excluded.
 | `FSIM-ELAB-SVCONTAINER-015` | error | An associative-array query or traversal method is used on another container kind. |
 | `FSIM-ELAB-SVCONTAINER-016` | error | An associative-array traversal argument is not a direct mutable integral variable. |
 | `FSIM-ELAB-SVCONTAINER-017` | error | An associative-array traversal argument width does not match the index type. |
-| `FSIM-ELAB-SVCONTAINER-018` | error | `delete(index)` is used on a non-associative container. |
-| `FSIM-ELAB-SVCONTAINER-019` | error | A queue-only push or pop method is used on another container kind. |
+| `FSIM-ELAB-SVCONTAINER-018` | error | `delete(index)` is used on a container other than a queue or associative array. |
+| `FSIM-ELAB-SVCONTAINER-019` | error | A queue-only insert, push, or pop method is used on another container kind. |
 | `FSIM-ELAB-SVCONTAINER-020` | error | Static unpacked-array bounds are not locally constant signed 32-bit values spanning 1 through 4,096 elements. |
 | `FSIM-ELAB-SVCONTAINER-021` | error | `delete()` is used to clear a fixed static unpacked array. |
 | `FSIM-ELAB-SVCONTAINER-022` | error | A mutating container method is applied to a temporary or another non-object receiver. |
+| `FSIM-ELAB-SVCONTAINER-023` | error | A dynamic-array `new[size](initializer)` value is not an exactly compatible dynamic array. |
 | `FSIM-ELAB-SVCOND-001` | error | A container conditional has invalid arity or is used outside SystemVerilog. |
 | `FSIM-ELAB-SVCOND-002` | error | Container conditional alternatives do not have an exactly compatible kind and profile. |
 | `FSIM-ELAB-SVCOND-003` | error | An associative-array conditional value is used outside the bounded consumer subset. |
@@ -1285,10 +1297,10 @@ therefore excluded.
 | `FSIM-ELAB-SVFIND-006` | error | A predicate container locator result is used outside a whole-queue assignment. |
 | `FSIM-ELAB-SVFIND-007` | error | A named predicate-container iterator is malformed or collides with a visible object. |
 | `FSIM-ELAB-SVFIND-008` | error | A predicate-container iterator has an unknown or unsupported index reference, selection, call, or mixed element/index comparison profile. |
-| `FSIM-ELAB-SVMEMORY-001` | error | `$readmemb` or `$readmemh` is lowered outside SystemVerilog-2017. |
-| `FSIM-ELAB-SVMEMORY-002` | error | A read-memory file name is not a bounded string expression. |
-| `FSIM-ELAB-SVMEMORY-003` | error | A read-memory target is not a direct bounded static unpacked-array object. |
-| `FSIM-ELAB-SVMEMORY-004` | error | A read-memory start or finish argument is not a 32-bit integral expression. |
+| `FSIM-ELAB-SVMEMORY-001` | error | A `$readmem*` or `$writemem*` task is lowered outside SystemVerilog-2017. |
+| `FSIM-ELAB-SVMEMORY-002` | error | A memory-file task file name is not a bounded string expression. |
+| `FSIM-ELAB-SVMEMORY-003` | error | A memory-file task object is not a direct bounded static unpacked-array object. |
+| `FSIM-ELAB-SVMEMORY-004` | error | A memory-file task start or finish argument is not a 32-bit integral expression. |
 | `FSIM-ELAB-SVPORT-001` | error | A SystemVerilog container port lacks a supported one-dimensional integral element or associative-index type. |
 | `FSIM-ELAB-SVPORT-002` | error | A bounded-queue maximum or static-array range does not specialize within the 4,096-element limit. |
 | `FSIM-ELAB-SVPORT-003` | error | A container input port attempts to use an unsupported default connection value. |
@@ -1298,6 +1310,9 @@ therefore excluded.
 | `FSIM-ELAB-SVPORT-007` | error | A container formal and actual differ in kind, element/index profile, queue bound, or exact static range. |
 | `FSIM-ELAB-SVPORT-008` | error | Independent output or inout module-port paths drive the same container object. |
 | `FSIM-ELAB-SVPORT-009` | error | An input container port would be modified locally or through a descendant output/inout connection. |
+| `FSIM-ELAB-SVPORT-010` | error | A mutable string module port is unconnected, crosses a language boundary, or does not use a direct same-language string object actual. |
+| `FSIM-ELAB-SVPORT-011` | error | A mutable string input port is written directly or through a descendant output/inout port. |
+| `FSIM-ELAB-SVPORT-012` | error | Sibling output/inout mutable string ports drive the same object. |
 | `FSIM-ELAB-SVSTRING-001` | error | A SystemVerilog string parameter/localparam default is not a supported immutable constant-string expression. |
 | `FSIM-ELAB-SVSTRING-002` | error | A SystemVerilog parameter actual crosses the bounded integral/string type boundary or is not a supported constant string. |
 | `FSIM-ELAB-SVSTRING-003` | error | A bounded output/report message position contains a string expression that is not constant after specialization. |
@@ -1315,6 +1330,9 @@ therefore excluded.
 | `FSIM-ELAB-SVSTRING-015` | error | A runtime string assignment target is neither a whole object nor one byte index. |
 | `FSIM-ELAB-SVSTRING-016` | error | A retained module variable is not in the supported runtime string domain. |
 | `FSIM-ELAB-SVSTRING-017` | error | A module string initializer is not a supported bounded static string expression. |
+| `FSIM-ELAB-SVSTRING-018` | error | A runtime string method has an unsupported receiver, argument, or result context. |
+| `FSIM-ELAB-SVSTRING-019` | error | `$swrite`, `$sformat`, or `$sformatf` has a nonliteral, malformed, oversized, under-supplied, or unsupported bounded format/value list. |
+| `FSIM-ELAB-SVSTRING-020` | error | `$swrite` or `$sformat` does not name a direct writable string target with positional arguments. |
 | `FSIM-ELAB-SVTYPEPARAM-001` | error | A required SystemVerilog type parameter or local type parameter has no data-type actual/default. |
 | `FSIM-ELAB-SVTYPEPARAM-002` | error | A SystemVerilog value parameter received a data-type actual. |
 | `FSIM-ELAB-SVTYPEPARAM-003` | error | A SystemVerilog type-parameter actual/default is invisible or outside the bounded packed integral subset. |

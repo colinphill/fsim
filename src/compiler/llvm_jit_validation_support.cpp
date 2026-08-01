@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <set>
 #include <sstream>
 
@@ -21,6 +22,35 @@ namespace {
 }
 
 }  // namespace
+
+void validate_process_shape(
+    const runtime::simir::Process& process,
+    const std::span<const std::uint32_t> signal_widths,
+    const std::span<const runtime::simir::ValueKind> signal_value_kinds) {
+  using namespace runtime::simir;
+  if (process.operations.empty())
+    throw LlvmJitError{"cannot JIT an empty SimIR process"};
+  if (process.operations.size()
+      > std::numeric_limits<InstructionIndex>::max())
+    throw LlvmJitUnsupportedError{
+        "SimIR process has too many instructions for the resumable JIT ABI"};
+  if (process.register_count > std::numeric_limits<RegisterId>::max())
+    throw LlvmJitUnsupportedError{
+        "SimIR process has too many registers for the JIT ABI"};
+  if (!process.register_value_kinds.empty()
+      && process.register_value_kinds.size() != process.register_count)
+    throw LlvmJitError{
+        "SimIR register value-domain metadata count does not match "
+        "register_count"};
+  if (!signal_value_kinds.empty()
+      && signal_value_kinds.size() != signal_widths.size())
+    throw LlvmJitError{
+        "SimIR signal value-domain metadata count does not match "
+        "signal_widths"};
+  if (const auto error = validate_expression_profile_metadata(
+          process.expression_profiles))
+    throw LlvmJitError{*error};
+}
 
 [[noreturn]] void reject(
     const runtime::simir::Process& process,
@@ -95,6 +125,162 @@ void validate_fork_operation(
         const auto character = static_cast<unsigned char>(value);
         return std::isalnum(character) != 0 || value == '_';
       });
+}
+
+std::optional<std::string> validate_string_method_metadata(
+    const runtime::simir::StringMethod& operation,
+    const runtime::simir::Process& process,
+    std::vector<PackedRegisterValidation>& registers) {
+  using namespace runtime::simir;
+  const auto string_register = [&](const StringRegisterId id) {
+    return id < process.string_register_count;
+  };
+  const auto kind = operation.operation;
+  if (!string_register(operation.source))
+    return "StringMethod source string register is out of range";
+  if (kind > StringMethodOperator::format_time)
+    return "StringMethod kind is invalid";
+  if (kind == StringMethodOperator::format_packed
+      && operation.format > OutputFormat::string)
+    return "StringMethod format is invalid";
+  const bool string_result = kind == StringMethodOperator::toupper
+      || kind == StringMethodOperator::tolower
+      || kind == StringMethodOperator::substr;
+  const bool integer_result = kind == StringMethodOperator::getc
+      || kind == StringMethodOperator::compare
+      || kind == StringMethodOperator::icompare
+      || (kind >= StringMethodOperator::atoi
+          && kind <= StringMethodOperator::atobin);
+  if (string_result && !string_register(operation.string_destination))
+    return "StringMethod destination string register is out of range";
+  if (integer_result)
+    registers.push_back({operation.destination,
+        kind == StringMethodOperator::getc ? 8U : 32U, true});
+  if (kind == StringMethodOperator::getc || kind == StringMethodOperator::putc
+      || kind == StringMethodOperator::substr
+      || kind == StringMethodOperator::format_packed
+      || (kind >= StringMethodOperator::itoa
+          && kind <= StringMethodOperator::bintoa))
+    registers.push_back({operation.first,
+        kind == StringMethodOperator::format_packed ? 0U : 32U, false});
+  if (kind == StringMethodOperator::compare
+      || kind == StringMethodOperator::icompare
+      || kind == StringMethodOperator::format_string) {
+    if (!string_register(operation.argument))
+      return "StringMethod argument string register is out of range";
+  }
+  if (kind == StringMethodOperator::putc || kind == StringMethodOperator::substr
+      || kind == StringMethodOperator::format_packed)
+    registers.push_back({operation.second,
+        kind == StringMethodOperator::putc ? 8U : 32U, false});
+  return std::nullopt;
+}
+
+std::optional<std::string> validate_file_scan_metadata(
+    const runtime::simir::FileScan& operation,
+    const runtime::simir::Process& process,
+    const std::span<const std::uint32_t> signal_widths,
+    const std::span<const runtime::simir::ValueKind> signal_value_kinds,
+    std::vector<PackedRegisterValidation>& registers) {
+  using namespace runtime::simir;
+  if (operation.string_source && operation.source >= process.string_register_count)
+    return "FileScan source string register is out of range";
+  if (operation.conversions.empty() || operation.conversions.size() > 64U
+      || operation.trailing_text.size() > maximum_string_bytes)
+    return "FileScan format metadata is empty or oversized";
+  for (const auto& conversion : operation.conversions) {
+    if (conversion.format > InputScanFormat::string
+        || conversion.prefix.size() > maximum_string_bytes
+        || conversion.maximum_characters > maximum_string_bytes)
+      return "FileScan conversion metadata is invalid or oversized";
+    if (conversion.suppress) continue;
+    const bool string_target = conversion.target.kind
+            == InputScanTargetKind::string_register
+        || conversion.target.kind == InputScanTargetKind::string_object;
+    const bool text_format = conversion.format == InputScanFormat::character
+        || conversion.format == InputScanFormat::string;
+    if (string_target && !text_format)
+      return "FileScan numeric conversion has a string target";
+    if (conversion.target.kind > InputScanTargetKind::string_object
+        || conversion.target.width == 0 || conversion.target.width > 64)
+      return "FileScan target metadata is invalid";
+    if (conversion.target.kind == InputScanTargetKind::packed_register) {
+      if (conversion.target.id >= process.register_count)
+        return "FileScan packed target register is out of range";
+      if (!process.register_value_kinds.empty()) {
+        const auto kind = process.register_value_kinds[conversion.target.id];
+        if (kind == ValueKind::logic9)
+          return "FileScan packed target value domain is inconsistent";
+      }
+      registers.push_back(
+          {conversion.target.id, conversion.target.width, true});
+    } else if (conversion.target.kind == InputScanTargetKind::packed_signal) {
+      if (conversion.target.id >= signal_widths.size()
+          || signal_widths[conversion.target.id] != conversion.target.width)
+        return "FileScan packed signal target is out of range or mismatched";
+      if (!signal_value_kinds.empty()) {
+        const auto kind = signal_value_kinds[conversion.target.id];
+        if (kind == ValueKind::logic9)
+          return "FileScan packed signal value domain is inconsistent";
+      }
+    } else if (conversion.target.kind == InputScanTargetKind::string_register
+               && conversion.target.id >= process.string_register_count) {
+      return "FileScan target string register is out of range";
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> validate_file_binary_metadata(
+    const runtime::simir::FileBinaryRead& operation,
+    const runtime::simir::Process& process,
+    const std::span<const std::uint32_t> signal_widths,
+    std::vector<PackedRegisterValidation>& registers) {
+  using namespace runtime::simir;
+  if (operation.target_kind > FileBinaryTargetKind::container_object
+      || operation.width == 0 || operation.width > 64
+      || (operation.has_count && !operation.has_start))
+    return "FileBinaryRead metadata is invalid";
+  registers.push_back({operation.handle, 32U, false});
+  registers.push_back({operation.destination, 32U, true});
+  if (operation.has_start) registers.push_back({operation.start, 32U, false});
+  if (operation.has_count) registers.push_back({operation.count, 32U, false});
+  if (operation.target_kind == FileBinaryTargetKind::packed_register) {
+    if (operation.target >= process.register_count
+        || operation.has_start || operation.has_count)
+      return "FileBinaryRead packed target metadata is invalid";
+    registers.push_back({operation.target, operation.width, true});
+  } else if (operation.target_kind == FileBinaryTargetKind::packed_signal) {
+    if (operation.target >= signal_widths.size()
+        || signal_widths[operation.target] != operation.width
+        || operation.has_start || operation.has_count)
+      return "FileBinaryRead packed signal metadata is invalid";
+  } else if (operation.target_kind
+             == FileBinaryTargetKind::container_register) {
+    if (operation.target >= process.container_register_types.size())
+      return "FileBinaryRead container register is out of range";
+    const auto& type = process.container_register_types[operation.target];
+    if (!type.fixed || type.dimensions.size() != 1U
+        || type.element_width != operation.width
+        || type.two_state != operation.two_state)
+      return "FileBinaryRead container target profile is invalid";
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> validate_file_position_metadata(
+    const runtime::simir::FilePosition& operation,
+    std::vector<PackedRegisterValidation>& registers) {
+  using namespace runtime::simir;
+  if (operation.kind > FilePositionKind::rewind)
+    return "FilePosition kind is invalid";
+  registers.push_back({operation.handle, 32U, false});
+  registers.push_back({operation.destination, 32U, true});
+  if (operation.kind == FilePositionKind::seek) {
+    registers.push_back({operation.offset, 32U, false});
+    registers.push_back({operation.origin, 32U, false});
+  }
+  return std::nullopt;
 }
 
 [[nodiscard]] std::string_view generated_runtime_error_reason(

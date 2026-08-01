@@ -63,6 +63,8 @@ module containers;
   initial begin
     $readmemh("image.hex", image);
     $readmemb("image.bin", image, 6, 4);
+    $writememh("dump.hex", image);
+    $writememb("dump.bin", image, 6, 4);
     image = '{8'h11, 8'h22, 8'h33, 8'h44};
     values = '{1, 2, 3};
     pending = '{8'haa, 8'hbb};
@@ -244,8 +246,17 @@ endmodule
           && unit->processes[0].statements[1].target.text == "image"
           && unit->processes[0].statements[1].task_arguments.size() == 2
           && unit->processes[0].statements[1].task_arguments[0].text == "6"
-          && unit->processes[0].statements[1].task_arguments[1].text == "4",
-      "$readmemh/$readmemb retain target, radix, and optional bounds");
+          && unit->processes[0].statements[1].task_arguments[1].text == "4"
+          && unit->processes[0].statements[2].kind
+              == StatementKind::MemoryLoad
+          && unit->processes[0].statements[2].memory_hex
+          && unit->processes[0].statements[2].memory_write
+          && unit->processes[0].statements[3].kind
+              == StatementKind::MemoryLoad
+          && !unit->processes[0].statements[3].memory_hex
+          && unit->processes[0].statements[3].memory_write
+          && unit->processes[0].statements[3].task_arguments.size() == 2,
+      "$readmem*/$writemem* retain direction, radix, and optional bounds");
   const auto& query_statements =
       unit->processes[0].statements;
   const auto slice_assignment =
@@ -1494,6 +1505,65 @@ endmodule
           && has_code(verilog, "FSIM-SV-SEM-088"),
       "containers, patterns, reductions, ordering, and locators require "
       "SystemVerilog-2017");
+
+  const auto construction = parse_text(
+      "container-construction.sv",
+      "module m; int source[], target[]; byte queue[$:2]; "
+      "initial begin target = new[5](source); "
+      "queue.insert(1, 8'h2a); queue.delete(0); end endmodule",
+      Language::SystemVerilog2017);
+  require(construction.ok(),
+          "dynamic-array initialization and indexed queue mutation parse");
+  const auto* construction_unit = &construction.design.units.front();
+  const auto& construction_statements =
+      construction_unit->processes.front().statements;
+  require(
+      construction_statements.size() == 3U
+          && construction_statements[0].value.kind
+              == ExpressionKind::Call
+          && construction_statements[0].value.text == "@new-array"
+          && construction_statements[0].value.operands.size() == 2U
+          && construction_statements[1].value.text == ".insert"
+          && construction_statements[1].value.operands.size() == 3U
+          && construction_statements[2].value.text == ".delete"
+          && construction_statements[2].value.operands.size() == 2U,
+      "construction HIR retains size, initializer, queue index, and value");
+  const auto invalid_construction = parse_text(
+      "container-construction-invalid.sv",
+      "module m; int source[], target[]; byte queue[$]; initial begin "
+      "target = new[2](); target = new[2](source, source); "
+      "queue.insert(0); end endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !invalid_construction.ok()
+          && has_code(invalid_construction, "FSIM-SV-SEM-128")
+          && has_code(invalid_construction, "FSIM-SV-SEM-081"),
+      "dynamic-array initializer and queue-insert arity are checked");
+
+  const auto aggregate_elements = parse_text(
+      "aggregate-container-elements.sv",
+      "module m; typedef struct packed { logic [3:0] tag; "
+      "logic [3:0] data; } packet_t; packet_t dynamic[]; "
+      "packet_t queue[$]; packet_t memory[1:0]; "
+      "packet_t matrix[1:0][0:1]; endmodule",
+      Language::SystemVerilog2017);
+  require(aggregate_elements.ok(),
+          "packed aggregate container elements parse");
+  const auto* aggregate_unit = aggregate_elements.design.find(
+      UnitKind::VerilogModule, "m");
+  require(
+      aggregate_unit != nullptr && aggregate_unit->variables.size() == 4
+          && std::ranges::all_of(
+              aggregate_unit->variables,
+              [](const auto& variable) {
+                return variable.type.systemverilog_container
+                    && variable.type.named_type == "packet_t";
+              })
+          && aggregate_unit->variables.back().type
+                 .systemverilog_container->static_range_expressions.size()
+              == 2,
+      "aggregate element type references and multidimensional bounds remain "
+      "typed");
 
   const auto malformed_pattern = parse_text(
       "container-pattern-invalid.sv",

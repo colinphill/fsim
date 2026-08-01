@@ -43,11 +43,24 @@ module text_files;
   string path = "input.txt";
   string line;
   string error;
+  logic [31:0] bits;
+  logic [7:0] memory [3:0];
   initial begin : io
     handle = $fopen(path, "r");
     count = $fgets(line, handle);
+    count = $fgetc(handle);
+    count = $ungetc(count, handle);
     status = $feof(handle);
     status = $ferror(handle, error);
+    count = $fscanf(handle, "%d %s", status, line);
+    count = $sscanf(line, "%*s %2h", status);
+    count = $fread(bits, handle);
+    count = $fread(memory, handle, 2, 2);
+    status = $ftell(handle);
+    status = $fseek(handle, -2, 1);
+    status = $rewind(handle);
+    $fflush(handle);
+    $fflush();
     $fdisplay(handle, "count=%0d", count);
     $fwrite(handle, "%s", line);
     $fclose(handle);
@@ -64,7 +77,7 @@ endmodule
   const auto& block = unit->processes[0].statements.at(0);
   require(
       block.kind == StatementKind::Block
-          && block.statements.size() == 7,
+          && block.statements.size() == 18,
       "file statements remain ordered in their block");
   require(
       block.statements[0].kind == StatementKind::Assignment
@@ -75,23 +88,38 @@ endmodule
       "$fopen retains filename and mode operands");
   require(
       block.statements[1].value.text == "$fgets"
-          && block.statements[2].value.text == "$feof"
-          && block.statements[3].value.text == "$ferror",
+          && block.statements[2].value.text == "$fgetc"
+          && block.statements[3].value.text == "$ungetc"
+          && block.statements[4].value.text == "$feof"
+          && block.statements[5].value.text == "$ferror"
+          && block.statements[6].value.text == "$fscanf"
+          && block.statements[6].value.operands.size() == 4
+          && block.statements[7].value.text == "$sscanf"
+          && block.statements[7].value.operands.size() == 3
+          && block.statements[8].value.text == "$fread"
+          && block.statements[8].value.operands.size() == 2
+          && block.statements[9].value.text == "$fread"
+          && block.statements[9].value.operands.size() == 4
+          && block.statements[10].value.text == "$ftell"
+          && block.statements[11].value.text == "$fseek"
+          && block.statements[12].value.text == "$rewind"
+          && block.statements[13].kind == StatementKind::FileFlush
+          && block.statements[14].kind == StatementKind::FileFlush,
       "file system functions retain distinct call identities");
   require(
-      block.statements[4].kind == StatementKind::FileDisplay
-          && block.statements[4].output_newline
-          && block.statements[4].output_format
+      block.statements[15].kind == StatementKind::FileDisplay
+          && block.statements[15].output_newline
+          && block.statements[15].output_format
               == OutputFormat::Decimal
-          && block.statements[5].kind
+          && block.statements[16].kind
               == StatementKind::FileDisplay
-          && !block.statements[5].output_newline
-          && block.statements[5].output_format
+          && !block.statements[16].output_newline
+          && block.statements[16].output_format
               == OutputFormat::String,
       "file output tasks retain bounded formatting");
   require(
-      block.statements[6].kind == StatementKind::FileClose
-          && block.statements[6].file_handle.text == "handle",
+      block.statements[17].kind == StatementKind::FileClose
+          && block.statements[17].file_handle.text == "handle",
       "$fclose retains its handle expression");
 
   const auto invalid_arity = parse_text(
@@ -103,8 +131,18 @@ module file_arity;
   initial begin
     handle = $fopen("only-name");
     handle = $fgets(line);
+    handle = $fgetc();
+    handle = $ungetc(handle);
     handle = $feof(handle, handle);
     handle = $ferror(handle);
+    handle = $fscanf(handle);
+    handle = $sscanf(line);
+    handle = $fread(line);
+    handle = $fread(line, handle, 0, 1, 2);
+    handle = $fseek(handle, 0);
+    handle = $ftell();
+    handle = $rewind(handle, 0);
+    $fflush(handle, handle);
   end
 endmodule
 )",

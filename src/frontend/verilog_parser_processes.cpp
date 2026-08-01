@@ -1008,12 +1008,17 @@ std::optional<Statement> VerilogParser::parse_statement() {
     return statement;
   }
 
-  if (keyword("$readmemb") || keyword("$readmemh")) {
-    const bool hexadecimal = keyword("$readmemh");
+  if (keyword("$readmemb") || keyword("$readmemh")
+      || keyword("$writememb") || keyword("$writememh")) {
+    const bool hexadecimal =
+        keyword("$readmemh") || keyword("$writememh");
+    const bool write =
+        keyword("$writememb") || keyword("$writememh");
     const auto start = advance();
     Statement statement;
     statement.kind = StatementKind::MemoryLoad;
     statement.memory_hex = hexadecimal;
+    statement.memory_write = write;
     if (language_ != Language::SystemVerilog2017) {
       error(
           start,
@@ -1027,7 +1032,7 @@ std::optional<Statement> VerilogParser::parse_statement() {
     statement.value = parse_expression();
     expect(
         TokenKind::Comma,
-        "',' after read-memory file name",
+        "',' after memory-file name",
         "FSIM-SV-PARSE-160");
     statement.target = parse_expression();
     if (match(TokenKind::Comma)) {
@@ -1044,6 +1049,40 @@ std::optional<Statement> VerilogParser::parse_statement() {
         TokenKind::Semicolon,
         "';' after read-memory task",
         "FSIM-SV-PARSE-162");
+    statement.span = span_from(start, previous());
+    return statement;
+  }
+
+  if (keyword("$fflush")) {
+    const auto start = advance();
+    Statement statement;
+    statement.kind = StatementKind::FileFlush;
+    if (language_ != Language::SystemVerilog2017) {
+      error(
+          start,
+          "FSIM-SV-SEM-074",
+          "$fflush requires SystemVerilog-2017");
+    }
+    if (match(TokenKind::LeftParen)) {
+      if (!at(TokenKind::RightParen)) {
+        statement.file_handle = parse_expression();
+        while (match(TokenKind::Comma)) {
+          error(
+              previous(),
+              "FSIM-SV-SEM-075",
+              "$fflush accepts at most one file handle");
+          (void)parse_expression();
+        }
+      }
+      expect(
+          TokenKind::RightParen,
+          "')' after $fflush arguments",
+          "FSIM-SV-PARSE-201");
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after $fflush",
+        "FSIM-SV-PARSE-202");
     statement.span = span_from(start, previous());
     return statement;
   }
@@ -1481,7 +1520,7 @@ std::optional<Statement> VerilogParser::parse_statement() {
           && current(lookahead + 2U).kind
               == TokenKind::LeftParen
           && contains_word(
-              {"delete", "push_front", "push_back",
+              {"delete", "insert", "push_front", "push_back",
                "pop_front", "pop_back", "exists",
                "first", "last", "next", "prev",
                "sum", "product", "and", "or", "xor",
@@ -1489,7 +1528,8 @@ std::optional<Statement> VerilogParser::parse_statement() {
                "min", "max", "unique", "unique_index",
                "find", "find_index", "find_first",
                "find_first_index", "find_last",
-               "find_last_index"},
+               "find_last_index", "putc", "itoa",
+               "hextoa", "octtoa", "bintoa"},
               current(lookahead + 1U).text)) {
         container_method_statement = true;
         break;
