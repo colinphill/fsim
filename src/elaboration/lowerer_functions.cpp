@@ -88,6 +88,17 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
         || !function_support_initialized_) {
         return ExpressionAttempt{};
     }
+    if (expression.text.starts_with(".")
+        && !expression.operands.empty()
+        && expression.operands.front().kind
+            == ExpressionKind::Identifier) {
+        auto qualified = expression;
+        qualified.text = qualified.operands.front().text
+            + qualified.text;
+        qualified.operands.erase(qualified.operands.begin());
+        return lower_user_function_expression(
+            qualified, expected_width, nullptr);
+    }
     const auto found = function_indices_.find(expression.text);
     if (found == function_indices_.end()) {
         return ExpressionAttempt{};
@@ -328,6 +339,16 @@ Lowerer::lower_user_container_function_expression(
     if (expression.kind != ExpressionKind::Call
         || !function_support_initialized_) {
         return std::nullopt;
+    }
+    if (expression.text.starts_with(".")
+        && !expression.operands.empty()
+        && expression.operands.front().kind
+            == ExpressionKind::Identifier) {
+        auto qualified = expression;
+        qualified.text = qualified.operands.front().text
+            + qualified.text;
+        qualified.operands.erase(qualified.operands.begin());
+        return lower_user_container_function_expression(qualified);
     }
     const auto found = function_indices_.find(expression.text);
     if (found == function_indices_.end()) {

@@ -741,6 +741,7 @@ public:
     Lowerer(
         ElaboratedDesign& design,
         const std::unordered_map<std::string, SignalId>& signals,
+        const std::unordered_set<SignalId>& read_only_signals,
         const std::unordered_map<std::string, StringObjectId>&
             string_objects,
         const std::unordered_map<std::string, ContainerObjectId>&
@@ -1158,6 +1159,9 @@ private:
 
     void diagnose_procedure_cycles();
 
+    void validate_read_only_signal_writes(
+        const frontend::SourceSpan& source);
+
     void collect_identifiers(
         const Expression& expression,
         std::set<std::string>& output) const;
@@ -1188,6 +1192,7 @@ private:
 
     ElaboratedDesign& design_;
     const std::unordered_map<std::string, SignalId>& signals_;
+    const std::unordered_set<SignalId>& read_only_signals_;
     const std::unordered_map<std::string, StringObjectId>&
         string_objects_;
     const std::unordered_map<std::string, ContainerObjectId>&
@@ -1342,6 +1347,7 @@ private:
     struct PortAliases {
         SignalMap signals;
         ContainerMap containers;
+        std::unordered_set<SignalId> read_only_signals;
     };
 
     struct ContainerBoundaryDriver {
@@ -1483,6 +1489,20 @@ private:
         std::vector<const DesignUnit*>& import_stack,
         NamedTypeEnvironment& type_environment);
 
+    void validate_systemverilog_exports(
+        const DesignUnit& declared_package,
+        const DesignUnit& effective_package);
+
+    void qualify_interface_callable(
+        frontend::FunctionDeclaration& callable,
+        std::string_view port,
+        const frontend::DesignUnit& interface_unit);
+
+    void qualify_interface_callable(
+        frontend::TaskDeclaration& callable,
+        std::string_view port,
+        const frontend::DesignUnit& interface_unit);
+
     void resolve_named_types(
         DesignUnit& unit,
         const NamedTypeEnvironment& imported_types,
@@ -1578,11 +1598,12 @@ private:
             parent_read_only_containers,
         const Binding* binding,
         const bool cross_language,
-        const bool require_input_connections = false);
+        const bool require_input_connections = false,
+        DesignUnit* dependency_owner = nullptr);
 
     PortAliases connect_instance(
         const frontend::Instance& instance,
-        const DesignUnit& target,
+        DesignUnit& target,
         const std::string& path,
         const SignalMap& parent_signals,
         const ContainerMap& parent_containers,
@@ -1634,6 +1655,7 @@ private:
         const std::string& path,
         SignalMap aliases,
         ContainerMap container_aliases,
+        std::unordered_set<SignalId> read_only_signals,
         ConstantEnvironment parameter_environment,
         std::vector<std::pair<std::string, std::string>>
             parameter_values,
@@ -1664,8 +1686,18 @@ private:
     SystemCFactoryProvider* systemc_provider_{};
     std::unordered_set<std::string> used_systemc_instances_;
     std::unordered_set<std::string> instance_paths_;
+    // Interface instances are registered by canonical hierarchy path after
+    // their member signals have been allocated. Later sibling module ports
+    // bind modport members through this exact instance identity.
+    std::unordered_map<std::string, DesignUnit>
+        systemverilog_interface_instances_;
+    std::unordered_set<std::string>
+        systemverilog_interface_port_paths_;
+    std::unordered_set<std::string>
+        systemverilog_read_only_interface_member_paths_;
     std::vector<std::string> stack_;
-    std::unordered_map<SignalId, std::size_t> boundary_driver_count_;
+    std::unordered_map<SignalId, std::vector<std::string>>
+        boundary_driver_paths_;
     std::unordered_set<SignalId> cross_language_boundary_signals_;
     std::unordered_map<SignalId, std::string> resolver_by_signal_;
     std::unordered_map<

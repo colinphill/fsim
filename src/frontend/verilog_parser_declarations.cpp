@@ -86,6 +86,55 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
             "named port connections are not valid in a module declaration");
       skip_to_port_delimiter();
     } else {
+      const bool explicit_generic_interface = keyword("interface");
+      const bool typed_interface =
+          at(TokenKind::Identifier)
+          && !keyword_reserved(keyword_set_, current().text)
+          && ((at(TokenKind::Dot, 1)
+               && at(TokenKind::Identifier, 2)
+               && at(TokenKind::Identifier, 3))
+              || at(TokenKind::Identifier, 1));
+      if (explicit_generic_interface || typed_interface) {
+        const auto interface_start = current();
+        std::string interface_type;
+        std::string modport;
+        if (explicit_generic_interface) {
+          advance();
+        } else {
+          interface_type = advance().text;
+          if (match(TokenKind::Dot)) {
+            modport = expect_identifier("interface modport name").text;
+          }
+        }
+        const auto port_name = expect_identifier("interface port name");
+        SignalDeclaration declaration{
+            port_name.text,
+            Type{ValueDomain::Unknown, "interface", std::nullopt, false},
+            PortDirection::Unknown,
+            true,
+            cover(interface_start.span, port_name.span),
+            std::nullopt,
+            std::move(interface_type),
+            std::move(modport)};
+        const auto duplicate = std::ranges::find_if(
+            unit.ports,
+            [&](const SignalDeclaration& port) {
+              return port.name == port_name.text;
+            });
+        if (duplicate != unit.ports.end()) {
+          error(
+              port_name,
+              "FSIM-SV-SEM-003",
+              "duplicate module port declaration '"
+                  + port_name.text + "'");
+        } else {
+          unit.ports.push_back(std::move(declaration));
+        }
+        if (!match(TokenKind::Comma)) {
+          break;
+        }
+        continue;
+      }
       VerilogTypeSpec spec = inherited;
       bool declared_here = false;
       if (is_direction_keyword()) {
@@ -163,6 +212,157 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
       break;
     }
   }
+}
+
+void VerilogParser::parse_modport(
+    DesignUnit& unit,
+    const Token& start) {
+  for (;;) {
+    const auto name = expect_identifier("modport name");
+    SystemVerilogModport declaration;
+    declaration.name = name.text;
+    expect(
+        TokenKind::LeftParen,
+        "'(' after modport name",
+        "FSIM-SV-PARSE-212");
+    PortDirection direction = PortDirection::Unknown;
+    enum class CallableAccess { None, Import, Export };
+    CallableAccess callable_access{CallableAccess::None};
+    while (!at_end() && !at(TokenKind::RightParen)) {
+      if (is_direction_keyword()) {
+        direction = parse_direction();
+        callable_access = CallableAccess::None;
+      } else if (match_keyword("ref")) {
+        direction = PortDirection::Ref;
+        callable_access = CallableAccess::None;
+      } else if (match_keyword("import")) {
+        callable_access = CallableAccess::Import;
+        direction = PortDirection::Unknown;
+      } else if (match_keyword("export")) {
+        callable_access = CallableAccess::Export;
+        direction = PortDirection::Unknown;
+      }
+      if (keyword("clocking")) {
+        error(
+            current(),
+            "FSIM-SV-UNSUPPORTED-044",
+            "bounded modports do not admit clocking-block members");
+        skip_to_port_delimiter();
+      } else if (!at(TokenKind::RightParen)) {
+        std::optional<bool> explicit_function;
+        if (callable_access != CallableAccess::None
+            && (keyword("function") || keyword("task"))) {
+          explicit_function = keyword("function");
+          advance();
+        }
+        const auto member = expect_identifier("modport member name");
+        const auto function = std::ranges::find_if(
+            unit.functions,
+            [&](const FunctionDeclaration& candidate) {
+              return candidate.name == member.text;
+            });
+        const auto task = std::ranges::find_if(
+            unit.tasks,
+            [&](const TaskDeclaration& candidate) {
+              return candidate.name == member.text;
+            });
+        const bool callable = callable_access != CallableAccess::None;
+        if (!callable && direction == PortDirection::Unknown) {
+          error(
+              member,
+              "FSIM-SV-SEM-116",
+              "a modport member requires an explicit direction");
+        }
+        const bool duplicate = std::ranges::any_of(
+            declaration.members,
+            [&](const SystemVerilogModportMember& existing) {
+              return existing.name == member.text;
+            });
+        if (duplicate) {
+          error(
+              member,
+              "FSIM-SV-SEM-117",
+              "duplicate modport member '" + member.text + "'");
+        } else {
+          const bool signal_declared = std::ranges::any_of(
+              unit.signals,
+              [&](const SignalDeclaration& signal) {
+                return signal.name == member.text;
+              }) || std::ranges::any_of(
+                  unit.ports,
+                  [&](const SignalDeclaration& port) {
+                    return port.name == member.text;
+                  });
+          if (!callable && !signal_declared) {
+            error(
+                member,
+                "FSIM-SV-SEM-118",
+                "modport member '" + member.text
+                    + "' is not declared by the interface");
+          }
+          if (callable && function == unit.functions.end()
+              && task == unit.tasks.end()) {
+            error(
+                member,
+                "FSIM-SV-SEM-122",
+                "modport callable '" + member.text
+                    + "' is not declared by the interface");
+          }
+          if (callable && explicit_function
+              && ((*explicit_function
+                       && function == unit.functions.end())
+                  || (!*explicit_function
+                      && task == unit.tasks.end()))) {
+            error(
+                member,
+                "FSIM-SV-SEM-123",
+                "modport callable kind does not match '"
+                    + member.text + "'");
+          }
+          auto kind = SystemVerilogModportMemberKind::Signal;
+          if (callable && function != unit.functions.end()) {
+            kind = callable_access == CallableAccess::Import
+                ? SystemVerilogModportMemberKind::FunctionImport
+                : SystemVerilogModportMemberKind::FunctionExport;
+          } else if (callable && task != unit.tasks.end()) {
+            kind = callable_access == CallableAccess::Import
+                ? SystemVerilogModportMemberKind::TaskImport
+                : SystemVerilogModportMemberKind::TaskExport;
+          }
+          declaration.members.push_back({
+              member.text, direction, member.span, kind});
+        }
+      }
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+    }
+    expect(
+        TokenKind::RightParen,
+        "')' after modport members",
+        "FSIM-SV-PARSE-213");
+    declaration.span = cover(name.span, previous().span);
+    if (std::ranges::any_of(
+            unit.systemverilog_modports,
+            [&](const SystemVerilogModport& existing) {
+              return existing.name == declaration.name;
+            })) {
+      error(
+          name,
+          "FSIM-SV-SEM-119",
+          "duplicate modport declaration '" + name.text + "'");
+    } else {
+      unit.systemverilog_modports.push_back(std::move(declaration));
+    }
+    if (!match(TokenKind::Comma)) {
+      break;
+    }
+  }
+  expect(
+      TokenKind::Semicolon,
+      "';' after modport declaration",
+      "FSIM-SV-PARSE-214");
+  (void)start;
 }
 
 void VerilogParser::skip_to_port_delimiter() {

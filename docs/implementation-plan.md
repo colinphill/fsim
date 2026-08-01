@@ -5788,6 +5788,47 @@ fork in 0.07 seconds, procedural assignments in 1.91 seconds, containers in
 2026-07-31. Batch 106 is not a ten-batch CI-inspection boundary, so no Actions
 run was inspected.
 
+### One-hundred-seventh feature batch — SystemVerilog interface, modport, and package visibility closure
+
+SystemVerilog interfaces are now retained as distinct parameterizable design
+units with time context, packed members, continuous and procedural behavior,
+functions, tasks, modports, and stable source identity. Bounded static interface
+arrays expand in declared order, and explicit interface/modport module ports
+bind named or positional whole-interface and indexed-array actuals through
+nested generated hierarchy with exact member aliases.
+
+Modports retain input/output/inout/ref signal views and function/task
+import/export entries. Input views are read-only after direct or forwarded
+binding; writable views participate in path-aware ownership so one nested
+forwarding chain is not mistaken for multiple drivers. Imported callables are
+qualified per specialized interface port and execute through ordinary callable
+frames and safe points. Export entries require a matching module callable.
+
+Package exports now filter imported constants, packed types, functions, and
+tasks through selective, `package::*`, and `*::*` forms. Qualified and wildcard
+imports traverse explicit re-exports without leaking private imports, while
+collision, malformed export, missing item, and recursive visibility paths fail
+deterministically with transitive package/interface source provenance.
+
+The dedicated application differential covers parameterized interface arrays,
+positional and named ports, nested generated forwarding, function/task access,
+`ref`, export validation, debugger aliases, callbacks, normalized VCD,
+interpreter and LLVM O0/O2, cold/warm reuse, and callable/export edits. Native
+schema 59 records the resulting specialized SimIR graph without changing the
+public ABI. Feature-matrix rows SV-631 through SV-640 are the detailed release
+evidence.
+
+The diagnostic catalog covers 1,363 production codes, and the source gate
+covers 316 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 62 tests
+in 450.73 seconds, including scoped locals in 0.90 seconds, interfaces in 1.89
+seconds, LLVM in 3.64 seconds, containers in 346.90 seconds, and the monolithic
+application in 40.34 seconds. Release passed all 62 tests in 144.44 seconds,
+including scoped locals in 0.83 seconds, interfaces in 1.60 seconds, LLVM in
+3.50 seconds, containers in 85.63 seconds, and the monolithic application in
+13.64 seconds, on 2026-07-31. Batch 107 is not a ten-batch CI-inspection
+boundary, so no Actions run was inspected.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the

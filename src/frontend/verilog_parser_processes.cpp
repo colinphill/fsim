@@ -1515,6 +1515,10 @@ std::optional<Statement> VerilogParser::parse_statement() {
            at(TokenKind::Identifier, lookahead + 1)) {
       lookahead += 2;
     }
+    if (at(TokenKind::Dot, lookahead)
+        && at(TokenKind::Identifier, lookahead + 1)) {
+      lookahead += 2;
+    }
     if (at(TokenKind::LeftParen, lookahead) ||
         at(TokenKind::Semicolon, lookahead)) {
       const auto start = advance();
@@ -1522,6 +1526,10 @@ std::optional<Statement> VerilogParser::parse_statement() {
       while (match(TokenKind::Scope)) {
         name += "::";
         name += expect_identifier("package-scoped task name").text;
+      }
+      if (match(TokenKind::Dot)) {
+        name += ".";
+        name += expect_identifier("interface task name").text;
       }
       Statement statement;
       statement.kind = StatementKind::TaskCall;

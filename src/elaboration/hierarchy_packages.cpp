@@ -83,6 +83,7 @@ HierarchyBuilder::HierarchyBuilder(
             design_.top_,
             {},
             {},
+            {},
             std::move(specialized.environment),
             std::move(specialized.values),
             std::move(specialized.identity_values),
@@ -1476,6 +1477,8 @@ HierarchyBuilder::HierarchyBuilder(
             effective_package, import_stack, type_environment);
         import_qualified_systemverilog_package_items(
             effective_package, import_stack, type_environment);
+        validate_systemverilog_exports(
+            package, effective_package);
         for (const auto& parameter :
              effective_package.parameters) {
             if (parameter.kind
@@ -1573,6 +1576,7 @@ HierarchyBuilder::HierarchyBuilder(
         std::vector<frontend::FunctionDeclaration>
             function_imports;
         std::vector<frontend::TaskDeclaration> task_imports;
+        std::vector<frontend::TypeAliasDeclaration> type_imports;
         std::unordered_map<std::string, std::string> owners;
         for (const auto& import_item :
              unit.systemverilog_imports) {
@@ -1595,30 +1599,69 @@ HierarchyBuilder::HierarchyBuilder(
             }
             const bool wildcard = import_item.name.empty();
             bool found_selected = wildcard;
+            const auto reexported_from_import =
+                [&](const std::string_view name) {
+                    return unit.kind
+                            == frontend::UnitKind::SystemVerilogPackage
+                        && std::ranges::any_of(
+                            unit.systemverilog_exports,
+                            [&](const frontend::SystemVerilogExport& item) {
+                                const bool package_matches =
+                                    item.package == "*"
+                                    || item.package == import_item.package;
+                                const bool name_matches =
+                                    item.name.empty() || item.name == name;
+                                return package_matches && name_matches;
+                            });
+                };
+            const auto directly_declared =
+                [](const auto& candidate, const auto& declarations) {
+                    return std::ranges::any_of(
+                        declarations,
+                        [&](const auto& declaration) {
+                            return declaration.name == candidate.name
+                                && declaration.span.source_name
+                                    == candidate.span.source_name
+                                && declaration.span.begin.offset
+                                    == candidate.span.begin.offset;
+                        });
+                };
+            const auto explicitly_exported =
+                [&](const std::string_view name) {
+                    return std::ranges::any_of(
+                        package->systemverilog_exports,
+                        [&](const frontend::SystemVerilogExport& item) {
+                            if (!item.name.empty()
+                                && item.name != name) {
+                                return false;
+                            }
+                            return std::ranges::any_of(
+                                package->systemverilog_imports,
+                                [&](const frontend::SystemVerilogImport& imported) {
+                                    const bool package_matches =
+                                        item.package == "*"
+                                        || imported.package == item.package;
+                                    const bool name_matches =
+                                        imported.name.empty()
+                                        || imported.name == name;
+                                    return package_matches && name_matches;
+                                });
+                        });
+                };
             for (const auto& declaration :
-                 package->parameters) {
+                 specialized_package->unit.parameters) {
+                const bool public_item = directly_declared(
+                    declaration, package->parameters)
+                    || explicitly_exported(declaration.name);
+                if (!public_item) {
+                    continue;
+                }
                 if (!wildcard
                     && declaration.name != import_item.name) {
                     continue;
                 }
                 found_selected = true;
-                const auto specialized_declaration =
-                    std::find_if(
-                        specialized_package->unit.parameters.begin(),
-                        specialized_package->unit.parameters.end(),
-                        [&](const auto& candidate) {
-                            return candidate.name
-                                    == declaration.name
-                                && candidate.span.source_name
-                                    == declaration.span.source_name
-                                && candidate.span.begin.offset
-                                    == declaration.span.begin.offset;
-                        });
-                const auto& imported_type =
-                    specialized_declaration
-                            == specialized_package->unit.parameters.end()
-                        ? declaration.type
-                        : specialized_declaration->type;
+                const auto& imported_type = declaration.type;
                 frontend::Expression imported_value;
                 if (imported_type.spelling == "string") {
                     const auto value =
@@ -1678,6 +1721,14 @@ HierarchyBuilder::HierarchyBuilder(
             }
             for (const auto& alias :
                  specialized_package->unit.type_aliases) {
+                const bool public_item = directly_declared(
+                    alias, package->type_aliases)
+                    || directly_declared(
+                        alias, package->parameters)
+                    || explicitly_exported(alias.name);
+                if (!public_item) {
+                    continue;
+                }
                 if (!wildcard
                     && alias.name != import_item.name) {
                     continue;
@@ -1699,9 +1750,23 @@ HierarchyBuilder::HierarchyBuilder(
                               "packages",
                         import_item.span);
                 }
+                if (reexported_from_import(alias.name)
+                    && std::ranges::none_of(
+                        type_imports,
+                        [&](const auto& existing_alias) {
+                          return existing_alias.name == alias.name;
+                        })) {
+                  type_imports.push_back(alias);
+                }
             }
             for (const auto& function :
                  specialized_package->unit.functions) {
+                const bool public_item = directly_declared(
+                    function, package->functions)
+                    || explicitly_exported(function.name);
+                if (!public_item) {
+                    continue;
+                }
                 if (!wildcard
                     && function.name != import_item.name) {
                     continue;
@@ -1730,6 +1795,12 @@ HierarchyBuilder::HierarchyBuilder(
             }
             for (const auto& task :
                  specialized_package->unit.tasks) {
+                const bool public_item = directly_declared(
+                    task, package->tasks)
+                    || explicitly_exported(task.name);
+                if (!public_item) {
+                    continue;
+                }
                 if (!wildcard
                     && task.name != import_item.name) {
                     continue;
@@ -1773,6 +1844,11 @@ HierarchyBuilder::HierarchyBuilder(
             std::make_move_iterator(unit.parameters.begin()),
             std::make_move_iterator(unit.parameters.end()));
         unit.parameters = std::move(imports);
+        type_imports.insert(
+            type_imports.end(),
+            std::make_move_iterator(unit.type_aliases.begin()),
+            std::make_move_iterator(unit.type_aliases.end()));
+        unit.type_aliases = std::move(type_imports);
         function_imports.insert(
             function_imports.end(),
             std::make_move_iterator(unit.functions.begin()),
@@ -1785,198 +1861,5 @@ HierarchyBuilder::HierarchyBuilder(
         unit.tasks = std::move(task_imports);
     }
 
-    void HierarchyBuilder::import_qualified_systemverilog_package_items(
-        DesignUnit& unit,
-        std::vector<const DesignUnit*>& import_stack,
-        NamedTypeEnvironment& type_environment) {
-        auto identifiers = qualified_identifiers(unit);
-        std::vector<std::string> ordered;
-        for (const auto& [identifier, span] : identifiers) {
-            (void)span;
-            if (identifier.find("::")
-                != std::string::npos) {
-                ordered.push_back(identifier);
-            }
-        }
-        std::sort(ordered.begin(), ordered.end());
-        std::vector<frontend::ParameterDeclaration> imports;
-        std::vector<frontend::FunctionDeclaration>
-            function_imports;
-        std::vector<frontend::TaskDeclaration> task_imports;
-        for (const auto& identifier : ordered) {
-            const auto& reference_span =
-                identifiers.at(identifier);
-            const auto separator = identifier.find("::");
-            if (separator == std::string::npos
-                || separator == 0
-                || identifier.find("::", separator + 2)
-                    != std::string::npos
-                || separator + 2 >= identifier.size()) {
-                report(
-                    "FSIM-ELAB-SVPKG-005",
-                    "a package-scoped item must be "
-                    "package::name",
-                    reference_span);
-                continue;
-            }
-            const auto package_name =
-                identifier.substr(0, separator);
-            const auto constant_name =
-                identifier.substr(separator + 2);
-            const auto* package =
-                find_systemverilog_package(
-                    unit, package_name);
-            if (package == nullptr) {
-                report(
-                    "FSIM-ELAB-SVPKG-001",
-                    "SystemVerilog package '"
-                        + package_name + "' was not found",
-                    reference_span);
-                continue;
-            }
-            auto specialized_package =
-                specialize_systemverilog_package(
-                    *package, import_stack, reference_span);
-            if (!specialized_package) {
-                continue;
-            }
-            const auto declaration = std::find_if(
-                package->parameters.begin(),
-                package->parameters.end(),
-                [&](const auto& candidate) {
-                    return candidate.name == constant_name;
-                });
-            const auto alias = std::find_if(
-                specialized_package->unit.type_aliases.begin(),
-                specialized_package->unit.type_aliases.end(),
-                [&](const auto& candidate) {
-                    return candidate.name == constant_name;
-                });
-            const auto function = std::find_if(
-                specialized_package->unit.functions.begin(),
-                specialized_package->unit.functions.end(),
-                [&](const auto& candidate) {
-                    return candidate.name == constant_name;
-                });
-            const auto task = std::find_if(
-                specialized_package->unit.tasks.begin(),
-                specialized_package->unit.tasks.end(),
-                [&](const auto& candidate) {
-                    return candidate.name == constant_name;
-                });
-            if (declaration == package->parameters.end()
-                && alias
-                    == specialized_package->unit.type_aliases.end()
-                && function
-                    == specialized_package->unit.functions.end()
-                && task
-                    == specialized_package->unit.tasks.end()) {
-                report(
-                    "FSIM-ELAB-SVPKG-002",
-                    "SystemVerilog package '"
-                        + package_name
-                        + "' has no exported item '"
-                        + constant_name + "'",
-                    reference_span);
-                continue;
-            }
-            if (alias
-                != specialized_package->unit.type_aliases.end()) {
-                type_environment.insert_or_assign(
-                    identifier,
-                    NamedTypeBinding{
-                        alias->type,
-                        package->name});
-                append_package_dependencies(
-                    unit, *package, *specialized_package);
-                continue;
-            }
-            if (function
-                != specialized_package->unit.functions.end()) {
-                auto imported = *function;
-                imported.name = identifier;
-                function_imports.push_back(std::move(imported));
-                append_package_dependencies(
-                    unit, *package, *specialized_package);
-                continue;
-            }
-            if (task
-                != specialized_package->unit.tasks.end()) {
-                auto imported = *task;
-                imported.name = identifier;
-                task_imports.push_back(std::move(imported));
-                append_package_dependencies(
-                    unit, *package, *specialized_package);
-                continue;
-            }
-            const auto specialized_declaration =
-                std::find_if(
-                    specialized_package->unit.parameters.begin(),
-                    specialized_package->unit.parameters.end(),
-                    [&](const auto& candidate) {
-                        return candidate.name
-                                == declaration->name
-                            && candidate.span.source_name
-                                == declaration->span.source_name
-                            && candidate.span.begin.offset
-                                == declaration->span.begin.offset;
-                    });
-            const auto& imported_type =
-                specialized_declaration
-                        == specialized_package->unit.parameters.end()
-                    ? declaration->type
-                    : specialized_declaration->type;
-            frontend::Expression imported_value;
-            if (imported_type.spelling == "string") {
-                const auto value =
-                    specialized_package->string_environment.find(
-                        constant_name);
-                if (value
-                    == specialized_package
-                           ->string_environment.end()) {
-                    continue;
-                }
-                imported_value =
-                    value->second.expression(declaration->span);
-            } else {
-                const auto value =
-                    specialized_package->environment.find(
-                        constant_name);
-                if (value
-                    == specialized_package->environment.end()) {
-                    continue;
-                }
-                imported_value = constant_expression(
-                    value->second,
-                    declaration->span,
-                    imported_type.domain,
-                    frontend::Language::
-                        SystemVerilog2017);
-            }
-            imports.push_back({
-                identifier,
-                imported_type,
-                std::move(imported_value),
-                true,
-                declaration->span});
-            append_package_dependencies(
-                unit, *package, *specialized_package);
-        }
-        imports.insert(
-            imports.end(),
-            std::make_move_iterator(unit.parameters.begin()),
-            std::make_move_iterator(unit.parameters.end()));
-        unit.parameters = std::move(imports);
-        function_imports.insert(
-            function_imports.end(),
-            std::make_move_iterator(unit.functions.begin()),
-            std::make_move_iterator(unit.functions.end()));
-        unit.functions = std::move(function_imports);
-        task_imports.insert(
-            task_imports.end(),
-            std::make_move_iterator(unit.tasks.begin()),
-            std::make_move_iterator(unit.tasks.end()));
-        unit.tasks = std::move(task_imports);
-    }
 
 } // namespace fsim::elaboration

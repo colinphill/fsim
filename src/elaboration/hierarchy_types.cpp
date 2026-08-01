@@ -1309,8 +1309,20 @@ using namespace elaboration_detail;
         const std::string& path,
         const frontend::SourceSpan& source,
         const bool cross_language) {
-        auto& count = boundary_driver_count_[signal];
-        ++count;
+        auto& paths = boundary_driver_paths_[signal];
+        const auto nested_with = [](const std::string_view left,
+                                    const std::string_view right) {
+          const auto left_prefix = std::string{left} + ".";
+          const auto right_prefix = std::string{right} + ".";
+          return left.starts_with(right_prefix)
+              || right.starts_with(left_prefix);
+        };
+        const bool conflicting = std::ranges::any_of(
+            paths,
+            [&](const std::string& existing) {
+              return !nested_with(path, existing);
+            });
+        paths.push_back(path);
         if (cross_language) {
             cross_language_boundary_signals_.insert(signal);
         }
@@ -1324,7 +1336,7 @@ using namespace elaboration_detail;
                     source);
             }
         }
-        if (count > 1
+        if (conflicting
             && !resolver_by_signal_.contains(signal)
             && (cross_language_boundary_signals_.contains(signal)
                 || native_resolution(
@@ -1347,7 +1359,8 @@ using namespace elaboration_detail;
             parent_read_only_containers,
         const Binding* binding,
         const bool cross_language,
-        const bool require_input_connections) {
+        const bool require_input_connections,
+        DesignUnit* dependency_owner) {
         PortAliases result;
         auto& aliases = result.signals;
         auto& container_aliases = result.containers;
@@ -1393,6 +1406,288 @@ using namespace elaboration_detail;
             }
             connected[port_index] = true;
             const auto& port = ports[port_index];
+            if (!port.interface_type.empty()
+                || port.type.spelling == "interface") {
+                std::string actual_name;
+                if (connection.value.kind
+                    == frontend::ExpressionKind::Identifier) {
+                  actual_name = connection.value.text;
+                } else if (
+                    connection.value.kind
+                        == frontend::ExpressionKind::Index
+                    && connection.value.operands.size() == 2
+                    && connection.value.operands[0].kind
+                        == frontend::ExpressionKind::Identifier
+                    && connection.value.operands[1].kind
+                        == frontend::ExpressionKind::IntegerLiteral) {
+                  actual_name = connection.value.operands[0].text
+                      + "[" + connection.value.operands[1].text + "]";
+                }
+                if (actual_name.empty()) {
+                  report(
+                        "FSIM-ELAB-SVIFACE-001",
+                        "interface port '" + path + "." + port.name
+                            + "' requires a whole interface-instance actual",
+                        connection.value.span);
+                    continue;
+                }
+                const auto separator = path.rfind('.');
+                const auto parent_path = separator == std::string::npos
+                    ? std::string{}
+                    : path.substr(0, separator);
+                auto actual_path = parent_path.empty()
+                    ? actual_name
+                    : parent_path + "." + actual_name;
+                auto actual_interface =
+                    systemverilog_interface_instances_.find(actual_path);
+                auto lexical_path = parent_path;
+                while (actual_interface
+                           == systemverilog_interface_instances_.end()
+                       && lexical_path.find('.') != std::string::npos) {
+                  lexical_path.resize(lexical_path.rfind('.'));
+                  actual_path = lexical_path + "." + actual_name;
+                  actual_interface =
+                      systemverilog_interface_instances_.find(actual_path);
+                }
+                if (actual_interface
+                    == systemverilog_interface_instances_.end()) {
+                    report(
+                        "FSIM-ELAB-SVIFACE-002",
+                        "interface actual '" + actual_path
+                            + "' must name an earlier interface instance",
+                        connection.value.span);
+                    continue;
+                }
+                const auto interface_unit = actual_interface->second;
+                if (dependency_owner != nullptr) {
+                  const auto source = std::string{
+                      frontend::physical_source(interface_unit.span)};
+                  if (!source.empty()
+                      && std::ranges::find(
+                          dependency_owner->source_dependencies,
+                          source)
+                          == dependency_owner->source_dependencies.end()) {
+                    dependency_owner->source_dependencies.push_back(source);
+                  }
+                }
+                if (!port.interface_type.empty()
+                    && port.interface_type != interface_unit.name) {
+                    report(
+                        "FSIM-ELAB-SVIFACE-003",
+                        "interface port '" + path + "." + port.name
+                            + "' requires type '" + port.interface_type
+                            + "' but actual '" + actual_path + "' has type '"
+                            + interface_unit.name + "'",
+                        connection.span);
+                    continue;
+                }
+                systemverilog_interface_instances_.insert_or_assign(
+                    path + "." + port.name, interface_unit);
+                systemverilog_interface_port_paths_.insert(
+                    path + "." + port.name);
+                const bool forwarded_interface_port =
+                    systemverilog_interface_port_paths_.contains(
+                        actual_path);
+                const frontend::SystemVerilogModport* modport = nullptr;
+                if (!port.modport.empty()) {
+                    const auto found = std::ranges::find_if(
+                        interface_unit.systemverilog_modports,
+                        [&](const frontend::SystemVerilogModport& candidate) {
+                          return candidate.name == port.modport;
+                        });
+                    if (found
+                        == interface_unit.systemverilog_modports.end()) {
+                      report(
+                          "FSIM-ELAB-SVIFACE-004",
+                          "interface type '" + interface_unit.name
+                              + "' has no modport '" + port.modport + "'",
+                          port.span);
+                      continue;
+                    }
+                    modport = &*found;
+                }
+                const auto connect_member =
+                    [&](const std::string& member,
+                        const frontend::PortDirection direction,
+                        const frontend::SourceSpan& member_span) {
+                      const auto signal_name = actual_path + "." + member;
+                      const auto signal =
+                          design_.signal_by_name_.find(signal_name);
+                      if (signal == design_.signal_by_name_.end()) {
+                        report(
+                            "FSIM-ELAB-SVIFACE-005",
+                            "interface member signal '" + signal_name
+                                + "' was not elaborated",
+                            member_span);
+                        return;
+                      }
+                      const auto local_name = port.name + "." + member;
+                      const auto qualified_name = path + "." + local_name;
+                      aliases.emplace(local_name, signal->second);
+                      aliases.emplace(qualified_name, signal->second);
+                      const auto member_path =
+                          actual_path + "." + member;
+                      const bool inherited_read_only =
+                          systemverilog_read_only_interface_member_paths_
+                              .contains(member_path);
+                      if (direction
+                              == frontend::PortDirection::Input
+                          || inherited_read_only) {
+                        result.read_only_signals.insert(signal->second);
+                        systemverilog_read_only_interface_member_paths_
+                            .insert(qualified_name);
+                      }
+                      design_.signal_by_name_.emplace(
+                          qualified_name, signal->second);
+                      if (!forwarded_interface_port
+                          && (direction
+                                  == frontend::PortDirection::Output
+                          || direction == frontend::PortDirection::Inout
+                          || direction == frontend::PortDirection::Ref
+                          || direction
+                              == frontend::PortDirection::Buffer)) {
+                        note_boundary_driver(
+                            signal->second,
+                            binding,
+                            qualified_name,
+                            connection.span,
+                            false);
+                      }
+                    };
+                const auto connect_callable =
+                    [&](const std::string& member,
+                        const bool function,
+                        const bool imported,
+                        const frontend::SourceSpan& member_span) {
+                      if (dependency_owner == nullptr) {
+                        report(
+                            "FSIM-ELAB-SVIFACE-007",
+                            "interface callable '" + member
+                                + "' has no same-language module owner",
+                            member_span);
+                        return;
+                      }
+                      if (!imported) {
+                        const bool supplied = function
+                            ? std::ranges::any_of(
+                                  dependency_owner->functions,
+                                  [&](const auto& candidate) {
+                                    return candidate.name == member;
+                                  })
+                            : std::ranges::any_of(
+                                  dependency_owner->tasks,
+                                  [&](const auto& candidate) {
+                                    return candidate.name == member;
+                                  });
+                        if (!supplied) {
+                          report(
+                              "FSIM-ELAB-SVIFACE-009",
+                              "modport export '" + member
+                                  + "' has no matching module callable",
+                              member_span);
+                        }
+                        return;
+                      }
+                      const auto qualified = port.name + "." + member;
+                      if (function) {
+                        const auto found = std::ranges::find_if(
+                            interface_unit.functions,
+                            [&](const auto& candidate) {
+                              return candidate.name == member;
+                            });
+                        if (found == interface_unit.functions.end()) {
+                          report(
+                              "FSIM-ELAB-SVIFACE-007",
+                              "interface function '" + member
+                                  + "' was not retained",
+                              member_span);
+                          return;
+                        }
+                        if (std::ranges::any_of(
+                                dependency_owner->functions,
+                                [&](const auto& candidate) {
+                                  return candidate.name == qualified;
+                                })) {
+                          report(
+                              "FSIM-ELAB-SVIFACE-008",
+                              "interface callable '" + qualified
+                                  + "' is visible more than once",
+                              member_span);
+                          return;
+                        }
+                        auto callable = *found;
+                        qualify_interface_callable(
+                            callable, port.name, interface_unit);
+                        dependency_owner->functions.push_back(
+                            std::move(callable));
+                        return;
+                      }
+                      const auto found = std::ranges::find_if(
+                          interface_unit.tasks,
+                          [&](const auto& candidate) {
+                            return candidate.name == member;
+                          });
+                      if (found == interface_unit.tasks.end()) {
+                        report(
+                            "FSIM-ELAB-SVIFACE-007",
+                            "interface task '" + member
+                                + "' was not retained",
+                            member_span);
+                        return;
+                      }
+                      if (std::ranges::any_of(
+                              dependency_owner->tasks,
+                              [&](const auto& candidate) {
+                                return candidate.name == qualified;
+                              })) {
+                        report(
+                            "FSIM-ELAB-SVIFACE-008",
+                            "interface callable '" + qualified
+                                + "' is visible more than once",
+                            member_span);
+                        return;
+                      }
+                      auto callable = *found;
+                      qualify_interface_callable(
+                          callable, port.name, interface_unit);
+                      dependency_owner->tasks.push_back(
+                          std::move(callable));
+                    };
+                if (modport != nullptr) {
+                  for (const auto& member : modport->members) {
+                    using Kind =
+                        frontend::SystemVerilogModportMemberKind;
+                    if (member.kind == Kind::Signal) {
+                      connect_member(
+                          member.name, member.direction, member.span);
+                    } else {
+                      connect_callable(
+                          member.name,
+                          member.kind == Kind::FunctionImport
+                              || member.kind == Kind::FunctionExport,
+                          member.kind == Kind::FunctionImport
+                              || member.kind == Kind::TaskImport,
+                          member.span);
+                    }
+                  }
+                } else {
+                  for (const auto& member : interface_unit.signals) {
+                    connect_member(
+                        member.name,
+                        frontend::PortDirection::Unknown,
+                        member.span);
+                  }
+                  for (const auto& function : interface_unit.functions) {
+                    connect_callable(
+                        function.name, true, true, function.span);
+                  }
+                  for (const auto& task : interface_unit.tasks) {
+                    connect_callable(
+                        task.name, false, true, task.span);
+                  }
+                }
+                continue;
+            }
             if (connection.kind
                     == frontend::PortActualKind::Open) {
                 if (port.direction

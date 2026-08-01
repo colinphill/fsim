@@ -21,6 +21,7 @@ enum class UnitKind {
   VhdlPackage,
   VhdlContext,
   SystemVerilogPackage,
+  SystemVerilogInterface,
   VerilogModule,
 };
 
@@ -29,6 +30,7 @@ enum class PortDirection {
   Input,
   Output,
   Inout,
+  Ref,
   Buffer,
 };
 
@@ -408,6 +410,11 @@ struct SignalDeclaration {
   // A SystemVerilog net-declaration propagation delay. Elaboration applies
   // it to every continuous driver targeting this net after specialization.
   std::optional<Delay> net_delay;
+  // Non-empty only for a SystemVerilog interface port. The optional modport
+  // names the view selected after `interface_type.`; these declarations are
+  // hierarchy bundles rather than independently allocated packed signals.
+  std::string interface_type;
+  std::string modport;
 
   SignalDeclaration() = default;
   SignalDeclaration(
@@ -416,11 +423,15 @@ struct SignalDeclaration {
       PortDirection signal_direction,
       bool signal_is_port,
       SourceSpan signal_span,
-      std::optional<Delay> signal_net_delay = std::nullopt)
+      std::optional<Delay> signal_net_delay = std::nullopt,
+      std::string signal_interface_type = {},
+      std::string signal_modport = {})
       : name(std::move(signal_name)), type(std::move(signal_type)),
         direction(signal_direction), is_port(signal_is_port),
         span(std::move(signal_span)),
-        net_delay(std::move(signal_net_delay)) {}
+        net_delay(std::move(signal_net_delay)),
+        interface_type(std::move(signal_interface_type)),
+        modport(std::move(signal_modport)) {}
 };
 
 struct VariableDeclaration {
@@ -712,6 +723,9 @@ struct Instance {
   // cross-language manifest binding overrides it.
   std::string unit_name;
   std::string name;
+  // Empty for a scalar instance. A bounded SystemVerilog instance array is
+  // expanded in this exact declared order after specialization.
+  std::vector<std::int64_t> array_indices;
   std::vector<ParameterOverride> parameter_overrides;
   std::vector<PortConnection> connections;
   // True for `label: component_name ...`; false for direct entity/module
@@ -1203,6 +1217,35 @@ struct SystemVerilogImport {
   SourceSpan span;
 };
 
+enum class SystemVerilogModportMemberKind {
+  Signal,
+  FunctionImport,
+  FunctionExport,
+  TaskImport,
+  TaskExport,
+};
+
+struct SystemVerilogModportMember {
+  std::string name;
+  PortDirection direction{PortDirection::Unknown};
+  SourceSpan span;
+  SystemVerilogModportMemberKind kind{
+      SystemVerilogModportMemberKind::Signal};
+};
+
+struct SystemVerilogModport {
+  std::string name;
+  std::vector<SystemVerilogModportMember> members;
+  SourceSpan span;
+};
+
+struct SystemVerilogExport {
+  std::string package;
+  // Empty means every explicitly imported item from this package.
+  std::string name;
+  SourceSpan span;
+};
+
 struct DesignUnit {
   UnitKind kind{UnitKind::VerilogModule};
   Language language{Language::SystemVerilog2017};
@@ -1223,6 +1266,9 @@ struct DesignUnit {
   std::vector<VhdlContextItem> vhdl_context;
   // Compilation-unit or unit-local SystemVerilog package imports.
   std::vector<SystemVerilogImport> systemverilog_imports;
+  // Package export/re-export declarations and interface modport views.
+  std::vector<SystemVerilogExport> systemverilog_exports;
+  std::vector<SystemVerilogModport> systemverilog_modports;
   // Bounded SystemVerilog packed integral typedef declarations.
   std::vector<TypeAliasDeclaration> type_aliases;
   std::vector<ParameterDeclaration> parameters;

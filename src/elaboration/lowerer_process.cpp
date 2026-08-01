@@ -34,6 +34,7 @@ namespace {
 Lowerer::Lowerer(
         ElaboratedDesign& design,
         const std::unordered_map<std::string, SignalId>& signals,
+        const std::unordered_set<SignalId>& read_only_signals,
         const std::unordered_map<std::string, StringObjectId>&
             string_objects,
         const std::unordered_map<std::string, ContainerObjectId>&
@@ -50,6 +51,7 @@ Lowerer::Lowerer(
         std::vector<Diagnostic>& diagnostics)
         : design_(design),
           signals_(signals),
+          read_only_signals_(read_only_signals),
           string_objects_(string_objects),
           container_objects_(container_objects),
           read_only_container_objects_(
@@ -60,6 +62,43 @@ Lowerer::Lowerer(
           tasks_(tasks),
           procedures_(procedures),
           diagnostics_(diagnostics) {}
+
+void Lowerer::validate_read_only_signal_writes(
+    const frontend::SourceSpan& source) {
+  std::set<SignalId> reported;
+  const auto check = [&](const SignalId signal) {
+    if (read_only_signals_.contains(signal)
+        && reported.insert(signal).second) {
+      report(
+          "FSIM-ELAB-SVIFACE-006",
+          "a modport input member is read-only within process '"
+              + process_.name + "'",
+          source);
+    }
+  };
+  for (const auto& operation : process_.operations) {
+    std::visit(
+        [&](const auto& candidate) {
+          using Operation = std::decay_t<decltype(candidate)>;
+          if constexpr (
+              std::is_same_v<Operation, WriteBlocking>
+              || std::is_same_v<Operation, WriteUpdate>
+              || std::is_same_v<Operation, WriteAfter>
+              || std::is_same_v<Operation, WriteInertial>
+              || std::is_same_v<Operation, WriteProjected>
+              || std::is_same_v<Operation, WriteProjectedWaveform>
+              || std::is_same_v<Operation, WriteBlockingSlice>
+              || std::is_same_v<Operation, WriteUpdateSlice>
+              || std::is_same_v<Operation, WriteAfterSlice>
+              || std::is_same_v<Operation, WriteInertialSlice>
+              || std::is_same_v<Operation, WriteProjectedSlice>
+              || std::is_same_v<Operation, WriteProjectedWaveformSlice>) {
+            check(candidate.signal);
+          }
+        },
+        operation);
+  }
+}
 
 
 
@@ -294,6 +333,7 @@ Lowerer::Lowerer(
         lower_pending_tasks();
         lower_pending_procedures();
         lower_pending_functions();
+        validate_read_only_signal_writes(source.span);
         process_.register_count = next_register_;
         process_.string_register_count = next_string_register_;
         process_.container_register_count = next_container_register_;
@@ -378,6 +418,7 @@ Lowerer::Lowerer(
         lower_pending_tasks();
         lower_pending_procedures();
         lower_pending_functions();
+        validate_read_only_signal_writes(statement.span);
         process_.register_count = next_register_;
         process_.string_register_count = next_string_register_;
         process_.container_register_count = next_container_register_;

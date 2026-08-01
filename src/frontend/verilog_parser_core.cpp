@@ -21,6 +21,9 @@ ParseResult VerilogParser::run() {
     } else if (match_keyword("module")) {
       compilation_unit_has_design_item_ = true;
       design.units.push_back(parse_module(previous()));
+    } else if (match_keyword("interface")) {
+      compilation_unit_has_design_item_ = true;
+      design.units.push_back(parse_module(previous(), true));
     } else if (match_keyword("package")) {
       compilation_unit_has_design_item_ = true;
       auto package = parse_package(previous());
@@ -723,8 +726,16 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
   for (const auto& variable : unit.variables) {
     known.insert(variable.name);
   }
+  for (const auto& instance : unit.instances) {
+    known.insert(instance.name);
+  }
   std::unordered_set<std::string> rejected;
   for (const auto& reference : implicit_net_references_) {
+    const auto member_separator = reference.name.find('.');
+    if (member_separator != std::string::npos
+        && known.contains(reference.name.substr(0, member_separator))) {
+      continue;
+    }
     if (known.contains(reference.name)
         || rejected.contains(reference.name)) {
       continue;
@@ -766,7 +777,9 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
   }
 }
 
-DesignUnit VerilogParser::parse_module(const Token& start) {
+DesignUnit VerilogParser::parse_module(
+    const Token& start,
+    const bool interface_unit) {
   non_ansi_ports_.clear();
   body_port_declarations_.clear();
   port_type_refinements_.clear();
@@ -793,7 +806,9 @@ DesignUnit VerilogParser::parse_module(const Token& start) {
   module_time_precision_declared_ = false;
   module_has_non_time_item_ = false;
   DesignUnit unit;
-  unit.kind = UnitKind::VerilogModule;
+  unit.kind = interface_unit
+      ? UnitKind::SystemVerilogInterface
+      : UnitKind::VerilogModule;
   unit.language = language_;
   unit.systemverilog_imports =
       compilation_unit_imports_;
@@ -817,7 +832,10 @@ DesignUnit VerilogParser::parse_module(const Token& start) {
   expect(TokenKind::Semicolon, "';' after module header",
          "FSIM-SV-PARSE-003");
 
-  while (!at_end() && !keyword("endmodule")) {
+  const auto terminator = interface_unit
+      ? std::string_view{"endinterface"}
+      : std::string_view{"endmodule"};
+  while (!at_end() && !keyword(terminator)) {
     if (time_declaration_start()) {
       const auto declaration = advance();
       parse_time_declaration(&unit, declaration);
@@ -836,6 +854,17 @@ DesignUnit VerilogParser::parse_module(const Token& start) {
     } else if (match_keyword("typedef")) {
       module_has_non_time_item_ = true;
       parse_typedef(unit, previous());
+    } else if (match_keyword("modport")) {
+      module_has_non_time_item_ = true;
+      if (!interface_unit) {
+        error(
+            previous(),
+            "FSIM-SV-SEM-115",
+            "a modport declaration is only valid inside an interface");
+        skip_to_semicolon();
+      } else {
+        parse_modport(unit, previous());
+      }
     } else if (match_keyword("function")) {
       module_has_non_time_item_ = true;
       auto function = parse_function(previous());
@@ -955,15 +984,21 @@ DesignUnit VerilogParser::parse_module(const Token& start) {
     } else {
       module_has_non_time_item_ = true;
       const auto unexpected = advance();
-      error(unexpected, "FSIM-SV-UNSUPPORTED-004",
-            "unsupported module item starting with '" + unexpected.text +
-                "'");
+      error(
+          unexpected,
+          "FSIM-SV-UNSUPPORTED-004",
+          "unsupported "
+              + std::string{interface_unit ? "interface" : "module"}
+              + " item starting with '" + unexpected.text + "'");
       skip_to_semicolon();
     }
   }
-  expect_keyword("endmodule", false, "FSIM-SV-PARSE-004");
+  expect_keyword(terminator, false, "FSIM-SV-PARSE-004");
   if (match(TokenKind::Colon)) {
-    expect_identifier("module name after endmodule");
+    expect_identifier(
+        interface_unit
+            ? "interface name after endinterface"
+            : "module name after endmodule");
   }
   for (const auto& use : external_genvar_uses_) {
     if (!declared_genvars_.contains(use.text)) {

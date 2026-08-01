@@ -130,7 +130,7 @@ using runtime::simir::DisableFork;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v58";
+    "fsim-llvm-native-object-v59";
 
 template <class... Ts> struct Overloaded : Ts... {
   using Ts::operator()...;

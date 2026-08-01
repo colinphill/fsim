@@ -24,6 +24,22 @@ silently discarded.
 | Preprocessing/directives | Quoted and angle includes, manifest/CLI definitions, object/function macros with default arguments, multiline replacement, argument substitution, token concatenation/stringification, `__FILE__`/`__LINE__`, `undef`, nested conditional compilation, logical `` `line`` source remapping, legal `` `timescale``, `` `default_nettype``, reset/cell/keyword-version/unconnected-drive state, and ordered `file`/`source-set`/`combined` policies | Included units and macro-selected executable source enter the normal frontend; active `` `line`` mappings reach parser diagnostics, macro ancestry, DesignIR/SimIR debug points, report callbacks, and LLVM objects while physical ownership remains in analysis/native cache provenance; mappings reset for includes and compilation-unit roots; source-set/combined roots otherwise share macro, conditional, and parser directive state while retaining library ownership; scalar implicit nets and default port net types honor `` `default_nettype``; cell metadata and omitted-input pulls reach DesignIR/runtime; time directives and declarations scale exact delays and contribute to `auto` resolution; ordered snapshots participate in cache identity | Standardized pragma behavior, multi-driver wired-net resolution, and complete trireg charge semantics remain incomplete; unsupported directives receive targeted errors |
 | SystemC | C++ compatibility header, versioned plug-in entry point, typed factories, and peer mixed-language hierarchy | Common signals/ports/exports/events/channels, native and foreign children, lifecycle callbacks, `SC_METHOD`, and Boost.Context-backed `SC_THREAD`/`SC_CTHREAD` timed/event/static waits execute on the deterministic common kernel | Arbitrary custom-interface metadata, dynamic processes, thread reset/kill, TLM/AMS/CCI, and Accellera ABI compatibility remain unsupported |
 
+Batch 107 SystemVerilog unit-status update: the Verilog/SV unit row's earlier
+interface and package-export exclusions are superseded. Bounded parameterized
+interfaces now retain packed members, processes, continuous assignments,
+functions, tasks, and one-dimensional static instance arrays. Explicit
+interface/modport ports accept whole-interface or statically indexed actuals
+through named, positional, nested, and generated hierarchy. Modports retain
+checked input/output/inout/ref members plus function/task import/export
+entries; input views are read-only, writable views use path-aware driver
+ownership, and imported callables execute through specialized dotted views.
+Package `export` supports selective, `package::*`, and `*::*` re-export of
+explicitly imported constants, packed types, functions, and tasks with
+transitive visibility, collision checks, cycle rejection, and source/cache
+provenance. Clocking-block modport entries, virtual interfaces, dynamic
+interface arrays, interface classes, and general interface-type expressions
+remain outside this bounded slice.
+
 SystemVerilog expression-sizing status update: the bounded 1–64-bit scalar
 path now retains source-spanned resolved width, signedness, self- versus
 context-determined sizing, and two-/four-state domain metadata. Sized,

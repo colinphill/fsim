@@ -617,6 +617,7 @@ using namespace elaboration_detail;
                 child_path,
                 std::move(child_aliases),
                 {},
+                {},
                 std::move(specialized.environment),
                 std::move(specialized.values),
                 std::move(specialized.identity_values),
@@ -632,6 +633,7 @@ using namespace elaboration_detail;
         const std::string& path,
         SignalMap aliases,
         ContainerMap container_aliases,
+        std::unordered_set<SignalId> read_only_signals,
         ConstantEnvironment parameter_environment,
         std::vector<std::pair<std::string, std::string>>
             parameter_values,
@@ -727,10 +729,14 @@ using namespace elaboration_detail;
             return;
         }
         for (const auto& port : *ports) {
-            expose_type_mark(port.type.spelling, port.type);
-            visible_types.emplace(port.name, &port.type);
-            visible_types.emplace(
-                path + "." + port.name, &port.type);
+          expose_type_mark(port.type.spelling, port.type);
+          visible_types.emplace(port.name, &port.type);
+          visible_types.emplace(
+              path + "." + port.name, &port.type);
+          if (!port.interface_type.empty()
+              || port.type.spelling == "interface") {
+            continue;
+          }
             if (port.type.systemverilog_container) {
                 if (!local_container_objects.contains(
                         port.name)) {
@@ -1114,6 +1120,7 @@ using namespace elaboration_detail;
         Lowerer lowerer{
             design_,
             local,
+            read_only_signals,
             local_string_objects,
             local_container_objects,
             read_only_container_objects,
@@ -1253,10 +1260,16 @@ using namespace elaboration_detail;
                 child_path,
                 std::move(child_aliases.signals),
                 std::move(child_aliases.containers),
+                std::move(child_aliases.read_only_signals),
                 std::move(child_specialized.environment),
                 std::move(child_specialized.values),
                 std::move(child_specialized.identity_values),
                 std::move(child_specialized.packages));
+            if (target->kind
+                == frontend::UnitKind::SystemVerilogInterface) {
+                systemverilog_interface_instances_.insert_or_assign(
+                    child_path, child_specialized.unit);
+            }
         }
         stack_.pop_back();
     }

@@ -1262,6 +1262,20 @@ SpecializedUnit specialize_unit(
         diagnostics);
     result.unit.generate_regions.clear();
     apply_net_delays(result.unit, diagnostics);
+    std::vector<frontend::Instance> expanded_instances;
+    for (auto& instance : result.unit.instances) {
+      if (instance.array_indices.empty()) {
+        expanded_instances.push_back(std::move(instance));
+        continue;
+      }
+      for (const auto index : instance.array_indices) {
+        auto expanded = instance;
+        expanded.name += "[" + std::to_string(index) + "]";
+        expanded.array_indices.clear();
+        expanded_instances.push_back(std::move(expanded));
+      }
+    }
+    result.unit.instances = std::move(expanded_instances);
     return result;
 }
 

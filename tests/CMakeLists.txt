@@ -9,6 +9,8 @@ add_executable(
   frontend/frontend_vhdl_type_tests.cpp
   frontend/frontend_vhdl_statement_tests.cpp
   frontend/frontend_declaration_tests.cpp
+  frontend/frontend_interface_tests.cpp
+  frontend/frontend_package_tests.cpp
   frontend/frontend_callable_tests.cpp
   frontend/frontend_vhdl_subprogram_tests.cpp
   frontend/frontend_vhdl_generic_subprogram_tests.cpp
@@ -121,6 +123,7 @@ add_executable(
   elaboration/elaborator_sv_slice_call_test.cpp
   elaboration/elaborator_sv_slice_order_test.cpp
   elaboration/elaborator_sv_slice_port_test.cpp
+  elaboration/elaborator_sv_interface_test.cpp
 )
 fsim_configure_test(fsim_elaboration_tests)
 target_link_libraries(fsim_elaboration_tests PRIVATE fsim_elaboration)
@@ -498,6 +501,25 @@ set_tests_properties(
   set_tests_properties(
     fsim.application.call_safe_points
     PROPERTIES LABELS "fast;call-safe-points"
+  )
+
+  add_executable(
+    fsim_sv_interface_application_tests
+    app/sv_interface_application_test.cpp
+  )
+  fsim_configure_test(fsim_sv_interface_application_tests)
+  target_link_libraries(
+    fsim_sv_interface_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.sv_interfaces
+    COMMAND fsim_sv_interface_application_tests
+  )
+  set_tests_properties(
+    fsim.application.sv_interfaces
+    PROPERTIES
+      LABELS "fast;interfaces;packages;systemverilog;cache;debugger;vcd"
   )
 
   add_executable(

@@ -728,7 +728,7 @@ void HierarchyBuilder::validate_boundary_type(
 
 HierarchyBuilder::PortAliases HierarchyBuilder::connect_instance(
     const frontend::Instance& instance,
-    const DesignUnit& target,
+    DesignUnit& target,
     const std::string& path,
     const SignalMap& parent_signals,
     const ContainerMap& parent_containers,
@@ -754,7 +754,8 @@ HierarchyBuilder::PortAliases HierarchyBuilder::connect_instance(
       parent_read_only_containers,
       binding,
       cross_language,
-      target.language == frontend::Language::Vhdl2008);
+      target.language == frontend::Language::Vhdl2008,
+      &target);
 }
 
 frontend::SignalDeclaration

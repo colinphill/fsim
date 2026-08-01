@@ -34,6 +34,38 @@ void VerilogParser::parse_import_clause(
       "FSIM-SV-PARSE-079");
 }
 
+void VerilogParser::parse_export_clause(
+    std::vector<SystemVerilogExport>& exports,
+    const Token& start) {
+  for (;;) {
+    std::string package;
+    if (match(TokenKind::Star)) {
+      package = "*";
+    } else {
+      package = expect_identifier("package name in export").text;
+    }
+    expect(
+        TokenKind::Scope,
+        "'::' after exported package name",
+        "FSIM-SV-PARSE-215");
+    std::string name;
+    if (!match(TokenKind::Star)) {
+      name = expect_identifier("exported package item").text;
+    }
+    exports.push_back({
+        std::move(package),
+        std::move(name),
+        cover(start.span, previous().span)});
+    if (!match(TokenKind::Comma)) {
+      break;
+    }
+  }
+  expect(
+      TokenKind::Semicolon,
+      "';' after package export",
+      "FSIM-SV-PARSE-216");
+}
+
 DesignUnit VerilogParser::parse_package(const Token& start) {
   non_ansi_ports_.clear();
   body_port_declarations_.clear();
@@ -88,6 +120,10 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
           unit.systemverilog_imports, previous());
       active_package_imports_ =
           unit.systemverilog_imports;
+    } else if (match_keyword("export")) {
+      module_has_non_time_item_ = true;
+      parse_export_clause(
+          unit.systemverilog_exports, previous());
     } else if (match_keyword("typedef")) {
       module_has_non_time_item_ = true;
       parse_typedef(unit, previous());
@@ -1076,6 +1112,69 @@ Instance VerilogParser::parse_instance() {
   }
   const auto name = expect_identifier("instance name");
   instance.name = name.text;
+  if (match(TokenKind::LeftBracket)) {
+    const auto range = previous();
+    const auto left_expression = parse_expression();
+    expect(
+        TokenKind::Colon,
+        "':' in instance-array range",
+        "FSIM-SV-PARSE-217");
+    const auto right_expression = parse_expression();
+    expect(
+        TokenKind::RightBracket,
+        "']' after instance-array range",
+        "FSIM-SV-PARSE-218");
+    const auto literal_value =
+        [&](auto& self,
+            const Expression& expression)
+            -> std::optional<std::int64_t> {
+          if (expression.kind == ExpressionKind::IntegerLiteral) {
+            return detail::decimal_i64(expression.text);
+          }
+          if (expression.kind == ExpressionKind::Unary
+              && expression.operands.size() == 1
+              && (expression.text == "+" || expression.text == "-")) {
+            const auto operand = self(self, expression.operands.front());
+            if (!operand
+                || (expression.text == "-"
+                    && *operand
+                        == std::numeric_limits<std::int64_t>::min())) {
+              return std::nullopt;
+            }
+            return expression.text == "-" ? -*operand : *operand;
+          }
+          return std::nullopt;
+        };
+    const auto left = literal_value(literal_value, left_expression);
+    const auto right = literal_value(literal_value, right_expression);
+    if (!left || !right) {
+      error(
+          range,
+          "FSIM-SV-SEM-120",
+          "instance-array bounds must be decimal locally static integers "
+          "in this bounded slice");
+    } else {
+      const auto distance = *left >= *right
+          ? static_cast<std::uint64_t>(*left)
+              - static_cast<std::uint64_t>(*right)
+          : static_cast<std::uint64_t>(*right)
+              - static_cast<std::uint64_t>(*left);
+      if (distance >= 64) {
+        error(
+            range,
+            "FSIM-SV-SEM-121",
+            "an instance array may contain at most 64 instances");
+      } else {
+        for (std::uint64_t ordinal = 0;
+             ordinal <= distance; ++ordinal) {
+          instance.array_indices.push_back(
+              *left >= *right
+                  ? *left - static_cast<std::int64_t>(ordinal)
+                  : *left + static_cast<std::int64_t>(ordinal));
+        }
+      }
+    }
+  }
   instance.unconnected_drive = current_unconnected_drive_;
   expect(
       TokenKind::LeftParen, "'(' after instance name",

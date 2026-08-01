@@ -185,7 +185,9 @@ const DesignUnit* choose_same_language_instance(
         return nullptr;
     }
     for (const auto& unit : parsed.units) {
-        if (unit.kind == frontend::UnitKind::VerilogModule
+        if ((unit.kind == frontend::UnitKind::VerilogModule
+             || unit.kind
+                 == frontend::UnitKind::SystemVerilogInterface)
             && unit.language == parent.language && unit.name == name) {
             if (!unit.library.empty() && !parent.library.empty()
                 && unit.library != parent.library) {

@@ -71,6 +71,7 @@ int main() {
     test_systemverilog_compiler_directives();
     test_systemverilog_parameters();
     test_systemverilog_packages();
+    test_systemverilog_interfaces();
     test_vhdl_function_declarations();
     test_vhdl_procedure_declarations();
     test_vhdl_generic_subprogram_declarations();

@@ -43,6 +43,7 @@ void test_systemverilog_procedural_assignment_controls();
 void test_systemverilog_compiler_directives();
 void test_systemverilog_parameters();
 void test_systemverilog_packages();
+void test_systemverilog_interfaces();
 void test_vhdl_function_declarations();
 void test_vhdl_procedure_declarations();
 void test_vhdl_generic_subprogram_declarations();

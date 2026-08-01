@@ -502,10 +502,18 @@ class VerilogParser final : private detail::ParserBase {
 
   void resolve_implicit_nets(DesignUnit& unit);
 
-  DesignUnit parse_module(const Token& start);
+  DesignUnit parse_module(
+      const Token& start,
+      bool interface_unit = false);
+
+  void parse_modport(DesignUnit& unit, const Token& start);
 
   void parse_import_clause(
       std::vector<SystemVerilogImport>& imports,
+      const Token& start);
+
+  void parse_export_clause(
+      std::vector<SystemVerilogExport>& exports,
       const Token& start);
 
   DesignUnit parse_package(const Token& start);

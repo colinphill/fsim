@@ -582,6 +582,13 @@ therefore excluded.
 | `FSIM-SV-PARSE-209` | error | A `disable fork` statement is missing its terminating semicolon. |
 | `FSIM-SV-PARSE-210` | error | A static gate-instance array range is missing its colon. |
 | `FSIM-SV-PARSE-211` | error | A static gate-instance array range is missing its closing bracket. |
+| `FSIM-SV-PARSE-212` | error | A modport declaration is missing the opening parenthesis after its name. |
+| `FSIM-SV-PARSE-213` | error | A modport declaration is missing its closing parenthesis. |
+| `FSIM-SV-PARSE-214` | error | A modport declaration is missing its terminating semicolon. |
+| `FSIM-SV-PARSE-215` | error | A package export item is missing `::` after its package selector. |
+| `FSIM-SV-PARSE-216` | error | A package export declaration is missing its terminating semicolon. |
+| `FSIM-SV-PARSE-217` | error | A static module/interface instance array range is missing its colon. |
+| `FSIM-SV-PARSE-218` | error | A static module/interface instance array range is missing its closing bracket. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -735,6 +742,19 @@ therefore excluded.
 | `FSIM-SV-SEM-112` | error | A static gate-instance array bound is not a decimal locally static integer in the bounded slice. |
 | `FSIM-SV-SEM-113` | error | A static gate-instance array exceeds the 64-instance bound. |
 | `FSIM-SV-SEM-114` | error | A gate-array terminal is neither scalar nor equal in width to the instance count. |
+| `FSIM-SV-SEM-115` | error | A modport declaration appears outside a SystemVerilog interface. |
+| `FSIM-SV-SEM-116` | error | A modport signal member has no explicit direction. |
+| `FSIM-SV-SEM-117` | error | A modport repeats a member name. |
+| `FSIM-SV-SEM-118` | error | A modport names a signal that is not declared by its interface. |
+| `FSIM-SV-SEM-119` | error | An interface repeats a modport declaration name. |
+| `FSIM-SV-SEM-120` | error | A bounded instance-array range is not a decimal locally static integer range. |
+| `FSIM-SV-SEM-121` | error | A bounded instance array exceeds 64 instances. |
+| `FSIM-SV-SEM-122` | error | A modport import/export entry does not name an interface function or task. |
+| `FSIM-SV-SEM-123` | error | A modport callable's explicit function/task kind does not match its interface declaration. |
+| `FSIM-ELAB-SVIFACE-006` | error | A process writes through a read-only modport input member. |
+| `FSIM-ELAB-SVIFACE-007` | error | A retained interface callable cannot be materialized at its same-language module boundary. |
+| `FSIM-ELAB-SVIFACE-008` | error | An interface callable is visible more than once through the same module port. |
+| `FSIM-ELAB-SVIFACE-009` | error | A modport export has no matching callable implementation in the connected module. |
 | `FSIM-SV-SEM-030` | error | A reachable `forever` path can take its backedge without suspending, exiting, or terminating the simulation. |
 | `FSIM-SV-SEM-031` | error | A SystemVerilog `break` or `continue` statement appears outside a procedural loop. |
 | `FSIM-SV-SEM-032` | error | A SystemVerilog `final` procedure contains a timing control, wait, or `$finish`. |
@@ -835,6 +855,7 @@ therefore excluded.
 | `FSIM-SV-UNSUPPORTED-041` | error | `reverse` or nondeterministic `shuffle` uses an excluded container-ordering `with` clause. |
 | `FSIM-SV-UNSUPPORTED-042` | error | A bounded `case matches` item uses a deferred variable-binding, tagged, or structured pattern. |
 | `FSIM-SV-UNSUPPORTED-043` | error | A bounded `case matches` item uses a deferred `&&&` guard. |
+| `FSIM-SV-UNSUPPORTED-044` | error | A modport uses a deferred ref, clocking, or callable import/export member instead of a bounded signal direction. |
 
 ## Elaboration and SimIR lowering
 
@@ -960,6 +981,8 @@ therefore excluded.
 | `FSIM-ELAB-SVPKG-004` | error | Recursive SystemVerilog package imports contain a visibility cycle. |
 | `FSIM-ELAB-SVPKG-005` | error | A package-scoped item is not exactly `package::name`. |
 | `FSIM-ELAB-SVPKG-006` | error | A SystemVerilog package constant default cannot be evaluated in declaration order. |
+| `FSIM-ELAB-SVPKG-007` | error | A package export has invalid wildcard shape or is not backed by a matching import. |
+| `FSIM-ELAB-SVPKG-008` | error | A selective package export does not select an imported declaration. |
 | `FSIM-ELAB-SVTYPE-001` | error | A SystemVerilog user-defined type is not visible in the unit where it is used. |
 | `FSIM-ELAB-SVTYPE-002` | error | The same direct type name is imported from multiple SystemVerilog packages. |
 | `FSIM-ELAB-SVTYPE-003` | error | Bounded SystemVerilog typedef aliases contain a cycle. |
@@ -972,6 +995,11 @@ therefore excluded.
 | `FSIM-ELAB-SVDELAY-001` | error | A SystemVerilog delay expression is not a known nonnegative locally constant integral value after specialization. |
 | `FSIM-ELAB-SVDELAY-002` | error | A specialized SystemVerilog delay expression overflows 64-bit simulation time after time-unit normalization. |
 | `FSIM-ELAB-SVDELAY-003` | error | Combined continuous-assignment and net-declaration transition delays overflow 64-bit simulation time. |
+| `FSIM-ELAB-SVIFACE-001` | error | An interface port actual is not a whole scalar or statically indexed interface instance. |
+| `FSIM-ELAB-SVIFACE-002` | error | An interface port actual does not name an already elaborated interface instance. |
+| `FSIM-ELAB-SVIFACE-003` | error | An interface port actual has the wrong interface type. |
+| `FSIM-ELAB-SVIFACE-004` | error | An interface port selects a modport that its interface type does not declare. |
+| `FSIM-ELAB-SVIFACE-005` | error | A retained modport member has no elaborated interface signal. |
 | `FSIM-ELAB-SVFUNC-001` | error | The visible bounded function set exceeds the representable SimIR call-stack capacity. |
 | `FSIM-ELAB-SVFUNC-002` | error | More than one bounded function has the same visible name. |
 | `FSIM-ELAB-SVFUNC-003` | error | A bounded function call has the wrong number of arguments. |

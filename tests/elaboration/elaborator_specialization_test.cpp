@@ -739,6 +739,12 @@ package beta_values;
   localparam int SHARED = 4;
   typedef bit shared_t;
 endpackage
+package invalid_exports;
+  import alpha_values::*;
+  export beta_values::SHARED;
+  export alpha_values::MISSING;
+  export *::SHARED;
+endpackage
 package broken_values;
   localparam int BROKEN = 1 / 0;
 endpackage
@@ -768,6 +774,7 @@ import broken_values::*;
 import invalid_enum_values::*;
 import invalid_struct_layout::invalid_packet_t;
 import invalid_union_layout::*;
+import invalid_exports::*;
 module invalid_systemverilog_package_user;
   typedef struct packed {
     logic [3:0] field;
@@ -806,6 +813,8 @@ endmodule
              "FSIM-ELAB-SVPKG-004",
              "FSIM-ELAB-SVPKG-005",
              "FSIM-ELAB-SVPKG-006",
+             "FSIM-ELAB-SVPKG-007",
+             "FSIM-ELAB-SVPKG-008",
              "FSIM-ELAB-SVTYPE-001",
              "FSIM-ELAB-SVTYPE-002",
              "FSIM-ELAB-SVTYPE-003",
