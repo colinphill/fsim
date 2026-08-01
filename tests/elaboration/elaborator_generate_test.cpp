@@ -423,6 +423,130 @@ begin
   end block interface_scope;
 end architecture;
 
+package generated_vhdl_block_math is
+  generic (bias : integer := 1);
+  constant offset : integer := bias;
+  function apply(value : integer) return integer;
+end package;
+package body generated_vhdl_block_math is
+  function apply(value : integer) return integer is
+  begin
+    return value + offset;
+  end function;
+end package body;
+
+entity generated_vhdl_block_package_leaf is
+  generic (
+    package api is new work.generated_vhdl_block_math
+      generic map (<>));
+end entity;
+architecture rtl of generated_vhdl_block_package_leaf is
+begin
+  worker: process
+    variable local_value : integer;
+  begin
+    local_value := api.offset;
+    wait;
+  end process;
+end architecture;
+
+entity generated_vhdl_block_nonvalue is
+  port (result_value : out integer);
+end entity;
+architecture rtl of generated_vhdl_block_nonvalue is
+  function increment(value : integer) return integer is
+  begin
+    return value + 1;
+  end function;
+  procedure observe(value : integer) is
+  begin
+    null;
+  end procedure;
+  package selected_math is new work.generated_vhdl_block_math
+    generic map (bias => 3);
+begin
+  nonvalue_scope: block is
+    generic (
+      type item_t;
+      function transform(value : item_t) return item_t;
+      procedure publish(value : item_t) is observe;
+      package api is new work.generated_vhdl_block_math
+        generic map (<>));
+    generic map (
+      item_t => integer,
+      transform => increment,
+      publish => open,
+      api => selected_math);
+    port (output_value : out item_t);
+    port map (output_value => result_value);
+  begin
+    worker: process
+      variable local_value : item_t;
+    begin
+      local_value := transform(api.apply(2));
+      publish(local_value);
+      output_value <= local_value;
+      wait;
+    end process;
+    child: entity work.generated_vhdl_block_package_leaf(rtl)
+      generic map (api => api)
+      port map ();
+  end block nonvalue_scope;
+end architecture;
+
+package generated_vhdl_other_block_math is
+  generic (bias : integer := 1);
+  constant offset : integer := bias;
+end package;
+
+entity generated_vhdl_bad_block_nonvalue is
+end entity;
+architecture rtl of generated_vhdl_bad_block_nonvalue is
+  function wrong_function(value : boolean) return boolean is
+  begin
+    return value;
+  end function;
+  procedure wrong_procedure(value : boolean) is
+  begin
+    null;
+  end procedure;
+  package other_math is new work.generated_vhdl_other_block_math
+    generic map (bias => 3);
+begin
+  missing_type_scope: block is
+    generic (type item_t);
+  begin
+  end block missing_type_scope;
+
+  wrong_function_scope: block is
+    generic (
+      type item_t;
+      function transform(value : item_t) return item_t);
+    generic map (
+      item_t => integer,
+      transform => wrong_function);
+  begin
+  end block wrong_function_scope;
+
+  wrong_procedure_scope: block is
+    generic (
+      type item_t;
+      procedure publish(value : item_t));
+    generic map (
+      item_t => integer,
+      publish => wrong_procedure);
+  begin
+  end block wrong_procedure_scope;
+
+  wrong_package_scope: block is
+    generic (
+      package api is new work.generated_vhdl_block_math
+        generic map (<>));
+    generic map (api => other_math);
+  begin
+  end block wrong_package_scope;
+end architecture;
+
 entity generated_vhdl_bad_block_generic is
 end entity;
 architecture rtl of generated_vhdl_bad_block_generic is
@@ -1124,6 +1248,70 @@ end architecture;
     assert(
         block_interpreter->signal_value(*default_result).to_msb_string()
         == "0011");
+
+    const auto block_nonvalue = fsim::elaboration::elaborate(
+        generated_design,
+        "vhdl:work.generated_vhdl_block_nonvalue(rtl)");
+    for (const auto& diagnostic : block_nonvalue.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+    assert(block_nonvalue.ok());
+    const auto block_nonvalue_result =
+        block_nonvalue.design->find_signal("result_value");
+    assert(block_nonvalue_result);
+    auto block_nonvalue_interpreter =
+        block_nonvalue.design->create_interpreter();
+    assert(
+        block_nonvalue_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto block_nonvalue_word =
+        block_nonvalue_interpreter
+            ->signal_value(*block_nonvalue_result)
+            .low_word();
+    assert(
+        block_nonvalue_word.aval == 6
+        && block_nonvalue_word.bval == 0);
+    const auto& block_nonvalue_specialization =
+        block_nonvalue.design->specializations().front();
+    for (const auto generic : {
+             "item_t", "transform", "publish", "api"}) {
+      assert(std::ranges::any_of(
+          block_nonvalue_specialization.parameter_identity_values,
+          [&](const auto& identity) {
+            return identity.first
+                == "__block:nonvalue_scope:"
+                    + std::string{generic};
+      }));
+    }
+    const auto block_package_child = std::ranges::find_if(
+        block_nonvalue.design->specializations(),
+        [](const auto& specialization) {
+          return specialization.instance
+              == "generated_vhdl_block_nonvalue.nonvalue_scope.child";
+        });
+    assert(
+        block_package_child
+        != block_nonvalue.design->specializations().end());
+    assert(std::ranges::any_of(
+        block_package_child->parameter_identity_values,
+        [](const auto& identity) {
+          return identity.first == "api"
+              && identity.second.find("bias=3")
+                  != std::string::npos;
+        }));
+
+    const auto bad_block_nonvalue = fsim::elaboration::elaborate(
+        generated_design,
+        "vhdl:work.generated_vhdl_bad_block_nonvalue(rtl)");
+    assert(!bad_block_nonvalue.ok());
+    for (const auto code : {
+             "FSIM-ELAB-GENTYPE-001",
+             "FSIM-ELAB-VHFUNC-005",
+             "FSIM-ELAB-VHPROC-005",
+             "FSIM-ELAB-VHPKG-007"}) {
+      assert(has_diagnostic(bad_block_nonvalue, code));
+    }
 
     const auto bad_block_generic = fsim::elaboration::elaborate(
         generated_design,

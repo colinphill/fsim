@@ -220,7 +220,8 @@ SpecializedUnit specialize_unit(
     const std::vector<frontend::ParameterOverride>& overrides,
     const ConstantEnvironment& parent_environment,
     const frontend::Language association_language,
-    std::vector<Diagnostic>& diagnostics) {
+    std::vector<Diagnostic>& diagnostics,
+    const bool expand_generates) {
     SpecializedUnit result;
     result.unit = source;
     const bool is_vhdl =
@@ -1385,19 +1386,31 @@ SpecializedUnit specialize_unit(
         domains,
         source.language,
         diagnostics);
+    result.domains = domains;
+    if (expand_generates) {
+        expand_specialized_unit_generates(result, diagnostics);
+    }
+    return result;
+}
+
+void expand_specialized_unit_generates(
+    SpecializedUnit& specialized,
+    std::vector<Diagnostic>& diagnostics,
+    const VhdlBlockInterfacePreparer* block_preparer) {
     expand_generate_regions(
-        result.unit.generate_regions,
-        result.environment,
-        domains,
-        source.language,
+        specialized.unit.generate_regions,
+        specialized.environment,
+        specialized.domains,
+        specialized.unit.language,
         {},
         {},
-        result.unit,
-        diagnostics);
-    result.unit.generate_regions.clear();
-    apply_net_delays(result.unit, diagnostics);
+        specialized.unit,
+        diagnostics,
+        block_preparer);
+    specialized.unit.generate_regions.clear();
+    apply_net_delays(specialized.unit, diagnostics);
     std::vector<frontend::Instance> expanded_instances;
-    for (auto& instance : result.unit.instances) {
+    for (auto& instance : specialized.unit.instances) {
       if (instance.array_indices.empty()) {
         expanded_instances.push_back(std::move(instance));
         continue;
@@ -1409,8 +1422,7 @@ SpecializedUnit specialize_unit(
         expanded_instances.push_back(std::move(expanded));
       }
     }
-    result.unit.instances = std::move(expanded_instances);
-    return result;
+    specialized.unit.instances = std::move(expanded_instances);
 }
 
 

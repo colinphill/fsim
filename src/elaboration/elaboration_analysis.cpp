@@ -350,6 +350,33 @@ void substitute_parameters(
             diagnostics,
             language);
     }
+    for (auto& procedure : body.procedures) {
+        for (auto& argument : procedure.arguments) {
+            substitute_parameters(
+                argument.type,
+                environment,
+                domains,
+                diagnostics,
+                language);
+            if (argument.default_value) {
+                substitute_parameters(
+                    *argument.default_value,
+                    environment,
+                    domains,
+                    language);
+            }
+        }
+        for (auto& variable : procedure.variables) {
+            substitute_parameters(
+                variable, environment, domains, diagnostics, language);
+        }
+        substitute_parameters(
+            procedure.statements,
+            environment,
+            domains,
+            diagnostics,
+            language);
+    }
     substitute_parameters(
         body.concurrent_statements,
         environment,
@@ -709,6 +736,25 @@ void collect_qualified_identifiers(
         collect_qualified_identifiers(
             process.statements, identifiers);
     }
+    for (const auto& procedure : body.procedures) {
+        for (const auto& argument : procedure.arguments) {
+            collect_qualified_identifiers(
+                argument.type, identifiers);
+            if (argument.default_value) {
+                collect_qualified_identifiers(
+                    *argument.default_value, identifiers);
+            }
+        }
+        for (const auto& variable : procedure.variables) {
+            collect_qualified_identifiers(variable.type, identifiers);
+            if (variable.initializer) {
+                collect_qualified_identifiers(
+                    *variable.initializer, identifiers);
+            }
+        }
+        collect_qualified_identifiers(
+            procedure.statements, identifiers);
+    }
     for (const auto& instance : body.instances) {
         for (const auto& override :
              instance.parameter_overrides) {
@@ -755,6 +801,17 @@ void collect_qualified_identifiers(
             generate.condition, identifiers);
         collect_qualified_identifiers(
             generate.iteration, identifiers);
+        const bool deferred_vhdl_block =
+            generate.kind == frontend::GenerateKind::StaticBlock
+            && std::ranges::any_of(
+                generate.block_generics,
+                [](const auto& generic) {
+                  return generic.kind
+                      != frontend::ParameterKind::Value;
+                });
+        if (deferred_vhdl_block) {
+            continue;
+        }
         collect_qualified_identifiers(
             generate.then_body, identifiers);
         collect_qualified_identifiers(
@@ -1034,6 +1091,17 @@ void qualify_generated_statement(
             statement.task_name = found->second;
         }
     }
+    for (auto& association : statement.procedure_arguments) {
+        qualify_generated_expression(
+            association.value, body_names);
+    }
+    if (statement.kind == StatementKind::ProcedureCall) {
+        if (const auto found =
+                body_names.find(statement.procedure_name);
+            found != body_names.end()) {
+            statement.procedure_name = found->second;
+        }
+    }
     for (auto& sensitivity : statement.sensitivities) {
         qualify_generated_expression(
             sensitivity.expression, body_names);
@@ -1137,6 +1205,33 @@ void qualify_generated_task(
     }
     qualify_generated_statements(task.statements, task_names);
 }
+void qualify_generated_procedure(
+    frontend::ProcedureDeclaration& procedure,
+    const GeneratedNameEnvironment& names,
+    const std::string_view scope) {
+    const auto local_name = procedure.name;
+    procedure.name = generated_scope(scope, local_name);
+    auto procedure_names = names;
+    procedure_names[local_name] = procedure.name;
+    for (auto& argument : procedure.arguments) {
+        qualify_generated_type(argument.type, names);
+        if (argument.default_value) {
+            qualify_generated_expression(
+                *argument.default_value, procedure_names);
+        }
+        procedure_names.erase(argument.name);
+    }
+    for (auto& variable : procedure.variables) {
+        qualify_generated_type(variable.type, names);
+        if (variable.initializer) {
+            qualify_generated_expression(
+                *variable.initializer, procedure_names);
+        }
+        procedure_names.erase(variable.name);
+    }
+    qualify_generated_statements(
+        procedure.statements, procedure_names);
+}
 void qualify_generated_instance(
     frontend::Instance& instance,
     const GeneratedNameEnvironment& names,
@@ -1238,7 +1333,8 @@ void append_generated_body(
     const std::string_view scope,
     const GeneratedNameEnvironment& visible_names,
     DesignUnit& unit,
-    std::vector<Diagnostic>& diagnostics) {
+    std::vector<Diagnostic>& diagnostics,
+    const VhdlBlockInterfacePreparer* block_preparer) {
     auto body_environment = environment;
     auto body_domains = domains;
     evaluate_generated_constants(
@@ -1294,6 +1390,10 @@ void append_generated_body(
     for (const auto& task : body.tasks) {
         body_names[task.name] = generated_scope(scope, task.name);
     }
+    for (const auto& procedure : body.procedures) {
+        body_names[procedure.name] =
+            generated_scope(scope, procedure.name);
+    }
     for (auto& function : body.functions) {
         qualify_generated_function(function, body_names, scope);
         unit.functions.push_back(std::move(function));
@@ -1301,6 +1401,11 @@ void append_generated_body(
     for (auto& task : body.tasks) {
         qualify_generated_task(task, body_names, scope);
         unit.tasks.push_back(std::move(task));
+    }
+    for (auto& procedure : body.procedures) {
+        qualify_generated_procedure(
+            procedure, body_names, scope);
+        unit.procedures.push_back(std::move(procedure));
     }
     for (auto& statement : body.concurrent_statements) {
         if (statement.label == "@vhdl-block-input-driver") {
@@ -1327,7 +1432,8 @@ void append_generated_body(
         scope,
         body_names,
         unit,
-        diagnostics);
+        diagnostics,
+        block_preparer);
 }
 
 std::optional<frontend::ValueDomain> vhdl_guard_domain(
@@ -1392,291 +1498,45 @@ std::optional<frontend::ValueDomain> vhdl_guard_domain(
     return std::nullopt;
 }
 
-bool prepare_vhdl_block_interface(
-    const frontend::GenerateRegion& region,
-    frontend::GenerateBody& body,
-    const GeneratedNameEnvironment& visible_names,
-    std::vector<Diagnostic>& diagnostics) {
-    bool valid = true;
-    const auto report = [&](const std::string_view code,
-                            std::string message,
-                            const frontend::SourceSpan& span) {
-      diagnostics.push_back(
-          {std::string{code}, std::move(message), span});
-      valid = false;
-    };
-    const auto writes_formal = [&](const std::string_view name) {
-      std::function<bool(const std::vector<frontend::Statement>&)> writes;
-      writes = [&](const auto& statements) {
-        return std::ranges::any_of(statements, [&](const auto& statement) {
-          if ((statement.kind == frontend::StatementKind::Assignment
-               && statement.target.text == name)
-              || writes(statement.statements)
-              || writes(statement.else_statements)) {
-              return true;
-          }
-          return std::ranges::any_of(
-              statement.case_alternatives, [&](const auto& alternative) {
-                return writes(alternative.statements);
-              });
-        });
-      };
-      return writes(body.concurrent_statements)
-          || std::ranges::any_of(body.processes, [&](const auto& process) {
-               return writes(process.statements);
-             });
-    };
-
-    std::vector<const frontend::ParameterOverride*> generic_actuals(
-        region.block_generics.size());
-    std::size_t positional = 0;
-    bool saw_named = false;
-    for (const auto& actual : region.block_generic_map) {
-        std::size_t index = region.block_generics.size();
-        if (actual.name) {
-            saw_named = true;
-            const auto found = std::ranges::find(
-                region.block_generics, *actual.name,
-                &frontend::ParameterDeclaration::name);
-            if (found != region.block_generics.end()) {
-                index = static_cast<std::size_t>(std::distance(
-                    region.block_generics.begin(), found));
-            }
-        } else if (saw_named) {
-            report(
-                "FSIM-ELAB-VHBLOCK-001",
-                "a positional block generic actual follows a named actual",
-                actual.span);
-            continue;
-        } else {
-            index = positional++;
-        }
-        if (index >= generic_actuals.size()) {
-            report(
-                "FSIM-ELAB-VHBLOCK-001",
-                actual.name
-                    ? "unknown block generic formal '" + *actual.name + "'"
-                    : "too many positional block generic actuals",
-                actual.span);
-        } else if (generic_actuals[index] != nullptr) {
-            report(
-                "FSIM-ELAB-VHBLOCK-001",
-                "block generic formal '"
-                    + region.block_generics[index].name
-                    + "' is associated more than once",
-                actual.span);
-        } else {
-            generic_actuals[index] = &actual;
-        }
-    }
-
-    std::vector<frontend::ParameterDeclaration> constants;
-    constants.reserve(region.block_generics.size());
-    for (std::size_t index = 0;
-         index < region.block_generics.size(); ++index) {
-        auto constant = region.block_generics[index];
-        if (constant.kind != frontend::ParameterKind::Value) {
-            report(
-                "FSIM-ELAB-VHBLOCK-001",
-                "block generic formal '" + constant.name
-                    + "' is not a bounded value generic",
-                constant.span);
-            continue;
-        }
-        const auto* actual = generic_actuals[index];
-        if (actual != nullptr && !actual->default_box) {
-            if (actual->type_value || !actual->value.valid()) {
-                report(
-                    "FSIM-ELAB-VHBLOCK-001",
-                    "block value generic '" + constant.name
-                        + "' requires an expression actual",
-                    actual->span);
-                continue;
-            }
-            constant.default_value = actual->value;
-        } else if (!constant.default_value.valid()) {
-            report(
-                "FSIM-ELAB-VHBLOCK-001",
-                "required block generic '" + constant.name
-                    + "' has no actual or default",
-                actual ? actual->span : constant.span);
-            continue;
-        }
-        constant.local = true;
-        constants.push_back(std::move(constant));
-    }
-    body.constants.insert(
-        body.constants.begin(),
-        std::make_move_iterator(constants.begin()),
-        std::make_move_iterator(constants.end()));
-
-    std::vector<const frontend::PortConnection*> port_actuals(
-        region.block_ports.size());
-    positional = 0;
-    saw_named = false;
-    for (const auto& actual : region.block_port_map) {
-        std::size_t index = region.block_ports.size();
-        if (actual.port) {
-            saw_named = true;
-            const auto found = std::ranges::find(
-                region.block_ports, *actual.port,
-                &frontend::SignalDeclaration::name);
-            if (found != region.block_ports.end()) {
-                index = static_cast<std::size_t>(std::distance(
-                    region.block_ports.begin(), found));
-            }
-        } else if (saw_named) {
-            report(
-                "FSIM-ELAB-VHBLOCK-002",
-                "a positional block port actual follows a named actual",
-                actual.span);
-            continue;
-        } else {
-            index = positional++;
-        }
-        if (index >= port_actuals.size()) {
-            report(
-                "FSIM-ELAB-VHBLOCK-002",
-                actual.port
-                    ? "unknown block port formal '" + *actual.port + "'"
-                    : "too many positional block port actuals",
-                actual.span);
-        } else if (port_actuals[index] != nullptr) {
-            report(
-                "FSIM-ELAB-VHBLOCK-002",
-                "block port formal '" + region.block_ports[index].name
-                    + "' is associated more than once",
-                actual.span);
-        } else {
-            port_actuals[index] = &actual;
-        }
-    }
-
-    for (std::size_t index = 0;
-         index < region.block_ports.size(); ++index) {
-        auto port = region.block_ports[index];
-        if (port.direction == frontend::PortDirection::Input
-            && writes_formal(port.name)) {
-            report(
-                "FSIM-ELAB-VHBLOCK-002",
-                "input block port '" + port.name
-                    + "' is read-only within the block",
-                port.span);
-            continue;
-        }
-        const auto* actual = port_actuals[index];
-        frontend::PortConnection effective;
-        if (actual != nullptr) {
-            effective = *actual;
-        } else if (port.direction == frontend::PortDirection::Input
-                   && port.default_value) {
-            effective.kind = frontend::PortActualKind::Default;
-            effective.value = *port.default_value;
-            effective.span = port.span;
-        } else if (port.direction != frontend::PortDirection::Input) {
-            effective.kind = frontend::PortActualKind::Open;
-            effective.span = port.span;
-        } else {
-            report(
-                "FSIM-ELAB-VHBLOCK-002",
-                "required input block port '" + port.name
-                    + "' has no actual or default",
-                port.span);
-            continue;
-        }
-        if (effective.kind == frontend::PortActualKind::Open
-            && port.direction == frontend::PortDirection::Input) {
-            if (!port.default_value) {
-                report(
-                    "FSIM-ELAB-VHBLOCK-002",
-                    "input block port '" + port.name
-                        + "' is open but has no default",
-                    effective.span);
-                continue;
-            }
-            effective.kind = frontend::PortActualKind::Default;
-            effective.value = *port.default_value;
-        }
-        const bool conflicts = std::ranges::any_of(
-            body.signals,
-            [&](const frontend::SignalDeclaration& signal) {
-              return signal.name == port.name;
-            });
-        if (conflicts) {
-            report(
-                "FSIM-ELAB-VHBLOCK-002",
-                "block port '" + port.name
-                    + "' conflicts with a local signal declaration",
-                port.span);
-            continue;
-        }
-        if (effective.kind == frontend::PortActualKind::Expression
-            && effective.value.kind
-                == frontend::ExpressionKind::Identifier) {
-            auto actual_expression = effective.value;
-            qualify_generated_expression(
-                actual_expression, visible_names);
-            body.signal_aliases.push_back(
-                frontend::SignalAliasDeclaration{
-                    port.name,
-                    std::move(actual_expression.text),
-                    port.type,
-                    port.direction,
-                    effective.span});
-            continue;
-        }
-        if (effective.kind == frontend::PortActualKind::Expression
-            && port.direction != frontend::PortDirection::Input) {
-            report(
-                "FSIM-ELAB-VHBLOCK-002",
-                "output, buffer, or inout block port '" + port.name
-                    + "' requires a writable signal actual",
-                effective.span);
-            continue;
-        }
-        port.is_port = false;
-        body.signals.insert(body.signals.begin(), port);
-        if (effective.kind == frontend::PortActualKind::Open) {
-            continue;
-        }
-        auto value = effective.value;
-        qualify_generated_expression(value, visible_names);
-        frontend::Statement driver;
-        driver.kind = frontend::StatementKind::Assignment;
-        driver.assignment_kind = frontend::AssignmentKind::Continuous;
-        driver.target = frontend::Expression{
-            frontend::ExpressionKind::Identifier,
-            port.name, {}, effective.span};
-        driver.value = std::move(value);
-        driver.vhdl_delay_mechanism =
-            frontend::VhdlDelayMechanism::ImplicitInertial;
-        driver.span = effective.span;
-        driver.label = "@vhdl-block-input-driver";
-        body.concurrent_statements.insert(
-            body.concurrent_statements.begin(), std::move(driver));
-    }
-    return valid;
-}
-
 void expand_generate_regions(
-    const std::vector<frontend::GenerateRegion>& generates,
+    std::vector<frontend::GenerateRegion>& generates,
     const ConstantEnvironment& environment,
     const ConstantDomainEnvironment& domains,
     const frontend::Language language,
     const std::string_view parent_scope,
     const GeneratedNameEnvironment& visible_names,
     DesignUnit& unit,
-    std::vector<Diagnostic>& diagnostics) {
-    for (const auto& generate : generates) {
+    std::vector<Diagnostic>& diagnostics,
+    const VhdlBlockInterfacePreparer* block_preparer) {
+    for (auto& generate : generates) {
         if (generate.kind == frontend::GenerateKind::StaticBlock) {
             auto body = generate.then_body;
+            const auto scope = generated_scope(
+                parent_scope, generate.then_scope);
+            auto body_visible_names = visible_names;
+            if (language == frontend::Language::Vhdl2008
+                && block_preparer != nullptr
+                && !(*block_preparer)(
+                    generate,
+                    body,
+                    environment,
+                    domains,
+                    scope,
+                    body_visible_names,
+                    unit,
+                    diagnostics)) {
+                continue;
+            }
             if (language == frontend::Language::Vhdl2008
                 && (!generate.block_generics.empty()
                     || !generate.block_generic_map.empty()
                     || !generate.block_ports.empty()
                     || !generate.block_port_map.empty())
                 && !prepare_vhdl_block_interface(
-                    generate, body, visible_names, diagnostics)) {
+                    generate,
+                    body,
+                    body_visible_names,
+                    diagnostics)) {
                 continue;
             }
             if (language == frontend::Language::Vhdl2008
@@ -1723,9 +1583,10 @@ void expand_generate_regions(
                 language,
                 generated_scope(
                     parent_scope, generate.then_scope),
-                visible_names,
+                body_visible_names,
                 unit,
-                diagnostics);
+                diagnostics,
+                block_preparer);
             continue;
         }
         if (generate.kind == frontend::GenerateKind::Selection) {
@@ -1857,7 +1718,8 @@ void expand_generate_regions(
                         parent_scope, selected->scope),
                     visible_names,
                     unit,
-                    diagnostics);
+                    diagnostics,
+                    block_preparer);
             }
             continue;
         }
@@ -1928,7 +1790,8 @@ void expand_generate_regions(
                     generated_scope(parent_scope, indexed_scope),
                     visible_names,
                     unit,
-                    diagnostics);
+                    diagnostics,
+                    block_preparer);
                 error.clear();
                 const auto next = evaluate_constant_expression(
                     generate.iteration,
@@ -1981,7 +1844,8 @@ void expand_generate_regions(
             generated_scope(parent_scope, local_scope),
             visible_names,
             unit,
-            diagnostics);
+            diagnostics,
+            block_preparer);
     }
 }
 

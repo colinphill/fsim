@@ -6391,19 +6391,22 @@ application differential agrees across interpreter and LLVM O0/O2 cold/warm
 runs, including scheduling, normalized VCD, and cache reuse. Batch 114 remains
 **in progress** with Tasks 3 through 10 outstanding.
 
-Task 3 now has focused partial evidence for bounded value-generic block
-interfaces. Block generic and port clauses/maps retain positional-then-named
-associations, declaration-ordered defaults, explicit `open`, and dependent
-port constraints. Elaboration creates scoped owned signals for defaulted/open
+Task 3 is focused-complete. Block generic and port clauses/maps retain
+positional-then-named associations, declaration-ordered defaults, explicit
+`open`, and dependent port constraints. Expansion is delayed until enclosing
+value/type/subprogram/local-package specialization completes, then binds block
+value, type, function, procedure, and package formals before resolving the
+body and ports. Elaboration creates scoped owned signals for defaulted/open
 formals and exact hierarchy aliases for direct enclosing-signal actuals,
-rejects unknown/duplicate/misordered/missing associations, nonwritable output
-actuals, writes through input formals, and width/range-direction mismatches.
-The interpreter and LLVM O0/O2 cold/warm application differential agrees on
-values and VCD; a generic-map edit changes behavior and specialization-cache
-identity. The focused frontend, 1,445-code catalog, 343-source line budget,
-elaboration, and merged-application gate passes. Task 3 remains **in progress**
-until type, subprogram, and package block generics plus their maps have
-equivalent evidence.
+records scoped callable/package identities and source dependencies, and emits
+stable association, formal-mode, type, subprogram-profile, package-profile,
+writable-actual, and port-profile diagnostics. The interpreter and LLVM O0/O2
+cold/warm application differential agrees on values and VCD, and a block
+package-map edit changes the selected package identity, behavior, and native
+cache key. The final focused frontend, 1,445-code catalog, 344-source budget,
+elaboration, and merged-application gate passes in 15.91 seconds. Tasks 1
+through 3 are focused-complete; Batch 114 remains **in progress** with Tasks 4
+through 10 outstanding.
 
 ## Forward language-closure feature batches
 

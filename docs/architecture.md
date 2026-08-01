@@ -150,6 +150,14 @@ static regions representing unguarded VHDL blocks or direct/named
 SystemVerilog generate contents.
 Generate conditions, loop controls, selectors, and choices are
 constant-evaluated after generic/parameter substitution for each occurrence.
+Selected VHDL units retain generated regions until enclosing value, type,
+subprogram, and local-package specialization is complete. A block with
+non-value interface generics is then specialized as a temporary declarative
+unit at its exact expansion point: package formals bind first, type and
+subprogram formals bind against the enclosing visibility, and value/port maps
+expand only after those bindings have resolved dependent types. Scoped block
+binding identities and callable/package source dependencies join the owning
+specialization key before native-cache lookup.
 Only selected branches/alternatives and realized iterations enter DesignIR.
 Declared block/alternative labels become stable path components; loop
 iterations use the common `label[index]` spelling so explicit mixed-language

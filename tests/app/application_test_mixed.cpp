@@ -692,6 +692,20 @@ generated_block_interface_vhdl_o0_config.build.optimization =
     fsim::project::Optimization::o0;
 generated_block_interface_vhdl_o0_config.build.cache_path =
     directory / "generated-block-interface-vhdl-o0-test-cache";
+auto generated_block_nonvalue_vhdl_config =
+    make_generated_behavior_config(
+        "generated-block-nonvalue-vhdl-test",
+        "vhdl:work.generated_block_nonvalue_vhdl(rtl)",
+        fsim::project::Language::vhdl,
+        generated_block_behavior_vhdl_source);
+auto generated_block_nonvalue_vhdl_o0_config =
+    generated_block_nonvalue_vhdl_config;
+generated_block_nonvalue_vhdl_o0_config.project.name =
+    "generated-block-nonvalue-vhdl-o0-test";
+generated_block_nonvalue_vhdl_o0_config.build.optimization =
+    fsim::project::Optimization::o0;
+generated_block_nonvalue_vhdl_o0_config.build.cache_path =
+    directory / "generated-block-nonvalue-vhdl-o0-test-cache";
 auto generated_guarded_behavior_vhdl_config =
     make_generated_behavior_config(
         "generated-guarded-behavior-vhdl-test",
@@ -709,7 +723,10 @@ generated_guarded_behavior_vhdl_o0_config.build.cache_path =
 const auto run_generated_behavior =
     [&](const fsim::project::Config& behavior_config,
         const fsim::app::SimulationEngine engine,
-        const std::vector<std::string_view>& local_paths) {
+        const std::vector<std::string_view>& local_paths,
+        const std::vector<std::pair<std::string_view,
+                                    std::string_view>>&
+            expected_identities = {}) {
       fsim::diagnostic::Engine run_diagnostics;
       auto project = fsim::app::build_project(
           behavior_config, run_diagnostics);
@@ -721,6 +738,16 @@ const auto run_generated_behavior =
       assert(project->design.specializations().size() == 1);
       assert(project->specialization_cache_keys.size() == 1);
       assert(project->design.find_signal("observed"));
+      for (const auto& [name, fragment] : expected_identities) {
+        assert(std::ranges::any_of(
+            project->design.specializations().front()
+                .parameter_identity_values,
+            [&](const auto& identity) {
+              return identity.first == name
+                  && identity.second.find(fragment)
+                      != std::string::npos;
+            }));
+      }
       for (const auto local_path : local_paths) {
         assert(project->design.find_signal(local_path));
       }
@@ -737,15 +764,20 @@ const auto verify_generated_behavior =
         const std::vector<std::string_view>& local_paths,
         const std::vector<std::string>& expected_values,
         const std::size_t expected_processes,
-        const fsim::runtime::SimulationTick expected_time = 0) {
+        const fsim::runtime::SimulationTick expected_time = 0,
+        const std::vector<std::pair<std::string_view,
+                                    std::string_view>>&
+            expected_identities = {}) {
       const auto reference = run_generated_behavior(
           behavior_config,
           fsim::app::SimulationEngine::interpreter,
-          local_paths);
+          local_paths,
+          expected_identities);
       const auto cold = run_generated_behavior(
           behavior_config,
           fsim::app::SimulationEngine::compiled,
-          local_paths);
+          local_paths,
+          expected_identities);
       compare_captures(reference.simulation, cold.simulation);
       assert(
           cold.simulation.result.status
@@ -792,7 +824,8 @@ const auto verify_generated_behavior =
       const auto warm = run_generated_behavior(
           behavior_config,
           fsim::app::SimulationEngine::compiled,
-          local_paths);
+          local_paths,
+          expected_identities);
       assert(warm.keys == cold.keys);
 #if defined(FSIM_HAS_LLVM)
       assert(warm.simulation.native_cache.hits == 1);
@@ -842,6 +875,26 @@ verify_generated_behavior(
      "interface_scope.unused_output"},
     {"0111", "0011", "0101", "UUUU", "0011"},
     4);
+const std::vector<std::pair<std::string_view, std::string_view>>
+    block_nonvalue_identities{
+        {"__block:nonvalue_scope:item_t", "vhdl-type-v"},
+        {"__block:nonvalue_scope:transform", "vhdl-function-v"},
+        {"__block:nonvalue_scope:observe", "vhdl-procedure-v"},
+        {"__block:nonvalue_scope:api", "bias=3"}};
+const auto block_nonvalue_baseline = verify_generated_behavior(
+    generated_block_nonvalue_vhdl_config,
+    {},
+    {"00000000000000000000000000000110"},
+    1,
+    0,
+    block_nonvalue_identities);
+verify_generated_behavior(
+    generated_block_nonvalue_vhdl_o0_config,
+    {},
+    {"00000000000000000000000000000110"},
+    1,
+    0,
+    block_nonvalue_identities);
 verify_generated_behavior(
     generated_guarded_behavior_vhdl_config,
     {"enabled", "guarded_scope.guard"},
@@ -868,6 +921,13 @@ edited_block_source.replace(
     old_map,
     std::string_view{"increment => open"}.size(),
     "increment => 3");
+const auto old_package_map =
+    edited_block_source.find("generic map (bias => 3)");
+assert(old_package_map != std::string::npos);
+edited_block_source.replace(
+    old_package_map,
+    std::string_view{"generic map (bias => 3)"}.size(),
+    "generic map (bias => 4)");
 std::ofstream block_source_output(
     generated_block_behavior_vhdl_source,
     std::ios::binary | std::ios::trunc);
@@ -885,6 +945,19 @@ assert((block_interface_edited.simulation.final_values
 #if defined(FSIM_HAS_LLVM)
 assert(block_interface_edited.simulation.native_cache.hits == 0);
 assert(block_interface_edited.simulation.native_cache.misses == 1);
+#endif
+const auto block_nonvalue_edited = run_generated_behavior(
+    generated_block_nonvalue_vhdl_config,
+    fsim::app::SimulationEngine::compiled,
+    {},
+    {{"__block:nonvalue_scope:api", "bias=4"}});
+assert(block_nonvalue_edited.keys != block_nonvalue_baseline.keys);
+assert((block_nonvalue_edited.simulation.final_values
+        == std::vector<std::string>{
+            "00000000000000000000000000000111"}));
+#if defined(FSIM_HAS_LLVM)
+assert(block_nonvalue_edited.simulation.native_cache.hits == 0);
+assert(block_nonvalue_edited.simulation.native_cache.misses == 1);
 #endif
 
 }

@@ -988,6 +988,7 @@ void HierarchyBuilder::instantiate_vhdl_local_packages(
         specialized.environment,
         domains,
         diagnostics_);
+    specialized.domains = std::move(domains);
 }
 
 } // namespace fsim::elaboration

@@ -420,6 +420,61 @@ begin
   end block interface_scope;
 end architecture;
 
+package generated_block_math_vhdl is
+  generic (bias : integer := 1);
+  constant offset : integer := bias;
+  function apply(value : integer) return integer;
+end package;
+
+package body generated_block_math_vhdl is
+  function apply(value : integer) return integer is
+  begin
+    return value + offset;
+  end function;
+end package body;
+
+entity generated_block_nonvalue_vhdl is
+  port (observed : out integer);
+end entity;
+
+architecture rtl of generated_block_nonvalue_vhdl is
+  function increment(value : integer) return integer is
+  begin
+    return value + 1;
+  end function;
+  procedure publish(value : integer) is
+  begin
+    null;
+  end procedure;
+  package selected_math is new work.generated_block_math_vhdl
+    generic map (bias => 3);
+begin
+  nonvalue_scope: block is
+    generic (
+      type item_t;
+      function transform(value : item_t) return item_t;
+      procedure observe(value : item_t) is publish;
+      package api is new work.generated_block_math_vhdl
+        generic map (<>));
+    generic map (
+      item_t => integer,
+      transform => increment,
+      observe => open,
+      api => selected_math);
+    port (output_value : out item_t);
+    port map (output_value => observed);
+  begin
+    worker: process
+      variable local_value : item_t;
+    begin
+      local_value := transform(api.apply(2));
+      observe(local_value);
+      output_value <= local_value;
+      wait;
+    end process;
+  end block nonvalue_scope;
+end architecture;
+
 entity generated_guarded_behavior_vhdl is
   port (
     observed : out boolean

@@ -1206,6 +1206,7 @@ struct GenerateBody {
   std::vector<SignalAliasDeclaration> signal_aliases;
   std::vector<FunctionDeclaration> functions;
   std::vector<TaskDeclaration> tasks;
+  std::vector<ProcedureDeclaration> procedures;
   std::vector<VhdlComponentDeclaration> vhdl_component_declarations;
   std::vector<Statement> concurrent_statements;
   std::vector<Process> processes;

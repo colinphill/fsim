@@ -16,12 +16,13 @@ as work lands. Before moving on, retain that batch's list, mark it
 
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: pushed feature-batch-111 VHDL analysis-order,
-  package/body context, transitive callable provenance, and recursive
-  configuration-binding closure at commit `fdafa67`, plus an intentionally
-  dirty Batch 112 ordinary-callable overload-resolution checkpoint described
-  below. Do not reset the worktree to the pushed commit.
-- The source-size refactor is complete: all 336 authored C/C++ source, header,
+- Implementation baseline: pushed Batch 114 value-generic block interfaces at
+  commit `1a9c4dd`. The Task 3 all-family block-interface checkpoint is this
+  document's containing commit: it delays selected-unit generate expansion,
+  binds block type/function/procedure/package generics after enclosing local
+  packages, and retains scoped cache/provenance identities. Verify live Git
+  state before resuming; do not discard a newer intentional checkpoint.
+- The source-size refactor is complete: all 344 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 115-alternative
@@ -1702,19 +1703,22 @@ application differential prove false-to-true activation, scheduling,
 normalized VCD, hierarchy, and cache reuse. Batch 114 remains **in progress**
 with Tasks 3 through 10 outstanding.
 
-Task 3 has focused partial evidence for bounded value-generic block
-interfaces. The retained generic/port clauses and maps support
-positional-then-named associations, declaration-ordered defaults, explicit
-`open`, and generic-dependent port constraints. Expansion creates scoped
-owned signals for defaulted/open formals and exact hierarchy aliases for
-direct enclosing-signal actuals. Stable diagnostics reject association,
-formal-mode, writable-actual, and profile errors. Frontend, catalog,
-source-budget, elaboration, and the merged application test pass; the latter
-proves interpreter and LLVM O0/O2 cold/warm values, VCD, cache reuse, and a
-generic-map edit that changes behavior and the specialization key. The catalog
-covers 1,445 production codes and all 343 authored sources remain within the
-2,000-line limit. Task 3 remains **in progress** until type, subprogram, and
-package block generics and maps receive equivalent evidence.
+Task 3 is focused-complete. Block generic/port clauses and maps support
+positional-then-named associations, declaration-ordered defaults, `open`, and
+generic-dependent port constraints. Selected-unit generate expansion is now
+delayed until enclosing value/type/subprogram/local-package specialization is
+complete; the block binder then resolves value, type, function, procedure, and
+package formals before its body and ports. Scoped owned signals and exact
+enclosing-signal aliases coexist with stable scoped callable/package
+identities and transitive provenance. Focused negative evidence covers
+association/formal-mode/writable/profile failures plus missing type and
+mismatched function, procedure, and package actuals. The merged application
+test proves interpreter and LLVM O0/O2 cold/warm value/VCD agreement and a
+block package-map edit that changes package identity, behavior, and the native
+cache key. The final five-test focused gate passes in 15.91 seconds with 1,445
+production diagnostics and all 344 authored sources within the 2,000-line
+limit. Tasks 1 through 3 are focused-complete; Batch 114 remains **in progress**
+with Tasks 4 through 10 outstanding.
 
 Batch 110 has advanced through these validated features:
 

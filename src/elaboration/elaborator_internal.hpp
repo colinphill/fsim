@@ -457,6 +457,15 @@ void visit_generate_body_types(
         }
         visit_statement_types(task.statements, visitor);
     }
+    for (auto& procedure : body.procedures) {
+        for (auto& argument : procedure.arguments) {
+            visitor(argument.type);
+        }
+        for (auto& variable : procedure.variables) {
+            visitor(variable.type);
+        }
+        visit_statement_types(procedure.statements, visitor);
+    }
     for (auto& component :
          body.vhdl_component_declarations) {
         for (auto& generic : component.generics) {
@@ -549,12 +558,18 @@ std::string generated_scope(
 using GeneratedNameEnvironment =
     std::unordered_map<std::string, std::string>;
 
+using VhdlBlockInterfacePreparer = std::function<bool(
+    frontend::GenerateRegion&,
+    frontend::GenerateBody&,
+    const ConstantEnvironment&,
+    const ConstantDomainEnvironment&,
+    std::string_view,
+    GeneratedNameEnvironment&,
+    DesignUnit&,
+    std::vector<Diagnostic>&)>;
+
 void qualify_generated_expression(
     Expression& expression,
-    const GeneratedNameEnvironment& names);
-
-void qualify_generated_statements(
-    std::vector<Statement>& statements,
     const GeneratedNameEnvironment& names);
 
 void qualify_generated_statement(
@@ -575,14 +590,10 @@ void qualify_generated_instance(
     const GeneratedNameEnvironment& names,
     const std::string_view scope);
 
-void expand_generate_regions(
-    const std::vector<frontend::GenerateRegion>& generates,
-    const ConstantEnvironment& environment,
-    const ConstantDomainEnvironment& domains,
-    frontend::Language language,
-    std::string_view parent_scope,
+bool prepare_vhdl_block_interface(
+    const frontend::GenerateRegion& region,
+    frontend::GenerateBody& body,
     const GeneratedNameEnvironment& visible_names,
-    DesignUnit& unit,
     std::vector<Diagnostic>& diagnostics);
 
 void evaluate_generated_constants(
@@ -600,17 +611,19 @@ void append_generated_body(
     const std::string_view scope,
     const GeneratedNameEnvironment& visible_names,
     DesignUnit& unit,
-    std::vector<Diagnostic>& diagnostics);
+    std::vector<Diagnostic>& diagnostics,
+    const VhdlBlockInterfacePreparer* block_preparer = nullptr);
 
 void expand_generate_regions(
-    const std::vector<frontend::GenerateRegion>& generates,
+    std::vector<frontend::GenerateRegion>& generates,
     const ConstantEnvironment& environment,
     const ConstantDomainEnvironment& domains,
     const frontend::Language language,
     const std::string_view parent_scope,
     const GeneratedNameEnvironment& visible_names,
     DesignUnit& unit,
-    std::vector<Diagnostic>& diagnostics);
+    std::vector<Diagnostic>& diagnostics,
+    const VhdlBlockInterfacePreparer* block_preparer = nullptr);
 
 struct PackageBinding {
     std::string template_name;
@@ -626,6 +639,7 @@ using PackageEnvironment =
 struct SpecializedUnit {
     DesignUnit unit;
     ConstantEnvironment environment;
+    ConstantDomainEnvironment domains;
     SystemVerilogStringEnvironment string_environment;
     std::vector<std::pair<std::string, std::string>> values;
     std::vector<std::pair<std::string, std::string>> identity_values;
@@ -694,7 +708,13 @@ SpecializedUnit specialize_unit(
     const std::vector<frontend::ParameterOverride>& overrides,
     const ConstantEnvironment& parent_environment,
     const frontend::Language association_language,
-    std::vector<Diagnostic>& diagnostics);
+    std::vector<Diagnostic>& diagnostics,
+    bool expand_generates = true);
+
+void expand_specialized_unit_generates(
+    SpecializedUnit& specialized,
+    std::vector<Diagnostic>& diagnostics,
+    const VhdlBlockInterfacePreparer* block_preparer = nullptr);
 
 bool valid_systemc_construction_value(
     const fsim_sc_construction_type_v1 type,
@@ -1634,6 +1654,20 @@ private:
         const std::vector<frontend::ProcedureDeclaration>& parent_procedures,
         const PackageEnvironment& parent_packages,
         const frontend::Language association_language);
+
+    bool prepare_vhdl_block_nonvalue_interface(
+        frontend::GenerateRegion& region,
+        frontend::GenerateBody& body,
+        const ConstantEnvironment& environment,
+        const ConstantDomainEnvironment& domains,
+        std::string_view scope,
+        GeneratedNameEnvironment& visible_names,
+        DesignUnit& unit,
+        PackageEnvironment& packages,
+        std::vector<std::pair<std::string, std::string>>& values,
+        std::vector<std::pair<std::string, std::string>>& identities);
+
+    void expand_vhdl_block_generates(SpecializedUnit& specialized);
 
     void finish();
 

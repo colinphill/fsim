@@ -367,6 +367,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/elaboration_literals.cpp
       src/elaboration/elaboration_specialization.cpp
       src/elaboration/elaboration_vhdl_static.cpp
+      src/elaboration/elaboration_vhdl_blocks.cpp
       src/elaboration/elaboration_sv_constants.cpp
       src/elaboration/elaboration_sv_functions.cpp
       src/elaboration/elaboration_sv_generate.cpp

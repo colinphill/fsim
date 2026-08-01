@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
-
 namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
-
     void HierarchyBuilder::resolve_named_types(
         DesignUnit& unit,
         const NamedTypeEnvironment& imported_types,
@@ -535,6 +533,14 @@ using namespace elaboration_detail;
             [&](std::vector<frontend::GenerateRegion>&
                     regions) {
                 for (auto& region : regions) {
+                    if (std::ranges::any_of(
+                            region.block_generics,
+                            [](const auto& generic) {
+                              return generic.kind
+                                  != frontend::ParameterKind::Value;
+                            })) {
+                        continue;
+                    }
                     for (auto& generic : region.block_generics) {
                         resolve_declaration(generic);
                     }
@@ -975,7 +981,6 @@ using namespace elaboration_detail;
         }
         return result;
     }
-
     SpecializedUnit HierarchyBuilder::specialize_selected_unit(
         const DesignUnit& selected,
         const std::vector<frontend::ParameterOverride>& overrides,
@@ -1079,7 +1084,8 @@ using namespace elaboration_detail;
             type_specialized.value_overrides,
             parent_environment,
             association_language,
-            diagnostics_);
+            diagnostics_,
+            false);
         if (selected.language
                 == frontend::Language::SystemVerilog2017
             && type_specialized.applied) {
@@ -1186,9 +1192,9 @@ using namespace elaboration_detail;
             specialized, interface_packages);
         instantiate_vhdl_generic_subprograms(
             specialized);
+        expand_vhdl_block_generates(specialized);
         return specialized;
     }
-
     std::optional<SignalId> HierarchyBuilder::add_owned_signal(
         const frontend::SignalDeclaration& declaration,
         const std::string_view path,

@@ -844,6 +844,56 @@ end architecture;
               == std::optional<std::string>{"output_value"},
       "guarded VHDL block retains its expression, interface, and maps");
 
+  const auto nonvalue_vhdl_block = parse_text(
+      "nonvalue_block.vhd",
+      R"(
+package template is
+  generic (bias : integer := 1);
+end package;
+architecture rtl of nonvalue_block is
+  function increment(value : integer) return integer is
+  begin
+    return value + 1;
+  end function;
+  procedure observe(value : integer) is
+  begin
+    null;
+  end procedure;
+  package selected is new work.template generic map (bias => 2);
+begin
+  selected_scope: block is
+    generic (
+      type item_t;
+      function transform(value : item_t) return item_t;
+      procedure publish(value : item_t) is observe;
+      package api is new work.template generic map (<>));
+    generic map (
+      item_t => integer,
+      transform => increment,
+      publish => open,
+      api => selected);
+  begin
+  end block selected_scope;
+end architecture;
+)",
+      Language::Vhdl2008);
+  const auto& nonvalue_region =
+      nonvalue_vhdl_block.design.units.back().generate_regions.front();
+  require(
+      nonvalue_vhdl_block.ok()
+          && nonvalue_region.block_generics.size() == 4
+          && nonvalue_region.block_generics[0].kind
+              == ParameterKind::Type
+          && nonvalue_region.block_generics[1].kind
+              == ParameterKind::Function
+          && nonvalue_region.block_generics[2].kind
+              == ParameterKind::Procedure
+          && nonvalue_region.block_generics[3].kind
+              == ParameterKind::Package
+          && nonvalue_region.block_generic_map.size() == 4
+          && nonvalue_region.block_generic_map[2].default_box,
+      "VHDL block retains type, function, procedure, and package generics");
+
   const auto missing_block_generic_map_semicolon = parse_text(
       "missing_block_generic_map_semicolon.vhd",
       R"(
