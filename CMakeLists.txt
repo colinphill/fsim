@@ -379,6 +379,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/elaboration_vhdl_subprograms.cpp
       src/elaboration/elaboration_targets.cpp
       src/elaboration/hierarchy_packages.cpp
+      src/elaboration/hierarchy_ports.cpp
       src/elaboration/hierarchy_sv_package_qualified.cpp
       src/elaboration/hierarchy_sv_interface_callables.cpp
       src/elaboration/hierarchy_resolution.cpp

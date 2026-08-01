@@ -381,6 +381,7 @@ therefore excluded.
 | `FSIM-VHDL-SEM-072` | error | A component port default is declared on a non-input formal. |
 | `FSIM-VHDL-SEM-073` | error | A positional VHDL function-call actual follows a named actual. |
 | `FSIM-VHDL-SEM-074` | error | A VHDL procedure parameter default is declared on a non-input formal. |
+| `FSIM-VHDL-SEM-075` | error | A VHDL entity port default is declared on a non-input formal. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -388,7 +389,6 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-006` | error | Unsupported concurrent statement. |
 | `FSIM-VHDL-UNSUPPORTED-007` | error | A process declarative item is not a bounded variable declaration. |
 | `FSIM-VHDL-UNSUPPORTED-008` | error | Unsupported sequential statement. |
-| `FSIM-VHDL-UNSUPPORTED-011` | error | Port default expressions are parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-012` | error | Signal initializers are parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-014` | error | An integer-family subtype appears in a declaration context that does not yet admit scalar integer objects. |
 | `FSIM-VHDL-UNSUPPORTED-015` | error | A nested context declaration appears where only a context reference is permitted. |
@@ -1197,6 +1197,8 @@ therefore excluded.
 | `FSIM-ELAB-VHENUMRANGE-002` | error | A VHDL enumeration subtype constraint is null or lies outside the base enumeration's literal table. |
 | `FSIM-ELAB-VHENUMRANGE-003` | error | A derived VHDL enumeration subtype constraint is not contained by its resolved base subtype. |
 | `FSIM-ELAB-VHENUMRANGE-004` | error | A locally static value assigned to a constrained VHDL enumeration object lies outside the subtype range. |
+| `FSIM-ELAB-VHPORT-001` | error | A VHDL input-port expression is not a supported locally static value for its contextual formal type. |
+| `FSIM-ELAB-VHPORT-002` | error | A VHDL output, buffer, or inout port is associated with an expression that is not a writable signal name. |
 | `FSIM-ELAB-SVENUM-001` | error | An enum base width is unsupported or an enumerator value does not fit it. |
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-SVCONST-001` | error | A SystemVerilog parameter value cannot be converted to its declared bounded integral type without losing X/Z state or valid width metadata. |

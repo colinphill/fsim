@@ -1298,6 +1298,10 @@ using namespace elaboration_detail;
                 read_only_container_objects,
                 binding,
                 target->language != unit.language);
+            for (auto& driver : child_aliases.vhdl_input_drivers) {
+                child_specialized.unit.concurrent_statements.push_back(
+                    std::move(driver));
+            }
             if (configured.referenced_configuration != nullptr) {
                 vhdl_configurations_by_path_[child_path] =
                     configured.referenced_configuration;

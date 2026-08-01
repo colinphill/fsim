@@ -382,12 +382,10 @@ using namespace elaboration_detail;
             type = std::move(*constrained);
             return true;
         };
-
         for (std::size_t index = 0;
              index < unit.type_aliases.size(); ++index) {
             (void)resolve_alias(index);
         }
-
         const auto resolve_declaration =
             [&](auto& declaration) {
                 (void)resolve_type(declaration.type);
@@ -543,7 +541,6 @@ using namespace elaboration_detail;
                     }
                 }
             };
-
         for (auto& parameter : unit.parameters) {
             if (parameter.kind
                 == frontend::ParameterKind::Type) {
@@ -827,7 +824,6 @@ using namespace elaboration_detail;
                         + "." + entity->name,
                     true});
         }
-
         // Entity interfaces have their own declarative region. Resolve them
         // without exposing architecture-local type declarations, then merge
         // the typed ports back into the architecture specialization.
@@ -1390,52 +1386,6 @@ using namespace elaboration_detail;
         return selected;
     }
 
-    void HierarchyBuilder::note_boundary_driver(
-        const SignalId signal,
-        const Binding* binding,
-        const std::string& path,
-        const frontend::SourceSpan& source,
-        const bool cross_language) {
-        auto& paths = boundary_driver_paths_[signal];
-        const auto nested_with = [](const std::string_view left,
-                                    const std::string_view right) {
-          const auto left_prefix = std::string{left} + ".";
-          const auto right_prefix = std::string{right} + ".";
-          return left.starts_with(right_prefix)
-              || right.starts_with(left_prefix);
-        };
-        const bool conflicting = std::ranges::any_of(
-            paths,
-            [&](const std::string& existing) {
-              return !nested_with(path, existing);
-            });
-        paths.push_back(path);
-        if (cross_language) {
-            cross_language_boundary_signals_.insert(signal);
-        }
-        if (binding != nullptr && binding->resolver) {
-            const auto [found, inserted] =
-                resolver_by_signal_.emplace(signal, *binding->resolver);
-            if (!inserted && found->second != *binding->resolver) {
-                report(
-                    "FSIM-ELAB-BIND-023",
-                    "conflicting resolvers for boundary net '" + path + "'",
-                    source);
-            }
-        }
-        if (conflicting
-            && !resolver_by_signal_.contains(signal)
-            && (cross_language_boundary_signals_.contains(signal)
-                || native_resolution(
-                       design_.signal_info_.at(signal))
-                    == ResolutionKind::none)) {
-            report(
-                "FSIM-ELAB-BIND-024",
-                "multiple boundary drivers on '" + path
-                    + "' require resolver = \"std_logic\" or \"sv_wire\"",
-                source);
-        }
-    }
     HierarchyBuilder::PortAliases HierarchyBuilder::connect_ports(
         const frontend::Instance& instance,
         const std::vector<frontend::SignalDeclaration>& ports,
@@ -1783,6 +1733,22 @@ using namespace elaboration_detail;
                     == frontend::PortActualKind::Open) {
                 if (port.direction
                     == frontend::PortDirection::Input) {
+                    if (!cross_language
+                        && dependency_owner != nullptr
+                        && port.default_value) {
+                        auto default_connection = connection;
+                        default_connection.kind =
+                            frontend::PortActualKind::Default;
+                        default_connection.value = *port.default_value;
+                        (void)connect_vhdl_expression_port(
+                            port,
+                            default_connection,
+                            path,
+                            parent_signals,
+                            result,
+                            *dependency_owner);
+                        continue;
+                    }
                     report(
                         "FSIM-ELAB-BIND-027",
                         "input port '" + path + "." + port.name
@@ -1889,6 +1855,19 @@ using namespace elaboration_detail;
                 continue;
             }
             if (connection.value.kind != frontend::ExpressionKind::Identifier) {
+                if (!cross_language
+                    && dependency_owner != nullptr
+                    && dependency_owner->language
+                        == frontend::Language::Vhdl2008
+                    && connect_vhdl_expression_port(
+                        port,
+                        connection,
+                        path,
+                        parent_signals,
+                        result,
+                        *dependency_owner)) {
+                    continue;
+                }
                 report(
                     "FSIM-ELAB-BIND-027",
                     "boundary connection actuals must be whole signals",
@@ -1974,6 +1953,27 @@ using namespace elaboration_detail;
                 if (!connected[port_index]
                     && ports[port_index].direction
                         == frontend::PortDirection::Input) {
+                    if (!cross_language
+                        && dependency_owner != nullptr
+                        && ports[port_index].default_value) {
+                        frontend::PortConnection default_connection;
+                        default_connection.port =
+                            ports[port_index].name;
+                        default_connection.value =
+                            *ports[port_index].default_value;
+                        default_connection.kind =
+                            frontend::PortActualKind::Default;
+                        default_connection.span =
+                            ports[port_index].span;
+                        (void)connect_vhdl_expression_port(
+                            ports[port_index],
+                            default_connection,
+                            path,
+                            parent_signals,
+                            result,
+                            *dependency_owner);
+                        continue;
+                    }
                     report(
                         ports[port_index].type.domain
                                     == frontend::ValueDomain::String

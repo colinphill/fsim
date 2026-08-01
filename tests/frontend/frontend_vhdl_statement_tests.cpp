@@ -969,21 +969,41 @@ begin
 end architecture;
 )",
       Language::Vhdl2008);
-  require(!vhdl.ok(), "VHDL defaults and initializers must be rejected");
-  bool port_default = false;
+  require(!vhdl.ok(), "VHDL signal initializers must be rejected");
   bool signal_initializer = false;
   for (const auto& diagnostic : vhdl.diagnostics) {
-    port_default =
-        port_default
-        || diagnostic.code == "FSIM-VHDL-UNSUPPORTED-011";
     signal_initializer =
         signal_initializer
         || diagnostic.code == "FSIM-VHDL-UNSUPPORTED-012";
   }
-  require(port_default, "VHDL port default needs a targeted diagnostic");
+  const auto* entity =
+      vhdl.design.find(UnitKind::VhdlEntity, "initializers");
+  require(
+      entity != nullptr && entity->ports.size() == 1
+          && entity->ports.front().default_value
+          && entity->ports.front().default_value->kind
+              == ExpressionKind::LogicLiteral,
+      "VHDL input-port defaults must remain in entity HIR");
   require(
       signal_initializer,
       "VHDL signal initializer needs a targeted diagnostic");
+
+  const auto invalid_port_default = parse_text(
+      "invalid-port-default.vhd",
+      R"(
+entity invalid_port_default is
+  port (output_value : out bit := '0');
+end entity;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_port_default.ok()
+          && std::ranges::any_of(
+              invalid_port_default.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-075";
+              }),
+      "non-input VHDL entity-port defaults need a targeted diagnostic");
 
   const auto sv = parse_text(
       "initializers.sv",

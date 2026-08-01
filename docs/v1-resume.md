@@ -1549,9 +1549,15 @@ Current evidence: `open` generic actuals are retained as explicit default
 selections, and indexed/general expression port actuals are retained in HIR
 without the old parser-only rejection. Component and direct-entity value
 generic defaults elaborate, while `open` on a required direct generic reports
-`FSIM-ELAB-GENERIC-001`. The focused frontend, elaboration, catalog, and
-340-source line-budget gate passes in the LLVM Debug tree. Batch 113 remains in
-progress; this is the first Task 2/6 slice, not task completion.
+`FSIM-ELAB-GENERIC-001`. Entity input defaults now execute for omitted and
+explicit-`open` direct associations; non-input defaults are rejected. Static
+literal/array-aggregate and dynamic arithmetic/slice/concatenation input actuals
+execute through owned boundary signals and per-instance VHDL drivers, while
+output/buffer/inout expressions require writable names. `hierarchy_ports.cpp`
+holds the new boundary implementation and `hierarchy_types.cpp` remains exactly
+2,000 lines. The focused frontend, elaboration, component interpreter/LLVM
+O0/O2/cache, catalog, and 341-source line-budget evidence passes in the LLVM
+Debug tree. Batch 113 and Tasks 2, 6, and 7 remain in progress.
 
 Batch 110 has advanced through these validated features:
 

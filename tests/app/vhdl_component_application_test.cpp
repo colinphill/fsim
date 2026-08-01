@@ -32,6 +32,10 @@ struct Capture {
   std::array<std::string, 2> packets;
   std::string nonvalue;
   std::string defaulted;
+  std::string dynamic_expression;
+  std::array<std::string, 2> expression_inputs;
+  std::array<std::string, 2> direct_default_inputs;
+  std::array<std::string, 2> composite_expression_outputs;
   std::vector<std::pair<std::string, std::string>> keys;
   std::vector<fsim::runtime::simir::ExecutionPoint> points;
   fsim::app::NativeCacheStatistics cache;
@@ -111,7 +115,7 @@ Capture run_once(
     }
   }
   assert(project);
-  assert(project->design.specializations().size() == 6);
+  assert(project->design.specializations().size() == 13);
   for (const auto path : {
            "component_runtime_top.positional_child",
            "component_runtime_top.default_child"}) {
@@ -254,12 +258,36 @@ Capture run_once(
   const auto defaulted_output = simulation.find_signal(
       "component_runtime_top.defaulted_child."
       "entity_default_output");
+  const auto dynamic_input = simulation.find_signal(
+      "component_runtime_top.dynamic_expression_input");
+  const auto dynamic_output = simulation.find_signal(
+      "component_runtime_top.dynamic_expression_output");
+  const auto vector_input = simulation.find_signal(
+      "component_runtime_top.vector_expression_input");
+  constexpr std::array<std::string_view, 2> composite_outputs{
+      "component_runtime_top.slice_expression_output",
+      "component_runtime_top.concat_expression_output"};
+  std::array<fsim::runtime::simir::SignalId, 2>
+      composite_output_ids{};
   assert(
       nonvalue_input && nonvalue_output
-      && defaulted_output);
+      && defaulted_output && dynamic_input && dynamic_output
+      && vector_input);
   simulation.deposit_signal(
       *nonvalue_input,
       fsim::runtime::PackedLogic4::from_msb_string(bits(7)));
+  simulation.deposit_signal(
+      *dynamic_input,
+      fsim::runtime::PackedLogic4::from_msb_string(bits(43)));
+  simulation.deposit_signal(
+      *vector_input,
+      fsim::runtime::PackedLogic4::from_msb_string("11010110"));
+  for (std::size_t index = 0;
+       index < composite_outputs.size(); ++index) {
+    const auto output = simulation.find_signal(composite_outputs[index]);
+    assert(output);
+    composite_output_ids[index] = *output;
+  }
   for (std::size_t index = 0; index < inputs.size(); ++index) {
     const auto input = simulation.find_signal(inputs[index]);
     const auto output = simulation.find_signal(outputs[index]);
@@ -299,6 +327,37 @@ Capture run_once(
       simulation.read_signal(*nonvalue_output).to_msb_string();
   capture.defaulted =
       simulation.read_signal(*defaulted_output).to_msb_string();
+  capture.dynamic_expression =
+      simulation.read_signal(*dynamic_output).to_msb_string();
+  for (std::size_t index = 0;
+       index < composite_output_ids.size(); ++index) {
+    capture.composite_expression_outputs[index] =
+        simulation.read_signal(composite_output_ids[index])
+            .to_msb_string();
+  }
+  constexpr std::array<std::string_view, 2> expression_inputs{
+      "component_runtime_top.component_expression_child."
+      "entity_default_input",
+      "component_runtime_top.direct_expression_child.input_value"};
+  for (std::size_t index = 0;
+       index < expression_inputs.size(); ++index) {
+    const auto signal = simulation.find_signal(expression_inputs[index]);
+    assert(signal);
+    capture.expression_inputs[index] =
+        simulation.read_signal(*signal).to_msb_string();
+  }
+  constexpr std::array<std::string_view, 2> direct_default_inputs{
+      "component_runtime_top.direct_default_omitted."
+      "entity_default_input",
+      "component_runtime_top.direct_default_open."
+      "entity_default_input"};
+  for (std::size_t index = 0;
+       index < direct_default_inputs.size(); ++index) {
+    const auto signal = simulation.find_signal(direct_default_inputs[index]);
+    assert(signal);
+    capture.direct_default_inputs[index] =
+        simulation.read_signal(*signal).to_msb_string();
+  }
   return capture;
 }
 
@@ -318,6 +377,13 @@ void verify(
               "10101", "01010"}));
   assert(capture.nonvalue == bits(expected_nonvalue));
   assert(capture.defaulted == bits(expected_default));
+  assert(capture.dynamic_expression == bits(44));
+  assert((capture.composite_expression_outputs
+          == std::array<std::string, 2>{"0101", "1011"}));
+  assert((capture.expression_inputs
+          == std::array<std::string, 2>{bits(41), bits(42)}));
+  assert((capture.direct_default_inputs
+          == std::array<std::string, 2>{bits(13), bits(13)}));
   assert(std::ranges::count_if(
              capture.points,
              [](const auto& point) {
@@ -383,7 +449,7 @@ end architecture;
 
 entity component_runtime_defaulted is
   port (
-    entity_default_input : in integer;
+    entity_default_input : in integer := 13;
     entity_default_output : out integer);
 end entity;
 architecture rtl of component_runtime_defaulted is
@@ -411,6 +477,16 @@ begin
     entity_procedure(temporary);
     entity_output <= temporary;
   end process;
+end architecture;
+
+entity component_runtime_vector is
+  port (
+    input_value : in std_logic_vector(3 downto 0);
+    output_value : out std_logic_vector(3 downto 0));
+end entity;
+architecture rtl of component_runtime_vector is
+begin
+  output_value <= input_value;
 end architecture;
 )";
     assert(output.good());
@@ -523,6 +599,11 @@ architecture rtl of component_runtime_top is
   signal default_packet_output : packet_t;
   signal nonvalue_input : integer;
   signal nonvalue_output : integer;
+  signal dynamic_expression_input : integer;
+  signal dynamic_expression_output : integer;
+  signal vector_expression_input : std_logic_vector(7 downto 0);
+  signal slice_expression_output : std_logic_vector(3 downto 0);
+  signal concat_expression_output : std_logic_vector(3 downto 0);
 begin
   positional_child: component_runtime_leaf
     generic map (5)
@@ -554,6 +635,33 @@ begin
     port map (
       component_default_input => open,
       component_default_output => open);
+  component_expression_child: component_runtime_defaulted
+    port map (
+      component_default_input => 20 + 21,
+      component_default_output => open);
+  direct_expression_child: entity work.component_runtime_stable(rtl)
+    port map (
+      input_value => 42,
+      output_value => open);
+  dynamic_expression_child: entity work.component_runtime_stable(rtl)
+    port map (
+      input_value => dynamic_expression_input + 1,
+      output_value => dynamic_expression_output);
+  slice_expression_child: entity work.component_runtime_vector(rtl)
+    port map (
+      input_value => vector_expression_input(5 downto 2),
+      output_value => slice_expression_output);
+  concat_expression_child: entity work.component_runtime_vector(rtl)
+    port map (
+      input_value => vector_expression_input(1 downto 0)
+        & vector_expression_input(7 downto 6),
+      output_value => concat_expression_output);
+  direct_default_omitted: entity work.component_runtime_defaulted(rtl)
+    port map (entity_default_output => open);
+  direct_default_open: entity work.component_runtime_defaulted(rtl)
+    port map (
+      entity_default_input => open,
+      entity_default_output => open);
 end architecture;
 )";
     assert(output.good());
@@ -588,6 +696,16 @@ end architecture;
     assert(cold.nonvalue == warm.nonvalue);
     assert(reference.defaulted == cold.defaulted);
     assert(cold.defaulted == warm.defaulted);
+    assert(reference.expression_inputs == cold.expression_inputs);
+    assert(cold.expression_inputs == warm.expression_inputs);
+    assert(reference.direct_default_inputs == cold.direct_default_inputs);
+    assert(cold.direct_default_inputs == warm.direct_default_inputs);
+    assert(reference.dynamic_expression == cold.dynamic_expression);
+    assert(cold.dynamic_expression == warm.dynamic_expression);
+    assert(reference.composite_expression_outputs
+           == cold.composite_expression_outputs);
+    assert(cold.composite_expression_outputs
+           == warm.composite_expression_outputs);
     assert(reference.keys == cold.keys);
     assert(cold.keys == warm.keys);
 #if defined(FSIM_HAS_LLVM)

@@ -6207,8 +6207,17 @@ explicit default selections and retains indexed/general expression port actual
 HIR instead of issuing the former parser-only unsupported diagnostics.
 Component and direct-entity value generics now materialize valid selected
 defaults, while direct `open` on a required generic reports the existing
-generic-actual diagnostic. The focused frontend, elaboration, diagnostic
-catalog, and 340-source line-budget gate passes in the LLVM Debug tree.
+generic-actual diagnostic. Entity input-port defaults are retained and
+materialized for omitted or explicit-`open` direct associations; non-input
+defaults have a dedicated legality diagnostic. Static literals and array
+aggregates plus dynamic arithmetic, slice, and concatenation input actuals use
+owned boundary signals and per-instance VHDL drivers, while output/buffer/inout
+expressions require writable signal names. The partitioned port-boundary
+implementation keeps `hierarchy_types.cpp` at 2,000 lines. The focused frontend,
+elaboration, component interpreter/LLVM O0/O2 cache differential, diagnostic
+catalog, and 341-source line-budget evidence passes in the LLVM Debug tree.
+Tasks 2, 6, and 7 remain in progress; these bounded slices are not yet the
+complete task claims.
 
 ## Forward language-closure feature batches
 

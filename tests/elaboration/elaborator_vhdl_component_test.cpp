@@ -1362,7 +1362,7 @@ end architecture;
         R"(
 entity defaulted_port_leaf is
   port (
-    entity_input : in integer;
+    entity_input : in integer := 13;
     entity_output : out integer);
 end entity;
 architecture rtl of defaulted_port_leaf is
@@ -1383,6 +1383,12 @@ begin
     port map (
       component_input => open,
       component_output => open);
+  direct_omitted_child: entity work.defaulted_port_leaf(rtl)
+    port map (entity_output => open);
+  direct_open_child: entity work.defaulted_port_leaf(rtl)
+    port map (
+      entity_input => open,
+      entity_output => open);
 end architecture;
 )",
         "vhdl:work.defaulted_port_top(rtl)");
@@ -1427,6 +1433,117 @@ end architecture;
                 .to_msb_string()
             == "00000000000000000000000000000111");
     }
+    for (const auto input : {
+             "defaulted_port_top.direct_omitted_child.entity_input",
+             "defaulted_port_top.direct_open_child.entity_input"}) {
+        const auto signal =
+            defaulted_ports.design->find_signal(input);
+        assert(signal);
+        assert(
+            defaulted_interpreter->signal_value(*signal)
+                .to_msb_string()
+            == "00000000000000000000000000001101");
+    }
+
+    const auto expression_ports = elaborate_text(
+        "component_expression_ports.vhd",
+        R"(
+entity expression_port_leaf is
+  port (
+    entity_input : in bit_vector(3 downto 0);
+    entity_output : out bit_vector(3 downto 0));
+end entity;
+architecture rtl of expression_port_leaf is
+begin
+  entity_output <= entity_input;
+end architecture;
+entity expression_port_top is
+end entity;
+architecture rtl of expression_port_top is
+  component expression_port_leaf is
+    port (
+      component_input : in bit_vector(3 downto 0);
+      component_output : out bit_vector(3 downto 0));
+  end component;
+begin
+  literal_child: expression_port_leaf
+    port map ("1010", open);
+  aggregate_child: entity work.expression_port_leaf(rtl)
+    port map (
+      entity_input => (0 => '1', others => '0'),
+      entity_output => open);
+end architecture;
+)",
+        "vhdl:work.expression_port_top(rtl)");
+    if (!expression_ports.ok()) {
+        for (const auto& diagnostic :
+             expression_ports.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(expression_ports.ok());
+    auto expression_interpreter =
+        expression_ports.design->create_interpreter();
+    for (const auto& [name, expected] :
+         std::array<std::pair<std::string_view, std::string_view>, 2>{
+             {{"expression_port_top.literal_child.entity_input", "1010"},
+              {"expression_port_top.aggregate_child.entity_input", "0001"}}}) {
+        const auto signal =
+            expression_ports.design->find_signal(name);
+        assert(signal);
+        assert(expression_interpreter->signal_value(*signal)
+                   .to_msb_string()
+               == expected);
+    }
+
+    const auto dynamic_expression_port = elaborate_text(
+        "dynamic_expression_port.vhd",
+        R"(
+entity dynamic_expression_leaf is
+  port (
+    input_value : in bit;
+    output_value : out bit);
+end entity;
+architecture rtl of dynamic_expression_leaf is
+begin
+end architecture;
+entity dynamic_expression_top is
+end entity;
+architecture rtl of dynamic_expression_top is
+  signal data : bit_vector(1 downto 0);
+begin
+  child: entity work.dynamic_expression_leaf(rtl)
+    port map (
+      input_value => data(0),
+      output_value => open);
+end architecture;
+)",
+        "vhdl:work.dynamic_expression_top(rtl)");
+    assert(dynamic_expression_port.ok());
+
+    const auto invalid_output_expression = elaborate_text(
+        "invalid_output_expression.vhd",
+        R"(
+entity invalid_output_leaf is
+  port (output_value : out bit);
+end entity;
+architecture rtl of invalid_output_leaf is
+begin
+end architecture;
+entity invalid_output_top is
+end entity;
+architecture rtl of invalid_output_top is
+  signal data : bit;
+begin
+  child: entity work.invalid_output_leaf(rtl)
+    port map (output_value => not data);
+end architecture;
+)",
+        "vhdl:work.invalid_output_top(rtl)");
+    assert(!invalid_output_expression.ok());
+    assert(has_diagnostic(
+        invalid_output_expression, "FSIM-ELAB-VHPORT-002"));
 
     const auto composite_defaults = elaborate_text(
         "component_composite_defaults.vhd",

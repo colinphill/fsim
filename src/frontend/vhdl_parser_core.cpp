@@ -729,14 +729,16 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit) {
     }
 
     Type type = parse_vhdl_type(true, true);
+    std::optional<Expression> default_value;
     if (match(TokenKind::ColonEqual)) {
       const auto initializer = previous();
-      (void)parse_expression();
-      error(
-          initializer,
-          "FSIM-VHDL-UNSUPPORTED-011",
-          "VHDL port default expressions are not executable in this "
-          "frontend slice");
+      default_value = parse_expression();
+      if (direction != PortDirection::Input) {
+        error(
+            initializer,
+            "FSIM-VHDL-SEM-075",
+            "a VHDL port default is permitted only on an input formal");
+      }
     }
     for (const auto& name : names) {
       const auto canonical = vhdl_name(name.text);
@@ -770,7 +772,11 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit) {
                 type,
                 direction,
                 true,
-                span_from(name, previous())});
+                span_from(name, previous()),
+                std::nullopt,
+                {},
+                {},
+                default_value});
       }
     }
 

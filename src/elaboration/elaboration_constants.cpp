@@ -738,14 +738,17 @@ std::optional<PackedLogic4> static_vhdl_value(
         return normalize(std::move(result));
     }
 
-    if (type.vhdl_array && type.packed_range) {
+    if (type.packed_range) {
         frontend::Type element_type;
-        element_type.domain =
-            type.vhdl_array->element_domain;
-        element_type.spelling =
-            type.vhdl_array->element_spelling;
-        element_type.named_type =
-            type.vhdl_array->element_named_type;
+        element_type.domain = type.vhdl_array
+            ? type.vhdl_array->element_domain
+            : type.domain;
+        element_type.spelling = type.vhdl_array
+            ? type.vhdl_array->element_spelling
+            : type.spelling;
+        element_type.named_type = type.vhdl_array
+            ? type.vhdl_array->element_named_type
+            : std::string{};
         std::vector<bool> assigned(width);
         std::optional<std::size_t> others;
         std::size_t positional = 0;

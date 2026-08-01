@@ -1436,6 +1436,7 @@ private:
         SignalMap signals;
         StringMap strings;
         ContainerMap containers;
+        std::vector<frontend::Statement> vhdl_input_drivers;
         std::unordered_set<SignalId> read_only_signals;
         std::unordered_set<StringObjectId> read_only_strings;
     };
@@ -1694,6 +1695,14 @@ private:
         const std::string& path,
         const frontend::SourceSpan& source,
         const bool cross_language);
+
+    bool connect_vhdl_expression_port(
+        const frontend::SignalDeclaration& port,
+        const frontend::PortConnection& connection,
+        const std::string& path,
+        const SignalMap& parent_signals,
+        PortAliases& aliases,
+        DesignUnit& dependency_owner);
 
     PortAliases connect_ports(
         const frontend::Instance& instance,

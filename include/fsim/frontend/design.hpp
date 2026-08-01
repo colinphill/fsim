@@ -424,6 +424,9 @@ struct SignalDeclaration {
   // hierarchy bundles rather than independently allocated packed signals.
   std::string interface_type;
   std::string modport;
+  // VHDL input-port default retained in the entity interface. Other
+  // languages and non-input VHDL ports leave this empty.
+  std::optional<Expression> default_value;
 
   SignalDeclaration() = default;
   SignalDeclaration(
@@ -434,13 +437,15 @@ struct SignalDeclaration {
       SourceSpan signal_span,
       std::optional<Delay> signal_net_delay = std::nullopt,
       std::string signal_interface_type = {},
-      std::string signal_modport = {})
+      std::string signal_modport = {},
+      std::optional<Expression> signal_default_value = std::nullopt)
       : name(std::move(signal_name)), type(std::move(signal_type)),
         direction(signal_direction), is_port(signal_is_port),
         span(std::move(signal_span)),
         net_delay(std::move(signal_net_delay)),
         interface_type(std::move(signal_interface_type)),
-        modport(std::move(signal_modport)) {}
+        modport(std::move(signal_modport)),
+        default_value(std::move(signal_default_value)) {}
 };
 
 struct VariableDeclaration {
