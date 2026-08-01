@@ -180,6 +180,10 @@ endmodule
       "malformed-directives.sv",
       R"(`default_nettype banana
 `unconnected_drive highz
+`nounconnected_drive
+`celldefine
+`celldefine
+`endcelldefine
 `begin_keywords "1800-2099"
 `end_keywords
 `resetall extra
@@ -202,7 +206,9 @@ endmodule
           && has_code("FSIM-SV-PP-035")
           && has_code("FSIM-SV-PP-036")
           && has_code("FSIM-SV-PP-037")
-          && has_code("FSIM-SV-PP-038"),
+          && has_code("FSIM-SV-PP-038")
+          && has_code("FSIM-SV-PP-047")
+          && has_code("FSIM-SV-PP-048"),
       "malformed directive forms have stable targeted diagnostics");
 }
 

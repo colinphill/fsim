@@ -9,19 +9,21 @@ and the [feature matrix](feature-matrix.md) remains the release authority.
 
 - Recorded: 2026-07-31.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: completed feature-batch-107 SystemVerilog
-  interface, modport, and package-visibility closure on top of Batch 106
-  commit `64bf73d`; the current handoff commit is the Batch 107 baseline.
-- The source-size refactor is complete: all 316 authored C/C++ source, header,
+- Implementation baseline: completed feature-batch-108 SystemVerilog
+  preprocessing, directive, and generate-specialization closure on top of
+  Batch 107 commit `7169b45`; the current handoff commit is the Batch 108
+  baseline.
+- The source-size refactor is complete: all 317 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
-- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 62
-  configured tests in 450.73 seconds, and Release passed all 62 configured
-  tests in 144.44 seconds on 2026-07-31. Debug/Release scoped locals completed
-  in 0.90/0.83 seconds, interfaces in 1.89/1.60 seconds, LLVM in 3.64/3.50
-  seconds, containers in 346.90/85.63 seconds, and the monolithic application
-  in 40.34/13.64 seconds.
-- The diagnostic catalog covers all 1,363 production codes.
+- The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 63
+  configured tests in 443.90 seconds, and Release passed all 63 configured
+  tests in 145.66 seconds on 2026-07-31. Debug/Release scoped locals completed
+  in 0.89/0.81 seconds, preprocessing and generate specialization in
+  1.24/1.12 seconds, interfaces in 1.84/1.55 seconds, LLVM in 2.83/2.66
+  seconds, containers in 342.96/88.05 seconds, and the monolithic application
+  in 39.11/13.59 seconds.
+- The diagnostic catalog covers all 1,368 production codes.
 - The Batch 100 boundary is closed at repair commit `d2f216e`. Initial run
   `30640792808` and replacements `30647570353`/`30651503050` passed every
   ordinary job but exposed exact 1,500.27/1,800.14/2,400.12-second sanitizer
@@ -1276,36 +1278,54 @@ catalog covers 1,363 codes, the source gate covers 316 files, and both 62-test
 full regressions pass. Feature-matrix rows SV-631 through SV-640 are the
 detailed release evidence. Batch 107 is not a CI-inspection boundary.
 
-Resume with **feature batch 108: SystemVerilog preprocessor, directive, and
-generate-specialization closure**:
+Batch 108 completes bounded SystemVerilog preprocessing, directive, and
+generate-specialization closure. Complete include directive arguments may be
+assembled from nested macro fragments; identical/conflicting redefinitions,
+`` `undefineall``, empty includes, and include-local conditional-frame
+boundaries now have checked behavior. Source-ordered directive state retains
+the supported compilation policies, with duplicate cell entry and unmatched
+drive reset diagnosed. Physical/logical ancestry and transitive include bytes
+remain explicit preprocessor-v5 cache inputs.
 
-1. Audit macro expansion, directives, compilation-unit state, and generate
-   specialization against every remaining SystemVerilog v1 matrix row.
-2. Complete object/function macro argument collection, defaults, recursion,
-   rescanning, token concatenation, stringification, and multiline replacement
-   with exact physical/logical source ancestry.
-3. Complete nested conditional-compilation legality and deterministic recovery
-   for unmatched, duplicated, inactive, and cross-include branches.
-4. Close `include`, `line`, predefined macro, keyword-version, reset, cell,
-   unconnected-drive, default-nettype, and timescale state transitions across
-   file/source-set/combined compilation policies.
-5. Retain every supported directive state in compilation snapshots and reject
-   unknown or misplaced directives without silently discarding promised forms.
-6. Fold genvar-dependent constants and typed parameters in declaration order,
-   including generated ranges, typedefs, objects, callable profiles, delays,
-   and instance overrides.
-7. Complete generated declaration legality and visibility through nested
-   if/for/case regions, deterministic naming, shadowing, and source ordering.
-8. Prove specialization-selected hierarchy, diagnostics, debugger/process
-   names, callbacks, and normalized VCD across interpreter and LLVM O0/O2.
-9. Add malformed preprocessing/directive/generate HIR diagnostics plus focused
-   source-edit and include-edit invalidation evidence.
-10. Version the completed directive/generate graph in native-cache identity,
-    run full Debug/Release gates, and push the non-boundary batch.
+Unlabeled generate blocks receive stable source-ordered `genblkN` names.
+Generated localparams evaluate per concrete genvar iteration before dependent
+ranges, typedefs, enum literals, signal objects, callables, delays, instance
+overrides, and connections specialize. Nested generated type environments
+retain lexical shadowing. Debugger/VCD hierarchy, interpreter/LLVM O0/O2,
+cold/warm reuse, and include-edit invalidation agree. Native schema 60 records
+the specialized graph without a public ABI change. The catalog covers 1,368
+codes, the source gate covers 317 files, and both 63-test full regressions
+pass. Feature-matrix rows SV-641 through SV-650 are the detailed release
+evidence. Batch 108 is not a CI-inspection boundary.
 
-Keep Batch 108 to preprocessing, compilation directives, genvar-dependent
-constants, and generated declaration/specialization legality. Nested aggregate
-and multidimensional type closure remains Batch 109.
+Resume with **feature batch 109: SystemVerilog aggregate, multidimensional
+array, pattern, cast, and nominal-legality closure**:
+
+1. Audit every remaining aggregate, array-rank, pattern, cast, and nominal-type
+   SystemVerilog v1 matrix row against live parser, elaborator, and runtime
+   evidence.
+2. Retain recursive nested packed struct, union, and enum type structure in HIR
+   with exact member names, widths, signedness, state domains, and source spans.
+3. Add unpacked aggregate members and locally constant multidimensional fixed
+   unpacked arrays without expanding recursive parser stack frames inline.
+4. Complete direction-aware multidimensional indexing, selection, assignment,
+   and deterministic dense storage layout across ascending/descending ranges.
+5. Complete nested positional, keyed, member-keyed, and default assignment
+   patterns with exact contextual conversion and one atomic destination update.
+6. Complete integral/aggregate casts, qualified expressions, and nominal-versus-
+   structural assignment legality with stable checked diagnostics.
+7. Carry aggregate and multidimensional types through hierarchy ports,
+   callables, generated declarations, parameters, and specialization.
+8. Prove debugger reads, callbacks, normalized VCD, interpreter, and LLVM O0/O2
+   equivalence for the supported aggregate and multidimensional slice.
+9. Add malformed-HIR, collision, compatibility, bounds, pattern, cast, and
+   source-edit invalidation evidence.
+10. Advance native schema 61, run the exact full Debug/Release gates, document,
+    commit, and push the non-boundary batch.
+
+Keep Batch 109 to aggregate and multidimensional type semantics. Batch 110
+remains the strings, files, and containers release audit and is the next
+mandatory non-documentation CI-inspection boundary.
 
 The authoritative Batch 99 through 130 language-closure sequence is recorded
 under **Forward language-closure feature batches** in the implementation plan;
@@ -1390,8 +1410,9 @@ handoff, followed by the Batch 102 procedural-lvalue, timed-update,
 expression-increment, and selected-force/release handoff and the Batch 103
 function/task lifetime, association, reference, static-local, and generated-
 callable handoff, followed by the Batch 104 always/procedural-control handoff,
-the Batch 105 fork/process/NBA-ordering handoff, and the Batch 106
-delay/primitive/continuous-assignment handoff. Treat the newest pushed commit
+the Batch 105 fork/process/NBA-ordering handoff, the Batch 106
+delay/primitive/continuous-assignment handoff, the Batch 107 interface/modport
+handoff, and the Batch 108 preprocessing/generate handoff. Treat the newest pushed commit
 on the same branch as the authoritative continuation and read this file from
 that checkout before doing work.
 
@@ -1424,7 +1445,7 @@ ctest --test-dir build/llvm22-ninja-release --output-on-failure
 
 The recorded timings above are evidence from the previous development host,
 not performance expectations for the new machine. After the baseline passes,
-resume Batch 108 below and return to focused tests until its tenth feature.
+resume Batch 109 below and return to focused tests until its tenth feature.
 
 ## Resume commands
 
@@ -1441,16 +1462,16 @@ For a clean-context restart:
    release authority, and `docs/implementation-plan.md` only when historical
    detail is needed.
 2. Confirm the branch is `codex/resumable-jit` and history contains the
-   bounded SystemVerilog interface/modport/package-visibility implementation.
-3. Begin Batch 108 from the completed interface/modport/package-visibility
+   bounded SystemVerilog preprocessing/directive/generate implementation.
+3. Begin Batch 109 from the completed preprocessing/directive/generate
    baseline described above.
    Inspect the live tree first and rerun focused evidence if the host changed.
-4. Keep Batch 108 within SystemVerilog preprocessing, compilation directives,
-   genvar-dependent constants, and generated declaration/specialization rules.
+4. Keep Batch 109 within SystemVerilog aggregate, multidimensional array,
+   assignment-pattern, cast, and nominal-legality rules.
    Record intentional scope changes in this handoff before implementation.
 5. Use targeted tests during that batch, run the full Debug and Release gates
    after all ten features, update the four documents named above, commit, and
-   push. Batch 108 is not a CI-inspection boundary.
+   push. Batch 109 is not a CI-inspection boundary.
 
 The existing exact-LLVM build trees on the recorded development host are:
 
@@ -1459,17 +1480,17 @@ cmake --build build/llvm22-ninja-debug --parallel 8
 cmake --build build/llvm22-ninja-release --parallel 8
 ```
 
-Use a narrow test expression while Batch 108 is in progress, extending the
-frontend/preprocessor, generate elaboration, hierarchy/native cache, and
-line-directive/application tests as directive behavior lands:
+Use a narrow test expression while Batch 109 is in progress, extending the
+frontend, aggregate/container elaboration, hierarchy/native cache, and
+application tests as aggregate behavior lands:
 
 ```sh
 ctest --test-dir build/llvm22-ninja-debug --output-on-failure \
-  -R 'fsim\.(frontend|elaboration|llvm|application$|application\.line_directives|diagnostics-catalog|source-line-budget)'
+  -R 'fsim\.(frontend|elaboration|llvm|application$|application\.sv_containers|diagnostics-catalog|source-line-budget)'
 ```
 
 Both warnings-as-errors Ninja trees link the exact LLVM 22.1.8 backend. Their
-recorded 62-test inventories are clean after the local feature-batch-107 gates.
+recorded 63-test inventories are clean after the local feature-batch-108 gates.
 
 Before declaring any row complete, consult:
 

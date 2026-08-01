@@ -567,19 +567,59 @@ module invalid #(parameter ENABLED = 1);
   generate
     if (ENABLED) begin
     end
+    for (genvar i = 0; i < 1; i++) begin
+      localparam int WIDTH = i + 2;
+      typedef logic [WIDTH-1:0] word_t;
+      word_t value;
+      function automatic word_t make(input word_t input_value);
+        return input_value;
+      endfunction
+    end
   endgenerate
 endmodule
 )",
       Language::SystemVerilog2017);
   require(
-      !unlabeled_systemverilog.ok()
-          && std::any_of(
-              unlabeled_systemverilog.diagnostics.begin(),
-              unlabeled_systemverilog.diagnostics.end(),
-              [](const auto& diagnostic) {
-                return diagnostic.code == "FSIM-SV-PARSE-062";
+      unlabeled_systemverilog.ok()
+          && unlabeled_systemverilog.design.units.size() == 1
+          && unlabeled_systemverilog.design.units.front()
+                 .generate_regions.size()
+              == 2
+          && unlabeled_systemverilog.design.units.front()
+                 .generate_regions.front().then_scope
+              == "genblk1"
+          && unlabeled_systemverilog.design.units.front()
+                 .generate_regions[1].then_scope
+              == "genblk2"
+          && unlabeled_systemverilog.design.units.front()
+                 .generate_regions[1].then_body.type_aliases.size()
+              == 1
+          && unlabeled_systemverilog.design.units.front()
+                 .generate_regions[1].then_body.functions.front()
+                 .return_type.named_type
+              == "word_t",
+      "unlabeled generate names and local typedef/callable HIR are stable");
+
+  const auto generated_type_conflict = parse_text(
+      "generated_type_conflict.sv",
+      R"(module invalid;
+  generate
+    if (1) begin : selected
+      typedef logic word_t;
+      logic word_t;
+    end
+  endgenerate
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      !generated_type_conflict.ok()
+          && std::ranges::any_of(
+              generated_type_conflict.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-124";
               }),
-      "unlabeled SystemVerilog generate branch is targeted");
+      "generated type/object declaration conflicts are diagnosed");
 
   const auto unsupported_vhdl_body = parse_text(
       "unsupported_generate.vhd",

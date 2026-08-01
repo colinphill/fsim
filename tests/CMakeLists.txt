@@ -772,6 +772,26 @@ set_tests_properties(
   )
 
   add_executable(
+    fsim_sv_preprocessor_generate_application_tests
+    app/sv_preprocessor_generate_application_test.cpp
+  )
+  fsim_configure_test(
+    fsim_sv_preprocessor_generate_application_tests
+  )
+  target_link_libraries(
+    fsim_sv_preprocessor_generate_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.sv_preprocessor_generate
+    COMMAND fsim_sv_preprocessor_generate_application_tests
+  )
+  set_tests_properties(
+    fsim.application.sv_preprocessor_generate
+    PROPERTIES LABELS "fast;preprocessor;generate;systemverilog"
+  )
+
+  add_executable(
     fsim_time_application_tests
     app/time_application_test.cpp
   )

@@ -89,6 +89,14 @@ void prepare_body(
     auto string_environment = inherited_string_environment;
     auto integer_environment = inherited_integer_environment;
     auto domains = inherited_domains;
+    for (auto& alias : body.type_aliases) {
+        substitute_parameters(
+            alias.type,
+            integer_environment,
+            domains,
+            diagnostics,
+            frontend::Language::SystemVerilog2017);
+    }
     for (auto& constant : body.constants) {
         substitute_parameters(
             constant.type,

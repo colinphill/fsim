@@ -40,6 +40,18 @@ provenance. Clocking-block modport entries, virtual interfaces, dynamic
 interface arrays, interface classes, and general interface-type expressions
 remain outside this bounded slice.
 
+Batch 108 preprocessing/generate status update: the Verilog/SV unit row's
+earlier exclusions for genvar-dependent typed constants and generated type
+declarations are superseded. Full directive-argument include expansion,
+`` `undefineall``, checked macro redefinition, include-local conditional
+frames, deterministic unlabeled `genblkN` names, and declaration-ordered
+generated localparams now specialize packed ranges, local typedefs, objects,
+function/task profiles, delays, instance overrides, and connections. Exact
+physical/logical source ancestry and include snapshots participate in
+preprocessor-v5 and native-schema-60 identity. Implementation-defined pragma
+payload semantics, dynamic generate selection, and aggregate or
+multidimensional generated types remain outside this bounded slice.
+
 SystemVerilog expression-sizing status update: the bounded 1–64-bit scalar
 path now retains source-spanned resolved width, signedness, self- versus
 context-determined sizing, and two-/four-state domain metadata. Sized,

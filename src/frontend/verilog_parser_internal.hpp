@@ -552,6 +552,11 @@ class VerilogParser final : private detail::ParserBase {
       GenerateBody& body,
       std::vector<std::string>& local_names);
 
+  void parse_generate_typedef(
+      GenerateBody& body,
+      std::vector<std::string>& local_names,
+      const Token& start);
+
   void parse_generated_parameter_group(
       GenerateBody& body,
       std::vector<std::string>& local_names,
@@ -736,6 +741,7 @@ class VerilogParser final : private detail::ParserBase {
   std::size_t current_loop_depth_{};
   std::unordered_set<std::string> declared_genvars_;
   std::vector<Token> external_genvar_uses_;
+  std::size_t next_implicit_generate_scope_{1};
   std::vector<ImplicitNetReference> implicit_net_references_;
   std::unordered_set<std::string> container_iterator_names_;
   std::vector<SystemVerilogImport>

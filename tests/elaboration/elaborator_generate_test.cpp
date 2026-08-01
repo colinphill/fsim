@@ -141,6 +141,17 @@ module generated_sv_loop_behavior #(parameter COUNT = 3);
   endgenerate
 endmodule
 
+module generated_sv_typed #(parameter COUNT = 2);
+  generate
+    for (genvar i = 0; i < COUNT; i++) begin
+      localparam int WIDTH = i + 2;
+      typedef logic [WIDTH-1:0] word_t;
+      word_t value;
+      initial value = WIDTH;
+    end
+  endgenerate
+endmodule
+
 module generated_sv_implicit_behavior #(
   parameter ENABLED = 1
 ) (
@@ -810,6 +821,36 @@ end architecture;
           == generated_sv_loop_behavior_values[index]);
     }
 
+    const auto generated_sv_typed =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "sv:work.generated_sv_typed");
+    for (const auto& diagnostic : generated_sv_typed.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+    assert(generated_sv_typed.ok());
+    auto generated_sv_typed_interpreter =
+        generated_sv_typed.design->create_interpreter();
+    assert(
+        generated_sv_typed_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto typed_zero =
+        generated_sv_typed.design->find_signal(
+            "genblk1[0].value");
+    const auto typed_one =
+        generated_sv_typed.design->find_signal(
+            "genblk1[1].value");
+    assert(typed_zero && typed_one);
+    assert(
+        generated_sv_typed_interpreter
+            ->signal_value(*typed_zero).to_msb_string()
+        == "10");
+    assert(
+        generated_sv_typed_interpreter
+            ->signal_value(*typed_one).to_msb_string()
+        == "011");
+
     const auto generated_vhdl_loop_behavior =
         fsim::elaboration::elaborate(
             generated_design,
@@ -1188,4 +1229,3 @@ end architecture;
 }
 
 } // namespace fsim::tests::elaboration
-

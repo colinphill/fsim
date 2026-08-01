@@ -1531,6 +1531,9 @@ void substitute_sv_generate_body(
     frontend::GenerateBody& body,
     const SystemVerilogConstantEnvironment& environment) {
     auto body_environment = environment;
+    for (auto& alias : body.type_aliases) {
+        substitute_sv_type(alias.type, body_environment);
+    }
     for (auto& constant : body.constants) {
         substitute_sv_type(constant.type, body_environment);
         substitute_systemverilog_parameters(

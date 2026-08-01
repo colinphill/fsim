@@ -1276,6 +1276,101 @@ using namespace elaboration_detail;
 
 
 
+    std::pair<HierarchyBuilder::SignalMap, HierarchyBuilder::ObjectMap>
+    HierarchyBuilder::connect_systemc_instance(
+        const frontend::Instance& instance,
+        const SystemCInstanceDescription& target,
+        const std::string& path,
+        const SignalMap& parent_signals,
+        const Binding* binding) {
+        std::vector<frontend::SignalDeclaration> ports;
+        ports.reserve(target.ports.size());
+        for (const auto& port : target.ports) {
+            ports.push_back(external_port_declaration(port));
+        }
+        auto aliases = connect_ports(
+            instance, ports, path, parent_signals, {}, {}, binding, true);
+        ObjectMap objects;
+        for (const auto& port : target.ports) {
+            if (const auto signal = aliases.signals.find(port.name);
+                signal != aliases.signals.end()) {
+                objects.emplace(port.handle, signal->second);
+            }
+        }
+        return {std::move(aliases.signals), std::move(objects)};
+    }
+
+    HierarchyBuilder::SignalMap HierarchyBuilder::connect_foreign_child(
+        const ForeignChild& child,
+        const DesignUnit& target,
+        const std::string& path,
+        const ObjectMap& objects) {
+        SignalMap aliases;
+        const auto* target_ports = unit_ports(parsed_, target);
+        if (target_ports == nullptr) {
+            report(
+                "FSIM-ELAB-002",
+                "architecture '" + target.name
+                    + "' has no matching entity",
+                target.span);
+            return aliases;
+        }
+        std::unordered_set<std::string> connected;
+        for (const auto& foreign_port : child.ports) {
+            const auto formal = std::find_if(
+                target_ports->begin(), target_ports->end(),
+                [&](const frontend::SignalDeclaration& port) {
+                    return port.name == foreign_port.name;
+                });
+            if (formal == target_ports->end()) {
+                report(
+                    "FSIM-ELAB-BIND-034",
+                    "foreign child '" + path
+                        + "' declares unknown target port '"
+                        + foreign_port.name + "'",
+                    {});
+                continue;
+            }
+            if (!connected.insert(foreign_port.name).second) {
+                report(
+                    "FSIM-ELAB-BIND-035",
+                    "foreign child port '" + path + "."
+                        + foreign_port.name
+                        + "' is connected more than once",
+                    {});
+                continue;
+            }
+            const auto actual = objects.find(foreign_port.object);
+            if (actual == objects.end()) {
+                report(
+                    "FSIM-ELAB-BIND-036",
+                    "foreign child port '" + path + "."
+                        + foreign_port.name
+                        + "' references an unknown SystemC object",
+                    {});
+                continue;
+            }
+            const auto placeholder = foreign_port_declaration(foreign_port);
+            const auto& actual_info = design_.signal_info_.at(actual->second);
+            validate_boundary_type(placeholder, actual_info, path, {}, true);
+            validate_boundary_type(*formal, actual_info, path, {}, true);
+            if (placeholder.direction != formal->direction) {
+                report(
+                    "FSIM-ELAB-BIND-037",
+                    "foreign child port direction mismatch on '"
+                        + path + "." + foreign_port.name + "'",
+                    {});
+            }
+            aliases.emplace(formal->name, actual->second);
+            aliases.emplace(path + "." + formal->name, actual->second);
+            design_.signal_by_name_.emplace(
+                path + "." + formal->name, actual->second);
+            // This foreign child is an implementation detail of the SystemC
+            // parent, whose boundary driver is already recorded.
+        }
+        return aliases;
+    }
+
     void HierarchyBuilder::report(
         std::string code,
         std::string message,

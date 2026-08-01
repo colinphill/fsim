@@ -17,7 +17,21 @@ FunctionDeclaration VerilogParser::parse_function(const Token& start) {
     function.lifetime_explicit = false;
   }
 
-  function.return_type = parse_parameter_type();
+  // A user-defined return type is followed by the function name and then
+  // '('. The general declaration lookahead deliberately treats that shape
+  // as a possible instance, but inside a function header it is unambiguous.
+  const bool builtin_return_type =
+      keyword("string") || keyword("byte")
+      || keyword("shortint") || keyword("longint")
+      || keyword("time") || keyword("integer") || keyword("int")
+      || keyword("logic") || keyword("reg") || keyword("bit")
+      || keyword("signed") || keyword("unsigned")
+      || at(TokenKind::LeftBracket);
+  function.return_type =
+      !builtin_return_type && at(TokenKind::Identifier)
+          && at(TokenKind::Identifier, 1)
+          ? parse_named_type()
+          : parse_parameter_type();
   const auto name = expect_identifier("function name");
   function.name = name.text;
   (void)parse_optional_container_dimension(

@@ -228,6 +228,12 @@ void VerilogParser::parse_directive() {
     reset_compiler_directives();
     reject_directive_arguments(tick, directive);
   } else if (directive.text == "celldefine") {
+    if (current_cell_define_) {
+      error(
+          directive,
+          "FSIM-SV-PP-047",
+          "nested or duplicate `celldefine is not legal");
+    }
     current_cell_define_ = true;
     reject_directive_arguments(tick, directive);
   } else if (directive.text == "endcelldefine") {
@@ -242,6 +248,13 @@ void VerilogParser::parse_directive() {
   } else if (directive.text == "unconnected_drive") {
     parse_unconnected_drive(tick, directive);
   } else if (directive.text == "nounconnected_drive") {
+    if (current_unconnected_drive_ == VerilogUnconnectedDrive::None) {
+      error(
+          directive,
+          "FSIM-SV-PP-048",
+          "`nounconnected_drive requires an active "
+          "`unconnected_drive state");
+    }
     current_unconnected_drive_ = VerilogUnconnectedDrive::None;
     reject_directive_arguments(tick, directive);
   } else if (directive.text == "begin_keywords") {
@@ -790,6 +803,7 @@ DesignUnit VerilogParser::parse_module(
   current_loop_names_.clear();
   declared_genvars_.clear();
   external_genvar_uses_.clear();
+  next_implicit_generate_scope_ = 1;
   module_time_unit_magnitude_ =
       compilation_time_unit_.empty()
           ? current_time_unit_magnitude_

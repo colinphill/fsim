@@ -74,6 +74,8 @@ void test_systemverilog_preprocessor() {
       root,
       R"(`define HEADER "definitions.svh"
 `include `HEADER
+`define NESTED_NAME values.svh
+`include <nested/`NESTED_NAME>
 `define SELECT_EXPECTED
 `undef SELECT_EXPECTED
 `ifndef SELECT_EXPECTED
@@ -283,6 +285,8 @@ endmodule
       directive_error_root,
       R"(`define TWO(first,second) first
 `TWO(one)
+`define EMPTY
+`include `EMPTY
 `resetall
 `pragma protect
 `ifdef LEFT_OPEN
@@ -301,6 +305,7 @@ endmodule
   require(
       !directive_errors.ok()
           && has_preprocessor_code("FSIM-SV-PP-030")
+          && has_preprocessor_code("FSIM-SV-PP-020")
           && has_preprocessor_code("FSIM-SV-PP-011")
           && has_preprocessor_code("FSIM-SV-PP-002"),
       "macro arity, unsupported pragma, and open conditional diagnostics");
@@ -332,6 +337,71 @@ endmodule
                 return diagnostic.code == "FSIM-SV-PP-031";
               }),
       "an empty preprocessing compilation unit is rejected");
+
+  auto reset_macros = preprocess_verilog(
+      SourceText{
+          "undefineall.sv",
+          R"(`define SAME(value=1) value
+`define SAME(value=1) value
+`define CLEARED 1
+`undefineall
+`ifndef CLEARED
+module macros_cleared;
+endmodule
+`endif
+)"},
+      Language::SystemVerilog2017);
+  auto reset_parsed =
+      parse_verilog(std::move(reset_macros.lexed), true);
+  require(
+      reset_parsed.ok()
+          && reset_parsed.design.units.size() == 1
+          && reset_parsed.design.units.front().name
+              == "macros_cleared",
+      "identical redefinition is legal and `undefineall clears macros");
+
+  const auto conflicting_redefinition = preprocess_verilog(
+      SourceText{
+          "macro-redefinition.sv",
+          "`define VALUE 1\n`define VALUE 2\n"},
+      Language::SystemVerilog2017);
+  require(
+      !conflicting_redefinition.ok()
+          && std::ranges::any_of(
+              conflicting_redefinition.lexed.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PP-044"
+                    && !diagnostic.expansion_stack.empty();
+              }),
+      "a conflicting macro redefinition retains the prior location");
+
+  const auto cross_close = directory / "cross-close.svh";
+  const auto cross_open = directory / "cross-open.svh";
+  const auto cross_root = directory / "cross-root.sv";
+  write_text(cross_close, "`endif\n");
+  write_text(cross_open, "`ifdef OPEN_IN_INCLUDE\n");
+  write_text(
+      cross_root,
+      R"(`define FLAG
+`ifdef FLAG
+`include "cross-close.svh"
+`include "cross-open.svh"
+`endif
+)" );
+  const auto cross_boundary = preprocess_verilog_file(
+      cross_root, Language::SystemVerilog2017);
+  const auto has_cross_code = [&](const std::string_view code) {
+    return std::ranges::any_of(
+        cross_boundary.lexed.diagnostics,
+        [&](const Diagnostic& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      !cross_boundary.ok()
+          && has_cross_code("FSIM-SV-PP-045")
+          && has_cross_code("FSIM-SV-PP-046"),
+      "conditional branches cannot open or close across include boundaries");
 
   std::error_code cleanup_error;
   std::filesystem::remove_all(directory, cleanup_error);

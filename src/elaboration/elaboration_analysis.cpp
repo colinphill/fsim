@@ -245,6 +245,23 @@ void substitute_parameters(
     const ConstantDomainEnvironment& domains,
     const frontend::Language language,
     std::vector<Diagnostic>& diagnostics) {
+    // Iterative SystemVerilog bodies retain declaration-ordered localparams
+    // until a concrete genvar value selects one iteration. Substituting the
+    // rest of the body here would diagnose legitimate references to those
+    // not-yet-evaluated declarations; append_generated_body performs the
+    // complete substitution after establishing the per-iteration values.
+    if (language == frontend::Language::SystemVerilog2017
+        && !body.constants.empty()) {
+        return;
+    }
+    for (auto& alias : body.type_aliases) {
+        substitute_parameters(
+            alias.type,
+            environment,
+            domains,
+            diagnostics,
+            language);
+    }
     for (auto& constant : body.constants) {
         substitute_parameters(
             constant.type,
@@ -615,6 +632,9 @@ void collect_qualified_identifiers(
 void collect_qualified_identifiers(
     const frontend::GenerateBody& body,
     QualifiedIdentifierMap& identifiers) {
+    for (const auto& alias : body.type_aliases) {
+        collect_qualified_identifiers(alias.type, identifiers);
+    }
     for (const auto& constant : body.constants) {
         collect_qualified_identifiers(
             constant.type, identifiers);
@@ -955,6 +975,26 @@ void qualify_generated_expression(
     }
 }
 
+void qualify_generated_type(
+    frontend::Type& type,
+    const GeneratedNameEnvironment& names) {
+    if (!type.named_type.empty()) {
+        if (const auto found = names.find(type.named_type);
+            found != names.end()) {
+            if (type.spelling == type.named_type) {
+                type.spelling = found->second;
+            }
+            type.named_type = found->second;
+        }
+    }
+    if (type.systemverilog_container
+        && type.systemverilog_container->associative_index_type) {
+        qualify_generated_type(
+            *type.systemverilog_container->associative_index_type,
+            names);
+    }
+}
+
 
 
 void qualify_generated_statement(
@@ -1024,6 +1064,7 @@ void qualify_generated_process(
         : generated_scope(scope, process.name);
     auto process_names = names;
     for (auto& variable : process.variables) {
+        qualify_generated_type(variable.type, process_names);
         if (variable.initializer) {
             qualify_generated_expression(
                 *variable.initializer, process_names);
@@ -1048,7 +1089,9 @@ void qualify_generated_function(
     const auto local_name = function.name;
     function.name = generated_scope(scope, local_name);
     auto function_names = names;
+    qualify_generated_type(function.return_type, function_names);
     for (auto& argument : function.arguments) {
+        qualify_generated_type(argument.type, function_names);
         if (argument.default_value) {
             qualify_generated_expression(
                 *argument.default_value, function_names);
@@ -1056,6 +1099,7 @@ void qualify_generated_function(
         function_names.erase(argument.name);
     }
     for (auto& variable : function.variables) {
+        qualify_generated_type(variable.type, function_names);
         if (variable.initializer) {
             qualify_generated_expression(
                 *variable.initializer, function_names);
@@ -1073,6 +1117,7 @@ void qualify_generated_task(
     task.name = generated_scope(scope, local_name);
     auto task_names = names;
     for (auto& argument : task.arguments) {
+        qualify_generated_type(argument.type, task_names);
         if (argument.default_value) {
             qualify_generated_expression(
                 *argument.default_value, task_names);
@@ -1080,6 +1125,7 @@ void qualify_generated_task(
         task_names.erase(argument.name);
     }
     for (auto& variable : task.variables) {
+        qualify_generated_type(variable.type, task_names);
         if (variable.initializer) {
             qualify_generated_expression(
                 *variable.initializer, task_names);
@@ -1207,6 +1253,7 @@ void append_generated_body(
         body_domains,
         language,
         diagnostics);
+    body.constants.clear();
     substitute_parameters(
         body,
         body_environment,
@@ -1214,6 +1261,15 @@ void append_generated_body(
         language,
         diagnostics);
     auto body_names = visible_names;
+    for (const auto& alias : body.type_aliases) {
+        body_names[alias.name] = generated_scope(scope, alias.name);
+    }
+    for (auto& alias : body.type_aliases) {
+        const auto local_name = alias.name;
+        qualify_generated_type(alias.type, body_names);
+        alias.name = body_names.at(local_name);
+        unit.type_aliases.push_back(std::move(alias));
+    }
     for (auto& declaration :
          body.vhdl_component_declarations) {
         declaration.scope_path = scope;
@@ -1226,6 +1282,7 @@ void append_generated_body(
     }
     for (auto& signal : body.signals) {
         const auto local_name = signal.name;
+        qualify_generated_type(signal.type, body_names);
         signal.name = generated_scope(scope, local_name);
         body_names[local_name] = signal.name;
         unit.signals.push_back(std::move(signal));
@@ -1481,12 +1538,6 @@ void expand_generate_regions(
                     break;
                 }
                 auto body = generate.then_body;
-                substitute_parameters(
-                    body,
-                    iteration_environment,
-                    iteration_domains,
-                    language,
-                    diagnostics);
                 const auto indexed_scope =
                     generate.then_scope + "["
                     + std::to_string(value) + "]";

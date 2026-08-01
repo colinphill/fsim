@@ -33,6 +33,44 @@ struct Macro {
   SourceSpan definition;
 };
 
+[[nodiscard]] bool same_tokens(
+    const std::vector<Token>& left,
+    const std::vector<Token>& right) {
+  return left.size() == right.size()
+      && std::equal(
+          left.begin(), left.end(), right.begin(),
+          [](const Token& lhs, const Token& rhs) {
+            return lhs.kind == rhs.kind && lhs.text == rhs.text;
+          });
+}
+
+[[nodiscard]] bool same_macro(
+    const Macro& left,
+    const Macro& right) {
+  if (left.parameters.has_value() != right.parameters.has_value()
+      || !same_tokens(left.replacement, right.replacement)) {
+    return false;
+  }
+  if (!left.parameters) {
+    return true;
+  }
+  if (left.parameters->size() != right.parameters->size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < left.parameters->size(); ++index) {
+    const auto& lhs = (*left.parameters)[index];
+    const auto& rhs = (*right.parameters)[index];
+    if (lhs.name != rhs.name
+        || lhs.default_value.has_value()
+            != rhs.default_value.has_value()
+        || (lhs.default_value
+            && !same_tokens(*lhs.default_value, *rhs.default_value))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 struct Conditional {
   bool parent_active{};
   bool active{};
@@ -472,9 +510,21 @@ class VerilogPreprocessor {
             include_ancestry_.end());
       }
     }
+    const auto conditional_depth = conditionals_.size();
     include_stack_.push_back(normalized);
     auto processed = process_tokens(lexed.tokens, depth);
     include_stack_.pop_back();
+    if (depth != 0 && conditionals_.size() > conditional_depth) {
+      for (auto index = conditional_depth;
+           index < conditionals_.size(); ++index) {
+        diagnose(
+            "FSIM-SV-PP-045",
+            "conditional compilation block opened in an include must "
+            "close before the include ends",
+            conditionals_[index].opening);
+      }
+      conditionals_.resize(conditional_depth);
+    }
     for (auto diagnostic_index = lexical_diagnostics_begin;
          diagnostic_index < lexical_diagnostics_end; ++diagnostic_index) {
       auto& diagnostic = diagnostics_[diagnostic_index];
@@ -663,6 +713,7 @@ class VerilogPreprocessor {
     constexpr std::string_view directives[] = {
         "define",
         "undef",
+        "undefineall",
         "include",
         "ifdef",
         "ifndef",
@@ -719,6 +770,16 @@ class VerilogPreprocessor {
         return;
       }
       auto& conditional = conditionals_.back();
+      if (include_stack_.size() > 1
+          && physical_source(name_token.span)
+              != physical_source(conditional.opening)) {
+        diagnose(
+            "FSIM-SV-PP-046",
+            "an include cannot continue a conditional compilation block "
+            "opened by its parent source",
+            name_token.span);
+        return;
+      }
       if (conditional.saw_else) {
         diagnose(
             "FSIM-SV-PP-007",
@@ -743,6 +804,16 @@ class VerilogPreprocessor {
         return;
       }
       auto& conditional = conditionals_.back();
+      if (include_stack_.size() > 1
+          && physical_source(name_token.span)
+              != physical_source(conditional.opening)) {
+        diagnose(
+            "FSIM-SV-PP-046",
+            "an include cannot continue a conditional compilation block "
+            "opened by its parent source",
+            name_token.span);
+        return;
+      }
       if (conditional.saw_else) {
         diagnose(
             "FSIM-SV-PP-009",
@@ -765,6 +836,16 @@ class VerilogPreprocessor {
             name_token.span);
         return;
       }
+      if (include_stack_.size() > 1
+          && physical_source(name_token.span)
+              != physical_source(conditionals_.back().opening)) {
+        diagnose(
+            "FSIM-SV-PP-046",
+            "an include cannot close a conditional compilation block "
+            "opened by its parent source",
+            name_token.span);
+        return;
+      }
       reject_extra_directive_tokens(
           tokens, arguments, end, name_token);
       conditionals_.pop_back();
@@ -784,6 +865,12 @@ class VerilogPreprocessor {
       if (macro_name) {
         macros_.erase(*macro_name);
       }
+      return;
+    }
+    if (name == "undefineall") {
+      reject_extra_directive_tokens(
+          tokens, arguments, end, name_token);
+      macros_.clear();
       return;
     }
     if (name == "include") {
@@ -994,9 +1081,23 @@ class VerilogPreprocessor {
       }
       replacement.push_back(tokens[position]);
     }
-    macros_[name.text] =
-        Macro{name.text, std::move(parameters), std::move(replacement),
-              name.span};
+    Macro definition{
+        name.text, std::move(parameters), std::move(replacement),
+        name.span};
+    if (const auto existing = macros_.find(name.text);
+        existing != macros_.end()
+        && !same_macro(existing->second, definition)) {
+      diagnose(
+          "FSIM-SV-PP-044",
+          "macro `" + name.text
+              + "' is redefined with a different parameter list or "
+                "replacement",
+          name.span,
+          {"previous definition at "
+           + location_text(existing->second.definition)});
+      return;
+    }
+    macros_[name.text] = std::move(definition);
   }
 
   [[nodiscard]] std::optional<std::filesystem::path> resolve_include(
@@ -1036,23 +1137,17 @@ class VerilogPreprocessor {
           directive.span);
       return;
     }
-    std::vector<Token> replacement;
-    std::size_t cursor = begin;
-    if (tokens[cursor].kind == TokenKind::Backtick) {
-      replacement = expand_invocation(tokens, cursor, 0, {});
-      if (cursor != end || replacement.size() != 1) {
-        diagnose(
-            "FSIM-SV-PP-020",
-            "macro-expanded `include name must produce exactly one token",
-            tokens[begin].span);
-        return;
-      }
-    } else {
-      using Difference = std::vector<Token>::difference_type;
-      replacement.assign(
-          tokens.begin() + static_cast<Difference>(begin),
-          tokens.begin() + static_cast<Difference>(end));
-      cursor = end;
+    using Difference = std::vector<Token>::difference_type;
+    const std::vector<Token> include_arguments{
+        tokens.begin() + static_cast<Difference>(begin),
+        tokens.begin() + static_cast<Difference>(end)};
+    auto replacement = expand_sequence(include_arguments, 0, {});
+    if (replacement.empty()) {
+      diagnose(
+          "FSIM-SV-PP-020",
+          "macro-expanded `include name produced no tokens",
+          tokens[begin].span);
+      return;
     }
 
     bool quoted = false;

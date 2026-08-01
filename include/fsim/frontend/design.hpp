@@ -1151,6 +1151,7 @@ struct GenerateBody {
   // These are evaluated in declaration order during generate expansion and
   // are not externally overridable specialization parameters.
   std::vector<ParameterDeclaration> constants;
+  std::vector<TypeAliasDeclaration> type_aliases;
   std::vector<SignalDeclaration> signals;
   std::vector<FunctionDeclaration> functions;
   std::vector<TaskDeclaration> tasks;

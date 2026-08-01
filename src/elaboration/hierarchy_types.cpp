@@ -18,6 +18,8 @@ using namespace elaboration_detail;
         }
         std::vector<unsigned char> states(
             unit.type_aliases.size(), 0);
+        std::unordered_map<std::string, frontend::Type*>
+            generated_types;
         std::unordered_set<std::string> active_interface_type_formals;
         std::unordered_set<std::string> active_interface_package_formals;
         std::function<bool(frontend::Type&)> resolve_type;
@@ -271,8 +273,12 @@ using namespace elaboration_detail;
             const auto derived = type;
             std::optional<frontend::Type> base;
             if (name.find("::") == std::string::npos) {
+                if (const auto generated = generated_types.find(name);
+                    generated != generated_types.end()) {
+                    base = *generated->second;
+                }
                 if (const auto local = local_types.find(name);
-                    local != local_types.end()) {
+                    !base && local != local_types.end()) {
                     if (!resolve_alias(local->second)) {
                         return false;
                     }
@@ -428,6 +434,21 @@ using namespace elaboration_detail;
             resolve_generate_regions;
         resolve_generate_body =
             [&](frontend::GenerateBody& body) {
+                struct PriorGeneratedType {
+                    std::string name;
+                    frontend::Type* type{};
+                };
+                std::vector<PriorGeneratedType> prior_types;
+                for (auto& alias : body.type_aliases) {
+                    (void)resolve_type(alias.type);
+                    const auto prior = generated_types.find(alias.name);
+                    prior_types.push_back({
+                        alias.name,
+                        prior == generated_types.end()
+                            ? nullptr
+                            : prior->second});
+                    generated_types[alias.name] = &alias.type;
+                }
                 for (auto& constant : body.constants) {
                     resolve_declaration(constant);
                 }
@@ -444,8 +465,35 @@ using namespace elaboration_detail;
                     }
                     resolve_statements(process.statements);
                 }
+                for (auto& function : body.functions) {
+                    (void)resolve_type(function.return_type);
+                    for (auto& argument : function.arguments) {
+                        (void)resolve_type(argument.type);
+                    }
+                    for (auto& variable : function.variables) {
+                        resolve_declaration(variable);
+                    }
+                    resolve_statements(function.statements);
+                }
+                for (auto& task : body.tasks) {
+                    for (auto& argument : task.arguments) {
+                        (void)resolve_type(argument.type);
+                    }
+                    for (auto& variable : task.variables) {
+                        resolve_declaration(variable);
+                    }
+                    resolve_statements(task.statements);
+                }
                 resolve_generate_regions(
                     body.generate_regions);
+                for (auto prior = prior_types.rbegin();
+                     prior != prior_types.rend(); ++prior) {
+                    if (prior->type == nullptr) {
+                        generated_types.erase(prior->name);
+                    } else {
+                        generated_types[prior->name] = prior->type;
+                    }
+                }
             };
         resolve_generate_regions =
             [&](std::vector<frontend::GenerateRegion>&
@@ -1867,115 +1915,4 @@ using namespace elaboration_detail;
         }
         return result;
     }
-    std::pair<HierarchyBuilder::SignalMap, HierarchyBuilder::ObjectMap> HierarchyBuilder::connect_systemc_instance(
-        const frontend::Instance& instance,
-        const SystemCInstanceDescription& target,
-        const std::string& path,
-        const SignalMap& parent_signals,
-        const Binding* binding) {
-        std::vector<frontend::SignalDeclaration> ports;
-        ports.reserve(target.ports.size());
-        for (const auto& port : target.ports) {
-            ports.push_back(external_port_declaration(port));
-        }
-        auto aliases = connect_ports(
-            instance,
-            ports,
-            path,
-            parent_signals,
-            {},
-            {},
-            binding,
-            true);
-        ObjectMap objects;
-        for (const auto& port : target.ports) {
-            if (const auto signal =
-                    aliases.signals.find(port.name);
-                signal != aliases.signals.end()) {
-                objects.emplace(port.handle, signal->second);
-            }
-        }
-        return {
-            std::move(aliases.signals), std::move(objects)};
-    }
-    HierarchyBuilder::SignalMap HierarchyBuilder::connect_foreign_child(
-        const ForeignChild& child,
-        const DesignUnit& target,
-        const std::string& path,
-        const ObjectMap& objects) {
-        SignalMap aliases;
-        const auto* target_ports = unit_ports(parsed_, target);
-        if (target_ports == nullptr) {
-            report(
-                "FSIM-ELAB-002",
-                "architecture '" + target.name
-                    + "' has no matching entity",
-                target.span);
-            return aliases;
-        }
-        std::unordered_set<std::string> connected;
-        for (const auto& foreign_port : child.ports) {
-            const auto formal = std::find_if(
-                target_ports->begin(),
-                target_ports->end(),
-                [&](const frontend::SignalDeclaration& port) {
-                    return port.name == foreign_port.name;
-                });
-            if (formal == target_ports->end()) {
-                report(
-                    "FSIM-ELAB-BIND-034",
-                    "foreign child '" + path
-                        + "' declares unknown target port '"
-                        + foreign_port.name + "'",
-                    {});
-                continue;
-            }
-            if (!connected.insert(foreign_port.name).second) {
-                report(
-                    "FSIM-ELAB-BIND-035",
-                    "foreign child port '" + path + "."
-                        + foreign_port.name
-                        + "' is connected more than once",
-                    {});
-                continue;
-            }
-            const auto actual = objects.find(foreign_port.object);
-            if (actual == objects.end()) {
-                report(
-                    "FSIM-ELAB-BIND-036",
-                    "foreign child port '" + path + "."
-                        + foreign_port.name
-                        + "' references an unknown SystemC object",
-                    {});
-                continue;
-            }
-            const auto placeholder =
-                foreign_port_declaration(foreign_port);
-            const auto& actual_info =
-                design_.signal_info_.at(actual->second);
-            validate_boundary_type(
-                placeholder, actual_info, path, {}, true);
-            validate_boundary_type(
-                *formal, actual_info, path, {}, true);
-            if (placeholder.direction != formal->direction) {
-                report(
-                    "FSIM-ELAB-BIND-037",
-                    "foreign child port direction mismatch on '"
-                        + path + "." + foreign_port.name + "'",
-                    {});
-            }
-            aliases.emplace(formal->name, actual->second);
-            aliases.emplace(
-                path + "." + formal->name, actual->second);
-            design_.signal_by_name_.emplace(
-                path + "." + formal->name, actual->second);
-            // The foreign child is an implementation detail of the enclosing
-            // SystemC module. Its output reaches the parent through that
-            // module's already-recorded boundary driver, so recording a
-            // second boundary driver here would turn one hierarchical drive
-            // path into a false multi-driver conflict.
-        }
-        return aliases;
-    }
-
 } // namespace fsim::elaboration

@@ -441,7 +441,7 @@ therefore excluded.
 | `FSIM-SV-PP-017` | error | A function-like macro repeats a parameter name. |
 | `FSIM-SV-PP-018` | error | A function-like macro parameter list is unterminated. |
 | `FSIM-SV-PP-019` | error | `` `include`` lacks a file name. |
-| `FSIM-SV-PP-020` | error | A macro-expanded include name does not produce exactly one token. |
+| `FSIM-SV-PP-020` | error | A macro-expanded include name produces no tokens. |
 | `FSIM-SV-PP-021` | error | An include name is neither a string literal nor an angle-bracket name. |
 | `FSIM-SV-PP-022` | error | An include file cannot be resolved from the including file or configured search roots. |
 | `FSIM-SV-PP-023` | error | A function-like macro invocation lacks an argument list. |
@@ -465,6 +465,11 @@ therefore excluded.
 | `FSIM-SV-PP-041` | error | A `` `line`` logical file name is not a string literal. |
 | `FSIM-SV-PP-042` | error | A `` `line`` logical file name contains an invalid escape. |
 | `FSIM-SV-PP-043` | error | A `` `line`` level is not `0`, `1`, or `2`. |
+| `FSIM-SV-PP-044` | error | A macro is redefined with a different parameter list, defaults, or replacement. |
+| `FSIM-SV-PP-045` | error | A conditional compilation block opened inside an include remains open when that include ends. |
+| `FSIM-SV-PP-046` | error | An include attempts to continue or close a conditional block opened by its parent source. |
+| `FSIM-SV-PP-047` | error | `` `celldefine`` is nested or repeated while already active. |
+| `FSIM-SV-PP-048` | error | `` `nounconnected_drive`` appears without active `` `unconnected_drive`` state. |
 
 ### Verilog/SystemVerilog syntax
 
@@ -607,7 +612,6 @@ therefore excluded.
 | `FSIM-SV-PARSE-059` | error | Expected `(` after a generate `if`. |
 | `FSIM-SV-PARSE-060` | error | Expected `)` after a generate condition. |
 | `FSIM-SV-PARSE-061` | error | A conditional-generate branch is not a labeled `begin`/`end` block. |
-| `FSIM-SV-PARSE-062` | error | Expected `:` before a generate-block label. |
 | `FSIM-SV-PARSE-063` | error | A generate branch lacks `end` or has a mismatched end label. |
 | `FSIM-SV-PARSE-064` | error | Expected `endgenerate`. |
 | `FSIM-SV-PARSE-065` | error | Expected `(` after a generate `for`. |
@@ -751,6 +755,7 @@ therefore excluded.
 | `FSIM-SV-SEM-121` | error | A bounded instance array exceeds 64 instances. |
 | `FSIM-SV-SEM-122` | error | A modport import/export entry does not name an interface function or task. |
 | `FSIM-SV-SEM-123` | error | A modport callable's explicit function/task kind does not match its interface declaration. |
+| `FSIM-SV-SEM-124` | error | A generated typedef or enum literal conflicts with another declaration in the same generated body. |
 | `FSIM-ELAB-SVIFACE-006` | error | A process writes through a read-only modport input member. |
 | `FSIM-ELAB-SVIFACE-007` | error | A retained interface callable cannot be materialized at its same-language module boundary. |
 | `FSIM-ELAB-SVIFACE-008` | error | An interface callable is visible more than once through the same module port. |

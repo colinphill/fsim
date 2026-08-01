@@ -847,6 +847,9 @@ void fold_generate_body(
     const std::vector<frontend::FunctionDeclaration>& functions,
     const SystemVerilogConstantEnvironment& environment,
     const ConstantEnvironment& fallback) {
+    for (auto& alias : body.type_aliases) {
+        fold_type(alias.type, functions, environment, fallback);
+    }
     for (auto& constant : body.constants) {
         fold_type(
             constant.type, functions, environment, fallback);

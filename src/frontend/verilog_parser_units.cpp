@@ -76,6 +76,7 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
   current_generate_names_.clear();
   declared_genvars_.clear();
   external_genvar_uses_.clear();
+  next_implicit_generate_scope_ = 1;
   module_time_unit_magnitude_ =
       compilation_time_unit_.empty()
           ? current_time_unit_magnitude_
@@ -291,6 +292,13 @@ void VerilogParser::parse_generate_region(
           parse_task(previous()));
       continue;
     }
+    if (match_keyword("typedef")) {
+      parse_generate_typedef(
+          direct_region.then_body,
+          direct_local_names,
+          previous());
+      continue;
+    }
     if (
         keyword("final")
         || (language_ == Language::Verilog2005
@@ -354,7 +362,10 @@ void VerilogParser::parse_generate_region(
       span_from(generate_token, previous());
   const bool has_direct_items =
       !direct_region.then_body.constants.empty()
+      || !direct_region.then_body.type_aliases.empty()
       || !direct_region.then_body.signals.empty()
+      || !direct_region.then_body.functions.empty()
+      || !direct_region.then_body.tasks.empty()
       || !direct_region.then_body.concurrent_statements.empty()
       || !direct_region.then_body.processes.empty()
       || !direct_region.then_body.instances.empty();
@@ -599,12 +610,12 @@ void VerilogParser::parse_generate_branch(
         "block");
     return;
   }
-  expect(
-      TokenKind::Colon,
-      "':' before generate block label",
-      "FSIM-SV-PARSE-062");
-  const auto label = expect_identifier("generate block label");
-  scope = label.text;
+  if (match(TokenKind::Colon)) {
+    scope = expect_identifier("generate block label").text;
+  } else {
+    scope = "genblk"
+        + std::to_string(next_implicit_generate_scope_++);
+  }
   std::vector<std::string> local_names;
   while (!at_end() && !keyword("end")) {
     if (
@@ -625,6 +636,8 @@ void VerilogParser::parse_generate_branch(
       body.functions.push_back(parse_function(previous()));
     } else if (match_keyword("task")) {
       body.tasks.push_back(parse_task(previous()));
+    } else if (match_keyword("typedef")) {
+      parse_generate_typedef(body, local_names, previous());
     } else if (match_keyword("assign")) {
       if (auto assignment =
               parse_continuous_assignment(previous())) {
@@ -682,6 +695,59 @@ void VerilogParser::parse_generate_branch(
         && --found->second == 0) {
       current_generate_names_.erase(found);
     }
+  }
+}
+
+void VerilogParser::parse_generate_typedef(
+  GenerateBody& body,
+  std::vector<std::string>& local_names,
+  const Token& start) {
+  DesignUnit parsed;
+  parse_typedef(parsed, start);
+  if (parsed.type_aliases.empty()) {
+    return;
+  }
+  auto alias = std::move(parsed.type_aliases.front());
+  const auto conflicts = [&](const std::string_view name) {
+    return std::ranges::any_of(
+               body.type_aliases,
+               [&](const TypeAliasDeclaration& candidate) {
+                 return candidate.name == name;
+               })
+        || std::ranges::any_of(
+               body.constants,
+               [&](const ParameterDeclaration& candidate) {
+                 return candidate.name == name;
+               })
+        || std::ranges::any_of(
+               body.signals,
+               [&](const SignalDeclaration& candidate) {
+                 return candidate.name == name;
+               });
+  };
+  if (conflicts(alias.name)) {
+    error(
+        start,
+        "FSIM-SV-SEM-124",
+        "generated typedef '" + alias.name
+            + "' conflicts with another generated declaration");
+    return;
+  }
+  ++current_generate_names_[alias.name];
+  local_names.push_back(alias.name);
+  body.type_aliases.push_back(std::move(alias));
+  for (auto& parameter : parsed.parameters) {
+    if (conflicts(parameter.name)) {
+      error(
+          start,
+          "FSIM-SV-SEM-124",
+          "generated enum literal '" + parameter.name
+              + "' conflicts with another generated declaration");
+      continue;
+    }
+    ++current_generate_names_[parameter.name];
+    local_names.push_back(parameter.name);
+    body.constants.push_back(std::move(parameter));
   }
 }
 
@@ -751,7 +817,18 @@ void VerilogParser::parse_generate_declaration(
             [&](const ParameterDeclaration& parameter) {
               return parameter.name == name.text;
             });
-    if (parameter_conflict) {
+    const bool type_conflict = std::ranges::any_of(
+        body.type_aliases,
+        [&](const TypeAliasDeclaration& alias) {
+          return alias.name == name.text;
+        });
+    if (type_conflict) {
+      error(
+          name,
+          "FSIM-SV-SEM-124",
+          "generated signal '" + name.text
+              + "' conflicts with a typedef declaration");
+    } else if (parameter_conflict) {
       error(
           name,
           "FSIM-SV-SEM-020",
@@ -828,7 +905,18 @@ void VerilogParser::parse_generated_parameter_group(
             [&](const ParameterDeclaration& parameter) {
               return parameter.name == name.text;
             });
-    if (signal_conflict) {
+    const bool type_conflict = std::ranges::any_of(
+        body.type_aliases,
+        [&](const TypeAliasDeclaration& alias) {
+          return alias.name == name.text;
+        });
+    if (type_conflict) {
+      error(
+          name,
+          "FSIM-SV-SEM-124",
+          "generated parameter '" + name.text
+              + "' conflicts with a typedef declaration");
+    } else if (signal_conflict) {
       error(
           name,
           "FSIM-SV-SEM-020",

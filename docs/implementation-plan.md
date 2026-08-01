@@ -5829,6 +5829,51 @@ including scoped locals in 0.83 seconds, interfaces in 1.60 seconds, LLVM in
 13.64 seconds, on 2026-07-31. Batch 107 is not a ten-batch CI-inspection
 boundary, so no Actions run was inspected.
 
+### One-hundred-eighth feature batch — SystemVerilog preprocessing, directives, and generate specialization closure
+
+The preprocessor now expands complete include-argument token sequences, so
+quoted or angle paths may be assembled from multiple nested macros. Identical
+macro redefinitions remain legal, conflicting definitions retain the prior
+location in a targeted diagnostic, and `` `undefineall`` clears compilation-
+unit macro state. Conditional frames opened by an include must close there,
+and an include cannot continue or close its parent's frame; unmatched,
+duplicate, inactive, and post-else recovery remains deterministic.
+
+Parser-visible timescale, default-nettype, reset, cell, keyword-version, and
+unconnected-drive state retains source ordering across existing file,
+source-set, and combined compilation policies. Duplicate cell entry and an
+unmatched drive reset are now checked. Preprocessor identity advances to v5;
+exact physical/logical source ancestry, ordered roots, includes, mappings, and
+macro expansion stacks remain cache and diagnostic inputs.
+
+Unlabeled generated blocks now receive stable source-ordered `genblkN` names.
+Generated localparams evaluate in declaration order for each concrete genvar
+iteration before dependent ranges, typedefs, signal objects, function/task
+profiles, net delays, process expressions, instance overrides, and connections
+specialize. Nested generated type environments preserve lexical visibility and
+shadow restoration, and user-defined function return types remain unambiguous
+before a function-name parenthesis.
+
+The dedicated application differential covers macro-composed includes,
+`` `undefineall``, varying-width generated typedefs, function/task calls,
+delayed nets, child overrides, deterministic hierarchy paths, debugger signal
+lookup, normalized VCD, interpreter and LLVM O0/O2, cold/warm reuse, and an
+include edit. Native schema 60 records the specialized graph without changing
+the public ABI. Feature-matrix rows SV-641 through SV-650 are the detailed
+release evidence.
+
+The diagnostic catalog covers 1,368 production codes, and the source gate
+covers 317 authored files with an empty allowlist and a 2,000-line maximum.
+The exact LLVM 22.1.8 warnings-as-errors Debug regression passed all 63 tests
+in 443.90 seconds, including scoped locals in 0.89 seconds, preprocessing and
+generate specialization in 1.24 seconds, LLVM in 2.83 seconds, containers in
+342.96 seconds, and the monolithic application in 39.11 seconds. Release
+passed all 63 tests in 145.66 seconds, including scoped locals in 0.81 seconds,
+preprocessing and generate specialization in 1.12 seconds, LLVM in 2.66
+seconds, containers in 88.05 seconds, and the monolithic application in 13.59
+seconds, on 2026-07-31. Batch 108 is not a ten-batch CI-inspection boundary,
+so no Actions run was inspected.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the
