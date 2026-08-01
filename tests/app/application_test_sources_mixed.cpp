@@ -290,7 +290,24 @@ begin
     end process;
   else generate
     observed <= 1;
-  end generate chosen;
+end generate chosen;
+end architecture;
+
+entity generated_loop_declarations_vhdl is
+  port (
+    observed : out unsigned(3 downto 0)
+  );
+end entity;
+
+architecture rtl of generated_loop_declarations_vhdl is
+begin
+  lanes: for i in 2 to 2 generate
+    constant local_value : natural := i + 4;
+    signal generated_value : unsigned(3 downto 0);
+  begin
+    generated_value <= local_value;
+    observed <= generated_value + 1;
+  end generate lanes;
 end architecture;
 
 entity generated_range_behavior_vhdl is
@@ -308,7 +325,11 @@ begin
     zero: when 0 =>
       observed <= 1;
     selected: when 1 to 2 | 7 downto 5 =>
-      observed <= 9;
+      constant base_value : natural := 8;
+      signal selected_value : unsigned(3 downto 0);
+    begin
+      selected_value <= "1001";
+      observed <= selected_value;
     empty_choice: when 4 to 3 =>
       observed <= 15;
     fallback: when others =>

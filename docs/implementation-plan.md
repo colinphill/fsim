@@ -6408,6 +6408,20 @@ elaboration, and merged-application gate passes in 15.91 seconds. Tasks 1
 through 3 are focused-complete; Batch 114 remains **in progress** with Tasks 4
 through 10 outstanding.
 
+Task 4 is focused-complete. Conditional then/else, iterative, and labeled
+case-alternative bodies retain bounded constants, signals, and components in
+their pre-`begin` declarative part. A nonempty part now requires `begin` and
+reports `FSIM-VHDL-PARSE-234` when it is omitted, while declaration-free
+generate bodies retain the legal optional form. Selected expansion folds
+declarations in source order and qualifies them under the exact branch,
+alternative, or `label[index]` iteration scope; unselected declarations never
+enter DesignIR. Focused elaboration and the merged interpreter/LLVM O0/O2
+cold/warm/VCD differential cover conditional, case-alternative, and indexed
+loop declarations. The final five-test focused gate passes in 16.10 seconds
+with all 1,446 production diagnostics cataloged and all 344 authored sources
+within the line budget. Tasks 1 through 4 are focused-complete; Batch 114
+remains **in progress** with Tasks 5 through 10 outstanding.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the

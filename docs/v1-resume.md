@@ -1720,6 +1720,19 @@ production diagnostics and all 344 authored sources within the 2,000-line
 limit. Tasks 1 through 3 are focused-complete; Batch 114 remains **in progress**
 with Tasks 4 through 10 outstanding.
 
+Task 4 is focused-complete. Bounded constants, signals, and components before
+`begin` are retained for conditional then/else, iterative, and labeled case
+alternatives. Nonempty generate declarative parts now require the separating
+`begin`; omission reports `FSIM-VHDL-PARSE-234`, while declaration-free bodies
+retain their legal optional form. Expansion folds only the selected body's
+declarations and qualifies them beneath its exact branch, alternative, or
+`label[index]` scope. Focused elaboration plus the merged interpreter/LLVM
+O0/O2 cold/warm/VCD differential prove conditional, selected-case, and
+`lanes[2]` declarations. The final five-test focused gate passes in 16.10
+seconds with 1,446 production diagnostics and all 344 authored sources within
+the 2,000-line limit. Tasks 1 through 4 are focused-complete; Batch 114 remains
+**in progress** with Tasks 5 through 10 outstanding.
+
 Batch 110 has advanced through these validated features:
 
 1. deterministic string expression and mutation/conversion methods;

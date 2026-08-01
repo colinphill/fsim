@@ -296,9 +296,13 @@ begin
         )
         port map ();
     selected: when 1 to 2 | 7 downto 5 =>
+      constant base_value : natural := 6;
+      signal selected_value : unsigned(3 downto 0);
+    begin
+      selected_value <= "0111";
       child: entity work.generated_case_foreign(rtl)
         generic map (
-          value => 7
+          value => base_value + 1
         )
         port map ();
     empty_choice: when 3 to 1 =>
@@ -926,7 +930,10 @@ end architecture;
     const auto generated_vhdl_case_q =
         generated_vhdl_case.design->find_signal(
             "generated_vhdl_case_top.selected.child.q");
-    assert(generated_vhdl_case_q);
+    const auto generated_vhdl_case_local =
+        generated_vhdl_case.design->find_signal(
+            "generated_vhdl_case_top.selected.selected_value");
+    assert(generated_vhdl_case_q && generated_vhdl_case_local);
     auto generated_vhdl_case_interpreter =
         generated_vhdl_case.design->create_interpreter();
     assert(
@@ -935,6 +942,11 @@ end architecture;
     assert(
         generated_vhdl_case_interpreter
             ->signal_value(*generated_vhdl_case_q)
+            .to_msb_string()
+        == "0111");
+    assert(
+        generated_vhdl_case_interpreter
+            ->signal_value(*generated_vhdl_case_local)
             .to_msb_string()
         == "0111");
 

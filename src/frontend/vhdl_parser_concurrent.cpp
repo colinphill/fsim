@@ -11,17 +11,25 @@ GenerateRegion VhdlParser::parse_vhdl_conditional_generate(
   result.else_scope = result.then_scope;
   result.condition = parse_expression();
   expect_keyword("generate", true, "FSIM-VHDL-PARSE-056");
-  parse_vhdl_generate_declarations(
+  const bool then_declarations = parse_vhdl_generate_declarations(
       result.then_body,
       VhdlComponentDeclarationRegion::Generate);
-  (void)match_keyword("begin", true);
+  if (then_declarations) {
+    expect_keyword("begin", true, "FSIM-VHDL-PARSE-234");
+  } else {
+    (void)match_keyword("begin", true);
+  }
   parse_vhdl_generate_branch(result.then_body);
   if (match_keyword("else", true)) {
     expect_keyword("generate", true, "FSIM-VHDL-PARSE-057");
-    parse_vhdl_generate_declarations(
+    const bool else_declarations = parse_vhdl_generate_declarations(
         result.else_body,
         VhdlComponentDeclarationRegion::Generate);
-    (void)match_keyword("begin", true);
+    if (else_declarations) {
+      expect_keyword("begin", true, "FSIM-VHDL-PARSE-234");
+    } else {
+      (void)match_keyword("begin", true);
+    }
     parse_vhdl_generate_branch(result.else_body);
   }
   expect_keyword("end", true, "FSIM-VHDL-PARSE-058");
@@ -89,10 +97,14 @@ GenerateRegion VhdlParser::parse_vhdl_iterative_generate(
               {},
               expression_span}},
       expression_span};
-  parse_vhdl_generate_declarations(
+  const bool has_declarations = parse_vhdl_generate_declarations(
       result.then_body,
       VhdlComponentDeclarationRegion::Generate);
-  (void)match_keyword("begin", true);
+  if (has_declarations) {
+    expect_keyword("begin", true, "FSIM-VHDL-PARSE-234");
+  } else {
+    (void)match_keyword("begin", true);
+  }
   parse_vhdl_generate_branch(result.then_body);
   expect_keyword("end", true, "FSIM-VHDL-PARSE-065");
   expect_keyword("generate", true, "FSIM-VHDL-PARSE-066");
@@ -184,10 +196,14 @@ GenerateRegion VhdlParser::parse_vhdl_selection_generate(
         TokenKind::Arrow,
         "'=>' after case-generate choices",
         "FSIM-VHDL-PARSE-073");
-    parse_vhdl_generate_declarations(
+    const bool has_declarations = parse_vhdl_generate_declarations(
         alternative.body,
         VhdlComponentDeclarationRegion::Generate);
-    (void)match_keyword("begin", true);
+    if (has_declarations) {
+      expect_keyword("begin", true, "FSIM-VHDL-PARSE-234");
+    } else {
+      (void)match_keyword("begin", true);
+    }
     parse_vhdl_generate_branch(
         alternative.body,
         true);
@@ -256,7 +272,7 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
       std::move(associations.parameter_overrides);
   result.block_ports = std::move(interface.ports);
   result.block_port_map = std::move(associations.connections);
-  parse_vhdl_generate_declarations(
+  (void)parse_vhdl_generate_declarations(
       result.then_body,
       VhdlComponentDeclarationRegion::Block);
   expect_keyword("begin", true, "FSIM-VHDL-PARSE-078");
@@ -281,21 +297,25 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
   return result;
 }
 
-void VhdlParser::parse_vhdl_generate_declarations(
+bool VhdlParser::parse_vhdl_generate_declarations(
     GenerateBody& body,
     const VhdlComponentDeclarationRegion region) {
+  bool parsed = false;
   for (;;) {
     if (match_keyword("signal", true)) {
+      parsed = true;
       parse_signal_declaration(
           body.signals, &body.constants);
       continue;
     }
     if (match_keyword("constant", true)) {
+      parsed = true;
       parse_vhdl_generate_constant(
           body, previous());
       continue;
     }
     if (match_keyword("component", true)) {
+      parsed = true;
       const auto component_start = previous();
       auto declaration =
           parse_vhdl_component_declaration(
@@ -308,7 +328,7 @@ void VhdlParser::parse_vhdl_generate_declarations(
           component_start);
       continue;
     }
-    break;
+    return parsed;
   }
 }
 

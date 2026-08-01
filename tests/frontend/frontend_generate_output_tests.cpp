@@ -369,6 +369,9 @@ end entity;
 architecture rtl of generated is
 begin
   selection: if enabled generate
+    constant branch_value : natural := 1;
+    signal branch_signal : std_logic;
+  begin
     active: entity work.leaf(rtl)
       port map (value => value, result => result);
     nested: if enabled generate
@@ -379,6 +382,9 @@ begin
         port map (value => value, result => result);
     end generate nested;
   else generate
+    constant branch_value : natural := 0;
+    signal branch_signal : std_logic;
+  begin
     inactive: entity work.leaf(rtl)
       port map (value => value, result => result);
   end generate selection;
@@ -422,6 +428,9 @@ begin
       child: entity work.leaf(rtl)
         port map (value => value, result => result);
     selected: when 1 to 2 | 7 downto 5 =>
+      constant choice_value : natural := 9;
+      signal choice_signal : unsigned(3 downto 0);
+    begin
       child: entity work.leaf(rtl)
         port map (value => value, result => result);
     empty_choice: when 3 to 1 =>
@@ -470,6 +479,10 @@ end architecture;
       vhdl_generate.then_scope == "selection"
           && vhdl_generate.else_scope == "selection"
           && vhdl_generate.condition.text == "enabled"
+          && vhdl_generate.then_body.constants.size() == 1
+          && vhdl_generate.then_body.signals.size() == 1
+          && vhdl_generate.else_body.constants.size() == 1
+          && vhdl_generate.else_body.signals.size() == 1
           && vhdl_generate.then_body.instances.front().name == "active"
           && vhdl_generate.else_body.instances.front().name == "inactive"
           && vhdl_generate.then_body.generate_regions.size() == 1
@@ -529,6 +542,8 @@ end architecture;
           && !vhdl_case.alternatives[1].choices[0].descending
           && vhdl_case.alternatives[1].choices[1].right
           && vhdl_case.alternatives[1].choices[1].descending
+          && vhdl_case.alternatives[1].body.constants.size() == 1
+          && vhdl_case.alternatives[1].body.signals.size() == 1
           && vhdl_case.alternatives[2].scope == "empty_choice"
           && vhdl_case.alternatives[2].choices.front().right
           && !vhdl_case.alternatives[2].choices.front().descending
@@ -960,6 +975,27 @@ end architecture;
                 return diagnostic.code == "FSIM-VHDL-PARSE-231";
               }),
       "guarded VHDL block requires a closing parenthesis");
+
+  const auto missing_generate_begin = parse_text(
+      "missing_generate_begin.vhd",
+      R"(
+architecture rtl of missing_begin is
+begin
+  selected: if true generate
+    constant value : natural := 1;
+    observed <= value;
+  end generate selected;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !missing_generate_begin.ok()
+          && std::ranges::any_of(
+              missing_generate_begin.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-PARSE-234";
+              }),
+      "a generated declarative part requires begin before statements");
 
   const auto mismatched_vhdl_block = parse_text(
       "mismatched_block.vhd",

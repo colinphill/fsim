@@ -218,7 +218,7 @@ class VhdlParser final : private detail::ParserBase {
       const Token& label,
       const Token& start);
 
-  void parse_vhdl_generate_declarations(
+  bool parse_vhdl_generate_declarations(
       GenerateBody& body,
       VhdlComponentDeclarationRegion region);
 

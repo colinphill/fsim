@@ -660,6 +660,12 @@ auto generated_range_behavior_vhdl_config =
         "vhdl:work.generated_range_behavior_vhdl(rtl)",
         fsim::project::Language::vhdl,
         generated_behavior_vhdl_source);
+auto generated_loop_declarations_vhdl_config =
+    make_generated_behavior_config(
+        "generated-loop-declarations-vhdl-test",
+        "vhdl:work.generated_loop_declarations_vhdl(rtl)",
+        fsim::project::Language::vhdl,
+        generated_behavior_vhdl_source);
 auto generated_static_behavior_sv_config =
     make_generated_behavior_config(
         "generated-static-behavior-sv-test",
@@ -797,9 +803,14 @@ const auto verify_generated_behavior =
         if (local_separator != std::string_view::npos) {
           const auto local_scope =
               local_path.substr(0, local_separator);
+          const auto vcd_scope =
+              local_scope.find_first_of("[]")
+                      == std::string_view::npos
+                  ? std::string{local_scope}
+                  : "\\" + std::string{local_scope};
           assert(
               cold.simulation.normalized_vcd.find(
-                  "$scope module " + std::string{local_scope}
+                  "$scope module " + vcd_scope
                   + " $end")
               != std::string::npos);
         }
@@ -844,10 +855,15 @@ verify_generated_behavior(
     {"0111", "0110"},
     2);
 verify_generated_behavior(
+    generated_loop_declarations_vhdl_config,
+    {"lanes[2].generated_value"},
+    {"0111", "0110"},
+    2);
+verify_generated_behavior(
     generated_range_behavior_vhdl_config,
-    {},
-    {"1001"},
-    1);
+    {"selected.selected_value"},
+    {"1001", "1001"},
+    2);
 verify_generated_behavior(
     generated_static_behavior_sv_config,
     {"direct_value", "named_scope.nested_value"},

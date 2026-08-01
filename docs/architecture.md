@@ -182,6 +182,11 @@ body extends its parent's constant environment in declaration order before
 signal types, behavior, child actuals, and nested generate controls are
 substituted. Constants therefore consume no runtime storage, while a loop body
 reevaluates index-dependent declarations independently for every iteration.
+VHDL conditional, iterative, and case-alternative bodies retain their
+declarative part separately from concurrent statements; any nonempty
+declarative part requires the grammar's separating `begin`. Expansion applies
+the declared branch or alternative label, or the concrete `label[index]`,
+before qualifying its local signals and behavior.
 An unguarded VHDL block or named SystemVerilog `begin : label` static region
 contributes its label as a stable hierarchy component. Direct items inside an
 explicit SystemVerilog `generate` region use one empty static parent scope, so
