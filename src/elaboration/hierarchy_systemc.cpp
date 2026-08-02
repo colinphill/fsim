@@ -777,6 +777,44 @@ void adapt_vhdl_array_port_shapes(
             std::string, const frontend::Type*> visible_types;
         std::unordered_map<
             std::string, const frontend::Type*> visible_type_marks;
+        const auto builtin_scalar = [](
+            const frontend::ValueDomain domain,
+            const std::string_view spelling,
+            const std::optional<frontend::IntegerRange> range = {}) {
+          frontend::Type type;
+          type.domain = domain;
+          type.spelling = spelling;
+          type.is_signed = domain == frontend::ValueDomain::Integer;
+          type.integer_range = range;
+          return type;
+        };
+        static const auto builtin_integer = builtin_scalar(
+            frontend::ValueDomain::Integer,
+            "integer",
+            frontend::IntegerRange{
+                std::numeric_limits<std::int32_t>::min(),
+                std::numeric_limits<std::int32_t>::max(), false});
+        static const auto builtin_natural = builtin_scalar(
+            frontend::ValueDomain::Integer,
+            "natural",
+            frontend::IntegerRange{
+                0, std::numeric_limits<std::int32_t>::max(), false});
+        static const auto builtin_positive = builtin_scalar(
+            frontend::ValueDomain::Integer,
+            "positive",
+            frontend::IntegerRange{
+                1, std::numeric_limits<std::int32_t>::max(), false});
+        static const auto builtin_boolean = builtin_scalar(
+            frontend::ValueDomain::Boolean, "boolean");
+        static const auto builtin_bit = builtin_scalar(
+            frontend::ValueDomain::Bit2, "bit");
+        if (unit.language == frontend::Language::Vhdl2008) {
+          visible_type_marks.emplace("integer", &builtin_integer);
+          visible_type_marks.emplace("natural", &builtin_natural);
+          visible_type_marks.emplace("positive", &builtin_positive);
+          visible_type_marks.emplace("boolean", &builtin_boolean);
+          visible_type_marks.emplace("bit", &builtin_bit);
+        }
         const auto expose_type_mark =
             [&](const std::string_view name,
                 const frontend::Type& type) {

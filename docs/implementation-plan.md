@@ -6958,10 +6958,10 @@ The current ten implementation tasks are:
 5. **Complete.** Complete record and array aggregate element-choice, range, choice-list,
    qualified, nested, and final `others` forms with exact order, coverage,
    overlap, duplicate, and subtype legality.
-6. **In progress.** Complete scalar and composite type/object attributes across nested records,
+6. **Complete.** Complete scalar and composite type/object attributes across nested records,
    arrays, and enumerations, including static folding, executable results,
    dimensions, bounds, ranges, positions, and checked failures.
-7. **Pending.** Complete supported composite equality, inequality, matching, concatenation,
+7. **In progress.** Complete supported composite equality, inequality, matching, concatenation,
    selection, assignment, conditional/case choice, and conversion operations
    with interpreter/LLVM parity.
 8. **Pending.** Complete nested-composite hierarchy ports, generic and callable boundaries,
@@ -7124,6 +7124,36 @@ catalog covers 1,487 production diagnostics and all 367 authored sources pass
 the 2,000-line gate; `lowerer_expression.cpp` is 1,993 lines. Batch 117
 remains **in progress** with Task 6 current and is not a CI-inspection
 boundary.
+
+Task 6 is focused-complete. The dedicated 466-line
+`lowerer_vhdl_attributes.cpp` now owns executable scalar/enumeration and array
+attribute lowering. Built-in integer, natural, positive, Boolean, and bit type
+marks are always visible; integer-family, Boolean, bit, and declared
+enumeration bounds, direction, length, position/value, adjacency, and checked
+successor/predecessor results retain their exact domains. Scalar
+`range`/`reverse_range` loops preserve integer, Boolean, bit, or nominal
+enumeration loop-parameter typing. Concrete array attributes select every
+locally static dimension from the complete rank, including null ranges, and
+nested record-selected signal/local array objects use the same declared
+dimension metadata as type and subtype marks. Pre-layout static folding now
+evaluates multidimensional constraints instead of guessing from a flattened
+first-dimension packed range.
+
+The 249-line elaboration fixture covers scalar bounds/positions, Boolean/bit
+results, both dimensions and directions, nested record array objects, null
+lengths, architecture-constant folding, scalar/array/enumeration range loops,
+invalid ranks, dynamic dimensions, indefinite arrays, prefix legality, scalar
+range misuse, and static/runtime checked failures. The new 236-line
+application differential proves interpreter and LLVM O0/O2 cold/warm equality
+plus dynamic scalar-bound failure parity. The eight-worker seven-test Debug
+and Release gates passed in 3.86 and 4.14 seconds, with attributes at
+0.16/0.17 seconds, arrays at 1.89/2.14 seconds, enumerations at 0.62/0.63
+seconds, and scoped locals at 0.84/0.88 seconds. The LLVM-disabled ASan/UBSan
+seven-test gate passed in 6.54 seconds with leak detection disabled under the
+managed ptrace sandbox. The catalog covers 1,490 production diagnostics and
+all 370 authored sources pass the 2,000-line gate;
+`lowerer_expression.cpp` is 1,984 lines. Batch 117 remains **in progress**
+with Task 7 current and is not a CI-inspection boundary.
 
 ## Forward language-closure feature batches
 

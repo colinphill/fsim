@@ -378,6 +378,23 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
             && language_ == frontend::Language::Vhdl2008
             && (expression.text == "'range"
                 || expression.text == "'reverse_range")) {
+            const auto* scalar_prefix =
+                !expression.operands.empty()
+                    && expression.operands.front().kind
+                        == ExpressionKind::Identifier
+                ? visible_type_mark(
+                      expression.operands.front().text)
+                : nullptr;
+            if (scalar_prefix != nullptr
+                && !is_vhdl_array_like(*scalar_prefix)) {
+                report(
+                    "FSIM-ELAB-VHSCALARATTR-003",
+                    expression.text
+                        + " is a discrete range and cannot be used as a "
+                          "scalar expression",
+                    expression.span);
+                return std::nullopt;
+            }
             if (!vhdl_array_attribute_range(
                     expression, true)) {
                 return std::nullopt;
@@ -428,10 +445,15 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
             } else {
                 const auto* type =
                     vhdl_array_attribute_prefix_type(expression);
-                const bool null_array =
-                    type != nullptr && type->vhdl_array
-                    && !type->vhdl_array->dimensions.empty()
-                    && type->vhdl_array->dimensions.front().null;
+                const auto dimension = expression.operands.size() == 2
+                    ? static_integer_value(expression.operands[1]).value_or(1)
+                    : std::int64_t{1};
+                const bool null_array = type != nullptr && type->vhdl_array
+                    && dimension > 0
+                    && static_cast<std::uint64_t>(dimension)
+                        <= type->vhdl_array->dimensions.size()
+                    && type->vhdl_array->dimensions[
+                        static_cast<std::size_t>(dimension - 1)].null;
                 const auto width =
                     null_array ? std::uint64_t{0} : range->width();
                 if (width

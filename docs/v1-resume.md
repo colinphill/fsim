@@ -17,11 +17,11 @@ as work lands. Before moving on, retain that batch's list, mark it
 - Recorded: 2026-08-02.
 - Branch: `codex/resumable-jit`.
 - Implementation baseline: all ten Batch 116 tasks are complete through this
-  handoff; Batch 117 Tasks 1 through 3 are complete and Task 4 qualified
-  expression and subtype-conversion lowering is current.
+  handoff; Batch 117 Tasks 1 through 6 are complete and Task 7 composite
+  operation closure is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 364 authored C/C++ source, header,
+- The source-size refactor is complete: all 370 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 115-alternative
@@ -2230,10 +2230,10 @@ The current ten implementation tasks are:
 5. **Complete.** Complete record and array aggregate element-choice, range, choice-list,
    qualified, nested, and final `others` forms with exact order, coverage,
    overlap, duplicate, and subtype legality.
-6. **In progress.** Complete scalar and composite type/object attributes across nested records,
+6. **Complete.** Complete scalar and composite type/object attributes across nested records,
    arrays, and enumerations, including static folding, executable results,
    dimensions, bounds, ranges, positions, and checked failures.
-7. **Pending.** Complete supported composite equality, inequality, matching, concatenation,
+7. **In progress.** Complete supported composite equality, inequality, matching, concatenation,
    selection, assignment, conditional/case choice, and conversion operations
    with interpreter/LLVM parity.
 8. **Pending.** Complete nested-composite hierarchy ports, generic and callable boundaries,
@@ -2432,6 +2432,34 @@ cataloged and all 367 authored sources pass the 2,000-line gate;
 `lowerer_expression.cpp` remains within the limit at 1,993 lines. Batch 117
 remains **in progress** with Task 6 current and is not a CI-inspection
 boundary.
+
+Task 6 is focused-complete. Executable VHDL attribute lowering is centralized
+in the dedicated 466-line `lowerer_vhdl_attributes.cpp`. Built-in integer,
+natural, positive, Boolean, and bit type marks are always visible;
+integer-family, Boolean, bit, and declared enumeration bounds, direction,
+length, position/value, adjacency, and checked successor/predecessor results
+retain their exact domains. Scalar `range`/`reverse_range` loops preserve the
+integer, Boolean, bit, or nominal enumeration loop-parameter type. Concrete
+array type, subtype, signal, local, and nested record-selected object prefixes
+query every locally static dimension in the complete rank, including null
+ranges. Static folding evaluates pre-layout multidimensional constraints
+instead of falling back to a flattened first-dimension packed range.
+
+The 249-line elaboration fixture covers scalar bounds/positions, Boolean/bit
+results, both dimensions and directions, nested record array objects, null
+lengths, architecture-constant folding, scalar/array/enumeration range loops,
+invalid ranks, dynamic dimensions, indefinite arrays, prefix legality, scalar
+range misuse, and static/runtime checked failures. The new 236-line
+application differential proves interpreter and LLVM O0/O2 cold/warm equality
+plus dynamic scalar-bound failure parity. The eight-worker seven-test Debug
+and Release gates passed in 3.86 and 4.14 seconds, with attributes at
+0.16/0.17 seconds, arrays at 1.89/2.14 seconds, enumerations at 0.62/0.63
+seconds, and scoped locals at 0.84/0.88 seconds. The LLVM-disabled ASan/UBSan
+seven-test gate passed in 6.54 seconds with leak detection disabled under the
+managed ptrace sandbox. The catalog covers 1,490 production diagnostics and
+all 370 authored sources pass the 2,000-line gate;
+`lowerer_expression.cpp` is 1,984 lines. Batch 117 remains **in progress**
+with Task 7 current and is not a CI-inspection boundary.
 
 Batch 110 has advanced through these validated features:
 

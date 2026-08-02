@@ -30,13 +30,30 @@ const frontend::Type* type_mark(
         0, std::numeric_limits<std::int32_t>::max(), "natural");
     static const auto positive = builtin_integer(
         1, std::numeric_limits<std::int32_t>::max(), "positive");
+    const auto builtin_discrete = [](const frontend::ValueDomain domain,
+                                     const std::string_view spelling) {
+      frontend::Type type;
+      type.domain = domain;
+      type.spelling = spelling;
+      return type;
+    };
+    static const auto boolean = builtin_discrete(
+        frontend::ValueDomain::Boolean, "boolean");
+    static const auto bit = builtin_discrete(
+        frontend::ValueDomain::Bit2, "bit");
     if (name == "integer") {
         return &integer;
     }
     if (name == "natural") {
         return &natural;
     }
-    return name == "positive" ? &positive : nullptr;
+    if (name == "positive") {
+        return &positive;
+    }
+    if (name == "boolean") {
+        return &boolean;
+    }
+    return name == "bit" ? &bit : nullptr;
 }
 
 std::optional<std::pair<std::int64_t, std::int64_t>>
@@ -100,55 +117,218 @@ bool fold_type_attribute(
             != ExpressionKind::Identifier) {
         return true;
     }
-    const auto* type = type_mark(
-        unit, expression.operands.front().text);
+    const auto* type = type_mark(unit, expression.operands.front().text);
+    const bool type_prefix = type != nullptr;
+    if (type == nullptr) {
+        type = vhdl_object_type(
+            unit, expression.operands.front().text);
+    }
     if (type == nullptr || !type->enumeration_literals.empty()) {
         return true;
     }
-    if (expression.operands.size() != 1) {
-        error = expression.text
-            + " on a scalar or array type takes no argument";
-        return false;
-    }
-    const auto range = static_range(
-        *type, unit, environment, error, range_error);
-    if (!range) {
-        error = "VHDL type attribute prefix has no locally static range";
-        return false;
-    }
-    const auto [left, right] = *range;
-    std::optional<std::int64_t> value;
-    if (expression.text == "'left") {
-        value = left;
-    } else if (expression.text == "'right") {
-        value = right;
-    } else if (expression.text == "'low") {
-        value = std::min(left, right);
-    } else if (expression.text == "'high") {
-        value = std::max(left, right);
-    } else if (expression.text == "'ascending") {
-        value = left <= right ? 1 : 0;
-    } else if (expression.text == "'length") {
-        const auto distance = left >= right
-            ? static_cast<std::uint64_t>(left - right)
-            : static_cast<std::uint64_t>(right - left);
-        if (distance
-            >= static_cast<std::uint64_t>(
-                std::numeric_limits<std::int64_t>::max())) {
-            range_error = true;
-            error = "VHDL type attribute length is not representable";
+    const auto simple_name = type->spelling.substr(
+        type->spelling.find_last_of('.') == std::string::npos
+            ? 0
+            : type->spelling.find_last_of('.') + 1);
+    const bool array = type->vhdl_array
+        || simple_name == "bit_vector"
+        || simple_name == "std_logic_vector"
+        || simple_name == "std_ulogic_vector"
+        || simple_name == "signed" || simple_name == "unsigned";
+    std::int64_t left = 0;
+    std::int64_t right = 0;
+    bool descending = false;
+    bool null_range = false;
+    if (array) {
+        if (expression.operands.size() > 2) {
+            error = expression.text
+                + " accepts at most one array dimension argument";
             return false;
         }
-        value = static_cast<std::int64_t>(distance + 1U);
+        std::int64_t dimension = 1;
+        if (expression.operands.size() == 2) {
+            const auto selected = evaluate_constant_expression(
+                expression.operands[1], environment, error);
+            if (!selected) {
+                error = expression.text
+                    + " requires a locally static array dimension";
+                return false;
+            }
+            dimension = *selected;
+        }
+        const auto rank = type->vhdl_array
+            ? type->vhdl_array->dimensions.size()
+            : std::size_t{1};
+        if (dimension < 1
+            || static_cast<std::uint64_t>(dimension) > rank) {
+            range_error = true;
+            error = expression.text + " dimension "
+                + std::to_string(dimension) + " is outside array rank "
+                + std::to_string(rank);
+            return false;
+        }
+        if (type->vhdl_array) {
+            const auto& selected = type->vhdl_array->dimensions[
+                static_cast<std::size_t>(dimension - 1)];
+            if (selected.range) {
+                left = selected.range->left;
+                right = selected.range->right;
+                descending = selected.range->descending;
+                null_range = selected.null;
+            } else if (selected.constraint) {
+                auto left_expression = selected.constraint->left;
+                auto right_expression = selected.constraint->right;
+                if (!fold_vhdl_enumeration_attributes(
+                        left_expression, unit, environment, error, range_error)
+                    || !fold_vhdl_static_expressions(
+                        left_expression, unit, environment, error, range_error)
+                    || !fold_vhdl_enumeration_attributes(
+                        right_expression, unit, environment, error, range_error)
+                    || !fold_vhdl_static_expressions(
+                        right_expression, unit, environment, error, range_error)) {
+                    return false;
+                }
+                const auto left_value = evaluate_constant_expression(
+                    left_expression, environment, error);
+                const auto right_value = left_value
+                    ? evaluate_constant_expression(
+                          right_expression, environment, error)
+                    : std::nullopt;
+                if (!left_value || !right_value) {
+                    error = "VHDL array attribute constraint is not locally static";
+                    return false;
+                }
+                left = *left_value;
+                right = *right_value;
+                descending = selected.constraint->descending;
+                null_range = descending ? left < right : left > right;
+            } else {
+                error = "VHDL array attribute prefix has no concrete constraint";
+                return false;
+            }
+        } else if (type->packed_range) {
+            left = type->packed_range->left;
+            right = type->packed_range->right;
+            descending = type->packed_range->descending;
+        } else {
+            error = "VHDL array attribute prefix has no concrete constraint";
+            return false;
+        }
     } else {
+        if (!type_prefix) {
+            error = "a scalar attribute prefix must be a type or subtype mark";
+            return false;
+        }
+        if (type->domain == frontend::ValueDomain::Integer) {
+            const auto range = static_range(
+                *type, unit, environment, error, range_error);
+            if (!range) {
+                error = "VHDL scalar attribute prefix has no locally static range";
+                return false;
+            }
+            left = range->first;
+            right = range->second;
+            descending = type->integer_range
+                ? type->integer_range->descending
+                : type->integer_range_expression
+                    && type->integer_range_expression->descending;
+        } else if (type->packed_members.empty()
+                   && (type->domain == frontend::ValueDomain::Boolean
+                       || type->domain == frontend::ValueDomain::Bit2)) {
+            left = 0;
+            right = 1;
+        } else {
+            return true;
+        }
+    }
+
+    const auto low = std::min(left, right);
+    const auto high = std::max(left, right);
+    const bool zero_arguments = expression.text == "'left"
+        || expression.text == "'right" || expression.text == "'low"
+        || expression.text == "'high" || expression.text == "'ascending"
+        || expression.text == "'length";
+    const bool one_argument = expression.text == "'pos"
+        || expression.text == "'val" || expression.text == "'succ"
+        || expression.text == "'pred" || expression.text == "'leftof"
+        || expression.text == "'rightof";
+    if (!zero_arguments && !one_argument) {
         return true;
     }
+    if (array && one_argument) {
+        error = expression.text + " is not defined for an array prefix";
+        return false;
+    }
+    if (!array
+        && expression.operands.size() != (one_argument ? 2U : 1U)) {
+        error = expression.text + " requires "
+            + (one_argument ? std::string{"one argument"}
+                            : std::string{"no argument"});
+        return false;
+    }
+
+    std::int64_t value = 0;
+    auto result_domain = frontend::ValueDomain::Integer;
+    if (expression.text == "'left") {
+        value = left;
+        result_domain = array ? frontend::ValueDomain::Integer : type->domain;
+    } else if (expression.text == "'right") {
+        value = right;
+        result_domain = array ? frontend::ValueDomain::Integer : type->domain;
+    } else if (expression.text == "'low") {
+        value = low;
+        result_domain = array ? frontend::ValueDomain::Integer : type->domain;
+    } else if (expression.text == "'high") {
+        value = high;
+        result_domain = array ? frontend::ValueDomain::Integer : type->domain;
+    } else if (expression.text == "'ascending") {
+        value = descending ? 0 : 1;
+        result_domain = frontend::ValueDomain::Boolean;
+    } else if (expression.text == "'length") {
+        const auto distance = null_range ? std::uint64_t{0}
+            : index_distance(left, right) + 1U;
+        if (distance
+            > static_cast<std::uint64_t>(
+                std::numeric_limits<std::int32_t>::max())) {
+            range_error = true;
+            error = "VHDL attribute length is outside the bounded integer range";
+            return false;
+        }
+        value = static_cast<std::int64_t>(distance);
+    } else {
+        const auto argument = evaluate_constant_expression(
+            expression.operands[1], environment, error);
+        if (!argument) {
+            return false;
+        }
+        if (*argument < low || *argument > high) {
+            range_error = true;
+            error = expression.text + " argument is outside the scalar range";
+            return false;
+        }
+        if (expression.text == "'pos") {
+            value = *argument;
+        } else if (expression.text == "'val") {
+            value = *argument;
+            result_domain = type->domain;
+        } else {
+            const bool successor = expression.text == "'succ"
+                || (expression.text == "'leftof" && descending)
+                || (expression.text == "'rightof" && !descending);
+            value = *argument + (successor ? 1 : -1);
+            if (value < low || value > high) {
+                range_error = true;
+                error = expression.text
+                    + " argument has no result inside the scalar range";
+                return false;
+            }
+            result_domain = type->domain;
+        }
+    }
     expression = constant_expression(
-        *value,
+        value,
         expression.span,
-        expression.text == "'ascending"
-            ? frontend::ValueDomain::Boolean
-            : frontend::ValueDomain::Integer,
+        result_domain,
         frontend::Language::Vhdl2008);
     return true;
 }

@@ -69,6 +69,7 @@ using namespace elaboration_detail;
         std::optional<std::int64_t> limit;
         bool loop_descending =
             statement.loop_descending;
+        const frontend::Type* scalar_range_type = nullptr;
         const bool attribute_range =
             language_ == frontend::Language::Vhdl2008
             && statement.loop_initial.kind
@@ -77,9 +78,66 @@ using namespace elaboration_detail;
                 || statement.loop_initial.text
                     == "'reverse_range");
         if (attribute_range) {
-            const auto range =
-                vhdl_array_attribute_range(
+            std::optional<frontend::PackedRange> range;
+            const auto& attribute = statement.loop_initial;
+            if (!attribute.operands.empty()
+                && attribute.operands.front().kind
+                    == ExpressionKind::Identifier) {
+                const auto* candidate = visible_type_mark(
+                    attribute.operands.front().text);
+                if (candidate != nullptr
+                    && !is_vhdl_array_like(*candidate)
+                    && candidate->packed_members.empty()
+                    && (candidate->domain
+                            == frontend::ValueDomain::Integer
+                        || candidate->domain
+                            == frontend::ValueDomain::Boolean
+                        || candidate->domain
+                            == frontend::ValueDomain::Bit2
+                        || !candidate->enumeration_literals.empty())) {
+                    scalar_range_type = candidate;
+                    if (attribute.operands.size() != 1) {
+                        report(
+                            "FSIM-ELAB-VHSCALARATTR-001",
+                            attribute.text
+                                + " on a scalar type takes no dimension",
+                            attribute.span);
+                        return;
+                    }
+                    if (!candidate->enumeration_literals.empty()) {
+                        const auto selected =
+                            candidate->enumeration_range.value_or(
+                                frontend::EnumerationRange{
+                                    0,
+                                    static_cast<std::int64_t>(
+                                        candidate->enumeration_literals.size()
+                                        - 1U),
+                                    false});
+                        range = frontend::PackedRange{
+                            selected.left,
+                            selected.right,
+                            selected.descending};
+                    } else if (candidate->domain
+                               == frontend::ValueDomain::Integer) {
+                        const auto selected =
+                            candidate->integer_range.value_or(
+                                frontend::IntegerRange{
+                                    std::numeric_limits<std::int32_t>::min(),
+                                    std::numeric_limits<std::int32_t>::max(),
+                                    false});
+                        range = frontend::PackedRange{
+                            selected.left,
+                            selected.right,
+                            selected.descending};
+                    } else {
+                        range = frontend::PackedRange{0, 1, false};
+                    }
+                }
+            }
+            if (!range) {
+                range = vhdl_array_attribute_range(
                     statement.loop_initial, true);
+            }
             if (!range) {
                 return;
             }
@@ -156,7 +214,13 @@ using namespace elaboration_detail;
         if (!statement.loop_variable.empty()) {
             domains.emplace(
                 statement.loop_variable,
-                frontend::ValueDomain::Integer);
+                scalar_range_type == nullptr
+                    ? ConstantTypeInfo{frontend::ValueDomain::Integer}
+                    : ConstantTypeInfo{
+                          scalar_range_type->domain,
+                          !scalar_range_type
+                               ->enumeration_literals.empty(),
+                          scalar_range_type->nominal_type});
         }
         auto value = *initial;
         std::size_t count = 0;
@@ -607,287 +671,6 @@ using namespace elaboration_detail;
             {padding, source},
             32});
         return destination;
-    }
-
-
-
-    [[nodiscard]] RegisterId Lowerer::narrow_enumeration_ordinal(
-        const RegisterId source,
-        const frontend::Type& type) {
-        const auto width =
-            static_cast<std::size_t>(
-                type.width().value_or(1));
-        const auto destination =
-            allocate_register(width, frontend::ValueDomain::Bit2);
-        process_.operations.emplace_back(Extract{
-            destination,
-            source,
-            0,
-            static_cast<std::uint32_t>(width)});
-        return destination;
-    }
-
-
-
-    std::optional<RegisterId> Lowerer::lower_enumeration_attribute(
-        const Expression& expression,
-        const frontend::Type& type) {
-        const auto width_value = type.width();
-        if (!width_value || *width_value == 0
-            || *width_value > 32
-            || type.enumeration_literals.empty()
-            || type.enumeration_literals.size()
-                > static_cast<std::size_t>(
-                    std::numeric_limits<std::int32_t>::max())) {
-            report(
-                "FSIM-ELAB-VHENUMATTR-001",
-                "enumeration attribute prefix '"
-                    + type.spelling
-                    + "' has no executable ordinal range",
-                expression.span);
-            return std::nullopt;
-        }
-        const auto width =
-            static_cast<std::size_t>(*width_value);
-        const auto count = static_cast<std::int32_t>(
-            type.enumeration_literals.size());
-        const auto range =
-            type.enumeration_range.value_or(
-                frontend::EnumerationRange{
-                    0,
-                    static_cast<std::int64_t>(count - 1),
-                    false});
-        const auto range_left =
-            static_cast<std::int32_t>(range.left);
-        const auto range_right =
-            static_cast<std::int32_t>(range.right);
-        const auto range_low =
-            std::min(range_left, range_right);
-        const auto range_high =
-            std::max(range_left, range_right);
-        const auto require_arity =
-            [&](const std::size_t expected) {
-              if (expression.operands.size() != expected + 1U) {
-                  report(
-                      "FSIM-ELAB-VHENUMATTR-001",
-                      expression.text + " on enumeration type '"
-                          + type.spelling + "' requires "
-                          + std::to_string(expected)
-                          + (expected == 1
-                                 ? " argument"
-                                 : " arguments"),
-                      expression.span);
-                  return false;
-              }
-              return true;
-            };
-        if (expression.text == "'left"
-            || expression.text == "'right"
-            || expression.text == "'low"
-            || expression.text == "'high") {
-            if (!require_arity(0)) {
-                return std::nullopt;
-            }
-            const auto ordinal =
-                expression.text == "'left"
-                    ? range_left
-                : expression.text == "'right"
-                    ? range_right
-                : expression.text == "'low"
-                    ? range_low
-                    : range_high;
-            const auto destination =
-                allocate_register(
-                    width, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(LoadConstant{
-                destination,
-                unsigned_value(
-                    static_cast<std::uint64_t>(ordinal),
-                    width)});
-            return destination;
-        }
-        if (expression.text == "'length") {
-            if (!require_arity(0)) {
-                return std::nullopt;
-            }
-            const auto destination =
-                allocate_register(
-                    32, frontend::ValueDomain::Integer);
-            process_.operations.emplace_back(LoadConstant{
-                destination,
-                integer_value(
-                    range_high - range_low + 1)});
-            return destination;
-        }
-        if (expression.text == "'ascending") {
-            if (!require_arity(0)) {
-                return std::nullopt;
-            }
-            const auto destination =
-                allocate_register(
-                    1, frontend::ValueDomain::Boolean);
-            process_.operations.emplace_back(LoadConstant{
-                destination,
-                PackedLogic4(
-                    1,
-                    range.descending
-                        ? Logic4::zero
-                        : Logic4::one)});
-            return destination;
-        }
-
-        const bool position = expression.text == "'pos";
-        const bool value = expression.text == "'val";
-        const bool successor =
-            expression.text == "'succ"
-            || (expression.text == "'leftof"
-                && range.descending)
-            || (expression.text == "'rightof"
-                && !range.descending);
-        const bool predecessor =
-            expression.text == "'pred"
-            || (expression.text == "'leftof"
-                && !range.descending)
-            || (expression.text == "'rightof"
-                && range.descending);
-        if (!position && !value && !successor && !predecessor) {
-            report(
-                "FSIM-ELAB-VHENUMATTR-001",
-                "attribute '" + expression.text
-                    + "' is not defined for enumeration type '"
-                    + type.spelling + "'",
-                expression.span);
-            return std::nullopt;
-        }
-        if (!require_arity(1)) {
-            return std::nullopt;
-        }
-        if (value) {
-            if (const auto static_value =
-                    constant_index(expression.operands[1]);
-                static_value
-                && (*static_value < range_low
-                    || *static_value > range_high)) {
-                report(
-                    "FSIM-ELAB-VHENUMATTR-002",
-                    "'val argument "
-                        + std::to_string(*static_value)
-                        + " is outside enumeration type '"
-                        + type.spelling + "'",
-                    expression.operands[1].span);
-                return std::nullopt;
-            }
-            if (!is_integer_expression(
-                    expression.operands[1])) {
-                report(
-                    "FSIM-ELAB-VHENUMATTR-001",
-                    "'val requires an integer-family argument",
-                    expression.operands[1].span);
-                return std::nullopt;
-            }
-            const auto argument =
-                lower_expression(
-                    expression.operands[1], 32);
-            if (!argument || register_width(*argument) != 32) {
-                report(
-                    "FSIM-ELAB-VHENUMATTR-001",
-                    "'val argument does not have the portable "
-                    "32-bit integer representation",
-                    expression.operands[1].span);
-                return std::nullopt;
-            }
-            process_.operations.emplace_back(IntegerCheck{
-                *argument, range_low, range_high});
-            return narrow_enumeration_ordinal(
-                *argument, type);
-        }
-
-        const auto argument =
-            [&]() -> std::optional<RegisterId> {
-              const auto& argument_expression =
-                  expression.operands[1];
-              if (argument_expression.kind
-                      == ExpressionKind::IntegerLiteral
-                  || argument_expression.kind
-                      == ExpressionKind::BooleanLiteral
-                  || argument_expression.kind
-                      == ExpressionKind::StringLiteral) {
-                  report(
-                      "FSIM-ELAB-VHENUMATTR-001",
-                      expression.text
-                          + " requires a value of enumeration type '"
-                          + type.spelling + "'",
-                      argument_expression.span);
-                  return std::nullopt;
-              }
-              if (argument_expression.kind
-                      == ExpressionKind::Identifier
-                  && !vhdl_enumeration_ordinal(
-                      argument_expression, type)) {
-                  const auto* argument_type =
-                      object_type(argument_expression.text);
-                  if (argument_type != nullptr
-                      && argument_type
-                          ->enumeration_literals.empty()) {
-                      report(
-                          "FSIM-ELAB-VHENUMATTR-001",
-                          expression.text
-                              + " requires a value of enumeration type '"
-                              + type.spelling + "'",
-                          argument_expression.span);
-                      return std::nullopt;
-                  }
-              }
-              return lower_expression(
-                  argument_expression, width, &type);
-            }();
-        if (!argument) {
-            return std::nullopt;
-        }
-        const auto ordinal =
-            widen_enumeration_ordinal(*argument);
-        if (position) {
-            process_.operations.emplace_back(IntegerCheck{
-                ordinal, range_low, range_high});
-            return ordinal;
-        }
-        const auto static_ordinal =
-            vhdl_enumeration_ordinal(
-                expression.operands[1], type);
-        const auto lower =
-            successor ? range_low : range_low + 1;
-        const auto upper =
-            successor ? range_high - 1 : range_high;
-        if (lower > upper
-            || (static_ordinal
-                && (*static_ordinal < lower
-                    || *static_ordinal > upper))) {
-            report(
-                "FSIM-ELAB-VHENUMATTR-002",
-                expression.text + " argument has no result inside "
-                    "enumeration type '" + type.spelling + "'",
-                expression.operands[1].span);
-            return std::nullopt;
-        }
-        process_.operations.emplace_back(
-            IntegerCheck{ordinal, lower, upper});
-        const auto one =
-            allocate_register(
-                32, frontend::ValueDomain::Integer);
-        process_.operations.emplace_back(
-            LoadConstant{one, integer_value(1)});
-        const auto adjusted =
-            allocate_register(
-                32, frontend::ValueDomain::Integer);
-        process_.operations.emplace_back(IntegerBinary{
-            successor
-                ? IntegerBinaryOperator::add
-                : IntegerBinaryOperator::subtract,
-            adjusted,
-            ordinal,
-            one});
-        return narrow_enumeration_ordinal(
-            adjusted, type);
     }
 
 

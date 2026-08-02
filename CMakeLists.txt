@@ -401,6 +401,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_case_qualified.cpp
       src/elaboration/lowerer_vhdl_case.cpp
       src/elaboration/lowerer_vhdl_conversion.cpp
+      src/elaboration/lowerer_vhdl_attributes.cpp
       src/elaboration/lowerer_vhdl_matching.cpp
       src/elaboration/lowerer_control.cpp
       src/elaboration/lowerer_expression.cpp

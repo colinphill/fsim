@@ -5,108 +5,6 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
-    [[nodiscard]] const frontend::Type*
-    Lowerer::vhdl_array_attribute_prefix_type(
-        const Expression& expression) const {
-        if (language_ != frontend::Language::Vhdl2008
-            || expression.kind != ExpressionKind::Call
-            || expression.operands.empty()
-            || expression.operands.front().kind
-                != ExpressionKind::Identifier) {
-            return nullptr;
-        }
-        const auto& prefix =
-            expression.operands.front().text;
-        if (const auto* object = object_type(prefix);
-            object != nullptr) {
-            return object;
-        }
-        return visible_type_mark(prefix);
-    }
-
-    [[nodiscard]] bool Lowerer::is_vhdl_array_like(
-        const frontend::Type& type) {
-        if (type.vhdl_array) {
-            return true;
-        }
-        const auto separator =
-            type.spelling.find_last_of('.');
-        const auto name = type.spelling.substr(
-            separator == std::string::npos
-                ? 0
-                : separator + 1);
-        return name == "bit_vector"
-            || name == "std_logic_vector"
-            || name == "std_ulogic_vector"
-            || name == "signed"
-            || name == "unsigned";
-    }
-
-    std::optional<frontend::PackedRange>
-    Lowerer::vhdl_array_attribute_range(
-        const Expression& expression,
-        const bool report_errors) {
-        const auto* type =
-            vhdl_array_attribute_prefix_type(expression);
-        if (type == nullptr || !is_vhdl_array_like(*type)) {
-            if (report_errors) {
-                report(
-                    "FSIM-ELAB-VHARRAYATTR-001",
-                    expression.text
-                        + " requires a visible bounded array object, "
-                          "type, or subtype mark",
-                    expression.span);
-            }
-            return std::nullopt;
-        }
-        if (expression.operands.size() < 1
-            || expression.operands.size() > 2) {
-            if (report_errors) {
-                report(
-                    "FSIM-ELAB-VHARRAYATTR-001",
-                    expression.text
-                        + " accepts at most one dimension argument",
-                    expression.span);
-            }
-            return std::nullopt;
-        }
-        if (expression.operands.size() == 2) {
-            const auto dimension =
-                constant_index(expression.operands[1]);
-            if (!dimension || *dimension != 1) {
-                if (report_errors) {
-                    report(
-                        "FSIM-ELAB-VHARRAYATTR-002",
-                        expression.text
-                            + " supports only the locally static "
-                              "dimension 1",
-                        expression.operands[1].span);
-                }
-                return std::nullopt;
-            }
-        }
-        if (type->vhdl_array
-            && !type->vhdl_array->dimensions.empty()
-            && type->vhdl_array->dimensions.front().range) {
-            const auto& range =
-                *type->vhdl_array->dimensions.front().range;
-            return frontend::PackedRange{
-                range.left, range.right, range.descending};
-        }
-        if (!type->packed_range) {
-            if (report_errors) {
-                report(
-                    "FSIM-ELAB-VHARRAYATTR-001",
-                    expression.text
-                        + " requires a concrete array "
-                          "constraint",
-                    expression.operands.front().span);
-            }
-            return std::nullopt;
-        }
-        return type->packed_range;
-    }
-
     std::optional<std::int64_t>
     Lowerer::static_integer_value(const Expression& expression) {
         if (language_ != frontend::Language::Vhdl2008) {
@@ -154,10 +52,15 @@ using namespace elaboration_detail;
               } else {
                   const auto* type =
                       vhdl_array_attribute_prefix_type(candidate);
-                  const bool null_array =
-                      type != nullptr && type->vhdl_array
-                      && !type->vhdl_array->dimensions.empty()
-                      && type->vhdl_array->dimensions.front().null;
+                  const auto dimension = candidate.operands.size() == 2
+                      ? static_integer_value(candidate.operands[1]).value_or(1)
+                      : std::int64_t{1};
+                  const bool null_array = type != nullptr && type->vhdl_array
+                      && dimension > 0
+                      && static_cast<std::uint64_t>(dimension)
+                          <= type->vhdl_array->dimensions.size()
+                      && type->vhdl_array->dimensions[
+                          static_cast<std::size_t>(dimension - 1)].null;
                   const auto width =
                       null_array ? std::uint64_t{0} : range->width();
                   if (width

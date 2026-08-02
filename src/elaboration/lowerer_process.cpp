@@ -398,8 +398,7 @@ void Lowerer::validate_read_only_signal_writes(
         if (!selected || selected->member->nested_types.empty()) {
             return nullptr;
         }
-        const auto& type = selected->member->nested_types.front();
-        return !type.enumeration_literals.empty() ? &type : nullptr;
+        return &selected->member->nested_types.front();
     }
 
 

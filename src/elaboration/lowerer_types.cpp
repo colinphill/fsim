@@ -557,10 +557,25 @@ using namespace elaboration_detail;
                     == ExpressionKind::Identifier) {
                 const auto* type = visible_type_mark(
                     expression.operands.front().text);
-                if (type != nullptr
-                    && !type->enumeration_literals.empty()) {
-                    return expression.text == "'pos"
-                        || expression.text == "'length";
+                if (type != nullptr) {
+                    if (!type->enumeration_literals.empty()) {
+                        return expression.text == "'pos"
+                            || expression.text == "'length";
+                    }
+                    if (type->domain
+                        == frontend::ValueDomain::Integer) {
+                        return expression.text != "'ascending"
+                            && expression.text != "'range"
+                            && expression.text != "'reverse_range";
+                    }
+                    if (type->packed_members.empty()
+                        && !is_vhdl_array_like(*type)
+                        && (type->domain == frontend::ValueDomain::Boolean
+                            || type->domain
+                                == frontend::ValueDomain::Bit2)) {
+                        return expression.text == "'pos"
+                            || expression.text == "'length";
+                    }
                 }
             }
             if (language_ == frontend::Language::Vhdl2008
@@ -819,10 +834,25 @@ using namespace elaboration_detail;
                     == ExpressionKind::Identifier) {
                 const auto* type = visible_type_mark(
                     expression.operands.front().text);
-                if (type != nullptr
-                    && !type->enumeration_literals.empty()) {
-                    return expression.text == "'pos"
-                        || expression.text == "'length";
+                if (type != nullptr) {
+                    if (!type->enumeration_literals.empty()) {
+                        return expression.text == "'pos"
+                            || expression.text == "'length";
+                    }
+                    if (type->domain
+                        == frontend::ValueDomain::Integer) {
+                        return expression.text != "'ascending"
+                            && expression.text != "'range"
+                            && expression.text != "'reverse_range";
+                    }
+                    if (type->packed_members.empty()
+                        && !is_vhdl_array_like(*type)
+                        && (type->domain == frontend::ValueDomain::Boolean
+                            || type->domain
+                                == frontend::ValueDomain::Bit2)) {
+                        return expression.text == "'pos"
+                            || expression.text == "'length";
+                    }
                 }
             }
             return expression.text == "'left"

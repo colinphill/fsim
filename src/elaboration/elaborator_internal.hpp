@@ -1098,9 +1098,9 @@ private:
         const RegisterId source,
         const frontend::Type& type);
 
-    std::optional<RegisterId> lower_enumeration_attribute(
+    std::optional<RegisterId> lower_vhdl_scalar_attribute(
         const Expression& expression,
-        const frontend::Type& type);
+        const frontend::Type* expected_type);
     std::optional<RegisterId> lower_vhdl_array_aggregate(
         const Expression& expression,
         const std::size_t expected_width,

@@ -1224,7 +1224,7 @@ therefore excluded.
 | `FSIM-ELAB-VHARRAYSEL-003` | error | A multidimensional VHDL array read or target index is outside its selected source dimension. |
 | `FSIM-ELAB-VHARRAYSEL-004` | error | A multidimensional VHDL array slice has incompatible direction, bounds, placement, or contextual shape. |
 | `FSIM-ELAB-VHARRAYATTR-001` | error | A VHDL array attribute prefix is unknown, nonarray, unconstrained, null, or otherwise lacks a concrete bounded range. |
-| `FSIM-ELAB-VHARRAYATTR-002` | error | A VHDL array attribute selects a nonstatic or unsupported dimension instead of dimension `1`. |
+| `FSIM-ELAB-VHARRAYATTR-002` | error | A VHDL array attribute selects a nonstatic dimension or a dimension outside the concrete array rank. |
 | `FSIM-ELAB-VHARRAYATTR-003` | error | VHDL `range` or `reverse_range` is used as a scalar expression rather than a discrete range. |
 | `FSIM-ELAB-VHARRAYATTR-004` | error | A scalar VHDL array attribute result is outside the portable signed 32-bit integer representation. |
 | `FSIM-ELAB-VHDLMATCH-001` | error | A matching case or selected assignment is outside VHDL-2008 or has a selector outside the bounded bit/std_ulogic scalar or one-dimensional-array domain. |
@@ -1244,6 +1244,9 @@ therefore excluded.
 | `FSIM-ELAB-VHENUM-003` | error | An operator that is not defined for VHDL enumeration values was applied to an enumeration object. |
 | `FSIM-ELAB-VHENUMATTR-001` | error | A VHDL enumeration scalar attribute has an invalid prefix, arity, argument type, result context, or executable ordinal range. |
 | `FSIM-ELAB-VHENUMATTR-002` | error | A locally static or executable VHDL enumeration scalar attribute argument is outside the type's declaration range or has no predecessor/successor. |
+| `FSIM-ELAB-VHSCALARATTR-001` | error | A non-enumeration VHDL scalar attribute has an invalid type-mark prefix, arity, argument type, or executable range. |
+| `FSIM-ELAB-VHSCALARATTR-002` | error | A locally static or executable VHDL scalar attribute argument is outside its subtype range or has no predecessor/successor. |
+| `FSIM-ELAB-VHSCALARATTR-003` | error | A scalar VHDL `range` or `reverse_range` attribute is used as a scalar expression rather than a discrete range. |
 | `FSIM-ELAB-VHENUMRANGE-001` | error | A VHDL enumeration subtype constraint bound is not locally static, is unknown, or belongs to a different nominal enumeration type. |
 | `FSIM-ELAB-VHENUMRANGE-002` | error | A VHDL enumeration subtype constraint is null or lies outside the base enumeration's literal table. |
 | `FSIM-ELAB-VHENUMRANGE-003` | error | A derived VHDL enumeration subtype constraint is not contained by its resolved base subtype. |

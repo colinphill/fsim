@@ -110,6 +110,7 @@ int fsim_application_case_vhdl_record_aggregates();
 int fsim_application_case_vhdl_subtypes();
 int fsim_application_case_vhdl_enumerations();
 int fsim_application_case_vhdl_arrays();
+int fsim_application_case_vhdl_attributes();
 int fsim_application_case_vhdl_projected();
 int fsim_application_case_systemc_datatypes();
 #if FSIM_APPLICATION_WITH_TCL
@@ -121,6 +122,7 @@ constexpr NamedApplicationCase application_cases[] = {
     {"vhdl_subtypes", fsim_application_case_vhdl_subtypes},
     {"vhdl_enumerations", fsim_application_case_vhdl_enumerations},
     {"vhdl_arrays", fsim_application_case_vhdl_arrays},
+    {"vhdl_attributes", fsim_application_case_vhdl_attributes},
     {"vhdl_projected", fsim_application_case_vhdl_projected},
     {"systemc_datatypes", fsim_application_case_systemc_datatypes},
 #if FSIM_APPLICATION_WITH_TCL

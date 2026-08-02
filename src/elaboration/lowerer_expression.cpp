@@ -1005,40 +1005,31 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
             && expression.operands.front().kind
                 == ExpressionKind::Identifier) {
             const auto& prefix = expression.operands.front().text;
-            if (const auto* type =
-                    visible_type_mark(prefix);
-                type != nullptr
-                && !type->enumeration_literals.empty()) {
-                const bool enumeration_result =
-                    expression.text == "'left" || expression.text == "'right"
-                    || expression.text == "'low" || expression.text == "'high"
-                    || expression.text == "'val" || expression.text == "'succ"
-                    || expression.text == "'pred"
-                    || expression.text == "'leftof"
-                    || expression.text == "'rightof";
-                if (enumeration_result
-                    && !enumeration_context_compatible(type)) {
-                    return std::nullopt;
-                }
-                return lower_enumeration_attribute(
-                    expression, *type);
-            }
-            const bool enumeration_attribute =
+            const auto* prefix_type_mark = visible_type_mark(prefix);
+            const bool scalar_value_attribute =
                 expression.text == "'pos" || expression.text == "'val"
                 || expression.text == "'succ" || expression.text == "'pred"
                 || expression.text == "'leftof"
                 || expression.text == "'rightof";
             const auto* prefix_object = object_type(prefix);
-            if (enumeration_attribute
-                || (prefix_object != nullptr
-                    && !prefix_object
-                            ->enumeration_literals.empty())) {
-                report(
-                    "FSIM-ELAB-VHENUMATTR-001",
-                    "enumeration attribute '" + expression.text
-                        + "' requires a visible enumeration type mark",
-                    expression.operands.front().span);
-                return std::nullopt;
+            const auto scalar = [&](const frontend::Type* type) {
+              return type != nullptr && !is_vhdl_array_like(*type)
+                  && type->packed_members.empty();
+            };
+            const bool scalar_attribute = scalar_value_attribute
+                || expression.text == "'left"
+                || expression.text == "'right"
+                || expression.text == "'low"
+                || expression.text == "'high"
+                || expression.text == "'length"
+                || expression.text == "'ascending"
+                || expression.text == "'range"
+                || expression.text == "'reverse_range";
+            if (((scalar(prefix_type_mark) || scalar(prefix_object))
+                 && scalar_attribute)
+                || scalar_value_attribute) {
+                return lower_vhdl_scalar_attribute(
+                    expression, expected_type);
             }
         }
         if (expression.kind == ExpressionKind::Identifier) {
