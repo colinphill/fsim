@@ -1349,7 +1349,6 @@ validate_process(
             const auto target_width =
                 signal_width(operation.signal, index);
             record_use(operation.source, index);
-            constrain_width(operation.source, 1U, index);
             validate_dynamic_selection(
                 operation.selection, target_width, index);
             result.uses_write_blocking_slice = true;
@@ -1420,7 +1419,6 @@ validate_process(
             const auto target_width =
                 signal_width(operation.signal, index);
             record_use(operation.source, index);
-            constrain_width(operation.source, 1U, index);
             validate_dynamic_selection(
                 operation.selection, target_width, index);
             switch (operation.mode) {
@@ -1470,9 +1468,15 @@ validate_process(
                   "elements for the runtime ABI");
             }
             std::optional<runtime::SimulationTick> previous_delay;
+            std::optional<RegisterId> first_source;
             for (const auto& element : operation.elements) {
               record_use(element.source, index);
-              constrain_width(element.source, 1U, index);
+              if (first_source) {
+                unify_registers(
+                    *first_source, element.source, index);
+              } else {
+                first_source = element.source;
+              }
               if (previous_delay
                   && element.delay <= *previous_delay) {
                 reject(

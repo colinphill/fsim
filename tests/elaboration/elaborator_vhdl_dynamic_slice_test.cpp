@@ -14,7 +14,9 @@ entity Dynamic_Slices is
     Ascending_Read : out std_logic_vector(0 to 3);
     Ascending_Write : out std_logic_vector(0 to 7);
     Chained_Read : out std_logic_vector(3 downto 0);
-    Chained_Write : out std_logic_vector(7 downto 0)
+    Chained_Write : out std_logic_vector(7 downto 0);
+    Scheduled_Single : out std_logic_vector(7 downto 0);
+    Scheduled_Waveform : out std_logic_vector(7 downto 0)
   );
 end entity;
 
@@ -62,6 +64,13 @@ begin
     Chained_Read <= Descending_Selected;
     Packet.Data(Left_Bound downto Right_Bound) := "Z10X";
     Chained_Write <= Packet.Data;
+
+    Scheduled_Single <= "00000000";
+    Scheduled_Waveform <= "00000000";
+    Scheduled_Single(Left_Bound downto Right_Bound) <=
+      transport "10XZ" after 2 ns;
+    Scheduled_Waveform(Left_Bound downto Right_Bound) <=
+      transport "1010" after 1 ns, "Z01X" after 3 ns;
     wait;
   end process;
 end architecture;
@@ -86,6 +95,20 @@ end architecture;
   assert(std::count_if(
              operations.begin(), operations.end(), [](const auto& operation) {
                return fsim::runtime::simir::operation_holds<
+                   fsim::runtime::simir::WriteProjectedDynamicSlice>(
+                   operation);
+             })
+         == 1);
+  assert(std::count_if(
+             operations.begin(), operations.end(), [](const auto& operation) {
+               return fsim::runtime::simir::operation_holds<
+                   fsim::runtime::simir::
+                       WriteProjectedWaveformDynamicSlice>(operation);
+             })
+         == 1);
+  assert(std::count_if(
+             operations.begin(), operations.end(), [](const auto& operation) {
+               return fsim::runtime::simir::operation_holds<
                    fsim::runtime::simir::DynamicPartInsert>(operation);
              })
          == 3);
@@ -98,10 +121,51 @@ end architecture;
            std::pair{"ascending_read", "0XZ0"},
            std::pair{"ascending_write", "00XZ0000"},
            std::pair{"chained_read", "0XZ0"},
-           std::pair{"chained_write", "1Z10X110"}}) {
+           std::pair{"chained_write", "1Z10X110"},
+           std::pair{"scheduled_single", "010XZ000"},
+           std::pair{"scheduled_waveform", "0Z01X000"}}) {
     const auto signal = elaborated.design->find_signal(name);
     assert(signal);
     assert(interpreter->signal_value(*signal).to_msb_string() == expected);
+  }
+
+  const auto sensitivity_source = fsim::frontend::parse_text(
+      "dynamic_target_sensitivity.vhd",
+      R"(
+entity Dynamic_Target_Sensitivity is
+  port (
+    Source : in std_logic_vector(3 downto 0);
+    Left_Bound : in integer;
+    Right_Bound : in integer;
+    Target : out std_logic_vector(7 downto 0)
+  );
+end entity;
+architecture Rtl of Dynamic_Target_Sensitivity is
+begin
+  Target(Left_Bound downto Right_Bound) <= transport Source;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(sensitivity_source.ok());
+  const auto sensitivity = fsim::elaboration::elaborate(
+      sensitivity_source.design,
+      "vhdl:work.dynamic_target_sensitivity(rtl)");
+  assert(sensitivity.ok());
+  const auto& sensitivity_process =
+      sensitivity.design->processes().front();
+  assert(sensitivity_process.static_sensitivity.size() == 3);
+  assert(std::ranges::any_of(
+      sensitivity_process.operations, [](const auto& operation) {
+        return fsim::runtime::simir::operation_holds<
+            fsim::runtime::simir::WaitSensitivity>(operation);
+      }));
+  for (const auto name : {"source", "left_bound", "right_bound"}) {
+    const auto signal = sensitivity.design->find_signal(name);
+    assert(signal);
+    assert(std::ranges::find(
+               sensitivity_process.static_sensitivity,
+               fsim::runtime::simir::Sensitivity{*signal})
+           != sensitivity_process.static_sensitivity.end());
   }
 
   const auto invalid = fsim::frontend::parse_text(

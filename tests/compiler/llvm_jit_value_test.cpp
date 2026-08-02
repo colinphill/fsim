@@ -238,7 +238,7 @@ void test_comparisons_at_level(
   Process process;
   process.id = 0;
   process.name = std::string{symbol};
-  process.register_count = 8;
+  process.register_count = 9;
   process.operations = {
       ReadSignal{0, 0},
       ReadSignal{1, 1},
@@ -943,24 +943,23 @@ void test_dynamic_packed_indices_at_level(
           3,
           DynamicIndex{1, 7, 0, 0},
           TransitionDelays{2, 3, 4}},
+      LoadConstant{5, PackedLogic4::from_msb_string("1010")},
+      LoadConstant{6, PackedLogic4::from_msb_string("X01Z")},
+      LoadConstant{7, integer(4)},
       WriteProjectedDynamicSlice{
           8,
-          3,
-          DynamicIndex{1, 7, 0, 0},
+          5,
+          DynamicIndex{7, 7, 0, 0},
           5,
           0,
           ProjectedDelayMode::transport},
-      LoadConstant{
-          5, PackedLogic4::from_msb_string("0")},
-      LoadConstant{
-          6, PackedLogic4::from_msb_string("X")},
       WriteProjectedWaveformDynamicSlice{
           9,
           {
               ProjectedWaveformElement{5, 1},
               ProjectedWaveformElement{6, 6},
           },
-          DynamicIndex{1, 7, 0, 0},
+          DynamicIndex{7, 7, 0, 0},
           0,
           ProjectedDelayMode::transport},
       Halt{},
@@ -1009,11 +1008,13 @@ void test_dynamic_packed_indices_at_level(
   assert(
       runtime.projected_writes.size() == 3
           && runtime.projected_writes[0].signal == 8
-          && runtime.projected_writes[0].offset == 5
-          && runtime.projected_writes[0].width == 1
+          && runtime.projected_writes[0].offset == 4
+          && runtime.projected_writes[0].width == 4
           && runtime.projected_writes[1].signal == 9
-          && runtime.projected_writes[1].offset == 5
-          && runtime.projected_writes[2].offset == 5);
+          && runtime.projected_writes[1].offset == 4
+          && runtime.projected_writes[1].width == 4
+          && runtime.projected_writes[2].offset == 4
+          && runtime.projected_writes[2].width == 4);
 
   const auto run_failure =
       [&](const std::string_view suffix,
@@ -1184,4 +1185,3 @@ void test_initialized_bval_slot(const JitOptimizationLevel optimization,
 }
 
 } // namespace fsim::tests::compiler
-

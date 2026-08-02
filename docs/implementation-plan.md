@@ -6552,9 +6552,9 @@ The current ten implementation tasks are:
    hierarchy, name lookup, debugger metadata, and specialization provenance.
 7. **Complete.** Lower dynamic packed/composite indices, slices, and chained selections for
    supported expression and assignment targets with checked bounds and direction.
-8. **In progress.** Complete sensitivity, scheduling, delta/update ordering, and exact
+8. **Complete.** Complete sensitivity, scheduling, delta/update ordering, and exact
    interpreter/LLVM behavior for the newly retained statement and selection forms.
-9. **Pending.** Prove positive/negative parser and elaboration coverage plus interpreter,
+9. **In progress.** Prove positive/negative parser and elaboration coverage plus interpreter,
    LLVM O0/O2, cache-edit, hierarchy, debugger, and normalized-VCD differentials.
 10. **Pending.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
     Debug/Release, commit, and push gates before closing Batch 115.
@@ -6673,6 +6673,25 @@ locals gates pass in 4.09/3.93 seconds for Debug/Release, with scoped locals
 at 0.83/0.82 seconds. The catalog covers 1,472 production diagnostics and
 all 356 authored sources pass the 2,000-line gate. Batch 115 remains **in
 progress** with Task 8 current and Tasks 9 through 10 pending.
+
+Task 8 is focused-complete. Checked VHDL runtime slices now schedule single
+and atomic multi-element projected signal waveforms through the existing
+dynamic projected operations widened to their statically validated packed
+source width. The explicit slice right bound is the normalized runtime offset
+anchor in both directions, so selection is captured when the assignment
+executes and delayed/update transactions retain exact scalar driver identity,
+delta ordering, transport/inertial cancellation, and Logic4/Logic9 state.
+Concurrent target-bound expressions contribute dependencies without making
+the written signal self-sensitive. Interpreter tests cover delayed single and
+multi-waveform values; LLVM O0/O2 tests cover four-bit dynamic projected
+callbacks and cache identity. Native-object schema 72 records the widened
+operation contract without changing the public runtime ABI. `lower_assert`
+is structurally partitioned into its own source. The final eight-test
+diagnostic/source/elaboration/LLVM/runtime/projected/Logic9/scoped-locals
+gates pass in 4.44/4.24 seconds for Debug/Release, with scoped locals at
+0.85/0.81 seconds. All 1,472 diagnostics remain cataloged and all 357 authored
+sources pass the hard line limit. Batch 115 remains **in progress** with Task
+9 current and Task 10 pending.
 
 ## Forward language-closure feature batches
 

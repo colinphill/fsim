@@ -850,6 +850,17 @@ using namespace elaboration_detail;
             collect_identifiers(statement.vhdl_guard, output);
             switch (statement.kind) {
             case StatementKind::Assignment:
+                for (const auto* target = &statement.target;
+                     (target->kind == ExpressionKind::Index
+                      || target->kind == ExpressionKind::Slice)
+                     && !target->operands.empty();
+                     target = &target->operands.front()) {
+                    for (std::size_t index = 1;
+                         index < target->operands.size(); ++index) {
+                        collect_identifiers(
+                            target->operands[index], output);
+                    }
+                }
                 if (statement.vhdl_waveform.empty()) {
                     collect_identifiers(statement.value, output);
                 } else {

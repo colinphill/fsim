@@ -16,11 +16,11 @@ as work lands. Before moving on, retain that batch's list, mark it
 
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: Batch 115 Tasks 1 through 7 are complete through
-  this handoff; Task 8 selection scheduling and engine parity is current.
+- Implementation baseline: Batch 115 Tasks 1 through 8 are complete through
+  this handoff; Task 9 end-to-end differential evidence is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 356 authored C/C++ source, header,
+- The source-size refactor is complete: all 357 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 115-alternative
@@ -1842,9 +1842,9 @@ completed selector-domain contract. All ten Batch 114 tasks are complete.
    hierarchy, name lookup, debugger metadata, and specialization provenance.
 7. **Complete.** Lower dynamic packed/composite indices, slices, and chained selections for
    supported expression and assignment targets with checked bounds and direction.
-8. **In progress.** Complete sensitivity, scheduling, delta/update ordering, and exact
+8. **Complete.** Complete sensitivity, scheduling, delta/update ordering, and exact
    interpreter/LLVM behavior for the newly retained statement and selection forms.
-9. **Pending.** Prove positive/negative parser and elaboration coverage plus interpreter,
+9. **In progress.** Prove positive/negative parser and elaboration coverage plus interpreter,
    LLVM O0/O2, cache-edit, hierarchy, debugger, and normalized-VCD differentials.
 10. **Pending.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
     Debug/Release, commit, and push gates before closing Batch 115.
@@ -1952,6 +1952,22 @@ pass in 4.09/3.93 seconds for Debug/Release, with scoped locals at 0.83/0.82
 seconds. All 1,472 production diagnostics are cataloged and all 356
 authored sources pass the 2,000-line gate. Batch 115 remains **in progress**
 with Task 8 current and Tasks 9 through 10 pending.
+
+Task 8 is focused-complete. Single and atomic multi-element projected signal
+waveforms accept checked fixed-width dynamic VHDL slices through the existing
+dynamic projected operations. The explicit right bound anchors the normalized
+offset for ascending and descending targets, capturing the selected region at
+assignment execution while retaining driver identity, delta/update order,
+transport/inertial transaction behavior, and exact Logic4/Logic9 values.
+Concurrent assignment sensitivity now includes dynamic target bounds but not
+the written signal itself. Interpreter and LLVM O0/O2 tests cover multi-bit
+single/waveform callbacks; native-object schema 72 records the widened
+contract without an ABI change. The assertion lowerer is now a separate source
+partition. Eight focused diagnostic/source/elaboration/LLVM/runtime/projected/
+Logic9/scoped-locals tests pass in 4.44/4.24 seconds for Debug/Release, with
+scoped locals at 0.85/0.81 seconds. All 1,472 diagnostics are cataloged and all
+357 authored sources pass the line gate. Batch 115 remains **in progress**
+with Task 9 current and Task 10 pending.
 
 Batch 110 has advanced through these validated features:
 

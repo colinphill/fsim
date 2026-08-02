@@ -115,12 +115,12 @@ std::optional<DynamicPartIndex> Lowerer::lower_vhdl_dynamic_slice(
   process_.operations.emplace_back(IntegerCheck{
       distance, required_distance, required_distance});
   return DynamicPartIndex{
-      descending ? *right : *left,
+      *right,
       range->left,
       range->right,
       base_offset,
       static_cast<std::uint32_t>(selected_width),
-      true,
+      descending,
       range->descending};
 }
 
