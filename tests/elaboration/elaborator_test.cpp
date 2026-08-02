@@ -41,5 +41,6 @@ int main() {
   test_vhdl_configurations();
   test_vhdl_matching_statements();
   test_vhdl_discrete_case_choices();
+  test_vhdl_concurrent_assignments();
   std::cout << "elaborator tests passed\n";
 }

@@ -956,15 +956,15 @@ verify_generated_behavior(
 verify_generated_behavior(
     generated_guarded_behavior_vhdl_config,
     {"enabled", "guarded_scope.guard"},
-    {"1", "1", "1"},
-    3,
-    1);
+    {"0", "1", "1", "1", "XXX", "X11", "0", "0", "0", "0"},
+    9,
+    7);
 verify_generated_behavior(
     generated_guarded_behavior_vhdl_o0_config,
     {"enabled", "guarded_scope.guard"},
-    {"1", "1", "1"},
-    3,
-    1);
+    {"0", "1", "1", "1", "XXX", "X11", "0", "0", "0", "0"},
+    9,
+    7);
 
 std::ifstream generated_callable_source_input(
     generated_behavior_vhdl_source,

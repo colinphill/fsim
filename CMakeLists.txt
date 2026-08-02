@@ -407,6 +407,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_callables.cpp
       src/elaboration/lowerer_overloads.cpp
       src/elaboration/lowerer_procedures.cpp
+      src/elaboration/lowerer_concurrent.cpp
       src/elaboration/lowerer_process.cpp
       src/elaboration/lowerer_fork.cpp
       src/elaboration/lowerer_events.cpp

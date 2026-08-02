@@ -479,6 +479,48 @@ end architecture;
               == VhdlDelayMechanism::Transport,
       "VHDL variable assignments stay distinct from signal mechanisms");
 
+  const auto guarded = parse_text(
+      "guarded_assignments.vhd",
+      R"(architecture rtl of guarded_assignments is
+  signal enabled : boolean; signal selector, source, result : std_logic;
+begin
+  scope: block (enabled) begin
+    simple: result <= guarded transport null after 1 ns,
+                                      source after 3 ns;
+    result <= guarded source when enabled else null;
+    with selector select result <= guarded reject 1 ns inertial
+      source after 2 ns when '1', null after 2 ns when others;
+  end block scope;
+  process begin result <= guarded source; wait; end process;
+end architecture;)",
+      Language::Vhdl2008);
+  const auto& guarded_body =
+      guarded.design.units.front().generate_regions.front().then_body;
+  require(
+      !guarded.ok()
+          && guarded_body.concurrent_statements.size() == 3
+          && guarded_body.concurrent_statements[0]
+                 .vhdl_guarded_assignment
+          && guarded_body.concurrent_statements[0]
+                 .vhdl_waveform.front().disconnect
+          && guarded_body.concurrent_statements[0]
+                 .vhdl_waveform.back().value.text == "source"
+          && guarded_body.concurrent_statements[1]
+                 .vhdl_guarded_assignment
+          && guarded_body.concurrent_statements[1]
+                 .else_statements.front().vhdl_waveform.front().disconnect
+          && guarded_body.concurrent_statements[2]
+                 .vhdl_guarded_assignment
+          && guarded_body.concurrent_statements[2]
+                 .case_alternatives.back().statements.front()
+                 .vhdl_waveform.front().disconnect
+          && std::ranges::any_of(
+              guarded.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-087";
+              }),
+      "guarded simple, conditional, selected, null, and context HIR");
+
   const auto malformed = parse_text(
       "bad_delay_mechanisms.vhd",
       R"(

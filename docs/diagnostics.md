@@ -397,6 +397,7 @@ therefore excluded.
 | `FSIM-VHDL-SEM-084` | error | A sequential `if`/`case` or process end label is orphaned or does not match its opening label. |
 | `FSIM-VHDL-SEM-085` | error | A `process(all)` sensitivity clause also contains an explicit sensitivity name. |
 | `FSIM-VHDL-SEM-086` | error | A VHDL matching case does not use `?` consistently after its opening and ending `case` keywords. |
+| `FSIM-VHDL-SEM-087` | error | The `guarded` keyword appears on a sequential rather than concurrent signal assignment. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -413,7 +414,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-022` | error | A package declaration item is outside the bounded constant, type, subtype, or function subset. |
 | `FSIM-VHDL-UNSUPPORTED-023` | error | A package constant is outside the scalar integer, Boolean, or bit subset. |
 | `FSIM-VHDL-UNSUPPORTED-024` | error | A context declaration contains an item other than a library clause, use clause, or context reference. |
-| `FSIM-VHDL-UNSUPPORTED-025` | error | A `null` waveform element requires guarded-signal driver disconnection, which is not executable yet. |
+| `FSIM-VHDL-UNSUPPORTED-025` | error | A `null` waveform element appears outside a guarded concurrent signal assignment. |
 | `FSIM-VHDL-UNSUPPORTED-026` | error | A bounded VHDL type or record element is outside the architecture-local, non-nested packed record subset. |
 | `FSIM-VHDL-UNSUPPORTED-027` | error | A VHDL array declaration has multiple dimensions, a noninteger index subtype, or an element outside the current scalar packed subset. |
 | `FSIM-VHDL-UNSUPPORTED-028` | error | A VHDL interface type generic uses classified or default-like syntax outside the VHDL-2008 unclassified `type T` form. |
@@ -1218,6 +1219,8 @@ therefore excluded.
 | `FSIM-ELAB-VHDLCASE-004` | error | Two VHDL case choices or nonnull ranges overlap. |
 | `FSIM-ELAB-VHDLCASE-005` | error | A VHDL case statement neither covers its complete selector subtype nor supplies `others`. |
 | `FSIM-ELAB-VHDLCASE-006` | error | Validated VHDL case-range HIR is malformed or lost its static bounds before lowering. |
+| `FSIM-ELAB-VHDLGUARD-001` | error | A guarded concurrent assignment has no enclosing Boolean block guard or no retained assignment leaf. |
+| `FSIM-ELAB-VHDLGUARD-002` | error | A guarded driver disconnection targets a local or non-nine-state signal. |
 | `FSIM-ELAB-VHENUM-001` | error | A contextual VHDL enumeration type has no matching identifier or character literal. |
 | `FSIM-ELAB-VHENUM-002` | error | Assignment or comparison mixes values from different nominal VHDL enumeration types. |
 | `FSIM-ELAB-VHENUM-003` | error | An operator that is not defined for VHDL enumeration values was applied to an enumeration object. |

@@ -6546,9 +6546,9 @@ The current ten implementation tasks are:
    assignments with exact wildcard semantics and deterministic legality checks.
 4. **Complete.** Complete discrete case choices with grouped literals, locally static ranges,
    `others`, null ranges, overlap, duplicate, and coverage diagnostics.
-5. **In progress.** Complete concurrent simple, conditional, and selected signal assignments,
+5. **Complete.** Complete concurrent simple, conditional, and selected signal assignments,
    including guarded/delay-mechanism interaction and driver identity.
-6. **Pending.** Preserve process, loop, case-alternative, and labeled statement scopes in
+6. **In progress.** Preserve process, loop, case-alternative, and labeled statement scopes in
    hierarchy, name lookup, debugger metadata, and specialization provenance.
 7. **Pending.** Lower dynamic packed/composite indices, slices, and chained selections for
    supported expression and assignment targets with checked bounds and direction.
@@ -6620,6 +6620,25 @@ five-test focused Debug/Release gates pass in 15.83/15.19 seconds, with scoped
 locals at 0.85/0.88 seconds. The catalog covers 1,466 production diagnostics
 and all 352 authored sources pass the 2,000-line gate. Batch 115 remains **in
 progress** with Task 5 current and Tasks 6 through 10 pending.
+
+Task 5 is focused-complete. The parser and typed HIR retain `guarded` on
+concurrent simple, conditional, and selected signal assignments plus explicit
+`null` waveform elements. Generated-block expansion binds each statement to
+the block's implicit Boolean `GUARD`; every concurrent statement remains a
+separate reactive process and therefore keeps a stable driver identity. The
+active branch preserves its inertial/transport mechanism and projected
+waveform. For the bounded nine-state target subset, an inactive guard or an
+explicit `null` element schedules a resolution-neutral `Z` transaction through
+that same driver, using the retained waveform delay; targeted diagnostics
+reject guarded assignments outside Boolean-guarded blocks and disconnection
+on other target domains. The merged application proves three independent
+base/guarded drivers: activation produces `XXX`, selected explicit-null
+alternatives produce `X11`, and deactivation restores all three base values
+across interpreter and LLVM O0/O2 execution. The final five-test focused
+Debug/Release gates pass in 16.88/16.26 seconds, with scoped locals at
+0.82/0.83 seconds. The catalog covers 1,469 production diagnostics and all 354
+authored sources pass the 2,000-line gate. Batch 115 remains **in progress**
+with Task 6 current and Tasks 7 through 10 pending.
 
 ## Forward language-closure feature batches
 

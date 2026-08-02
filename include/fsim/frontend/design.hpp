@@ -805,6 +805,7 @@ enum class VhdlDelayMechanism {
 struct VhdlWaveformElement {
   Expression value;
   std::optional<Delay> delay;
+  bool disconnect{};
   SourceSpan span;
 };
 
@@ -967,6 +968,10 @@ struct Statement {
   // True only for an If node synthesized from a VHDL conditional signal
   // assignment, preserving its distinct legality diagnostic.
   bool vhdl_conditional_assignment{};
+  // A concurrent guarded assignment retains the keyword plus the implicit
+  // block GUARD expression attached during generated-scope expansion.
+  bool vhdl_guarded_assignment{};
+  Expression vhdl_guard;
   // Verilog/SystemVerilog intra-assignment timing. The associated `delay` or
   // `sensitivities` payload is distinct from statement-level timing controls.
   ProceduralAssignmentControl procedural_assignment_control{

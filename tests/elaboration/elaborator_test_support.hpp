@@ -128,5 +128,6 @@ void test_vhdl_components();
 void test_vhdl_configurations();
 void test_vhdl_matching_statements();
 void test_vhdl_discrete_case_choices();
+void test_vhdl_concurrent_assignments();
 
 } // namespace fsim::tests::elaboration

@@ -5,8 +5,6 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
-
-
     std::optional<RegisterId> Lowerer::lower_condition(
         const Expression& expression,
         std::string diagnostic_code,
@@ -50,8 +48,6 @@ using namespace elaboration_detail;
             LogicalNot{normalized, inverted});
         return normalized;
     }
-
-
 
     void Lowerer::lower_assert(const Statement& statement) {
         const auto condition = lower_condition(
@@ -134,8 +130,6 @@ using namespace elaboration_detail;
                 static_cast<std::uint32_t>(statement.span.begin.column)}});
     }
 
-
-
     [[nodiscard]] const frontend::Type*
     Lowerer::vhdl_array_attribute_prefix_type(
         const Expression& expression) const {
@@ -155,8 +149,6 @@ using namespace elaboration_detail;
         return visible_type_mark(prefix);
     }
 
-
-
     [[nodiscard]] bool Lowerer::is_vhdl_array_like(
         const frontend::Type& type) {
         if (type.vhdl_array) {
@@ -174,8 +166,6 @@ using namespace elaboration_detail;
             || name == "signed"
             || name == "unsigned";
     }
-
-
 
     std::optional<frontend::PackedRange>
     Lowerer::vhdl_array_attribute_range(
@@ -234,8 +224,6 @@ using namespace elaboration_detail;
         }
         return type->packed_range;
     }
-
-
 
     std::optional<std::int64_t>
     Lowerer::static_integer_value(const Expression& expression) {
@@ -305,8 +293,6 @@ using namespace elaboration_detail;
         }
         return constant_index(folded);
     }
-
-
 
     void Lowerer::lower_assignment(const Statement& statement) {
         const Expression* base = &statement.target;
@@ -807,6 +793,34 @@ using namespace elaboration_detail;
 
         const auto target_width =
             selected_width.value_or(whole_width);
+        const bool has_disconnect = std::ranges::any_of(
+            statement.vhdl_waveform,
+            &frontend::VhdlWaveformElement::disconnect);
+        const auto disconnect_domain = selected_domain.value_or(
+            local != locals_.end()
+                ? register_domain(local->second)
+                : design_.signal_info_[signal->second].source_domain);
+        if (has_disconnect
+            && (local != locals_.end()
+                || disconnect_domain
+                    != frontend::ValueDomain::Logic9)) {
+            report(
+                "FSIM-ELAB-VHDLGUARD-002",
+                "guarded driver disconnection requires a nine-state "
+                "resolved signal target",
+                statement.span);
+            return;
+        }
+        const auto load_disconnect = [&]() {
+            const auto result = allocate_register(
+                target_width, frontend::ValueDomain::Logic9);
+            auto value = PackedLogic4{
+                target_width, Logic4::z};
+            value.fill(runtime::Logic9::z);
+            process_.operations.emplace_back(
+                LoadConstant{result, std::move(value)});
+            return result;
+        };
         if (dynamic_part_selection
             && statement.assignment_kind != AssignmentKind::Blocking
             && statement.assignment_kind != AssignmentKind::NonBlocking) {
@@ -822,7 +836,8 @@ using namespace elaboration_detail;
                     || dynamic_part_selection
                 ? nullptr
                 : object_type(target_name);
-        if (!validate_sv_nominal_assignment(
+        if (!has_disconnect
+            && !validate_sv_nominal_assignment(
                 contextual_target_type, statement.value)) {
             return;
         }
@@ -1082,11 +1097,12 @@ using namespace elaboration_detail;
                               .source_domain);
             std::optional<runtime::SimulationTick> previous_delay;
             for (const auto& element : statement.vhdl_waveform) {
-                const auto value =
-                    lower_expression(
-                        element.value,
-                        target_width,
-                        contextual_target_type);
+                const auto value = element.disconnect
+                    ? std::optional<RegisterId>{load_disconnect()}
+                    : lower_expression(
+                          element.value,
+                          target_width,
+                          contextual_target_type);
                 if (!value) {
                     return;
                 }
@@ -1110,7 +1126,8 @@ using namespace elaboration_detail;
                         element.span);
                     return;
                 }
-                if (language_ == frontend::Language::Vhdl2008
+                if (!element.disconnect
+                    && language_ == frontend::Language::Vhdl2008
                     && target_domain
                         == frontend::ValueDomain::Integer
                     && !has_selected_offset
@@ -1135,7 +1152,8 @@ using namespace elaboration_detail;
                     }
                     emit_integer_check(*value, range);
                 }
-                if (language_
+                if (!element.disconnect
+                    && language_
                         == frontend::Language::Vhdl2008
                     && !has_selected_offset
                     && !dynamic_selection
@@ -1260,16 +1278,20 @@ using namespace elaboration_detail;
                 captured = whole;
             }
         }
-        auto value = captured
-            ? lower_procedural_update_value(
-                  statement,
-                  *captured,
-                  target_width,
-                  contextual_target_type)
-            : lower_expression(
-                  statement.value,
-                  target_width,
-                  contextual_target_type);
+        const bool disconnect = statement.vhdl_waveform.size() == 1
+            && statement.vhdl_waveform.front().disconnect;
+        auto value = disconnect
+            ? std::optional<RegisterId>{load_disconnect()}
+            : captured
+                  ? lower_procedural_update_value(
+                        statement,
+                        *captured,
+                        target_width,
+                        contextual_target_type)
+                  : lower_expression(
+                        statement.value,
+                        target_width,
+                        contextual_target_type);
         if (!value) {
             return;
         }
@@ -1310,7 +1332,8 @@ using namespace elaboration_detail;
                 statement.span);
             return;
         }
-        if (language_ == frontend::Language::Vhdl2008
+        if (!disconnect
+            && language_ == frontend::Language::Vhdl2008
             && target_domain == frontend::ValueDomain::Integer
             && !has_selected_offset
             && !dynamic_selection
@@ -1335,7 +1358,8 @@ using namespace elaboration_detail;
             }
             emit_integer_check(*value, range);
         }
-        if (language_ == frontend::Language::Vhdl2008
+        if (!disconnect
+            && language_ == frontend::Language::Vhdl2008
             && !has_selected_offset
             && !dynamic_selection
             && !dynamic_part_selection

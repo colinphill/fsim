@@ -668,6 +668,15 @@ std::optional<Statement> VhdlParser::parse_assignment(bool concurrent) {
   statement.assignment_kind = kind;
   statement.target = std::move(target);
   if (kind != AssignmentKind::Blocking) {
+    if (match_keyword("guarded", true)) {
+      statement.vhdl_guarded_assignment = true;
+      if (!concurrent) {
+        error(
+            previous(),
+            "FSIM-VHDL-SEM-087",
+            "guarded is permitted only on a concurrent signal assignment");
+      }
+    }
     parse_vhdl_delay_mechanism(statement);
     statement = parse_conditional_signal_assignment(std::move(statement));
   } else {
@@ -710,6 +719,15 @@ Statement VhdlParser::parse_vhdl_selected_assignment(
   }
   Statement common_assignment;
   if (assignment_kind != AssignmentKind::Blocking) {
+    if (match_keyword("guarded", true)) {
+      common_assignment.vhdl_guarded_assignment = true;
+      if (!concurrent) {
+        error(
+            previous(),
+            "FSIM-VHDL-SEM-087",
+            "guarded is permitted only on a concurrent signal assignment");
+      }
+    }
     common_assignment.vhdl_delay_mechanism =
         VhdlDelayMechanism::ImplicitInertial;
     parse_vhdl_delay_mechanism(common_assignment);
@@ -727,6 +745,8 @@ Statement VhdlParser::parse_vhdl_selected_assignment(
         common_assignment.vhdl_delay_mechanism;
     assignment.vhdl_rejection_limit =
         common_assignment.vhdl_rejection_limit;
+    assignment.vhdl_guarded_assignment =
+        common_assignment.vhdl_guarded_assignment;
     if (assignment_kind == AssignmentKind::Blocking) {
       assignment.value = parse_expression();
       diagnose_misplaced_vhdl_delay_mechanism();
@@ -776,6 +796,8 @@ Statement VhdlParser::parse_vhdl_selected_assignment(
       "';' after selected signal assignment",
       "FSIM-VHDL-PARSE-119");
   statement.span = span_from(start, previous());
+  statement.vhdl_guarded_assignment =
+      common_assignment.vhdl_guarded_assignment;
   return statement;
 }
 
@@ -808,6 +830,8 @@ Statement VhdlParser::parse_conditional_signal_assignment(Statement assignment) 
   Statement conditional;
   conditional.kind = StatementKind::If;
   conditional.vhdl_conditional_assignment = true;
+  conditional.vhdl_guarded_assignment =
+      assignment.vhdl_guarded_assignment;
   conditional.condition = parse_expression();
   expect_keyword("else", true, "FSIM-VHDL-PARSE-115");
   conditional.statements.push_back(std::move(assignment));
@@ -821,6 +845,8 @@ Statement VhdlParser::parse_conditional_signal_assignment(Statement assignment) 
       conditional.statements.front().vhdl_delay_mechanism;
   alternate.vhdl_rejection_limit =
       conditional.statements.front().vhdl_rejection_limit;
+  alternate.vhdl_guarded_assignment =
+      conditional.statements.front().vhdl_guarded_assignment;
   conditional.else_statements.push_back(
       parse_conditional_signal_assignment(std::move(alternate)));
   conditional.span = cover(assignment_start, previous().span);
@@ -847,13 +873,14 @@ void VhdlParser::parse_vhdl_waveform(Statement& statement) {
     const auto start = current();
     VhdlWaveformElement element;
     if (match_keyword("null", true)) {
-      error(
-          previous(),
-          "FSIM-VHDL-UNSUPPORTED-025",
-          "null waveform elements require guarded-signal driver "
-          "disconnection, which is not supported yet");
-      element.value = Expression{
-          ExpressionKind::IntegerLiteral, "0", {}, previous().span};
+      element.disconnect = true;
+      if (!statement.vhdl_guarded_assignment) {
+        error(
+            previous(),
+            "FSIM-VHDL-UNSUPPORTED-025",
+            "null waveform elements require a guarded concurrent "
+            "signal assignment");
+      }
     } else if (
         at(TokenKind::Semicolon) || keyword("when", 0, true)
         || keyword("else", 0, true)) {

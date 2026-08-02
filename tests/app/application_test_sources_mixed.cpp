@@ -703,23 +703,44 @@ end architecture;
 
 entity generated_guarded_behavior_vhdl is
   port (
-    observed : out boolean
+    observed : out boolean;
+    simple_value, conditional_value, selected_value : out std_logic;
+    active_sample, selection_sample : out std_logic_vector(2 downto 0)
   );
 end entity;
 
 architecture rtl of generated_guarded_behavior_vhdl is
   signal enabled : boolean;
+  signal selector, source : std_logic;
 begin
+  simple_base: simple_value <= '1';
+  conditional_base: conditional_value <= '1';
+  selected_base: selected_value <= '1';
   stimulus: process
   begin
     enabled <= false;
+    selector <= '1';
+    source <= '0';
     wait for 1 ns;
     enabled <= true;
+    wait for 2 ns;
+    active_sample <= simple_value & conditional_value & selected_value;
+    selector <= '0';
+    wait for 2 ns;
+    selection_sample <= simple_value & conditional_value & selected_value;
+    enabled <= false;
+    wait for 2 ns;
     wait;
   end process;
   guarded_scope: block (enabled) is
   begin
     observed <= guard;
+    simple_drive: simple_value <= guarded transport source after 1 ns;
+    conditional_drive: conditional_value <= guarded transport
+      source after 1 ns when selector = '1' else null after 1 ns;
+    selected_drive: with selector select
+      selected_value <= guarded transport
+        source after 1 ns when '1', null after 1 ns when others;
   end block guarded_scope;
 end architecture;
 )";

@@ -847,6 +847,7 @@ using namespace elaboration_detail;
         const std::vector<Statement>& statements,
         std::set<std::string>& output) const {
         for (const auto& statement : statements) {
+            collect_identifiers(statement.vhdl_guard, output);
             switch (statement.kind) {
             case StatementKind::Assignment:
                 if (statement.vhdl_waveform.empty()) {
@@ -998,6 +999,8 @@ using namespace elaboration_detail;
                     collect_expression_calls, statement.value);
                 collect_expression_calls(
                     collect_expression_calls, statement.condition);
+                collect_expression_calls(
+                    collect_expression_calls, statement.vhdl_guard);
                 collect_expression_calls(
                     collect_expression_calls, statement.loop_initial);
                 collect_expression_calls(

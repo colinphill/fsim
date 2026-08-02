@@ -16,11 +16,11 @@ as work lands. Before moving on, retain that batch's list, mark it
 
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: Batch 115 Tasks 1 through 4 are complete through
-  this handoff; Task 5 concurrent-assignment execution is current.
+- Implementation baseline: Batch 115 Tasks 1 through 5 are complete through
+  this handoff; Task 6 statement-scope preservation is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 352 authored C/C++ source, header,
+- The source-size refactor is complete: all 354 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 115-alternative
@@ -1836,9 +1836,9 @@ completed selector-domain contract. All ten Batch 114 tasks are complete.
    assignments with exact wildcard semantics and deterministic legality checks.
 4. **Complete.** Complete discrete case choices with grouped literals, locally static ranges,
    `others`, null ranges, overlap, duplicate, and coverage diagnostics.
-5. **In progress.** Complete concurrent simple, conditional, and selected signal assignments,
+5. **Complete.** Complete concurrent simple, conditional, and selected signal assignments,
    including guarded/delay-mechanism interaction and driver identity.
-6. **Pending.** Preserve process, loop, case-alternative, and labeled statement scopes in
+6. **In progress.** Preserve process, loop, case-alternative, and labeled statement scopes in
    hierarchy, name lookup, debugger metadata, and specialization provenance.
 7. **Pending.** Lower dynamic packed/composite indices, slices, and chained selections for
    supported expression and assignment targets with checked bounds and direction.
@@ -1906,6 +1906,23 @@ Debug/Release gates pass in 15.83/15.19 seconds, and scoped locals remains
 quick at 0.85/0.88 seconds. All 1,466 production diagnostics are cataloged and
 all 352 authored sources remain within the 2,000-line limit. Batch 115 remains
 **in progress** with Task 5 current and Tasks 6 through 10 pending.
+
+Task 5 is focused-complete. Concurrent simple, conditional, and selected
+signal assignments retain `guarded`, their exact delay mechanism, and explicit
+`null` waveform elements in typed HIR. Generated-block expansion binds them to
+the implicit Boolean `GUARD`, while one reactive process per concurrent
+statement preserves distinct driver identity. Within the bounded nine-state
+target subset, false guards and explicit-null alternatives schedule a
+resolution-neutral `Z` transaction through the same projected-waveform path;
+other domains and missing enclosing guards receive stable diagnostics. The
+merged application combines three base and three guarded drivers and observes
+`XXX` after activation, `X11` after explicit-null selection, and the base
+values again after deactivation across interpreter and LLVM O0/O2 execution.
+The final five-test focused Debug/Release gates pass in 16.88/16.26 seconds;
+scoped locals remains quick at 0.82/0.83 seconds. All 1,469 production
+diagnostics are cataloged and all 354 authored sources pass the 2,000-line
+gate. Batch 115 remains **in progress** with Task 6 current and Tasks 7
+through 10 pending.
 
 Batch 110 has advanced through these validated features:
 

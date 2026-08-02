@@ -158,6 +158,8 @@ void substitute_parameters(
         }
         substitute_parameters(
             statement.condition, environment, domains, language);
+        substitute_parameters(
+            statement.vhdl_guard, environment, domains, language);
         for (auto& argument : statement.task_arguments) {
             substitute_parameters(
                 argument, environment, domains, language);
@@ -355,6 +357,8 @@ void collect_qualified_identifiers(
         }
         collect_qualified_identifiers(
             statement.condition, identifiers);
+        collect_qualified_identifiers(
+            statement.vhdl_guard, identifiers);
         if (statement.kind == StatementKind::TaskCall
             && statement.task_name.find("::")
                 != std::string::npos) {
@@ -758,6 +762,7 @@ void qualify_generated_statement(
         qualify_generated_expression(element.value, body_names);
     }
     qualify_generated_expression(statement.condition, body_names);
+    qualify_generated_expression(statement.vhdl_guard, body_names);
     for (auto& argument : statement.task_arguments) {
         qualify_generated_expression(argument, body_names);
     }
@@ -1485,6 +1490,17 @@ void append_generated_body(
             std::move(instance));
     }
     for (auto& statement : body.concurrent_statements) {
+        if (statement.vhdl_guarded_assignment
+            && !statement.vhdl_guard.valid()) {
+            if (const auto guard = body_names.find("guard");
+                guard != body_names.end()) {
+                statement.vhdl_guard = frontend::Expression{
+                    frontend::ExpressionKind::Identifier,
+                    guard->second,
+                    {},
+                    statement.span};
+            }
+        }
         if (statement.label == "@vhdl-block-input-driver") {
             qualify_generated_expression(statement.target, body_names);
             statement.label.clear();
