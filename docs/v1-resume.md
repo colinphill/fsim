@@ -16,13 +16,14 @@ as work lands. Before moving on, retain that batch's list, mark it
 
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: pushed Batch 114 value-generic block interfaces at
-  commit `1a9c4dd`. The Task 3 all-family block-interface checkpoint is this
-  document's containing commit: it delays selected-unit generate expansion,
-  binds block type/function/procedure/package generics after enclosing local
-  packages, and retains scoped cache/provenance identities. Verify live Git
-  state before resuming; do not discard a newer intentional checkpoint.
-- The source-size refactor is complete: all 344 authored C/C++ source, header,
+- Implementation baseline: pushed Batch 114 generate-declarative-part support
+  at parent commit `c26690f`. The Task 5 generated-type checkpoint is this
+  document's containing commit: it adds declaration-ordered visibility,
+  specialized per-iteration constraints, and scope-qualified nominal source
+  provenance. Tasks 1 through 5 are focused-complete and Task 6 is current.
+  Verify live Git state before resuming; do not discard a newer intentional
+  checkpoint.
+- The source-size refactor is complete: all 345 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 115-alternative
@@ -53,7 +54,7 @@ as work lands. Before moving on, retain that batch's list, mark it
   seconds, files in 2.11/0.68 seconds, containers in 375.83/99.00 seconds, and
   the monolithic application in 40.66/14.10 seconds. Debug aggregate/
   multidimensional execution completed in 2.03 seconds.
-- The diagnostic catalog covers all 1,445 production codes.
+- The diagnostic catalog covers all 1,446 production codes.
 - Batch 111 requires deterministic VHDL semantic analysis in manifest order
   after parallel parsing. Architectures, package bodies, use/context clauses,
   configuration declarations, and explicit entity/configuration bindings now
@@ -1666,27 +1667,27 @@ complete and checkpoint `4af01cd` contains the final implementation slice.
 
 ## In-progress feature batch 114
 
-1. Retain guarded block syntax, guard expressions, optional `is`, opening/end
+1. **Complete.** Retain guarded block syntax, guard expressions, optional `is`, opening/end
    labels, and exact source regions with checked unsupported-form diagnostics.
-2. Elaborate implicit Boolean `GUARD`, guard sensitivity and activation, nested
+2. **Complete.** Elaborate implicit Boolean `GUARD`, guard sensitivity and activation, nested
    scope identity, and invalid/non-Boolean guard diagnostics.
-3. Complete block generic/port clauses and maps, defaults, `open`, profile
+3. **Complete.** Complete block generic/port clauses and maps, defaults, `open`, profile
    legality, hierarchy aliases, and specialization/cache provenance.
-4. Complete declarative parts for `if`, `for`, and `case` generate alternatives
+4. **Complete.** Complete declarative parts for `if`, `for`, and `case` generate alternatives
    before `begin`, retaining alternative and iteration scope.
-5. Add generated type/subtype declarations with declaration-order visibility,
+5. **Complete.** Add generated type/subtype declarations with declaration-order visibility,
    specialized constraints, nominal identity, and source provenance.
-6. Add generated function/procedure declarations, bodies, and bounded
+6. **In progress.** Add generated function/procedure declarations, bodies, and bounded
    instantiations with local overload visibility and scope-qualified identity.
-7. Complete generated constants, signals, aliases, components, package
+7. **Pending.** Complete generated constants, signals, aliases, components, package
    instantiations, nested items, and collision/unsupported-item diagnostics.
-8. Complete architecture/block/generate/process/subprogram local declarative
+8. **Pending.** Complete architecture/block/generate/process/subprogram local declarative
    regions for bounded constants, types, objects, aliases, packages, and
    non-suspending local callables.
-9. Complete remaining locally static `if`/`for`/`case` generate choices,
+9. **Pending.** Complete remaining locally static `if`/`for`/`case` generate choices,
    including enumeration/character choices, groups, ranges, `others`,
    overlap/null handling, labels, hierarchy, and specialization identity.
-10. Close focused positive/negative/runtime, sanitizer, source/catalog, full
+10. **Pending.** Close focused positive/negative/runtime, sanitizer, source/catalog, full
     Debug/Release, matrix/docs, commit, and push evidence.
 
 Batch status is **in progress**. Keep this ten-task list current in both the
@@ -1732,6 +1733,21 @@ O0/O2 cold/warm/VCD differential prove conditional, selected-case, and
 seconds with 1,446 production diagnostics and all 344 authored sources within
 the 2,000-line limit. Tasks 1 through 4 are focused-complete; Batch 114 remains
 **in progress** with Tasks 5 through 10 outstanding.
+
+Task 5 is focused-complete. Generated conditional, iterative, and labeled case
+bodies retain bounded array, enumeration, record, and subtype declarations.
+The type-resolution partition merges declarations by source offset, rejecting
+forward type visibility while admitting same-spelled types in separate
+alternatives. Selected-body expansion substitutes prior local constants and
+the concrete loop index, qualifies every realized type under its exact branch
+or `label[index]` path, and extends source-backed nominal identity with that
+scope. Focused elaboration proves three different loop-dependent widths and
+three distinct source-and-scope identities. The merged interpreter/LLVM O0/O2
+cold/warm/VCD differential executes conditional, loop, and case generated
+subtypes unchanged. The final five-test focused gate passes in 15.30 seconds
+with 1,446 production diagnostics and all 345 authored sources within the
+2,000-line limit. Tasks 1 through 5 are focused-complete; Batch 114 remains
+**in progress** with Task 6 current and Tasks 7 through 10 pending.
 
 Batch 110 has advanced through these validated features:
 

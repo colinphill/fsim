@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
 
+#include <unordered_set>
+
 namespace fsim::tests::elaboration {
 
 void test_generate_elaboration() {
@@ -350,7 +352,8 @@ end entity;
 architecture rtl of generated_vhdl_behavior is
 begin
   chosen: if enabled generate
-    signal generated_value : unsigned(3 downto 0);
+    subtype generated_word_t is unsigned(3 downto 0);
+    signal generated_value : generated_word_t;
   begin
     generated_value <= 6;
     worker: process(generated_value)
@@ -367,8 +370,10 @@ end entity;
 architecture rtl of generated_vhdl_loop_behavior is
 begin
   lanes: for i in 0 to 2 generate
+    type lane_bits_t is array (0 to i + 1) of bit;
     constant local_value : natural := i + 4;
     signal generated_value : unsigned(3 downto 0);
+    signal typed_value : lane_bits_t;
   begin
     generated_value <= local_value;
   end generate lanes;
@@ -621,6 +626,17 @@ begin
     constant bad_value : positive := 0;
   begin
   end block invalid_scope;
+end architecture;
+
+entity generated_vhdl_forward_generated_type is
+end entity;
+architecture rtl of generated_vhdl_forward_generated_type is
+begin
+  selected: if true generate
+    signal early_value : later_t;
+    subtype later_t is bit;
+  begin
+  end generate selected;
 end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
@@ -1098,6 +1114,7 @@ end architecture;
     const std::array<std::string_view, 3>
         generated_vhdl_loop_behavior_values{
             "0100", "0101", "0110"};
+    std::unordered_set<std::string> generated_vhdl_type_identities;
     for (std::size_t index = 0; index < 3; ++index) {
       const auto signal =
           generated_vhdl_loop_behavior.design->find_signal(
@@ -1109,6 +1126,27 @@ end architecture;
               ->signal_value(*signal)
               .to_msb_string()
           == generated_vhdl_loop_behavior_values[index]);
+      const auto typed_signal =
+          generated_vhdl_loop_behavior.design->find_signal(
+              "lanes[" + std::to_string(index)
+              + "].typed_value");
+      assert(typed_signal);
+      const auto& typed_info =
+          generated_vhdl_loop_behavior.design
+              ->signals().at(*typed_signal);
+      assert(typed_info.width == index + 2);
+      assert(
+          typed_info.nominal_type.find(
+              "generated-mixed.vhd")
+              != std::string::npos
+          && typed_info.nominal_type.find("lane_bits_t")
+              != std::string::npos
+          && typed_info.nominal_type.find(
+                 "lanes[" + std::to_string(index) + "]")
+              != std::string::npos);
+      assert(
+          generated_vhdl_type_identities.insert(
+              typed_info.nominal_type).second);
     }
 
     const auto generated_sv_implicit_behavior =
@@ -1418,6 +1456,14 @@ end architecture;
         [](const auto& diagnostic) {
           return diagnostic.code == "FSIM-ELAB-GEN-012";
         }));
+
+    const auto forward_generated_type =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_forward_generated_type(rtl)");
+    assert(!forward_generated_type.ok());
+    assert(has_diagnostic(
+        forward_generated_type, "FSIM-ELAB-VHTYPE-001"));
 
     auto unevaluable_generate_design = generated_design;
     const auto unevaluable_unit = std::find_if(

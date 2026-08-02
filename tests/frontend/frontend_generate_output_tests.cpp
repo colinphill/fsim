@@ -369,8 +369,10 @@ end entity;
 architecture rtl of generated is
 begin
   selection: if enabled generate
+    subtype branch_word_t is unsigned(3 downto 0);
+    type branch_state_t is (idle, ready);
     constant branch_value : natural := 1;
-    signal branch_signal : std_logic;
+    signal branch_signal : branch_word_t;
   begin
     active: entity work.leaf(rtl)
       port map (value => value, result => result);
@@ -382,8 +384,10 @@ begin
         port map (value => value, result => result);
     end generate nested;
   else generate
+    subtype branch_word_t is unsigned(3 downto 0);
+    type branch_state_t is (idle, ready);
     constant branch_value : natural := 0;
-    signal branch_signal : std_logic;
+    signal branch_signal : branch_word_t;
   begin
     inactive: entity work.leaf(rtl)
       port map (value => value, result => result);
@@ -401,7 +405,8 @@ end entity;
 architecture rtl of generated_loop is
 begin
   lanes: for i in 2 downto 0 generate
-    signal generated_value : unsigned(3 downto 0);
+    subtype lane_word_t is unsigned(i + 1 downto 0);
+    signal generated_value : lane_word_t;
   begin
     generated_value <= i;
     worker: process(generated_value)
@@ -428,8 +433,10 @@ begin
       child: entity work.leaf(rtl)
         port map (value => value, result => result);
     selected: when 1 to 2 | 7 downto 5 =>
+      type choice_bits_t is array (0 to 3) of bit;
+      subtype choice_word_t is unsigned(3 downto 0);
       constant choice_value : natural := 9;
-      signal choice_signal : unsigned(3 downto 0);
+      signal choice_signal : choice_word_t;
     begin
       child: entity work.leaf(rtl)
         port map (value => value, result => result);
@@ -479,8 +486,16 @@ end architecture;
       vhdl_generate.then_scope == "selection"
           && vhdl_generate.else_scope == "selection"
           && vhdl_generate.condition.text == "enabled"
+          && vhdl_generate.then_body.type_aliases.size() == 2
+          && vhdl_generate.then_body.type_aliases[0].name
+              == "branch_word_t"
+          && vhdl_generate.then_body.type_aliases[0].declaration_kind
+              == TypeDeclarationKind::VhdlSubtype
+          && vhdl_generate.then_body.type_aliases[1].declaration_kind
+              == TypeDeclarationKind::VhdlEnumeration
           && vhdl_generate.then_body.constants.size() == 1
           && vhdl_generate.then_body.signals.size() == 1
+          && vhdl_generate.else_body.type_aliases.size() == 2
           && vhdl_generate.else_body.constants.size() == 1
           && vhdl_generate.else_body.signals.size() == 1
           && vhdl_generate.then_body.instances.front().name == "active"
@@ -513,6 +528,11 @@ end architecture;
           && vhdl_loop.variable == "i"
           && vhdl_loop.condition.text == ">="
           && vhdl_loop.iteration.text == "-"
+          && vhdl_loop.then_body.type_aliases.size() == 1
+          && vhdl_loop.then_body.type_aliases.front().name
+              == "lane_word_t"
+          && vhdl_loop.then_body.type_aliases.front()
+                 .type.packed_range_expression
           && vhdl_loop.then_body.signals.size() == 1
           && vhdl_loop.then_body.concurrent_statements.size() == 1
           && vhdl_loop.then_body.processes.size() == 1
@@ -542,6 +562,10 @@ end architecture;
           && !vhdl_case.alternatives[1].choices[0].descending
           && vhdl_case.alternatives[1].choices[1].right
           && vhdl_case.alternatives[1].choices[1].descending
+          && vhdl_case.alternatives[1].body.type_aliases.size() == 2
+          && vhdl_case.alternatives[1].body.type_aliases[0]
+                 .declaration_kind
+              == TypeDeclarationKind::VhdlArray
           && vhdl_case.alternatives[1].body.constants.size() == 1
           && vhdl_case.alternatives[1].body.signals.size() == 1
           && vhdl_case.alternatives[2].scope == "empty_choice"
@@ -1050,6 +1074,28 @@ end architecture;
                     == "FSIM-VHDL-SEM-019";
               }),
       "invalid VHDL generated constants are targeted");
+
+  const auto duplicate_generated_type = parse_text(
+      "duplicate_generated_type.vhd",
+      R"(
+architecture rtl of duplicate_generated_type is
+begin
+  selected: if true generate
+    type local_t is (first, second);
+    subtype local_t is bit;
+  begin
+  end generate selected;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !duplicate_generated_type.ok()
+          && std::ranges::any_of(
+              duplicate_generated_type.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-036";
+              }),
+      "duplicate types in one generated declarative region are rejected");
 }
 
 void test_systemverilog_named_events() {

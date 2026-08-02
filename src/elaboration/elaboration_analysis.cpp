@@ -236,13 +236,12 @@ void substitute_parameters(
     const ConstantDomainEnvironment& domains,
     const frontend::Language language,
     std::vector<Diagnostic>& diagnostics) {
-    // Iterative SystemVerilog bodies retain declaration-ordered localparams
-    // until a concrete genvar value selects one iteration. Substituting the
-    // rest of the body here would diagnose legitimate references to those
-    // not-yet-evaluated declarations; append_generated_body performs the
-    // complete substitution after establishing the per-iteration values.
-    if (language == frontend::Language::SystemVerilog2017
-        && !body.constants.empty()) {
+    // Generated bodies retain local constants until a concrete branch or
+    // iteration is selected. Substituting the rest of the body here would
+    // diagnose legitimate constraint references before those declarations
+    // have been evaluated; append_generated_body performs the complete
+    // substitution after establishing the selected-body environment.
+    if (!body.constants.empty()) {
         return;
     }
     for (auto& alias : body.type_aliases) {
@@ -448,12 +447,14 @@ void substitute_parameters(
             body_environment,
             body_domains,
             language);
-        substitute_parameters(
-            generate.then_body,
-            body_environment,
-            body_domains,
-            language,
-            diagnostics);
+        if (generate.kind != frontend::GenerateKind::Iterative) {
+            substitute_parameters(
+                generate.then_body,
+                body_environment,
+                body_domains,
+                language,
+                diagnostics);
+        }
         substitute_parameters(
             generate.else_body,
             body_environment,
@@ -1353,6 +1354,60 @@ void append_generated_body(
     auto body_names = visible_names;
     for (const auto& alias : body.type_aliases) {
         body_names[alias.name] = generated_scope(scope, alias.name);
+    }
+    std::unordered_map<std::string, std::string>
+        scoped_vhdl_type_identities;
+    if (language == frontend::Language::Vhdl2008) {
+        const auto scope_suffix = "@" + std::string{scope};
+        for (const auto& alias : body.type_aliases) {
+            if (alias.declaration_kind
+                    != frontend::TypeDeclarationKind::VhdlSubtype
+                && !alias.type.nominal_type.empty()) {
+                scoped_vhdl_type_identities.emplace(
+                    alias.type.nominal_type,
+                    alias.type.nominal_type + scope_suffix);
+            }
+            if (!alias.type.vhdl_type_declaration.empty()) {
+                scoped_vhdl_type_identities.emplace(
+                    alias.type.vhdl_type_declaration,
+                    alias.type.vhdl_type_declaration + scope_suffix);
+            }
+        }
+    }
+    const auto scope_vhdl_type =
+        [&](auto&& self, frontend::Type& type) -> void {
+          if (const auto found = scoped_vhdl_type_identities.find(
+                  type.nominal_type);
+              found != scoped_vhdl_type_identities.end()) {
+              type.nominal_type = found->second;
+          }
+          if (const auto found = scoped_vhdl_type_identities.find(
+                  type.vhdl_type_declaration);
+              found != scoped_vhdl_type_identities.end()) {
+              type.vhdl_type_declaration = found->second;
+          }
+          for (auto& member : type.packed_members) {
+              for (auto& nested : member.nested_types) {
+                  self(self, nested);
+              }
+          }
+          if (type.systemverilog_container
+              && type.systemverilog_container
+                     ->associative_index_type) {
+              self(
+                  self,
+                  *type.systemverilog_container
+                       ->associative_index_type);
+          }
+        };
+    for (auto& alias : body.type_aliases) {
+        scope_vhdl_type(scope_vhdl_type, alias.type);
+    }
+    for (auto& signal : body.signals) {
+        scope_vhdl_type(scope_vhdl_type, signal.type);
+    }
+    for (auto& alias : body.signal_aliases) {
+        scope_vhdl_type(scope_vhdl_type, alias.type);
     }
     for (auto& alias : body.type_aliases) {
         const auto local_name = alias.name;

@@ -191,10 +191,14 @@ class VhdlParser final : private detail::ParserBase {
   DesignUnit parse_architecture(const Token& start);
 
   void parse_type_declaration(
-      DesignUnit& unit, const Token& start);
+      DesignUnit& unit,
+      const Token& start,
+      bool nested_scope = false);
 
   void parse_subtype_declaration(
-      DesignUnit& unit, const Token& start);
+      DesignUnit& unit,
+      const Token& start,
+      bool nested_scope = false);
 
   void parse_signal_declaration(
       std::vector<SignalDeclaration>& signals,

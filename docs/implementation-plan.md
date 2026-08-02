@@ -6347,30 +6347,30 @@ unchanged. All ten Batch 113 tasks are complete.
 
 The current ten implementation tasks are:
 
-1. Retain guarded block syntax, guard expressions, optional `is`, opening/end
+1. **Complete.** Retain guarded block syntax, guard expressions, optional `is`, opening/end
    labels, and exact source regions without silently accepting unsupported
    guarded forms.
-2. Elaborate the implicit Boolean `GUARD` signal, guard-expression sensitivity,
+2. **Complete.** Elaborate the implicit Boolean `GUARD` signal, guard-expression sensitivity,
    activation changes, nested scope identity, and deterministic diagnostics for
    invalid or non-Boolean guards.
-3. Complete block generic/port clauses and maps, defaults, `open` behavior,
+3. **Complete.** Complete block generic/port clauses and maps, defaults, `open` behavior,
    profile legality, hierarchy aliases, and specialization/cache provenance.
-4. Parse and elaborate declarative parts for `if`, `for`, and `case` generate
+4. **Complete.** Parse and elaborate declarative parts for `if`, `for`, and `case` generate
    alternatives before their `begin`, retaining alternative and iteration scope.
-5. Support generated type and subtype declarations with declaration-ordered
+5. **Complete.** Support generated type and subtype declarations with declaration-ordered
    visibility, specialized constraints, nominal identity, and source provenance.
-6. Support generated function/procedure declarations, bodies, and bounded
+6. **In progress.** Support generated function/procedure declarations, bodies, and bounded
    instantiations with local overload visibility and scope-qualified identity.
-7. Complete generated constants, signals, aliases, component declarations,
+7. **Pending.** Complete generated constants, signals, aliases, component declarations,
    package instantiations, and nested declarative items with deterministic
    collision and unsupported-item diagnostics.
-8. Complete architecture, block, generate, process, and subprogram local
+8. **Pending.** Complete architecture, block, generate, process, and subprogram local
    declarative regions for bounded constants, types/subtypes, objects, aliases,
    packages, and non-suspending local callables.
-9. Complete remaining locally static `if`/`for`/`case` generate choices,
+9. **Pending.** Complete remaining locally static `if`/`for`/`case` generate choices,
    including enumeration/character choices, grouped choices, ranges, `others`,
    overlap/null handling, labels, hierarchy, and specialization identity.
-10. Add focused positive/negative parser, elaboration, and runtime differentials;
+10. **Pending.** Add focused positive/negative parser, elaboration, and runtime differentials;
     update matrix/diagnostics/docs; then pass sanitizer, source/catalog, full
     Debug/Release, documentation, commit, and push gates before closing Batch 114.
 
@@ -6421,6 +6421,24 @@ loop declarations. The final five-test focused gate passes in 16.10 seconds
 with all 1,446 production diagnostics cataloged and all 344 authored sources
 within the line budget. Tasks 1 through 4 are focused-complete; Batch 114
 remains **in progress** with Tasks 5 through 10 outstanding.
+
+Task 5 is focused-complete. Selected conditional, iterative, and labeled case
+bodies retain bounded array, enumeration, record, and subtype declarations.
+Named types, constants, signals, aliases, components, and callables are merged
+by physical source offset for resolution, so a preceding object cannot see a
+later type. Concrete branch and loop environments specialize prior-constant
+and iteration-dependent constraints before expansion. Every realized type is
+scope-qualified beneath its branch or `label[index]` path, while its nominal
+identity retains the exact source declaration and gains the realized scope;
+same-spelled types in separate alternatives remain independent. Focused HIR
+and negative evidence covers all supported declaration kinds, same-region
+duplicates, and forward visibility. Elaboration proves distinct per-iteration
+widths and nominal identities, and the merged interpreter/LLVM O0/O2 cold/warm
+application differential executes generated subtypes without behavior or VCD
+drift. The final five-test focused gate passes in 15.30 seconds with all 1,446
+production diagnostics cataloged and all 345 authored sources within the
+2,000-line limit. Tasks 1 through 5 are focused-complete; Batch 114 remains
+**in progress** with Task 6 current and Tasks 7 through 10 pending.
 
 ## Forward language-closure feature batches
 

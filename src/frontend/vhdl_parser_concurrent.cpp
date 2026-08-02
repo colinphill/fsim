@@ -314,6 +314,28 @@ bool VhdlParser::parse_vhdl_generate_declarations(
           body, previous());
       continue;
     }
+    if (match_keyword("type", true)) {
+      parsed = true;
+      DesignUnit declarations;
+      declarations.type_aliases =
+          std::move(body.type_aliases);
+      parse_type_declaration(
+          declarations, previous(), true);
+      body.type_aliases =
+          std::move(declarations.type_aliases);
+      continue;
+    }
+    if (match_keyword("subtype", true)) {
+      parsed = true;
+      DesignUnit declarations;
+      declarations.type_aliases =
+          std::move(body.type_aliases);
+      parse_subtype_declaration(
+          declarations, previous(), true);
+      body.type_aliases =
+          std::move(declarations.type_aliases);
+      continue;
+    }
     if (match_keyword("component", true)) {
       parsed = true;
       const auto component_start = previous();

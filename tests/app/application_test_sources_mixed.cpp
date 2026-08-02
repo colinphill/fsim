@@ -281,7 +281,8 @@ begin
   chosen: if enabled generate
     constant base_value : natural := 5;
     constant local_value : natural := base_value + 1;
-    signal generated_value : unsigned(3 downto 0);
+    subtype generated_word_t is unsigned(3 downto 0);
+    signal generated_value : generated_word_t;
   begin
     generated_value <= local_value;
     worker: process(generated_value)
@@ -303,7 +304,8 @@ architecture rtl of generated_loop_declarations_vhdl is
 begin
   lanes: for i in 2 to 2 generate
     constant local_value : natural := i + 4;
-    signal generated_value : unsigned(3 downto 0);
+    subtype lane_word_t is unsigned(i + 1 downto 0);
+    signal generated_value : lane_word_t;
   begin
     generated_value <= local_value;
     observed <= generated_value + 1;
@@ -326,7 +328,9 @@ begin
       observed <= 1;
     selected: when 1 to 2 | 7 downto 5 =>
       constant base_value : natural := 8;
-      signal selected_value : unsigned(3 downto 0);
+      type choice_bits_t is array (0 to base_value / 2 - 1) of bit;
+      subtype selected_word_t is unsigned(3 downto 0);
+      signal selected_value : selected_word_t;
     begin
       selected_value <= "1001";
       observed <= selected_value;

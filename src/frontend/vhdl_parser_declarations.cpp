@@ -4,11 +4,14 @@
 namespace fsim::frontend {
 
 void VhdlParser::parse_type_declaration(
-  DesignUnit& unit, const Token& start) {
+  DesignUnit& unit,
+  const Token& start,
+  const bool nested_scope) {
   const auto name = expect_identifier("type name");
   const auto canonical_name = vhdl_name(name.text);
   const bool duplicate =
-      vhdl_named_types_.contains(canonical_name)
+      (!nested_scope
+       && vhdl_named_types_.contains(canonical_name))
       || std::any_of(
           unit.type_aliases.begin(),
           unit.type_aliases.end(),
@@ -180,7 +183,9 @@ void VhdlParser::parse_type_declaration(
               descending};
     }
     if (!duplicate && supported_element) {
-      vhdl_named_types_.insert(canonical_name);
+      if (!nested_scope) {
+        vhdl_named_types_.insert(canonical_name);
+      }
       unit.type_aliases.push_back(TypeAliasDeclaration{
           canonical_name,
           std::move(type),
@@ -291,7 +296,9 @@ void VhdlParser::parse_type_declaration(
           false};
     }
     if (!duplicate && !type.enumeration_literals.empty()) {
-      vhdl_named_types_.insert(canonical_name);
+      if (!nested_scope) {
+        vhdl_named_types_.insert(canonical_name);
+      }
       unit.type_aliases.push_back(TypeAliasDeclaration{
           canonical_name,
           std::move(type),
@@ -441,7 +448,9 @@ void VhdlParser::parse_type_declaration(
   }
 
   if (!duplicate) {
-    vhdl_named_types_.insert(canonical_name);
+    if (!nested_scope) {
+      vhdl_named_types_.insert(canonical_name);
+    }
     unit.type_aliases.push_back(TypeAliasDeclaration{
         canonical_name,
         std::move(type),
@@ -452,11 +461,14 @@ void VhdlParser::parse_type_declaration(
 }
 
 void VhdlParser::parse_subtype_declaration(
-  DesignUnit& unit, const Token& start) {
+  DesignUnit& unit,
+  const Token& start,
+  const bool nested_scope) {
   const auto name = expect_identifier("subtype name");
   const auto canonical_name = vhdl_name(name.text);
   const bool duplicate =
-      vhdl_named_types_.contains(canonical_name)
+      (!nested_scope
+       && vhdl_named_types_.contains(canonical_name))
       || std::any_of(
           unit.type_aliases.begin(),
           unit.type_aliases.end(),
@@ -506,7 +518,9 @@ void VhdlParser::parse_subtype_declaration(
   if (duplicate) {
     return;
   }
-  vhdl_named_types_.insert(canonical_name);
+  if (!nested_scope) {
+    vhdl_named_types_.insert(canonical_name);
+  }
   unit.type_aliases.push_back(TypeAliasDeclaration{
       canonical_name,
       std::move(type),

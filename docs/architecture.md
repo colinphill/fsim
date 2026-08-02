@@ -182,6 +182,14 @@ body extends its parent's constant environment in declaration order before
 signal types, behavior, child actuals, and nested generate controls are
 substituted. Constants therefore consume no runtime storage, while a loop body
 reevaluates index-dependent declarations independently for every iteration.
+Selected VHDL generate bodies additionally retain bounded array, enumeration,
+record, and subtype declarations. Named-type resolution merges types and
+objects by physical source offset so an earlier object cannot see a later type;
+after selection, constraint substitution uses the branch-local constant and
+iteration environment. Expansion qualifies every realized type name beneath
+the exact branch or `label[index]` scope and extends its source declaration
+identity with that scope, keeping equal declarations from different generated
+instances nominally distinct without losing source provenance.
 VHDL conditional, iterative, and case-alternative bodies retain their
 declarative part separately from concurrent statements; any nonempty
 declarative part requires the grammar's separating `begin`. Expansion applies
