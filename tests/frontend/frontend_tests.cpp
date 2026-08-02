@@ -44,6 +44,7 @@ int main() {
     test_vhdl_enumeration_declarations();
     test_vhdl_enumeration_attributes();
     test_vhdl_enumeration_subtype_ranges();
+    test_vhdl_case_generate_enumeration_choices();
     test_exponentiation_expression_nodes();
     test_systemverilog_procedural_updates();
     test_systemverilog_final_procedures();

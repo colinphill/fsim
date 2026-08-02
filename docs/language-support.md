@@ -49,6 +49,12 @@ actuals bind, and nested callable capture is bounded to locally static outer
 constants plus qualified local packages. Runtime outer-variable capture,
 implicit-subtype aliases, file objects, attributes, use clauses, and groups
 remain outside this local-region slice and receive deterministic diagnostics.
+Selection-generate elaboration now also resolves locally static integer and
+retained enumeration selectors across identifier and character literals,
+static constants, grouped choices, ascending/descending and null ranges, and
+`others`. Alternative labels remain canonical hierarchy segments, and
+overlapping intervals, duplicate defaults, unknown literals, and nominally
+mismatched enumeration choices receive deterministic generate diagnostics.
 
 Batch 107 SystemVerilog unit-status update: the Verilog/SV unit row's earlier
 interface and package-export exclusions are superseded. Bounded parameterized

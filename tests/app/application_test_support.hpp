@@ -116,6 +116,7 @@ class ApplicationTestFixture {
   std::filesystem::path generated_case_sv_top_source;
   std::filesystem::path generated_behavior_sv_source;
   std::filesystem::path generated_behavior_vhdl_source;
+  std::filesystem::path generated_enum_behavior_vhdl_source;
   std::filesystem::path generated_static_behavior_sv_source;
   std::filesystem::path generated_implicit_behavior_sv_source;
   std::filesystem::path generated_block_behavior_vhdl_source;

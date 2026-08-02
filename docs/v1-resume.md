@@ -16,15 +16,13 @@ as work lands. Before moving on, retain that batch's list, mark it
 
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: pushed Batch 114 generated-declarative support at
-  parent commit `f4e9199`. The Task 8 local declarative-region checkpoint is
-  this document's containing commit: it adds bounded architecture/process/
-  subprogram constants, types, objects, explicit aliases, local packages, and
-  nested callables with generic-instance materialization. Tasks 1 through 8
-  are focused-complete and Task 9 is current.
+- Implementation baseline: pushed Batch 114 local declarative-region support
+  at commit `f2fdd88`. This document's containing checkpoint closes Batch 114
+  enumeration/character selection-generate choices and all local gates. Batch
+  115 is current with Task 1 in progress.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 347 authored C/C++ source, header,
+- The source-size refactor is complete: all 348 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 115-alternative
@@ -1666,7 +1664,7 @@ identity is now version 6; native-object schema 69, the public runtime ABI, and
 container semantic revision 28 are unchanged. All ten Batch 113 tasks are
 complete and checkpoint `4af01cd` contains the final implementation slice.
 
-## In-progress feature batch 114
+## Completed feature batch 114
 
 1. **Complete.** Retain guarded block syntax, guard expressions, optional `is`, opening/end
    labels, and exact source regions with checked unsupported-form diagnostics.
@@ -1685,15 +1683,14 @@ complete and checkpoint `4af01cd` contains the final implementation slice.
 8. **Complete.** Complete architecture/block/generate/process/subprogram local declarative
    regions for bounded constants, types, objects, aliases, packages, and
    non-suspending local callables.
-9. **In progress.** Complete remaining locally static `if`/`for`/`case` generate choices,
+9. **Complete.** Complete remaining locally static `if`/`for`/`case` generate choices,
    including enumeration/character choices, groups, ranges, `others`,
    overlap/null handling, labels, hierarchy, and specialization identity.
-10. **Pending.** Close focused positive/negative/runtime, sanitizer, source/catalog, full
+10. **Complete.** Close focused positive/negative/runtime, sanitizer, source/catalog, full
     Debug/Release, matrix/docs, commit, and push evidence.
 
-Batch status is **in progress**. Keep this ten-task list current in both the
-official plan and this handoff. Change it to complete only after all ten tasks
-and their gates close and work moves to Batch 115.
+Batch status is **complete**. All ten tasks and their gates are closed, and the
+current in-progress ten-task record has moved to Batch 115 below.
 
 Tasks 1 and 2 are focused-complete. Guarded blocks retain their exact Boolean
 expression, optional `is`, labels, and source span; a missing `)` reports
@@ -1803,6 +1800,60 @@ five-test focused Debug/Release gates pass in 15.93/15.12 seconds with 1,453
 production diagnostics and all 347 authored sources within the 2,000-line
 limit. Tasks 1 through 8 are focused-complete;
 Batch 114 remains **in progress** with Task 9 current and Task 10 pending.
+
+Task 9 is focused-complete. Selection-generate elaboration derives a retained
+enumeration selector domain from nominal metadata or a directly named generic,
+port, or signal and maps identifier/character literals plus static constants
+to ordinals. Grouped choices, ascending/descending ranges, null ranges, and
+`others` retain exact labels and hierarchy; unknown or nominally mismatched
+choices, duplicate defaults, and overlapping integer/enumeration intervals use
+the stable `FSIM-ELAB-GEN-008`/`009`/`010` family. Frontend, elaboration, and
+the merged interpreter/LLVM O0/O2 differential prove the labeled
+`selected.selected_value` path, execution/process count, cold/warm reuse, and
+an enum-default edit that changes both selected behavior and specialization
+identity. The final five-test focused Debug/Release gates pass in 15.81/15.14
+seconds with 1,453 production diagnostics and all 348 authored sources within
+the 2,000-line limit. Tasks 1 through 9 are focused-complete; Batch 114 remains
+**in progress** with Task 10 current.
+
+Task 10 is complete. Exact LLVM 22.1.8 warnings-as-errors Debug passed all 66
+tests in 183.65 seconds, including the merged application in 16.03 seconds and
+`fsim.application.scoped_locals` in 0.89 seconds. Release passed all 66 in
+161.11 seconds, including the merged application in 14.84 seconds and scoped
+locals in 0.82 seconds. The LLVM-disabled ASan/UBSan focused six-test gate
+passed in 46.77 seconds with LeakSanitizer disabled only because the managed
+ptrace environment cannot start it. The diagnostic catalog retains 1,453
+production codes and all 348 authored sources pass the 2,000-line gate.
+Feature-matrix row VH-229 and the language/diagnostic documentation record the
+completed selector-domain contract. All ten Batch 114 tasks are complete.
+
+## In-progress feature batch 115
+
+1. **In progress.** Audit and retain every remaining synthesizable sequential and concurrent
+   statement form in typed HIR, with exact labels, spans, and targeted
+   unsupported-form diagnostics.
+2. **Pending.** Complete sequential signal/variable assignments, procedure calls, `null`,
+   conditionals, loops, and case statements across nested labeled scopes.
+3. **Pending.** Add VHDL-2008 matching case statements and matching selected/conditional
+   assignments with exact wildcard semantics and deterministic legality checks.
+4. **Pending.** Complete discrete case choices with grouped literals, locally static ranges,
+   `others`, null ranges, overlap, duplicate, and coverage diagnostics.
+5. **Pending.** Complete concurrent simple, conditional, and selected signal assignments,
+   including guarded/delay-mechanism interaction and driver identity.
+6. **Pending.** Preserve process, loop, case-alternative, and labeled statement scopes in
+   hierarchy, name lookup, debugger metadata, and specialization provenance.
+7. **Pending.** Lower dynamic packed/composite indices, slices, and chained selections for
+   supported expression and assignment targets with checked bounds and direction.
+8. **Pending.** Complete sensitivity, scheduling, delta/update ordering, and exact
+   interpreter/LLVM behavior for the newly retained statement and selection forms.
+9. **Pending.** Prove positive/negative parser and elaboration coverage plus interpreter,
+   LLVM O0/O2, cache-edit, hierarchy, debugger, and normalized-VCD differentials.
+10. **Pending.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
+    Debug/Release, commit, and push gates before closing Batch 115.
+
+Batch status is **in progress**. Keep this exact ten-task list current in both
+the official plan and this handoff. Change it to complete only after all ten
+tasks and their gates close and work moves to Batch 116.
 
 Batch 110 has advanced through these validated features:
 

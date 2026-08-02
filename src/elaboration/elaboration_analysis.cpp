@@ -3,6 +3,13 @@
 
 namespace fsim::elaboration::elaboration_detail {
 
+const frontend::GenerateAlternative* select_generate_alternative(
+    const frontend::GenerateRegion& generate,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    const DesignUnit& unit,
+    std::vector<Diagnostic>& diagnostics);
+
 namespace {
 
 void substitute_delay_parameters(
@@ -1660,124 +1667,8 @@ void expand_generate_regions(
             continue;
         }
         if (generate.kind == frontend::GenerateKind::Selection) {
-            std::string error;
-            const auto selector = evaluate_constant_expression(
-                generate.condition, environment, error);
-            if (!selector) {
-                diagnostics.push_back({
-                    "FSIM-ELAB-GEN-008",
-                    "cannot evaluate selection-generate expression: "
-                        + error,
-                    generate.condition.span});
-                continue;
-            }
-            const frontend::GenerateAlternative* selected = nullptr;
-            const frontend::GenerateAlternative* default_alternative =
-                nullptr;
-            bool invalid = false;
-            struct ChoiceInterval {
-                std::int64_t lower;
-                std::int64_t upper;
-            };
-            std::vector<ChoiceInterval> choice_intervals;
-            for (const auto& alternative : generate.alternatives) {
-                if (alternative.is_default) {
-                    if (default_alternative != nullptr) {
-                        diagnostics.push_back({
-                            "FSIM-ELAB-GEN-010",
-                            "selection generate has more than one "
-                            "default alternative",
-                            alternative.span});
-                        invalid = true;
-                    } else {
-                        default_alternative = &alternative;
-                    }
-                    continue;
-                }
-                bool alternative_matches = false;
-                for (const auto& choice : alternative.choices) {
-                    error.clear();
-                    const auto left = evaluate_constant_expression(
-                        choice.left, environment, error);
-                    if (!left) {
-                        diagnostics.push_back({
-                            "FSIM-ELAB-GEN-009",
-                            "cannot evaluate selection-generate choice: "
-                                + error,
-                            choice.span});
-                        invalid = true;
-                        continue;
-                    }
-                    auto right = left;
-                    if (choice.right) {
-                        error.clear();
-                        right = evaluate_constant_expression(
-                            *choice.right, environment, error);
-                        if (!right) {
-                            diagnostics.push_back({
-                                "FSIM-ELAB-GEN-009",
-                                "cannot evaluate selection-generate range "
-                                "bound: " + error,
-                                choice.span});
-                            invalid = true;
-                            continue;
-                        }
-                    }
-                    const bool empty_range =
-                        choice.right
-                        && (choice.descending
-                                ? *left < *right
-                                : *left > *right);
-                    if (empty_range) {
-                        continue;
-                    }
-                    const ChoiceInterval interval{
-                        std::min(*left, *right),
-                        std::max(*left, *right)};
-                    const bool overlaps =
-                        std::any_of(
-                            choice_intervals.begin(),
-                            choice_intervals.end(),
-                            [&](const ChoiceInterval& existing) {
-                                return interval.lower
-                                           <= existing.upper
-                                    && existing.lower
-                                           <= interval.upper;
-                            });
-                    if (overlaps) {
-                        diagnostics.push_back({
-                            "FSIM-ELAB-GEN-010",
-                            "selection generate has overlapping "
-                            "constant choices or ranges",
-                            choice.span});
-                        invalid = true;
-                    } else {
-                        choice_intervals.push_back(interval);
-                    }
-                    alternative_matches =
-                        alternative_matches
-                        || (interval.lower <= *selector
-                            && *selector <= interval.upper);
-                }
-                if (alternative_matches) {
-                    if (selected != nullptr) {
-                        diagnostics.push_back({
-                            "FSIM-ELAB-GEN-010",
-                            "selection generate has overlapping matching "
-                            "alternatives",
-                            alternative.span});
-                        invalid = true;
-                    } else {
-                        selected = &alternative;
-                    }
-                }
-            }
-            if (invalid) {
-                continue;
-            }
-            if (selected == nullptr) {
-                selected = default_alternative;
-            }
+            const auto* selected = select_generate_alternative(
+                generate, environment, domains, unit, diagnostics);
             if (selected != nullptr) {
                 append_generated_body(
                     selected->body,

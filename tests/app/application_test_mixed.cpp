@@ -660,6 +660,12 @@ auto generated_range_behavior_vhdl_config =
         "vhdl:work.generated_range_behavior_vhdl(rtl)",
         fsim::project::Language::vhdl,
         generated_behavior_vhdl_source);
+auto generated_enum_behavior_vhdl_config =
+    make_generated_behavior_config(
+        "generated-enum-behavior-vhdl-test",
+        "vhdl:work.generated_enum_behavior_vhdl(rtl)",
+        fsim::project::Language::vhdl,
+        generated_enum_behavior_vhdl_source);
 auto generated_loop_declarations_vhdl_config =
     make_generated_behavior_config(
         "generated-loop-declarations-vhdl-test",
@@ -871,6 +877,11 @@ verify_generated_behavior(
     {"selected.selected_value"},
     {"1001", "1001"},
     2);
+const auto generated_enum_baseline = verify_generated_behavior(
+    generated_enum_behavior_vhdl_config,
+    {"selected.selected_value"},
+    {"1001", "1001"},
+    2);
 verify_generated_behavior(
     generated_static_behavior_sv_config,
     {"direct_value", "named_scope.nested_value"},
@@ -970,6 +981,37 @@ assert((generated_callable_edited.simulation.final_values
 #if defined(FSIM_HAS_LLVM)
 assert(generated_callable_edited.simulation.native_cache.hits == 0);
 assert(generated_callable_edited.simulation.native_cache.misses == 1);
+#endif
+
+std::ifstream generated_enum_source_input(
+    generated_enum_behavior_vhdl_source,
+    std::ios::binary);
+std::string edited_generated_enum_source{
+    std::istreambuf_iterator<char>{generated_enum_source_input},
+    std::istreambuf_iterator<char>{}};
+generated_enum_source_input.close();
+const auto enum_default =
+    edited_generated_enum_source.find("mode : state_t := 'Z'");
+assert(enum_default != std::string::npos);
+edited_generated_enum_source.replace(
+    enum_default,
+    std::string_view{"mode : state_t := 'Z'"}.size(),
+    "mode : state_t := idle");
+std::ofstream generated_enum_source_output(
+    generated_enum_behavior_vhdl_source,
+    std::ios::binary | std::ios::trunc);
+generated_enum_source_output << edited_generated_enum_source;
+generated_enum_source_output.close();
+const auto generated_enum_edited = run_generated_behavior(
+    generated_enum_behavior_vhdl_config,
+    fsim::app::SimulationEngine::compiled,
+    {});
+assert(generated_enum_edited.keys != generated_enum_baseline.keys);
+assert((generated_enum_edited.simulation.final_values
+        == std::vector<std::string>{"0001"}));
+#if defined(FSIM_HAS_LLVM)
+assert(generated_enum_edited.simulation.native_cache.hits == 0);
+assert(generated_enum_edited.simulation.native_cache.misses == 1);
 #endif
 
 std::ifstream block_source_input(

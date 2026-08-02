@@ -990,9 +990,9 @@ therefore excluded.
 | `FSIM-ELAB-GEN-005` | error | A loop-generate iteration expression cannot be evaluated. |
 | `FSIM-ELAB-GEN-006` | error | A loop-generate iteration does not advance its variable. |
 | `FSIM-ELAB-GEN-007` | error | A nested loop-generate variable shadows an enclosing constant in the bounded executable slice. |
-| `FSIM-ELAB-GEN-008` | error | A selection-generate selector cannot be evaluated for its specialization. |
-| `FSIM-ELAB-GEN-009` | error | A selection-generate scalar choice or range bound cannot be evaluated. |
-| `FSIM-ELAB-GEN-010` | error | Selection-generate scalar/range choices overlap or contain duplicate defaults. |
+| `FSIM-ELAB-GEN-008` | error | A selection-generate selector cannot be evaluated in its locally static scalar or enumeration domain. |
+| `FSIM-ELAB-GEN-009` | error | A selection-generate choice or range bound is not locally static or does not belong to the selector domain. |
+| `FSIM-ELAB-GEN-010` | error | Selection-generate choices or ranges overlap, or the alternatives contain duplicate defaults. |
 | `FSIM-ELAB-GEN-011` | error | A generated constant or parameter cannot be evaluated in its declaration-order environment. |
 | `FSIM-ELAB-GEN-012` | error | A generated constant/parameter violates a bounded scalar subtype or exceeds the 64-bit integral width. |
 | `FSIM-ELAB-GEN-013` | error | A VHDL block guard expression has a non-Boolean type. |

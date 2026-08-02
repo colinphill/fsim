@@ -452,6 +452,37 @@ begin
 end architecture;
 )";
 }
+generated_enum_behavior_vhdl_source =
+    directory / "generated_enum_behavior.vhd";
+{
+  std::ofstream output(generated_enum_behavior_vhdl_source);
+  output << R"(
+package generated_choice_types is
+  type state_t is (idle, ready, 'Z', done);
+end package;
+use work.generated_choice_types.all;
+entity generated_enum_behavior_vhdl is
+  generic (mode : state_t := 'Z');
+  port (observed : out unsigned(3 downto 0));
+end entity;
+architecture rtl of generated_enum_behavior_vhdl is
+begin
+  selection: case mode generate
+    idle_choice: when idle =>
+      observed <= 1;
+    selected: when ready | 'Z' to done =>
+      signal selected_value : unsigned(3 downto 0);
+    begin
+      selected_value <= 9;
+      observed <= selected_value;
+    empty_range: when 'Z' downto done =>
+      observed <= 15;
+    fallback: when others =>
+      observed <= 3;
+  end generate selection;
+end architecture;
+)";
+}
 generated_static_behavior_sv_source =
     directory / "generated_static_behavior.sv";
 {

@@ -816,6 +816,48 @@ end architecture;
       "diagnostic");
 }
 
+void test_vhdl_case_generate_enumeration_choices() {
+  const auto parsed = parse_text(
+      "case_generate_enumeration.vhd",
+      R"(
+package choice_types is
+  type state_t is (idle, ready, 'Z', done);
+end package;
+use work.choice_types.all;
+entity case_generate_enumeration is
+  generic (mode : state_t := 'Z');
+end entity;
+architecture rtl of case_generate_enumeration is
+begin
+  selection: case mode generate
+    selected: when ready | 'Z' to done =>
+    empty_range: when 'Z' downto done =>
+    fallback: when others =>
+  end generate selection;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(parsed.ok(), "enumeration case-generate choices must parse");
+  const auto* unit = parsed.design.find(
+      UnitKind::VhdlArchitecture, "rtl");
+  require(
+      unit != nullptr && unit->generate_regions.size() == 1
+          && unit->generate_regions.front().alternatives.size() == 3,
+      "enumeration case-generate alternative count");
+  const auto& alternatives =
+      unit->generate_regions.front().alternatives;
+  require(
+      alternatives[0].choices.size() == 2
+          && alternatives[0].choices[0].left.text == "ready"
+          && alternatives[0].choices[1].left.text == "'Z'"
+          && alternatives[0].choices[1].right
+          && alternatives[0].choices[1].right->text == "done"
+          && !alternatives[0].choices[1].descending
+          && alternatives[1].choices.front().descending
+          && alternatives[2].is_default,
+      "grouped identifier/character/range case-generate HIR");
+}
+
 void test_exponentiation_expression_nodes() {
   const auto systemverilog = parse_text(
       "power.sv",

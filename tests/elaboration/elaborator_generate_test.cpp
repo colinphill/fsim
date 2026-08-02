@@ -327,6 +327,67 @@ begin
   end generate selection;
 end architecture;
 
+package generated_choice_types is
+  type state_t is (idle, ready, 'Z', done);
+  type foreign_state_t is (cold, hot);
+  constant foreign_choice : foreign_state_t := hot;
+end package;
+use work.generated_choice_types.all;
+entity generated_vhdl_enum_case is
+  generic (mode : state_t := 'Z');
+  port (observed : out unsigned(3 downto 0));
+end entity;
+architecture rtl of generated_vhdl_enum_case is
+begin
+  selection: case mode generate
+    idle_choice: when idle =>
+      observed <= 1;
+    selected: when ready | 'Z' to done =>
+      signal selected_value : unsigned(3 downto 0);
+    begin
+      selected_value <= 9;
+      observed <= selected_value;
+    empty_range: when 'Z' downto done =>
+      observed <= 15;
+    fallback: when others =>
+      observed <= 3;
+  end generate selection;
+end architecture;
+
+use work.generated_choice_types.all;
+entity generated_vhdl_enum_overlap is
+  generic (mode : state_t := 'Z');
+end entity;
+architecture rtl of generated_vhdl_enum_overlap is
+begin
+  selection: case mode generate
+    first_choice: when ready to 'Z' =>
+    second_choice: when 'Z' to done =>
+  end generate selection;
+end architecture;
+
+use work.generated_choice_types.all;
+entity generated_vhdl_enum_bad_choice is
+  generic (mode : state_t := 'Z');
+end entity;
+architecture rtl of generated_vhdl_enum_bad_choice is
+begin
+  selection: case mode generate
+    invalid_choice: when missing_state =>
+  end generate selection;
+end architecture;
+
+use work.generated_choice_types.all;
+entity generated_vhdl_enum_wrong_domain is
+  generic (mode : state_t := 'Z');
+end entity;
+architecture rtl of generated_vhdl_enum_wrong_domain is
+begin
+  selection: case mode generate
+    invalid_choice: when foreign_choice =>
+  end generate selection;
+end architecture;
+
 entity generated_vhdl_overlapping_ranges is
 end entity;
 architecture rtl of generated_vhdl_overlapping_ranges is
@@ -1143,6 +1204,62 @@ end architecture;
             ->signal_value(*generated_vhdl_case_local)
             .to_msb_string()
         == "0111");
+
+    const auto generated_vhdl_enum_case =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_enum_case(rtl)");
+    assert(generated_vhdl_enum_case.ok());
+    const auto generated_vhdl_enum_observed =
+        generated_vhdl_enum_case.design->find_signal("observed");
+    const auto generated_vhdl_enum_local =
+        generated_vhdl_enum_case.design->find_signal(
+            "selected.selected_value");
+    assert(generated_vhdl_enum_observed && generated_vhdl_enum_local);
+    auto generated_vhdl_enum_interpreter =
+        generated_vhdl_enum_case.design->create_interpreter();
+    assert(
+        generated_vhdl_enum_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        generated_vhdl_enum_interpreter
+            ->signal_value(*generated_vhdl_enum_observed)
+            .to_msb_string()
+        == "1001");
+    assert(
+        generated_vhdl_enum_interpreter
+            ->signal_value(*generated_vhdl_enum_local)
+            .to_msb_string()
+        == "1001");
+    assert(
+        generated_vhdl_enum_case.design->processes().size() == 2);
+
+    const auto generated_vhdl_enum_overlap =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_enum_overlap(rtl)");
+    assert(!generated_vhdl_enum_overlap.ok());
+    assert(has_diagnostic(
+        generated_vhdl_enum_overlap,
+        "FSIM-ELAB-GEN-010"));
+
+    const auto generated_vhdl_enum_bad_choice =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_enum_bad_choice(rtl)");
+    assert(!generated_vhdl_enum_bad_choice.ok());
+    assert(has_diagnostic(
+        generated_vhdl_enum_bad_choice,
+        "FSIM-ELAB-GEN-009"));
+
+    const auto generated_vhdl_enum_wrong_domain =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_enum_wrong_domain(rtl)");
+    assert(!generated_vhdl_enum_wrong_domain.ok());
+    assert(has_diagnostic(
+        generated_vhdl_enum_wrong_domain,
+        "FSIM-ELAB-GEN-009"));
 
     const auto generated_vhdl_overlapping_ranges =
         fsim::elaboration::elaborate(

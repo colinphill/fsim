@@ -6343,7 +6343,7 @@ identity version 6 partitions the alias-neutral identity contract; native-object
 schema 69, the public runtime ABI, and container semantic revision 28 remain
 unchanged. All ten Batch 113 tasks are complete.
 
-### One-hundred-fourteenth feature batch — VHDL generated and local declarative-region closure — In progress
+### One-hundred-fourteenth feature batch — VHDL generated and local declarative-region closure — Complete
 
 The current ten implementation tasks are:
 
@@ -6367,16 +6367,15 @@ The current ten implementation tasks are:
 8. **Complete.** Complete architecture, block, generate, process, and subprogram local
    declarative regions for bounded constants, types/subtypes, objects, aliases,
    packages, and non-suspending local callables.
-9. **In progress.** Complete remaining locally static `if`/`for`/`case` generate choices,
+9. **Complete.** Complete remaining locally static `if`/`for`/`case` generate choices,
    including enumeration/character choices, grouped choices, ranges, `others`,
    overlap/null handling, labels, hierarchy, and specialization identity.
-10. **Pending.** Add focused positive/negative parser, elaboration, and runtime differentials;
+10. **Complete.** Add focused positive/negative parser, elaboration, and runtime differentials;
     update matrix/diagnostics/docs; then pass sanitizer, source/catalog, full
     Debug/Release, documentation, commit, and push gates before closing Batch 114.
 
-Batch status is **in progress**. Keep this ten-task list current in both the
-official plan and resume handoff. Change it to complete only after all ten tasks
-and their gates close and work moves to Batch 115.
+Batch status is **complete**. All ten tasks and their gates are closed, and the
+current in-progress ten-task record has moved to Batch 115 below.
 
 Tasks 1 and 2 are focused-complete. The frontend now retains a guarded block's
 expression in `GenerateRegion::condition`, preserves optional `is`, scope/end
@@ -6503,6 +6502,66 @@ with all 1,453 production diagnostics cataloged and all 347 authored sources
 within the 2,000-line limit.
 Tasks 1 through 8 are focused-complete; Batch 114 remains **in progress** with
 Task 9 current and Task 10 pending.
+
+Task 9 is focused-complete. Selection-generate elaboration now derives the
+selector's enumeration domain from retained nominal metadata or its directly
+named generic, port, or signal, then resolves identifier and character
+enumeration literals, constants, grouped choices, ascending/descending
+ranges, null ranges, and `others` to ordinal intervals. Existing
+`FSIM-ELAB-GEN-008`/`009`/`010` diagnostics reject non-static selectors,
+unknown or nominally mismatched choices, duplicate defaults, and overlapping
+integer or enumeration intervals. Focused frontend HIR preserves exact labels,
+grouping, range direction, and character spelling. Elaboration and the merged
+interpreter/LLVM O0/O2 application differential select the labeled branch,
+retain `selected.selected_value` hierarchy, agree on behavior and process
+count, reuse cold/warm specialization identity, and change the key and selected
+behavior when the enum generic default is edited. The final five-test focused
+Debug/Release gates pass in 15.81/15.14 seconds with all 1,453 production
+diagnostics cataloged and all 348 authored sources within the 2,000-line
+limit. Tasks 1 through 9 are focused-complete; Batch 114 remains **in
+progress** with Task 10 current.
+
+Task 10 is complete. The exact LLVM 22.1.8 warnings-as-errors Debug regression
+passed all 66 tests in 183.65 seconds, including the merged application in
+16.03 seconds and `fsim.application.scoped_locals` in 0.89 seconds. Release
+passed all 66 tests in 161.11 seconds, including the merged application in
+14.84 seconds and scoped locals in 0.82 seconds. The LLVM-disabled ASan/UBSan
+focused six-test gate passed in 46.77 seconds with LeakSanitizer disabled only
+because the managed ptrace environment cannot start it. The catalog retains
+1,453 production codes and all 348 authored sources pass the 2,000-line gate.
+Feature-matrix row VH-229, language-support status, and generate diagnostic
+descriptions record the completed enumeration/character choice contract. All
+ten Batch 114 tasks are complete.
+
+### One-hundred-fifteenth feature batch — VHDL statement and dynamic-selection closure — In progress
+
+The current ten implementation tasks are:
+
+1. **In progress.** Audit and retain every remaining synthesizable sequential and concurrent
+   statement form in typed HIR, with exact labels, spans, and targeted
+   unsupported-form diagnostics.
+2. **Pending.** Complete sequential signal/variable assignments, procedure calls, `null`,
+   conditionals, loops, and case statements across nested labeled scopes.
+3. **Pending.** Add VHDL-2008 matching case statements and matching selected/conditional
+   assignments with exact wildcard semantics and deterministic legality checks.
+4. **Pending.** Complete discrete case choices with grouped literals, locally static ranges,
+   `others`, null ranges, overlap, duplicate, and coverage diagnostics.
+5. **Pending.** Complete concurrent simple, conditional, and selected signal assignments,
+   including guarded/delay-mechanism interaction and driver identity.
+6. **Pending.** Preserve process, loop, case-alternative, and labeled statement scopes in
+   hierarchy, name lookup, debugger metadata, and specialization provenance.
+7. **Pending.** Lower dynamic packed/composite indices, slices, and chained selections for
+   supported expression and assignment targets with checked bounds and direction.
+8. **Pending.** Complete sensitivity, scheduling, delta/update ordering, and exact
+   interpreter/LLVM behavior for the newly retained statement and selection forms.
+9. **Pending.** Prove positive/negative parser and elaboration coverage plus interpreter,
+   LLVM O0/O2, cache-edit, hierarchy, debugger, and normalized-VCD differentials.
+10. **Pending.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
+    Debug/Release, commit, and push gates before closing Batch 115.
+
+Batch status is **in progress**. Keep this exact ten-task list current in both
+the official plan and resume handoff. Change it to complete only after all ten
+tasks and their gates close and work moves to Batch 116.
 
 ## Forward language-closure feature batches
 
