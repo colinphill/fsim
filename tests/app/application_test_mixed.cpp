@@ -1002,12 +1002,15 @@ std::string edited_generated_callable_source{
 generated_callable_source_input.close();
 const auto old_callable_map =
     edited_generated_callable_source.find(
-        "function mapped_shift is new shifted\n"
-        "      generic map (amount => 0)");
+        "function mapped_shift is new shifted");
 assert(old_callable_map != std::string::npos);
+const auto old_callable_generic_map =
+    edited_generated_callable_source.find(
+        "generic map (amount => 0)", old_callable_map);
+assert(old_callable_generic_map != std::string::npos);
 const auto old_callable_amount =
     edited_generated_callable_source.find(
-        "amount => 0", old_callable_map);
+        "amount => 0", old_callable_generic_map);
 assert(old_callable_amount != std::string::npos);
 edited_generated_callable_source.replace(
     old_callable_amount,
