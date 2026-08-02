@@ -36,6 +36,17 @@ frontend::Type builtin_vhdl_type(const std::string_view name) {
     return type;
 }
 
+std::string expression_identity(
+    const frontend::Expression& expression) {
+    std::ostringstream output;
+    output << static_cast<unsigned>(expression.kind)
+           << ':' << expression.text;
+    for (const auto& operand : expression.operands) {
+        output << '(' << expression_identity(operand) << ')';
+    }
+    return output.str();
+}
+
 std::string canonical_type_identity(const frontend::Type& type) {
     std::ostringstream output;
     output << "vhdl-type-v1;domain="
@@ -94,6 +105,44 @@ std::string canonical_type_identity(const frontend::Type& type) {
                            ? 1
                            : 0);
         }
+        for (const auto& dimension :
+             type.vhdl_array->dimensions) {
+            output << ";dimension="
+                   << dimension.index_subtype << ':'
+                   << (dimension.unconstrained ? 1 : 0);
+            if (dimension.index_base_range) {
+                output << ':'
+                       << dimension.index_base_range->left << ':'
+                       << dimension.index_base_range->right << ':'
+                       << (dimension.index_base_range->descending
+                               ? 1
+                               : 0);
+            }
+            if (dimension.constraint) {
+                output << ":constraint:"
+                       << expression_identity(
+                              dimension.constraint->left)
+                       << ':'
+                       << expression_identity(
+                              dimension.constraint->right)
+                       << ':'
+                       << (dimension.constraint->descending
+                               ? 1
+                               : 0);
+            }
+        }
+        for (const auto& element :
+             type.vhdl_array->element_types) {
+            output << ";element={"
+                   << canonical_type_identity(element) << '}';
+        }
+    }
+    for (const auto& constraint :
+         type.vhdl_array_constraints) {
+        output << ";array-constraint="
+               << expression_identity(constraint.left) << ':'
+               << expression_identity(constraint.right) << ':'
+               << (constraint.descending ? 1 : 0);
     }
     return output.str();
 }

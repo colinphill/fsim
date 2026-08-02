@@ -50,82 +50,70 @@ void VhdlParser::parse_type_declaration(
         TokenKind::LeftParen,
         "'(' after array",
         "FSIM-VHDL-PARSE-143");
-    const auto index_start = current();
-    bool has_range = false;
-    bool unconstrained = false;
-    std::optional<Expression> left_expression;
-    std::optional<Expression> right_expression;
-    SourceSpan index_range_span;
-    bool descending = false;
-
-    if (at(TokenKind::Identifier)
-        && keyword("range", 1, true)) {
-      const auto index_type = advance();
-      array.index_subtype =
-          vhdl_name(index_type.text);
-      array.index_span = index_type.span;
-      match_keyword("range", true);
-      has_range = true;
-      if (match(TokenKind::Less)) {
-        unconstrained = true;
-        expect(
-            TokenKind::Greater,
-            "'>' in unconstrained array index '<>'",
-            "FSIM-VHDL-PARSE-144");
-      }
-    } else {
-      array.index_subtype = "integer";
-      array.index_span = index_start.span;
-      has_range = true;
-    }
-
     constexpr auto integer_first =
         std::int64_t{std::numeric_limits<std::int32_t>::min()};
     constexpr auto integer_last =
         std::int64_t{std::numeric_limits<std::int32_t>::max()};
-    if (array.index_subtype == "integer") {
-      array.index_base_range =
-          IntegerRange{integer_first, integer_last, false};
-    } else if (array.index_subtype == "natural") {
-      array.index_base_range =
-          IntegerRange{0, integer_last, false};
-    } else if (array.index_subtype == "positive") {
-      array.index_base_range =
-          IntegerRange{1, integer_last, false};
-    } else {
-      error(
-          index_start,
-          "FSIM-VHDL-UNSUPPORTED-027",
-          "one-dimensional VHDL arrays currently require an integer, "
-          "natural, or positive index subtype");
-    }
+    do {
+      VhdlArrayDimension dimension;
+      const auto index_start = current();
+      if (at(TokenKind::Identifier)
+          && keyword("range", 1, true)) {
+        const auto index_type = advance();
+        dimension.index_subtype =
+            vhdl_name(index_type.text);
+        dimension.index_span = index_type.span;
+        match_keyword("range", true);
+        if (match(TokenKind::Less)) {
+          dimension.unconstrained = true;
+          expect(
+              TokenKind::Greater,
+              "'>' in unconstrained array index '<>'",
+              "FSIM-VHDL-PARSE-144");
+        }
+      } else {
+        dimension.index_subtype = "integer";
+        dimension.index_span = index_start.span;
+      }
 
-    if (has_range && !unconstrained) {
-      left_expression = parse_expression();
-      if (match_keyword("downto", true)) {
-        descending = true;
-      } else if (match_keyword("to", true)) {
-        descending = false;
+      if (dimension.index_subtype == "integer") {
+        dimension.index_base_range =
+            IntegerRange{integer_first, integer_last, false};
+      } else if (dimension.index_subtype == "natural") {
+        dimension.index_base_range =
+            IntegerRange{0, integer_last, false};
+      } else if (dimension.index_subtype == "positive") {
+        dimension.index_base_range =
+            IntegerRange{1, integer_last, false};
       } else {
         error(
-            current(),
-            "FSIM-VHDL-PARSE-145",
-            "expected 'to' or 'downto' in array index range");
+            index_start,
+            "FSIM-VHDL-UNSUPPORTED-027",
+            "VHDL arrays currently require integer, natural, or "
+            "positive index subtypes");
       }
-      right_expression = parse_expression();
-      index_range_span =
-          cover(index_start.span, previous().span);
-    }
-    if (match(TokenKind::Comma)) {
-      error(
-          previous(),
-          "FSIM-VHDL-UNSUPPORTED-027",
-          "multidimensional VHDL array declarations are not implemented");
-      while (!at_end() && !at(TokenKind::RightParen)
-             && !at(TokenKind::Semicolon)) {
-        advance();
+
+      if (!dimension.unconstrained) {
+        auto left_expression = parse_expression();
+        bool descending = false;
+        if (match_keyword("downto", true)) {
+          descending = true;
+        } else if (!match_keyword("to", true)) {
+          error(
+              current(),
+              "FSIM-VHDL-PARSE-145",
+              "expected 'to' or 'downto' in array index range");
+        }
+        auto right_expression = parse_expression();
+        dimension.constraint =
+            DiscreteRangeExpression{
+                std::move(left_expression),
+                std::move(right_expression),
+                cover(index_start.span, previous().span),
+                descending};
       }
-    }
+      array.dimensions.push_back(std::move(dimension));
+    } while (match(TokenKind::Comma));
     expect(
         TokenKind::RightParen,
         "')' after array index definition",
@@ -138,26 +126,22 @@ void VhdlParser::parse_type_declaration(
     const bool unresolved_element =
         !element_type.named_type.empty();
     const auto element_width = element_type.width();
-    const bool supported_element =
+    const bool scalar_element =
         unresolved_element
         || (element_width && *element_width == 1
             && element_type.packed_members.empty()
             && element_type.enumeration_literals.empty()
             && element_type.domain != ValueDomain::Integer
             && element_type.domain != ValueDomain::Unknown);
-    if (!supported_element) {
-      error(
-          element_start,
-          "FSIM-VHDL-UNSUPPORTED-027",
-          "one-dimensional VHDL arrays currently require a scalar bit, "
-          "Boolean, std_logic, std_ulogic, or visible scalar subtype "
-          "element");
-    }
     expect(
         TokenKind::Semicolon,
         "';' after array type declaration",
         "FSIM-VHDL-PARSE-148");
 
+    const auto& first_dimension = array.dimensions.front();
+    array.index_subtype = first_dimension.index_subtype;
+    array.index_span = first_dimension.index_span;
+    array.index_base_range = first_dimension.index_base_range;
     array.element_spelling = element_type.spelling;
     array.element_named_type = element_type.named_type;
     array.element_span =
@@ -165,26 +149,39 @@ void VhdlParser::parse_type_declaration(
             ? element_start.span
             : element_type.named_type_span;
     array.element_domain = element_type.domain;
-    array.unconstrained = unconstrained;
-    type.domain = element_type.domain;
-    type.vhdl_array = std::move(array);
-    if (left_expression && right_expression) {
+    array.unconstrained = std::ranges::any_of(
+        array.dimensions,
+        [](const VhdlArrayDimension& dimension) {
+          return dimension.unconstrained;
+        });
+    array.element_types.push_back(element_type);
+    const bool legacy_scalar_array =
+        array.dimensions.size() == 1 && scalar_element;
+    type.domain = legacy_scalar_array
+        ? element_type.domain
+        : ValueDomain::Unknown;
+    if (legacy_scalar_array
+        && first_dimension.constraint) {
+      const auto& constraint =
+          *first_dimension.constraint;
       const auto left =
-          simple_integer_constant(*left_expression);
+          simple_integer_constant(constraint.left);
       const auto right =
-          simple_integer_constant(*right_expression);
+          simple_integer_constant(constraint.right);
       if (left && right) {
         type.packed_range =
-            PackedRange{*left, *right, descending};
+            PackedRange{
+                *left, *right, constraint.descending};
       }
       type.packed_range_expression =
           PackedRangeExpression{
-              std::move(*left_expression),
-              std::move(*right_expression),
-              index_range_span,
-              descending};
+              constraint.left,
+              constraint.right,
+              constraint.span,
+              constraint.descending};
     }
-    if (!duplicate && supported_element) {
+    type.vhdl_array = std::move(array);
+    if (!duplicate) {
       if (!nested_scope) {
         vhdl_named_types_.insert(canonical_name);
       }

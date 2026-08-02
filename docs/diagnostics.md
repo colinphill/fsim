@@ -416,7 +416,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-024` | error | A context declaration contains an item other than a library clause, use clause, or context reference. |
 | `FSIM-VHDL-UNSUPPORTED-025` | error | A `null` waveform element appears outside a guarded concurrent signal assignment. |
 | `FSIM-VHDL-UNSUPPORTED-026` | error | A bounded VHDL type or record element is outside the architecture-local, non-nested packed record subset. |
-| `FSIM-VHDL-UNSUPPORTED-027` | error | A VHDL array declaration has multiple dimensions, a noninteger index subtype, or an element outside the current scalar packed subset. |
+| `FSIM-VHDL-UNSUPPORTED-027` | error | A VHDL array declaration uses an index subtype outside the retained `integer`, `natural`, or `positive` subset, or applies multiple constraints to a built-in scalar/vector subtype. |
 | `FSIM-VHDL-UNSUPPORTED-028` | error | A VHDL interface type generic uses classified or default-like syntax outside the VHDL-2008 unclassified `type T` form. |
 | `FSIM-VHDL-UNSUPPORTED-029` | error | A bounded VHDL function formal is not constant class. |
 | `FSIM-VHDL-UNSUPPORTED-030` | error | A bounded VHDL function formal is not input mode. |
@@ -1201,6 +1201,7 @@ therefore excluded.
 | `FSIM-ELAB-VHARRAY-005` | error | A VHDL array object uses an unconstrained or otherwise nonconcrete array subtype. |
 | `FSIM-ELAB-VHARRAY-006` | error | Assignment or comparison mixes values from different nominal VHDL array types. |
 | `FSIM-ELAB-VHARRAY-007` | error | An operator other than equality, inequality, or matching equality is applied to a VHDL array value in the current bounded semantic path. |
+| `FSIM-ELAB-VHARRAY-008` | error | A retained multidimensional VHDL array type reaches elaboration before a concrete flattened layout has been constructed. |
 | `FSIM-ELAB-VHARRAYAGG-002` | error | Contextual VHDL array layout or aggregate-choice HIR metadata is inconsistent with the aggregate value. |
 | `FSIM-ELAB-VHARRAYAGG-003` | error | A VHDL array aggregate choice is nonstatic or outside the contextual index range. |
 | `FSIM-ELAB-VHARRAYAGG-004` | error | A VHDL array aggregate covers an index more than once, has too many positional values, or repeats `others`. |

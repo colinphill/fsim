@@ -245,13 +245,26 @@ struct PackedMember {
   [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
 };
 
-/// Source-level metadata for a one-dimensional VHDL array type.
+/// One source-ordered index subtype and optional constraint from a VHDL array
+/// type declaration. The complete dimension list remains frontend metadata
+/// until elaboration constructs a concrete multidimensional layout.
+struct VhdlArrayDimension {
+  std::string index_subtype;
+  SourceSpan index_span;
+  std::optional<IntegerRange> index_base_range;
+  std::optional<DiscreteRangeExpression> constraint;
+  bool unconstrained{};
+};
+
+/// Source-level metadata for a VHDL array type.
 ///
 /// The common runtime may store a supported scalar-element array in the same
 /// packed representation as a built-in vector, but the frontend retains the
-/// nominal array declaration, index subtype, element subtype, and constraint
-/// state so legality and hierarchy checks never infer compatibility from width
-/// alone.
+/// nominal array declaration, every index subtype, the complete element type,
+/// and constraint state so legality and hierarchy checks never infer
+/// compatibility from width alone. The scalar fields mirror the first
+/// dimension and scalar element for the existing one-dimensional execution
+/// path; new code should use dimensions and element_types.
 struct VhdlArrayInfo {
   std::string index_subtype;
   SourceSpan index_span;
@@ -261,6 +274,10 @@ struct VhdlArrayInfo {
   SourceSpan element_span;
   ValueDomain element_domain{ValueDomain::Unknown};
   bool unconstrained{};
+  std::vector<VhdlArrayDimension> dimensions;
+  // Exactly one entry for a retained declaration. Vector-backed recursion
+  // follows PackedMember::nested_types without embedding Type directly.
+  std::vector<Type> element_types;
 };
 
 enum class SystemVerilogContainerKind {
@@ -362,6 +379,10 @@ struct Type {
   // resolved from one. The packed range above is the concrete object
   // constraint; this metadata preserves nominal array semantics.
   std::optional<VhdlArrayInfo> vhdl_array;
+  // Source-ordered constraints on a named VHDL array subtype indication.
+  // One-dimensional executable views also mirror their sole entry through
+  // packed_range_expression for compatibility with the existing packed path.
+  std::vector<DiscreteRangeExpression> vhdl_array_constraints;
   // Present only for a SystemVerilog dynamic array, queue, or associative
   // array. All scalar fields above describe one element, not the container.
   std::optional<SystemVerilogContainerInfo> systemverilog_container;
@@ -689,18 +710,39 @@ struct ParameterDeclaration {
       Type parameter_type,
       Expression parameter_default,
       bool parameter_local,
+      SourceSpan parameter_span)
+      : name(std::move(parameter_name)),
+        type(std::move(parameter_type)),
+        default_value(std::move(parameter_default)),
+        local(parameter_local),
+        span(std::move(parameter_span)) {}
+
+  ParameterDeclaration(
+      std::string parameter_name,
+      Type parameter_type,
+      Expression parameter_default,
+      bool parameter_local,
       SourceSpan parameter_span,
-      ParameterKind parameter_kind = ParameterKind::Value,
-      std::optional<Type> parameter_default_type = std::nullopt,
-      std::optional<InterfaceFunctionProfile>
-          parameter_function_profile = std::nullopt,
-      std::optional<InterfaceProcedureProfile>
-          parameter_procedure_profile = std::nullopt,
-      std::optional<InterfacePackageProfile>
-          parameter_package_profile = std::nullopt,
-      InterfaceObjectClass parameter_object_class =
-          InterfaceObjectClass::Constant,
-      PortDirection parameter_direction = PortDirection::Input)
+      ParameterKind parameter_kind,
+      std::optional<Type> parameter_default_type)
+      : name(std::move(parameter_name)),
+        type(std::move(parameter_type)),
+        default_value(std::move(parameter_default)),
+        local(parameter_local),
+        span(std::move(parameter_span)),
+        kind(parameter_kind),
+        default_type(std::move(parameter_default_type)) {}
+
+  ParameterDeclaration(
+      std::string parameter_name,
+      Type parameter_type,
+      Expression parameter_default,
+      bool parameter_local,
+      SourceSpan parameter_span,
+      ParameterKind parameter_kind,
+      std::optional<Type> parameter_default_type,
+      InterfaceObjectClass parameter_object_class,
+      PortDirection parameter_direction)
       : name(std::move(parameter_name)),
         type(std::move(parameter_type)),
         default_value(std::move(parameter_default)),
@@ -708,9 +750,6 @@ struct ParameterDeclaration {
         span(std::move(parameter_span)),
         kind(parameter_kind),
         default_type(std::move(parameter_default_type)),
-        function_profile(std::move(parameter_function_profile)),
-        procedure_profile(std::move(parameter_procedure_profile)),
-        package_profile(std::move(parameter_package_profile)),
         object_class(parameter_object_class),
         direction(parameter_direction) {}
 };

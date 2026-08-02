@@ -1308,6 +1308,30 @@ end architecture;
     assert(
         has_diagnostic(
             invalid_array_design, "FSIM-ELAB-BIND-056"));
+
+    const auto retained_multidimensional =
+        fsim::frontend::parse_text(
+            "retained_multidimensional.vhd",
+            R"(
+entity Retained_Multidimensional is
+end entity;
+architecture rtl of Retained_Multidimensional is
+  type Matrix_T is array (0 to 1, 3 downto 1) of bit;
+  signal Matrix : Matrix_T;
+begin
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(retained_multidimensional.ok());
+    const auto retained_multidimensional_design =
+        fsim::elaboration::elaborate(
+            retained_multidimensional.design,
+            "vhdl:work.retained_multidimensional(rtl)");
+    assert(
+        !retained_multidimensional_design.ok()
+        && has_diagnostic(
+            retained_multidimensional_design,
+            "FSIM-ELAB-VHARRAY-008"));
     assert(
         has_diagnostic(
             invalid_array_design,

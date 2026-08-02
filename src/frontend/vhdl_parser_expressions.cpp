@@ -208,18 +208,28 @@ Expression VhdlParser::parse_primary() {
                 "named actual");
           }
           auto argument = parse_expression();
-          if (arguments.empty() && argument_name.empty()
-              && (match_keyword("downto", true)
-                  || match_keyword("to", true))) {
+          if (argument_name.empty()
+              && (keyword("downto", 0, true)
+                  || keyword("to", 0, true))) {
+            const auto first_span = argument.span;
+            advance();
             const auto direction = previous();
             auto second = parse_expression();
-            expect(TokenKind::RightParen, "')' after slice",
-                   "FSIM-VHDL-PARSE-033");
-            return Expression{
-                ExpressionKind::Slice,
+            if (arguments.empty()
+                && at(TokenKind::RightParen)) {
+              expect(TokenKind::RightParen, "')' after slice",
+                     "FSIM-VHDL-PARSE-033");
+              return Expression{
+                  ExpressionKind::Slice,
+                  detail::ascii_lower(direction.text),
+                  {base, std::move(argument), std::move(second)},
+                  cover(name.span, previous().span)};
+            }
+            argument = Expression{
+                ExpressionKind::Binary,
                 detail::ascii_lower(direction.text),
-                {base, std::move(argument), std::move(second)},
-                cover(name.span, previous().span)};
+                {std::move(argument), std::move(second)},
+                cover(first_span, previous().span)};
           }
           arguments.push_back(std::move(argument));
           argument_names.push_back(std::move(argument_name));

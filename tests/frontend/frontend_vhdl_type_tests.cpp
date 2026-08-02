@@ -490,12 +490,149 @@ end architecture;
               == "downto",
       "range and others array aggregate choices retain direction and order");
 
+  const auto retained = parse_text(
+      "multidimensional_array_types.vhd",
+      R"(
+package Composite_Arrays is
+  type Matrix_T is array
+    (natural range <>, 3 downto 1) of bit;
+  type Packed_Rows_T is array (0 to 1)
+    of bit_vector(3 downto 0);
+  type Row_T is array (natural range <>) of bit;
+  type Nested_Rows_T is array (0 to 1) of Row_T;
+  function Read_Cell(
+    Value : Matrix_T;
+    Row : integer;
+    Column : integer) return bit;
+  procedure Copy_Rows(
+    Value : in Packed_Rows_T;
+    Result : out Packed_Rows_T);
+end package;
+
+use work.composite_arrays.all;
+entity Composite_Endpoint is
+  port (
+    Matrix : in Matrix_T(0 to 1, 3 downto 1);
+    Packed_Rows : out Packed_Rows_T
+  );
+end entity;
+
+use work.composite_arrays.all;
+architecture rtl of Composite_Endpoint is
+  signal Local_Matrix : Matrix_T(0 to 1, 3 downto 1);
+begin
+  retain_forms : process
+    variable Nested : Packed_Rows_T :=
+      ((0 => '1', others => '0'),
+       (3 downto 2 => '1', others => '0'));
+    variable Cell : bit;
+    variable Pair : bit_vector(1 downto 0);
+  begin
+    Cell := Local_Matrix(1, 2);
+    Pair := Local_Matrix(1, 3 downto 2);
+    Packed_Rows <= Nested;
+    wait;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      retained.ok(),
+      "multidimensional and composite-array syntax remains in typed HIR");
+  const auto* composite_package = retained.design.find(
+      UnitKind::VhdlPackage, "composite_arrays");
+  require(
+      composite_package != nullptr
+          && composite_package->type_aliases.size() == 4
+          && composite_package->functions.size() == 1
+          && composite_package->functions[0].arguments.size() == 3
+          && composite_package->functions[0]
+                 .arguments[0].type.named_type
+              == "matrix_t"
+          && composite_package->functions[0]
+                 .return_type.domain
+              == ValueDomain::Bit2
+          && composite_package->procedures.size() == 1
+          && composite_package->procedures[0].arguments.size() == 2
+          && composite_package->procedures[0]
+                 .arguments[1].type.named_type
+              == "packed_rows_t",
+      "array declarations and callable boundaries are retained");
+  const auto& matrix = composite_package->type_aliases[0].type;
+  require(
+      matrix.vhdl_array
+          && matrix.vhdl_array->dimensions.size() == 2
+          && matrix.vhdl_array->dimensions[0].index_subtype
+              == "natural"
+          && matrix.vhdl_array->dimensions[0].unconstrained
+          && matrix.vhdl_array->dimensions[1].constraint
+          && matrix.vhdl_array->dimensions[1]
+                 .constraint->descending
+          && matrix.vhdl_array->dimensions[1]
+                 .constraint->span.source_name
+              == "multidimensional_array_types.vhd"
+          && matrix.vhdl_array->element_types.size() == 1
+          && matrix.vhdl_array->element_types[0].domain
+              == ValueDomain::Bit2
+          && !matrix.width(),
+      "array HIR retains ordered dimensions and the complete element type");
+  const auto& packed_rows =
+      composite_package->type_aliases[1].type;
+  require(
+      packed_rows.vhdl_array
+          && packed_rows.vhdl_array->element_types.size() == 1
+          && packed_rows.vhdl_array->element_types[0].packed_range
+          && packed_rows.vhdl_array->element_types[0].width() == 4
+          && !packed_rows.width(),
+      "direct composite elements retain their packed subtype separately");
+  const auto& nested_rows =
+      composite_package->type_aliases[3].type;
+  require(
+      nested_rows.vhdl_array
+          && nested_rows.vhdl_array->element_types.size() == 1
+          && nested_rows.vhdl_array->element_types[0].named_type
+              == "row_t",
+      "nested array elements retain their unresolved nominal type");
+  const auto* composite_entity = retained.design.find(
+      UnitKind::VhdlEntity, "composite_endpoint");
+  require(
+      composite_entity != nullptr
+          && composite_entity->ports.size() == 2
+          && composite_entity->ports[0]
+                 .type.vhdl_array_constraints.size()
+              == 2
+          && composite_entity->ports[0]
+                 .type.vhdl_array_constraints[1].descending,
+      "multidimensional port constraints retain ordered ranges");
+  const auto& composite_architecture =
+      retained.design.units.back();
+  require(
+      composite_architecture.signals.size() == 1
+          && composite_architecture.signals[0]
+                 .type.vhdl_array_constraints.size()
+              == 2
+          && composite_architecture.processes.size() == 1
+          && composite_architecture.processes[0].variables[0]
+                 .initializer->kind
+              == ExpressionKind::Aggregate
+          && composite_architecture.processes[0].statements[0]
+                 .value.kind
+              == ExpressionKind::Call
+          && composite_architecture.processes[0].statements[0]
+                 .value.operands.size()
+              == 2
+          && composite_architecture.processes[0].statements[1]
+                 .value.operands[1].kind
+              == ExpressionKind::Binary
+          && composite_architecture.processes[0].statements[1]
+                 .value.operands[1].text
+              == "downto",
+      "objects, nested aggregates, indices, and subarray slices retain HIR");
+
   const auto rejected = parse_text(
-      "invalid_array_types.vhd",
+      "invalid_array_index_type.vhd",
       R"(
 package Invalid_Arrays is
-  type Matrix_T is array (0 to 1, 0 to 1) of bit;
-  type Composite_T is array (0 to 1) of bit_vector(1 downto 0);
   type Bad_Index_T is array (boolean range <>) of bit;
 end package;
 )",
@@ -508,9 +645,8 @@ end package;
                    return diagnostic.code
                        == "FSIM-VHDL-UNSUPPORTED-027";
                  })
-              >= 3,
-      "multidimensional, composite-element, and invalid-index arrays are "
-      "targeted rather than silently accepted");
+              == 1,
+      "unsupported noninteger array index subtypes remain targeted");
 
   const auto invalid_aggregates = parse_text(
       "invalid_array_aggregates.vhd",

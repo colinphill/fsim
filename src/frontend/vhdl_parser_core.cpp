@@ -700,9 +700,6 @@ void VhdlParser::parse_vhdl_generics(
               span_from(name, previous()),
               ParameterKind::Value,
               std::nullopt,
-              std::nullopt,
-              std::nullopt,
-              std::nullopt,
               object_class,
               direction},
           name);
@@ -922,29 +919,52 @@ Type VhdlParser::parse_vhdl_type(
           "an integer subtype constraint uses 'range', not a packed "
           "parenthesized range");
     }
-    auto left_expression = parse_expression();
-    bool descending = true;
-    if (match_keyword("downto", true)) {
-      descending = true;
-    } else if (match_keyword("to", true)) {
-      descending = false;
-    } else {
-      error(current(), "FSIM-VHDL-PARSE-009",
-            "only locally static integer ranges are supported here");
-    }
-    auto right_expression = parse_expression();
+    do {
+      const auto constraint_start = current().span;
+      auto left_expression = parse_expression();
+      bool descending = true;
+      if (match_keyword("downto", true)) {
+        descending = true;
+      } else if (match_keyword("to", true)) {
+        descending = false;
+      } else {
+        error(current(), "FSIM-VHDL-PARSE-009",
+              "only discrete ranges are supported in a VHDL array "
+              "constraint");
+      }
+      auto right_expression = parse_expression();
+      type.vhdl_array_constraints.push_back(
+          DiscreteRangeExpression{
+              std::move(left_expression),
+              std::move(right_expression),
+              cover(constraint_start, previous().span),
+              descending});
+    } while (match(TokenKind::Comma));
     expect(TokenKind::RightParen, "')' after range",
            "FSIM-VHDL-PARSE-010");
-    const auto left = simple_integer_constant(left_expression);
-    const auto right = simple_integer_constant(right_expression);
-    if (left && right) {
-      type.packed_range = PackedRange{*left, *right, descending};
+    if (type.vhdl_array_constraints.size() > 1
+        && type.domain != ValueDomain::Unknown) {
+      error(
+          range_start,
+          "FSIM-VHDL-UNSUPPORTED-027",
+          "a built-in scalar or vector subtype cannot have multiple "
+          "array constraints");
     }
-    type.packed_range_expression = PackedRangeExpression{
-        std::move(left_expression),
-        std::move(right_expression),
-        cover(range_start.span, previous().span),
-        descending};
+    if (type.vhdl_array_constraints.size() == 1) {
+      const auto& constraint =
+          type.vhdl_array_constraints.front();
+      const auto left = simple_integer_constant(constraint.left);
+      const auto right = simple_integer_constant(constraint.right);
+      if (left && right) {
+        type.packed_range = PackedRange{
+            *left, *right, constraint.descending};
+      }
+      type.packed_range_expression = PackedRangeExpression{
+          constraint.left,
+          constraint.right,
+          cover(range_start.span, previous().span),
+          constraint.descending};
+    }
   }
   return type;
 }

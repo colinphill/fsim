@@ -24,6 +24,17 @@ silently discarded.
 | Preprocessing/directives | Quoted and angle includes, manifest/CLI definitions, object/function macros with default arguments, multiline replacement, argument substitution, token concatenation/stringification, `__FILE__`/`__LINE__`, `undef`, nested conditional compilation, logical `` `line`` source remapping, legal `` `timescale``, `` `default_nettype``, reset/cell/keyword-version/unconnected-drive state, and ordered `file`/`source-set`/`combined` policies | Included units and macro-selected executable source enter the normal frontend; active `` `line`` mappings reach parser diagnostics, macro ancestry, DesignIR/SimIR debug points, report callbacks, and LLVM objects while physical ownership remains in analysis/native cache provenance; mappings reset for includes and compilation-unit roots; source-set/combined roots otherwise share macro, conditional, and parser directive state while retaining library ownership; scalar implicit nets and default port net types honor `` `default_nettype``; cell metadata and omitted-input pulls reach DesignIR/runtime; time directives and declarations scale exact delays and contribute to `auto` resolution; ordered snapshots participate in cache identity | Standardized pragma behavior, multi-driver wired-net resolution, and complete trireg charge semantics remain incomplete; unsupported directives receive targeted errors |
 | SystemC | C++ compatibility header, versioned plug-in entry point, typed factories, and peer mixed-language hierarchy | Common signals/ports/exports/events/channels, native and foreign children, lifecycle callbacks, `SC_METHOD`, and Boost.Context-backed `SC_THREAD`/`SC_CTHREAD` timed/event/static waits execute on the deterministic common kernel | Arbitrary custom-interface metadata, dynamic processes, thread reset/kill, TLM/AMS/CCI, and Accellera ABI compatibility remain unsupported |
 
+Batch 116 parser-retention status update: VHDL array declarations now retain
+every ordered `integer`/`natural`/`positive` index subtype and constraint,
+including mixed constrained/unconstrained dimensions, plus the complete direct
+or named composite element type. Named subtype indications preserve all
+multidimensional constraints on objects and ports. Nested aggregates,
+multi-index names, subarray-slice operands, and array-typed function/procedure
+boundaries remain source-spanned in typed HIR. This is not yet an executable
+claim: multidimensional types reaching elaboration receive
+`FSIM-ELAB-VHARRAY-008` until Batch 116 constructs their concrete layout, and
+noninteger index subtypes remain outside the retained subset.
+
 Batch 114 generated-type status update: the VHDL unit row's earlier
 generate-local subtype and generated-type exclusions are superseded. Selected
 `if`/`else`, iterative, and labeled `case` alternatives retain bounded array,

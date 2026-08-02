@@ -259,16 +259,30 @@ using namespace elaboration_detail;
                          ->associative_index_type)) {
                 return false;
             }
-            if (type.vhdl_array
-                && !type.vhdl_array->element_named_type.empty()) {
+            if (type.vhdl_array) {
+                if (type.vhdl_array->dimensions.size() > 1) {
+                    report(
+                        "FSIM-ELAB-VHARRAY-008",
+                        "VHDL array type '" + type.spelling
+                            + "' retains multiple index dimensions but "
+                              "does not yet have a concrete flattened "
+                              "layout",
+                        type.vhdl_array->dimensions[1].index_span);
+                    return false;
+                }
                 frontend::Type element;
-                element.spelling =
-                    type.vhdl_array->element_spelling;
-                element.named_type =
-                    type.vhdl_array->element_named_type;
-                element.named_type_span =
-                    type.vhdl_array->element_span;
-                if (!resolve_type(element)) {
+                if (!type.vhdl_array->element_types.empty()) {
+                    element = type.vhdl_array->element_types.front();
+                } else {
+                    element.spelling =
+                        type.vhdl_array->element_spelling;
+                    element.named_type =
+                        type.vhdl_array->element_named_type;
+                    element.named_type_span =
+                        type.vhdl_array->element_span;
+                }
+                if (!element.named_type.empty()
+                    && !resolve_type(element)) {
                     return false;
                 }
                 const auto width = element.width();
@@ -293,6 +307,8 @@ using namespace elaboration_detail;
                 type.vhdl_array->element_spelling =
                     element.spelling;
                 type.vhdl_array->element_named_type.clear();
+                type.vhdl_array->element_types.assign(
+                    1, element);
                 type.domain = element.domain;
                 // Resolve packed array elements independently.
                 if (!element.vhdl_resolution_function.empty()) {

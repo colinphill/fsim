@@ -6725,10 +6725,10 @@ cataloged and all 357 authored sources pass the 2,000-line gate. All ten Batch
 
 The current ten implementation tasks are:
 
-1. **In progress.** Audit and retain multidimensional and composite-element array declarations,
+1. **Complete.** Audit and retain multidimensional and composite-element array declarations,
    constraints, objects, aggregates, selections, ports, and callable boundaries
    in typed HIR with exact spans and targeted diagnostics.
-2. **Pending.** Complete type/subtype layout for multidimensional and composite arrays,
+2. **In progress.** Complete type/subtype layout for multidimensional and composite arrays,
    preserving every index range, direction, null range, element subtype, nominal
    identity, and deterministic flattened storage mapping.
 3. **Pending.** Complete contextual array aggregates with positional, named, discrete-range,
@@ -6758,6 +6758,22 @@ The current ten implementation tasks are:
 Batch status is **in progress**. Keep this exact ten-task list current in both
 the official plan and resume handoff. Change it to complete only after all ten
 tasks and their gates close and work moves to Batch 117.
+
+Task 1 is focused-complete. Typed HIR now retains every source-ordered
+integer-family array dimension, mixed constrained/unconstrained ranges, the
+complete direct or named composite element type, and multidimensional subtype
+constraints on objects and ports. Nested aggregates, multi-index reads,
+subarray-slice operands, and array-typed function/procedure boundaries retain
+their exact expression and source-span structure. Existing one-dimensional
+execution reads a compatibility mirror of the first dimension, while
+`FSIM-ELAB-VHARRAY-008` rejects a retained multidimensional type before layout
+construction. The richer recursive Type layout exposed and repaired an O3 GCC
+optional-profile constructor false positive without a warning suppression.
+Final frontend/catalog/source/elaboration/type-generic/component/array/scoped-
+locals gates pass in 3.18/3.05 seconds for Debug/Release, with scoped locals
+at 0.86/0.83 seconds. All 1,473 diagnostics are cataloged and all 357 authored
+sources remain within the 2,000-line gate. Batch 116 remains **in progress**
+with Task 2 current and Tasks 3 through 10 pending.
 
 ## Forward language-closure feature batches
 
