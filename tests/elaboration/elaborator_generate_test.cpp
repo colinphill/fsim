@@ -354,11 +354,46 @@ begin
   chosen: if enabled generate
     subtype generated_word_t is unsigned(3 downto 0);
     signal generated_value : generated_word_t;
+    signal mapped_value : generated_word_t;
+    function adjust(value : generated_word_t)
+      return generated_word_t;
+    function adjust(value : generated_word_t)
+      return generated_word_t is
+    begin
+      return value + 1;
+    end function adjust;
+    procedure drive(
+      variable target : out generated_word_t;
+      value : generated_word_t);
+    procedure drive(
+      variable target : out generated_word_t;
+      value : generated_word_t) is
+    begin
+      target := adjust(value);
+    end procedure drive;
+    generic (amount : natural := 0)
+    function shifted(value : generated_word_t)
+      return generated_word_t is
+    begin
+      return adjust(value) + amount;
+    end function shifted;
+    function mapped_shift is new shifted
+      generic map (amount => 0);
+    generic (amount : natural := 0)
+    procedure shifted_drive(
+      variable target : out generated_word_t;
+      value : generated_word_t) is
+    begin
+      drive(target, value + amount);
+    end procedure shifted_drive;
+    procedure mapped_drive is new shifted_drive
+      generic map (amount => 0);
   begin
     generated_value <= 6;
+    mapped_value <= mapped_shift(generated_value);
     worker: process(generated_value)
     begin
-      observed <= generated_value + 1;
+      mapped_drive(observed, generated_value);
     end process;
   else generate
     observed <= 1;
@@ -636,6 +671,75 @@ begin
     signal early_value : later_t;
     subtype later_t is bit;
   begin
+  end generate selected;
+end architecture;
+
+entity generated_vhdl_duplicate_callable is
+  port (observed : out integer);
+end entity;
+architecture rtl of generated_vhdl_duplicate_callable is
+begin
+  selected: if true generate
+    function adjust(value : integer) return integer is
+    begin
+      return value + 1;
+    end function adjust;
+    function adjust(value : integer) return integer is
+    begin
+      return value + 2;
+    end function adjust;
+    procedure drive(variable value : out integer) is
+    begin
+      value := 1;
+    end procedure drive;
+    procedure drive(variable value : out integer) is
+    begin
+      value := 2;
+    end procedure drive;
+  begin
+    worker: process
+    begin
+      observed <= adjust(0);
+      drive(observed);
+      wait;
+    end process;
+  end generate selected;
+end architecture;
+
+entity generated_vhdl_forward_callable is
+  port (observed : out integer);
+end entity;
+architecture rtl of generated_vhdl_forward_callable is
+begin
+  selected: if true generate
+    function early(value : integer) return integer is
+    begin
+      return later(value);
+    end function early;
+    function later(value : integer) return integer is
+    begin
+      return value + 1;
+    end function later;
+  begin
+    observed <= early(1);
+  end generate selected;
+end architecture;
+
+entity generated_vhdl_forward_generic_callable is
+  port (observed : out integer);
+end entity;
+architecture rtl of generated_vhdl_forward_generic_callable is
+begin
+  selected: if true generate
+    function mapped is new later
+      generic map (amount => 1);
+    generic (amount : natural := 0)
+    function later(value : integer) return integer is
+    begin
+      return value + amount;
+    end function later;
+  begin
+    observed <= mapped(1);
   end generate selected;
 end architecture;
 )",
@@ -1022,8 +1126,13 @@ end architecture;
     const auto generated_vhdl_local =
         generated_vhdl_behavior.design->find_signal(
             "chosen.generated_value");
-    assert(generated_vhdl_observed && generated_vhdl_local);
-    assert(generated_vhdl_behavior.design->processes().size() == 2);
+    const auto generated_vhdl_mapped =
+        generated_vhdl_behavior.design->find_signal(
+            "chosen.mapped_value");
+    assert(
+        generated_vhdl_observed && generated_vhdl_local
+        && generated_vhdl_mapped);
+    assert(generated_vhdl_behavior.design->processes().size() == 3);
     auto generated_vhdl_behavior_interpreter =
         generated_vhdl_behavior.design->create_interpreter();
     assert(
@@ -1037,6 +1146,11 @@ end architecture;
     assert(
         generated_vhdl_behavior_interpreter
             ->signal_value(*generated_vhdl_observed)
+            .to_msb_string()
+        == "0111");
+    assert(
+        generated_vhdl_behavior_interpreter
+            ->signal_value(*generated_vhdl_mapped)
             .to_msb_string()
         == "0111");
 
@@ -1464,6 +1578,33 @@ end architecture;
     assert(!forward_generated_type.ok());
     assert(has_diagnostic(
         forward_generated_type, "FSIM-ELAB-VHTYPE-001"));
+
+    const auto duplicate_generated_callable =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_duplicate_callable(rtl)");
+    assert(!duplicate_generated_callable.ok());
+    assert(has_diagnostic(
+        duplicate_generated_callable, "FSIM-ELAB-VHOVER-003"));
+    assert(has_diagnostic(
+        duplicate_generated_callable, "FSIM-ELAB-VHOVER-006"));
+
+    const auto forward_generated_callable =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_forward_callable(rtl)");
+    assert(!forward_generated_callable.ok());
+    assert(has_diagnostic(
+        forward_generated_callable, "FSIM-ELAB-VHNAME-001"));
+
+    const auto forward_generated_generic_callable =
+        fsim::elaboration::elaborate(
+            generated_design,
+            "vhdl:work.generated_vhdl_forward_generic_callable(rtl)");
+    assert(!forward_generated_generic_callable.ok());
+    assert(has_diagnostic(
+        forward_generated_generic_callable,
+        "FSIM-ELAB-VHGSUB-001"));
 
     auto unevaluable_generate_design = generated_design;
     const auto unevaluable_unit = std::find_if(

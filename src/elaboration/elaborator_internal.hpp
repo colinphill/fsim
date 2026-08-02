@@ -429,6 +429,9 @@ void visit_statement_types(
 template <typename Body, typename Visitor>
 void visit_generate_body_types(
     Body& body, Visitor& visitor) {
+    for (auto& alias : body.type_aliases) {
+        visitor(alias.type);
+    }
     for (auto& constant : body.constants) {
         visitor(constant.type);
     }
@@ -465,6 +468,49 @@ void visit_generate_body_types(
             visitor(variable.type);
         }
         visit_statement_types(procedure.statements, visitor);
+    }
+    const auto visit_generic_parameters =
+        [&](auto& parameters) {
+          for (auto& parameter : parameters) {
+              visitor(parameter.type);
+              if (parameter.default_type) {
+                  visitor(*parameter.default_type);
+              }
+              if (parameter.function_profile) {
+                  visitor(parameter.function_profile->return_type);
+                  for (auto& argument :
+                       parameter.function_profile->arguments) {
+                      visitor(argument.type);
+                  }
+              }
+              if (parameter.procedure_profile) {
+                  for (auto& argument :
+                       parameter.procedure_profile->arguments) {
+                      visitor(argument.type);
+                  }
+              }
+          }
+        };
+    for (auto& generic : body.generic_function_templates) {
+        visit_generic_parameters(generic.generic_parameters);
+        visitor(generic.function.return_type);
+        for (auto& argument : generic.function.arguments) {
+            visitor(argument.type);
+        }
+        for (auto& variable : generic.function.variables) {
+            visitor(variable.type);
+        }
+        visit_statement_types(generic.function.statements, visitor);
+    }
+    for (auto& generic : body.generic_procedure_templates) {
+        visit_generic_parameters(generic.generic_parameters);
+        for (auto& argument : generic.procedure.arguments) {
+            visitor(argument.type);
+        }
+        for (auto& variable : generic.procedure.variables) {
+            visitor(variable.type);
+        }
+        visit_statement_types(generic.procedure.statements, visitor);
     }
     for (auto& component :
          body.vhdl_component_declarations) {

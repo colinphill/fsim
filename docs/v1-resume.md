@@ -16,14 +16,15 @@ as work lands. Before moving on, retain that batch's list, mark it
 
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: pushed Batch 114 generate-declarative-part support
-  at parent commit `c26690f`. The Task 5 generated-type checkpoint is this
-  document's containing commit: it adds declaration-ordered visibility,
-  specialized per-iteration constraints, and scope-qualified nominal source
-  provenance. Tasks 1 through 5 are focused-complete and Task 6 is current.
+- Implementation baseline: pushed Batch 114 generated-type support at parent
+  commit `fdffaff`. The Task 6 generated-callable checkpoint is this document's
+  containing commit: it adds scoped ordinary function/procedure declaration
+  bodies plus bounded generic templates/instances, source-order visibility,
+  and cache-edit identity. Tasks 1 through 6 are focused-complete and Task 7
+  is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 345 authored C/C++ source, header,
+- The source-size refactor is complete: all 346 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 115-alternative
@@ -54,7 +55,7 @@ as work lands. Before moving on, retain that batch's list, mark it
   seconds, files in 2.11/0.68 seconds, containers in 375.83/99.00 seconds, and
   the monolithic application in 40.66/14.10 seconds. Debug aggregate/
   multidimensional execution completed in 2.03 seconds.
-- The diagnostic catalog covers all 1,446 production codes.
+- The diagnostic catalog covers all 1,447 production codes.
 - Batch 111 requires deterministic VHDL semantic analysis in manifest order
   after parallel parsing. Architectures, package bodies, use/context clauses,
   configuration declarations, and explicit entity/configuration bindings now
@@ -1677,9 +1678,9 @@ complete and checkpoint `4af01cd` contains the final implementation slice.
    before `begin`, retaining alternative and iteration scope.
 5. **Complete.** Add generated type/subtype declarations with declaration-order visibility,
    specialized constraints, nominal identity, and source provenance.
-6. **In progress.** Add generated function/procedure declarations, bodies, and bounded
+6. **Complete.** Add generated function/procedure declarations, bodies, and bounded
    instantiations with local overload visibility and scope-qualified identity.
-7. **Pending.** Complete generated constants, signals, aliases, components, package
+7. **In progress.** Complete generated constants, signals, aliases, components, package
    instantiations, nested items, and collision/unsupported-item diagnostics.
 8. **Pending.** Complete architecture/block/generate/process/subprogram local declarative
    regions for bounded constants, types, objects, aliases, packages, and
@@ -1748,6 +1749,23 @@ subtypes unchanged. The final five-test focused gate passes in 15.30 seconds
 with 1,446 production diagnostics and all 345 authored sources within the
 2,000-line limit. Tasks 1 through 5 are focused-complete; Batch 114 remains
 **in progress** with Task 6 current and Tasks 7 through 10 pending.
+
+Task 6 is focused-complete. Selected generate bodies retain ordinary VHDL
+function/procedure declarations, conforming bodies, local overloads,
+value-generic subprogram templates, and `is new` instances. Callable bodies see
+only their own and earlier physical-source designators, while expansion merges
+conforming declaration/body pairs and qualifies ordinary, template, and
+instance names beneath the exact selected scope. A post-expansion bounded
+generic materialization pass produces scoped instance identities and preserves
+source dependencies. Focused negative evidence covers malformed purity,
+duplicate profiles, ordinary forward calls, and forward generic instances. The
+merged interpreter/LLVM O0/O2 application executes both ordinary and generic
+function/procedure paths, proves cold/warm reuse, and changes behavior plus the
+specialization key after one generated generic-map edit. The final five-test
+focused gate passes in 15.66 seconds with 1,447 production diagnostics and all
+346 authored sources within the 2,000-line limit. Tasks 1 through 6 are
+focused-complete; Batch 114 remains **in progress** with Task 7 current and
+Tasks 8 through 10 pending.
 
 Batch 110 has advanced through these validated features:
 

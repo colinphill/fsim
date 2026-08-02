@@ -390,50 +390,57 @@ using namespace elaboration_detail;
             [&](auto& declaration) {
                 (void)resolve_type(declaration.type);
             };
+        const auto resolve_interface_parameter =
+            [&](frontend::ParameterDeclaration& generic) {
+              switch (generic.kind) {
+              case frontend::ParameterKind::Type:
+                  if (generic.default_type) {
+                      (void)resolve_type(*generic.default_type);
+                  }
+                  active_interface_type_formals.insert(
+                      generic.name);
+                  break;
+              case frontend::ParameterKind::Function:
+                  if (generic.function_profile) {
+                      (void)resolve_type(
+                          generic.function_profile->return_type);
+                      for (auto& argument :
+                           generic.function_profile->arguments) {
+                          (void)resolve_type(argument.type);
+                      }
+                  }
+                  break;
+              case frontend::ParameterKind::Procedure:
+                  if (generic.procedure_profile) {
+                      for (auto& argument :
+                           generic.procedure_profile->arguments) {
+                          (void)resolve_type(argument.type);
+                      }
+                  }
+                  break;
+              case frontend::ParameterKind::Package:
+                  if (generic.package_profile) {
+                      for (auto& actual :
+                           generic.package_profile->generic_map) {
+                          if (actual.type_value) {
+                              (void)resolve_type(*actual.type_value);
+                          }
+                      }
+                  }
+                  active_interface_package_formals.insert(
+                      generic.name);
+                  break;
+              case frontend::ParameterKind::Value:
+                  (void)resolve_type(generic.type);
+                  break;
+              }
+            };
         const auto resolve_component =
             [&](frontend::VhdlComponentDeclaration& component) {
                 active_interface_type_formals.clear();
                 active_interface_package_formals.clear();
                 for (auto& generic : component.generics) {
-                    switch (generic.kind) {
-                    case frontend::ParameterKind::Type:
-                        active_interface_type_formals.insert(
-                            generic.name);
-                        break;
-                    case frontend::ParameterKind::Function:
-                        if (generic.function_profile) {
-                            (void)resolve_type(
-                                generic.function_profile->return_type);
-                            for (auto& argument :
-                                 generic.function_profile->arguments) {
-                                (void)resolve_type(argument.type);
-                            }
-                        }
-                        break;
-                    case frontend::ParameterKind::Procedure:
-                        if (generic.procedure_profile) {
-                            for (auto& argument :
-                                 generic.procedure_profile->arguments) {
-                                (void)resolve_type(argument.type);
-                            }
-                        }
-                        break;
-                    case frontend::ParameterKind::Package:
-                        if (generic.package_profile) {
-                            for (auto& actual :
-                                 generic.package_profile->generic_map) {
-                                if (actual.type_value) {
-                                    (void)resolve_type(*actual.type_value);
-                                }
-                            }
-                        }
-                        active_interface_package_formals.insert(
-                            generic.name);
-                        break;
-                    case frontend::ParameterKind::Value:
-                        (void)resolve_type(generic.type);
-                        break;
-                    }
+                    resolve_interface_parameter(generic);
                 }
                 for (auto& port : component.ports) {
                     (void)resolve_type(port.type);
@@ -480,6 +487,8 @@ using namespace elaboration_detail;
                     Function,
                     Task,
                     Procedure,
+                    GenericFunction,
+                    GenericProcedure,
                 };
                 struct OrderedDeclaration {
                     std::size_t offset{};
@@ -517,6 +526,12 @@ using namespace elaboration_detail;
                     body.tasks, DeclarationKind::Task);
                 append_declarations(
                     body.procedures, DeclarationKind::Procedure);
+                append_declarations(
+                    body.generic_function_templates,
+                    DeclarationKind::GenericFunction);
+                append_declarations(
+                    body.generic_procedure_templates,
+                    DeclarationKind::GenericProcedure);
                 std::ranges::stable_sort(
                     declarations, {}, &OrderedDeclaration::offset);
                 for (const auto& declaration : declarations) {
@@ -586,6 +601,49 @@ using namespace elaboration_detail;
                             resolve_declaration(variable);
                         }
                         resolve_statements(procedure.statements);
+                        break;
+                    }
+                    case DeclarationKind::GenericFunction: {
+                        auto& generic =
+                            body.generic_function_templates[
+                                declaration.index];
+                        active_interface_type_formals.clear();
+                        active_interface_package_formals.clear();
+                        for (auto& parameter : generic.generic_parameters) {
+                            resolve_interface_parameter(parameter);
+                        }
+                        auto& function = generic.function;
+                        (void)resolve_type(function.return_type);
+                        for (auto& argument : function.arguments) {
+                            (void)resolve_type(argument.type);
+                        }
+                        for (auto& variable : function.variables) {
+                            resolve_declaration(variable);
+                        }
+                        resolve_statements(function.statements);
+                        active_interface_type_formals.clear();
+                        active_interface_package_formals.clear();
+                        break;
+                    }
+                    case DeclarationKind::GenericProcedure: {
+                        auto& generic =
+                            body.generic_procedure_templates[
+                                declaration.index];
+                        active_interface_type_formals.clear();
+                        active_interface_package_formals.clear();
+                        for (auto& parameter : generic.generic_parameters) {
+                            resolve_interface_parameter(parameter);
+                        }
+                        auto& procedure = generic.procedure;
+                        for (auto& argument : procedure.arguments) {
+                            (void)resolve_type(argument.type);
+                        }
+                        for (auto& variable : procedure.variables) {
+                            resolve_declaration(variable);
+                        }
+                        resolve_statements(procedure.statements);
+                        active_interface_type_formals.clear();
+                        active_interface_package_formals.clear();
                         break;
                     }
                     }

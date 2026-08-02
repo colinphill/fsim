@@ -230,261 +230,6 @@ void substitute_parameters(
         }
     }
 }
-void substitute_parameters(
-    frontend::GenerateBody& body,
-    const ConstantEnvironment& environment,
-    const ConstantDomainEnvironment& domains,
-    const frontend::Language language,
-    std::vector<Diagnostic>& diagnostics) {
-    // Generated bodies retain local constants until a concrete branch or
-    // iteration is selected. Substituting the rest of the body here would
-    // diagnose legitimate constraint references before those declarations
-    // have been evaluated; append_generated_body performs the complete
-    // substitution after establishing the selected-body environment.
-    if (!body.constants.empty()) {
-        return;
-    }
-    for (auto& alias : body.type_aliases) {
-        substitute_parameters(
-            alias.type,
-            environment,
-            domains,
-            diagnostics,
-            language);
-    }
-    for (auto& constant : body.constants) {
-        substitute_parameters(
-            constant.type,
-            environment,
-            domains,
-            diagnostics,
-            language);
-        substitute_parameters(
-            constant.default_value,
-            environment,
-            domains,
-            language);
-    }
-    for (auto& signal : body.signals) {
-        substitute_parameters(
-            signal,
-            environment,
-            domains,
-            diagnostics,
-            language);
-    }
-    for (auto& alias : body.signal_aliases) {
-        substitute_parameters(
-            alias.type,
-            environment,
-            domains,
-            diagnostics,
-            language);
-    }
-    for (auto& function : body.functions) {
-        substitute_parameters(
-            function.return_type,
-            environment,
-            domains,
-            diagnostics,
-            language);
-        for (auto& argument : function.arguments) {
-            substitute_parameters(
-                argument.type,
-                environment,
-                domains,
-                diagnostics,
-                language);
-            if (argument.default_value) {
-                substitute_parameters(
-                    *argument.default_value,
-                    environment,
-                    domains,
-                    language);
-            }
-        }
-        for (auto& variable : function.variables) {
-            substitute_parameters(
-                variable,
-                environment,
-                domains,
-                diagnostics,
-                language);
-        }
-        substitute_parameters(
-            function.statements,
-            environment,
-            domains,
-            diagnostics,
-            language);
-    }
-    for (auto& task : body.tasks) {
-        for (auto& argument : task.arguments) {
-            substitute_parameters(
-                argument.type,
-                environment,
-                domains,
-                diagnostics,
-                language);
-            if (argument.default_value) {
-                substitute_parameters(
-                    *argument.default_value,
-                    environment,
-                    domains,
-                    language);
-            }
-        }
-        for (auto& variable : task.variables) {
-            substitute_parameters(
-                variable,
-                environment,
-                domains,
-                diagnostics,
-                language);
-        }
-        substitute_parameters(
-            task.statements,
-            environment,
-            domains,
-            diagnostics,
-            language);
-    }
-    for (auto& procedure : body.procedures) {
-        for (auto& argument : procedure.arguments) {
-            substitute_parameters(
-                argument.type,
-                environment,
-                domains,
-                diagnostics,
-                language);
-            if (argument.default_value) {
-                substitute_parameters(
-                    *argument.default_value,
-                    environment,
-                    domains,
-                    language);
-            }
-        }
-        for (auto& variable : procedure.variables) {
-            substitute_parameters(
-                variable, environment, domains, diagnostics, language);
-        }
-        substitute_parameters(
-            procedure.statements,
-            environment,
-            domains,
-            diagnostics,
-            language);
-    }
-    substitute_parameters(
-        body.concurrent_statements,
-        environment,
-        domains,
-        diagnostics,
-        language);
-    for (auto& process : body.processes) {
-        for (auto& variable : process.variables) {
-            substitute_parameters(
-                variable,
-                environment,
-                domains,
-                diagnostics,
-                language);
-        }
-        for (auto& sensitivity : process.sensitivities) {
-            substitute_parameters(
-                sensitivity.expression,
-                environment,
-                domains,
-                language);
-        }
-        substitute_parameters(
-            process.statements,
-            environment,
-            domains,
-            diagnostics,
-            language);
-    }
-    substitute_parameters(
-        body.instances, environment, domains, language);
-    substitute_parameters(
-        body.generate_regions,
-        environment,
-        domains,
-        language,
-        diagnostics);
-}
-void substitute_parameters(
-    std::vector<frontend::GenerateRegion>& generates,
-    const ConstantEnvironment& environment,
-    const ConstantDomainEnvironment& domains,
-    const frontend::Language language,
-    std::vector<Diagnostic>& diagnostics) {
-    for (auto& generate : generates) {
-        for (auto& actual : generate.block_generic_map) {
-            substitute_parameters(
-                actual.value, environment, domains, language);
-        }
-        for (auto& actual : generate.block_port_map) {
-            substitute_parameters(
-                actual.value, environment, domains, language);
-        }
-        substitute_parameters(
-            generate.initial, environment, domains, language);
-        auto body_environment = environment;
-        auto body_domains = domains;
-        if (generate.kind == frontend::GenerateKind::Iterative) {
-            body_environment.erase(generate.variable);
-            body_domains.erase(generate.variable);
-        }
-        substitute_parameters(
-            generate.condition,
-            body_environment,
-            body_domains,
-            language);
-        substitute_parameters(
-            generate.iteration,
-            body_environment,
-            body_domains,
-            language);
-        if (generate.kind != frontend::GenerateKind::Iterative) {
-            substitute_parameters(
-                generate.then_body,
-                body_environment,
-                body_domains,
-                language,
-                diagnostics);
-        }
-        substitute_parameters(
-            generate.else_body,
-            body_environment,
-            body_domains,
-            language,
-            diagnostics);
-        for (auto& alternative : generate.alternatives) {
-            for (auto& choice : alternative.choices) {
-                substitute_parameters(
-                    choice.left,
-                    body_environment,
-                    body_domains,
-                    language);
-                if (choice.right) {
-                    substitute_parameters(
-                        *choice.right,
-                        body_environment,
-                        body_domains,
-                        language);
-                }
-            }
-            substitute_parameters(
-                alternative.body,
-                body_environment,
-                body_domains,
-                language,
-                diagnostics);
-        }
-    }
-}
 void collect_qualified_identifiers(
     const Expression& expression,
     QualifiedIdentifierMap& identifiers) {
@@ -1409,6 +1154,156 @@ void append_generated_body(
     for (auto& alias : body.signal_aliases) {
         scope_vhdl_type(scope_vhdl_type, alias.type);
     }
+    for (auto& function : body.functions) {
+        scope_vhdl_type(scope_vhdl_type, function.return_type);
+        for (auto& argument : function.arguments) {
+            scope_vhdl_type(scope_vhdl_type, argument.type);
+        }
+        for (auto& variable : function.variables) {
+            scope_vhdl_type(scope_vhdl_type, variable.type);
+        }
+    }
+    for (auto& procedure : body.procedures) {
+        for (auto& argument : procedure.arguments) {
+            scope_vhdl_type(scope_vhdl_type, argument.type);
+        }
+        for (auto& variable : procedure.variables) {
+            scope_vhdl_type(scope_vhdl_type, variable.type);
+        }
+    }
+    for (auto& generic : body.generic_function_templates) {
+        scope_vhdl_type(
+            scope_vhdl_type, generic.function.return_type);
+        for (auto& argument : generic.function.arguments) {
+            scope_vhdl_type(scope_vhdl_type, argument.type);
+        }
+        for (auto& variable : generic.function.variables) {
+            scope_vhdl_type(scope_vhdl_type, variable.type);
+        }
+    }
+    for (auto& generic : body.generic_procedure_templates) {
+        for (auto& argument : generic.procedure.arguments) {
+            scope_vhdl_type(scope_vhdl_type, argument.type);
+        }
+        for (auto& variable : generic.procedure.variables) {
+            scope_vhdl_type(scope_vhdl_type, variable.type);
+        }
+    }
+    const auto conforming_type =
+        [](const frontend::Type& left,
+           const frontend::Type& right) {
+          return left.spelling == right.spelling
+              && left.named_type == right.named_type
+              && left.domain == right.domain
+              && left.is_signed == right.is_signed;
+        };
+    std::vector<bool> merged_function_declarations(
+        body.functions.size());
+    for (std::size_t declaration = 0;
+         declaration < body.functions.size(); ++declaration) {
+        const auto& candidate = body.functions[declaration];
+        if (candidate.defined) {
+            continue;
+        }
+        for (std::size_t body_index = declaration + 1;
+             body_index < body.functions.size(); ++body_index) {
+            auto& defined = body.functions[body_index];
+            if (!defined.defined
+                || candidate.name != defined.name
+                || candidate.pure != defined.pure
+                || candidate.arguments.size()
+                    != defined.arguments.size()
+                || !conforming_type(
+                    candidate.return_type, defined.return_type)) {
+                continue;
+            }
+            bool conforming = true;
+            for (std::size_t argument = 0;
+                 argument < candidate.arguments.size(); ++argument) {
+                if (candidate.arguments[argument].direction
+                        != defined.arguments[argument].direction
+                    || !conforming_type(
+                        candidate.arguments[argument].type,
+                        defined.arguments[argument].type)) {
+                    conforming = false;
+                    break;
+                }
+            }
+            if (!conforming) {
+                continue;
+            }
+            for (std::size_t argument = 0;
+                 argument < candidate.arguments.size(); ++argument) {
+                if (!defined.arguments[argument].default_value
+                    && candidate.arguments[argument].default_value) {
+                    defined.arguments[argument].default_value =
+                        candidate.arguments[argument].default_value;
+                }
+            }
+            merged_function_declarations[declaration] = true;
+            break;
+        }
+    }
+    for (std::size_t index = body.functions.size();
+         index != 0; --index) {
+        if (merged_function_declarations[index - 1]) {
+            body.functions.erase(
+                body.functions.begin()
+                + static_cast<std::ptrdiff_t>(index - 1));
+        }
+    }
+    std::vector<bool> merged_procedure_declarations(
+        body.procedures.size());
+    for (std::size_t declaration = 0;
+         declaration < body.procedures.size(); ++declaration) {
+        const auto& candidate = body.procedures[declaration];
+        if (candidate.defined) {
+            continue;
+        }
+        for (std::size_t body_index = declaration + 1;
+             body_index < body.procedures.size(); ++body_index) {
+            auto& defined = body.procedures[body_index];
+            if (!defined.defined
+                || candidate.name != defined.name
+                || candidate.arguments.size()
+                    != defined.arguments.size()) {
+                continue;
+            }
+            bool conforming = true;
+            for (std::size_t argument = 0;
+                 argument < candidate.arguments.size(); ++argument) {
+                const auto& left = candidate.arguments[argument];
+                const auto& right = defined.arguments[argument];
+                if (left.direction != right.direction
+                    || left.object_class != right.object_class
+                    || !conforming_type(left.type, right.type)) {
+                    conforming = false;
+                    break;
+                }
+            }
+            if (!conforming) {
+                continue;
+            }
+            for (std::size_t argument = 0;
+                 argument < candidate.arguments.size(); ++argument) {
+                if (!defined.arguments[argument].default_value
+                    && candidate.arguments[argument].default_value) {
+                    defined.arguments[argument].default_value =
+                        candidate.arguments[argument].default_value;
+                }
+            }
+            merged_procedure_declarations[declaration] = true;
+            break;
+        }
+    }
+    for (std::size_t index = body.procedures.size();
+         index != 0; --index) {
+        if (merged_procedure_declarations[index - 1]) {
+            body.procedures.erase(
+                body.procedures.begin()
+                + static_cast<std::ptrdiff_t>(index - 1));
+        }
+    }
     for (auto& alias : body.type_aliases) {
         const auto local_name = alias.name;
         qualify_generated_type(alias.type, body_names);
@@ -1439,28 +1334,124 @@ void append_generated_body(
         body_names[local_name] = alias.name;
         unit.signal_aliases.push_back(std::move(alias));
     }
-    for (const auto& function : body.functions) {
-        body_names[function.name] = generated_scope(scope, function.name);
+    if (language == frontend::Language::Vhdl2008) {
+        struct CallableDeclaration {
+            std::size_t offset{};
+            bool function{};
+            std::size_t index{};
+        };
+        std::vector<CallableDeclaration> declarations;
+        for (std::size_t index = 0;
+             index < body.functions.size(); ++index) {
+            declarations.push_back({
+                body.functions[index].span.begin.offset,
+                true,
+                index});
+        }
+        for (std::size_t index = 0;
+             index < body.procedures.size(); ++index) {
+            declarations.push_back({
+                body.procedures[index].span.begin.offset,
+                false,
+                index});
+        }
+        std::ranges::stable_sort(
+            declarations, {}, &CallableDeclaration::offset);
+        auto callable_names = body_names;
+        for (const auto& declaration : declarations) {
+            if (declaration.function) {
+                auto& function = body.functions[declaration.index];
+                callable_names[function.name] =
+                    generated_scope(scope, function.name);
+                qualify_generated_function(
+                    function, callable_names, scope);
+            } else {
+                auto& procedure = body.procedures[declaration.index];
+                callable_names[procedure.name] =
+                    generated_scope(scope, procedure.name);
+                qualify_generated_procedure(
+                    procedure, callable_names, scope);
+            }
+        }
+        body_names = std::move(callable_names);
+    } else {
+        for (const auto& function : body.functions) {
+            body_names[function.name] =
+                generated_scope(scope, function.name);
+        }
+        for (const auto& task : body.tasks) {
+            body_names[task.name] =
+                generated_scope(scope, task.name);
+        }
+        for (auto& function : body.functions) {
+            qualify_generated_function(
+                function, body_names, scope);
+        }
+        for (auto& task : body.tasks) {
+            qualify_generated_task(task, body_names, scope);
+        }
     }
-    for (const auto& task : body.tasks) {
-        body_names[task.name] = generated_scope(scope, task.name);
+    for (auto& generic : body.generic_function_templates) {
+        const auto local_name = generic.function.name;
+        body_names[local_name] =
+            generated_scope(scope, local_name);
+        qualify_generated_function(
+            generic.function, body_names, scope);
     }
-    for (const auto& procedure : body.procedures) {
-        body_names[procedure.name] =
-            generated_scope(scope, procedure.name);
+    for (auto& generic : body.generic_procedure_templates) {
+        const auto local_name = generic.procedure.name;
+        body_names[local_name] =
+            generated_scope(scope, local_name);
+        qualify_generated_procedure(
+            generic.procedure, body_names, scope);
     }
+    const auto qualify_generic_instances =
+        [&](auto& instances) {
+          for (auto& instance : instances) {
+              if (const auto found = body_names.find(
+                      instance.template_name);
+                  found != body_names.end()) {
+                  instance.template_name = found->second;
+              }
+              const auto local_name = instance.name;
+              instance.name = generated_scope(scope, local_name);
+              body_names[local_name] = instance.name;
+              for (auto& actual : instance.generic_map) {
+                  qualify_generated_expression(
+                      actual.value, body_names);
+                  if (actual.type_value) {
+                      qualify_generated_type(
+                          *actual.type_value, body_names);
+                  }
+              }
+          }
+        };
+    qualify_generic_instances(body.generic_function_instances);
+    qualify_generic_instances(body.generic_procedure_instances);
     for (auto& function : body.functions) {
-        qualify_generated_function(function, body_names, scope);
         unit.functions.push_back(std::move(function));
     }
     for (auto& task : body.tasks) {
-        qualify_generated_task(task, body_names, scope);
         unit.tasks.push_back(std::move(task));
     }
     for (auto& procedure : body.procedures) {
-        qualify_generated_procedure(
-            procedure, body_names, scope);
         unit.procedures.push_back(std::move(procedure));
+    }
+    for (auto& generic : body.generic_function_templates) {
+        unit.generic_function_templates.push_back(
+            std::move(generic));
+    }
+    for (auto& generic : body.generic_procedure_templates) {
+        unit.generic_procedure_templates.push_back(
+            std::move(generic));
+    }
+    for (auto& instance : body.generic_function_instances) {
+        unit.generic_function_instances.push_back(
+            std::move(instance));
+    }
+    for (auto& instance : body.generic_procedure_instances) {
+        unit.generic_procedure_instances.push_back(
+            std::move(instance));
     }
     for (auto& statement : body.concurrent_statements) {
         if (statement.label == "@vhdl-block-input-driver") {

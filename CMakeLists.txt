@@ -363,6 +363,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/elaborated_design.cpp
       src/elaboration/elaborate.cpp
       src/elaboration/elaboration_analysis.cpp
+      src/elaboration/elaboration_generate_substitution.cpp
       src/elaboration/elaboration_constants.cpp
       src/elaboration/elaboration_literals.cpp
       src/elaboration/elaboration_specialization.cpp

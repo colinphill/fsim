@@ -336,6 +336,69 @@ bool VhdlParser::parse_vhdl_generate_declarations(
           std::move(declarations.type_aliases);
       continue;
     }
+    if (keyword("pure", 0, true)
+        || keyword("impure", 0, true)) {
+      parsed = true;
+      const auto pure = keyword("pure", 0, true);
+      (void)advance();
+      expect_keyword("function", true, "FSIM-VHDL-PARSE-235");
+      body.functions.push_back(
+          parse_vhdl_function(previous(), pure, true));
+      continue;
+    }
+    if (match_keyword("generic", true)) {
+      parsed = true;
+      DesignUnit declarations;
+      declarations.generic_function_templates =
+          std::move(body.generic_function_templates);
+      declarations.generic_procedure_templates =
+          std::move(body.generic_procedure_templates);
+      parse_vhdl_generic_subprogram(
+          declarations, previous(), true);
+      body.generic_function_templates =
+          std::move(declarations.generic_function_templates);
+      body.generic_procedure_templates =
+          std::move(declarations.generic_procedure_templates);
+      continue;
+    }
+    if (match_keyword("function", true)) {
+      parsed = true;
+      DesignUnit declarations;
+      declarations.functions = std::move(body.functions);
+      declarations.procedures = std::move(body.procedures);
+      declarations.generic_function_instances =
+          std::move(body.generic_function_instances);
+      declarations.generic_procedure_instances =
+          std::move(body.generic_procedure_instances);
+      parse_vhdl_function_item(
+          declarations, previous(), true, true);
+      body.functions = std::move(declarations.functions);
+      body.procedures = std::move(declarations.procedures);
+      body.generic_function_instances =
+          std::move(declarations.generic_function_instances);
+      body.generic_procedure_instances =
+          std::move(declarations.generic_procedure_instances);
+      continue;
+    }
+    if (match_keyword("procedure", true)) {
+      parsed = true;
+      DesignUnit declarations;
+      declarations.functions = std::move(body.functions);
+      declarations.procedures = std::move(body.procedures);
+      declarations.generic_function_instances =
+          std::move(body.generic_function_instances);
+      declarations.generic_procedure_instances =
+          std::move(body.generic_procedure_instances);
+      parse_vhdl_procedure_item(
+          declarations, previous(), true);
+      body.functions = std::move(declarations.functions);
+      body.procedures = std::move(declarations.procedures);
+      body.generic_function_instances =
+          std::move(declarations.generic_function_instances);
+      body.generic_procedure_instances =
+          std::move(declarations.generic_procedure_instances);
+      continue;
+    }
     if (match_keyword("component", true)) {
       parsed = true;
       const auto component_start = previous();

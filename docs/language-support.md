@@ -31,8 +31,12 @@ enumeration, record, and subtype declarations before `begin`. Physical-source
 ordering rejects forward type visibility; selected constraints fold prior local
 constants and the concrete loop index. Realized declarations and their object
 types retain exact source provenance plus branch- or iteration-qualified
-nominal identity. Process-local subtype declarations, generated subprograms,
-and the remaining generated declarative families are still pending.
+nominal identity. Generated declarative parts also retain bounded VHDL function
+and procedure declarations/bodies, local overloads, and value-generic
+subprogram templates plus `is new` instances. Calls execute under scoped
+identity with declaration-order visibility, exact generic bindings, and
+cold/warm/edit cache provenance. Process-local subtype declarations and the
+remaining generated declarative families are still pending.
 
 Batch 107 SystemVerilog unit-status update: the Verilog/SV unit row's earlier
 interface and package-export exclusions are superseded. Bounded parameterized

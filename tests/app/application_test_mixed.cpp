@@ -849,11 +849,16 @@ verify_generated_behavior(
     {"selected.generated_value"},
     {"0110", "0101"},
     2);
-verify_generated_behavior(
+const auto generated_callable_baseline = verify_generated_behavior(
     generated_behavior_vhdl_config,
-    {"chosen.generated_value"},
-    {"0111", "0110"},
-    2);
+    {"chosen.generated_value", "chosen.mapped_value"},
+    {"0111", "0110", "0111"},
+    3,
+    0,
+    {{"chosen.mapped_shift",
+      "kind=function;template=chosen.shifted"},
+     {"chosen.mapped_drive",
+      "kind=procedure;template=chosen.shifted_drive"}});
 verify_generated_behavior(
     generated_loop_declarations_vhdl_config,
     {"lanes[2].generated_value"},
@@ -923,6 +928,46 @@ verify_generated_behavior(
     {"1", "1", "1"},
     3,
     1);
+
+std::ifstream generated_callable_source_input(
+    generated_behavior_vhdl_source,
+    std::ios::binary);
+std::string edited_generated_callable_source{
+    std::istreambuf_iterator<char>{generated_callable_source_input},
+    std::istreambuf_iterator<char>{}};
+generated_callable_source_input.close();
+const auto old_callable_map =
+    edited_generated_callable_source.find(
+        "function mapped_shift is new shifted\n"
+        "      generic map (amount => 0)");
+assert(old_callable_map != std::string::npos);
+const auto old_callable_amount =
+    edited_generated_callable_source.find(
+        "amount => 0", old_callable_map);
+assert(old_callable_amount != std::string::npos);
+edited_generated_callable_source.replace(
+    old_callable_amount,
+    std::string_view{"amount => 0"}.size(),
+    "amount => 1");
+std::ofstream generated_callable_source_output(
+    generated_behavior_vhdl_source,
+    std::ios::binary | std::ios::trunc);
+generated_callable_source_output
+    << edited_generated_callable_source;
+generated_callable_source_output.close();
+const auto generated_callable_edited = run_generated_behavior(
+    generated_behavior_vhdl_config,
+    fsim::app::SimulationEngine::compiled,
+    {"chosen.generated_value", "chosen.mapped_value"},
+    {{"chosen.mapped_shift", "generic=amount=1"},
+     {"chosen.mapped_drive", "generic=amount=0"}});
+assert(generated_callable_edited.keys != generated_callable_baseline.keys);
+assert((generated_callable_edited.simulation.final_values
+        == std::vector<std::string>{"0111", "0110", "1000"}));
+#if defined(FSIM_HAS_LLVM)
+assert(generated_callable_edited.simulation.native_cache.hits == 0);
+assert(generated_callable_edited.simulation.native_cache.misses == 1);
+#endif
 
 std::ifstream block_source_input(
     generated_block_behavior_vhdl_source,

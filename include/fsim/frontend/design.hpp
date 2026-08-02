@@ -1207,6 +1207,10 @@ struct GenerateBody {
   std::vector<FunctionDeclaration> functions;
   std::vector<TaskDeclaration> tasks;
   std::vector<ProcedureDeclaration> procedures;
+  std::vector<GenericFunctionTemplate> generic_function_templates;
+  std::vector<GenericProcedureTemplate> generic_procedure_templates;
+  std::vector<GenericSubprogramInstantiation> generic_function_instances;
+  std::vector<GenericSubprogramInstantiation> generic_procedure_instances;
   std::vector<VhdlComponentDeclaration> vhdl_component_declarations;
   std::vector<Statement> concurrent_statements;
   std::vector<Process> processes;

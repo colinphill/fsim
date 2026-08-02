@@ -488,8 +488,22 @@ void HierarchyBuilder::instantiate_vhdl_generic_subprograms(
         subprogram_domains(unit, specialized.environment);
     for (const auto& item : pending) {
         const auto& instance = *item.instance;
+        const auto exact_generated_template =
+            std::ranges::any_of(
+                function_templates,
+                [&](const auto& candidate) {
+                  return candidate.function.name
+                      == instance.template_name;
+                })
+            || std::ranges::any_of(
+                procedure_templates,
+                [&](const auto& candidate) {
+                  return candidate.procedure.name
+                      == instance.template_name;
+                });
         if (instance.template_name.find('.')
-            != std::string::npos) {
+                != std::string::npos
+            && !exact_generated_template) {
             report(
                 "FSIM-ELAB-VHGSUB-009",
                 "selected or scoped generic subprogram template '"

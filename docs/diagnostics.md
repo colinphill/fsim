@@ -313,6 +313,7 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-232` | error | Expected `;` after a VHDL block generic-map aspect. |
 | `FSIM-VHDL-PARSE-233` | error | Expected `;` after a VHDL block port-map aspect. |
 | `FSIM-VHDL-PARSE-234` | error | Expected `begin` after a VHDL generate declarative part. |
+| `FSIM-VHDL-PARSE-235` | error | Expected `function` after a `pure` or `impure` prefix in a VHDL generate declarative part. |
 
 ### VHDL semantics and bounded-subset rejections
 

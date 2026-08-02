@@ -6359,9 +6359,9 @@ The current ten implementation tasks are:
    alternatives before their `begin`, retaining alternative and iteration scope.
 5. **Complete.** Support generated type and subtype declarations with declaration-ordered
    visibility, specialized constraints, nominal identity, and source provenance.
-6. **In progress.** Support generated function/procedure declarations, bodies, and bounded
+6. **Complete.** Support generated function/procedure declarations, bodies, and bounded
    instantiations with local overload visibility and scope-qualified identity.
-7. **Pending.** Complete generated constants, signals, aliases, component declarations,
+7. **In progress.** Complete generated constants, signals, aliases, component declarations,
    package instantiations, and nested declarative items with deterministic
    collision and unsupported-item diagnostics.
 8. **Pending.** Complete architecture, block, generate, process, and subprogram local
@@ -6439,6 +6439,25 @@ drift. The final five-test focused gate passes in 15.30 seconds with all 1,446
 production diagnostics cataloged and all 345 authored sources within the
 2,000-line limit. Tasks 1 through 5 are focused-complete; Batch 114 remains
 **in progress** with Task 6 current and Tasks 7 through 10 pending.
+
+Task 6 is focused-complete. Selected generate bodies retain bounded ordinary
+function/procedure declarations, conforming bodies, overloads, value-generic
+subprogram templates, and `is new` instances. Physical source ordering limits
+each ordinary callable body to its own and earlier local designators; later
+callables and later generic templates remain invisible. Expansion merges a
+conforming declaration/body pair, qualifies every ordinary/template/instance
+name under the exact branch or iteration scope, and reruns bounded generic
+materialization only after selected declarations enter the unit. Duplicate
+function/procedure profiles, malformed purity prefixes, ordinary forward calls,
+and generic forward instantiations retain stable diagnostics. The application
+differential executes an ordinary function/procedure through generated generic
+function/procedure instances in the interpreter and LLVM O0/O2, proves scoped
+instance identities and cold/warm reuse, then edits one generic map and observes
+the exact behavior and cache-key change. The generated substitution partition
+keeps all 346 authored sources under 2,000 lines. The final five-test focused
+gate passes in 15.66 seconds with all 1,447 production diagnostics cataloged.
+Tasks 1 through 6 are focused-complete; Batch 114 remains **in progress** with
+Task 7 current and Tasks 8 through 10 pending.
 
 ## Forward language-closure feature batches
 

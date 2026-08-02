@@ -373,6 +373,39 @@ begin
     type branch_state_t is (idle, ready);
     constant branch_value : natural := 1;
     signal branch_signal : branch_word_t;
+    function adjust(value : branch_word_t)
+      return branch_word_t;
+    pure function adjust(value : branch_word_t)
+      return branch_word_t is
+    begin
+      return value + 1;
+    end function adjust;
+    procedure drive(
+      target : out branch_word_t;
+      value : branch_word_t);
+    procedure drive(
+      target : out branch_word_t;
+      value : branch_word_t) is
+    begin
+      target := adjust(value);
+    end procedure drive;
+    generic (amount : natural := 0)
+    function shifted(value : branch_word_t)
+      return branch_word_t is
+    begin
+      return adjust(value) + amount;
+    end function shifted;
+    function mapped_shift is new shifted
+      generic map (amount => 1);
+    generic (amount : natural := 0)
+    procedure shifted_drive(
+      variable target : out branch_word_t;
+      value : branch_word_t) is
+    begin
+      target := value + amount;
+    end procedure shifted_drive;
+    procedure mapped_drive is new shifted_drive
+      generic map (amount => 1);
   begin
     active: entity work.leaf(rtl)
       port map (value => value, result => result);
@@ -388,6 +421,17 @@ begin
     type branch_state_t is (idle, ready);
     constant branch_value : natural := 0;
     signal branch_signal : branch_word_t;
+    pure function adjust(value : branch_word_t)
+      return branch_word_t is
+    begin
+      return value + 2;
+    end function adjust;
+    procedure drive(
+      target : out branch_word_t;
+      value : branch_word_t) is
+    begin
+      target := adjust(value);
+    end procedure drive;
   begin
     inactive: entity work.leaf(rtl)
       port map (value => value, result => result);
@@ -495,9 +539,32 @@ end architecture;
               == TypeDeclarationKind::VhdlEnumeration
           && vhdl_generate.then_body.constants.size() == 1
           && vhdl_generate.then_body.signals.size() == 1
+          && vhdl_generate.then_body.functions.size() == 2
+          && vhdl_generate.then_body.functions.front().name
+              == "adjust"
+          && !vhdl_generate.then_body.functions.front().defined
+          && vhdl_generate.then_body.functions[1].defined
+          && vhdl_generate.then_body.functions.front()
+                 .return_type.named_type
+              == "branch_word_t"
+          && vhdl_generate.then_body.procedures.size() == 2
+          && vhdl_generate.then_body.procedures.front().name
+              == "drive"
+          && !vhdl_generate.then_body.procedures.front().defined
+          && vhdl_generate.then_body.procedures[1].defined
+          && vhdl_generate.then_body.generic_function_templates.size()
+              == 1
+          && vhdl_generate.then_body.generic_function_instances.size()
+              == 1
+          && vhdl_generate.then_body.generic_procedure_templates.size()
+              == 1
+          && vhdl_generate.then_body.generic_procedure_instances.size()
+              == 1
           && vhdl_generate.else_body.type_aliases.size() == 2
           && vhdl_generate.else_body.constants.size() == 1
           && vhdl_generate.else_body.signals.size() == 1
+          && vhdl_generate.else_body.functions.size() == 1
+          && vhdl_generate.else_body.procedures.size() == 1
           && vhdl_generate.then_body.instances.front().name == "active"
           && vhdl_generate.else_body.instances.front().name == "inactive"
           && vhdl_generate.then_body.generate_regions.size() == 1
@@ -1096,6 +1163,29 @@ end architecture;
                 return diagnostic.code == "FSIM-VHDL-SEM-036";
               }),
       "duplicate types in one generated declarative region are rejected");
+
+  const auto malformed_generated_purity = parse_text(
+      "malformed_generated_purity.vhd",
+      R"(
+architecture rtl of malformed_generated_purity is
+begin
+  selected: if true generate
+    pure procedure invalid is
+    begin
+    end procedure invalid;
+  begin
+  end generate selected;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !malformed_generated_purity.ok()
+          && std::ranges::any_of(
+              malformed_generated_purity.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-PARSE-235";
+              }),
+      "a generated purity prefix requires a function");
 }
 
 void test_systemverilog_named_events() {

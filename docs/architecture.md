@@ -190,6 +190,15 @@ iteration environment. Expansion qualifies every realized type name beneath
 the exact branch or `label[index]` scope and extends its source declaration
 identity with that scope, keeping equal declarations from different generated
 instances nominally distinct without losing source provenance.
+Generated VHDL function and procedure declaration/body pairs are merged after
+type specialization, while physical-source ordering limits each callable body
+to earlier overloads and its own designator. Ordinary and generic callables are
+qualified beneath the selected branch or iteration. Generic templates and
+`is new` instances are materialized once more after generate expansion, with
+the internal scoped template name admitted only when it names an exact retained
+generated declaration. The resulting instance name and generic binding join
+specialization identity and source provenance before lowering and native-cache
+lookup.
 VHDL conditional, iterative, and case-alternative bodies retain their
 declarative part separately from concurrent statements; any nonempty
 declarative part requires the grammar's separating `begin`. Expansion applies

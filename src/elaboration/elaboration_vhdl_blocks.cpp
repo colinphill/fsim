@@ -28,6 +28,14 @@ DesignUnit block_unit(
     result.functions = std::move(body.functions);
     result.tasks = std::move(body.tasks);
     result.procedures = std::move(body.procedures);
+    result.generic_function_templates =
+        std::move(body.generic_function_templates);
+    result.generic_procedure_templates =
+        std::move(body.generic_procedure_templates);
+    result.generic_function_instances =
+        std::move(body.generic_function_instances);
+    result.generic_procedure_instances =
+        std::move(body.generic_procedure_instances);
     result.vhdl_component_declarations =
         std::move(body.vhdl_component_declarations);
     result.concurrent_statements =
@@ -59,6 +67,14 @@ void unpack_block_unit(
     body.functions = std::move(source.functions);
     body.tasks = std::move(source.tasks);
     body.procedures = std::move(source.procedures);
+    body.generic_function_templates =
+        std::move(source.generic_function_templates);
+    body.generic_procedure_templates =
+        std::move(source.generic_procedure_templates);
+    body.generic_function_instances =
+        std::move(source.generic_function_instances);
+    body.generic_procedure_instances =
+        std::move(source.generic_procedure_instances);
     body.vhdl_component_declarations =
         std::move(source.vhdl_component_declarations);
     body.concurrent_statements =
@@ -475,6 +491,7 @@ void HierarchyBuilder::expand_vhdl_block_generates(
         };
     expand_specialized_unit_generates(
         specialized, diagnostics_, &block_preparer);
+    instantiate_vhdl_generic_subprograms(specialized);
 }
 
 }  // namespace fsim::elaboration

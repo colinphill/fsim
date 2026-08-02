@@ -283,11 +283,46 @@ begin
     constant local_value : natural := base_value + 1;
     subtype generated_word_t is unsigned(3 downto 0);
     signal generated_value : generated_word_t;
+    signal mapped_value : generated_word_t;
+    function adjust(value : generated_word_t)
+      return generated_word_t;
+    function adjust(value : generated_word_t)
+      return generated_word_t is
+    begin
+      return value + 1;
+    end function adjust;
+    procedure drive(
+      variable target : out generated_word_t;
+      value : generated_word_t);
+    procedure drive(
+      variable target : out generated_word_t;
+      value : generated_word_t) is
+    begin
+      target := adjust(value);
+    end procedure drive;
+    generic (amount : natural := 0)
+    function shifted(value : generated_word_t)
+      return generated_word_t is
+    begin
+      return adjust(value) + amount;
+    end function shifted;
+    function mapped_shift is new shifted
+      generic map (amount => 0);
+    generic (amount : natural := 0)
+    procedure shifted_drive(
+      variable target : out generated_word_t;
+      value : generated_word_t) is
+    begin
+      drive(target, value + amount);
+    end procedure shifted_drive;
+    procedure mapped_drive is new shifted_drive
+      generic map (amount => 0);
   begin
     generated_value <= local_value;
+    mapped_value <= mapped_shift(generated_value);
     worker: process(generated_value)
     begin
-      observed <= generated_value + 1;
+      mapped_drive(observed, generated_value);
     end process;
   else generate
     observed <= 1;
