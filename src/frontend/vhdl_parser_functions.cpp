@@ -782,13 +782,22 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
   expect_keyword(
       "is", true, "FSIM-VHDL-PARSE-158");
   while (!at_end() && !keyword("begin", 0, true)) {
+    if (parse_vhdl_local_nonobject_declaration(
+            function.constants,
+            function.type_aliases,
+            function.signal_aliases,
+            function.variables,
+            function.package_instances,
+            function.functions,
+            function.procedures)) {
+      continue;
+    }
     if (!match_keyword("variable", true)) {
       const auto declaration = advance();
       error(
           declaration,
           "FSIM-VHDL-UNSUPPORTED-035",
-          "bounded VHDL function bodies currently support only local "
-          "variable declarations");
+          "unsupported VHDL function declarative item");
       skip_to_semicolon();
       continue;
     }
@@ -843,6 +852,15 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
           span_from(local_name, previous())});
     }
   }
+
+  validate_vhdl_local_declaration_names(
+      function.constants,
+      function.type_aliases,
+      function.signal_aliases,
+      function.variables,
+      function.package_instances,
+      function.functions,
+      function.procedures);
 
   expect_keyword(
       "begin", true, "FSIM-VHDL-PARSE-161");
@@ -968,13 +986,22 @@ ProcedureDeclaration VhdlParser::parse_vhdl_procedure(
   expect_keyword(
       "is", true, "FSIM-VHDL-PARSE-173");
   while (!at_end() && !keyword("begin", 0, true)) {
+    if (parse_vhdl_local_nonobject_declaration(
+            procedure.constants,
+            procedure.type_aliases,
+            procedure.signal_aliases,
+            procedure.variables,
+            procedure.package_instances,
+            procedure.functions,
+            procedure.procedures)) {
+      continue;
+    }
     if (!match_keyword("variable", true)) {
       const auto declaration = advance();
       error(
           declaration,
           "FSIM-VHDL-UNSUPPORTED-043",
-          "bounded VHDL procedure bodies currently support only local "
-          "variable declarations");
+          "unsupported VHDL procedure declarative item");
       skip_to_semicolon();
       continue;
     }
@@ -1027,6 +1054,15 @@ ProcedureDeclaration VhdlParser::parse_vhdl_procedure(
           span_from(local_name, previous())});
     }
   }
+
+  validate_vhdl_local_declaration_names(
+      procedure.constants,
+      procedure.type_aliases,
+      procedure.signal_aliases,
+      procedure.variables,
+      procedure.package_instances,
+      procedure.functions,
+      procedure.procedures);
 
   expect_keyword(
       "begin", true, "FSIM-VHDL-PARSE-176");

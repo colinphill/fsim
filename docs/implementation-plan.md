@@ -6364,10 +6364,10 @@ The current ten implementation tasks are:
 7. **Complete.** Complete generated constants, signals, aliases, component declarations,
    package instantiations, and nested declarative items with deterministic
    collision and unsupported-item diagnostics.
-8. **In progress.** Complete architecture, block, generate, process, and subprogram local
+8. **Complete.** Complete architecture, block, generate, process, and subprogram local
    declarative regions for bounded constants, types/subtypes, objects, aliases,
    packages, and non-suspending local callables.
-9. **Pending.** Complete remaining locally static `if`/`for`/`case` generate choices,
+9. **In progress.** Complete remaining locally static `if`/`for`/`case` generate choices,
    including enumeration/character choices, grouped choices, ranges, `others`,
    overlap/null handling, labels, hierarchy, and specialization identity.
 10. **Pending.** Add focused positive/negative parser, elaboration, and runtime differentials;
@@ -6478,6 +6478,31 @@ The final five-test focused Release gate passes in 14.68 seconds with all 1,449
 production diagnostics cataloged and all 346 authored sources within the
 2,000-line limit. Tasks 1 through 7 are focused-complete; Batch 114 remains
 **in progress** with Task 8 current and Tasks 9 and 10 pending.
+
+Task 8 is focused-complete. Architecture constants and explicit typed object
+aliases now join the existing type, signal, package, and callable regions;
+generated, process, ordinary-subprogram, and generic-subprogram declarative
+parts retain bounded constants, types/subtypes, variables, typed aliases,
+local generic-package instances, and nested non-suspending callables. Local
+constants specialize in physical order, while generic-template locals defer
+until their own actuals are bound. A recursive materialization pass performs
+source-ordered package, alias, and callable qualification, hoists executable
+callables, reruns local-package specialization after generic instantiation,
+and visits nested types plus transitive qualified dependencies. Typed aliases
+execute over architecture/generated signals and callable formals/variables;
+locally static outer constants remain visible to nested callables.
+`FSIM-VHDL-SEM-082`/`083` target local cross-family and duplicate-alias
+collisions, while `FSIM-VHDL-PARSE-236` and
+`FSIM-VHDL-UNSUPPORTED-054` target malformed or untyped aliases. Frontend and
+elaboration evidence covers every retained region, and the merged application
+differential executes ordinary and generic local packages, aliases, functions,
+and procedures through the interpreter and LLVM O0/O2 with cold/warm reuse,
+scoped hierarchy, normalized VCD, and edit-sensitive specialization identity.
+The final five-test focused Debug/Release gates pass in 15.93/15.12 seconds
+with all 1,453 production diagnostics cataloged and all 347 authored sources
+within the 2,000-line limit.
+Tasks 1 through 8 are focused-complete; Batch 114 remains **in progress** with
+Task 9 current and Task 10 pending.
 
 ## Forward language-closure feature batches
 

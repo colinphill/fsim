@@ -495,8 +495,11 @@ void HierarchyBuilder::expand_vhdl_block_generates(
         };
     expand_specialized_unit_generates(
         specialized, diagnostics_, &block_preparer);
+    materialize_vhdl_local_declarations(specialized);
     instantiate_vhdl_local_packages(specialized, {});
     instantiate_vhdl_generic_subprograms(specialized);
+    materialize_vhdl_local_declarations(specialized);
+    instantiate_vhdl_local_packages(specialized, {});
 }
 
 }  // namespace fsim::elaboration

@@ -25,6 +25,14 @@ void require(bool condition, std::string_view message) {
   }
 }
 
+bool has_code(const ParseResult& parsed, const std::string_view code) {
+  return std::ranges::any_of(
+      parsed.diagnostics,
+      [&](const auto& diagnostic) {
+        return diagnostic.code == code;
+      });
+}
+
 [[maybe_unused]] std::filesystem::path make_test_directory(
     std::string_view name) {
   const auto suffix =
@@ -372,18 +380,46 @@ entity generated is
 end entity;
 
 architecture rtl of generated is
+  constant architecture_bias : natural := 1;
+  subtype architecture_word_t is unsigned(3 downto 0);
+  alias result_alias : std_logic is result;
+  function architecture_adjust(value : architecture_word_t)
+    return architecture_word_t is
+    package local_math is new work.generated_math
+      generic map (bias => 0);
+    function bump(input_value : architecture_word_t)
+      return architecture_word_t is
+    begin
+      return input_value + local_math.selected_value;
+    end function bump;
+  begin
+    return bump(value);
+  end function architecture_adjust;
 begin
   selection: if enabled generate
     subtype branch_word_t is unsigned(3 downto 0);
     type branch_state_t is (idle, ready);
-    constant branch_value : natural := 1;
+    constant branch_value : natural := architecture_bias;
     signal branch_signal : branch_word_t;
+    alias branch_alias : branch_word_t is branch_signal;
     function adjust(value : branch_word_t)
       return branch_word_t;
     pure function adjust(value : branch_word_t)
       return branch_word_t is
+      constant local_increment : natural := 1;
+      subtype local_word_t is branch_word_t;
+      package function_math is new work.generated_math
+        generic map (bias => 0);
+      function bump(input_value : local_word_t)
+        return local_word_t is
+      begin
+        return input_value + function_math.selected_value;
+      end function bump;
+      variable adjusted : local_word_t;
+      alias adjusted_alias : local_word_t is adjusted;
     begin
-      return value + 1;
+      adjusted_alias := bump(value) + local_increment - 1;
+      return adjusted_alias;
     end function adjust;
     procedure drive(
       target : out branch_word_t;
@@ -391,8 +427,19 @@ begin
     procedure drive(
       target : out branch_word_t;
       value : branch_word_t) is
+      constant local_offset : natural := 0;
+      subtype local_word_t is branch_word_t;
+      procedure copy_with_offset(
+        variable inner_target : out local_word_t;
+        inner_value : local_word_t) is
+      begin
+        inner_target := inner_value + local_offset;
+      end procedure copy_with_offset;
+      variable driven : local_word_t;
+      alias driven_alias : local_word_t is driven;
     begin
-      target := adjust(value);
+      copy_with_offset(driven_alias, adjust(value));
+      target := driven_alias;
     end procedure drive;
     generic (amount : natural := 0)
     function shifted(value : branch_word_t)
@@ -518,8 +565,26 @@ begin
   begin
     generated_value <= generated_constant;
     worker: process(generated_value)
+      constant local_offset : natural := 1;
+      subtype local_word_t is unsigned(3 downto 0);
+      package process_math is new work.generated_math
+        generic map (bias => 0);
+      function process_adjust(input_value : local_word_t)
+        return local_word_t is
+      begin
+        return input_value + process_math.selected_value;
+      end function process_adjust;
+      procedure process_drive(
+        variable target : out local_word_t;
+        input_value : local_word_t) is
+      begin
+        target := process_adjust(input_value);
+      end procedure process_drive;
+      variable local_value : local_word_t;
+      alias local_alias : local_word_t is local_value;
     begin
-      observed <= generated_value + 1;
+      process_drive(local_alias, generated_value);
+      observed <= local_alias;
     end process;
   end block static_scope;
 end architecture;
@@ -532,6 +597,14 @@ end architecture;
       vhdl.design.find(UnitKind::VhdlArchitecture, "rtl");
   require(
       vhdl_unit != nullptr
+          && vhdl_unit->parameters.size() == 1
+          && vhdl_unit->parameters.front().name
+              == "architecture_bias"
+          && vhdl_unit->parameters.front().local
+          && vhdl_unit->signal_aliases.size() == 1
+          && vhdl_unit->functions.size() == 1
+          && vhdl_unit->functions.front().package_instances.size() == 1
+          && vhdl_unit->functions.front().functions.size() == 1
           && vhdl_unit->generate_regions.size() == 1,
       "VHDL generate HIR count");
   const auto& vhdl_generate =
@@ -549,11 +622,19 @@ end architecture;
               == TypeDeclarationKind::VhdlEnumeration
           && vhdl_generate.then_body.constants.size() == 1
           && vhdl_generate.then_body.signals.size() == 1
+          && vhdl_generate.then_body.signal_aliases.size() == 1
           && vhdl_generate.then_body.functions.size() == 2
           && vhdl_generate.then_body.functions.front().name
               == "adjust"
           && !vhdl_generate.then_body.functions.front().defined
           && vhdl_generate.then_body.functions[1].defined
+          && vhdl_generate.then_body.functions[1].constants.size() == 1
+          && vhdl_generate.then_body.functions[1].type_aliases.size() == 1
+          && vhdl_generate.then_body.functions[1].package_instances.size()
+              == 1
+          && vhdl_generate.then_body.functions[1].functions.size() == 1
+          && vhdl_generate.then_body.functions[1].variables.size() == 1
+          && vhdl_generate.then_body.functions[1].signal_aliases.size() == 1
           && vhdl_generate.then_body.functions.front()
                  .return_type.named_type
               == "branch_word_t"
@@ -562,6 +643,11 @@ end architecture;
               == "drive"
           && !vhdl_generate.then_body.procedures.front().defined
           && vhdl_generate.then_body.procedures[1].defined
+          && vhdl_generate.then_body.procedures[1].constants.size() == 1
+          && vhdl_generate.then_body.procedures[1].type_aliases.size() == 1
+          && vhdl_generate.then_body.procedures[1].procedures.size() == 1
+          && vhdl_generate.then_body.procedures[1].variables.size() == 1
+          && vhdl_generate.then_body.procedures[1].signal_aliases.size() == 1
           && vhdl_generate.then_body.generic_function_templates.size()
               == 1
           && vhdl_generate.then_body.generic_function_instances.size()
@@ -679,6 +765,24 @@ end architecture;
               == 1
           && vhdl_block_unit->generate_regions.front()
                  .then_body.processes.size()
+              == 1
+          && vhdl_block_unit->generate_regions.front()
+                 .then_body.processes.front().constants.size()
+              == 1
+          && vhdl_block_unit->generate_regions.front()
+                 .then_body.processes.front().type_aliases.size()
+              == 1
+          && vhdl_block_unit->generate_regions.front()
+                 .then_body.processes.front().package_instances.size()
+              == 1
+          && vhdl_block_unit->generate_regions.front()
+                 .then_body.processes.front().functions.size()
+              == 1
+          && vhdl_block_unit->generate_regions.front()
+                 .then_body.processes.front().procedures.size()
+              == 1
+          && vhdl_block_unit->generate_regions.front()
+                 .then_body.processes.front().signal_aliases.size()
               == 1,
       "VHDL unguarded static block body");
 
@@ -1179,6 +1283,27 @@ end architecture;
                 return diagnostic.code == "FSIM-VHDL-SEM-081";
               }),
       "cross-family generated declaration collisions are targeted");
+
+  const auto invalid_local_region = parse_text(
+      "invalid_local_region.vhd",
+      R"(
+architecture rtl of invalid_local_region is
+begin
+  worker: process
+    constant shared_name : natural := 1;
+    variable shared_name : natural;
+    alias unsupported_alias is shared_name;
+  begin
+  end process worker;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_local_region.ok()
+          && has_code(invalid_local_region, "FSIM-VHDL-SEM-082")
+          && has_code(
+              invalid_local_region, "FSIM-VHDL-UNSUPPORTED-054"),
+      "local collisions and unsupported items are targeted");
 
   const auto unsupported_generated_declaration = parse_text(
       "unsupported_generated_declaration.vhd",

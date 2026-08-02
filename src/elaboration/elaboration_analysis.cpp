@@ -418,23 +418,8 @@ void collect_qualified_identifiers(
         collect_qualified_identifiers(signal.type, identifiers);
     }
     for (const auto& function : body.functions) {
-        collect_qualified_identifiers(
-            function.return_type, identifiers);
-        for (const auto& argument : function.arguments) {
-            collect_qualified_identifiers(argument.type, identifiers);
-            if (argument.default_value) {
-                collect_qualified_identifiers(
-                    *argument.default_value, identifiers);
-            }
-        }
-        for (const auto& variable : function.variables) {
-            collect_qualified_identifiers(variable.type, identifiers);
-            if (variable.initializer) {
-                collect_qualified_identifiers(
-                    *variable.initializer, identifiers);
-            }
-        }
-        collect_qualified_identifiers(function.statements, identifiers);
+        collect_vhdl_local_qualified_identifiers(
+            function, identifiers);
     }
     for (const auto& task : body.tasks) {
         for (const auto& argument : task.arguments) {
@@ -453,6 +438,61 @@ void collect_qualified_identifiers(
         }
         collect_qualified_identifiers(task.statements, identifiers);
     }
+    const auto collect_generic_parameters =
+        [&](const auto& parameters) {
+          for (const auto& parameter : parameters) {
+            collect_qualified_identifiers(
+                parameter.type, identifiers);
+            collect_qualified_identifiers(
+                parameter.default_value, identifiers);
+            if (parameter.default_type) {
+                collect_qualified_identifiers(
+                    *parameter.default_type, identifiers);
+            }
+            if (parameter.function_profile) {
+                collect_qualified_identifiers(
+                    parameter.function_profile->return_type,
+                    identifiers);
+                for (const auto& argument :
+                     parameter.function_profile->arguments) {
+                    collect_qualified_identifiers(
+                        argument.type, identifiers);
+                }
+            }
+            if (parameter.procedure_profile) {
+                for (const auto& argument :
+                     parameter.procedure_profile->arguments) {
+                    collect_qualified_identifiers(
+                        argument.type, identifiers);
+                }
+            }
+          }
+        };
+    for (const auto& generic :
+         body.generic_function_templates) {
+        collect_generic_parameters(generic.generic_parameters);
+        collect_vhdl_local_qualified_identifiers(
+            generic.function, identifiers);
+    }
+    for (const auto& generic :
+         body.generic_procedure_templates) {
+        collect_generic_parameters(generic.generic_parameters);
+        collect_vhdl_local_qualified_identifiers(
+            generic.procedure, identifiers);
+    }
+    const auto collect_generic_maps = [&](const auto& instances) {
+      for (const auto& instance : instances) {
+        for (const auto& actual : instance.generic_map) {
+          collect_qualified_identifiers(actual.value, identifiers);
+          if (actual.type_value) {
+            collect_qualified_identifiers(
+                *actual.type_value, identifiers);
+          }
+        }
+      }
+    };
+    collect_generic_maps(body.generic_function_instances);
+    collect_generic_maps(body.generic_procedure_instances);
     for (const auto& component :
          body.vhdl_component_declarations) {
         for (const auto& generic : component.generics) {
@@ -483,39 +523,12 @@ void collect_qualified_identifiers(
     collect_qualified_identifiers(
         body.concurrent_statements, identifiers);
     for (const auto& process : body.processes) {
-        for (const auto& variable : process.variables) {
-            collect_qualified_identifiers(
-                variable.type, identifiers);
-            if (variable.initializer) {
-                collect_qualified_identifiers(
-                    *variable.initializer, identifiers);
-            }
-        }
-        for (const auto& sensitivity : process.sensitivities) {
-            collect_qualified_identifiers(
-                sensitivity.expression, identifiers);
-        }
-        collect_qualified_identifiers(
-            process.statements, identifiers);
+        collect_vhdl_local_qualified_identifiers(
+            process, identifiers);
     }
     for (const auto& procedure : body.procedures) {
-        for (const auto& argument : procedure.arguments) {
-            collect_qualified_identifiers(
-                argument.type, identifiers);
-            if (argument.default_value) {
-                collect_qualified_identifiers(
-                    *argument.default_value, identifiers);
-            }
-        }
-        for (const auto& variable : procedure.variables) {
-            collect_qualified_identifiers(variable.type, identifiers);
-            if (variable.initializer) {
-                collect_qualified_identifiers(
-                    *variable.initializer, identifiers);
-            }
-        }
-        collect_qualified_identifiers(
-            procedure.statements, identifiers);
+        collect_vhdl_local_qualified_identifiers(
+            procedure, identifiers);
     }
     for (const auto& instance : body.instances) {
         for (const auto& override :
@@ -637,26 +650,8 @@ QualifiedIdentifierMap qualified_identifiers(
         }
     }
     for (const auto& function : unit.functions) {
-        collect_qualified_identifiers(
-            function.return_type, result);
-        for (const auto& argument : function.arguments) {
-            collect_qualified_identifiers(
-                argument.type, result);
-            if (argument.default_value) {
-                collect_qualified_identifiers(
-                    *argument.default_value, result);
-            }
-        }
-        for (const auto& variable : function.variables) {
-            collect_qualified_identifiers(
-                variable.type, result);
-            if (variable.initializer) {
-                collect_qualified_identifiers(
-                    *variable.initializer, result);
-            }
-        }
-        collect_qualified_identifiers(
-            function.statements, result);
+        collect_vhdl_local_qualified_identifiers(
+            function, result);
     }
     for (const auto& task : unit.tasks) {
         for (const auto& argument : task.arguments) {
@@ -678,24 +673,8 @@ QualifiedIdentifierMap qualified_identifiers(
             task.statements, result);
     }
     for (const auto& procedure : unit.procedures) {
-        for (const auto& argument : procedure.arguments) {
-            collect_qualified_identifiers(
-                argument.type, result);
-            if (argument.default_value) {
-                collect_qualified_identifiers(
-                    *argument.default_value, result);
-            }
-        }
-        for (const auto& variable : procedure.variables) {
-            collect_qualified_identifiers(
-                variable.type, result);
-            if (variable.initializer) {
-                collect_qualified_identifiers(
-                    *variable.initializer, result);
-            }
-        }
-        collect_qualified_identifiers(
-            procedure.statements, result);
+        collect_vhdl_local_qualified_identifiers(
+            procedure, result);
     }
     for (const auto& generic : unit.generic_function_templates) {
         for (const auto& parameter :
@@ -705,23 +684,8 @@ QualifiedIdentifierMap qualified_identifiers(
             collect_qualified_identifiers(
                 parameter.default_value, result);
         }
-        const auto& function = generic.function;
-        collect_qualified_identifiers(
-            function.return_type, result);
-        for (const auto& argument : function.arguments) {
-            collect_qualified_identifiers(
-                argument.type, result);
-        }
-        for (const auto& variable : function.variables) {
-            collect_qualified_identifiers(
-                variable.type, result);
-            if (variable.initializer) {
-                collect_qualified_identifiers(
-                    *variable.initializer, result);
-            }
-        }
-        collect_qualified_identifiers(
-            function.statements, result);
+        collect_vhdl_local_qualified_identifiers(
+            generic.function, result);
     }
     for (const auto& generic :
          unit.generic_procedure_templates) {
@@ -732,25 +696,8 @@ QualifiedIdentifierMap qualified_identifiers(
             collect_qualified_identifiers(
                 parameter.default_value, result);
         }
-        const auto& procedure = generic.procedure;
-        for (const auto& argument : procedure.arguments) {
-            collect_qualified_identifiers(
-                argument.type, result);
-            if (argument.default_value) {
-                collect_qualified_identifiers(
-                    *argument.default_value, result);
-            }
-        }
-        for (const auto& variable : procedure.variables) {
-            collect_qualified_identifiers(
-                variable.type, result);
-            if (variable.initializer) {
-                collect_qualified_identifiers(
-                    *variable.initializer, result);
-            }
-        }
-        collect_qualified_identifiers(
-            procedure.statements, result);
+        collect_vhdl_local_qualified_identifiers(
+            generic.procedure, result);
     }
     const auto collect_generic_map =
         [&](const auto& instances) {
@@ -770,18 +717,8 @@ QualifiedIdentifierMap qualified_identifiers(
     collect_qualified_identifiers(
         unit.concurrent_statements, result);
     for (const auto& process : unit.processes) {
-        for (const auto& variable : process.variables) {
-            collect_qualified_identifiers(variable.type, result);
-            if (variable.initializer) {
-                collect_qualified_identifiers(
-                    *variable.initializer, result);
-            }
-        }
-        for (const auto& sensitivity : process.sensitivities) {
-            collect_qualified_identifiers(
-                sensitivity.expression, result);
-        }
-        collect_qualified_identifiers(process.statements, result);
+        collect_vhdl_local_qualified_identifiers(
+            process, result);
     }
     for (const auto& instance : unit.instances) {
         for (const auto& override :
@@ -796,65 +733,6 @@ QualifiedIdentifierMap qualified_identifiers(
     }
     collect_qualified_identifiers(unit.generate_regions, result);
     return result;
-}
-void qualify_generated_expression(
-    Expression& expression,
-    const GeneratedNameEnvironment& names) {
-    if (expression.kind == ExpressionKind::Identifier
-        || expression.kind == ExpressionKind::Call) {
-        if (const auto found = names.find(expression.text);
-            found != names.end()) {
-            expression.text = found->second;
-        } else if (const auto separator = expression.text.find('.');
-                   separator != std::string::npos) {
-            if (const auto prefix = names.find(
-                    expression.text.substr(0, separator));
-                prefix != names.end()) {
-                expression.text = prefix->second
-                    + expression.text.substr(separator);
-            }
-        }
-    }
-    for (auto& association :
-         expression.aggregate_choice_expressions) {
-        for (auto& choice : association) {
-            qualify_generated_expression(choice, names);
-        }
-    }
-    for (auto& operand : expression.operands) {
-        qualify_generated_expression(operand, names);
-    }
-}
-void qualify_generated_type(
-    frontend::Type& type,
-    const GeneratedNameEnvironment& names) {
-    if (!type.named_type.empty()) {
-        if (const auto found = names.find(type.named_type);
-            found != names.end()) {
-            if (type.spelling == type.named_type) {
-                type.spelling = found->second;
-            }
-            type.named_type = found->second;
-        } else if (const auto separator = type.named_type.find('.');
-                   separator != std::string::npos) {
-            if (const auto prefix = names.find(
-                    type.named_type.substr(0, separator));
-                prefix != names.end()) {
-                if (type.spelling == type.named_type) {
-                    type.spelling = prefix->second
-                        + type.named_type.substr(separator);
-                }
-                type.named_type = prefix->second
-                    + type.named_type.substr(separator);
-            }
-        }
-    }
-    if (type.systemverilog_container
-        && type.systemverilog_container->associative_index_type) {
-        qualify_generated_type(
-            *type.systemverilog_container->associative_index_type,
-            names);
-    }
 }
 void qualify_generated_statement(
     Statement& statement,
@@ -927,6 +805,13 @@ void qualify_generated_process(
         ? std::string{scope}
         : generated_scope(scope, process.name);
     auto process_names = names;
+    for (auto& alias : process.signal_aliases) {
+        qualify_generated_type(alias.type, process_names);
+        if (const auto found = process_names.find(alias.actual);
+            found != process_names.end()) {
+            alias.actual = found->second;
+        }
+    }
     for (auto& variable : process.variables) {
         qualify_generated_type(variable.type, process_names);
         if (variable.initializer) {
@@ -952,6 +837,13 @@ void qualify_generated_function(
     const auto local_name = function.name;
     function.name = generated_scope(scope, local_name);
     auto function_names = names;
+    for (auto& alias : function.signal_aliases) {
+        qualify_generated_type(alias.type, function_names);
+        if (const auto found = function_names.find(alias.actual);
+            found != function_names.end()) {
+            alias.actual = found->second;
+        }
+    }
     qualify_generated_type(function.return_type, function_names);
     for (auto& argument : function.arguments) {
         qualify_generated_type(argument.type, function_names);
@@ -1004,6 +896,13 @@ void qualify_generated_procedure(
     procedure.name = generated_scope(scope, local_name);
     auto procedure_names = names;
     procedure_names[local_name] = procedure.name;
+    for (auto& alias : procedure.signal_aliases) {
+        qualify_generated_type(alias.type, procedure_names);
+        if (const auto found = procedure_names.find(alias.actual);
+            found != procedure_names.end()) {
+            alias.actual = found->second;
+        }
+    }
     for (auto& argument : procedure.arguments) {
         qualify_generated_type(argument.type, names);
         if (argument.default_value) {
@@ -1167,6 +1066,33 @@ void append_generated_body(
                     alias.type.vhdl_type_declaration + scope_suffix);
             }
         }
+        const auto append_local_type_identities =
+            [&](const auto& owner) {
+              for (const auto& alias : owner.type_aliases) {
+                  if (alias.declaration_kind
+                          != frontend::TypeDeclarationKind::VhdlSubtype
+                      && !alias.type.nominal_type.empty()) {
+                      scoped_vhdl_type_identities.emplace(
+                          alias.type.nominal_type,
+                          alias.type.nominal_type + scope_suffix);
+                  }
+                  if (!alias.type.vhdl_type_declaration.empty()) {
+                      scoped_vhdl_type_identities.emplace(
+                          alias.type.vhdl_type_declaration,
+                          alias.type.vhdl_type_declaration
+                              + scope_suffix);
+                  }
+              }
+            };
+        for (const auto& function : body.functions) {
+            append_local_type_identities(function);
+        }
+        for (const auto& procedure : body.procedures) {
+            append_local_type_identities(procedure);
+        }
+        for (const auto& process : body.processes) {
+            append_local_type_identities(process);
+        }
     }
     const auto scope_vhdl_type =
         [&](auto&& self, frontend::Type& type) -> void {
@@ -1211,12 +1137,44 @@ void append_generated_body(
         for (auto& variable : function.variables) {
             scope_vhdl_type(scope_vhdl_type, variable.type);
         }
+        for (auto& constant : function.constants) {
+            scope_vhdl_type(scope_vhdl_type, constant.type);
+        }
+        for (auto& alias : function.type_aliases) {
+            scope_vhdl_type(scope_vhdl_type, alias.type);
+        }
+        for (auto& alias : function.signal_aliases) {
+            scope_vhdl_type(scope_vhdl_type, alias.type);
+        }
     }
     for (auto& procedure : body.procedures) {
         for (auto& argument : procedure.arguments) {
             scope_vhdl_type(scope_vhdl_type, argument.type);
         }
         for (auto& variable : procedure.variables) {
+            scope_vhdl_type(scope_vhdl_type, variable.type);
+        }
+        for (auto& constant : procedure.constants) {
+            scope_vhdl_type(scope_vhdl_type, constant.type);
+        }
+        for (auto& alias : procedure.type_aliases) {
+            scope_vhdl_type(scope_vhdl_type, alias.type);
+        }
+        for (auto& alias : procedure.signal_aliases) {
+            scope_vhdl_type(scope_vhdl_type, alias.type);
+        }
+    }
+    for (auto& process : body.processes) {
+        for (auto& constant : process.constants) {
+            scope_vhdl_type(scope_vhdl_type, constant.type);
+        }
+        for (auto& alias : process.type_aliases) {
+            scope_vhdl_type(scope_vhdl_type, alias.type);
+        }
+        for (auto& alias : process.signal_aliases) {
+            scope_vhdl_type(scope_vhdl_type, alias.type);
+        }
+        for (auto& variable : process.variables) {
             scope_vhdl_type(scope_vhdl_type, variable.type);
         }
     }
@@ -1379,6 +1337,10 @@ void append_generated_body(
     for (auto& alias : body.signal_aliases) {
         const auto local_name = alias.name;
         qualify_generated_type(alias.type, body_names);
+        if (const auto found = body_names.find(alias.actual);
+            found != body_names.end()) {
+            alias.actual = found->second;
+        }
         alias.name = generated_scope(scope, local_name);
         body_names[local_name] = alias.name;
         unit.signal_aliases.push_back(std::move(alias));

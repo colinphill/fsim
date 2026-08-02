@@ -203,6 +203,25 @@ class VhdlParser final : private detail::ParserBase {
   void parse_signal_declaration(
       std::vector<SignalDeclaration>& signals,
       const std::vector<ParameterDeclaration>* constants = nullptr);
+  void parse_vhdl_object_alias(
+      std::vector<SignalAliasDeclaration>& aliases,
+      const Token& start);
+  bool parse_vhdl_local_nonobject_declaration(
+      std::vector<ParameterDeclaration>& constants,
+      std::vector<TypeAliasDeclaration>& type_aliases,
+      std::vector<SignalAliasDeclaration>& signal_aliases,
+      const std::vector<VariableDeclaration>& variables,
+      std::vector<PackageInstantiation>& package_instances,
+      std::vector<FunctionDeclaration>& functions,
+      std::vector<ProcedureDeclaration>& procedures);
+  void validate_vhdl_local_declaration_names(
+      const std::vector<ParameterDeclaration>& constants,
+      const std::vector<TypeAliasDeclaration>& type_aliases,
+      const std::vector<SignalAliasDeclaration>& signal_aliases,
+      const std::vector<VariableDeclaration>& variables,
+      const std::vector<PackageInstantiation>& package_instances,
+      const std::vector<FunctionDeclaration>& functions,
+      const std::vector<ProcedureDeclaration>& procedures);
 
   void parse_concurrent_statement(DesignUnit& unit);
 

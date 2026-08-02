@@ -450,7 +450,7 @@ using namespace elaboration_detail;
             };
         std::function<void(std::vector<Statement>&)>
             resolve_statements;
-        resolve_statements =
+            resolve_statements =
             [&](std::vector<Statement>& statements) {
                 for (auto& statement : statements) {
                     for (auto& declaration :
@@ -466,6 +466,104 @@ using namespace elaboration_detail;
                             alternative.statements);
                     }
                 }
+            };
+        const auto resolve_local_declarations =
+            [&](auto&& self, auto& local_region) -> void {
+              const auto saved_package_formals =
+                  active_interface_package_formals;
+              for (const auto& package :
+                   local_region.package_instances) {
+                  active_interface_package_formals.insert(
+                      package.name);
+              }
+              struct PriorType {
+                  std::string name;
+                  frontend::Type* type{};
+              };
+              struct Declaration {
+                  std::size_t offset{};
+                  bool type{};
+                  bool constant{};
+                  bool alias{};
+                  std::size_t index{};
+              };
+              std::vector<PriorType> prior_types;
+              std::vector<Declaration> declarations;
+              for (std::size_t index = 0;
+                   index < local_region.type_aliases.size(); ++index) {
+                  declarations.push_back({
+                      local_region.type_aliases[index].span.begin.offset,
+                      true, false, false, index});
+              }
+              for (std::size_t index = 0;
+                   index < local_region.constants.size(); ++index) {
+                  declarations.push_back({
+                      local_region.constants[index].span.begin.offset,
+                      false, true, false, index});
+              }
+              for (std::size_t index = 0;
+                   index < local_region.signal_aliases.size(); ++index) {
+                  declarations.push_back({
+                      local_region.signal_aliases[index].span.begin.offset,
+                      false, false, true, index});
+              }
+              for (std::size_t index = 0;
+                   index < local_region.variables.size(); ++index) {
+                  declarations.push_back({
+                      local_region.variables[index].span.begin.offset,
+                      false, false, false, index});
+              }
+              std::ranges::stable_sort(
+                  declarations, {}, &Declaration::offset);
+              for (const auto& declaration : declarations) {
+                  if (declaration.type) {
+                      auto& alias = local_region.type_aliases[
+                          declaration.index];
+                      (void)resolve_type(alias.type);
+                      const auto prior =
+                          generated_types.find(alias.name);
+                      prior_types.push_back({
+                          alias.name,
+                          prior == generated_types.end()
+                              ? nullptr
+                              : prior->second});
+                      generated_types[alias.name] = &alias.type;
+                  } else if (declaration.constant) {
+                      resolve_declaration(local_region.constants[
+                          declaration.index]);
+                  } else if (declaration.alias) {
+                      (void)resolve_type(
+                          local_region.signal_aliases[
+                              declaration.index].type);
+                  } else {
+                      resolve_declaration(local_region.variables[
+                          declaration.index]);
+                  }
+              }
+              for (auto& function : local_region.functions) {
+                  (void)resolve_type(function.return_type);
+                  for (auto& argument : function.arguments) {
+                      (void)resolve_type(argument.type);
+                  }
+                  self(self, function);
+              }
+              for (auto& procedure : local_region.procedures) {
+                  for (auto& argument : procedure.arguments) {
+                      (void)resolve_type(argument.type);
+                  }
+                  self(self, procedure);
+              }
+              resolve_statements(local_region.statements);
+              for (auto prior = prior_types.rbegin();
+                   prior != prior_types.rend(); ++prior) {
+                  if (prior->type == nullptr) {
+                      generated_types.erase(prior->name);
+                  } else {
+                      generated_types[prior->name] = prior->type;
+                  }
+              }
+              active_interface_package_formals =
+                  saved_package_formals;
             };
         std::function<void(frontend::GenerateBody&)>
             resolve_generate_body;
@@ -578,10 +676,8 @@ using namespace elaboration_detail;
                         for (auto& argument : function.arguments) {
                             (void)resolve_type(argument.type);
                         }
-                        for (auto& variable : function.variables) {
-                            resolve_declaration(variable);
-                        }
-                        resolve_statements(function.statements);
+                        resolve_local_declarations(
+                            resolve_local_declarations, function);
                         break;
                     }
                     case DeclarationKind::Task: {
@@ -601,10 +697,8 @@ using namespace elaboration_detail;
                         for (auto& argument : procedure.arguments) {
                             (void)resolve_type(argument.type);
                         }
-                        for (auto& variable : procedure.variables) {
-                            resolve_declaration(variable);
-                        }
-                        resolve_statements(procedure.statements);
+                        resolve_local_declarations(
+                            resolve_local_declarations, procedure);
                         break;
                     }
                     case DeclarationKind::GenericFunction: {
@@ -621,10 +715,8 @@ using namespace elaboration_detail;
                         for (auto& argument : function.arguments) {
                             (void)resolve_type(argument.type);
                         }
-                        for (auto& variable : function.variables) {
-                            resolve_declaration(variable);
-                        }
-                        resolve_statements(function.statements);
+                        resolve_local_declarations(
+                            resolve_local_declarations, function);
                         active_interface_type_formals.clear();
                         active_interface_package_formals.clear();
                         break;
@@ -642,10 +734,8 @@ using namespace elaboration_detail;
                         for (auto& argument : procedure.arguments) {
                             (void)resolve_type(argument.type);
                         }
-                        for (auto& variable : procedure.variables) {
-                            resolve_declaration(variable);
-                        }
-                        resolve_statements(procedure.statements);
+                        resolve_local_declarations(
+                            resolve_local_declarations, procedure);
                         active_interface_type_formals.clear();
                         active_interface_package_formals.clear();
                         break;
@@ -663,10 +753,8 @@ using namespace elaboration_detail;
                     }
                 }
                 for (auto& process : body.processes) {
-                    for (auto& variable : process.variables) {
-                        resolve_declaration(variable);
-                    }
-                    resolve_statements(process.statements);
+                    resolve_local_declarations(
+                        resolve_local_declarations, process);
                 }
                 resolve_generate_regions(
                     body.generate_regions);
@@ -744,6 +832,9 @@ using namespace elaboration_detail;
         for (auto& signal : unit.signals) {
             resolve_declaration(signal);
         }
+        for (auto& alias : unit.signal_aliases) {
+            resolve_declaration(alias);
+        }
         for (auto& variable : unit.variables) {
             resolve_declaration(variable);
         }
@@ -756,10 +847,8 @@ using namespace elaboration_detail;
             for (auto& argument : function.arguments) {
                 (void)resolve_type(argument.type);
             }
-            for (auto& variable : function.variables) {
-                resolve_declaration(variable);
-            }
-            resolve_statements(function.statements);
+            resolve_local_declarations(
+                resolve_local_declarations, function);
         }
         for (auto& task : unit.tasks) {
             for (auto& argument : task.arguments) {
@@ -774,16 +863,12 @@ using namespace elaboration_detail;
             for (auto& argument : procedure.arguments) {
                 (void)resolve_type(argument.type);
             }
-            for (auto& variable : procedure.variables) {
-                resolve_declaration(variable);
-            }
-            resolve_statements(procedure.statements);
+            resolve_local_declarations(
+                resolve_local_declarations, procedure);
         }
         for (auto& process : unit.processes) {
-            for (auto& variable : process.variables) {
-                resolve_declaration(variable);
-            }
-            resolve_statements(process.statements);
+            resolve_local_declarations(
+                resolve_local_declarations, process);
         }
         resolve_generate_regions(unit.generate_regions);
     }

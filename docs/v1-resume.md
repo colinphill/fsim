@@ -16,15 +16,15 @@ as work lands. Before moving on, retain that batch's list, mark it
 
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: pushed Batch 114 generated-callable support at
-  parent commit `8746f6d`. The Task 7 generated declarative-family checkpoint
-  is this document's containing commit: it adds selected and recursively nested
-  local-package instances, scoped package identity, deterministic cross-family
-  collisions, and unsupported-item diagnostics. Tasks 1 through 7 are
-  focused-complete and Task 8 is current.
+- Implementation baseline: pushed Batch 114 generated-declarative support at
+  parent commit `f4e9199`. The Task 8 local declarative-region checkpoint is
+  this document's containing commit: it adds bounded architecture/process/
+  subprogram constants, types, objects, explicit aliases, local packages, and
+  nested callables with generic-instance materialization. Tasks 1 through 8
+  are focused-complete and Task 9 is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 346 authored C/C++ source, header,
+- The source-size refactor is complete: all 347 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 115-alternative
@@ -1682,10 +1682,10 @@ complete and checkpoint `4af01cd` contains the final implementation slice.
    instantiations with local overload visibility and scope-qualified identity.
 7. **Complete.** Complete generated constants, signals, aliases, components, package
    instantiations, nested items, and collision/unsupported-item diagnostics.
-8. **In progress.** Complete architecture/block/generate/process/subprogram local declarative
+8. **Complete.** Complete architecture/block/generate/process/subprogram local declarative
    regions for bounded constants, types, objects, aliases, packages, and
    non-suspending local callables.
-9. **Pending.** Complete remaining locally static `if`/`for`/`case` generate choices,
+9. **In progress.** Complete remaining locally static `if`/`for`/`case` generate choices,
    including enumeration/character choices, groups, ranges, `others`,
    overlap/null handling, labels, hierarchy, and specialization identity.
 10. **Pending.** Close focused positive/negative/runtime, sanitizer, source/catalog, full
@@ -1784,6 +1784,25 @@ VCD, and cold/warm cache reuse. The final five-test focused Release gate passes
 in 14.68 seconds with 1,449 production diagnostics and all 346 authored sources
 within the 2,000-line limit. Tasks 1 through 7 are focused-complete; Batch 114
 remains **in progress** with Task 8 current and Tasks 9 and 10 pending.
+
+Task 8 is focused-complete. Architecture, generated/block, process, ordinary
+subprogram, and instantiated generic-subprogram regions retain their bounded
+constants, types/subtypes, variables/signals, typed object aliases, local
+generic packages, and nested non-suspending callables. Local constants are
+specialized in declaration order; generic-template locals wait for their own
+actuals. Recursive source-ordered materialization qualifies packages, aliases,
+and callables, hoists executable nested callables, then repeats local-package
+materialization after generic instantiation. Nested type/provenance visitors
+cover the complete retained graph. `FSIM-VHDL-SEM-082`/`083`,
+`FSIM-VHDL-PARSE-236`, and `FSIM-VHDL-UNSUPPORTED-054` give deterministic
+collision and malformed-alias failures. The merged interpreter/LLVM O0/O2
+application differential executes architecture/generated and callable aliases,
+ordinary/generic local packages, local functions/procedures, cold/warm cache
+reuse, normalized VCD, and edit-sensitive specialization identity. The final
+five-test focused Debug/Release gates pass in 15.93/15.12 seconds with 1,453
+production diagnostics and all 347 authored sources within the 2,000-line
+limit. Tasks 1 through 8 are focused-complete;
+Batch 114 remains **in progress** with Task 9 current and Task 10 pending.
 
 Batch 110 has advanced through these validated features:
 

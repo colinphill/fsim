@@ -64,7 +64,21 @@ using namespace elaboration_detail;
         if (entity == nullptr) {
             return result;
         }
+        std::vector<frontend::ParameterDeclaration>
+            architecture_constants;
+        for (auto& parameter : result.parameters) {
+            if (parameter.local) {
+                architecture_constants.push_back(
+                    std::move(parameter));
+            }
+        }
         result.parameters = entity->parameters;
+        result.parameters.insert(
+            result.parameters.end(),
+            std::make_move_iterator(
+                architecture_constants.begin()),
+            std::make_move_iterator(
+                architecture_constants.end()));
         result.ports = entity->ports;
         std::vector<frontend::VhdlComponentDeclaration>
             entity_components =
@@ -554,10 +568,14 @@ using namespace elaboration_detail;
             specialized.identity_values.push_back(identity);
         }
         specialized.packages = interface_packages;
+        materialize_vhdl_local_declarations(specialized);
         instantiate_vhdl_local_packages(
             specialized, interface_packages);
         instantiate_vhdl_generic_subprograms(
             specialized);
+        materialize_vhdl_local_declarations(specialized);
+        instantiate_vhdl_local_packages(
+            specialized, interface_packages);
         expand_vhdl_block_generates(specialized);
         return specialized;
     }

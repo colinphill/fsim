@@ -355,6 +355,7 @@ entity generated_vhdl_behavior is
   );
 end entity;
 architecture rtl of generated_vhdl_behavior is
+  constant architecture_bias : natural := 5;
 begin
   chosen: if enabled generate
     subtype generated_word_t is unsigned(3 downto 0);
@@ -364,8 +365,20 @@ begin
       return generated_word_t;
     function adjust(value : generated_word_t)
       return generated_word_t is
+      constant local_increment : natural := 1;
+      subtype local_word_t is generated_word_t;
+      package function_math is new work.generated_math
+        generic map (bias => 0);
+      function bump(input_value : local_word_t)
+        return local_word_t is
+      begin
+        return input_value + function_math.selected_value;
+      end function bump;
+      variable adjusted : local_word_t;
+      alias adjusted_alias : local_word_t is adjusted;
     begin
-      return value + 1;
+      adjusted_alias := bump(value) + local_increment - 1;
+      return adjusted_alias;
     end function adjust;
     procedure drive(
       variable target : out generated_word_t;
@@ -373,14 +386,30 @@ begin
     procedure drive(
       variable target : out generated_word_t;
       value : generated_word_t) is
+      constant local_offset : natural := 0;
+      subtype local_word_t is generated_word_t;
+      procedure copy_with_offset(
+        variable inner_target : out local_word_t;
+        inner_value : local_word_t) is
+      begin
+        inner_target := inner_value + local_offset;
+      end procedure copy_with_offset;
+      variable driven : local_word_t;
+      alias driven_alias : local_word_t is driven;
     begin
-      target := adjust(value);
+      copy_with_offset(driven_alias, adjust(value));
+      target := driven_alias;
     end procedure drive;
     generic (amount : natural := 0)
     function shifted(value : generated_word_t)
       return generated_word_t is
+      constant local_amount : natural := amount;
+      package generic_math is new work.generated_math
+        generic map (bias => 0);
+      alias input_alias : generated_word_t is value;
     begin
-      return adjust(value) + amount;
+      return adjust(input_alias) + local_amount
+        + generic_math.selected_value - 1;
     end function shifted;
     function mapped_shift is new shifted
       generic map (amount => 0);
@@ -388,19 +417,38 @@ begin
     procedure shifted_drive(
       variable target : out generated_word_t;
       value : generated_word_t) is
+      alias target_alias : generated_word_t is target;
     begin
-      drive(target, value + amount);
+      drive(target_alias, value + amount);
     end procedure shifted_drive;
     procedure mapped_drive is new shifted_drive
       generic map (amount => 0);
     package selected_math is new work.generated_math
-      generic map (bias => 5);
+      generic map (bias => architecture_bias);
   begin
     generated_value <= selected_math.selected_value;
     mapped_value <= mapped_shift(generated_value);
     worker: process(generated_value)
+      constant local_offset : natural := 0;
+      subtype local_word_t is generated_word_t;
+      package process_math is new work.generated_math
+        generic map (bias => 0);
+      function process_adjust(input_value : local_word_t)
+        return local_word_t is
+      begin
+        return input_value + process_math.selected_value;
+      end function process_adjust;
+      procedure process_drive(
+        variable inner_target : out local_word_t;
+        inner_value : local_word_t) is
+      begin
+        inner_target := process_adjust(inner_value);
+      end procedure process_drive;
+      variable process_value : local_word_t;
+      alias process_alias : local_word_t is process_value;
     begin
-      mapped_drive(observed, generated_value);
+      process_drive(process_alias, generated_value + local_offset);
+      mapped_drive(observed, process_alias);
     end process;
   else generate
     observed <= 1;
@@ -410,16 +458,33 @@ end architecture;
 entity generated_vhdl_loop_behavior is
 end entity;
 architecture rtl of generated_vhdl_loop_behavior is
+  subtype architecture_word_t is unsigned(3 downto 0);
+  function architecture_adjust(value : architecture_word_t)
+    return architecture_word_t is
+    package local_math is new work.generated_math
+      generic map (bias => 0);
+    function bump(input_value : architecture_word_t)
+      return architecture_word_t is
+    begin
+      return input_value + local_math.selected_value;
+    end function bump;
+    alias input_alias : architecture_word_t is value;
+  begin
+    return bump(input_alias);
+  end function architecture_adjust;
 begin
   lanes: for i in 0 to 2 generate
     type lane_bits_t is array (0 to i + 1) of bit;
     constant local_value : natural := i + 4;
     package lane_math is new work.generated_math
       generic map (bias => i + 3);
+    signal raw_value : unsigned(3 downto 0);
     signal generated_value : unsigned(3 downto 0);
+    alias generated_alias : unsigned(3 downto 0) is generated_value;
     signal typed_value : lane_bits_t;
   begin
-    generated_value <= lane_math.selected_value;
+    raw_value <= lane_math.selected_value;
+    generated_alias <= architecture_adjust(raw_value);
   end generate lanes;
 end architecture;
 
@@ -1156,7 +1221,7 @@ end architecture;
         generated_vhdl_behavior_interpreter
             ->signal_value(*generated_vhdl_observed)
             .to_msb_string()
-        == "0111");
+        == "1000");
     assert(
         generated_vhdl_behavior_interpreter
             ->signal_value(*generated_vhdl_mapped)
@@ -1225,10 +1290,15 @@ end architecture;
         fsim::elaboration::elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_loop_behavior(rtl)");
+    for (const auto& diagnostic :
+         generated_vhdl_loop_behavior.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
     assert(generated_vhdl_loop_behavior.ok());
     assert(
         generated_vhdl_loop_behavior.design->processes().size()
-        == 3);
+        == 6);
     auto generated_vhdl_loop_behavior_interpreter =
         generated_vhdl_loop_behavior.design->create_interpreter();
     assert(
@@ -1236,7 +1306,7 @@ end architecture;
         == fsim::runtime::RunStatus::completed);
     const std::array<std::string_view, 3>
         generated_vhdl_loop_behavior_values{
-            "0100", "0101", "0110"};
+            "0101", "0110", "0111"};
     std::unordered_set<std::string> generated_vhdl_type_identities;
     for (std::size_t index = 0; index < 3; ++index) {
       const auto signal =

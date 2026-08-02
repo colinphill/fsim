@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_parser_internal.hpp"
 
+#include <unordered_map>
+
 namespace fsim::frontend {
 
 void VhdlParser::parse_type_declaration(
@@ -587,6 +589,195 @@ void VhdlParser::parse_signal_declaration(
           false,
           span_from(start, previous())});
     }
+  }
+}
+
+void VhdlParser::parse_vhdl_object_alias(
+    std::vector<SignalAliasDeclaration>& aliases,
+    const Token& start) {
+  const auto name = expect_identifier("alias name");
+  if (!match(TokenKind::Colon)) {
+    error(
+        name,
+        "FSIM-VHDL-UNSUPPORTED-054",
+        "bounded object aliases require an explicit subtype indication");
+    skip_to_semicolon();
+    return;
+  }
+  auto type = parse_vhdl_type(true, true);
+  expect_keyword("is", true, "FSIM-VHDL-PARSE-236");
+  const auto actual = expect_identifier("alias target");
+  expect(
+      TokenKind::Semicolon,
+      "';' after alias declaration",
+      "FSIM-VHDL-PARSE-236");
+  const auto canonical = vhdl_name(name.text);
+  if (std::ranges::any_of(
+          aliases,
+          [&](const auto& alias) {
+            return alias.name == canonical;
+          })) {
+    error(
+        name,
+        "FSIM-VHDL-SEM-083",
+        "duplicate bounded object alias '" + canonical + "'");
+    return;
+  }
+  aliases.push_back(SignalAliasDeclaration{
+      canonical,
+      vhdl_name(actual.text),
+      std::move(type),
+      PortDirection::Unknown,
+      span_from(start, previous())});
+}
+
+bool VhdlParser::parse_vhdl_local_nonobject_declaration(
+    std::vector<ParameterDeclaration>& constants,
+    std::vector<TypeAliasDeclaration>& type_aliases,
+    std::vector<SignalAliasDeclaration>& signal_aliases,
+    const std::vector<VariableDeclaration>& variables,
+    std::vector<PackageInstantiation>& package_instances,
+    std::vector<FunctionDeclaration>& functions,
+    std::vector<ProcedureDeclaration>& procedures) {
+  if (match_keyword("constant", true)) {
+    GenerateBody declarations;
+    declarations.constants = std::move(constants);
+    declarations.type_aliases = std::move(type_aliases);
+    declarations.signals.reserve(variables.size());
+    for (const auto& variable : variables) {
+      declarations.signals.push_back(SignalDeclaration{
+          variable.name,
+          variable.type,
+          PortDirection::Unknown,
+          false,
+          variable.span});
+    }
+    parse_vhdl_generate_constant(
+        declarations, previous());
+    constants = std::move(declarations.constants);
+    type_aliases = std::move(declarations.type_aliases);
+    return true;
+  }
+  if (match_keyword("alias", true)) {
+    parse_vhdl_object_alias(signal_aliases, previous());
+    return true;
+  }
+  if (keyword("package", 0, true)
+      && at(TokenKind::Identifier, 1)
+      && keyword("is", 2, true)
+      && keyword("new", 3, true)) {
+    const auto package_start = advance();
+    auto instance =
+        parse_vhdl_package_instantiation(package_start);
+    if (std::ranges::any_of(
+            package_instances,
+            [&](const auto& existing) {
+              return existing.name == instance.name;
+            })) {
+      error(
+          package_start,
+          "FSIM-VHDL-SEM-059",
+          "duplicate local package instance '"
+              + instance.name + "'");
+    } else {
+      package_instances.push_back(std::move(instance));
+    }
+    return true;
+  }
+  if (keyword("pure", 0, true)
+      || keyword("impure", 0, true)) {
+    const auto pure = keyword("pure", 0, true);
+    (void)advance();
+    expect_keyword("function", true, "FSIM-VHDL-PARSE-235");
+    functions.push_back(
+        parse_vhdl_function(previous(), pure, true));
+    return true;
+  }
+  if (match_keyword("function", true)) {
+    functions.push_back(
+        parse_vhdl_function(previous(), true, true));
+    return true;
+  }
+  if (match_keyword("procedure", true)) {
+    procedures.push_back(
+        parse_vhdl_procedure(previous(), true));
+    return true;
+  }
+  if (!match_keyword("type", true)
+      && !match_keyword("subtype", true)) {
+    return false;
+  }
+  const auto declaration = previous();
+  const auto subtype =
+      vhdl_name(declaration.text) == "subtype";
+  DesignUnit declarations;
+  declarations.type_aliases = std::move(type_aliases);
+  if (subtype) {
+    parse_subtype_declaration(
+        declarations, declaration, true);
+  } else {
+    parse_type_declaration(
+        declarations, declaration, true);
+  }
+  type_aliases = std::move(declarations.type_aliases);
+  return true;
+}
+
+void VhdlParser::validate_vhdl_local_declaration_names(
+    const std::vector<ParameterDeclaration>& constants,
+    const std::vector<TypeAliasDeclaration>& type_aliases,
+    const std::vector<SignalAliasDeclaration>& signal_aliases,
+    const std::vector<VariableDeclaration>& variables,
+    const std::vector<PackageInstantiation>& package_instances,
+    const std::vector<FunctionDeclaration>& functions,
+    const std::vector<ProcedureDeclaration>& procedures) {
+  struct LocalName {
+    std::string name;
+    std::string family;
+    SourceSpan span;
+    bool callable{};
+  };
+  std::vector<LocalName> names;
+  const auto append = [&](const auto& declarations,
+                          const std::string_view family,
+                          const bool callable = false) {
+    for (const auto& declaration : declarations) {
+      names.push_back({
+          declaration.name,
+          std::string{family},
+          declaration.span,
+          callable});
+    }
+  };
+  append(constants, "constant");
+  append(type_aliases, "type");
+  append(signal_aliases, "alias");
+  append(variables, "variable");
+  append(package_instances, "package");
+  append(functions, "function", true);
+  append(procedures, "procedure", true);
+  std::ranges::stable_sort(
+      names, {}, [](const auto& declaration) {
+        return declaration.span.begin.offset;
+      });
+  std::unordered_map<std::string, LocalName> prior;
+  for (const auto& declaration : names) {
+    const auto [found, inserted] =
+        prior.try_emplace(declaration.name, declaration);
+    if (inserted || found->second.family == declaration.family
+        || (found->second.callable && declaration.callable)) {
+      continue;
+    }
+    error(
+        Token{
+            TokenKind::Identifier,
+            declaration.name,
+            declaration.span,
+            {}},
+        "FSIM-VHDL-SEM-082",
+        "local " + declaration.family + " declaration '"
+            + declaration.name + "' conflicts with prior "
+            + found->second.family + " declaration");
   }
 }
 

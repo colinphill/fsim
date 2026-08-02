@@ -279,6 +279,42 @@ void fold_vhdl_static_type_expressions(
         }
       }
     };
+    const auto fold_local_region =
+        [&](const auto& self, auto& region) -> void {
+          for (auto& constant : region.constants) {
+            fold_variable(constant);
+          }
+          for (auto& alias : region.type_aliases) {
+            fold_type(fold_type, alias.type);
+          }
+          for (auto& alias : region.signal_aliases) {
+            fold_type(fold_type, alias.type);
+          }
+          for (auto& variable : region.variables) {
+            fold_variable(variable);
+          }
+          for (auto& function : region.functions) {
+            fold_type(fold_type, function.return_type);
+            for (auto& argument : function.arguments) {
+              fold_type(fold_type, argument.type);
+            }
+            self(self, function);
+          }
+          for (auto& procedure : region.procedures) {
+            for (auto& argument : procedure.arguments) {
+              fold_type(fold_type, argument.type);
+            }
+            self(self, procedure);
+          }
+          for (auto& package : region.package_instances) {
+            for (auto& actual : package.generic_map) {
+              if (actual.type_value) {
+                fold_type(fold_type, *actual.type_value);
+              }
+            }
+          }
+          fold_statements(fold_statements, region.statements);
+        };
     for (auto& parameter : unit.parameters) {
       fold_type(fold_type, parameter.type);
     }
@@ -299,19 +335,13 @@ void fold_vhdl_static_type_expressions(
       for (auto& argument : function.arguments) {
         fold_type(fold_type, argument.type);
       }
-      for (auto& variable : function.variables) {
-        fold_variable(variable);
-      }
-      fold_statements(fold_statements, function.statements);
+      fold_local_region(fold_local_region, function);
     }
     for (auto& procedure : unit.procedures) {
       for (auto& argument : procedure.arguments) {
         fold_type(fold_type, argument.type);
       }
-      for (auto& variable : procedure.variables) {
-        fold_variable(variable);
-      }
-      fold_statements(fold_statements, procedure.statements);
+      fold_local_region(fold_local_region, procedure);
     }
     for (auto& task : unit.tasks) {
       for (auto& argument : task.arguments) {
@@ -323,10 +353,7 @@ void fold_vhdl_static_type_expressions(
       fold_statements(fold_statements, task.statements);
     }
     for (auto& process : unit.processes) {
-      for (auto& variable : process.variables) {
-        fold_variable(variable);
-      }
-      fold_statements(fold_statements, process.statements);
+      fold_local_region(fold_local_region, process);
     }
     fold_statements(fold_statements, unit.concurrent_statements);
 }

@@ -4,6 +4,67 @@
 namespace fsim::elaboration::elaboration_detail {
 using namespace runtime::simir;
 
+void qualify_generated_expression(
+    Expression& expression,
+    const GeneratedNameEnvironment& names) {
+    if (expression.kind == ExpressionKind::Identifier
+        || expression.kind == ExpressionKind::Call) {
+        if (const auto found = names.find(expression.text);
+            found != names.end()) {
+            expression.text = found->second;
+        } else if (const auto separator = expression.text.find('.');
+                   separator != std::string::npos) {
+            if (const auto prefix = names.find(
+                    expression.text.substr(0, separator));
+                prefix != names.end()) {
+                expression.text = prefix->second
+                    + expression.text.substr(separator);
+            }
+        }
+    }
+    for (auto& association :
+         expression.aggregate_choice_expressions) {
+        for (auto& choice : association) {
+            qualify_generated_expression(choice, names);
+        }
+    }
+    for (auto& operand : expression.operands) {
+        qualify_generated_expression(operand, names);
+    }
+}
+
+void qualify_generated_type(
+    frontend::Type& type,
+    const GeneratedNameEnvironment& names) {
+    if (!type.named_type.empty()) {
+        if (const auto found = names.find(type.named_type);
+            found != names.end()) {
+            if (type.spelling == type.named_type) {
+                type.spelling = found->second;
+            }
+            type.named_type = found->second;
+        } else if (const auto separator = type.named_type.find('.');
+                   separator != std::string::npos) {
+            if (const auto prefix = names.find(
+                    type.named_type.substr(0, separator));
+                prefix != names.end()) {
+                if (type.spelling == type.named_type) {
+                    type.spelling = prefix->second
+                        + type.named_type.substr(separator);
+                }
+                type.named_type = prefix->second
+                    + type.named_type.substr(separator);
+            }
+        }
+    }
+    if (type.systemverilog_container
+        && type.systemverilog_container->associative_index_type) {
+        qualify_generated_type(
+            *type.systemverilog_container->associative_index_type,
+            names);
+    }
+}
+
 void substitute_parameters(
     frontend::GenerateBody& body,
     const ConstantEnvironment& environment,
@@ -55,6 +116,156 @@ void substitute_parameters(
             diagnostics,
             language);
     }
+    const auto substitute_local_declarations =
+        [&](auto&& self,
+            auto& owner,
+            const ConstantEnvironment& parent_environment,
+            const ConstantDomainEnvironment& parent_domains) -> void {
+          auto local_environment = parent_environment;
+          auto local_domains = parent_domains;
+          frontend::GenerateBody declarations;
+          declarations.constants = std::move(owner.constants);
+          declarations.type_aliases = std::move(owner.type_aliases);
+          evaluate_generated_constants(
+              declarations,
+              local_environment,
+              local_domains,
+              language,
+              diagnostics);
+          owner.constants = std::move(declarations.constants);
+          owner.type_aliases =
+              std::move(declarations.type_aliases);
+          for (auto& alias : owner.type_aliases) {
+              substitute_parameters(
+                  alias.type,
+                  local_environment,
+                  local_domains,
+                  diagnostics,
+                  language);
+          }
+          for (auto& alias : owner.signal_aliases) {
+              substitute_parameters(
+                  alias.type,
+                  local_environment,
+                  local_domains,
+                  diagnostics,
+                  language);
+          }
+          for (auto& variable : owner.variables) {
+              substitute_parameters(
+                  variable,
+                  local_environment,
+                  local_domains,
+                  diagnostics,
+                  language);
+          }
+          for (auto& package : owner.package_instances) {
+              for (auto& actual : package.generic_map) {
+                  substitute_parameters(
+                      actual.value,
+                      local_environment,
+                      local_domains,
+                      language);
+                  if (actual.type_value) {
+                      substitute_parameters(
+                          *actual.type_value,
+                          local_environment,
+                          local_domains,
+                          diagnostics,
+                          language);
+                  }
+              }
+          }
+          for (auto& function : owner.functions) {
+              self(
+                  self,
+                  function,
+                  local_environment,
+                  local_domains);
+          }
+          for (auto& procedure : owner.procedures) {
+              self(
+                  self,
+                  procedure,
+                  local_environment,
+                  local_domains);
+          }
+          substitute_parameters(
+              owner.statements,
+              local_environment,
+              local_domains,
+              diagnostics,
+              language);
+        };
+    const auto substitute_deferred_local_declarations =
+        [&](auto&& self, auto& owner) -> void {
+          for (auto& constant : owner.constants) {
+              substitute_parameters(
+                  constant.type,
+                  environment,
+                  domains,
+                  diagnostics,
+                  language);
+              substitute_parameters(
+                  constant.default_value,
+                  environment,
+                  domains,
+                  language);
+          }
+          for (auto& alias : owner.type_aliases) {
+              substitute_parameters(
+                  alias.type,
+                  environment,
+                  domains,
+                  diagnostics,
+                  language);
+          }
+          for (auto& alias : owner.signal_aliases) {
+              substitute_parameters(
+                  alias.type,
+                  environment,
+                  domains,
+                  diagnostics,
+                  language);
+          }
+          for (auto& variable : owner.variables) {
+              substitute_parameters(
+                  variable,
+                  environment,
+                  domains,
+                  diagnostics,
+                  language);
+          }
+          for (auto& package : owner.package_instances) {
+              for (auto& actual : package.generic_map) {
+                  substitute_parameters(
+                      actual.value,
+                      environment,
+                      domains,
+                      language);
+                  if (actual.type_value) {
+                      substitute_parameters(
+                          *actual.type_value,
+                          environment,
+                          domains,
+                          diagnostics,
+                          language);
+                  }
+              }
+          }
+          for (auto& function : owner.functions) {
+              self(self, function);
+          }
+          for (auto& procedure : owner.procedures) {
+              self(self, procedure);
+          }
+          substitute_parameters(
+              owner.statements,
+              environment,
+              domains,
+              diagnostics,
+              language);
+        };
     for (auto& function : body.functions) {
         substitute_parameters(
             function.return_type,
@@ -77,20 +288,11 @@ void substitute_parameters(
                     language);
             }
         }
-        for (auto& variable : function.variables) {
-            substitute_parameters(
-                variable,
-                environment,
-                domains,
-                diagnostics,
-                language);
-        }
-        substitute_parameters(
-            function.statements,
+        substitute_local_declarations(
+            substitute_local_declarations,
+            function,
             environment,
-            domains,
-            diagnostics,
-            language);
+            domains);
     }
     for (auto& task : body.tasks) {
         for (auto& argument : task.arguments) {
@@ -139,16 +341,11 @@ void substitute_parameters(
                     language);
             }
         }
-        for (auto& variable : procedure.variables) {
-            substitute_parameters(
-                variable, environment, domains, diagnostics, language);
-        }
-        substitute_parameters(
-            procedure.statements,
+        substitute_local_declarations(
+            substitute_local_declarations,
+            procedure,
             environment,
-            domains,
-            diagnostics,
-            language);
+            domains);
     }
     const auto substitute_generic_parameters =
         [&](auto& parameters) {
@@ -223,20 +420,9 @@ void substitute_parameters(
                 diagnostics,
                 language);
         }
-        for (auto& variable : function.variables) {
-            substitute_parameters(
-                variable,
-                environment,
-                domains,
-                diagnostics,
-                language);
-        }
-        substitute_parameters(
-            function.statements,
-            environment,
-            domains,
-            diagnostics,
-            language);
+        substitute_deferred_local_declarations(
+            substitute_deferred_local_declarations,
+            function);
     }
     for (auto& generic : body.generic_procedure_templates) {
         substitute_generic_parameters(generic.generic_parameters);
@@ -249,20 +435,9 @@ void substitute_parameters(
                 diagnostics,
                 language);
         }
-        for (auto& variable : procedure.variables) {
-            substitute_parameters(
-                variable,
-                environment,
-                domains,
-                diagnostics,
-                language);
-        }
-        substitute_parameters(
-            procedure.statements,
-            environment,
-            domains,
-            diagnostics,
-            language);
+        substitute_deferred_local_declarations(
+            substitute_deferred_local_declarations,
+            procedure);
     }
     const auto substitute_generic_maps =
         [&](auto& instances) {
@@ -294,14 +469,11 @@ void substitute_parameters(
         diagnostics,
         language);
     for (auto& process : body.processes) {
-        for (auto& variable : process.variables) {
-            substitute_parameters(
-                variable,
-                environment,
-                domains,
-                diagnostics,
-                language);
-        }
+        substitute_local_declarations(
+            substitute_local_declarations,
+            process,
+            environment,
+            domains);
         for (auto& sensitivity : process.sensitivities) {
             substitute_parameters(
                 sensitivity.expression,
@@ -309,12 +481,6 @@ void substitute_parameters(
                 domains,
                 language);
         }
-        substitute_parameters(
-            process.statements,
-            environment,
-            domains,
-            diagnostics,
-            language);
     }
     substitute_parameters(
         body.instances, environment, domains, language);

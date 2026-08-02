@@ -314,6 +314,7 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-233` | error | Expected `;` after a VHDL block port-map aspect. |
 | `FSIM-VHDL-PARSE-234` | error | Expected `begin` after a VHDL generate declarative part. |
 | `FSIM-VHDL-PARSE-235` | error | Expected `function` after a `pure` or `impure` prefix in a VHDL generate declarative part. |
+| `FSIM-VHDL-PARSE-236` | error | A bounded VHDL object alias is missing `is`, its target, or its terminating semicolon. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -391,12 +392,14 @@ therefore excluded.
 | `FSIM-VHDL-SEM-078` | error | A named port actual is repeated in one instance map. |
 | `FSIM-VHDL-SEM-079` | error | A positional port actual follows a named actual. |
 | `FSIM-VHDL-SEM-081` | error | A generated VHDL declarative item conflicts with an earlier declaration from a different non-overloadable family. |
+| `FSIM-VHDL-SEM-082` | error | A process or subprogram local declarative item conflicts with an earlier declaration from a different non-overloadable family. |
+| `FSIM-VHDL-SEM-083` | error | A bounded VHDL declarative region repeats an object alias name. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
 | `FSIM-VHDL-UNSUPPORTED-005` | error | Unsupported labeled concurrent statement. |
 | `FSIM-VHDL-UNSUPPORTED-006` | error | Unsupported concurrent statement. |
-| `FSIM-VHDL-UNSUPPORTED-007` | error | A process declarative item is not a bounded variable declaration. |
+| `FSIM-VHDL-UNSUPPORTED-007` | error | A process declarative item is outside the bounded constant, type/subtype, variable, alias, package-instance, and local-callable subset. |
 | `FSIM-VHDL-UNSUPPORTED-008` | error | Unsupported sequential statement. |
 | `FSIM-VHDL-UNSUPPORTED-012` | error | Signal initializers are parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-014` | error | An integer-family subtype appears in a declaration context that does not yet admit scalar integer objects. |
@@ -416,20 +419,21 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-031` | error | A VHDL function formal type is outside the bounded scalar integral or visible scalar-subtype profile. |
 | `FSIM-VHDL-UNSUPPORTED-033` | error | A VHDL interface function uses an operator-symbol designator. |
 | `FSIM-VHDL-UNSUPPORTED-034` | error | A VHDL function result type is outside the bounded scalar integral or visible scalar-subtype profile. |
-| `FSIM-VHDL-UNSUPPORTED-035` | error | A VHDL function declarative item is not a local variable. |
+| `FSIM-VHDL-UNSUPPORTED-035` | error | A VHDL function declarative item is outside the bounded local constant, type/subtype, variable, alias, package-instance, and callable subset. |
 | `FSIM-VHDL-UNSUPPORTED-037` | error | A bounded VHDL function body contains timing, signal updates, or another unsupported statement. |
 | `FSIM-VHDL-UNSUPPORTED-038` | error | A bounded VHDL procedure formal has signal or file class rather than constant or variable class. |
 | `FSIM-VHDL-UNSUPPORTED-039` | error | A bounded VHDL procedure formal uses buffer, linkage, or another unsupported mode. |
 | `FSIM-VHDL-UNSUPPORTED-040` | error | A VHDL procedure formal type is outside the bounded scalar integral or visible scalar-subtype profile. |
 | `FSIM-VHDL-UNSUPPORTED-042` | error | A VHDL procedure uses an operator-symbol designator. |
-| `FSIM-VHDL-UNSUPPORTED-043` | error | A VHDL procedure declarative item is not a local variable. |
+| `FSIM-VHDL-UNSUPPORTED-043` | error | A VHDL procedure declarative item is outside the bounded local constant, type/subtype, variable, alias, package-instance, and callable subset. |
 | `FSIM-VHDL-UNSUPPORTED-044` | error | A bounded VHDL procedure body contains timing, signal updates, or another unsupported statement. |
 | `FSIM-VHDL-UNSUPPORTED-045` | error | A nested interface-package formal appears in a bounded generic subprogram template. |
 | `FSIM-VHDL-UNSUPPORTED-046` | error | A generic function instantiation carries a `pure` or `impure` prefix. |
 | `FSIM-VHDL-UNSUPPORTED-047` | error | A bounded generic function template is impure. |
 | `FSIM-VHDL-UNSUPPORTED-050` | error | A configuration declaration contains an item outside the bounded architecture/component configuration subset. |
 | `FSIM-VHDL-UNSUPPORTED-052` | error | A component declaration contains an unsupported declarative item. |
-| `FSIM-VHDL-UNSUPPORTED-053` | error | A generated VHDL declarative region contains an item outside the bounded constant, signal, type, subtype, callable, component, and local-package subset. |
+| `FSIM-VHDL-UNSUPPORTED-053` | error | A generated VHDL declarative region contains an item outside the bounded constant, signal, alias, type, subtype, callable, component, and local-package subset. |
+| `FSIM-VHDL-UNSUPPORTED-054` | error | A bounded VHDL object alias omits its explicit subtype indication. |
 
 ## Verilog and SystemVerilog frontend
 
@@ -994,7 +998,7 @@ therefore excluded.
 | `FSIM-ELAB-GEN-013` | error | A VHDL block guard expression has a non-Boolean type. |
 | `FSIM-ELAB-VHBLOCK-001` | error | A VHDL block generic map is missing, excessive, duplicated, unknown, misordered, or selects an unavailable default. |
 | `FSIM-ELAB-VHBLOCK-002` | error | A VHDL block port map is missing, excessive, duplicated, unknown, misordered, or uses an illegal actual for the formal mode. |
-| `FSIM-ELAB-VHBLOCK-003` | error | A VHDL block port alias names an unknown or profile-incompatible enclosing signal. |
+| `FSIM-ELAB-VHBLOCK-003` | error | A VHDL object or block-port alias names an unknown or profile-incompatible signal target. |
 | `FSIM-ELAB-PKG-001` | error | A bounded VHDL package import is not `library.package.all` or `library.package.constant`. |
 | `FSIM-ELAB-PKG-002` | error | A project VHDL package named by a use clause was not found in the selected library. |
 | `FSIM-ELAB-PKG-003` | error | A selected package constant or type named by a use clause does not exist. |

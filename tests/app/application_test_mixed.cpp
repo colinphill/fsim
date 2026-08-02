@@ -852,7 +852,7 @@ verify_generated_behavior(
 const auto generated_callable_baseline = verify_generated_behavior(
     generated_behavior_vhdl_config,
     {"chosen.generated_value", "chosen.mapped_value"},
-    {"0111", "0110", "0111"},
+    {"1000", "0110", "0111"},
     3,
     0,
     {{"chosen.mapped_shift",
@@ -863,9 +863,9 @@ const auto generated_callable_baseline = verify_generated_behavior(
       "template=work.generated_math;bias=5"}});
 verify_generated_behavior(
     generated_loop_declarations_vhdl_config,
-    {"lanes[2].generated_value"},
-    {"0111", "0110"},
-    2);
+    {"architecture_value", "lanes[2].generated_value"},
+    {"0111", "0110", "0110"},
+    3);
 verify_generated_behavior(
     generated_range_behavior_vhdl_config,
     {"selected.selected_value"},
@@ -966,7 +966,7 @@ const auto generated_callable_edited = run_generated_behavior(
      {"chosen.selected_math", "bias=5"}});
 assert(generated_callable_edited.keys != generated_callable_baseline.keys);
 assert((generated_callable_edited.simulation.final_values
-        == std::vector<std::string>{"0111", "0110", "1000"}));
+        == std::vector<std::string>{"1000", "0110", "1000"}));
 #if defined(FSIM_HAS_LLVM)
 assert(generated_callable_edited.simulation.native_cache.hits == 0);
 assert(generated_callable_edited.simulation.native_cache.misses == 1);

@@ -1116,6 +1116,87 @@ SpecializedUnit specialize_unit(
             diagnostics,
             source.language);
     }
+    const auto specialize_local_declarations =
+        [&](auto&& self,
+            auto& owner,
+            const ConstantEnvironment& enclosing_environment,
+            const ConstantDomainEnvironment& enclosing_domains) -> void {
+          auto local_environment = enclosing_environment;
+          auto local_domains = enclosing_domains;
+          frontend::GenerateBody declarations;
+          declarations.constants = std::move(owner.constants);
+          declarations.type_aliases = std::move(owner.type_aliases);
+          evaluate_generated_constants(
+              declarations,
+              local_environment,
+              local_domains,
+              source.language,
+              diagnostics);
+          owner.constants = std::move(declarations.constants);
+          owner.type_aliases =
+              std::move(declarations.type_aliases);
+          for (auto& alias : owner.type_aliases) {
+              substitute_parameters(
+                  alias.type,
+                  local_environment,
+                  local_domains,
+                  diagnostics,
+                  source.language);
+          }
+          for (auto& alias : owner.signal_aliases) {
+              substitute_parameters(
+                  alias.type,
+                  local_environment,
+                  local_domains,
+                  diagnostics,
+                  source.language);
+          }
+          for (auto& variable : owner.variables) {
+              substitute_parameters(
+                  variable,
+                  local_environment,
+                  local_domains,
+                  diagnostics,
+                  source.language);
+          }
+          for (auto& package : owner.package_instances) {
+              for (auto& actual : package.generic_map) {
+                  substitute_parameters(
+                      actual.value,
+                      local_environment,
+                      local_domains,
+                      source.language);
+                  if (actual.type_value) {
+                      substitute_parameters(
+                          *actual.type_value,
+                          local_environment,
+                          local_domains,
+                          diagnostics,
+                          source.language);
+                  }
+              }
+          }
+          for (auto& function : owner.functions) {
+              self(
+                  self,
+                  function,
+                  local_environment,
+                  local_domains);
+          }
+          for (auto& procedure : owner.procedures) {
+              self(
+                  self,
+                  procedure,
+                  local_environment,
+                  local_domains);
+          }
+          substitute_parameters(
+              owner.statements,
+              local_environment,
+              local_domains,
+              diagnostics,
+              source.language);
+        };
     for (auto& function : result.unit.functions) {
         substitute_parameters(
             function.return_type,
@@ -1131,20 +1212,11 @@ SpecializedUnit specialize_unit(
                 diagnostics,
                 source.language);
         }
-        for (auto& variable : function.variables) {
-            substitute_parameters(
-                variable,
-                result.environment,
-                domains,
-                diagnostics,
-                source.language);
-        }
-        substitute_parameters(
-            function.statements,
+        specialize_local_declarations(
+            specialize_local_declarations,
+            function,
             result.environment,
-            domains,
-            diagnostics,
-            source.language);
+            domains);
     }
     for (auto& task : result.unit.tasks) {
         for (auto& argument : task.arguments) {
@@ -1186,20 +1258,11 @@ SpecializedUnit specialize_unit(
                     source.language);
             }
         }
-        for (auto& variable : procedure.variables) {
-            substitute_parameters(
-                variable,
-                result.environment,
-                domains,
-                diagnostics,
-                source.language);
-        }
-        substitute_parameters(
-            procedure.statements,
+        specialize_local_declarations(
+            specialize_local_declarations,
+            procedure,
             result.environment,
-            domains,
-            diagnostics,
-            source.language);
+            domains);
     }
     const auto substitute_generic_parameters =
         [&](auto& parameters) {
@@ -1279,20 +1342,6 @@ SpecializedUnit specialize_unit(
                 diagnostics,
                 source.language);
         }
-        for (auto& variable : function.variables) {
-            substitute_parameters(
-                variable,
-                result.environment,
-                domains,
-                diagnostics,
-                source.language);
-        }
-        substitute_parameters(
-            function.statements,
-            result.environment,
-            domains,
-            diagnostics,
-            source.language);
     }
     for (auto& generic :
          result.unit.generic_procedure_templates) {
@@ -1314,20 +1363,6 @@ SpecializedUnit specialize_unit(
                     source.language);
             }
         }
-        for (auto& variable : procedure.variables) {
-            substitute_parameters(
-                variable,
-                result.environment,
-                domains,
-                diagnostics,
-                source.language);
-        }
-        substitute_parameters(
-            procedure.statements,
-            result.environment,
-            domains,
-            diagnostics,
-            source.language);
     }
     const auto substitute_generic_maps =
         [&](auto& instances) {
@@ -1360,20 +1395,11 @@ SpecializedUnit specialize_unit(
         diagnostics,
         source.language);
     for (auto& process : result.unit.processes) {
-        for (auto& variable : process.variables) {
-            substitute_parameters(
-                variable,
-                result.environment,
-                domains,
-                diagnostics,
-                source.language);
-        }
-        substitute_parameters(
-            process.statements,
+        specialize_local_declarations(
+            specialize_local_declarations,
+            process,
             result.environment,
-            domains,
-            diagnostics,
-            source.language);
+            domains);
     }
     substitute_parameters(
         result.unit.instances,

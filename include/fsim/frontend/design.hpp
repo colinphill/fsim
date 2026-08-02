@@ -1059,9 +1059,18 @@ enum class ProcessKind {
   Final,
 };
 
+struct FunctionDeclaration;
+struct ProcedureDeclaration;
+
 struct Process {
   ProcessKind kind{ProcessKind::VhdlProcess};
   std::string name;
+  std::vector<ParameterDeclaration> constants;
+  std::vector<TypeAliasDeclaration> type_aliases;
+  std::vector<SignalAliasDeclaration> signal_aliases;
+  std::vector<PackageInstantiation> package_instances;
+  std::vector<FunctionDeclaration> functions;
+  std::vector<ProcedureDeclaration> procedures;
   std::vector<VariableDeclaration> variables;
   std::vector<Sensitivity> sensitivities;
   std::vector<Statement> statements;
@@ -1078,6 +1087,12 @@ struct FunctionDeclaration {
   std::string name;
   Type return_type;
   std::vector<FunctionArgument> arguments;
+  std::vector<ParameterDeclaration> constants;
+  std::vector<TypeAliasDeclaration> type_aliases;
+  std::vector<SignalAliasDeclaration> signal_aliases;
+  std::vector<PackageInstantiation> package_instances;
+  std::vector<FunctionDeclaration> functions;
+  std::vector<ProcedureDeclaration> procedures;
   std::vector<VariableDeclaration> variables;
   std::vector<Statement> statements;
   bool automatic{};
@@ -1141,6 +1156,12 @@ struct TaskDeclaration {
 struct ProcedureDeclaration {
   std::string name;
   std::vector<ProcedureArgument> arguments;
+  std::vector<ParameterDeclaration> constants;
+  std::vector<TypeAliasDeclaration> type_aliases;
+  std::vector<SignalAliasDeclaration> signal_aliases;
+  std::vector<PackageInstantiation> package_instances;
+  std::vector<FunctionDeclaration> functions;
+  std::vector<ProcedureDeclaration> procedures;
   std::vector<VariableDeclaration> variables;
   std::vector<Statement> statements;
   Language language{Language::Vhdl2008};

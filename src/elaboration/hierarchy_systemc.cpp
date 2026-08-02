@@ -793,8 +793,8 @@ using namespace elaboration_detail;
             if (actual == local.end()) {
                 report(
                     "FSIM-ELAB-VHBLOCK-003",
-                    "unknown enclosing signal '" + alias.actual
-                        + "' for block port '" + alias.name + "'",
+                    "unknown signal target '" + alias.actual
+                        + "' for object alias '" + alias.name + "'",
                     alias.span);
                 continue;
             }
@@ -824,9 +824,15 @@ using namespace elaboration_detail;
                         != info.nominal_type)) {
                 report(
                     "FSIM-ELAB-VHBLOCK-003",
-                    "block port '" + alias.name
-                        + "' does not match enclosing signal '"
-                        + alias.actual + "'",
+                    "object alias '" + alias.name
+                        + "' does not match signal target '"
+                        + alias.actual + "' (alias width="
+                        + (width ? std::to_string(*width) : "unknown")
+                        + ", signal width="
+                        + std::to_string(info.width)
+                        + ", alias nominal='" + alias.type.nominal_type
+                        + "', signal nominal='" + info.nominal_type
+                        + "')",
                     alias.span);
                 continue;
             }

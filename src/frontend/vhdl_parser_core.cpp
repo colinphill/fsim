@@ -978,7 +978,15 @@ DesignUnit VhdlParser::parse_architecture(const Token& start) {
       parse_vhdl_generic_subprogram(
           unit, generic_start, true);
     } else if (match_keyword("signal", true)) {
-      parse_signal_declaration(unit.signals);
+      parse_signal_declaration(unit.signals, &unit.parameters);
+    } else if (match_keyword("alias", true)) {
+      parse_vhdl_object_alias(unit.signal_aliases, previous());
+    } else if (match_keyword("constant", true)) {
+      GenerateBody declarations;
+      declarations.constants = std::move(unit.parameters);
+      parse_vhdl_generate_constant(
+          declarations, previous());
+      unit.parameters = std::move(declarations.constants);
     } else if (
         (keyword("pure", 0, true)
          || keyword("impure", 0, true))

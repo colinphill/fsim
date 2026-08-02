@@ -411,6 +411,12 @@ bool VhdlParser::parse_vhdl_generate_declarations(
           std::move(declarations.type_aliases);
       continue;
     }
+    if (match_keyword("alias", true)) {
+      parsed = true;
+      parse_vhdl_object_alias(
+          body.signal_aliases, previous());
+      continue;
+    }
     if (keyword("pure", 0, true)
         || keyword("impure", 0, true)) {
       parsed = true;
@@ -515,7 +521,6 @@ bool VhdlParser::parse_vhdl_generate_declarations(
     if (keyword("variable", 0, true)
         || keyword("shared", 0, true)
         || keyword("file", 0, true)
-        || keyword("alias", 0, true)
         || keyword("attribute", 0, true)
         || keyword("use", 0, true)
         || keyword("group", 0, true)
@@ -925,13 +930,22 @@ Process VhdlParser::parse_process(std::string label) {
   }
   match_keyword("is", true);
   while (!at_end() && !keyword("begin", 0, true)) {
+    if (parse_vhdl_local_nonobject_declaration(
+            process.constants,
+            process.type_aliases,
+            process.signal_aliases,
+            process.variables,
+            process.package_instances,
+            process.functions,
+            process.procedures)) {
+      continue;
+    }
     if (!match_keyword("variable", true)) {
       const auto declaration = current();
       error(
           declaration,
           "FSIM-VHDL-UNSUPPORTED-007",
-          "only process variable declarations are implemented in this "
-          "declarative slice");
+          "unsupported process declarative item");
       while (!at_end() && !keyword("begin", 0, true)
              && !at(TokenKind::Semicolon)) {
         advance();
@@ -965,6 +979,14 @@ Process VhdlParser::parse_process(std::string label) {
           span_from(name, previous())});
     }
   }
+  validate_vhdl_local_declaration_names(
+      process.constants,
+      process.type_aliases,
+      process.signal_aliases,
+      process.variables,
+      process.package_instances,
+      process.functions,
+      process.procedures);
   expect_keyword("begin", true, "FSIM-VHDL-PARSE-021");
   sequential_loop_labels_seen_.clear();
   process.statements = parse_statement_list({"end"});

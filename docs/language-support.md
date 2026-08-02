@@ -38,9 +38,17 @@ identity with declaration-order visibility, exact generic bindings, and
 cold/warm/edit cache provenance. Generated local-package instances are
 materialized after branch selection, including iteration-dependent maps,
 selected constants/types/callables, nested scopes, and exact package/cache
-identity. Cross-family collisions and unsupported variable, file, alias,
-attribute, use, group, or disconnect items use stable diagnostics. Process and
-subprogram local declarative-region closure remains pending.
+identity. Generated declarations also retain explicit typed signal aliases;
+variable, file, attribute, use, group, and disconnect items remain targeted
+unsupported forms. Architecture, process, ordinary-subprogram, and instantiated
+generic-subprogram regions now retain bounded constants, types/subtypes,
+signals or variables, explicit typed object aliases, local generic-package
+instances, and nested non-suspending callables. Local constants and types use
+declaration-order specialization, generic-template locals defer until their own
+actuals bind, and nested callable capture is bounded to locally static outer
+constants plus qualified local packages. Runtime outer-variable capture,
+implicit-subtype aliases, file objects, attributes, use clauses, and groups
+remain outside this local-region slice and receive deterministic diagnostics.
 
 Batch 107 SystemVerilog unit-status update: the Verilog/SV unit row's earlier
 interface and package-export exclusions are superseded. Bounded parameterized

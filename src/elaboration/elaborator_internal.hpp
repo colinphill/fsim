@@ -389,11 +389,19 @@ void collect_qualified_identifiers(
     QualifiedIdentifierMap& identifiers);
 
 void collect_qualified_identifiers(
-    const std::vector<frontend::GenerateRegion>& generates,
+    const frontend::GenerateBody& body,
     QualifiedIdentifierMap& identifiers);
 
-void collect_qualified_identifiers(
-    const frontend::GenerateBody& body,
+void collect_vhdl_local_qualified_identifiers(
+    const frontend::FunctionDeclaration& function,
+    QualifiedIdentifierMap& identifiers);
+
+void collect_vhdl_local_qualified_identifiers(
+    const frontend::ProcedureDeclaration& procedure,
+    QualifiedIdentifierMap& identifiers);
+
+void collect_vhdl_local_qualified_identifiers(
+    const frontend::Process& process,
     QualifiedIdentifierMap& identifiers);
 
 void collect_qualified_identifiers(
@@ -426,6 +434,44 @@ void visit_statement_types(
     }
 }
 
+template <typename Region, typename Visitor>
+void visit_local_region_types(
+    Region& region, Visitor& visitor) {
+    for (auto& alias : region.type_aliases) {
+        visitor(alias.type);
+    }
+    for (auto& alias : region.signal_aliases) {
+        visitor(alias.type);
+    }
+    for (auto& constant : region.constants) {
+        visitor(constant.type);
+    }
+    for (auto& variable : region.variables) {
+        visitor(variable.type);
+    }
+    for (auto& function : region.functions) {
+        visitor(function.return_type);
+        for (auto& argument : function.arguments) {
+            visitor(argument.type);
+        }
+        visit_local_region_types(function, visitor);
+    }
+    for (auto& procedure : region.procedures) {
+        for (auto& argument : procedure.arguments) {
+            visitor(argument.type);
+        }
+        visit_local_region_types(procedure, visitor);
+    }
+    for (auto& package : region.package_instances) {
+        for (auto& actual : package.generic_map) {
+            if (actual.type_value) {
+                visitor(*actual.type_value);
+            }
+        }
+    }
+    visit_statement_types(region.statements, visitor);
+}
+
 template <typename Body, typename Visitor>
 void visit_generate_body_types(
     Body& body, Visitor& visitor) {
@@ -446,10 +492,7 @@ void visit_generate_body_types(
         for (auto& argument : function.arguments) {
             visitor(argument.type);
         }
-        for (auto& variable : function.variables) {
-            visitor(variable.type);
-        }
-        visit_statement_types(function.statements, visitor);
+        visit_local_region_types(function, visitor);
     }
     for (auto& task : body.tasks) {
         for (auto& argument : task.arguments) {
@@ -464,10 +507,7 @@ void visit_generate_body_types(
         for (auto& argument : procedure.arguments) {
             visitor(argument.type);
         }
-        for (auto& variable : procedure.variables) {
-            visitor(variable.type);
-        }
-        visit_statement_types(procedure.statements, visitor);
+        visit_local_region_types(procedure, visitor);
     }
     const auto visit_generic_parameters =
         [&](auto& parameters) {
@@ -529,11 +569,7 @@ void visit_generate_body_types(
         }
     }
     for (auto& process : body.processes) {
-        for (auto& variable : process.variables) {
-            visitor(variable.type);
-        }
-        visit_statement_types(
-            process.statements, visitor);
+        visit_local_region_types(process, visitor);
     }
     visit_generate_types(
         body.generate_regions, visitor);
@@ -593,12 +629,21 @@ void visit_declared_types(
     }
     visit_statement_types(
         unit.concurrent_statements, visitor);
-    for (auto& process : unit.processes) {
-        for (auto& variable : process.variables) {
-            visitor(variable.type);
+    for (auto& function : unit.functions) {
+        visitor(function.return_type);
+        for (auto& argument : function.arguments) {
+            visitor(argument.type);
         }
-        visit_statement_types(
-            process.statements, visitor);
+        visit_local_region_types(function, visitor);
+    }
+    for (auto& procedure : unit.procedures) {
+        for (auto& argument : procedure.arguments) {
+            visitor(argument.type);
+        }
+        visit_local_region_types(procedure, visitor);
+    }
+    for (auto& process : unit.processes) {
+        visit_local_region_types(process, visitor);
     }
     visit_generate_types(
         unit.generate_regions, visitor);
@@ -623,6 +668,9 @@ using VhdlBlockInterfacePreparer = std::function<bool(
 
 void qualify_generated_expression(
     Expression& expression,
+    const GeneratedNameEnvironment& names);
+void qualify_generated_type(
+    frontend::Type& type,
     const GeneratedNameEnvironment& names);
 
 void qualify_generated_statement(
@@ -1627,6 +1675,9 @@ private:
     void instantiate_vhdl_local_packages(
         SpecializedUnit& specialized,
         const PackageEnvironment& inherited_packages);
+
+    void materialize_vhdl_local_declarations(
+        SpecializedUnit& specialized);
 
     void instantiate_vhdl_generic_subprograms(
         SpecializedUnit& specialized);
