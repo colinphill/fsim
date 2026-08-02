@@ -3,6 +3,13 @@
 
 namespace fsim::elaboration::elaboration_detail {
 
+[[nodiscard]] bool substitute_vhdl_array_layout(
+    frontend::Type& type,
+    const ConstantEnvironment& environment,
+    const ConstantDomainEnvironment& domains,
+    std::vector<Diagnostic>& diagnostics,
+    frontend::Language language);
+
 ConstantTypeInfo::ConstantTypeInfo() = default;
 
 ConstantTypeInfo::ConstantTypeInfo(
@@ -1897,6 +1904,14 @@ void substitute_parameters(
             0,
             true};
         type.packed_range_expression.reset();
+        return;
+    }
+    if (substitute_vhdl_array_layout(
+            type,
+            environment,
+            domains,
+            diagnostics,
+            language)) {
         return;
     }
     if (!type.packed_range_expression) {

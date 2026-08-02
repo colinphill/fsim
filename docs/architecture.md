@@ -299,6 +299,19 @@ four-plane Logic9 callbacks plus caller-owned third/fourth register planes.
 Per-process/per-signal SimIR value-kind metadata selects the correct path and
 drives explicit conversion at mixed-domain boundaries.
 
+Concrete VHDL user-array layout retains a source-ordered dimension vector in
+addition to the packed runtime view. Each dimension stores its exact evaluated
+left/right bounds, `to`/`downto` direction, null state, and packed-bit stride;
+the rightmost dimension varies fastest. Layout begins with the complete scalar,
+vector, record, enumeration, or nested-array element width and multiplies
+dimension extents from right to left with checked 64-bit arithmetic. A concrete
+null dimension produces total width zero without discarding its source range,
+while an unconstrained dimension leaves total width absent. One-dimensional
+arrays retain their declared packed-range mirror for existing execution;
+multidimensional arrays receive a normalized total packed range. Nominal array
+and element identities remain independent of this flattening and participate in
+generic-specialization identity.
+
 Simulation time is an unsigned 64-bit tick count at one elaborated global
 resolution. The v1 elaborator will select the finest declared VHDL, SV, or
 SystemC precision when the manifest says `auto`. It will apply SV

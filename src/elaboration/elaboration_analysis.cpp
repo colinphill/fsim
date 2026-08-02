@@ -313,6 +313,20 @@ void collect_qualified_identifiers(
     collect_discrete_range(type.enumeration_range_expression);
     collect_discrete_range(
         type.enumeration_base_range_expression);
+    for (const auto& constraint : type.vhdl_array_constraints) {
+        collect_qualified_identifiers(
+            constraint.left, identifiers);
+        collect_qualified_identifiers(
+            constraint.right, identifiers);
+    }
+    if (type.vhdl_array) {
+        for (const auto& dimension : type.vhdl_array->dimensions) {
+            collect_discrete_range(dimension.constraint);
+        }
+        for (const auto& element : type.vhdl_array->element_types) {
+            collect_qualified_identifiers(element, identifiers);
+        }
+    }
     if (type.systemverilog_container) {
         if (type.systemverilog_container->queue_maximum) {
             collect_qualified_identifiers(
@@ -1121,6 +1135,11 @@ void append_generated_body(
           for (auto& member : type.packed_members) {
               for (auto& nested : member.nested_types) {
                   self(self, nested);
+              }
+          }
+          if (type.vhdl_array) {
+              for (auto& element : type.vhdl_array->element_types) {
+                  self(self, element);
               }
           }
           if (type.systemverilog_container

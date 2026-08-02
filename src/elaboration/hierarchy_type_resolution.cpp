@@ -59,6 +59,9 @@ using namespace elaboration_detail;
             };
         const auto constraint_span =
             [](const frontend::Type& type) {
+                if (!type.vhdl_array_constraints.empty()) {
+                    return type.vhdl_array_constraints.front().span;
+                }
                 if (type.discrete_range_expression) {
                     return type.discrete_range_expression->span;
                 }
@@ -123,7 +126,12 @@ using namespace elaboration_detail;
                 const bool has_discrete_constraint =
                     derived.discrete_range_expression.has_value();
                 const bool has_packed_constraint =
-                    derived.packed_range_expression.has_value();
+                    derived.packed_range_expression.has_value()
+                    && !(base.vhdl_array
+                         && !derived.vhdl_array_constraints.empty());
+                const bool has_array_constraints =
+                    base.vhdl_array
+                    && !derived.vhdl_array_constraints.empty();
                 if (has_integer_constraint) {
                     if (base.domain
                         != frontend::ValueDomain::Integer) {
@@ -178,6 +186,56 @@ using namespace elaboration_detail;
                         return std::nullopt;
                     }
                     base.discrete_range_expression.reset();
+                }
+                if (has_array_constraints) {
+                    auto& array = *base.vhdl_array;
+                    if (derived.vhdl_array_constraints.size()
+                        != array.dimensions.size()) {
+                        report(
+                            "FSIM-ELAB-VHARRAY-008",
+                            "a VHDL array subtype constraint has "
+                            + std::to_string(
+                                derived.vhdl_array_constraints.size())
+                            + " dimensions but its base type has "
+                            + std::to_string(array.dimensions.size()),
+                            constraint_span(derived));
+                        return std::nullopt;
+                    }
+                    for (std::size_t index = 0;
+                         index < array.dimensions.size(); ++index) {
+                        auto& dimension = array.dimensions[index];
+                        if (!dimension.unconstrained
+                            || dimension.constraint
+                            || dimension.range) {
+                            report(
+                                "FSIM-ELAB-VHSUBTYPE-004",
+                                "a constrained VHDL array dimension cannot "
+                                "be constrained again",
+                                derived.vhdl_array_constraints[index].span);
+                            return std::nullopt;
+                        }
+                        dimension.constraint =
+                            derived.vhdl_array_constraints[index];
+                        dimension.range.reset();
+                        dimension.null = false;
+                        dimension.stride = 0;
+                        dimension.unconstrained = false;
+                    }
+                    array.unconstrained = false;
+                    array.flat_width.reset();
+                    base.packed_range.reset();
+                    base.packed_range_expression.reset();
+                    if (array.dimensions.size() == 1) {
+                        const auto& constraint =
+                            derived.vhdl_array_constraints.front();
+                        base.packed_range_expression =
+                            frontend::PackedRangeExpression{
+                                constraint.left,
+                                constraint.right,
+                                constraint.span,
+                                constraint.descending};
+                    }
+                    base.vhdl_array_constraints.clear();
                 }
                 if (has_packed_constraint) {
                     if (!is_packed_array_type(base)
@@ -260,16 +318,6 @@ using namespace elaboration_detail;
                 return false;
             }
             if (type.vhdl_array) {
-                if (type.vhdl_array->dimensions.size() > 1) {
-                    report(
-                        "FSIM-ELAB-VHARRAY-008",
-                        "VHDL array type '" + type.spelling
-                            + "' retains multiple index dimensions but "
-                              "does not yet have a concrete flattened "
-                              "layout",
-                        type.vhdl_array->dimensions[1].index_span);
-                    return false;
-                }
                 frontend::Type element;
                 if (!type.vhdl_array->element_types.empty()) {
                     element = type.vhdl_array->element_types.front();
@@ -281,24 +329,22 @@ using namespace elaboration_detail;
                     element.named_type_span =
                         type.vhdl_array->element_span;
                 }
-                if (!element.named_type.empty()
-                    && !resolve_type(element)) {
+                if (!resolve_type(element)) {
                     return false;
                 }
                 const auto width = element.width();
-                if (!width || *width != 1
-                    || element.vhdl_array
-                    || !element.packed_members.empty()
-                    || !element.enumeration_literals.empty()
+                if (!width || *width == 0
                     || element.domain
                         == frontend::ValueDomain::Integer
+                    || element.domain
+                        == frontend::ValueDomain::String
                     || element.domain
                         == frontend::ValueDomain::Unknown) {
                     report(
                         "FSIM-ELAB-VHARRAY-001",
                         "VHDL array type '" + type.spelling
-                            + "' requires a resolved scalar bit, Boolean, "
-                              "std_logic, or std_ulogic element subtype",
+                            + "' requires a concrete bounded scalar or "
+                              "packed composite element subtype",
                         type.vhdl_array->element_span);
                     return false;
                 }

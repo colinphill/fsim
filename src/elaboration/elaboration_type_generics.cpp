@@ -130,6 +130,18 @@ std::string canonical_type_identity(const frontend::Type& type) {
                                ? 1
                                : 0);
             }
+            if (dimension.range) {
+                output << ":range:"
+                       << dimension.range->left << ':'
+                       << dimension.range->right << ':'
+                       << (dimension.range->descending ? 1 : 0)
+                       << ":null:" << (dimension.null ? 1 : 0)
+                       << ":stride:" << dimension.stride;
+            }
+        }
+        if (type.vhdl_array->flat_width) {
+            output << ";flat-width="
+                   << *type.vhdl_array->flat_width;
         }
         for (const auto& element :
              type.vhdl_array->element_types) {
@@ -594,6 +606,9 @@ bool is_packed_array_type(const frontend::Type& type) {
 }
 
 frontend::SourceSpan constraint_span(const frontend::Type& type) {
+    if (!type.vhdl_array_constraints.empty()) {
+        return type.vhdl_array_constraints.front().span;
+    }
     if (type.discrete_range_expression) {
         return type.discrete_range_expression->span;
     }
@@ -655,7 +670,57 @@ std::optional<frontend::Type> apply_derived_constraints(
             return std::nullopt;
         }
     }
-    if (derived.packed_range_expression) {
+    if (base.vhdl_array
+        && !derived.vhdl_array_constraints.empty()) {
+        auto& array = *base.vhdl_array;
+        if (derived.vhdl_array_constraints.size()
+            != array.dimensions.size()) {
+            diagnostics.push_back({
+                "FSIM-ELAB-VHARRAY-008",
+                "a VHDL array subtype constraint has "
+                    + std::to_string(
+                        derived.vhdl_array_constraints.size())
+                    + " dimensions but its base type has "
+                    + std::to_string(array.dimensions.size()),
+                constraint_span(derived)});
+            return std::nullopt;
+        }
+        for (std::size_t index = 0;
+             index < array.dimensions.size(); ++index) {
+            auto& dimension = array.dimensions[index];
+            if (!dimension.unconstrained
+                || dimension.constraint
+                || dimension.range) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-VHSUBTYPE-004",
+                    "a constrained VHDL array dimension cannot be "
+                    "constrained again",
+                    derived.vhdl_array_constraints[index].span});
+                return std::nullopt;
+            }
+            dimension.constraint =
+                derived.vhdl_array_constraints[index];
+            dimension.range.reset();
+            dimension.null = false;
+            dimension.stride = 0;
+            dimension.unconstrained = false;
+        }
+        array.unconstrained = false;
+        array.flat_width.reset();
+        base.packed_range.reset();
+        base.packed_range_expression.reset();
+        if (array.dimensions.size() == 1) {
+            const auto& constraint =
+                derived.vhdl_array_constraints.front();
+            base.packed_range_expression =
+                frontend::PackedRangeExpression{
+                    constraint.left,
+                    constraint.right,
+                    constraint.span,
+                    constraint.descending};
+        }
+        base.vhdl_array_constraints.clear();
+    } else if (derived.packed_range_expression) {
         if (!is_packed_array_type(base)
             || !base.packed_members.empty()) {
             diagnostics.push_back({
@@ -718,6 +783,14 @@ std::optional<frontend::Type> resolve_subtype_indication(
                 actual.value.operands[2],
                 actual.value.span,
                 actual.value.text == "downto"};
+        if (base->vhdl_array) {
+            derived.vhdl_array_constraints.push_back(
+                frontend::DiscreteRangeExpression{
+                    actual.value.operands[1],
+                    actual.value.operands[2],
+                    actual.value.span,
+                    actual.value.text == "downto"});
+        }
         return apply_derived_constraints(
             std::move(*base), derived, diagnostics);
     }

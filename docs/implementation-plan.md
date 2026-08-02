@@ -6728,10 +6728,10 @@ The current ten implementation tasks are:
 1. **Complete.** Audit and retain multidimensional and composite-element array declarations,
    constraints, objects, aggregates, selections, ports, and callable boundaries
    in typed HIR with exact spans and targeted diagnostics.
-2. **In progress.** Complete type/subtype layout for multidimensional and composite arrays,
+2. **Complete.** Complete type/subtype layout for multidimensional and composite arrays,
    preserving every index range, direction, null range, element subtype, nominal
    identity, and deterministic flattened storage mapping.
-3. **Pending.** Complete contextual array aggregates with positional, named, discrete-range,
+3. **In progress.** Complete contextual array aggregates with positional, named, discrete-range,
    choice-list, and final `others` associations, including nested aggregates,
    coverage, overlap, duplicate, and subtype legality.
 4. **Pending.** Lower multidimensional indexing, slicing, and supported chained selections for
@@ -6765,15 +6765,31 @@ complete direct or named composite element type, and multidimensional subtype
 constraints on objects and ports. Nested aggregates, multi-index reads,
 subarray-slice operands, and array-typed function/procedure boundaries retain
 their exact expression and source-span structure. Existing one-dimensional
-execution reads a compatibility mirror of the first dimension, while
-`FSIM-ELAB-VHARRAY-008` rejects a retained multidimensional type before layout
-construction. The richer recursive Type layout exposed and repaired an O3 GCC
+execution reads a compatibility mirror of the first dimension. At this
+checkpoint `FSIM-ELAB-VHARRAY-008` staged multidimensional types behind the
+then-pending Task 2 layout. The richer recursive Type layout exposed and
+repaired an O3 GCC
 optional-profile constructor false positive without a warning suppression.
 Final frontend/catalog/source/elaboration/type-generic/component/array/scoped-
 locals gates pass in 3.18/3.05 seconds for Debug/Release, with scoped locals
 at 0.86/0.83 seconds. All 1,473 diagnostics are cataloged and all 357 authored
-sources remain within the 2,000-line gate. Batch 116 remains **in progress**
-with Task 2 current and Tasks 3 through 10 pending.
+sources remain within the 2,000-line gate.
+
+Task 2 is focused-complete. Concrete array layout now preserves every evaluated
+dimension range, direction, and null state, records rightmost-fastest packed-bit
+strides, and computes a checked total width without erasing nominal array or
+element identity. Scalar, vector, record, nested-concrete, constrained-open,
+and interface-type-generic element paths share the layout engine; one-dimensional
+arrays keep their declared packed-range compatibility mirror. Rank mismatch,
+illegal reconstraint, index-base, indefinite-element, and overflow failures
+remain deterministic. The layout engine is structurally partitioned in
+`elaboration_vhdl_array_layout.cpp`; all 358 authored sources remain within the
+2,000-line gate, with `elaborator_internal.hpp` at exactly 2,000 lines. Focused
+Debug and Release seven-test gates passed in 2.29 and 2.08 seconds, with scoped
+locals at 0.86/0.83 seconds and VHDL arrays at 0.95/0.80 seconds. The
+LLVM-disabled ASan/UBSan gate passed the same seven tests in 4.25 seconds. All
+1,473 production diagnostics remain cataloged. Batch 116 remains **in
+progress** with Task 3 current and Tasks 4 through 10 pending.
 
 ## Forward language-closure feature batches
 

@@ -1211,6 +1211,8 @@ package Invalid_Array_Types is
   type A_T is array (natural range <>) of bit;
   type B_T is array (natural range <>) of bit;
   type Fixed_T is array (3 downto 0) of bit;
+  type Open_2D_T is array
+    (natural range <>, natural range <>) of bit;
 end package;
 
 use work.invalid_array_types.all;
@@ -1228,6 +1230,7 @@ end entity;
 use work.invalid_array_types.all;
 architecture rtl of Invalid_Arrays is
   subtype Bad_Reconstraint_T is Fixed_T(1 downto 0);
+  subtype Bad_Rank_T is Open_2D_T(0 to 1);
   type Nested_T is array (0 to 1) of A_T;
   type Record_T is record
     X : bit;
@@ -1285,11 +1288,11 @@ end architecture;
             "vhdl:work.invalid_arrays(rtl)");
     assert(!invalid_array_design.ok());
     assert(
-        has_diagnostic(
-            invalid_array_design, "FSIM-ELAB-VHARRAY-001"));
+        !has_diagnostic(
+            invalid_array_design, "FSIM-ELAB-VHARRAY-002"));
     assert(
         has_diagnostic(
-            invalid_array_design, "FSIM-ELAB-VHARRAY-002"));
+            invalid_array_design, "FSIM-ELAB-VHARRAY-001"));
     assert(
         has_diagnostic(
             invalid_array_design, "FSIM-ELAB-VHARRAY-003"));
@@ -1304,34 +1307,76 @@ end architecture;
             invalid_array_design, "FSIM-ELAB-VHARRAY-007"));
     assert(
         has_diagnostic(
+            invalid_array_design, "FSIM-ELAB-VHARRAY-008"));
+    assert(
+        has_diagnostic(
             invalid_array_design, "FSIM-ELAB-VHSUBTYPE-004"));
     assert(
         has_diagnostic(
             invalid_array_design, "FSIM-ELAB-BIND-056"));
 
-    const auto retained_multidimensional =
+    const auto composite_array_layout =
         fsim::frontend::parse_text(
-            "retained_multidimensional.vhd",
+            "composite_array_layout.vhd",
             R"(
-entity Retained_Multidimensional is
+entity Composite_Array_Layout is
 end entity;
-architecture rtl of Retained_Multidimensional is
+architecture rtl of Composite_Array_Layout is
   type Matrix_T is array (0 to 1, 3 downto 1) of bit;
+  type Packed_Rows_T is array (1 downto 0) of bit_vector(3 downto 0);
+  type Cell_T is record
+    Flag : boolean;
+    Data : std_logic;
+  end record;
+  type Cells_T is array (2 to 3) of Cell_T;
+  type Open_T is array
+    (natural range <>, positive range <>) of bit_vector(1 downto 0);
+  subtype Window_T is Open_T(2 downto 0, 1 to 2);
   signal Matrix : Matrix_T;
+  signal Packed_Rows : Packed_Rows_T;
+  signal Cells : Cells_T;
+  signal Window : Window_T;
 begin
 end architecture;
 )",
             fsim::frontend::Language::Vhdl2008);
-    assert(retained_multidimensional.ok());
-    const auto retained_multidimensional_design =
+    assert(composite_array_layout.ok());
+    const auto composite_array_design =
         fsim::elaboration::elaborate(
-            retained_multidimensional.design,
-            "vhdl:work.retained_multidimensional(rtl)");
-    assert(
-        !retained_multidimensional_design.ok()
-        && has_diagnostic(
-            retained_multidimensional_design,
-            "FSIM-ELAB-VHARRAY-008"));
+            composite_array_layout.design,
+            "vhdl:work.composite_array_layout(rtl)");
+    if (!composite_array_design.ok()) {
+        for (const auto& diagnostic :
+             composite_array_design.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(composite_array_design.ok());
+    const auto assert_layout =
+        [&](const std::string_view name,
+            const std::size_t width,
+            const std::vector<std::uint64_t>& strides) {
+          const auto signal =
+              composite_array_design.design->find_signal(name);
+          assert(signal);
+          const auto& info =
+              composite_array_design.design->signals().at(*signal);
+          assert(info.width == width && info.vhdl_array);
+          assert(info.vhdl_array->flat_width == width);
+          assert(info.vhdl_array->dimensions.size() == strides.size());
+          for (std::size_t index = 0; index < strides.size(); ++index) {
+              assert(info.vhdl_array->dimensions[index].range);
+              assert(!info.vhdl_array->dimensions[index].null);
+              assert(
+                  info.vhdl_array->dimensions[index].stride
+                  == strides[index]);
+          }
+        };
+    assert_layout("matrix", 6, {3, 1});
+    assert_layout("packed_rows", 8, {4});
+    assert_layout("cells", 4, {2});
+    assert_layout("window", 12, {4, 2});
     assert(
         has_diagnostic(
             invalid_array_design,

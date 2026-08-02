@@ -63,6 +63,23 @@ void qualify_generated_type(
             *type.systemverilog_container->associative_index_type,
             names);
     }
+    if (type.vhdl_array) {
+        for (auto& dimension : type.vhdl_array->dimensions) {
+            if (dimension.constraint) {
+                qualify_generated_expression(
+                    dimension.constraint->left, names);
+                qualify_generated_expression(
+                    dimension.constraint->right, names);
+            }
+        }
+        for (auto& element : type.vhdl_array->element_types) {
+            qualify_generated_type(element, names);
+        }
+    }
+    for (auto& constraint : type.vhdl_array_constraints) {
+        qualify_generated_expression(constraint.left, names);
+        qualify_generated_expression(constraint.right, names);
+    }
 }
 
 void substitute_parameters(

@@ -597,7 +597,8 @@ using namespace elaboration_detail;
             return std::nullopt;
         }
         if (declaration.type.vhdl_array
-            && !declaration.type.width()) {
+            && (!declaration.type.width()
+                || *declaration.type.width() == 0)) {
             report(
                 "FSIM-ELAB-VHARRAY-005",
                 "VHDL array object '" + declaration.name

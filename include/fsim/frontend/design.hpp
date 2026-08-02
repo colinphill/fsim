@@ -253,6 +253,13 @@ struct VhdlArrayDimension {
   SourceSpan index_span;
   std::optional<IntegerRange> index_base_range;
   std::optional<DiscreteRangeExpression> constraint;
+  // Concrete source-direction range after specialization. Null ranges remain
+  // present so later semantics can distinguish them from unconstrained ones.
+  std::optional<IntegerRange> range;
+  bool null{};
+  // Packed-bit distance between adjacent elements in this dimension. The
+  // rightmost dimension varies fastest.
+  std::uint64_t stride{};
   bool unconstrained{};
 };
 
@@ -274,6 +281,10 @@ struct VhdlArrayInfo {
   SourceSpan element_span;
   ValueDomain element_domain{ValueDomain::Unknown};
   bool unconstrained{};
+  // Concrete packed width across every dimension and the complete element
+  // subtype. Zero denotes a concrete null array; empty denotes an indefinite
+  // array whose layout still depends on an object or subtype constraint.
+  std::optional<std::uint64_t> flat_width;
   std::vector<VhdlArrayDimension> dimensions;
   // Exactly one entry for a retained declaration. Vector-backed recursion
   // follows PackedMember::nested_types without embedding Type directly.

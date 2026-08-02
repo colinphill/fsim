@@ -1194,14 +1194,14 @@ therefore excluded.
 | `FSIM-ELAB-VHSUBTYPE-002` | error | A derived integer subtype constraint lies outside its resolved base subtype. |
 | `FSIM-ELAB-VHSUBTYPE-003` | error | A packed index constraint is applied to a scalar, record, or otherwise nonarray base subtype. |
 | `FSIM-ELAB-VHSUBTYPE-004` | error | A constrained packed-array subtype is constrained again. |
-| `FSIM-ELAB-VHARRAY-001` | error | A VHDL array element subtype resolves to an unsupported composite, integer, enumeration, unknown, or nonscalar type. |
-| `FSIM-ELAB-VHARRAY-002` | error | A VHDL array constraint is null and cannot be represented by the current packed runtime. |
+| `FSIM-ELAB-VHARRAY-001` | error | A VHDL array element subtype is missing, indefinite, zero-width, integer, string, unknown, or otherwise outside the bounded packed runtime. |
+| `FSIM-ELAB-VHARRAY-002` | error | A null constraint on a legacy built-in VHDL vector cannot yet be represented by its one-dimensional packed path. |
 | `FSIM-ELAB-VHARRAY-003` | error | A VHDL array constraint lies outside its `integer`, `natural`, or `positive` index subtype. |
 | `FSIM-ELAB-VHARRAY-004` | error | A VHDL array constraint width overflows the packed runtime representation. |
 | `FSIM-ELAB-VHARRAY-005` | error | A VHDL array object uses an unconstrained or otherwise nonconcrete array subtype. |
 | `FSIM-ELAB-VHARRAY-006` | error | Assignment or comparison mixes values from different nominal VHDL array types. |
 | `FSIM-ELAB-VHARRAY-007` | error | An operator other than equality, inequality, or matching equality is applied to a VHDL array value in the current bounded semantic path. |
-| `FSIM-ELAB-VHARRAY-008` | error | A retained multidimensional VHDL array type reaches elaboration before a concrete flattened layout has been constructed. |
+| `FSIM-ELAB-VHARRAY-008` | error | The number of constraints on a VHDL array subtype indication does not match the base array rank. |
 | `FSIM-ELAB-VHARRAYAGG-002` | error | Contextual VHDL array layout or aggregate-choice HIR metadata is inconsistent with the aggregate value. |
 | `FSIM-ELAB-VHARRAYAGG-003` | error | A VHDL array aggregate choice is nonstatic or outside the contextual index range. |
 | `FSIM-ELAB-VHARRAYAGG-004` | error | A VHDL array aggregate covers an index more than once, has too many positional values, or repeats `others`. |
