@@ -320,6 +320,16 @@ coverage and overlap remain correct for composite elements. A nested aggregate
 receives either the remaining multidimensional view or the retained element
 type, allowing the same lowerer to assemble nested arrays and nominal records
 into common fixed-width `Insert` operations.
+Nested record layout uses the same retained type graph recursively. Each
+member carries its concrete nested type, nominal identity, state domain, and
+packed offset; records and arrays therefore compose without flattening away
+the semantic profile. Same-language boundary compatibility walks that graph,
+and `vhdl-array-shape-v2` serializes it recursively into adapted-port
+specialization identities. Read and assignment selection chains likewise
+alternate member and array steps while accumulating exact packed offsets and
+runtime bounds checks. Driver-region and sensitivity analysis consume the same
+chain, so disjoint nested targets remain independently owned while debugger
+and VCD views retain the deterministic whole-object packed representation.
 
 Simulation time is an unsigned 64-bit tick count at one elaborated global
 resolution. The v1 elaborator will select the finest declared VHDL, SV, or

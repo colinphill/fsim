@@ -8,6 +8,87 @@
 
 namespace fsim::elaboration::elaboration_detail {
 
+inline void append_vhdl_type_shape_identity(
+    std::ostringstream& output,
+    const frontend::Type& type) {
+  output << "{domain=" << static_cast<unsigned>(type.domain)
+         << ";signed=" << (type.is_signed ? 1 : 0)
+         << ";spelling=" << type.spelling
+         << ";named=" << type.named_type
+         << ";nominal=" << type.nominal_type << ";width=";
+  if (const auto width = type.width()) {
+    output << *width;
+  } else {
+    output << '?';
+  }
+  if (type.packed_range) {
+    output << ";packed=" << type.packed_range->left
+           << ':' << type.packed_range->right
+           << ':' << (type.packed_range->descending ? 1 : 0);
+  }
+  if (type.integer_range) {
+    output << ";integer=" << type.integer_range->left
+           << ':' << type.integer_range->right
+           << ':' << (type.integer_range->descending ? 1 : 0);
+  }
+  if (type.enumeration_range) {
+    output << ";enum=" << type.enumeration_range->left
+           << ':' << type.enumeration_range->right
+           << ':' << (type.enumeration_range->descending ? 1 : 0);
+  }
+  for (const auto& literal : type.enumeration_literals) {
+    output << ";literal=" << literal;
+  }
+  for (const auto& member : type.packed_members) {
+    output << ";member=" << member.name
+           << ':' << static_cast<unsigned>(member.domain)
+           << ':' << (member.is_signed ? 1 : 0)
+           << ':' << member.spelling
+           << ':' << member.lsb_offset << ':';
+    if (const auto width = member.width()) {
+      output << *width;
+    } else {
+      output << '?';
+    }
+    for (const auto& nested : member.nested_types) {
+      output << ":nested=";
+      append_vhdl_type_shape_identity(output, nested);
+    }
+  }
+  if (type.vhdl_array) {
+    const auto& array = *type.vhdl_array;
+    output << ";array=" << array.index_subtype
+           << ':' << array.element_spelling
+           << ':' << array.element_named_type
+           << ':' << static_cast<unsigned>(array.element_domain)
+           << ':' << (array.unconstrained ? 1 : 0)
+           << ":flat=";
+    if (array.flat_width) {
+      output << *array.flat_width;
+    } else {
+      output << '?';
+    }
+    for (const auto& dimension : array.dimensions) {
+      output << ";dimension=" << dimension.index_subtype
+             << ':' << (dimension.unconstrained ? 1 : 0)
+             << ':' << (dimension.null ? 1 : 0)
+             << ':' << dimension.stride;
+      if (dimension.range) {
+        output << ':' << dimension.range->left
+               << ':' << dimension.range->right
+               << ':' << (dimension.range->descending ? 1 : 0);
+      } else {
+        output << ":?";
+      }
+    }
+    for (const auto& element : array.element_types) {
+      output << ";element=";
+      append_vhdl_type_shape_identity(output, element);
+    }
+  }
+  output << '}';
+}
+
 inline bool vhdl_array_element_profile_matches(
     const frontend::Type& left,
     const frontend::Type& right) {
@@ -87,56 +168,8 @@ inline bool vhdl_array_shape_matches(
 inline std::string vhdl_array_shape_identity(
     const frontend::Type& type) {
   std::ostringstream output;
-  output << "vhdl-array-shape-v1;nominal=" << type.nominal_type
-         << ";domain=" << static_cast<unsigned>(type.domain)
-         << ";signed=" << (type.is_signed ? 1 : 0);
-  if (!type.vhdl_array) {
-    return output.str() + ";absent";
-  }
-  const auto& array = *type.vhdl_array;
-  output << ";rank=" << array.dimensions.size()
-         << ";indefinite=" << (array.unconstrained ? 1 : 0)
-         << ";flat=";
-  if (array.flat_width) {
-    output << *array.flat_width;
-  } else {
-    output << '?';
-  }
-  for (const auto& dimension : array.dimensions) {
-    output << ";dimension=" << dimension.index_subtype
-           << ':' << (dimension.unconstrained ? 1 : 0)
-           << ':' << (dimension.null ? 1 : 0)
-           << ':' << dimension.stride;
-    if (dimension.range) {
-      output << ':' << dimension.range->left
-             << ':' << dimension.range->right
-             << ':' << (dimension.range->descending ? 1 : 0);
-    } else {
-      output << ":?";
-    }
-  }
-  for (const auto& element : array.element_types) {
-    output << ";element="
-           << static_cast<unsigned>(element.domain)
-           << ':' << (element.is_signed ? 1 : 0)
-           << ':' << element.nominal_type << ':';
-    if (const auto width = element.width()) {
-      output << *width;
-    } else {
-      output << '?';
-    }
-    for (const auto& member : element.packed_members) {
-      output << ":member=" << member.name
-             << ':' << static_cast<unsigned>(member.domain)
-             << ':' << (member.is_signed ? 1 : 0)
-             << ':' << member.lsb_offset << ':';
-      if (const auto width = member.width()) {
-        output << *width;
-      } else {
-        output << '?';
-      }
-    }
-  }
+  output << "vhdl-array-shape-v2;type=";
+  append_vhdl_type_shape_identity(output, type);
   return output.str();
 }
 

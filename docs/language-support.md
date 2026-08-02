@@ -526,6 +526,26 @@ also participate in array indices, slice bounds, and aggregate choices.
 Unconstrained marks, dimensions other than `1`, and scalar use of a range
 attribute are diagnosed.
 
+Batch 117 nested-composite status update supersedes the older coarse-table
+limitations that describe records as non-nested or qualified/nested aggregate
+expressions as unlowered. Bounded packed records now recurse through named
+record, array, enumeration, vector, Boolean, bit, and logic members with exact
+nominal identity, defaults, constraints, offsets, and checked acyclic width.
+Qualified expressions and supported subtype conversions preserve exact
+integer or nominal-composite contracts. Contextual record/array aggregates
+accept element-name and discrete/range choice lists, qualification, and final
+`others`; scalar/enumeration and multidimensional array attributes execute and
+fold over exact declared subtypes and dimensions. Same-base composite
+comparison, matching bit/logic equality, contextual concatenation,
+assignment, conditional/case values, and conversions execute with recursive
+profile checks. Bounded names may interleave record selections and array
+indices/slices for reads and local/signal targets. Those nested composites
+cross same-language hierarchy, generic-dependent, and callable boundaries
+with recursive cache identity, exact aliases/copies, driver ownership,
+sensitivity, scheduling, debugger/VCD, and provenance behavior. Integer,
+access, protected, dynamically sized, and implicit cross-language composite
+values remain outside this bounded contract.
+
 VHDL interface-type-generic status update: entity generic clauses accept the
 VHDL-2008 unclassified `type T` form mixed with existing value generics.
 Named or positional actual subtype indications retain their type mark,

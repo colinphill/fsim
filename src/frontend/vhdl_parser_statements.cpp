@@ -1012,33 +1012,35 @@ Expression VhdlParser::parse_lvalue() {
     expression.span = cover(
         expression.span, previous().span);
   }
-  while (match(TokenKind::LeftParen)) {
-    const auto open = previous();
-    bool saw_slice = false;
-    do {
-      Expression first = parse_expression();
-      if (match_keyword("downto", true) || match_keyword("to", true)) {
-        saw_slice = true;
-        const auto direction = previous();
-        Expression second = parse_expression();
-        expression = Expression{
-            ExpressionKind::Slice, detail::ascii_lower(direction.text),
-            {std::move(expression), std::move(first), std::move(second)},
-            cover(expression.span, second.span)};
-      } else {
-        expression = Expression{
-            ExpressionKind::Index, "index",
-            {std::move(expression), std::move(first)},
-            cover(expression.span, first.span)};
-      }
-    } while (match(TokenKind::Comma));
-    expect(TokenKind::RightParen, "')' after indices",
-           saw_slice ? "FSIM-VHDL-PARSE-031"
-                     : "FSIM-VHDL-PARSE-032");
-    expression.span = cover(expression.span, previous().span);
-    (void)open;
-  }
-  while (match(TokenKind::Dot)) {
+  for (;;) {
+    if (match(TokenKind::LeftParen)) {
+      bool saw_slice = false;
+      do {
+        Expression first = parse_expression();
+        if (match_keyword("downto", true) || match_keyword("to", true)) {
+          saw_slice = true;
+          const auto direction = previous();
+          Expression second = parse_expression();
+          expression = Expression{
+              ExpressionKind::Slice, detail::ascii_lower(direction.text),
+              {std::move(expression), std::move(first), std::move(second)},
+              cover(expression.span, second.span)};
+        } else {
+          expression = Expression{
+              ExpressionKind::Index, "index",
+              {std::move(expression), std::move(first)},
+              cover(expression.span, first.span)};
+        }
+      } while (match(TokenKind::Comma));
+      expect(TokenKind::RightParen, "')' after indices",
+             saw_slice ? "FSIM-VHDL-PARSE-031"
+                       : "FSIM-VHDL-PARSE-032");
+      expression.span = cover(expression.span, previous().span);
+      continue;
+    }
+    if (!match(TokenKind::Dot)) {
+      break;
+    }
     const auto member = expect_identifier("selected record element");
     expression = Expression{
         ExpressionKind::Call,

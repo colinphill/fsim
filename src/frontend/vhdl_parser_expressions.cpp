@@ -249,31 +249,34 @@ Expression VhdlParser::parse_primary() {
       if (saw_named) {
         call.call_argument_names = std::move(argument_names);
       }
-      while (match(TokenKind::LeftParen)) {
-        auto first = parse_expression();
-        if (match_keyword("downto", true)
-            || match_keyword("to", true)) {
-          const auto direction = previous();
-          auto second = parse_expression();
-          expect(TokenKind::RightParen, "')' after chained slice",
-                 "FSIM-VHDL-PARSE-033");
-          call = Expression{
-              ExpressionKind::Slice,
-              detail::ascii_lower(direction.text),
-              {std::move(call), std::move(first), std::move(second)},
-              cover(name.span, previous().span)};
-        } else {
-          expect(TokenKind::RightParen, "')' after chained index",
-                 "FSIM-VHDL-PARSE-033");
-          call = Expression{
-              ExpressionKind::Index, "index",
-              {std::move(call), std::move(first)},
-              cover(name.span, previous().span)};
+      for (;;) {
+        if (match(TokenKind::LeftParen)) {
+          auto first = parse_expression();
+          if (match_keyword("downto", true)
+              || match_keyword("to", true)) {
+            const auto direction = previous();
+            auto second = parse_expression();
+            expect(TokenKind::RightParen, "')' after chained slice",
+                   "FSIM-VHDL-PARSE-033");
+            call = Expression{
+                ExpressionKind::Slice,
+                detail::ascii_lower(direction.text),
+                {std::move(call), std::move(first), std::move(second)},
+                cover(name.span, previous().span)};
+          } else {
+            expect(TokenKind::RightParen, "')' after chained index",
+                   "FSIM-VHDL-PARSE-033");
+            call = Expression{
+                ExpressionKind::Index, "index",
+                {std::move(call), std::move(first)},
+                cover(name.span, previous().span)};
+          }
+          continue;
         }
-      }
-      while (match(TokenKind::Dot)) {
-        const auto member = expect_identifier(
-            "selected record element");
+        if (!match(TokenKind::Dot)) {
+          break;
+        }
+        const auto member = expect_identifier("selected record element");
         call = Expression{
             ExpressionKind::Call,
             "@vhdl-member:" + vhdl_name(member.text),

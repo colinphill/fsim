@@ -212,6 +212,7 @@ Capture run_once(
   Capture capture;
   capture.specialization_keys =
       project->specialization_cache_keys;
+  bool nested_shape_identity = false;
   for (const auto& specialization :
        project->design.specializations()) {
     if (specialization.instance == "array_top.boundary_a") {
@@ -222,7 +223,19 @@ Capture run_once(
       capture.boundary_identities[1] =
           project->specialization_cache_keys.at(specialization.id);
     }
+    for (const auto& [name, identity] :
+         specialization.parameter_identity_values) {
+      if (name.starts_with("__vhdl_port_shape.cells_")
+          && identity.find("vhdl-array-shape-v2")
+              != std::string::npos
+          && identity.find("boundary_detail_t")
+              != std::string::npos
+          && identity.find("literal=run") != std::string::npos) {
+        nested_shape_identity = true;
+      }
+    }
   }
+  assert(nested_shape_identity);
   assert(
       !capture.boundary_identities[0].empty()
       && !capture.boundary_identities[1].empty()
@@ -290,7 +303,7 @@ Capture run_once(
   constexpr std::array<std::size_t, 30> widths{
       8, 8, 8, 4, 1, 1, 8, 4, 8, 8, 1,
       32, 32, 32, 1, 32, 32, 4, 1, 8, 4, 8, 8, 8,
-      6, 6, 6, 6, 6, 1};
+      6, 6, 6, 6, 8, 1};
   std::array<fsim::runtime::simir::SignalId, 30> signals{};
   std::array<fsim::runtime::VcdSignal, 30> traces{};
   std::ostringstream vcd_output;
@@ -507,8 +520,8 @@ void verify_capture(const Capture& capture) {
           "111111",
           "101010",
           "10Z0H1",
-          "111111",
-          "H"}));
+          "11111111",
+          "1"}));
   assert((
       capture.composite_values
       == std::array<std::string, 19>{
@@ -551,7 +564,8 @@ void verify_capture(const Capture& capture) {
   assert(capture.boundary_matrix_outputs
          == capture.boundary_matrix_inputs);
   assert((capture.boundary_cell_inputs
-          == std::array<std::string, 2>{"111111", "111111"}));
+          == std::array<std::string, 2>{
+              "11111111", "11111111"}));
   assert(capture.boundary_cell_outputs
          == capture.boundary_cell_inputs);
   assert((capture.boundary_selected
@@ -560,7 +574,7 @@ void verify_capture(const Capture& capture) {
   assert(
       capture.generic_boundary_matrix_output
       == capture.generic_boundary_matrix_input);
-  assert(capture.generic_boundary_cells_input == "111111");
+  assert(capture.generic_boundary_cells_input == "11111111");
   assert(
       capture.generic_boundary_cells_output
       == capture.generic_boundary_cells_input);
@@ -571,7 +585,7 @@ void verify_capture(const Capture& capture) {
   assert(
       capture.callable_generated_result
       == capture.callable_matrix_input);
-  assert(capture.callable_cells_input == "111111");
+  assert(capture.callable_cells_input == "11111111");
   assert(
       capture.callable_local_result
       == capture.callable_cells_input);
@@ -581,7 +595,7 @@ void verify_capture(const Capture& capture) {
   assert(capture.disjoint_driver_equal == "1");
   assert(capture.resolved_driver_equal == "1");
   assert(capture.composite_driver_equal == "1");
-  assert(capture.partial_sensitivity_result == "H");
+  assert(capture.partial_sensitivity_result == "1");
   assert(
       !capture.boundary_identities[0].empty()
       && capture.boundary_identities[0]
@@ -636,7 +650,7 @@ void verify_capture(const Capture& capture) {
       != std::string::npos);
   assert(
       capture.debugger_output.find(
-          "composite_driver_cells = 111111")
+          "composite_driver_cells = 11111111")
       != std::string::npos);
   assert(
       capture.debugger_output.find("null_signal = <null>")
@@ -750,6 +764,8 @@ int main() {
       directory.path / "dynamic_slice_failure.vhd";
   const auto multidimensional_failure_source =
       directory.path / "multidimensional_failure.vhd";
+  const auto nested_composite_failure_source =
+      directory.path / "nested_composite_failure.vhd";
   const auto boundary_shape_failure_source =
       directory.path / "boundary_shape_failure.vhd";
   const auto component_shape_failure_source =
@@ -777,9 +793,14 @@ package Array_Types is
     (natural range <>, positive range <>) of bit;
   type Resolved_Matrix_T is array
     (natural range <>, positive range <>) of std_logic;
+  type Boundary_Mode_T is (Idle, Run);
+  type Boundary_Detail_T is record
+    Mode : Boundary_Mode_T;
+    Data : bit_vector(1 downto 0);
+  end record;
   type Boundary_Cell_T is record
     Flag : boolean;
-    Data : bit_vector(1 downto 0);
+    Detail : Boundary_Detail_T;
   end record;
   type Boundary_Cells_T is array
     (natural range <>) of Boundary_Cell_T;
@@ -927,7 +948,9 @@ architecture rtl of Array_Top is
     Value : Callable_Cells_T) return Callable_Cells_T is
     variable First : Callable_Cells_T := Value;
     variable Second : Callable_Cells_T :=
-      (others => (Flag => false, Data => "00"));
+      (others =>
+         (Flag => false,
+          Detail => (Mode => Idle, Data => "00")));
   begin
     Second := First;
     return Second;
@@ -1029,7 +1052,7 @@ architecture rtl of Array_Top is
   signal Composite_Driver_Cells : Callable_Cells_T;
   signal Composite_Driver_Expected : Callable_Cells_T;
   signal Composite_Driver_Equal : boolean;
-  signal Partial_Sensitivity_Result : std_logic;
+  signal Partial_Sensitivity_Result : bit;
 begin
   drive : process
     variable Top_Local : Byte_T := "01LH10Z-";
@@ -1161,25 +1184,35 @@ begin
   Boundary_Matrix_A_Input <= (others => (others => '1'));
   Boundary_Matrix_B_Input <= (others => (others => '1'));
   Boundary_Cells_A_Input <=
-    (others => (Flag => true, Data => "11"));
+    (others =>
+       (Flag => true,
+        Detail => (Mode => Run, Data => "11")));
   Boundary_Cells_B_Input <=
-    (others => (Flag => true, Data => "11"));
+    (others =>
+       (Flag => true,
+        Detail => (Mode => Run, Data => "11")));
   Generic_Boundary_Matrix_Input <=
     (others => (others => '1'));
   Generic_Boundary_Cells_Input <=
-    (others => (Flag => true, Data => "11"));
+    (others =>
+       (Flag => true,
+        Detail => (Mode => Run, Data => "11")));
 
   Callable_Matrix_Input <= (others => (others => '1'));
   Callable_Package_Result <=
     Package_Matrix_Copy(Callable_Matrix_Input);
   Callable_Cells_Input <=
-    (others => (Flag => true, Data => "11"));
+    (others =>
+       (Flag => true,
+        Detail => (Mode => Run, Data => "11")));
   Callable_Local_Result <=
     Local_Cells_Copy(Local_Cells_Copy(Callable_Cells_Input));
 
   callable_procedure : process(Callable_Cells_Input)
     variable Target : Callable_Cells_T :=
-      (others => (Flag => false, Data => "00"));
+      (others =>
+         (Flag => false,
+          Detail => (Mode => Idle, Data => "00")));
   begin
     Package_Cells_Copy(Callable_Cells_Input, Target);
     Callable_Procedure_Result <= Target;
@@ -1210,20 +1243,27 @@ begin
   Resolved_Driver_Expected <= ("10Z", "0H1");
   Resolved_Driver_Equal <=
     Resolved_Driver_Matrix = Resolved_Driver_Expected;
-  Partial_Sensitivity_Result <= Resolved_Driver_Matrix(1, 2);
+  Partial_Sensitivity_Result <=
+    Composite_Driver_Cells(1).Detail.Data(0);
 
   composite_zero : process
   begin
-    Composite_Driver_Cells(0) <= (Flag => true, Data => "11");
+    Composite_Driver_Cells(0).Flag <= true;
+    Composite_Driver_Cells(0).Detail <=
+      (Mode => Run, Data => "11");
     wait;
   end process;
   composite_one : process
   begin
-    Composite_Driver_Cells(1) <= (Flag => true, Data => "11");
+    Composite_Driver_Cells(1).Flag <= true;
+    Composite_Driver_Cells(1).Detail <=
+      (Mode => Run, Data => "11");
     wait;
   end process;
   Composite_Driver_Expected <=
-    (others => (Flag => true, Data => "11"));
+    (others =>
+       (Flag => true,
+        Detail => (Mode => Run, Data => "11")));
   Composite_Driver_Equal <=
     Composite_Driver_Cells = Composite_Driver_Expected;
 
@@ -1458,6 +1498,69 @@ end architecture;
     sources.library = "work";
     sources.compilation_unit = "file";
     sources.files = {slice_failure_source};
+    config.source_sets.push_back(std::move(sources));
+    const auto reference = run_expected_dynamic_failure(
+        config,
+        fsim::app::SimulationEngine::interpreter,
+        "VHDL integer subtype range check failed");
+    const auto compiled = run_expected_dynamic_failure(
+        config,
+        fsim::app::SimulationEngine::compiled,
+        "VHDL integer subtype range check failed");
+    assert(reference == compiled);
+  }
+
+  {
+    std::ofstream output{nested_composite_failure_source};
+    output << R"(
+entity Nested_Composite_Failure is
+end entity;
+
+architecture rtl of Nested_Composite_Failure is
+  type Detail_T is record
+    Data : bit_vector(1 downto 0);
+  end record;
+  type Cell_T is record
+    Flag : boolean;
+    Detail : Detail_T;
+  end record;
+  type Cells_T is array (0 to 1) of Cell_T;
+begin
+  fail : process
+    variable Value : Cells_T :=
+      (others =>
+         (Flag => false, Detail => (Data => "00")));
+    variable Index : integer := 2;
+  begin
+    Value(Index).Detail.Data(0) := '1';
+    wait;
+  end process;
+end architecture;
+)";
+    assert(output.good());
+  }
+  for (const auto optimization : {
+           fsim::project::Optimization::o0,
+           fsim::project::Optimization::o2}) {
+    fsim::project::Config config;
+    config.base_directory = directory.path;
+    config.project.name = "vhdl-nested-composite-failure";
+    config.project.top =
+        "vhdl:work.nested_composite_failure(rtl)";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path =
+        directory.path
+        / (optimization == fsim::project::Optimization::o0
+               ? "nested-composite-failure-cache-o0"
+               : "nested-composite-failure-cache-o2");
+    config.run.max_deltas = 1000;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::vhdl;
+    sources.standard = "2008";
+    sources.library = "work";
+    sources.compilation_unit = "file";
+    sources.files = {nested_composite_failure_source};
     config.source_sets.push_back(std::move(sources));
     const auto reference = run_expected_dynamic_failure(
         config,

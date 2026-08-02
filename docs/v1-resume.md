@@ -12,13 +12,21 @@ as work lands. Before moving on, retain that batch's list, mark it
 **complete**, and create the next batch's ten-task list as the new current
 **in progress** record.
 
+Treat those ten tasks as one implementation and release unit. Keep Tasks 1
+through 9 as a recoverable dirty working tree with concise status updates and
+the smallest focused tests after each coherent change; do not sanitize,
+commit, push, or run full Debug/Release regressions per task. Task 10 owns one
+accumulated sanitizer/source/catalog/full-regression/documentation/commit/push
+gate. Create an earlier commit only for an explicitly requested shutdown or a
+risky structural transition that needs a durable boundary.
+
 ## Snapshot
 
 - Recorded: 2026-08-02.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: all ten Batch 116 tasks are complete through this
-  handoff; Batch 117 Tasks 1 through 7 are complete and Task 8 nested-composite
-  boundary, scheduling, debug, and provenance closure is current.
+- Implementation baseline: all ten Batch 117 tasks are complete through this
+  handoff; Batch 118 Task 1 access/protected/physical syntax and HIR audit is
+  current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
 - The source-size refactor is complete: all 373 authored C/C++ source, header,
@@ -2212,7 +2220,7 @@ all 66 in 160.21 seconds, with arrays at 1.91 seconds and scoped locals at 0.84
 seconds. All 1,477 production diagnostics are cataloged and all 362 authored
 sources pass the 2,000-line gate. All ten Batch 116 tasks are complete.
 
-### Batch 117 — VHDL nested composites and expression closure — In progress
+### Batch 117 — VHDL nested composites and expression closure — Complete
 
 The current ten implementation tasks are:
 
@@ -2236,13 +2244,13 @@ The current ten implementation tasks are:
 7. **Complete.** Complete supported composite equality, inequality, matching, concatenation,
    selection, assignment, conditional/case choice, and conversion operations
    with interpreter/LLVM parity.
-8. **In progress.** Complete nested-composite hierarchy ports, generic and callable boundaries,
+8. **Complete.** Complete nested-composite hierarchy ports, generic and callable boundaries,
    aliases/copies, driver ownership, sensitivity, scheduling, debugger/VCD,
    provenance, and specialization/cache identity.
-9. **Pending.** Prove positive/negative parser and elaboration coverage plus interpreter,
+9. **Complete.** Prove positive/negative parser and elaboration coverage plus interpreter,
    LLVM O0/O2, cold/warm/edit, hierarchy, callable, debugger, normalized-VCD,
    null/constraint, and exact-failure differentials.
-10. **Pending.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
+10. **Complete.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
     Debug/Release, commit, and push gates before closing Batch 117.
 
 Batch status is **in progress**. Keep this exact ten-task list current in both
@@ -2501,6 +2509,87 @@ scoped locals 0.49 seconds. The catalog covers 1,494 production diagnostics
 and all 373 authored sources pass the 2,000-line gate;
 `lowerer_expression.cpp` is 1,922 lines. Batch 117 remains **in progress**
 with Task 8 current and is not a CI-inspection boundary.
+
+Tasks 8 and 9 are focused-complete in the accumulated Batch 117 working tree.
+VHDL read and assignment names now parse arbitrarily interleaved bounded array
+indices and record selections rather than stopping after the first post-index
+member. The merged array application carries an array of nested records whose
+inner record contains a nominal enumeration and vector through direct,
+component, generic-dependent, package/local function, and procedure
+boundaries. Whole-object aliases/copies, disjoint nested member drivers,
+selected sensitivity, scheduling, debugger and normalized-VCD views, and
+interpreter/LLVM O0/O2 cold/warm/edit behavior agree. Adapted unconstrained
+array identities now use recursive `vhdl-array-shape-v2` serialization, so
+nested record, array, enumeration literal/range, nominal, offset, and shape
+metadata all participate in specialization/cache identity. The same
+differential compares an out-of-range runtime index followed by nested
+record/array selections exactly between the interpreter and compiled engines.
+One eight-worker Debug development build and the single
+`fsim.application.vhdl_arrays` test passed in 2.01 seconds. Per the corrected
+batch cadence, no Task 8/9 sanitizer, Release, commit, or push checkpoint was
+run; Task 10 owns those accumulated gates. Batch 117 remains **in progress**
+with Task 10 current and is not a CI-inspection boundary.
+
+Task 10 is complete. Feature-matrix rows VH-239 through VH-246, the language
+support and architecture contracts, the diagnostics wording, and the test
+evidence inventory now record recursive nested composite HIR/layout,
+enumeration context, qualification/conversion, aggregate choices, attributes,
+operations, interleaved selections, boundaries, runtime/debug views, and cache
+identity. The single LLVM-disabled ASan/UBSan 13-test frontend, catalog,
+source, elaboration, scoped-local, record, enumeration, array, attribute,
+composite-operation, and runtime gate passed in 8.16 seconds with leak
+detection disabled under the managed ptrace environment. Exact LLVM 22.1.8
+warnings-as-errors Debug passed all 68 tests in 176.22 seconds, with arrays at
+1.88 seconds and scoped locals at 0.85 seconds. Release passed all 68 tests in
+158.10 seconds, with arrays at 1.81 seconds and scoped locals at 0.84 seconds.
+The diagnostic catalog covers 1,494 production codes and all 373 authored
+sources pass the 2,000-line gate. A final coverage review restored the prior
+multidimensional runtime-bound failure beside the new nested-chain failure;
+the affected array application then passed Debug, Release, and sanitizer in
+2.09, 2.04, and 1.90 seconds. All ten Batch 117 tasks are complete; Batch 117
+is not a CI-inspection boundary.
+
+### Batch 118 — VHDL access, protected, and physical types — In progress
+
+The current ten implementation tasks are:
+
+1. **In progress.** Audit and retain bounded access type declarations, allocators, null
+   values, dereference selections, protected type declarations/bodies and
+   methods, physical type ranges/units/literals, and exact source spans with
+   targeted diagnostics.
+2. **Pending.** Complete access designated-subtype resolution, recursive legality,
+   nullable storage metadata, deterministic object identity, initialization,
+   ownership, and bounded lifetime representation.
+3. **Pending.** Lower supported allocators, qualified/aggregate initialization,
+   dereference reads and writable targets, null checks, assignment, and
+   deterministic allocation failures in the interpreter and LLVM.
+4. **Pending.** Complete access equality/null operations, aliases/copies, callable
+   parameters/results, copy-in/out rules, lifetime escape checks, and explicit
+   diagnostics for dangling or unsupported deallocation paths.
+5. **Pending.** Complete protected type/body conformance, private member layout,
+   method visibility/profiles, shared-variable object construction, and
+   encapsulation or purity legality.
+6. **Pending.** Execute supported protected methods with deterministic mutual exclusion,
+   re-entry policy, process scheduling, suspension restrictions, and
+   interpreter/LLVM state parity.
+7. **Pending.** Complete bounded physical type ranges, primary/secondary units,
+   literal scaling, static folding, comparison/arithmetic/conversion, overflow,
+   and exact time-family interoperability where legal.
+8. **Pending.** Complete supported hierarchy, generic, callable, alias/copy, debugger,
+   VCD, provenance, specialization, and cache behavior for access, protected,
+   and physical objects without exposing host pointers in persistent identity.
+9. **Pending.** Prove positive/negative parser and elaboration coverage plus interpreter,
+   LLVM O0/O2, cold/warm/edit, hierarchy, callable, scheduling, debugger,
+   normalized-VCD, lifetime, locking, unit-scaling, and exact-failure
+   differentials.
+10. **Pending.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
+    Debug/Release, commit, and push gates before closing Batch 118.
+
+Batch status is **in progress**. Keep this exact ten-task list current in both
+the official plan and this handoff. Change it to complete only after all ten
+tasks and their gates close and work moves to Batch 119. Tasks 1 through 9 use
+the corrected accumulated working-tree cadence; Task 10 owns the single batch
+sanitizer, full-regression, commit, and push gate.
 
 Batch 110 has advanced through these validated features:
 
@@ -2791,6 +2880,10 @@ preserve that order unless both documents are explicitly amended.
 - Implement ten related features before the next full regression.
 - Use focused warnings-as-errors builds and targeted tests after each coherent
   change; do not run the full suite for every individual feature.
+- Keep Tasks 1 through 9 in one accumulated working tree. Update their status
+  records without routine per-task sanitizer runs, commits, or pushes; reserve
+  those operations for Task 10 unless an explicit restart checkpoint or risky
+  structural boundary requires an earlier durable commit.
 - Use at least eight parallel workers for every local project, test-support,
   and fetched-dependency build, including interim builds. Prefer
   `cmake --build <tree> --parallel 8` (or a larger value). GitHub Actions is

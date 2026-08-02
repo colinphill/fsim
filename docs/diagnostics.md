@@ -1202,7 +1202,7 @@ therefore excluded.
 | `FSIM-ELAB-VHCOMPOP-001` | error | VHDL composite comparison operands do not share one nominal record or array base and compatible element profile, or lack bounded executable widths. |
 | `FSIM-ELAB-VHCOMPOP-002` | error | A VHDL composite assignment source has an incompatible nominal base, element profile, rank, or dimension length. |
 | `FSIM-ELAB-VHCOMPOP-003` | error | A VHDL concatenation lacks a bounded one-dimensional array context or has incompatible operands, element profiles, state domains, or result length. |
-| `FSIM-ELAB-VHCOMPOP-004` | error | A record member selected after a VHDL array index is unknown or has no bounded executable read or assignment layout. |
+| `FSIM-ELAB-VHCOMPOP-004` | error | A record member in an interleaved VHDL array/record selection chain is unknown or has no bounded executable read or assignment layout. |
 | `FSIM-ELAB-VHSUBTYPE-001` | error | A scalar `range` constraint is applied to a resolved noninteger base subtype. |
 | `FSIM-ELAB-VHSUBTYPE-002` | error | A derived integer subtype constraint lies outside its resolved base subtype. |
 | `FSIM-ELAB-VHSUBTYPE-003` | error | A packed index constraint is applied to a scalar, record, or otherwise nonarray base subtype. |
