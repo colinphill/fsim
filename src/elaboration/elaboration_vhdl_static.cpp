@@ -403,6 +403,19 @@ void fold_vhdl_static_type_expressions(
     const ConstantEnvironment& environment,
     std::vector<Diagnostic>& diagnostics) {
     const auto fold_type = [&](const auto& self, frontend::Type& type) -> void {
+      const auto fold_expression = [&](frontend::Expression& expression) {
+        std::string error;
+        bool range_error = false;
+        if (!fold_vhdl_enumeration_attributes(
+                expression, unit, environment, error, range_error)
+            || !fold_vhdl_static_expressions(
+                expression, unit, environment, error, range_error)) {
+          diagnostics.push_back({
+              "FSIM-ELAB-GENERIC-006",
+              "cannot evaluate VHDL type expression: " + error,
+              expression.span});
+        }
+      };
       const auto fold_range = [&](auto& range) {
         if (!range) {
           return;
@@ -438,6 +451,39 @@ void fold_vhdl_static_type_expressions(
         }
         for (auto& element : type.vhdl_array->element_types) {
           self(self, element);
+        }
+      }
+      if (type.vhdl_access) {
+        for (auto& designated :
+             type.vhdl_access->designated_types) {
+          self(self, designated);
+        }
+      }
+      if (type.vhdl_physical) {
+        if (type.vhdl_physical->range) {
+          fold_expression(type.vhdl_physical->range->left);
+          fold_expression(type.vhdl_physical->range->right);
+        }
+        for (auto& physical_unit : type.vhdl_physical->units) {
+          if (physical_unit.scale) {
+            fold_expression(*physical_unit.scale);
+          }
+        }
+      }
+      if (type.vhdl_protected) {
+        for (auto& variable : type.vhdl_protected->variables) {
+          self(self, variable.type);
+        }
+        for (auto& function : type.vhdl_protected->functions) {
+          self(self, function.return_type);
+          for (auto& argument : function.arguments) {
+            self(self, argument.type);
+          }
+        }
+        for (auto& procedure : type.vhdl_protected->procedures) {
+          for (auto& argument : procedure.arguments) {
+            self(self, argument.type);
+          }
         }
       }
       for (auto& member : type.packed_members) {

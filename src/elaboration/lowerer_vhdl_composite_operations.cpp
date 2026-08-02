@@ -420,8 +420,30 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_composite_expression(
 bool Lowerer::validate_vhdl_composite_assignment(
     const frontend::Type* target,
     const Expression& value) {
-  if (language_ != frontend::Language::Vhdl2008 || target == nullptr
-      || !is_composite(*target)) {
+  if (language_ != frontend::Language::Vhdl2008 || target == nullptr) {
+    return true;
+  }
+  if (target->vhdl_access) {
+    if (value.kind == ExpressionKind::Call
+        && (value.text == "@vhdl-null"
+            || value.text == "@vhdl-new"
+            || value.text == "@vhdl-new-qualified")) {
+      return true;
+    }
+    const auto source = vhdl_expression_type(value);
+    if (source && source->vhdl_access
+        && !target->nominal_type.empty()
+        && target->nominal_type == source->nominal_type) {
+      return true;
+    }
+    report(
+        "FSIM-ELAB-VHACCESS-020",
+        "VHDL access assignment requires the same nominal access type "
+        "or null",
+        value.span);
+    return false;
+  }
+  if (!is_composite(*target)) {
     return true;
   }
   if (value.kind == ExpressionKind::Aggregate

@@ -665,6 +665,8 @@ using namespace elaboration_detail;
             declaration.type.is_signed,
             declaration.type.packed_range,
             declaration.type.vhdl_array,
+            declaration.type.vhdl_access,
+            declaration.type.vhdl_physical,
             declaration.type.packed_members,
             declaration.type.integer_range,
             declaration.type.nominal_type,

@@ -1,0 +1,46 @@
+// SPDX-License-Identifier: Apache-2.0
+#include "elaborator_internal.hpp"
+
+namespace fsim::elaboration {
+using namespace runtime::simir;
+using namespace elaboration_detail;
+
+Lowerer::ExpressionAttempt
+Lowerer::lower_vhdl_physical_expression(
+    const Expression& expression,
+    const std::size_t expected_width,
+    const frontend::Type* expected_type) {
+  if (language_ != frontend::Language::Vhdl2008
+      || expected_type == nullptr
+      || !expected_type->vhdl_physical
+      || expression.kind != ExpressionKind::Call
+      || !expression.text.starts_with("@vhdl-physical:")) {
+    return ExpressionAttempt{};
+  }
+  if (expected_width != 32) {
+    report(
+        "FSIM-ELAB-VHPHYSICAL-005",
+        "bounded physical values require the signed 32-bit runtime "
+        "representation",
+        expression.span);
+    return ExpressionAttempt{std::nullopt};
+  }
+  std::string error;
+  const auto value = vhdl_physical_literal_value(
+      expression, *expected_type, error);
+  if (!value) {
+    report(
+        "FSIM-ELAB-VHPHYSICAL-006",
+        "invalid physical literal for type '"
+            + expected_type->spelling + "': " + error,
+        expression.span);
+    return ExpressionAttempt{std::nullopt};
+  }
+  const auto result = allocate_register(
+      32, frontend::ValueDomain::Integer);
+  process_.operations.emplace_back(
+      LoadConstant{result, integer_value(*value)});
+  return ExpressionAttempt{result};
+}
+
+}  // namespace fsim::elaboration

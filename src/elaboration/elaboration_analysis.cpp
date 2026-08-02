@@ -327,6 +327,39 @@ void collect_qualified_identifiers(
             collect_qualified_identifiers(element, identifiers);
         }
     }
+    if (type.vhdl_access) {
+        for (const auto& designated :
+             type.vhdl_access->designated_types) {
+            collect_qualified_identifiers(
+                designated, identifiers);
+        }
+    }
+    if (type.vhdl_physical) {
+        collect_discrete_range(type.vhdl_physical->range);
+        for (const auto& physical_unit : type.vhdl_physical->units) {
+            if (physical_unit.scale) {
+                collect_qualified_identifiers(
+                    *physical_unit.scale, identifiers);
+            }
+        }
+    }
+    if (type.vhdl_protected) {
+        for (const auto& variable : type.vhdl_protected->variables) {
+            collect_qualified_identifiers(variable.type, identifiers);
+        }
+        for (const auto& function : type.vhdl_protected->functions) {
+            collect_qualified_identifiers(
+                function.return_type, identifiers);
+            for (const auto& argument : function.arguments) {
+                collect_qualified_identifiers(argument.type, identifiers);
+            }
+        }
+        for (const auto& procedure : type.vhdl_protected->procedures) {
+            for (const auto& argument : procedure.arguments) {
+                collect_qualified_identifiers(argument.type, identifiers);
+            }
+        }
+    }
     if (type.systemverilog_container) {
         if (type.systemverilog_container->queue_maximum) {
             collect_qualified_identifiers(
@@ -1140,6 +1173,28 @@ void append_generated_body(
           if (type.vhdl_array) {
               for (auto& element : type.vhdl_array->element_types) {
                   self(self, element);
+              }
+          }
+          if (type.vhdl_access) {
+              for (auto& designated :
+                   type.vhdl_access->designated_types) {
+                  self(self, designated);
+              }
+          }
+          if (type.vhdl_protected) {
+              for (auto& variable : type.vhdl_protected->variables) {
+                  self(self, variable.type);
+              }
+              for (auto& function : type.vhdl_protected->functions) {
+                  self(self, function.return_type);
+                  for (auto& argument : function.arguments) {
+                      self(self, argument.type);
+                  }
+              }
+              for (auto& procedure : type.vhdl_protected->procedures) {
+                  for (auto& argument : procedure.arguments) {
+                      self(self, argument.type);
+                  }
               }
           }
           if (type.systemverilog_container

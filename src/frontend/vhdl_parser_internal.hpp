@@ -206,6 +206,9 @@ class VhdlParser final : private detail::ParserBase {
   void parse_vhdl_object_alias(
       std::vector<SignalAliasDeclaration>& aliases,
       const Token& start);
+  void parse_vhdl_shared_variable(
+      DesignUnit& unit,
+      const Token& start);
   bool parse_vhdl_local_nonobject_declaration(
       std::vector<ParameterDeclaration>& constants,
       std::vector<TypeAliasDeclaration>& type_aliases,

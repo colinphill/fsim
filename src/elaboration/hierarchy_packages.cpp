@@ -787,6 +787,8 @@ HierarchyBuilder::HierarchyBuilder(
                 effective_package.type_aliases.end(),
                 package_body->type_aliases.begin(),
                 package_body->type_aliases.end());
+            merge_vhdl_protected_types(
+                effective_package, *package_body);
             effective_package.generic_function_templates.insert(
                 effective_package.generic_function_templates.end(),
                 package_body->generic_function_templates.begin(),
@@ -1103,8 +1105,6 @@ HierarchyBuilder::HierarchyBuilder(
         return specialized;
     }
 
-
-
     void HierarchyBuilder::import_qualified_vhdl_package_constants(
         DesignUnit& unit,
         std::vector<const DesignUnit*>& import_stack) {
@@ -1136,6 +1136,9 @@ HierarchyBuilder::HierarchyBuilder(
         }
         for (const auto& signal : unit.signals) {
             local_objects.emplace(signal.name);
+        }
+        for (const auto& variable : unit.variables) {
+            local_objects.emplace(variable.name);
         }
         for (const auto& process : unit.processes) {
             for (const auto& variable : process.variables) {

@@ -31,6 +31,9 @@ int main() {
   test_selection_and_assignment_lowering();
   test_vhdl_dynamic_slices();
   test_vhdl_recursive_composite_layout();
+  test_vhdl_access_type_storage();
+  test_vhdl_protected_type_storage();
+  test_vhdl_physical_type_execution();
   test_vhdl_qualified_expressions_and_conversions();
   test_vhdl_aggregate_choice_closure();
   test_vhdl_attribute_closure();

@@ -83,8 +83,13 @@ std::optional<std::int64_t> packed_vhdl_static_value(
     const frontend::Expression& expression,
     const frontend::Type& type,
     std::string& error) {
-    if (!type.packed_range
-        || (expression.kind != frontend::ExpressionKind::Aggregate
+    const bool physical_literal =
+        type.vhdl_physical
+        && expression.kind == frontend::ExpressionKind::Call
+        && expression.text.starts_with("@vhdl-physical:");
+    if ((!type.packed_range && !type.vhdl_physical)
+        || (!physical_literal
+            && expression.kind != frontend::ExpressionKind::Aggregate
             && expression.kind
                 != frontend::ExpressionKind::StringLiteral
             && expression.kind
@@ -103,6 +108,11 @@ std::optional<std::int64_t> packed_vhdl_static_value(
         error = "the packed aggregate contains an unknown or high-impedance "
                 "element";
         return std::nullopt;
+    }
+    if (type.vhdl_physical) {
+        return static_cast<std::int64_t>(
+            static_cast<std::int32_t>(
+                static_cast<std::uint32_t>(word.aval)));
     }
     return static_cast<std::int64_t>(word.aval);
 }

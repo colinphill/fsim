@@ -315,6 +315,23 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-234` | error | Expected `begin` after a VHDL generate declarative part. |
 | `FSIM-VHDL-PARSE-235` | error | Expected `function` after a `pure` or `impure` prefix in a VHDL generate declarative part. |
 | `FSIM-VHDL-PARSE-236` | error | A bounded VHDL object alias is missing `is`, its target, or its terminating semicolon. |
+| `FSIM-VHDL-PARSE-237` | error | A VHDL access type declaration is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-238` | error | A VHDL physical type range is missing `to` or `downto`. |
+| `FSIM-VHDL-PARSE-239` | error | A VHDL physical type declaration is missing `units`. |
+| `FSIM-VHDL-PARSE-240` | error | A secondary physical unit is missing its physical-literal scale. |
+| `FSIM-VHDL-PARSE-241` | error | A physical unit declaration is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-242` | error | A VHDL physical type declaration is missing `end`. |
+| `FSIM-VHDL-PARSE-243` | error | A VHDL physical type end clause is missing `units`. |
+| `FSIM-VHDL-PARSE-244` | error | A VHDL physical type declaration is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-245` | error | A protected private-variable declaration is missing the colon after its names. |
+| `FSIM-VHDL-PARSE-246` | error | A protected private-variable declaration is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-247` | error | A VHDL protected declaration or body is missing `end`. |
+| `FSIM-VHDL-PARSE-248` | error | A VHDL protected end clause is missing `protected`. |
+| `FSIM-VHDL-PARSE-249` | error | A VHDL protected-body end clause is missing `body`. |
+| `FSIM-VHDL-PARSE-250` | error | A VHDL protected declaration or body is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-251` | error | A dereferenced index is missing its closing parenthesis, or a shared declaration is missing `variable`. |
+| `FSIM-VHDL-PARSE-252` | error | A VHDL shared-variable declaration is missing the colon after its names. |
+| `FSIM-VHDL-PARSE-253` | error | A VHDL shared-variable declaration is missing its terminating semicolon. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -398,6 +415,12 @@ therefore excluded.
 | `FSIM-VHDL-SEM-085` | error | A `process(all)` sensitivity clause also contains an explicit sensitivity name. |
 | `FSIM-VHDL-SEM-086` | error | A VHDL matching case does not use `?` consistently after its opening and ending `case` keywords. |
 | `FSIM-VHDL-SEM-087` | error | The `guarded` keyword appears on a sequential rather than concurrent signal assignment. |
+| `FSIM-VHDL-SEM-088` | error | A VHDL physical type repeats a unit name. |
+| `FSIM-VHDL-SEM-089` | error | A VHDL physical type declares no primary unit. |
+| `FSIM-VHDL-SEM-090` | error | A VHDL physical type end name does not match its declaration name. |
+| `FSIM-VHDL-SEM-091` | error | A VHDL protected body repeats a private-variable name. |
+| `FSIM-VHDL-SEM-092` | error | A VHDL protected declaration or body end name does not match its declaration name. |
+| `FSIM-VHDL-SEM-093` | error | A VHDL declarative region repeats a shared-variable name. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -438,6 +461,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-052` | error | A component declaration contains an unsupported declarative item. |
 | `FSIM-VHDL-UNSUPPORTED-053` | error | A generated VHDL declarative region contains an item outside the bounded constant, signal, alias, type, subtype, callable, component, and local-package subset. |
 | `FSIM-VHDL-UNSUPPORTED-054` | error | A bounded VHDL object alias omits its explicit subtype indication. |
+| `FSIM-VHDL-UNSUPPORTED-055` | error | A protected type contains a declarative item outside the bounded private-variable, function, and procedure subset. |
 
 ## Verilog and SystemVerilog frontend
 
@@ -1188,6 +1212,59 @@ therefore excluded.
 | `FSIM-ELAB-VHTYPE-002` | error | Bounded VHDL named type aliases contain a cycle. |
 | `FSIM-ELAB-VHTYPE-003` | error | The same VHDL type name is directly visible from multiple packages. |
 | `FSIM-ELAB-VHTYPE-004` | error | A selected VHDL package type name is malformed or does not exist. |
+| `FSIM-ELAB-VHACCESS-001` | error | VHDL access type declarations contain a recursive designated-subtype cycle. |
+| `FSIM-ELAB-VHACCESS-002` | error | A VHDL access declaration does not resolve to exactly one designated subtype. |
+| `FSIM-ELAB-VHACCESS-003` | error | A bounded VHDL access type designates a protected type. |
+| `FSIM-ELAB-VHACCESS-004` | error | A VHDL access type has an invalid bounded handle or object-capacity representation. |
+| `FSIM-ELAB-VHACCESS-005` | error | A VHDL access operation lacks one resolved designated subtype. |
+| `FSIM-ELAB-VHACCESS-006` | error | A VHDL allocator's designated subtype lacks a concrete nonempty bounded packed representation. |
+| `FSIM-ELAB-VHACCESS-007` | error | A VHDL allocator designates a nine-state object outside the bounded access-object state subset. |
+| `FSIM-ELAB-VHACCESS-008` | error | The VHDL `null` access value lacks an access-type context. |
+| `FSIM-ELAB-VHACCESS-009` | error | A VHDL access context has an inconsistent bounded handle width. |
+| `FSIM-ELAB-VHACCESS-010` | error | A VHDL allocator lacks a resolved access-type context. |
+| `FSIM-ELAB-VHACCESS-011` | error | An allocator subtype differs from its access type's designated subtype. |
+| `FSIM-ELAB-VHACCESS-012` | error | A qualified VHDL allocator does not supply exactly one initial value. |
+| `FSIM-ELAB-VHACCESS-013` | error | A VHDL allocator initializer has the wrong designated-object width. |
+| `FSIM-ELAB-VHACCESS-014` | error | A VHDL dereference read or target lacks one access-typed prefix. |
+| `FSIM-ELAB-VHACCESS-015` | error | A dereferenced access object is assigned with timing or non-variable semantics. |
+| `FSIM-ELAB-VHACCESS-016` | error | A dereferenced assignment has the wrong designated-object width. |
+| `FSIM-ELAB-VHACCESS-017` | error | An operator other than equality or inequality is applied to VHDL access values. |
+| `FSIM-ELAB-VHACCESS-018` | error | VHDL access equality is given a nonaccess, nonnull operand. |
+| `FSIM-ELAB-VHACCESS-019` | error | VHDL access equality compares distinct nominal access types. |
+| `FSIM-ELAB-VHACCESS-020` | error | VHDL access assignment is not a same-nominal value or `null`. |
+| `FSIM-ELAB-VHACCESS-021` | error | A nonnull process-local VHDL access handle escapes through a signal. |
+| `FSIM-ELAB-VHACCESS-022` | error | Explicit access deallocation is requested for a bounded simulation-lifetime object. |
+| `FSIM-ELAB-VHPHYSICAL-001` | error | A VHDL physical type lacks its range or primary unit. |
+| `FSIM-ELAB-VHPHYSICAL-002` | error | A physical range is nonstatic or outside signed 32-bit primary-unit ticks. |
+| `FSIM-ELAB-VHPHYSICAL-003` | error | A physical primary unit incorrectly carries a secondary-unit scale. |
+| `FSIM-ELAB-VHPHYSICAL-004` | error | A secondary physical unit has a nonpositive, nonstatic, forward, or overflowing scale. |
+| `FSIM-ELAB-VHPHYSICAL-005` | error | A bounded physical value does not use the signed 32-bit runtime representation. |
+| `FSIM-ELAB-VHPHYSICAL-006` | error | A physical literal uses an unknown unit, nonstatic magnitude, overflow, or out-of-range value. |
+| `FSIM-ELAB-VHPHYSICAL-007` | error | An unsupported operator is applied to a bounded physical value. |
+| `FSIM-ELAB-VHPHYSICAL-008` | error | A physical expression combines distinct nominal physical types. |
+| `FSIM-ELAB-VHPHYSICAL-009` | error | Assignment mixes distinct nominal physical types. |
+| `FSIM-ELAB-VHPHYSICAL-010` | error | A physical target receives an untyped nonphysical value without explicit conversion. |
+| `FSIM-ELAB-VHPROTECTED-001` | error | A protected body has no visible protected type declaration. |
+| `FSIM-ELAB-VHPROTECTED-002` | error | A public protected function has no conforming body. |
+| `FSIM-ELAB-VHPROTECTED-003` | error | A protected function body has no conforming public profile. |
+| `FSIM-ELAB-VHPROTECTED-004` | error | A public protected procedure has no conforming body. |
+| `FSIM-ELAB-VHPROTECTED-005` | error | A protected procedure body has no conforming public profile. |
+| `FSIM-ELAB-VHPROTECTED-006` | error | A protected type declaration has no body. |
+| `FSIM-ELAB-VHPROTECTED-007` | error | A protected private variable lacks a bounded supported scalar or packed type. |
+| `FSIM-ELAB-VHPROTECTED-008` | error | A VHDL shared variable does not have a protected type. |
+| `FSIM-ELAB-VHPROTECTED-009` | error | A shared protected object lacks one conforming protected body. |
+| `FSIM-ELAB-VHPROTECTED-010` | error | A shared protected object incorrectly carries an object initializer. |
+| `FSIM-ELAB-VHPROTECTED-011` | error | A protected private initializer is nonstatic or incompatible with its member. |
+| `FSIM-ELAB-VHPROTECTED-012` | error | A protected function call matches no public profile. |
+| `FSIM-ELAB-VHPROTECTED-013` | error | A protected function call ambiguously matches multiple public profiles. |
+| `FSIM-ELAB-VHPROTECTED-014` | error | A protected method re-enters protected execution. |
+| `FSIM-ELAB-VHPROTECTED-015` | error | A bounded protected function is not a single direct value return. |
+| `FSIM-ELAB-VHPROTECTED-016` | error | A protected function result is incompatible with its expression context. |
+| `FSIM-ELAB-VHPROTECTED-017` | error | Protected private member storage is unavailable or has an invalid bounded width. |
+| `FSIM-ELAB-VHPROTECTED-018` | error | A protected procedure call matches no supported public input profile. |
+| `FSIM-ELAB-VHPROTECTED-019` | error | A protected procedure call ambiguously matches multiple public profiles. |
+| `FSIM-ELAB-VHPROTECTED-020` | error | A protected method attempts to suspend. |
+| `FSIM-ELAB-VHPROTECTED-021` | error | A protected method makes a nested procedure call outside the bounded non-reentrant policy. |
 | `FSIM-ELAB-VHAGG-001` | error | A VHDL aggregate appears without a supported contextual record or array target type. |
 | `FSIM-ELAB-VHAGG-002` | error | A contextual record layout or aggregate-association HIR payload is internally inconsistent. |
 | `FSIM-ELAB-VHAGG-003` | error | A named aggregate association does not name an element of the contextual record type. |

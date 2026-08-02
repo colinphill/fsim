@@ -76,6 +76,41 @@ void qualify_generated_type(
             qualify_generated_type(element, names);
         }
     }
+    if (type.vhdl_access) {
+        for (auto& designated :
+             type.vhdl_access->designated_types) {
+            qualify_generated_type(designated, names);
+        }
+    }
+    if (type.vhdl_physical) {
+        if (type.vhdl_physical->range) {
+            qualify_generated_expression(
+                type.vhdl_physical->range->left, names);
+            qualify_generated_expression(
+                type.vhdl_physical->range->right, names);
+        }
+        for (auto& unit : type.vhdl_physical->units) {
+            if (unit.scale) {
+                qualify_generated_expression(*unit.scale, names);
+            }
+        }
+    }
+    if (type.vhdl_protected) {
+        for (auto& variable : type.vhdl_protected->variables) {
+            qualify_generated_type(variable.type, names);
+        }
+        for (auto& function : type.vhdl_protected->functions) {
+            qualify_generated_type(function.return_type, names);
+            for (auto& argument : function.arguments) {
+                qualify_generated_type(argument.type, names);
+            }
+        }
+        for (auto& procedure : type.vhdl_protected->procedures) {
+            for (auto& argument : procedure.arguments) {
+                qualify_generated_type(argument.type, names);
+            }
+        }
+    }
     for (auto& constraint : type.vhdl_array_constraints) {
         qualify_generated_expression(constraint.left, names);
         qualify_generated_expression(constraint.right, names);

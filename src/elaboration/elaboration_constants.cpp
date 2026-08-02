@@ -530,345 +530,6 @@ evaluate_vhdl_enumeration_attribute(
     return FoldedEnumerationAttribute{
         adjusted, true, false};
 }
-std::optional<PackedLogic4> static_vhdl_value(
-    const Expression& expression,
-    const frontend::Type& type,
-    std::string& error) {
-    const auto width_value = type.width().value_or(1);
-    if (width_value == 0
-        || width_value
-            > std::numeric_limits<std::size_t>::max()) {
-        error = "the contextual type has no representable non-null width";
-        return std::nullopt;
-    }
-    const auto width = static_cast<std::size_t>(width_value);
-    const auto normalize =
-        [&](PackedLogic4 value)
-            -> std::optional<PackedLogic4> {
-          if (value.width() != width) {
-              error = "the default value width differs from its port type";
-              return std::nullopt;
-          }
-          if (type.domain == frontend::ValueDomain::Logic9
-              && !value.is_logic9()) {
-              value = value.promoted_to_logic9();
-          }
-          if (is_two_state_domain(type.domain)) {
-              for (std::size_t bit = 0; bit < value.width(); ++bit) {
-                  const auto digit = value.get(bit);
-                  if (digit == Logic4::x || digit == Logic4::z) {
-                      error = "a two-state port default contains an "
-                              "unknown or high-impedance digit";
-                      return std::nullopt;
-                  }
-              }
-          }
-          return value;
-        };
-
-    if (expression.kind != ExpressionKind::Aggregate) {
-        if (const auto ordinal =
-                vhdl_enumeration_ordinal(expression, type)) {
-            return normalize(unsigned_value(
-                static_cast<std::uint64_t>(*ordinal), width));
-        }
-        if (auto literal = literal_value(
-                expression,
-                width,
-                frontend::Language::Vhdl2008)) {
-            return normalize(std::move(literal->value));
-        }
-        std::string evaluation_error;
-        if (const auto value =
-                evaluate_constant_expression(
-                    expression, {}, evaluation_error)) {
-            return normalize(
-                type.domain == frontend::ValueDomain::Integer
-                    ? integer_value(*value)
-                    : unsigned_value(
-                          static_cast<std::uint64_t>(*value),
-                          width));
-        }
-        error = evaluation_error.empty()
-            ? "the expression is not a supported static VHDL value"
-            : evaluation_error;
-        return std::nullopt;
-    }
-
-    if (expression.aggregate_choices.size()
-            != expression.operands.size()
-        || expression.aggregate_choice_expressions.size()
-            != expression.operands.size()) {
-        error = "aggregate association metadata is inconsistent";
-        return std::nullopt;
-    }
-
-    auto result = default_packed_value(type, width);
-    const auto insert =
-        [&](const PackedLogic4& value,
-            const std::size_t offset) {
-          for (std::size_t bit = 0; bit < value.width(); ++bit) {
-              if (result.is_logic9()) {
-                  result.set_logic9(
-                      offset + bit,
-                      value.is_logic9()
-                          ? value.get_logic9(bit)
-                          : runtime::to_logic9(value.get(bit)));
-              } else {
-                  result.set(offset + bit, value.get(bit));
-              }
-          }
-        };
-
-    if (!type.packed_members.empty()) {
-        std::vector<bool> assigned(type.packed_members.size());
-        std::optional<std::size_t> others;
-        std::size_t positional = 0;
-        const auto assign =
-            [&](const std::size_t member_index,
-                const Expression& value) -> bool {
-              if (member_index >= type.packed_members.size()
-                  || assigned[member_index]) {
-                  error = member_index
-                              >= type.packed_members.size()
-                      ? "record aggregate has too many positional "
-                        "associations"
-                      : "record aggregate assigns one element more "
-                        "than once";
-                  return false;
-              }
-              const auto& member =
-                  type.packed_members[member_index];
-              frontend::Type member_type;
-              member_type.domain = member.domain;
-              member_type.spelling = member.spelling;
-              member_type.packed_range = member.packed_range;
-              member_type.packed_range_expression =
-                  member.packed_range_expression;
-              member_type.is_signed = member.is_signed;
-              auto member_value =
-                  static_vhdl_value(
-                      value, member_type, error);
-              if (!member_value) {
-                  return false;
-              }
-              insert(
-                  *member_value,
-                  static_cast<std::size_t>(
-                      member.lsb_offset));
-              assigned[member_index] = true;
-              return true;
-            };
-        for (std::size_t index = 0;
-             index < expression.operands.size(); ++index) {
-            const auto& choice =
-                expression.aggregate_choices[index];
-            if (choice.empty()) {
-                if (!assign(
-                        positional++,
-                        expression.operands[index])) {
-                    return std::nullopt;
-                }
-                continue;
-            }
-            if (choice == "others") {
-                if (others) {
-                    error = "record aggregate has more than one others "
-                            "association";
-                    return std::nullopt;
-                }
-                others = index;
-                continue;
-            }
-            const auto member = std::ranges::find_if(
-                type.packed_members,
-                [&](const auto& candidate) {
-                  return candidate.name == choice;
-                });
-            if (member == type.packed_members.end()) {
-                error = "record aggregate names an unknown element '"
-                    + choice + "'";
-                return std::nullopt;
-            }
-            if (!assign(
-                    static_cast<std::size_t>(
-                        std::distance(
-                            type.packed_members.begin(), member)),
-                    expression.operands[index])) {
-                return std::nullopt;
-            }
-        }
-        if (others) {
-            for (std::size_t member = 0;
-                 member < assigned.size(); ++member) {
-                if (!assigned[member]
-                    && !assign(
-                        member,
-                        expression.operands[*others])) {
-                    return std::nullopt;
-                }
-            }
-        }
-        if (std::ranges::find(assigned, false)
-            != assigned.end()) {
-            error = "record aggregate omits a required element";
-            return std::nullopt;
-        }
-        return normalize(std::move(result));
-    }
-
-    if (type.packed_range) {
-        frontend::Type element_type;
-        element_type.domain = type.vhdl_array
-            ? type.vhdl_array->element_domain
-            : type.domain;
-        element_type.spelling = type.vhdl_array
-            ? type.vhdl_array->element_spelling
-            : type.spelling;
-        element_type.named_type = type.vhdl_array
-            ? type.vhdl_array->element_named_type
-            : std::string{};
-        std::vector<bool> assigned(width);
-        std::optional<std::size_t> others;
-        std::size_t positional = 0;
-        const auto assign_offset =
-            [&](const std::size_t offset,
-                const Expression& value) -> bool {
-              if (offset >= width || assigned[offset]) {
-                  error = offset >= width
-                      ? "array aggregate index is outside its constraint"
-                      : "array aggregate assigns one index more than once";
-                  return false;
-              }
-              auto element =
-                  static_vhdl_value(
-                      value, element_type, error);
-              if (!element || element->width() != 1) {
-                  if (error.empty()) {
-                      error = "array aggregate element is not scalar";
-                  }
-                  return false;
-              }
-              insert(*element, offset);
-              assigned[offset] = true;
-              return true;
-            };
-        const auto assign_index =
-            [&](const std::int64_t source_index,
-                const Expression& value) -> bool {
-              const auto& range = *type.packed_range;
-              const auto low = std::min(range.left, range.right);
-              const auto high = std::max(range.left, range.right);
-              if (source_index < low || source_index > high) {
-                  error = "array aggregate index is outside its constraint";
-                  return false;
-              }
-              return assign_offset(
-                  static_cast<std::size_t>(
-                      index_distance(
-                          source_index, range.right)),
-                  value);
-            };
-        for (std::size_t association = 0;
-             association < expression.operands.size();
-             ++association) {
-            const auto& choices =
-                expression.aggregate_choice_expressions[
-                    association];
-            if (choices.empty()) {
-                if (!assign_offset(
-                        positional++,
-                        expression.operands[association])) {
-                    return std::nullopt;
-                }
-                continue;
-            }
-            for (const auto& choice : choices) {
-                if (choice.kind == ExpressionKind::Identifier
-                    && choice.text == "others") {
-                    if (others) {
-                        error = "array aggregate has more than one others "
-                                "association";
-                        return std::nullopt;
-                    }
-                    others = association;
-                    continue;
-                }
-                if (choice.kind == ExpressionKind::Binary
-                    && (choice.text == "to"
-                        || choice.text == "downto")
-                    && choice.operands.size() == 2) {
-                    std::string choice_error;
-                    const auto left =
-                        evaluate_constant_expression(
-                            choice.operands[0], {}, choice_error);
-                    const auto right =
-                        evaluate_constant_expression(
-                            choice.operands[1], {}, choice_error);
-                    if (!left || !right) {
-                        error = "array aggregate range is not static";
-                        return std::nullopt;
-                    }
-                    const auto step =
-                        choice.text == "downto" ? -1 : 1;
-                    for (auto current = *left;; current += step) {
-                        if (!assign_index(
-                                current,
-                                expression.operands[association])) {
-                            return std::nullopt;
-                        }
-                        if (current == *right) {
-                            break;
-                        }
-                        if ((step > 0 && current > *right)
-                            || (step < 0 && current < *right)) {
-                            error = "array aggregate range direction "
-                                    "does not reach its right bound";
-                            return std::nullopt;
-                        }
-                    }
-                    continue;
-                }
-                std::string choice_error;
-                const auto selected =
-                    evaluate_constant_expression(
-                        choice, {}, choice_error);
-                if (!selected
-                    || !assign_index(
-                        *selected,
-                        expression.operands[association])) {
-                    if (!selected) {
-                        error = "array aggregate choice is not static";
-                    }
-                    return std::nullopt;
-                }
-            }
-        }
-        if (others) {
-            for (std::size_t offset = 0;
-                 offset < assigned.size(); ++offset) {
-                if (!assigned[offset]
-                    && !assign_offset(
-                        offset,
-                        expression.operands[*others])) {
-                    return std::nullopt;
-                }
-            }
-        }
-        if (std::ranges::find(assigned, false)
-            != assigned.end()) {
-            error = "array aggregate omits a required index";
-            return std::nullopt;
-        }
-        return normalize(std::move(result));
-    }
-
-    error = "aggregate defaults require a supported record or array type";
-    return std::nullopt;
-}
-
-
-
 std::optional<std::int64_t> constant_literal_integer(
     const Expression& expression,
     std::string& error) {
@@ -1495,6 +1156,63 @@ void substitute_parameters(
     const ConstantDomainEnvironment& domains,
     std::vector<Diagnostic>& diagnostics,
     const frontend::Language language) {
+    if (type.vhdl_physical) {
+        auto& physical = *type.vhdl_physical;
+        if (physical.range) {
+            substitute_parameters(
+                physical.range->left, environment, domains, language);
+            substitute_parameters(
+                physical.range->right, environment, domains, language);
+        }
+        for (auto& unit : physical.units) {
+            if (unit.scale) {
+                substitute_parameters(
+                    *unit.scale, environment, domains, language);
+            }
+        }
+    }
+    if (type.vhdl_access) {
+        for (auto& designated : type.vhdl_access->designated_types) {
+            substitute_parameters(
+                designated, environment, domains, diagnostics, language);
+        }
+    }
+    if (type.vhdl_protected) {
+        type.vhdl_protected =
+            std::make_shared<frontend::VhdlProtectedInfo>(
+                *type.vhdl_protected);
+        auto& protected_info = *type.vhdl_protected;
+        for (auto& variable : protected_info.variables) {
+            substitute_parameters(
+                variable.type, environment, domains, diagnostics, language);
+        }
+        for (auto& function : protected_info.functions) {
+            substitute_parameters(
+                function.return_type,
+                environment,
+                domains,
+                diagnostics,
+                language);
+            for (auto& argument : function.arguments) {
+                substitute_parameters(
+                    argument.type,
+                    environment,
+                    domains,
+                    diagnostics,
+                    language);
+            }
+        }
+        for (auto& procedure : protected_info.procedures) {
+            for (auto& argument : procedure.arguments) {
+                substitute_parameters(
+                    argument.type,
+                    environment,
+                    domains,
+                    diagnostics,
+                    language);
+            }
+        }
+    }
     const auto evaluate_integer_range =
         [&](std::optional<frontend::IntegerRangeExpression>& expression,
             std::optional<frontend::IntegerRange>& range,

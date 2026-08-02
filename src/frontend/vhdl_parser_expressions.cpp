@@ -98,6 +98,52 @@ Expression VhdlParser::parse_unary() {
 }
 
 Expression VhdlParser::parse_primary() {
+  if (match_keyword("new", true)) {
+    const auto allocator = previous();
+    const auto subtype_start = current();
+    auto allocated_type = parse_vhdl_type(true, true);
+    Expression subtype{
+        ExpressionKind::Identifier,
+        "@vhdl-subtype:" + allocated_type.spelling,
+        {},
+        cover(subtype_start.span, previous().span)};
+    const auto append_constraint =
+        [&](const DiscreteRangeExpression& constraint) {
+          subtype.operands.push_back(Expression{
+              ExpressionKind::Binary,
+              constraint.descending ? "downto" : "to",
+              {constraint.left, constraint.right},
+              constraint.span});
+        };
+    if (allocated_type.discrete_range_expression) {
+      append_constraint(
+          *allocated_type.discrete_range_expression);
+    }
+    for (const auto& constraint :
+         allocated_type.vhdl_array_constraints) {
+      append_constraint(constraint);
+    }
+    std::vector<Expression> operands{
+        std::move(subtype)};
+    std::string operation = "@vhdl-new";
+    if (match(TokenKind::Apostrophe)) {
+      operation = "@vhdl-new-qualified";
+      operands.push_back(parse_primary());
+    }
+    return Expression{
+        ExpressionKind::Call,
+        std::move(operation),
+        std::move(operands),
+        cover(allocator.span, previous().span)};
+  }
+  if (match_keyword("null", true)) {
+    const auto token = previous();
+    return Expression{
+        ExpressionKind::Call,
+        "@vhdl-null",
+        {},
+        token.span};
+  }
   if (keyword("true", 0, true) || keyword("false", 0, true)) {
     const auto token = advance();
     return Expression{
@@ -108,8 +154,30 @@ Expression VhdlParser::parse_primary() {
   }
   if (at(TokenKind::Number)) {
     const auto token = advance();
-    return Expression{ExpressionKind::IntegerLiteral, token.text, {},
-                      token.span};
+    Expression literal{
+        ExpressionKind::IntegerLiteral, token.text, {}, token.span};
+    static constexpr std::array<std::string_view, 34>
+        physical_literal_terminators{
+            "after", "begin", "case", "downto", "else", "elsif",
+            "end", "exit", "for", "generate", "if", "in",
+            "inertial", "is", "loop", "next", "of", "on", "open",
+            "others", "range", "reject", "report", "return",
+            "select", "severity", "then", "to", "transport",
+            "unaffected", "units", "until", "wait", "when"};
+    if (at(TokenKind::Identifier)
+        && !binary_operation()
+        && std::ranges::find(
+               physical_literal_terminators,
+               vhdl_name(current().text))
+            == physical_literal_terminators.end()) {
+      const auto unit = advance();
+      return Expression{
+          ExpressionKind::Call,
+          "@vhdl-physical:" + vhdl_name(unit.text),
+          {std::move(literal)},
+          cover(token.span, unit.span)};
+    }
+    return literal;
   }
   if (at(TokenKind::CharacterLiteral)) {
     const auto token = advance();
@@ -124,9 +192,61 @@ Expression VhdlParser::parse_primary() {
   if (at(TokenKind::Identifier)) {
     const auto name = advance();
     std::string canonical = vhdl_name(name.text);
+    Expression selected{
+        ExpressionKind::Identifier, canonical, {}, name.span};
+    bool saw_dereference = false;
     while (match(TokenKind::Dot)) {
-      canonical += '.';
-      canonical += vhdl_name(expect_identifier("selected name").text);
+      const auto part = expect_identifier("selected name");
+      const auto canonical_part = vhdl_name(part.text);
+      if (canonical_part == "all") {
+        selected.text = canonical;
+        selected.span = cover(name.span, part.span);
+        selected = Expression{
+            ExpressionKind::Call,
+            "@vhdl-dereference",
+            {std::move(selected)},
+            cover(name.span, part.span)};
+        saw_dereference = true;
+      } else if (saw_dereference) {
+        selected = Expression{
+            ExpressionKind::Call,
+            "@vhdl-member:" + canonical_part,
+            {std::move(selected)},
+            cover(name.span, part.span)};
+      } else {
+        canonical += '.';
+        canonical += canonical_part;
+        selected.text = canonical;
+        selected.span = cover(name.span, part.span);
+      }
+    }
+    if (saw_dereference) {
+      for (;;) {
+        if (match(TokenKind::LeftParen)) {
+          auto index = parse_expression();
+          expect(
+              TokenKind::RightParen,
+              "')' after dereferenced index",
+              "FSIM-VHDL-PARSE-251");
+          selected = Expression{
+              ExpressionKind::Index,
+              "index",
+              {std::move(selected), std::move(index)},
+              cover(name.span, previous().span)};
+          continue;
+        }
+        if (!match(TokenKind::Dot)) {
+          break;
+        }
+        const auto member =
+            expect_identifier("selected dereferenced element");
+        selected = Expression{
+            ExpressionKind::Call,
+            "@vhdl-member:" + vhdl_name(member.text),
+            {std::move(selected)},
+            cover(name.span, member.span)};
+      }
+      return selected;
     }
     if (match(TokenKind::Apostrophe)) {
       if (at(TokenKind::LeftParen)) {

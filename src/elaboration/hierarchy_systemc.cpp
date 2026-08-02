@@ -983,6 +983,154 @@ void adapt_vhdl_array_port_shapes(
                 variable.name, &variable.type);
             visible_types.emplace(
                 path + "." + variable.name, &variable.type);
+            if (variable.vhdl_shared) {
+                if (unit.language
+                        != frontend::Language::Vhdl2008
+                    || !variable.type.vhdl_protected) {
+                    report(
+                        "FSIM-ELAB-VHPROTECTED-008",
+                        "shared variable '" + path + "."
+                            + variable.name
+                            + "' must have a protected type",
+                        variable.span);
+                    continue;
+                }
+                const auto& protected_info =
+                    *variable.type.vhdl_protected;
+                if (!protected_info.has_body
+                    || !protected_info.body_conformant) {
+                    report(
+                        "FSIM-ELAB-VHPROTECTED-009",
+                        "shared protected object '" + path + "."
+                            + variable.name
+                            + "' requires one conforming protected body",
+                        variable.span);
+                    continue;
+                }
+                if (variable.initializer) {
+                    report(
+                        "FSIM-ELAB-VHPROTECTED-010",
+                        "a protected shared variable is constructed from "
+                        "its private member defaults and cannot have an "
+                        "object initializer",
+                        variable.initializer->span);
+                    continue;
+                }
+                const auto object_index =
+                    design_.vhdl_protected_object_info_.size();
+                const auto object_id = static_cast<
+                    VhdlProtectedObjectId>(object_index);
+                if (static_cast<std::size_t>(object_id)
+                    != object_index) {
+                    throw std::length_error{
+                        "too many elaborated VHDL protected objects"};
+                }
+                VhdlProtectedObjectInfo object;
+                object.id = object_id;
+                object.name = path + "." + variable.name;
+                object.type_name = variable.type.spelling;
+                object.nominal_type = variable.type.nominal_type;
+                object.declaration_span = variable.span;
+                for (std::size_t member_index = 0;
+                     member_index < protected_info.variables.size();
+                     ++member_index) {
+                    const auto& member =
+                        protected_info.variables[member_index];
+                    const auto width = member.type.width();
+                    if (!width || *width == 0 || *width > 64) {
+                        continue;
+                    }
+                    ContainerType storage_type;
+                    storage_type.element_width =
+                        static_cast<std::uint32_t>(*width);
+                    storage_type.element_nominal_type =
+                        member.type.nominal_type;
+                    storage_type.two_state =
+                        is_two_state_domain(member.type.domain);
+                    storage_type.signed_elements =
+                        member.type.is_signed;
+                    storage_type.fixed = true;
+                    storage_type.index_left = 0;
+                    storage_type.index_right = 0;
+                    storage_type.dimensions.push_back({0, 0});
+                    auto initial =
+                        default_container_value(storage_type);
+                    initial.elements[0] = default_packed_value(
+                        member.type,
+                        static_cast<std::size_t>(*width));
+                    if (member.initializer) {
+                        std::string error;
+                        const auto value = static_vhdl_value(
+                            *member.initializer,
+                            member.type,
+                            error);
+                        if (!value || value->width() != *width) {
+                            report(
+                                "FSIM-ELAB-VHPROTECTED-011",
+                                "protected private initializer for '"
+                                    + object.name + "." + member.name
+                                    + "' is not a static value compatible "
+                                      "with its declared subtype: "
+                                    + error,
+                                member.initializer->span);
+                            continue;
+                        }
+                        initial.elements[0] = *value;
+                    }
+                    const auto storage_index =
+                        design_.container_objects_.size();
+                    const auto storage_id = static_cast<
+                        ContainerObjectId>(storage_index);
+                    if (static_cast<std::size_t>(storage_id)
+                        != storage_index) {
+                        throw std::length_error{
+                            "too many elaborated container objects"};
+                    }
+                    const auto member_name =
+                        object.name + "." + member.name;
+                    design_.container_object_info_.push_back(
+                        ContainerObjectInfo{
+                            storage_id,
+                            member_name,
+                            storage_type,
+                            member.span,
+                            false,
+                            frontend::PortDirection::Unknown,
+                            std::nullopt});
+                    design_.container_objects_.push_back(
+                        ContainerObject{
+                            member_name,
+                            std::move(initial),
+                            std::nullopt});
+                    local_container_objects.emplace(
+                        variable.name + "." + member.name,
+                        storage_id);
+                    local_container_objects.emplace(
+                        member_name, storage_id);
+                    design_.container_by_name_.emplace(
+                        member_name, storage_id);
+                    if (path == design_.top_) {
+                        design_.container_by_name_.emplace(
+                            variable.name + "." + member.name,
+                            storage_id);
+                    }
+                    object.members.push_back(
+                        VhdlProtectedMemberInfo{
+                            member.name,
+                            member.type,
+                            protected_info.variable_offsets[
+                                member_index],
+                            static_cast<std::size_t>(*width),
+                            storage_id,
+                            member.span});
+                }
+                if (object.members.size()
+                    == protected_info.variables.size()) {
+                    design_.vhdl_protected_object_info_.push_back(
+                        std::move(object));
+                }
+                continue;
+            }
             if (variable.type.systemverilog_container) {
                 const auto width = variable.type.width();
                 if (!width || *width == 0 || *width > 64

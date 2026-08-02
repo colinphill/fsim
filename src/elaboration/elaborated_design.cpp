@@ -28,6 +28,11 @@ ElaboratedDesign::container_objects() const noexcept {
   return container_object_info_;
 }
 
+const std::vector<VhdlProtectedObjectInfo>&
+ElaboratedDesign::vhdl_protected_objects() const noexcept {
+  return vhdl_protected_object_info_;
+}
+
 const std::vector<runtime::simir::Process>&
 ElaboratedDesign::processes() const noexcept {
   return processes_;

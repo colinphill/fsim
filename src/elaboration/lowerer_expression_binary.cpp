@@ -374,6 +374,55 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             const frontend::Type* rhs_object_type =
                 expression_object_type(
                     expression.operands[1]);
+            if (language_ == frontend::Language::Vhdl2008) {
+                const auto* physical_context =
+                    expected_type != nullptr
+                            && expected_type->vhdl_physical
+                        ? expected_type
+                    : lhs_object_type != nullptr
+                            && lhs_object_type->vhdl_physical
+                        ? lhs_object_type
+                    : rhs_object_type != nullptr
+                            && rhs_object_type->vhdl_physical
+                        ? rhs_object_type
+                        : nullptr;
+                if (physical_context != nullptr) {
+                    const bool supported =
+                        expression.text == "+"
+                        || expression.text == "-"
+                        || expression.text == "*"
+                        || expression.text == "/"
+                        || expression.text == "="
+                        || expression.text == "/="
+                        || expression.text == "<"
+                        || expression.text == "<="
+                        || expression.text == ">"
+                        || expression.text == ">=";
+                    if (!supported) {
+                        report(
+                            "FSIM-ELAB-VHPHYSICAL-007",
+                            "operator '" + expression.text
+                                + "' is not supported for bounded physical "
+                                  "values",
+                            expression.span);
+                        return std::nullopt;
+                    }
+                    if (lhs_object_type != nullptr
+                        && lhs_object_type->vhdl_physical
+                        && rhs_object_type != nullptr
+                        && rhs_object_type->vhdl_physical
+                        && lhs_object_type->nominal_type
+                            != rhs_object_type->nominal_type) {
+                        report(
+                            "FSIM-ELAB-VHPHYSICAL-008",
+                            "physical operands require the same nominal "
+                            "type",
+                            expression.span);
+                        return std::nullopt;
+                    }
+                    binary_context_type = physical_context;
+                }
+            }
             if (language_ == frontend::Language::SystemVerilog2017
                 && (expression.text == "=="
                     || expression.text == "!="

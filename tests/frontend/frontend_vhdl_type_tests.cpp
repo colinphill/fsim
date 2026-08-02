@@ -695,6 +695,173 @@ end architecture;
       "stable parser diagnostics");
 }
 
+void test_vhdl_access_protected_physical_hir() {
+  const auto parsed = parse_text(
+      "advanced_vhdl_types.vhd",
+      R"(
+package Advanced_Types is
+  type Integer_Pointer is access integer;
+  type Distance is range -100 to 1000 units
+    um;
+    mm = 1000 um;
+    meter = 1000 mm;
+  end units Distance;
+  type Counter is protected
+    procedure Add(Value : integer);
+    impure function Read return integer;
+  end protected Counter;
+  constant One_Millimeter : Distance := 1 mm;
+end package;
+
+package body Advanced_Types is
+  type Counter is protected body
+    variable Current_Value : integer := 0;
+    procedure Add(Value : integer) is
+    begin
+      Current_Value := Current_Value + Value;
+    end procedure;
+    impure function Read return integer is
+    begin
+      return Current_Value;
+    end function;
+  end protected body Counter;
+
+  function Allocate(Value : integer) return Integer_Pointer is
+    variable Result : Integer_Pointer := null;
+  begin
+    Result := new integer'(Value);
+    Result.all := Result.all + 1;
+    return Result;
+  end function;
+end package body;
+)",
+      Language::Vhdl2008);
+  if (!parsed.ok()) {
+    for (const auto& diagnostic : parsed.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
+  require(
+      parsed.ok() && parsed.design.units.size() == 2,
+      "access, protected, and physical declarations must parse");
+
+  const auto& declaration = parsed.design.units[0];
+  require(
+      declaration.type_aliases.size() == 3,
+      "advanced type declarations remain source ordered");
+  const auto& access = declaration.type_aliases[0];
+  require(
+      access.name == "integer_pointer"
+          && access.declaration_kind
+              == TypeDeclarationKind::VhdlAccess
+          && access.type.vhdl_access
+          && access.type.vhdl_access->designated_types.size() == 1
+          && access.type.vhdl_access->designated_types[0].domain
+              == ValueDomain::Integer
+          && access.type.vhdl_access->designated_span.source_name
+              == "advanced_vhdl_types.vhd",
+      "access HIR retains nominal identity and designated subtype span");
+
+  const auto& physical = declaration.type_aliases[1];
+  require(
+      physical.name == "distance"
+          && physical.declaration_kind
+              == TypeDeclarationKind::VhdlPhysical
+          && physical.type.vhdl_physical
+          && physical.type.vhdl_physical->range
+          && physical.type.vhdl_physical->range->left.kind
+              == ExpressionKind::Unary
+          && physical.type.vhdl_physical->range->descending == false
+          && physical.type.vhdl_physical->units.size() == 3
+          && !physical.type.vhdl_physical->units[0].scale
+          && physical.type.vhdl_physical->units[1].scale
+          && physical.type.vhdl_physical->units[1].scale->kind
+              == ExpressionKind::Call
+          && physical.type.vhdl_physical->units[1].scale->text
+              == "@vhdl-physical:um"
+          && physical.type.vhdl_physical->units[2].name == "meter",
+      "physical HIR retains range direction and ordered unit scales");
+  require(
+      declaration.parameters.size() == 1
+          && declaration.parameters[0].default_value.kind
+              == ExpressionKind::Call
+          && declaration.parameters[0].default_value.text
+              == "@vhdl-physical:mm",
+      "physical literals retain their unit independently from magnitude");
+
+  const auto& protected_declaration =
+      declaration.type_aliases[2];
+  require(
+      protected_declaration.declaration_kind
+              == TypeDeclarationKind::VhdlProtected
+          && protected_declaration.type.vhdl_protected
+          && !protected_declaration.type.vhdl_protected->body
+          && protected_declaration.type.vhdl_protected
+                 ->procedures.size()
+              == 1
+          && protected_declaration.type.vhdl_protected
+                 ->functions.size()
+              == 1
+          && !protected_declaration.type.vhdl_protected
+                  ->functions[0].pure,
+      "protected declaration HIR retains method profiles and purity");
+
+  const auto& body = parsed.design.units[1];
+  require(
+      body.type_aliases.size() == 1
+          && body.type_aliases[0].declaration_kind
+              == TypeDeclarationKind::VhdlProtectedBody
+          && body.type_aliases[0].type.vhdl_protected
+          && body.type_aliases[0].type.vhdl_protected->body
+          && body.type_aliases[0].type.vhdl_protected
+                 ->variables.size()
+              == 1
+          && body.type_aliases[0].type.vhdl_protected
+                 ->procedures[0].defined
+          && body.type_aliases[0].type.vhdl_protected
+                 ->functions[0].defined,
+      "protected body HIR retains private state and method bodies");
+  require(
+      body.functions.size() == 1
+          && body.functions[0].variables.size() == 1
+          && body.functions[0].variables[0].initializer
+          && body.functions[0].variables[0].initializer->text
+              == "@vhdl-null"
+          && body.functions[0].statements.size() == 3
+          && body.functions[0].statements[0].value.text
+              == "@vhdl-new-qualified"
+          && body.functions[0].statements[1].target.text
+              == "@vhdl-dereference"
+          && body.functions[0].statements[1].value.kind
+              == ExpressionKind::Binary
+          && body.functions[0].statements[1]
+                 .value.operands[0].text
+              == "@vhdl-dereference",
+      "null, allocators, and dereference reads/writes retain distinct HIR");
+
+  const auto malformed = parse_text(
+      "invalid_advanced_vhdl_types.vhd",
+      R"(
+package Invalid_Advanced_Types is
+  type Distance is range 0 to 10 units
+    step;
+  end units Wrong_Name;
+end package;
+)",
+      Language::Vhdl2008);
+  require(
+      !malformed.ok()
+          && std::ranges::any_of(
+              malformed.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-090"
+                    && diagnostic.span.source_name
+                        == "invalid_advanced_vhdl_types.vhd";
+              }),
+      "physical closing-name failures retain a targeted source span");
+}
+
 void test_vhdl_nested_composite_hir() {
   const auto retained = parse_text(
       "nested_composite_hir.vhd",

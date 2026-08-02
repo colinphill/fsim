@@ -309,6 +309,18 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         const std::size_t expected_width,
         const frontend::Type* expected_type) {
 
+        auto vhdl_physical = lower_vhdl_physical_expression(
+            expression, expected_width, expected_type);
+        if (vhdl_physical.handled) {
+            return vhdl_physical;
+        }
+
+        auto vhdl_access = lower_vhdl_access_expression(
+            expression, expected_width, expected_type);
+        if (vhdl_access.handled) {
+            return vhdl_access;
+        }
+
         auto multidimensional =
             lower_multidimensional_container_read(expression);
         if (multidimensional.handled) {
@@ -998,6 +1010,14 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                   expression.span);
               return false;
             };
+        if (language_ == frontend::Language::Vhdl2008) {
+            auto protected_method =
+                lower_vhdl_protected_expression(
+                    expression, expected_width, expected_type);
+            if (protected_method.handled) {
+                return protected_method.value;
+            }
+        }
         if (language_ == frontend::Language::Vhdl2008
             && expression.kind == ExpressionKind::Call
             && expression.text.starts_with("'")

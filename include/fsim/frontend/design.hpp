@@ -225,6 +225,7 @@ struct DiscreteRangeExpression {
 };
 
 struct Type;
+struct VhdlProtectedInfo;
 
 struct PackedMember {
   std::string name;
@@ -289,6 +290,45 @@ struct VhdlArrayInfo {
   // Exactly one entry for a retained declaration. Vector-backed recursion
   // follows PackedMember::nested_types without embedding Type directly.
   std::vector<Type> element_types;
+};
+
+/// Source-level metadata for a VHDL access type declaration.
+///
+/// Vector-backed recursion follows VhdlArrayInfo::element_types: a retained
+/// declaration has exactly one designated subtype, while malformed source may
+/// leave the vector empty without inventing a usable pointee type.
+struct VhdlAccessInfo {
+  std::vector<Type> designated_types;
+  SourceSpan designated_span;
+  // Access values use a stable integer handle. Zero is null; positive values
+  // are monotonically assigned object identities and never expose host
+  // addresses. The bounded v1 heap admits at most this many live identities.
+  std::uint32_t handle_width{32};
+  std::uint32_t maximum_objects{4096};
+  bool nullable{true};
+  bool owns_designated_object{true};
+  // Explicit deallocation is outside the bounded v1 subset, so allocated
+  // objects remain alive through the enclosing simulation lifetime.
+  bool simulation_lifetime{true};
+};
+
+/// One source-ordered unit from a VHDL physical type declaration. The primary
+/// unit has no scale expression. A secondary unit retains its complete
+/// physical literal expression until semantic analysis resolves unit ratios.
+struct VhdlPhysicalUnit {
+  std::string name;
+  std::optional<Expression> scale;
+  // Primary-unit multiplier after semantic analysis. The primary unit is 1;
+  // each secondary unit is expressed exactly in primary-unit ticks.
+  std::optional<std::int64_t> scale_factor;
+  SourceSpan span;
+};
+
+/// Source-level metadata for a VHDL physical type declaration.
+struct VhdlPhysicalInfo {
+  std::optional<DiscreteRangeExpression> range;
+  std::vector<VhdlPhysicalUnit> units;
+  std::optional<IntegerRange> resolved_range;
 };
 
 enum class SystemVerilogContainerKind {
@@ -390,6 +430,17 @@ struct Type {
   // resolved from one. The packed range above is the concrete object
   // constraint; this metadata preserves nominal array semantics.
   std::optional<VhdlArrayInfo> vhdl_array;
+  // Present only for a source-level VHDL access declaration or a resolved
+  // view of one. Allocation and ownership semantics are added during
+  // elaboration; the frontend never loses the designated subtype.
+  std::optional<VhdlAccessInfo> vhdl_access;
+  // Present only for a source-level VHDL physical type declaration or a
+  // resolved view of one. Source units and exact scale expressions remain
+  // declaration ordered.
+  std::optional<VhdlPhysicalInfo> vhdl_physical;
+  // Present on a VHDL protected declaration or body. A shared indirection is
+  // required because protected method profiles contain Type values.
+  std::shared_ptr<VhdlProtectedInfo> vhdl_protected;
   // Source-ordered constraints on a named VHDL array subtype indication.
   // One-dimensional executable views also mirror their sole entry through
   // packed_range_expression for compatibility with the existing packed path.
@@ -424,6 +475,10 @@ enum class TypeDeclarationKind {
   Alias,
   VhdlEnumeration,
   VhdlArray,
+  VhdlAccess,
+  VhdlProtected,
+  VhdlProtectedBody,
+  VhdlPhysical,
   VhdlRecord,
   VhdlSubtype,
   SystemVerilogTypedef,
@@ -485,6 +540,9 @@ struct VariableDeclaration {
   Type type;
   std::optional<Expression> initializer;
   SourceSpan span;
+  // True only for a VHDL `shared variable` object. Ordinary process and
+  // callable variables, and SystemVerilog module variables, leave this false.
+  bool vhdl_shared{};
 };
 
 struct FunctionArgument {
@@ -1230,6 +1288,27 @@ struct ProcedureDeclaration {
   // Nonempty on an elaboration copy made visible through a package. Used to
   // distinguish use-visible homographs from duplicates in one local region.
   std::string visibility_owner;
+};
+
+/// Source-ordered private state and methods retained from one VHDL protected
+/// type declaration or body. Declaration/body conformance and execution-time
+/// mutual exclusion are semantic phases, not parser guesses.
+struct VhdlProtectedInfo {
+  bool body{};
+  // Semantic analysis folds a conforming body into its declaration. The
+  // public declaration retains nominal identity while these fields record
+  // that executable private state and method bodies are available.
+  bool has_body{};
+  bool body_conformant{};
+  std::vector<VariableDeclaration> variables;
+  std::vector<FunctionDeclaration> functions;
+  std::vector<ProcedureDeclaration> procedures;
+  // Source-ordered packed offsets for private variables after resolution.
+  // Each member remains independently stored at runtime; this layout is the
+  // stable debugger/provenance view and validates the bounded representation.
+  std::vector<std::size_t> variable_offsets;
+  std::size_t storage_width{};
+  SourceSpan span;
 };
 
 /// Retained VHDL-2008 generic function template.

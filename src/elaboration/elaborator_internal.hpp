@@ -29,7 +29,6 @@ using runtime::PackedLogic4;
 using namespace runtime::simir;
 using ConstantEnvironment =
     std::unordered_map<std::string, std::int64_t>;
-
 /// A bounded IEEE 1800 integral constant.
 ///
 /// Values remain width-bearing bit patterns until an explicitly
@@ -44,7 +43,6 @@ struct SystemVerilogConstantValue {
     bool is_signed{true};
     bool unsized{};
     frontend::SourceSpan source;
-
     [[nodiscard]] std::uint64_t mask() const noexcept;
     [[nodiscard]] bool known() const noexcept;
     [[nodiscard]] std::optional<bool> truth_value() const noexcept;
@@ -55,53 +53,44 @@ struct SystemVerilogConstantValue {
     [[nodiscard]] Expression expression(
         const frontend::SourceSpan& use_span) const;
 };
-
 using SystemVerilogConstantEnvironment =
     std::unordered_map<std::string, SystemVerilogConstantValue>;
 struct SystemVerilogStringValue {
     std::string bytes;
     frontend::SourceSpan source;
-
     [[nodiscard]] std::string display() const;
     [[nodiscard]] std::string canonical() const;
     [[nodiscard]] Expression expression(
         const frontend::SourceSpan& use_span) const;
 };
-
 using SystemVerilogStringEnvironment =
     std::unordered_map<std::string, SystemVerilogStringValue>;
-
 std::optional<SystemVerilogStringValue>
 evaluate_systemverilog_string_expression(
     const Expression& expression,
     const SystemVerilogStringEnvironment& environment,
     const ConstantEnvironment& integer_environment,
     std::string& error);
-
 void substitute_systemverilog_strings(
     Expression& expression,
     const SystemVerilogStringEnvironment& environment,
     const ConstantEnvironment& integer_environment);
-
 void substitute_systemverilog_strings(
     DesignUnit& unit,
     const SystemVerilogStringEnvironment& environment,
     const ConstantEnvironment& integer_environment,
     std::vector<Diagnostic>& diagnostics);
-
 void substitute_systemverilog_strings(
     frontend::GenerateBody& body,
     const SystemVerilogStringEnvironment& environment,
     const ConstantEnvironment& integer_environment,
     std::vector<Diagnostic>& diagnostics);
-
 std::optional<SystemVerilogConstantValue>
 evaluate_systemverilog_constant_expression(
     const Expression& expression,
     const SystemVerilogConstantEnvironment& environment,
     const ConstantEnvironment& fallback_environment,
     std::string& error);
-
 std::optional<SystemVerilogConstantValue>
 evaluate_systemverilog_constant_function_expression(
     const Expression& expression,
@@ -109,42 +98,33 @@ evaluate_systemverilog_constant_function_expression(
     const ConstantEnvironment& fallback_environment,
     const std::vector<frontend::FunctionDeclaration>& functions,
     std::string& error);
-
 void fold_systemverilog_constant_functions(
     DesignUnit& unit,
     const SystemVerilogConstantEnvironment& environment,
     const ConstantEnvironment& fallback_environment,
     std::vector<Diagnostic>& diagnostics);
-
 std::optional<SystemVerilogConstantValue>
 convert_systemverilog_parameter_value(
     const SystemVerilogConstantValue& value,
     const frontend::Type& type,
     std::string& error);
-
 void substitute_systemverilog_parameters(
     Expression& expression,
     const SystemVerilogConstantEnvironment& environment);
-
 void substitute_systemverilog_parameters(
     DesignUnit& unit,
     const SystemVerilogConstantEnvironment& environment);
-
 void substitute_systemverilog_parameters(
     frontend::GenerateBody& body,
     const SystemVerilogConstantEnvironment& environment);
-
 [[nodiscard]] bool is_two_state_domain(
     const frontend::ValueDomain domain) noexcept;
-
 [[nodiscard]] runtime::simir::ValueKind value_kind(
     const frontend::ValueDomain domain) noexcept;
-
 std::optional<std::int64_t> evaluate_constant_expression(
     const Expression& expression,
     const ConstantEnvironment& environment,
     std::string& error);
-
 struct LoweredLiteral {
     PackedLogic4 value;
     frontend::ValueDomain domain{frontend::ValueDomain::Bit2};
@@ -204,6 +184,9 @@ std::optional<PackedLogic4> static_vhdl_value(
     const Expression& expression,
     const frontend::Type& type,
     std::string& error);
+
+std::optional<std::int64_t> vhdl_physical_literal_value(
+    const Expression&, const frontend::Type&, std::string& error);
 
 struct ConstantTypeInfo {
     frontend::ValueDomain domain{frontend::ValueDomain::Unknown};
@@ -1118,6 +1101,18 @@ private:
         const Expression& expression,
         std::size_t expected_width,
         const frontend::Type* expected_type);
+    ExpressionAttempt lower_vhdl_access_expression(
+        const Expression&, std::size_t, const frontend::Type*);
+    ExpressionAttempt lower_vhdl_protected_expression(
+        const Expression&, std::size_t, const frontend::Type*);
+    ExpressionAttempt lower_vhdl_physical_expression(
+        const Expression&, std::size_t, const frontend::Type*);
+    bool lower_vhdl_protected_procedure_call(const Statement&);
+    bool lower_vhdl_access_assignment(const Statement&);
+    std::optional<ContainerRegisterId> vhdl_access_heap(
+        const frontend::Type&, const frontend::SourceSpan&);
+    std::optional<RegisterId> vhdl_access_index(
+        const Expression&, const frontend::Type&);
     ExpressionAttempt lower_vhdl_conversion_expression(
         const Expression&, std::size_t, const frontend::Type*);
     ExpressionAttempt lower_vhdl_composite_expression(const Expression&,
@@ -1443,6 +1438,8 @@ private:
         string_locals_;
     std::unordered_map<std::string, ContainerRegisterId>
         container_locals_;
+    std::unordered_map<std::string, ContainerRegisterId> vhdl_access_heaps_;
+    bool active_vhdl_protected_method_{};
     std::unordered_map<std::string, bool> local_signed_;
     std::unordered_map<
         std::string, std::optional<frontend::PackedRange>>
@@ -1745,6 +1742,7 @@ private:
         const NamedTypeEnvironment& imported_types,
         const bool vhdl = false,
         const bool resolve_ports = true);
+    void merge_vhdl_protected_types(DesignUnit&, const DesignUnit&);
 
     DesignUnit effective_unit(
         const DesignUnit& selected,

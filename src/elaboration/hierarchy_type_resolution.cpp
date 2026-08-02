@@ -275,12 +275,19 @@ using namespace elaboration_detail;
                 return false;
             }
             if (states[index] == 1) {
+                const bool access_cycle =
+                    unit.type_aliases[index].type.vhdl_access
+                    != std::nullopt;
                 report(
-                    vhdl
+                    access_cycle
+                        ? "FSIM-ELAB-VHACCESS-001"
+                    : vhdl
                         ? "FSIM-ELAB-VHTYPE-002"
                         : "FSIM-ELAB-SVTYPE-003",
                     std::string{
-                        vhdl
+                        access_cycle
+                            ? "cyclic VHDL access designated subtype involving '"
+                        : vhdl
                             ? "cyclic VHDL type declaration involving '"
                             : "cyclic SystemVerilog typedef involving '"}
                         + unit.type_aliases[index].name + "'",
@@ -330,6 +337,185 @@ using namespace elaboration_detail;
                     *type.systemverilog_container
                          ->associative_index_type)) {
                 return false;
+            }
+            if (type.vhdl_access) {
+                auto& access = *type.vhdl_access;
+                if (access.designated_types.size() != 1) {
+                    report(
+                        "FSIM-ELAB-VHACCESS-002",
+                        "a VHDL access declaration requires exactly one "
+                        "designated subtype",
+                        access.designated_span);
+                    return false;
+                }
+                auto designated = access.designated_types.front();
+                if (!resolve_type(designated)) {
+                    return false;
+                }
+                if (designated.vhdl_protected) {
+                    report(
+                        "FSIM-ELAB-VHACCESS-003",
+                        "a bounded VHDL access type cannot designate a "
+                        "protected type",
+                        access.designated_span);
+                    return false;
+                }
+                if (access.handle_width == 0
+                    || access.handle_width > 64
+                    || access.maximum_objects == 0) {
+                    report(
+                        "FSIM-ELAB-VHACCESS-004",
+                        "a VHDL access type has an invalid bounded handle "
+                        "representation",
+                        access.designated_span);
+                    return false;
+                }
+                access.designated_types.assign(
+                    1, std::move(designated));
+                type.domain = frontend::ValueDomain::Bit2;
+                type.is_signed = false;
+                type.packed_range = frontend::PackedRange{
+                    static_cast<std::int64_t>(
+                        access.handle_width - 1U),
+                    0,
+                    true};
+                type.packed_range_expression.reset();
+            }
+            if (type.vhdl_physical) {
+                auto& physical = *type.vhdl_physical;
+                if (!physical.range || physical.units.empty()) {
+                    report(
+                        "FSIM-ELAB-VHPHYSICAL-001",
+                        "a VHDL physical type requires a range and a "
+                        "primary unit",
+                        type.named_type_span);
+                    return false;
+                }
+                std::string range_error;
+                const auto left = evaluate_constant_expression(
+                    physical.range->left, {}, range_error);
+                const auto right = evaluate_constant_expression(
+                    physical.range->right, {}, range_error);
+                if (!left || !right
+                    || *left < std::numeric_limits<std::int32_t>::min()
+                    || *left > std::numeric_limits<std::int32_t>::max()
+                    || *right < std::numeric_limits<std::int32_t>::min()
+                    || *right > std::numeric_limits<std::int32_t>::max()) {
+                    report(
+                        "FSIM-ELAB-VHPHYSICAL-002",
+                        "a bounded physical range must be locally static "
+                        "and fit signed 32-bit primary-unit ticks",
+                        physical.range->span);
+                    return false;
+                }
+                physical.resolved_range = frontend::IntegerRange{
+                    *left, *right, physical.range->descending};
+                std::unordered_map<std::string, std::int64_t> scales;
+                for (std::size_t index = 0;
+                     index < physical.units.size(); ++index) {
+                    auto& physical_unit = physical.units[index];
+                    if (index == 0) {
+                        if (physical_unit.scale) {
+                            report(
+                                "FSIM-ELAB-VHPHYSICAL-003",
+                                "the primary physical unit cannot have a "
+                                "secondary-unit scale",
+                                physical_unit.span);
+                            return false;
+                        }
+                        physical_unit.scale_factor = 1;
+                        scales.emplace(physical_unit.name, 1);
+                        continue;
+                    }
+                    constexpr std::string_view prefix{
+                        "@vhdl-physical:"};
+                    if (!physical_unit.scale
+                        || physical_unit.scale->kind
+                            != frontend::ExpressionKind::Call
+                        || !physical_unit.scale->text.starts_with(prefix)
+                        || physical_unit.scale->operands.size() != 1) {
+                        report(
+                            "FSIM-ELAB-VHPHYSICAL-004",
+                            "a secondary physical unit requires a positive "
+                            "locally static scale in an earlier unit",
+                            physical_unit.span);
+                        return false;
+                    }
+                    const auto reference = physical_unit.scale->text.substr(
+                        prefix.size());
+                    const auto prior = scales.find(reference);
+                    std::string magnitude_error;
+                    const auto magnitude = evaluate_constant_expression(
+                        physical_unit.scale->operands.front(), {},
+                        magnitude_error);
+                    if (prior == scales.end() || !magnitude
+                        || *magnitude <= 0
+                        || prior->second
+                            > std::numeric_limits<std::int32_t>::max()
+                                / *magnitude) {
+                        report(
+                            "FSIM-ELAB-VHPHYSICAL-004",
+                            "secondary unit '" + physical_unit.name
+                                + "' has an invalid, forward, or overflowing "
+                                "scale",
+                            physical_unit.span);
+                        return false;
+                    }
+                    physical_unit.scale_factor = prior->second * *magnitude;
+                    scales.emplace(
+                        physical_unit.name, *physical_unit.scale_factor);
+                }
+                type.domain = frontend::ValueDomain::Integer;
+                type.is_signed = true;
+                type.integer_range = *physical.resolved_range;
+            }
+            if (type.vhdl_protected) {
+                auto& protected_info = *type.vhdl_protected;
+                protected_info.variable_offsets.clear();
+                protected_info.storage_width = 0;
+                for (auto& variable : protected_info.variables) {
+                    if (!resolve_type(variable.type)) {
+                        return false;
+                    }
+                    const auto width = variable.type.width();
+                    if (!width || *width == 0 || *width > 64
+                        || variable.type.domain
+                            == frontend::ValueDomain::String
+                        || variable.type.domain
+                            == frontend::ValueDomain::Unknown
+                        || variable.type.domain
+                            == frontend::ValueDomain::Logic9
+                        || variable.type.vhdl_protected) {
+                        report(
+                            "FSIM-ELAB-VHPROTECTED-007",
+                            "protected private variable '"
+                                + variable.name
+                                + "' requires a bounded scalar or packed "
+                                  "value with width in 1..64",
+                            variable.span);
+                        return false;
+                    }
+                    protected_info.variable_offsets.push_back(
+                        protected_info.storage_width);
+                    protected_info.storage_width += *width;
+                }
+                for (auto& function : protected_info.functions) {
+                    if (!resolve_type(function.return_type)) {
+                        return false;
+                    }
+                    for (auto& argument : function.arguments) {
+                        if (!resolve_type(argument.type)) {
+                            return false;
+                        }
+                    }
+                }
+                for (auto& procedure : protected_info.procedures) {
+                    for (auto& argument : procedure.arguments) {
+                        if (!resolve_type(argument.type)) {
+                            return false;
+                        }
+                    }
+                }
             }
             if (type.vhdl_array) {
                 frontend::Type element;

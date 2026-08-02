@@ -149,6 +149,37 @@ std::optional<frontend::Type> Lowerer::vhdl_expression_type(
   if (language_ != frontend::Language::Vhdl2008) {
     return std::nullopt;
   }
+  if (expression.kind == ExpressionKind::Call
+      || expression.kind == ExpressionKind::Identifier) {
+    const auto separator = expression.text.find_last_of('.');
+    if (separator != std::string::npos) {
+      const auto object_name = expression.text.substr(0, separator);
+      const auto method_name = expression.text.substr(separator + 1);
+      const auto object = visible_types_.find(object_name);
+      if (object != visible_types_.end()
+          && object->second != nullptr
+          && object->second->vhdl_protected) {
+        std::optional<frontend::Type> result;
+        for (const auto& function :
+             object->second->vhdl_protected->functions) {
+          if (function.name != method_name
+              || function.arguments.size()
+                  != expression.operands.size()) {
+            continue;
+          }
+          if (!result) {
+            result = function.return_type;
+          } else if (!vhdl_callable_type_matches(
+                         *result, function.return_type)) {
+            return std::nullopt;
+          }
+        }
+        if (result) {
+          return result;
+        }
+      }
+    }
+  }
   if (expression.kind == ExpressionKind::Identifier) {
     const auto* type = object_type(expression.text);
     return type != nullptr
@@ -156,6 +187,16 @@ std::optional<frontend::Type> Lowerer::vhdl_expression_type(
         : std::nullopt;
   }
   if (expression.kind == ExpressionKind::Call) {
+    if (expression.text == "@vhdl-dereference"
+        && expression.operands.size() == 1) {
+      const auto source = vhdl_expression_type(
+          expression.operands.front());
+      return source && source->vhdl_access
+              && source->vhdl_access->designated_types.size() == 1
+          ? std::optional<frontend::Type>{
+                source->vhdl_access->designated_types.front()}
+          : std::nullopt;
+    }
     constexpr std::string_view member_prefix{"@vhdl-member:"};
     if (expression.text.starts_with(member_prefix)
         && expression.operands.size() == 1) {

@@ -124,6 +124,24 @@ void Lowerer::initialize_procedure_support() {
 }
 
 void Lowerer::lower_procedure_call(const Statement& statement) {
+    if (language_ == frontend::Language::Vhdl2008
+        && lower_vhdl_protected_procedure_call(statement)) {
+        return;
+    }
+    if (language_ == frontend::Language::Vhdl2008
+        && statement.procedure_name == "deallocate"
+        && statement.procedure_arguments.size() == 1) {
+        const auto type = vhdl_expression_type(
+            statement.procedure_arguments.front().value);
+        if (type && type->vhdl_access) {
+            report(
+                "FSIM-ELAB-VHACCESS-022",
+                "explicit VHDL access deallocation is unsupported; "
+                "bounded objects have simulation lifetime",
+                statement.span);
+            return;
+        }
+    }
     if (!procedure_support_initialized_) {
         report(
             "FSIM-ELAB-VHPROC-014",

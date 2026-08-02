@@ -122,6 +122,7 @@ void Lowerer::validate_read_only_signal_writes(
         locals_.clear();
         string_locals_.clear();
         container_locals_.clear();
+        vhdl_access_heaps_.clear();
         local_signed_.clear();
         local_ranges_.clear();
         local_integer_ranges_.clear();

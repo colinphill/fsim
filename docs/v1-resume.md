@@ -24,12 +24,12 @@ risky structural transition that needs a durable boundary.
 
 - Recorded: 2026-08-02.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: all ten Batch 117 tasks are complete through this
-  handoff; Batch 118 Task 1 access/protected/physical syntax and HIR audit is
-  current.
+- Implementation baseline: all ten Batch 118 tasks are complete through this
+  handoff; Batch 119 Task 1, the retained-surface audit for waits, reports,
+  files/TextIO, physical time, and transaction modes, is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 373 authored C/C++ source, header,
+- The source-size refactor is complete: all 379 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 115-alternative
@@ -2549,47 +2549,218 @@ the affected array application then passed Debug, Release, and sanitizer in
 2.09, 2.04, and 1.90 seconds. All ten Batch 117 tasks are complete; Batch 117
 is not a CI-inspection boundary.
 
-### Batch 118 — VHDL access, protected, and physical types — In progress
+### Batch 118 — VHDL access, protected, and physical types — Complete
 
 The current ten implementation tasks are:
 
-1. **In progress.** Audit and retain bounded access type declarations, allocators, null
+1. **Complete.** Audit and retain bounded access type declarations, allocators, null
    values, dereference selections, protected type declarations/bodies and
    methods, physical type ranges/units/literals, and exact source spans with
    targeted diagnostics.
-2. **Pending.** Complete access designated-subtype resolution, recursive legality,
+2. **Complete.** Complete access designated-subtype resolution, recursive legality,
    nullable storage metadata, deterministic object identity, initialization,
    ownership, and bounded lifetime representation.
-3. **Pending.** Lower supported allocators, qualified/aggregate initialization,
+3. **Complete.** Lower supported allocators, qualified/aggregate initialization,
    dereference reads and writable targets, null checks, assignment, and
    deterministic allocation failures in the interpreter and LLVM.
-4. **Pending.** Complete access equality/null operations, aliases/copies, callable
+4. **Complete.** Complete access equality/null operations, aliases/copies, callable
    parameters/results, copy-in/out rules, lifetime escape checks, and explicit
    diagnostics for dangling or unsupported deallocation paths.
-5. **Pending.** Complete protected type/body conformance, private member layout,
+5. **Complete.** Complete protected type/body conformance, private member layout,
    method visibility/profiles, shared-variable object construction, and
    encapsulation or purity legality.
-6. **Pending.** Execute supported protected methods with deterministic mutual exclusion,
+6. **Complete.** Execute supported protected methods with deterministic mutual exclusion,
    re-entry policy, process scheduling, suspension restrictions, and
    interpreter/LLVM state parity.
-7. **Pending.** Complete bounded physical type ranges, primary/secondary units,
+7. **Complete.** Complete bounded physical type ranges, primary/secondary units,
    literal scaling, static folding, comparison/arithmetic/conversion, overflow,
    and exact time-family interoperability where legal.
-8. **Pending.** Complete supported hierarchy, generic, callable, alias/copy, debugger,
+8. **Complete.** Complete supported hierarchy, generic, callable, alias/copy, debugger,
    VCD, provenance, specialization, and cache behavior for access, protected,
    and physical objects without exposing host pointers in persistent identity.
-9. **Pending.** Prove positive/negative parser and elaboration coverage plus interpreter,
+9. **Complete.** Prove positive/negative parser and elaboration coverage plus interpreter,
    LLVM O0/O2, cold/warm/edit, hierarchy, callable, scheduling, debugger,
    normalized-VCD, lifetime, locking, unit-scaling, and exact-failure
    differentials.
-10. **Pending.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
+10. **Complete.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
     Debug/Release, commit, and push gates before closing Batch 118.
 
-Batch status is **in progress**. Keep this exact ten-task list current in both
-the official plan and this handoff. Change it to complete only after all ten
-tasks and their gates close and work moves to Batch 119. Tasks 1 through 9 use
-the corrected accumulated working-tree cadence; Task 10 owns the single batch
-sanitizer, full-regression, commit, and push gate.
+Batch status is **complete**. All ten tasks and their gates are closed, and the
+current in-progress ten-task record has moved to Batch 119 below. Tasks 1
+through 9 used the corrected accumulated working-tree cadence; Task 10 owned
+the single batch sanitizer, full-regression, commit, and push gate.
+
+Task 1 adds nominal access, protected declaration/body, and physical type HIR;
+retains designated subtypes, protected private state and complete method
+profiles/bodies, source-ordered physical ranges and unit scales; and gives
+`null`, allocator, dereference read/write, and physical-literal syntax distinct
+source-spanned expression nodes. The accumulated Debug development build used
+eight workers, and `fsim.frontend` passed in 0.02 seconds after a
+physical-literal terminator regression was caught and repaired. No sanitizer,
+Release, full regression, commit, push, or CI inspection was run at this task
+boundary.
+
+Task 2 resolves designated subtypes recursively through local, imported, and
+specialized type environments and carries that resolution through generated
+qualification, static folding, local nominal scoping, and canonical type
+identity. Access values now have a bounded 32-bit opaque-handle contract with
+zero reserved for `null`, monotonically assigned object identities capped at
+4,096, owning simulation-lifetime semantics, and zero-default packed storage
+for signals and persistent locals. Access cycles and protected designated
+types receive access-specific elaboration failures. The eight-worker Debug
+development build and focused `fsim.elaboration` test passed in 0.14 seconds;
+no batch-final gates, commit, push, or CI inspection were run.
+
+Task 3 maps each process-local nominal access type to a hidden bounded queue
+whose source-level handles remain one-based packed IDs. Scalar, integer, and
+packed-record allocators now support default or qualified/aggregate
+initialization; whole designated values and record members can be read, and
+whole dereference targets can be written. Zero handles and invalid IDs fail
+through checked container indexing, while a pre-mutation capacity assertion
+gives exact deterministic exhaustion. The implementation reuses existing
+container SimIR, validation, interpreter, native callback, and LLVM lowering
+rather than adding a host pointer or ABI surface. The eight-worker Debug build
+passed focused `fsim.elaboration` and `fsim.llvm` in 0.14 and 2.50 seconds,
+including interpreter execution, null failure, and a two-object exhaustion
+fixture. No batch-final gates, commit, push, or CI inspection were run.
+
+Task 4 implements nominal access equality and inequality with `null`,
+same-nominal aliases and copies, access-valued function arguments/results, and
+variable-class procedure `inout` copy-in/out. Access handles remain valid for
+their owning process lifetime; nonnull signal escape, cross-nominal copies,
+unsupported operators, and explicit `Deallocate` receive access-specific
+diagnostics. A named vector subtype keeps the callable fixture within the
+existing bounded callable profile. The eight-worker Debug build passed focused
+`fsim.elaboration` and `fsim.llvm` in 0.15 and 2.68 seconds. No batch-final
+gates, commit, push, or CI inspection were run.
+
+Task 5 merges protected package declarations with exactly conforming bodies,
+resolves bounded private member and method-profile types, and retains stable
+source-ordered offsets without exposing private state as ordinary signals.
+Each architecture-level `shared variable` of protected type now constructs one
+stable protected-object record whose initialized private members use grouped
+global container storage; nonprotected shared variables, missing or mismatched
+bodies, invalid private storage, and object initializers receive protected-type
+diagnostics. The conformance implementation was extracted to
+`hierarchy_vhdl_protected.cpp`, leaving `hierarchy_packages.cpp` at 1,999
+lines. The eight-worker Debug build passed focused `fsim.frontend` and
+`fsim.elaboration` in 0.02 and 0.15 seconds. No batch-final gates, commit,
+push, or CI inspection were run.
+
+Task 6 executes supported protected procedures and direct-return functions by
+loading their grouped private member snapshots, binding public formals and
+private names inside an encapsulated method scope, and committing procedure
+updates before the process can yield. Because protected methods are inlined as
+wait-free scheduler segments, cooperative process execution supplies
+deterministic mutual exclusion without a host mutex or persistent pointer.
+Nested calls/re-entry, suspending bodies, unsupported profiles, unavailable
+storage, ambiguous methods, and non-direct function bodies receive exact
+protected-method diagnostics. A two-process test deterministically advances
+the shared counter from 7 to 21; the eight-worker Debug build passed focused
+`fsim.elaboration` and `fsim.llvm` in 0.16 and 3.94 seconds. No batch-final
+gates, commit, push, or CI inspection were run.
+
+Task 7 resolves bounded physical ranges to the portable signed 32-bit scalar
+representation and assigns source-ordered primary-unit scale 1 plus checked,
+positive secondary-unit scales expressed in earlier units. Physical literals
+now fold in constants and lower contextually with exact unit, range, and
+overflow failures; same-nominal addition, subtraction, scaling, division,
+comparison, and explicit conversion reuse the checked VHDL integer runtime so
+dynamic arithmetic overflow remains deterministic in the interpreter and
+LLVM. Cross-nominal assignment or operands and unsupported operators receive
+physical-type diagnostics. The positive fixture covers a statically folded
+unit-valued constant, micrometer/millimeter scaling, arithmetic, division,
+comparison, and conversion; negative fixtures cover unknown units, nominal
+mismatch, scale overflow, and runtime arithmetic overflow. The eight-worker
+Debug build and focused `fsim.elaboration` test passed in 0.15 seconds. No
+batch-final gates, commit, push, or CI inspection were run.
+
+Task 8 carries access and physical nominal metadata into public signal records,
+including bounded access ownership and complete resolved physical unit/range
+views, while protected shared objects retain a stable object ID and private
+member container paths. Canonical type identity now includes access designated
+types, physical scales/ranges, and protected layouts/method profiles; generated
+qualification, static folding, dependency collection, parameter substitution,
+and local nominal scoping recurse through the new type families. Tests cover
+stable signal/container hierarchy paths, access and physical debug-local
+records, protected member visibility, physical signal aliases and callable
+returns, and two independently specialized child instances whose generic
+values pass through explicit physical conversions without host pointers in
+persistent identity. The eight-worker Debug build passed focused
+`fsim.elaboration` in 0.16 seconds. No batch-final gates, commit, push, or CI
+inspection were run.
+
+Task 9 adds the merged `fsim.application.vhdl_advanced_types` differential.
+One fixture jointly exercises access allocation/null/dereference and debug
+locals, protected shared-state construction and serialized method updates, and
+physical literals/arithmetic/debug locals. Interpreter, compiled LLVM O0, and
+compiled LLVM O2 agree on final signals, private protected storage, completion
+time/delta, debugger reads, and normalized VCD; each compiled optimization
+proves cold miss/store and warm hit behavior, while an edited physical and
+protected increment invalidates analysis plus specialization/native identity
+and produces the expected new values. Existing focused parser/elaboration
+negative cases retain exact failures for access lifetime/ownership, protected
+conformance/suspension/re-entry, and physical units/range/nominal/overflow.
+The eight-worker Debug focused gate passed `fsim.frontend`,
+`fsim.elaboration`, `fsim.llvm`, and the new application in 3.49 seconds. No
+batch-final sanitizer, Release, full regression, commit, push, or CI inspection
+was run.
+
+Task 10 is complete. The focused LLVM-disabled ASan/UBSan gate passed all 14
+selected frontend, elaboration, application, runtime, catalog, and source tests
+in 8.54 seconds with LeakSanitizer disabled because it cannot run under the
+managed ptrace environment. The exact LLVM 22.1.8 warnings-as-errors Debug
+regression passed all 69 tests in 182.47 seconds, including the advanced-types
+differential in 0.59 seconds and scoped locals in 0.82 seconds. Release passed
+all 69 tests in 162.84 seconds, including advanced types in 0.54 seconds and
+scoped locals in 0.83 seconds. The diagnostic catalog covers 1,571 production
+codes, and all 379 authored sources pass the 2,000-line gate. Static VHDL value
+and physical-literal helpers now live in `elaboration_vhdl_values.cpp`, leaving
+`elaboration_constants.cpp` at 1,714 lines and `elaborator_internal.hpp` at
+1,998 lines. All ten Batch 118 tasks are complete; Batch 118 is not a
+CI-inspection boundary.
+
+### Batch 119 — VHDL waits, reports, files, time, and transactions — In progress
+
+The current ten implementation tasks are:
+
+1. **In progress.** Audit and retain nested wait forms, assertions and reports,
+   file declarations and operations, TextIO profiles, physical time literals,
+   and inertial, transport, and reject waveform syntax with exact source spans
+   and diagnostics.
+2. **Pending.** Complete wait legality and lowering in nested procedures, loops,
+   conditionals, and process-local call chains, including sensitivity, timeout,
+   condition, resume, and forbidden-context behavior.
+3. **Pending.** Complete general assertion and report expressions, severity
+   evaluation, message formatting, failure policy, source provenance, and
+   interpreter/LLVM parity.
+4. **Pending.** Complete bounded VHDL file types, file objects, open modes,
+   status, close, lifetime, aliasing, and deterministic manifest-confined I/O.
+5. **Pending.** Complete the supported `std.textio` line, read, write, endfile,
+   and formatting profiles with exact cursor, whitespace, conversion, and
+   failure behavior.
+6. **Pending.** Complete physical `time` units, literals, conversions,
+   resolution limits, static folding, arithmetic, comparison, timeout, and
+   scheduling interoperability.
+7. **Pending.** Complete inertial and transport waveform scheduling, reject
+   limits, pulse cancellation, transaction ordering, delta behavior, and
+   multi-driver resolution.
+8. **Pending.** Complete supported hierarchy, callable, debugger, VCD,
+   provenance, specialization, and cache behavior across waits, reports,
+   files/TextIO, time, and transaction modes.
+9. **Pending.** Prove positive/negative parser and elaboration coverage plus
+   interpreter, LLVM O0/O2, cold/warm/edit, scheduling, debugger,
+   normalized-VCD, I/O, time-resolution, and exact-failure differentials.
+10. **Pending.** Update matrix/diagnostics/docs and pass sanitizer,
+    source/catalog, full Debug/Release, commit, and push gates before closing
+    Batch 119.
+
+Batch status is **in progress** with Task 1 current. Keep this exact ten-task
+list current in both the official plan and this handoff. Change it to complete
+only after all ten tasks and their gates close and work moves to Batch 120.
+Tasks 1 through 9 use the corrected accumulated working-tree cadence; Task 10
+owns the single batch sanitizer, full-regression, commit, and push gate. Batch
+119 is not a CI-inspection boundary.
 
 Batch 110 has advanced through these validated features:
 

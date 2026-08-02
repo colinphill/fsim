@@ -490,6 +490,11 @@ if(TARGET fsim_application)
       fsim.application.vhdl_composite_operations
       fast vhdl records arrays expressions cache)
     fsim_add_application_case(
+      3 vhdl_advanced_types
+      app/vhdl_advanced_type_application_test.cpp
+      fsim.application.vhdl_advanced_types
+      fast vhdl access protected physical cache debugger vcd)
+    fsim_add_application_case(
       3 vhdl_projected app/vhdl_projected_application_test.cpp
       fsim.application.vhdl_projected fast vhdl projected-waveforms)
     fsim_add_application_case(
@@ -1443,6 +1448,25 @@ set_tests_properties(
   set_tests_properties(
     fsim.application.vhdl_projected
     PROPERTIES LABELS "fast;vhdl;projected-waveforms"
+  )
+
+  add_executable(
+    fsim_vhdl_advanced_type_application_tests
+    app/vhdl_advanced_type_application_test.cpp
+  )
+  fsim_configure_test(fsim_vhdl_advanced_type_application_tests)
+  target_link_libraries(
+    fsim_vhdl_advanced_type_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.vhdl_advanced_types
+    COMMAND fsim_vhdl_advanced_type_application_tests
+  )
+  set_tests_properties(
+    fsim.application.vhdl_advanced_types
+    PROPERTIES
+      LABELS "fast;vhdl;access;protected;physical;cache;debugger;vcd"
   )
 
   add_executable(

@@ -528,6 +528,41 @@ using namespace elaboration_detail;
             return expression.operands.size() == 1
                 && is_signed_expression(expression.operands.front());
         case ExpressionKind::Call:
+            if (language_ == frontend::Language::Vhdl2008
+                && expression.text.starts_with(
+                    "@vhdl-physical:")) {
+                return true;
+            }
+            if (const auto separator =
+                    expression.text.find_last_of('.');
+                separator != std::string::npos) {
+                const auto object = visible_types_.find(
+                    expression.text.substr(0, separator));
+                const auto method =
+                    expression.text.substr(separator + 1);
+                if (object != visible_types_.end()
+                    && object->second != nullptr
+                    && object->second->vhdl_protected
+                    && std::ranges::any_of(
+                        object->second->vhdl_protected->functions,
+                        [&](const auto& function) {
+                          return function.name == method
+                              && function.return_type.domain
+                                  == frontend::ValueDomain::Integer;
+                        })) {
+                    return true;
+                }
+            }
+            if (const auto type = vhdl_expression_type(expression);
+                type
+                && type->domain
+                    == frontend::ValueDomain::Integer) {
+                return true;
+            }
+            if (expression.text == "@vhdl-dereference") {
+                const auto type = vhdl_expression_type(expression);
+                return type && type->is_signed;
+            }
             if (expression.operands.size() == 1
                 && (expression.text == ".sum"
                     || expression.text == ".product"
@@ -791,6 +826,17 @@ using namespace elaboration_detail;
                 && is_integer_expression(expression.operands[0])
                 && is_integer_expression(expression.operands[1]);
         case ExpressionKind::Call:
+            if (language_ == frontend::Language::Vhdl2008
+                && expression.text.starts_with(
+                    "@vhdl-physical:")) {
+                return true;
+            }
+            if (expression.text == "@vhdl-dereference") {
+                const auto type = vhdl_expression_type(expression);
+                return type
+                    && type->domain
+                        == frontend::ValueDomain::Integer;
+            }
             if (expression.operands.size() == 1) {
                 constexpr std::string_view qualification_prefix{
                     "@vhdl-qualified:"};

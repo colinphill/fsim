@@ -170,6 +170,8 @@ struct SignalInfo {
     bool is_signed{};
     std::optional<frontend::PackedRange> packed_range;
     std::optional<frontend::VhdlArrayInfo> vhdl_array;
+    std::optional<frontend::VhdlAccessInfo> vhdl_access;
+    std::optional<frontend::VhdlPhysicalInfo> vhdl_physical;
     std::vector<frontend::PackedMember> packed_members;
     std::optional<frontend::IntegerRange> integer_range;
     std::string nominal_type;
@@ -200,6 +202,29 @@ struct ContainerObjectInfo {
     frontend::PortDirection direction{
         frontend::PortDirection::Unknown};
     std::optional<runtime::simir::ContainerSliceAlias> slice_alias;
+};
+
+using VhdlProtectedObjectId = std::uint32_t;
+
+struct VhdlProtectedMemberInfo {
+    std::string name;
+    frontend::Type type;
+    std::size_t offset{};
+    std::size_t width{};
+    runtime::simir::ContainerObjectId storage{};
+    frontend::SourceSpan declaration_span;
+};
+
+/// One constructed VHDL shared variable of protected type. Private members
+/// use independently addressable global container objects, while this record
+/// preserves their common object identity and declaration-ordered layout.
+struct VhdlProtectedObjectInfo {
+    VhdlProtectedObjectId id{};
+    std::string name;
+    std::string type_name;
+    std::string nominal_type;
+    std::vector<VhdlProtectedMemberInfo> members;
+    frontend::SourceSpan declaration_span;
 };
 
 using SpecializationId = std::uint32_t;
@@ -290,6 +315,8 @@ public:
     string_objects() const noexcept;
     [[nodiscard]] const std::vector<ContainerObjectInfo>&
     container_objects() const noexcept;
+    [[nodiscard]] const std::vector<VhdlProtectedObjectInfo>&
+    vhdl_protected_objects() const noexcept;
     [[nodiscard]] const std::vector<runtime::simir::Process>& processes() const noexcept;
     [[nodiscard]] const std::vector<SpecializationInfo>&
     specializations() const noexcept;
@@ -346,6 +373,7 @@ private:
     std::vector<runtime::simir::StringObject> string_objects_;
     std::vector<ContainerObjectInfo> container_object_info_;
     std::vector<runtime::simir::ContainerObject> container_objects_;
+    std::vector<VhdlProtectedObjectInfo> vhdl_protected_object_info_;
     std::vector<runtime::simir::Process> processes_;
     std::vector<SpecializationInfo> specializations_;
     std::vector<SystemCInstanceInfo> systemc_instances_;

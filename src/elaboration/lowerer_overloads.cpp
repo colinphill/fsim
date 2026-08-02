@@ -91,6 +91,13 @@ bool Lowerer::vhdl_callable_type_matches(
 bool Lowerer::vhdl_expression_matches_type(
     const Expression& expression,
     const frontend::Type& formal) const {
+  if (formal.vhdl_access
+      && expression.kind == ExpressionKind::Call
+      && (expression.text == "@vhdl-null"
+          || expression.text == "@vhdl-new"
+          || expression.text == "@vhdl-new-qualified")) {
+    return true;
+  }
   if (const auto* enumeration =
           enumeration_expression_type(expression)) {
     return vhdl_callable_type_matches(formal, *enumeration);
@@ -139,6 +146,9 @@ bool Lowerer::vhdl_expression_matches_type(
         || !formal.packed_members.empty();
   }
   if (expression.kind == ExpressionKind::Call) {
+    if (const auto actual = vhdl_expression_type(expression)) {
+      return vhdl_callable_type_matches(formal, *actual);
+    }
     if (expression.operands.size() == 1) {
       if (const auto* conversion =
               visible_type_mark(expression.text)) {

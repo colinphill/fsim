@@ -1006,11 +1006,26 @@ Expression VhdlParser::parse_lvalue() {
   Expression expression{ExpressionKind::Identifier, vhdl_name(name.text),
                         {}, name.span};
   while (match(TokenKind::Dot)) {
-    expression.text += '.';
-    expression.text += vhdl_name(
-        expect_identifier("selected record element").text);
-    expression.span = cover(
-        expression.span, previous().span);
+    const auto member =
+        expect_identifier("selected record element");
+    const auto canonical_member = vhdl_name(member.text);
+    if (canonical_member == "all") {
+      expression = Expression{
+          ExpressionKind::Call,
+          "@vhdl-dereference",
+          {std::move(expression)},
+          cover(name.span, member.span)};
+    } else if (expression.kind == ExpressionKind::Identifier) {
+      expression.text += '.';
+      expression.text += canonical_member;
+      expression.span = cover(expression.span, member.span);
+    } else {
+      expression = Expression{
+          ExpressionKind::Call,
+          "@vhdl-member:" + canonical_member,
+          {std::move(expression)},
+          cover(name.span, member.span)};
+    }
   }
   for (;;) {
     if (match(TokenKind::LeftParen)) {
@@ -1042,11 +1057,19 @@ Expression VhdlParser::parse_lvalue() {
       break;
     }
     const auto member = expect_identifier("selected record element");
-    expression = Expression{
-        ExpressionKind::Call,
-        "@vhdl-member:" + vhdl_name(member.text),
-        {std::move(expression)},
-        cover(name.span, member.span)};
+    if (vhdl_name(member.text) == "all") {
+      expression = Expression{
+          ExpressionKind::Call,
+          "@vhdl-dereference",
+          {std::move(expression)},
+          cover(name.span, member.span)};
+    } else {
+      expression = Expression{
+          ExpressionKind::Call,
+          "@vhdl-member:" + vhdl_name(member.text),
+          {std::move(expression)},
+          cover(name.span, member.span)};
+    }
   }
   return expression;
 }

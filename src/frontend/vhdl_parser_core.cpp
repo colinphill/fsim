@@ -999,6 +999,8 @@ DesignUnit VhdlParser::parse_architecture(const Token& start) {
           unit, generic_start, true);
     } else if (match_keyword("signal", true)) {
       parse_signal_declaration(unit.signals, &unit.parameters);
+    } else if (match_keyword("shared", true)) {
+      parse_vhdl_shared_variable(unit, previous());
     } else if (match_keyword("alias", true)) {
       parse_vhdl_object_alias(unit.signal_aliases, previous());
     } else if (match_keyword("constant", true)) {

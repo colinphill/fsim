@@ -370,6 +370,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/elaboration_literals.cpp
       src/elaboration/elaboration_specialization.cpp
       src/elaboration/elaboration_vhdl_static.cpp
+      src/elaboration/elaboration_vhdl_values.cpp
       src/elaboration/elaboration_vhdl_blocks.cpp
       src/elaboration/elaboration_vhdl_generate_choice.cpp
       src/elaboration/elaboration_vhdl_local.cpp
@@ -386,6 +387,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/elaboration_targets.cpp
       src/elaboration/hierarchy_generic_interfaces.cpp
       src/elaboration/hierarchy_packages.cpp
+      src/elaboration/hierarchy_vhdl_protected.cpp
       src/elaboration/hierarchy_ports.cpp
       src/elaboration/hierarchy_sv_package_qualified.cpp
       src/elaboration/hierarchy_sv_interface_callables.cpp
@@ -404,6 +406,8 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_vhdl_composite_operations.cpp
       src/elaboration/lowerer_vhdl_attributes.cpp
       src/elaboration/lowerer_vhdl_matching.cpp
+      src/elaboration/lowerer_vhdl_physical.cpp
+      src/elaboration/lowerer_vhdl_protected.cpp
       src/elaboration/lowerer_control.cpp
       src/elaboration/lowerer_expression.cpp
       src/elaboration/lowerer_expression_binary.cpp
@@ -428,6 +432,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_sv_file_scan.cpp
       src/elaboration/lowerer_sv_multidimensional.cpp
       src/elaboration/lowerer_vhdl_array_selection.cpp
+      src/elaboration/lowerer_vhdl_access.cpp
   )
 add_library(fsim::elaboration ALIAS fsim_elaboration)
 fsim_configure_library(fsim_elaboration)

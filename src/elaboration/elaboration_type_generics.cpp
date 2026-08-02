@@ -149,6 +149,81 @@ std::string canonical_type_identity(const frontend::Type& type) {
                    << canonical_type_identity(element) << '}';
         }
     }
+    if (type.vhdl_access) {
+        const auto& access = *type.vhdl_access;
+        output << ";access=" << access.handle_width << ':'
+               << access.maximum_objects << ':'
+               << (access.nullable ? 1 : 0) << ':'
+               << (access.owns_designated_object ? 1 : 0) << ':'
+               << (access.simulation_lifetime ? 1 : 0);
+        for (const auto& designated : access.designated_types) {
+            output << ";designated={"
+                   << canonical_type_identity(designated) << '}';
+        }
+    }
+    if (type.vhdl_physical) {
+        const auto& physical = *type.vhdl_physical;
+        output << ";physical";
+        if (physical.range) {
+            output << "-range="
+                   << expression_identity(physical.range->left) << ':'
+                   << expression_identity(physical.range->right) << ':'
+                   << (physical.range->descending ? 1 : 0);
+        }
+        if (physical.resolved_range) {
+            output << "-resolved=" << physical.resolved_range->left
+                   << ':' << physical.resolved_range->right << ':'
+                   << (physical.resolved_range->descending ? 1 : 0);
+        }
+        for (const auto& physical_unit : physical.units) {
+            output << ";physical-unit=" << physical_unit.name;
+            if (physical_unit.scale) {
+                output << ':'
+                       << expression_identity(*physical_unit.scale);
+            }
+            if (physical_unit.scale_factor) {
+                output << ":factor="
+                       << *physical_unit.scale_factor;
+            }
+        }
+    }
+    if (type.vhdl_protected) {
+        const auto& protected_info = *type.vhdl_protected;
+        output << ";protected=" << (protected_info.has_body ? 1 : 0)
+               << ':' << (protected_info.body_conformant ? 1 : 0)
+               << ':' << protected_info.storage_width;
+        for (std::size_t index = 0;
+             index < protected_info.variables.size(); ++index) {
+            output << ";protected-member="
+                   << protected_info.variables[index].name << ':'
+                   << (index < protected_info.variable_offsets.size()
+                           ? protected_info.variable_offsets[index]
+                           : 0)
+                   << "={"
+                   << canonical_type_identity(
+                          protected_info.variables[index].type)
+                   << '}';
+        }
+        for (const auto& function : protected_info.functions) {
+            output << ";protected-function=" << function.name
+                   << "->{"
+                   << canonical_type_identity(function.return_type)
+                   << '}';
+            for (const auto& argument : function.arguments) {
+                output << ":arg={"
+                       << canonical_type_identity(argument.type)
+                       << '}';
+            }
+        }
+        for (const auto& procedure : protected_info.procedures) {
+            output << ";protected-procedure=" << procedure.name;
+            for (const auto& argument : procedure.arguments) {
+                output << ":arg={"
+                       << canonical_type_identity(argument.type)
+                       << '}';
+            }
+        }
+    }
     for (const auto& constraint :
          type.vhdl_array_constraints) {
         output << ";array-constraint="

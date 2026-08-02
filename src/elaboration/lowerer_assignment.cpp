@@ -87,6 +87,9 @@ using namespace elaboration_detail;
     }
 
     void Lowerer::lower_assignment(const Statement& statement) {
+        if (lower_vhdl_access_assignment(statement)) {
+            return;
+        }
         const Expression* base = &statement.target;
         std::uint32_t selected_offset = 0;
         bool has_selected_offset = false;
@@ -516,6 +519,19 @@ using namespace elaboration_detail;
                     || dynamic_part_selection
                 ? nullptr
                 : object_type(target_name);
+        if (language_ == frontend::Language::Vhdl2008
+            && contextual_target_type != nullptr
+            && contextual_target_type->vhdl_access
+            && signal != signals_.end()
+            && !(statement.value.kind == ExpressionKind::Call
+                 && statement.value.text == "@vhdl-null")) {
+            report(
+                "FSIM-ELAB-VHACCESS-021",
+                "a nonnull process-local VHDL access handle cannot escape "
+                "through a signal",
+                statement.value.span);
+            return;
+        }
         if (!has_disconnect
             && !validate_sv_nominal_assignment(
                 contextual_target_type, statement.value)) {
@@ -1039,6 +1055,38 @@ using namespace elaboration_detail;
         }
         const auto* target_type =
             visible_type(target_name);
+        if (language_ == frontend::Language::Vhdl2008
+            && target_type != nullptr
+            && target_type->vhdl_physical) {
+            const auto source_type =
+                vhdl_expression_type(statement.value);
+            const bool physical_literal =
+                statement.value.kind == ExpressionKind::Call
+                && statement.value.text.starts_with(
+                    "@vhdl-physical:");
+            const bool physical_operation =
+                statement.value.kind == ExpressionKind::Binary;
+            if (source_type && source_type->vhdl_physical
+                && source_type->nominal_type
+                    != target_type->nominal_type) {
+                report(
+                    "FSIM-ELAB-VHPHYSICAL-009",
+                    "assignment between distinct nominal physical types "
+                    "is not legal",
+                    statement.span);
+                return;
+            }
+            if ((!source_type || !source_type->vhdl_physical)
+                && !physical_literal && !physical_operation) {
+                report(
+                    "FSIM-ELAB-VHPHYSICAL-010",
+                    "a physical target requires a same-type value, "
+                    "physical literal, physical operation, or explicit "
+                    "type conversion",
+                    statement.span);
+                return;
+            }
+        }
         const auto target_domain =
             selected_domain.value_or(
                 target_type != nullptr
