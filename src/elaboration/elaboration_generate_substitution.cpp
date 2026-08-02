@@ -286,6 +286,7 @@ void substitute_parameters(
         };
     substitute_generic_maps(body.generic_function_instances);
     substitute_generic_maps(body.generic_procedure_instances);
+    substitute_generic_maps(body.package_instances);
     substitute_parameters(
         body.concurrent_statements,
         environment,

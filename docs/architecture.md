@@ -199,6 +199,13 @@ the internal scoped template name admitted only when it names an exact retained
 generated declaration. The resulting instance name and generic binding join
 specialization identity and source provenance before lowering and native-cache
 lookup.
+Generated local generic-package instances follow the same two-phase rule.
+Parsing retains them in `GenerateBody`; selection qualifies the instance and
+its map under the exact branch or `label[index]` scope, and post-expansion
+package materialization publishes selected constants, types, and callables.
+Lexical generated-package prefixes are excluded from pre-expansion external
+package discovery, and the realized package binding participates in
+specialization and native-cache identity.
 VHDL conditional, iterative, and case-alternative bodies retain their
 declarative part separately from concurrent statements; any nonempty
 declarative part requires the grammar's separating `begin`. Expansion applies

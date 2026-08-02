@@ -267,6 +267,11 @@ generated_behavior_vhdl_source =
 {
   std::ofstream output(generated_behavior_vhdl_source);
   output << R"(
+package generated_math is
+  generic (bias : natural := 0);
+  constant selected_value : natural := bias + 1;
+end package;
+
 entity generated_behavior_vhdl is
   generic (
     enabled : boolean := true
@@ -317,8 +322,10 @@ begin
     end procedure shifted_drive;
     procedure mapped_drive is new shifted_drive
       generic map (amount => 0);
+    package selected_math is new work.generated_math
+      generic map (bias => base_value);
   begin
-    generated_value <= local_value;
+    generated_value <= selected_math.selected_value;
     mapped_value <= mapped_shift(generated_value);
     worker: process(generated_value)
     begin
@@ -339,10 +346,12 @@ architecture rtl of generated_loop_declarations_vhdl is
 begin
   lanes: for i in 2 to 2 generate
     constant local_value : natural := i + 4;
+    package lane_math is new work.generated_math
+      generic map (bias => i + 3);
     subtype lane_word_t is unsigned(i + 1 downto 0);
     signal generated_value : lane_word_t;
   begin
-    generated_value <= local_value;
+    generated_value <= lane_math.selected_value;
     observed <= generated_value + 1;
   end generate lanes;
 end architecture;

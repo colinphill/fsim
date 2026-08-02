@@ -1211,6 +1211,7 @@ struct GenerateBody {
   std::vector<GenericProcedureTemplate> generic_procedure_templates;
   std::vector<GenericSubprogramInstantiation> generic_function_instances;
   std::vector<GenericSubprogramInstantiation> generic_procedure_instances;
+  std::vector<PackageInstantiation> package_instances;
   std::vector<VhdlComponentDeclaration> vhdl_component_declarations;
   std::vector<Statement> concurrent_statements;
   std::vector<Process> processes;

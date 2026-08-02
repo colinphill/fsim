@@ -358,6 +358,11 @@ endmodule
   const auto vhdl = parse_text(
       "generate.vhd",
       R"(
+package generated_math is
+  generic (bias : natural := 0);
+  constant selected_value : natural := bias + 1;
+end package;
+
 entity generated is
   generic (enabled : boolean := true);
   port (
@@ -406,10 +411,15 @@ begin
     end procedure shifted_drive;
     procedure mapped_drive is new shifted_drive
       generic map (amount => 1);
+    package selected_math is new work.generated_math
+      generic map (bias => branch_value);
   begin
     active: entity work.leaf(rtl)
       port map (value => value, result => result);
     nested: if enabled generate
+      package nested_math is new work.generated_math
+        generic map (bias => branch_value + 1);
+    begin
       nested_active: entity work.leaf(rtl)
         port map (value => value, result => result);
     else generate
@@ -560,6 +570,9 @@ end architecture;
               == 1
           && vhdl_generate.then_body.generic_procedure_instances.size()
               == 1
+          && vhdl_generate.then_body.package_instances.size() == 1
+          && vhdl_generate.then_body.package_instances.front().name
+              == "selected_math"
           && vhdl_generate.else_body.type_aliases.size() == 2
           && vhdl_generate.else_body.constants.size() == 1
           && vhdl_generate.else_body.signals.size() == 1
@@ -570,6 +583,9 @@ end architecture;
           && vhdl_generate.then_body.generate_regions.size() == 1
           && vhdl_generate.then_body.generate_regions.front().then_scope
               == "nested"
+          && vhdl_generate.then_body.generate_regions.front()
+                 .then_body.package_instances.size()
+              == 1
           && vhdl_generate.then_body.generate_regions.front()
                  .then_body.instances
                  .front()
@@ -1141,6 +1157,50 @@ end architecture;
                     == "FSIM-VHDL-SEM-019";
               }),
       "invalid VHDL generated constants are targeted");
+
+  const auto generated_declaration_collisions = parse_text(
+      "generated_declaration_collisions.vhd",
+      R"(
+architecture rtl of generated_declaration_collisions is
+begin
+  selected: if true generate
+    type shared_name is (first, second);
+    signal shared_name : bit;
+  begin
+  end generate selected;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !generated_declaration_collisions.ok()
+          && std::ranges::any_of(
+              generated_declaration_collisions.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-081";
+              }),
+      "cross-family generated declaration collisions are targeted");
+
+  const auto unsupported_generated_declaration = parse_text(
+      "unsupported_generated_declaration.vhd",
+      R"(
+architecture rtl of unsupported_generated_declaration is
+begin
+  selected: if true generate
+    shared variable unsupported_value : integer;
+  begin
+  end generate selected;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !unsupported_generated_declaration.ok()
+          && std::ranges::any_of(
+              unsupported_generated_declaration.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-UNSUPPORTED-053";
+              }),
+      "unsupported generated declarations use a stable diagnostic");
 
   const auto duplicate_generated_type = parse_text(
       "duplicate_generated_type.vhd",

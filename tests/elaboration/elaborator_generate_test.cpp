@@ -204,6 +204,11 @@ endmodule
     auto generated_vhdl = fsim::frontend::parse_text(
         "generated-mixed.vhd",
         R"(
+package generated_math is
+  generic (bias : natural := 0);
+  constant selected_value : natural := bias + 1;
+end package;
+
 entity generated_vhdl_leaf is
   generic (
     value : natural := 1
@@ -388,8 +393,10 @@ begin
     end procedure shifted_drive;
     procedure mapped_drive is new shifted_drive
       generic map (amount => 0);
+    package selected_math is new work.generated_math
+      generic map (bias => 5);
   begin
-    generated_value <= 6;
+    generated_value <= selected_math.selected_value;
     mapped_value <= mapped_shift(generated_value);
     worker: process(generated_value)
     begin
@@ -407,10 +414,12 @@ begin
   lanes: for i in 0 to 2 generate
     type lane_bits_t is array (0 to i + 1) of bit;
     constant local_value : natural := i + 4;
+    package lane_math is new work.generated_math
+      generic map (bias => i + 3);
     signal generated_value : unsigned(3 downto 0);
     signal typed_value : lane_bits_t;
   begin
-    generated_value <= local_value;
+    generated_value <= lane_math.selected_value;
   end generate lanes;
 end architecture;
 

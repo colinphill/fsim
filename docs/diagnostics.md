@@ -390,6 +390,7 @@ therefore excluded.
 | `FSIM-VHDL-SEM-077` | error | A VHDL value generic is declared with a mode other than input. |
 | `FSIM-VHDL-SEM-078` | error | A named port actual is repeated in one instance map. |
 | `FSIM-VHDL-SEM-079` | error | A positional port actual follows a named actual. |
+| `FSIM-VHDL-SEM-081` | error | A generated VHDL declarative item conflicts with an earlier declaration from a different non-overloadable family. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -428,6 +429,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-047` | error | A bounded generic function template is impure. |
 | `FSIM-VHDL-UNSUPPORTED-050` | error | A configuration declaration contains an item outside the bounded architecture/component configuration subset. |
 | `FSIM-VHDL-UNSUPPORTED-052` | error | A component declaration contains an unsupported declarative item. |
+| `FSIM-VHDL-UNSUPPORTED-053` | error | A generated VHDL declarative region contains an item outside the bounded constant, signal, type, subtype, callable, component, and local-package subset. |
 
 ## Verilog and SystemVerilog frontend
 

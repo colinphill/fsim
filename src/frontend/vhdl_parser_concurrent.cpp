@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_parser_internal.hpp"
 
+#include <unordered_map>
+
 namespace fsim::frontend {
 
 GenerateRegion VhdlParser::parse_vhdl_conditional_generate(
@@ -300,6 +302,79 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
 bool VhdlParser::parse_vhdl_generate_declarations(
     GenerateBody& body,
     const VhdlComponentDeclarationRegion region) {
+  struct GeneratedDeclarationName {
+    std::string name;
+    std::string family;
+    SourceSpan span;
+    bool callable{};
+  };
+  const auto validate_cross_family_names = [&]() {
+    std::vector<GeneratedDeclarationName> names;
+    const auto append = [&](const auto& declarations,
+                            const std::string_view family,
+                            const bool callable = false) {
+      for (const auto& declaration : declarations) {
+        names.push_back({
+            declaration.name,
+            std::string{family},
+            declaration.span,
+            callable});
+      }
+    };
+    append(body.constants, "constant");
+    append(body.type_aliases, "type");
+    append(body.signals, "signal");
+    append(body.signal_aliases, "signal alias");
+    append(body.functions, "function", true);
+    append(body.tasks, "task", true);
+    append(body.procedures, "procedure", true);
+    for (const auto& declaration :
+         body.generic_function_templates) {
+      names.push_back({
+          declaration.function.name,
+          "generic function",
+          declaration.span,
+          true});
+    }
+    for (const auto& declaration :
+         body.generic_procedure_templates) {
+      names.push_back({
+          declaration.procedure.name,
+          "generic procedure",
+          declaration.span,
+          true});
+    }
+    append(body.generic_function_instances, "function", true);
+    append(body.generic_procedure_instances, "procedure", true);
+    append(body.package_instances, "package");
+    append(body.vhdl_component_declarations, "component");
+    std::ranges::stable_sort(
+        names, {}, [](const auto& declaration) {
+          return declaration.span.begin.offset;
+        });
+    std::unordered_map<std::string, GeneratedDeclarationName> prior;
+    for (const auto& declaration : names) {
+      const auto found = prior.find(declaration.name);
+      if (found == prior.end()) {
+        prior.emplace(declaration.name, declaration);
+        continue;
+      }
+      if (found->second.family == declaration.family
+          || (found->second.callable && declaration.callable)) {
+        continue;
+      }
+      error(
+          Token{
+              TokenKind::Identifier,
+              declaration.name,
+              declaration.span,
+              {}},
+          "FSIM-VHDL-SEM-081",
+          "generated " + declaration.family + " declaration '"
+              + declaration.name + "' conflicts with prior "
+              + found->second.family + " declaration");
+    }
+  };
   bool parsed = false;
   for (;;) {
     if (match_keyword("signal", true)) {
@@ -399,6 +474,30 @@ bool VhdlParser::parse_vhdl_generate_declarations(
           std::move(declarations.generic_procedure_instances);
       continue;
     }
+    if (keyword("package", 0, true)
+        && at(TokenKind::Identifier, 1)
+        && keyword("is", 2, true)
+        && keyword("new", 3, true)) {
+      parsed = true;
+      const auto package_start = advance();
+      auto instance =
+          parse_vhdl_package_instantiation(package_start);
+      if (std::ranges::any_of(
+              body.package_instances,
+              [&](const auto& existing) {
+                return existing.name == instance.name;
+              })) {
+        error(
+            package_start,
+            "FSIM-VHDL-SEM-059",
+            "duplicate local package instance '"
+                + instance.name + "'");
+      } else {
+        body.package_instances.push_back(
+            std::move(instance));
+      }
+      continue;
+    }
     if (match_keyword("component", true)) {
       parsed = true;
       const auto component_start = previous();
@@ -413,6 +512,26 @@ bool VhdlParser::parse_vhdl_generate_declarations(
           component_start);
       continue;
     }
+    if (keyword("variable", 0, true)
+        || keyword("shared", 0, true)
+        || keyword("file", 0, true)
+        || keyword("alias", 0, true)
+        || keyword("attribute", 0, true)
+        || keyword("use", 0, true)
+        || keyword("group", 0, true)
+        || keyword("disconnect", 0, true)
+        || keyword("package", 0, true)) {
+      parsed = true;
+      const auto unsupported = advance();
+      error(
+          unsupported,
+          "FSIM-VHDL-UNSUPPORTED-053",
+          "unsupported generated declarative item '"
+              + vhdl_name(unsupported.text) + "'");
+      skip_to_semicolon();
+      continue;
+    }
+    validate_cross_family_names();
     return parsed;
   }
 }

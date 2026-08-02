@@ -399,6 +399,12 @@ void collect_qualified_identifiers(
 void collect_qualified_identifiers(
     const frontend::GenerateBody& body,
     QualifiedIdentifierMap& identifiers) {
+    std::unordered_set<std::string> prior_identifiers;
+    prior_identifiers.reserve(identifiers.size());
+    for (const auto& [name, span] : identifiers) {
+        (void)span;
+        prior_identifiers.insert(name);
+    }
     for (const auto& alias : body.type_aliases) {
         collect_qualified_identifiers(alias.type, identifiers);
     }
@@ -464,6 +470,16 @@ void collect_qualified_identifiers(
             }
         }
     }
+    for (const auto& package : body.package_instances) {
+        for (const auto& actual : package.generic_map) {
+            collect_qualified_identifiers(
+                actual.value, identifiers);
+            if (actual.type_value) {
+                collect_qualified_identifiers(
+                    *actual.type_value, identifiers);
+            }
+        }
+    }
     collect_qualified_identifiers(
         body.concurrent_statements, identifiers);
     for (const auto& process : body.processes) {
@@ -514,6 +530,15 @@ void collect_qualified_identifiers(
     }
     collect_qualified_identifiers(
         body.generate_regions, identifiers);
+    for (const auto& package : body.package_instances) {
+        const auto prefix = package.name + ".";
+        std::erase_if(
+            identifiers,
+            [&](const auto& identifier) {
+              return !prior_identifiers.contains(identifier.first)
+                  && identifier.first.starts_with(prefix);
+            });
+    }
 }
 void collect_qualified_identifiers(
     const std::vector<frontend::GenerateRegion>& generates,
@@ -780,6 +805,14 @@ void qualify_generated_expression(
         if (const auto found = names.find(expression.text);
             found != names.end()) {
             expression.text = found->second;
+        } else if (const auto separator = expression.text.find('.');
+                   separator != std::string::npos) {
+            if (const auto prefix = names.find(
+                    expression.text.substr(0, separator));
+                prefix != names.end()) {
+                expression.text = prefix->second
+                    + expression.text.substr(separator);
+            }
         }
     }
     for (auto& association :
@@ -802,6 +835,18 @@ void qualify_generated_type(
                 type.spelling = found->second;
             }
             type.named_type = found->second;
+        } else if (const auto separator = type.named_type.find('.');
+                   separator != std::string::npos) {
+            if (const auto prefix = names.find(
+                    type.named_type.substr(0, separator));
+                prefix != names.end()) {
+                if (type.spelling == type.named_type) {
+                    type.spelling = prefix->second
+                        + type.named_type.substr(separator);
+                }
+                type.named_type = prefix->second
+                    + type.named_type.substr(separator);
+            }
         }
     }
     if (type.systemverilog_container
@@ -1099,6 +1144,10 @@ void append_generated_body(
     auto body_names = visible_names;
     for (const auto& alias : body.type_aliases) {
         body_names[alias.name] = generated_scope(scope, alias.name);
+    }
+    for (const auto& package : body.package_instances) {
+        body_names[package.name] =
+            generated_scope(scope, package.name);
     }
     std::unordered_map<std::string, std::string>
         scoped_vhdl_type_identities;
@@ -1428,6 +1477,19 @@ void append_generated_body(
         };
     qualify_generic_instances(body.generic_function_instances);
     qualify_generic_instances(body.generic_procedure_instances);
+    for (auto& instance : body.package_instances) {
+        const auto local_name = instance.name;
+        instance.name = body_names.at(local_name);
+        for (auto& actual : instance.generic_map) {
+            qualify_generated_expression(
+                actual.value, body_names);
+            if (actual.type_value) {
+                qualify_generated_type(
+                    *actual.type_value, body_names);
+            }
+        }
+        unit.package_instances.push_back(std::move(instance));
+    }
     for (auto& function : body.functions) {
         unit.functions.push_back(std::move(function));
     }

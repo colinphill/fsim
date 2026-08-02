@@ -36,6 +36,8 @@ DesignUnit block_unit(
         std::move(body.generic_function_instances);
     result.generic_procedure_instances =
         std::move(body.generic_procedure_instances);
+    result.package_instances =
+        std::move(body.package_instances);
     result.vhdl_component_declarations =
         std::move(body.vhdl_component_declarations);
     result.concurrent_statements =
@@ -75,6 +77,8 @@ void unpack_block_unit(
         std::move(source.generic_function_instances);
     body.generic_procedure_instances =
         std::move(source.generic_procedure_instances);
+    body.package_instances =
+        std::move(source.package_instances);
     body.vhdl_component_declarations =
         std::move(source.vhdl_component_declarations);
     body.concurrent_statements =
@@ -491,6 +495,7 @@ void HierarchyBuilder::expand_vhdl_block_generates(
         };
     expand_specialized_unit_generates(
         specialized, diagnostics_, &block_preparer);
+    instantiate_vhdl_local_packages(specialized, {});
     instantiate_vhdl_generic_subprograms(specialized);
 }
 

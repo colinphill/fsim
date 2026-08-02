@@ -489,6 +489,7 @@ using namespace elaboration_detail;
                     Procedure,
                     GenericFunction,
                     GenericProcedure,
+                    Package,
                 };
                 struct OrderedDeclaration {
                     std::size_t offset{};
@@ -532,6 +533,9 @@ using namespace elaboration_detail;
                 append_declarations(
                     body.generic_procedure_templates,
                     DeclarationKind::GenericProcedure);
+                append_declarations(
+                    body.package_instances,
+                    DeclarationKind::Package);
                 std::ranges::stable_sort(
                     declarations, {}, &OrderedDeclaration::offset);
                 for (const auto& declaration : declarations) {
@@ -646,6 +650,16 @@ using namespace elaboration_detail;
                         active_interface_package_formals.clear();
                         break;
                     }
+                    case DeclarationKind::Package:
+                        for (auto& actual :
+                             body.package_instances[
+                                 declaration.index].generic_map) {
+                            if (actual.type_value) {
+                                (void)resolve_type(
+                                    *actual.type_value);
+                            }
+                        }
+                        break;
                     }
                 }
                 for (auto& process : body.processes) {

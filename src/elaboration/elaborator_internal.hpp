@@ -512,6 +512,13 @@ void visit_generate_body_types(
         }
         visit_statement_types(generic.procedure.statements, visitor);
     }
+    for (auto& package : body.package_instances) {
+        for (auto& actual : package.generic_map) {
+            if (actual.type_value) {
+                visitor(*actual.type_value);
+            }
+        }
+    }
     for (auto& component :
          body.vhdl_component_declarations) {
         for (auto& generic : component.generics) {

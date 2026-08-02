@@ -6361,10 +6361,10 @@ The current ten implementation tasks are:
    visibility, specialized constraints, nominal identity, and source provenance.
 6. **Complete.** Support generated function/procedure declarations, bodies, and bounded
    instantiations with local overload visibility and scope-qualified identity.
-7. **In progress.** Complete generated constants, signals, aliases, component declarations,
+7. **Complete.** Complete generated constants, signals, aliases, component declarations,
    package instantiations, and nested declarative items with deterministic
    collision and unsupported-item diagnostics.
-8. **Pending.** Complete architecture, block, generate, process, and subprogram local
+8. **In progress.** Complete architecture, block, generate, process, and subprogram local
    declarative regions for bounded constants, types/subtypes, objects, aliases,
    packages, and non-suspending local callables.
 9. **Pending.** Complete remaining locally static `if`/`for`/`case` generate choices,
@@ -6458,6 +6458,26 @@ keeps all 346 authored sources under 2,000 lines. The final five-test focused
 gate passes in 15.66 seconds with all 1,447 production diagnostics cataloged.
 Tasks 1 through 6 are focused-complete; Batch 114 remains **in progress** with
 Task 7 current and Tasks 8 through 10 pending.
+
+Task 7 is focused-complete. Every selected or recursively nested generate body
+now carries the bounded constant, signal, type/subtype alias, block-port alias,
+component, ordinary/generic callable, and local generic-package families.
+Package instance names and generic actuals are qualified beneath the exact
+branch or concrete `label[index]` scope, lexical package-selected references
+are withheld from premature external-package discovery, and a post-expansion
+materialization pass publishes selected package constants, types, callables,
+identity, and transitive provenance. Physical-source sorting produces a stable
+`FSIM-VHDL-SEM-081` cross-family collision diagnostic, while recognized but
+unsupported generated declarations use `FSIM-VHDL-UNSUPPORTED-053` instead of
+falling through to a generic missing-`begin` error. Focused frontend and
+elaboration evidence covers direct, nested, and iteration-dependent local
+packages plus collisions and unsupported items. The merged application test
+executes package-selected values in the interpreter and LLVM O0/O2, verifies
+scope-qualified package identity, normalized VCD, and cold/warm cache reuse.
+The final five-test focused Release gate passes in 14.68 seconds with all 1,449
+production diagnostics cataloged and all 346 authored sources within the
+2,000-line limit. Tasks 1 through 7 are focused-complete; Batch 114 remains
+**in progress** with Task 8 current and Tasks 9 and 10 pending.
 
 ## Forward language-closure feature batches
 

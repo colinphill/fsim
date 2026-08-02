@@ -16,12 +16,12 @@ as work lands. Before moving on, retain that batch's list, mark it
 
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: pushed Batch 114 generated-type support at parent
-  commit `fdffaff`. The Task 6 generated-callable checkpoint is this document's
-  containing commit: it adds scoped ordinary function/procedure declaration
-  bodies plus bounded generic templates/instances, source-order visibility,
-  and cache-edit identity. Tasks 1 through 6 are focused-complete and Task 7
-  is current.
+- Implementation baseline: pushed Batch 114 generated-callable support at
+  parent commit `8746f6d`. The Task 7 generated declarative-family checkpoint
+  is this document's containing commit: it adds selected and recursively nested
+  local-package instances, scoped package identity, deterministic cross-family
+  collisions, and unsupported-item diagnostics. Tasks 1 through 7 are
+  focused-complete and Task 8 is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
 - The source-size refactor is complete: all 346 authored C/C++ source, header,
@@ -1680,9 +1680,9 @@ complete and checkpoint `4af01cd` contains the final implementation slice.
    specialized constraints, nominal identity, and source provenance.
 6. **Complete.** Add generated function/procedure declarations, bodies, and bounded
    instantiations with local overload visibility and scope-qualified identity.
-7. **In progress.** Complete generated constants, signals, aliases, components, package
+7. **Complete.** Complete generated constants, signals, aliases, components, package
    instantiations, nested items, and collision/unsupported-item diagnostics.
-8. **Pending.** Complete architecture/block/generate/process/subprogram local declarative
+8. **In progress.** Complete architecture/block/generate/process/subprogram local declarative
    regions for bounded constants, types, objects, aliases, packages, and
    non-suspending local callables.
 9. **Pending.** Complete remaining locally static `if`/`for`/`case` generate choices,
@@ -1766,6 +1766,24 @@ focused gate passes in 15.66 seconds with 1,447 production diagnostics and all
 346 authored sources within the 2,000-line limit. Tasks 1 through 6 are
 focused-complete; Batch 114 remains **in progress** with Task 7 current and
 Tasks 8 through 10 pending.
+
+Task 7 is focused-complete. Selected conditional, case-alternative, iterative,
+block, and recursively nested bodies retain the bounded constant, signal,
+type/subtype alias, block-port alias, component, callable, and local
+generic-package declaration families. Expansion scope-qualifies local-package
+names and maps, excludes their lexical prefixes from premature external
+package lookup, and reruns package materialization so selected constants,
+types, callables, identities, and source provenance reach the concrete unit.
+Direct, nested, and iteration-dependent package instances have focused HIR and
+elaboration coverage. `FSIM-VHDL-SEM-081` deterministically rejects
+cross-family homographs in physical source order, and
+`FSIM-VHDL-UNSUPPORTED-053` targets recognized unsupported generated items.
+The merged interpreter/LLVM O0/O2 application path executes a generated
+package-selected constant, verifies its scoped package identity, normalized
+VCD, and cold/warm cache reuse. The final five-test focused Release gate passes
+in 14.68 seconds with 1,449 production diagnostics and all 346 authored sources
+within the 2,000-line limit. Tasks 1 through 7 are focused-complete; Batch 114
+remains **in progress** with Task 8 current and Tasks 9 and 10 pending.
 
 Batch 110 has advanced through these validated features:
 

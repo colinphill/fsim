@@ -858,7 +858,9 @@ const auto generated_callable_baseline = verify_generated_behavior(
     {{"chosen.mapped_shift",
       "kind=function;template=chosen.shifted"},
      {"chosen.mapped_drive",
-      "kind=procedure;template=chosen.shifted_drive"}});
+      "kind=procedure;template=chosen.shifted_drive"},
+     {"chosen.selected_math",
+      "template=work.generated_math;bias=5"}});
 verify_generated_behavior(
     generated_loop_declarations_vhdl_config,
     {"lanes[2].generated_value"},
@@ -960,7 +962,8 @@ const auto generated_callable_edited = run_generated_behavior(
     fsim::app::SimulationEngine::compiled,
     {"chosen.generated_value", "chosen.mapped_value"},
     {{"chosen.mapped_shift", "generic=amount=1"},
-     {"chosen.mapped_drive", "generic=amount=0"}});
+     {"chosen.mapped_drive", "generic=amount=0"},
+     {"chosen.selected_math", "bias=5"}});
 assert(generated_callable_edited.keys != generated_callable_baseline.keys);
 assert((generated_callable_edited.simulation.final_values
         == std::vector<std::string>{"0111", "0110", "1000"}));
