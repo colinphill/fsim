@@ -483,6 +483,47 @@ begin
 end architecture;
 )";
 }
+vhdl_statement_behavior_source =
+    directory / "vhdl_statement_behavior.vhd";
+{
+  std::ofstream output(vhdl_statement_behavior_source);
+  output << R"(
+entity vhdl_statement_behavior is
+  port (observed : out integer);
+end entity;
+architecture rtl of vhdl_statement_behavior is
+begin
+  worker: process
+    procedure add_value(
+      variable target : inout integer;
+      amount : integer) is
+    begin
+      target := target + amount;
+    end procedure add_value;
+    variable local_value : integer := 1;
+  begin
+    choose_variable: with local_value select
+      local_value := 2 when 1, 3 when others;
+    initial_call: add_value(local_value, 1);
+    iterations: for index in 0 to 2 loop
+      branch: if index = 1 then
+        branch_call: add_value(local_value, 4);
+      else
+        branch_null: null;
+      end if branch;
+      choice: case index is
+        when 0 => first_call: add_value(local_value, 1);
+        when 1 => middle_null: null;
+        when others => final_call: add_value(local_value, 2);
+      end case choice;
+    end loop iterations;
+    choose_signal: with local_value select
+      observed <= local_value when 10, 0 when others;
+    suspended: wait;
+  end process worker;
+end architecture;
+)";
+}
 generated_static_behavior_sv_source =
     directory / "generated_static_behavior.sv";
 {

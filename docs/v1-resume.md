@@ -17,8 +17,8 @@ as work lands. Before moving on, retain that batch's list, mark it
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
 - Implementation baseline: pushed Batch 114 local declarative-region support
-  at commit `4e716e6`. The working tree contains focused-complete Batch 115
-  Task 1 statement-HIR/label coverage; Task 2 is current.
+  at commit `c25ac3a`. The working tree contains focused-complete Batch 115
+  Task 2 sequential-statement execution; Task 3 is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
 - The source-size refactor is complete: all 348 authored C/C++ source, header,
@@ -1831,9 +1831,9 @@ completed selector-domain contract. All ten Batch 114 tasks are complete.
 1. **Complete.** Audit and retain every remaining synthesizable sequential and concurrent
    statement form in typed HIR, with exact labels, spans, and targeted
    unsupported-form diagnostics.
-2. **In progress.** Complete sequential signal/variable assignments, procedure calls, `null`,
+2. **Complete.** Complete sequential signal/variable assignments, procedure calls, `null`,
    conditionals, loops, and case statements across nested labeled scopes.
-3. **Pending.** Add VHDL-2008 matching case statements and matching selected/conditional
+3. **In progress.** Add VHDL-2008 matching case statements and matching selected/conditional
    assignments with exact wildcard semantics and deterministic legality checks.
 4. **Pending.** Complete discrete case choices with grouped literals, locally static ranges,
    `others`, null ranges, overlap, duplicate, and coverage diagnostics.
@@ -1867,6 +1867,16 @@ production diagnostics and all 348 authored sources within the 2,000-line
 limit. The late Batch 114 negative fixture is compacted from 2,010 to exactly
 2,000 lines. Batch 115 remains **in progress** with Task 2 current and Tasks 3
 through 10 pending.
+
+Task 2 is focused-complete. The dedicated statement application executes a
+process-local scalar procedure, selected variable assignment, labeled
+ascending loop, nested labeled `if`/`else` and exact `case`, procedure calls,
+`null`, a sequential selected signal assignment, and a labeled permanent wait.
+The final integer value 10 agrees across interpreter and LLVM O0/O2 cold/warm
+runs with one process and stable cache reuse. The final five-test focused
+Debug/Release gates pass in 15.90/14.99 seconds with 1,455 production
+diagnostics and all 348 authored sources within the 2,000-line limit. Batch
+115 remains **in progress** with Task 3 current and Tasks 4 through 10 pending.
 
 Batch 110 has advanced through these validated features:
 

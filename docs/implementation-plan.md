@@ -6540,9 +6540,9 @@ The current ten implementation tasks are:
 1. **Complete.** Audit and retain every remaining synthesizable sequential and concurrent
    statement form in typed HIR, with exact labels, spans, and targeted
    unsupported-form diagnostics.
-2. **In progress.** Complete sequential signal/variable assignments, procedure calls, `null`,
+2. **Complete.** Complete sequential signal/variable assignments, procedure calls, `null`,
    conditionals, loops, and case statements across nested labeled scopes.
-3. **Pending.** Add VHDL-2008 matching case statements and matching selected/conditional
+3. **In progress.** Add VHDL-2008 matching case statements and matching selected/conditional
    assignments with exact wildcard semantics and deterministic legality checks.
 4. **Pending.** Complete discrete case choices with grouped literals, locally static ranges,
    `others`, null ranges, overlap, duplicate, and coverage diagnostics.
@@ -6578,6 +6578,19 @@ five-test focused Debug/Release gates pass in 16.21/15.30 seconds with all
 the 2,000-line limit; the late Batch 114 negative fixture is compacted from
 2,010 to exactly 2,000 lines. Batch 115 remains **in progress** with Task 2
 current and Tasks 3 through 10 pending.
+
+Task 2 is focused-complete. A dedicated VHDL statement application uses a
+process-local scalar procedure and selected variable assignment, then executes
+a labeled ascending `for` loop containing nested labeled `if`/`else`, exact
+`case`, procedure-call, and `null` statements before a sequential selected
+signal assignment and labeled permanent wait. The resulting integer value 10
+agrees across the interpreter and LLVM O0/O2 cold/warm paths with one process
+and stable cache reuse. This directly exercises the generalized Task 1 HIR
+through lowering without adding label-dependent behavior ahead of Task 6. The
+final five-test focused Debug/Release gates pass in 15.90/14.99 seconds with
+all 1,455 production diagnostics cataloged and all 348 authored sources within
+the 2,000-line limit. Batch 115 remains **in progress** with Task 3 current
+and Tasks 4 through 10 pending.
 
 ## Forward language-closure feature batches
 

@@ -666,6 +666,20 @@ auto generated_enum_behavior_vhdl_config =
         "vhdl:work.generated_enum_behavior_vhdl(rtl)",
         fsim::project::Language::vhdl,
         generated_enum_behavior_vhdl_source);
+auto vhdl_statement_behavior_config =
+    make_generated_behavior_config(
+        "vhdl-statement-behavior-test",
+        "vhdl:work.vhdl_statement_behavior(rtl)",
+        fsim::project::Language::vhdl,
+        vhdl_statement_behavior_source);
+auto vhdl_statement_behavior_o0_config =
+    vhdl_statement_behavior_config;
+vhdl_statement_behavior_o0_config.project.name =
+    "vhdl-statement-behavior-o0-test";
+vhdl_statement_behavior_o0_config.build.optimization =
+    fsim::project::Optimization::o0;
+vhdl_statement_behavior_o0_config.build.cache_path =
+    directory / "vhdl-statement-behavior-o0-test-cache";
 auto generated_loop_declarations_vhdl_config =
     make_generated_behavior_config(
         "generated-loop-declarations-vhdl-test",
@@ -882,6 +896,16 @@ const auto generated_enum_baseline = verify_generated_behavior(
     {"selected.selected_value"},
     {"1001", "1001"},
     2);
+verify_generated_behavior(
+    vhdl_statement_behavior_config,
+    {},
+    {"00000000000000000000000000001010"},
+    1);
+verify_generated_behavior(
+    vhdl_statement_behavior_o0_config,
+    {},
+    {"00000000000000000000000000001010"},
+    1);
 verify_generated_behavior(
     generated_static_behavior_sv_config,
     {"direct_value", "named_scope.nested_value"},
