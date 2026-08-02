@@ -32,6 +32,7 @@ struct TemporaryDirectory {
 struct Capture {
   fsim::runtime::RunResult result;
   std::array<std::string, 24> values;
+  std::array<std::string, 7> composite_values;
   std::string top_local;
   std::string dynamic_local;
   std::string dynamic_slice_local;
@@ -215,6 +216,23 @@ Capture run_once(
     traces[index] = vcd.declare_signal(
         std::string{paths[index]}, widths[index]);
   }
+  constexpr std::array<std::string_view, 7> composite_paths{
+      "array_top.matrix_positional",
+      "array_top.matrix_named",
+      "array_top.matrix_ranged",
+      "array_top.matrix_conditional",
+      "array_top.matrix_local_result",
+      "array_top.nested",
+      "array_top.cells"};
+  std::array<fsim::runtime::simir::SignalId, 7>
+      composite_signals{};
+  for (std::size_t index = 0;
+       index < composite_paths.size(); ++index) {
+    const auto signal =
+        simulation.find_signal(composite_paths[index]);
+    assert(signal);
+    composite_signals[index] = *signal;
+  }
   vcd.begin();
   for (std::size_t index = 0; index < signals.size(); ++index) {
     vcd.change(
@@ -240,6 +258,12 @@ Capture run_once(
   for (std::size_t index = 0; index < signals.size(); ++index) {
     capture.values[index] =
         simulation.read_signal(signals[index]).to_msb_string();
+  }
+  for (std::size_t index = 0;
+       index < composite_signals.size(); ++index) {
+    capture.composite_values[index] =
+        simulation.read_signal(composite_signals[index])
+            .to_msb_string();
   }
   capture.top_local = simulation.read_process_local(
       top_local->first, top_local->second).to_msb_string();
@@ -310,6 +334,16 @@ void verify_capture(const Capture& capture) {
           "0Z10X000",
           "010XZ000",
           "0Z01X000"}));
+  assert((
+      capture.composite_values
+      == std::array<std::string, 7>{
+          "101010",
+          "101000",
+          "111001",
+          "101010",
+          "011110",
+          "10000101",
+          "110001"}));
   assert(capture.top_local == "00LH10Z-");
   assert(capture.dynamic_local == "01HH10Z-");
   assert(capture.dynamic_slice_local == "0Z10X000");
@@ -455,6 +489,14 @@ end entity;
 
 use work.array_types.all;
 architecture rtl of Array_Top is
+  type Matrix_T is array (0 to 1, 3 downto 1) of bit;
+  type Nibble_Array_T is array (3 downto 0) of bit;
+  type Nibble_Memory_T is array (0 to 1) of Nibble_Array_T;
+  type Cell_T is record
+    Flag : boolean;
+    Data : bit_vector(1 downto 0);
+  end record;
+  type Cells_T is array (2 to 3) of Cell_T;
   signal Source : Byte_T;
   signal Result : Byte_T;
   signal Conditional_Result : Byte_T;
@@ -479,6 +521,13 @@ architecture rtl of Array_Top is
   signal Dynamic_Slice_Local_Result : Byte_T;
   signal Dynamic_Slice_Signal : Byte_T;
   signal Dynamic_Slice_Waveform : Byte_T;
+  signal Matrix_Positional : Matrix_T;
+  signal Matrix_Named : Matrix_T;
+  signal Matrix_Ranged : Matrix_T;
+  signal Matrix_Conditional : Matrix_T;
+  signal Matrix_Local_Result : Matrix_T;
+  signal Nested : Nibble_Memory_T;
+  signal Cells : Cells_T;
 begin
   drive : process
     variable Top_Local : Byte_T := "01LH10Z-";
@@ -493,6 +542,9 @@ begin
        First_Index => 'H', others => '0');
     variable Forward_Order : integer := 0;
     variable Backward_Order : integer := 0;
+    variable Matrix_Local : Matrix_T :=
+      ((3 => '0', others => '1'),
+       (3 downto 2 => '1', others => '0'));
   begin
     Source <= Top_Local;
     Aggregate_Named <= Top_Aggregate;
@@ -537,6 +589,7 @@ begin
     Attribute_Ascending <= Byte_T'ascending;
     Range_Order <= Forward_Order;
     Reverse_Order <= Backward_Order;
+    Matrix_Local_Result <= Matrix_Local;
     wait;
   end process;
 
@@ -567,6 +620,23 @@ begin
   Attribute_Slice <=
     Aggregate_Named(
       Byte_T'high downto Byte_T'high - 3);
+  Matrix_Positional <=
+    (('1', '0', '1'), ('0', '1', '0'));
+  Matrix_Named <=
+    (0 => (3 => '1', 2 => '0', others => '1'),
+     1 => (others => '0'));
+  Matrix_Ranged <=
+    (0 to 0 => (others => '1'),
+     others => ('0', '0', '1'));
+  Matrix_Conditional <=
+    (others => (others => '0')) when false else
+    (0 => ('1', '0', '1'), others => ('0', '1', '0'));
+  Nested <=
+    ((3 => '1', others => '0'),
+     ('0', '1', '0', '1'));
+  Cells <=
+    (2 => (Flag => true, Data => "10"),
+     others => (Data => "01", Flag => false));
 end architecture;
 )";
     assert(output.good());
@@ -600,6 +670,7 @@ end architecture;
     assert(reference.result.time == cold.result.time);
     assert(reference.result.delta == cold.result.delta);
     assert(reference.values == cold.values);
+    assert(reference.composite_values == cold.composite_values);
     assert(reference.top_local == cold.top_local);
     assert(reference.dynamic_local == cold.dynamic_local);
     assert(
@@ -613,6 +684,7 @@ end architecture;
     assert(reference.debugger_output == cold.debugger_output);
     assert(reference.vcd == cold.vcd);
     assert(cold.values == warm.values);
+    assert(cold.composite_values == warm.composite_values);
     assert(cold.top_local == warm.top_local);
     assert(cold.dynamic_local == warm.dynamic_local);
     assert(

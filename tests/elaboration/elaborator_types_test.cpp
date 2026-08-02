@@ -1236,6 +1236,8 @@ architecture rtl of Invalid_Arrays is
     X : bit;
     Y : bit;
   end record;
+  type Matrix_T is array (0 to 1, 3 downto 1) of bit;
+  type Records_T is array (0 to 1) of Record_T;
   signal Null_Array : A_T(3 to 0);
   signal Negative_Natural : A_T(-1 to 2);
   signal Unconstrained : A_T;
@@ -1252,6 +1254,9 @@ architecture rtl of Invalid_Arrays is
   signal Wide_Element_Aggregate : A_T(0 to 3);
   signal Scalar_Target : bit;
   signal Record_Target : Record_T;
+  signal Matrix_Missing : Matrix_T;
+  signal Matrix_Inner_Missing : Matrix_T;
+  signal Bad_Record_Elements : Records_T;
   signal Attribute_Error : integer;
 begin
   B <= A;
@@ -1270,6 +1275,10 @@ begin
   Scalar_Target <= A(Logic_Value);
   A(Logic_Value) <= '1';
   Record_Target <= (X | Y => '0');
+  Matrix_Missing <= (0 => (others => '0'));
+  Matrix_Inner_Missing <=
+    (others => (3 => '1', 2 => '0'));
+  Bad_Record_Elements <= (others => "10");
   Attribute_Error <= A_T'left;
   Attribute_Error <= Dynamic_Index'left;
   Attribute_Error <= Fixed_T'left(2);
@@ -1309,6 +1318,15 @@ end architecture;
         has_diagnostic(
             invalid_array_design, "FSIM-ELAB-VHARRAY-008"));
     assert(
+        std::ranges::any_of(
+            invalid_array_design.diagnostics,
+            [](const auto& diagnostic) {
+              return diagnostic.code
+                      == "FSIM-ELAB-VHARRAYAGG-006"
+                  && diagnostic.message.find("nominal record subtype")
+                      != std::string::npos;
+            }));
+    assert(
         has_diagnostic(
             invalid_array_design, "FSIM-ELAB-VHSUBTYPE-004"));
     assert(
@@ -1324,6 +1342,8 @@ end entity;
 architecture rtl of Composite_Array_Layout is
   type Matrix_T is array (0 to 1, 3 downto 1) of bit;
   type Packed_Rows_T is array (1 downto 0) of bit_vector(3 downto 0);
+  type Nibble_T is array (3 downto 0) of bit;
+  type Nibbles_T is array (0 to 1) of Nibble_T;
   type Cell_T is record
     Flag : boolean;
     Data : std_logic;
@@ -1334,6 +1354,7 @@ architecture rtl of Composite_Array_Layout is
   subtype Window_T is Open_T(2 downto 0, 1 to 2);
   signal Matrix : Matrix_T;
   signal Packed_Rows : Packed_Rows_T;
+  signal Nibbles : Nibbles_T;
   signal Cells : Cells_T;
   signal Window : Window_T;
 begin
@@ -1375,8 +1396,105 @@ end architecture;
         };
     assert_layout("matrix", 6, {3, 1});
     assert_layout("packed_rows", 8, {4});
+    assert_layout("nibbles", 8, {4});
     assert_layout("cells", 4, {2});
     assert_layout("window", 12, {4, 2});
+
+    const auto composite_array_aggregates =
+        fsim::frontend::parse_text(
+            "composite_array_aggregates.vhd",
+            R"(
+entity Composite_Array_Aggregates is
+end entity;
+architecture rtl of Composite_Array_Aggregates is
+  type Matrix_T is array (0 to 1, 3 downto 1) of bit;
+  type Nibble_T is array (3 downto 0) of bit;
+  type Nibbles_T is array (0 to 1) of Nibble_T;
+  type Cell_T is record
+    Flag : boolean;
+    Data : bit_vector(1 downto 0);
+  end record;
+  type Cells_T is array (2 to 3) of Cell_T;
+  signal Positional : Matrix_T;
+  signal Named : Matrix_T;
+  signal Ranged : Matrix_T;
+  signal Nested : Nibbles_T;
+  signal Cells : Cells_T;
+begin
+  Positional <= (('1', '0', '1'), ('0', '1', '0'));
+  Named <=
+    (0 => (3 => '1', 2 => '0', others => '1'),
+     1 => (others => '0'));
+  Ranged <=
+    (0 to 0 => (others => '1'),
+     others => ('0', '0', '1'));
+  Nested <=
+    ((3 => '1', others => '0'),
+     ('0', '1', '0', '1'));
+  Cells <=
+    (2 => (Flag => true, Data => "10"),
+     others => (Data => "01", Flag => false));
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(composite_array_aggregates.ok());
+    const auto aggregate_design =
+        fsim::elaboration::elaborate(
+            composite_array_aggregates.design,
+            "vhdl:work.composite_array_aggregates(rtl)");
+    if (!aggregate_design.ok()) {
+        for (const auto& diagnostic : aggregate_design.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(aggregate_design.ok());
+    const auto aggregate_positional =
+        aggregate_design.design->find_signal("positional");
+    const auto aggregate_named =
+        aggregate_design.design->find_signal("named");
+    const auto aggregate_ranged =
+        aggregate_design.design->find_signal("ranged");
+    const auto aggregate_cells =
+        aggregate_design.design->find_signal("cells");
+    const auto aggregate_nested =
+        aggregate_design.design->find_signal("nested");
+    assert(
+        aggregate_positional && aggregate_named
+        && aggregate_ranged && aggregate_cells
+        && aggregate_nested);
+    auto composite_aggregate_interpreter =
+        aggregate_design.design->create_interpreter();
+    const auto composite_aggregate_result =
+        composite_aggregate_interpreter->run();
+    assert(
+        composite_aggregate_result.status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        composite_aggregate_interpreter
+                ->signal_value(*aggregate_positional)
+                .to_msb_string()
+            == "101010");
+    assert(
+        composite_aggregate_interpreter
+                ->signal_value(*aggregate_named)
+                .to_msb_string()
+            == "101000");
+    assert(
+        composite_aggregate_interpreter
+                ->signal_value(*aggregate_ranged)
+                .to_msb_string()
+            == "111001");
+    assert(
+        composite_aggregate_interpreter
+                ->signal_value(*aggregate_cells)
+                .to_msb_string()
+            == "110001");
+    assert(
+        composite_aggregate_interpreter
+                ->signal_value(*aggregate_nested)
+                .to_msb_string()
+            == "10000101");
     assert(
         has_diagnostic(
             invalid_array_design,

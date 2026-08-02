@@ -17,7 +17,7 @@ as work lands. Before moving on, retain that batch's list, mark it
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
 - Implementation baseline: all ten Batch 115 tasks are complete through this
-  handoff; Batch 116 Tasks 1 and 2 are complete and Task 3 aggregates are
+  handoff; Batch 116 Tasks 1 through 3 are complete and Task 4 selections are
   current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
@@ -2003,10 +2003,10 @@ cataloged and all 357 authored sources pass the 2,000-line gate. All ten Batch
 2. **Complete.** Complete type/subtype layout for multidimensional and composite arrays,
    preserving every index range, direction, null range, element subtype, nominal
    identity, and deterministic flattened storage mapping.
-3. **In progress.** Complete contextual array aggregates with positional, named, discrete-range,
+3. **Complete.** Complete contextual array aggregates with positional, named, discrete-range,
    choice-list, and final `others` associations, including nested aggregates,
    coverage, overlap, duplicate, and subtype legality.
-4. **Pending.** Lower multidimensional indexing, slicing, and supported chained selections for
+4. **In progress.** Lower multidimensional indexing, slicing, and supported chained selections for
    reads and assignment targets with checked ordinal mapping, bounds, direction,
    and shape compatibility.
 5. **Pending.** Execute null arrays and slices through object initialization, aggregates,
@@ -2062,6 +2062,22 @@ locals at 0.86/0.83 seconds and VHDL arrays at 0.95/0.80 seconds. The
 LLVM-disabled ASan/UBSan gate passed the same seven tests in 4.25 seconds. All
 1,473 production diagnostics remain cataloged. Batch 116 remains **in
 progress** with Task 3 current and Tasks 4 through 10 pending.
+
+Task 3 is focused-complete. The contextual aggregate lowerer now walks one
+source dimension at a time, using its exact range and packed-bit stride to map
+positional, discrete, range, choice-list, and final-`others` associations.
+Nested multidimensional subaggregates, nested named arrays, vector values, and
+nominal record-element aggregates lower recursively with exact width,
+two-/four-/nine-state, coverage, overlap, duplicate, bounds, and record-subtype
+checks. Application evidence covers concurrent assignments, conditional
+alternatives, process-local initialization, interpreter execution, LLVM O0/O2,
+cold/warm cache reuse, and package-edit invalidation. Focused Debug and Release
+seven-test gates passed in 2.20 and 2.21 seconds, with VHDL arrays at 0.94/0.93
+seconds and scoped locals at 0.80/0.83 seconds. The LLVM-disabled ASan/UBSan
+gate passed the same seven tests in 4.33 seconds. All 1,473 production
+diagnostics are cataloged and all 358 authored sources remain within the
+2,000-line gate. Batch 116 remains **in progress** with Task 4 current and Tasks
+5 through 10 pending.
 
 Batch 110 has advanced through these validated features:
 

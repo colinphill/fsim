@@ -40,6 +40,15 @@ subset. Aggregate, selection, and general execution claims remain limited to
 the completed one-dimensional scalar-element path until the later Batch 116
 tasks close them.
 
+Batch 116 aggregate status update: contextual aggregates now recurse across
+concrete multidimensional subarrays, nested named arrays, and nominal record
+elements. Each source dimension accepts positional, locally static discrete or
+directed-range, choice-list, and final `others` associations with exact
+direction-aware coverage and overlap checks. The same lowering path is used in
+concurrent assignments, conditional alternatives, and process-local
+initializers, with interpreter and LLVM O0/O2 parity. General multidimensional
+selection and target syntax remains deferred to the next Batch 116 task.
+
 Batch 114 generated-type status update: the VHDL unit row's earlier
 generate-local subtype and generated-type exclusions are superseded. Selected
 `if`/`else`, iterative, and labeled `case` alternatives retain bounded array,

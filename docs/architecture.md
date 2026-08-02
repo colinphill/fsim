@@ -311,6 +311,15 @@ arrays retain their declared packed-range mirror for existing execution;
 multidimensional arrays receive a normalized total packed range. Nominal array
 and element identities remain independent of this flattening and participate in
 generic-specialization identity.
+Contextual VHDL array aggregates consume that dimension vector recursively.
+At each level, the declared right bound maps to packed offset zero and each
+index advances by the dimension stride; positional associations begin at the
+declared left bound. Named scalar, directed-range, choice-list, and final
+`others` associations mark logical elements rather than individual bits, so
+coverage and overlap remain correct for composite elements. A nested aggregate
+receives either the remaining multidimensional view or the retained element
+type, allowing the same lowerer to assemble nested arrays and nominal records
+into common fixed-width `Insert` operations.
 
 Simulation time is an unsigned 64-bit tick count at one elaborated global
 resolution. The v1 elaborator will select the finest declared VHDL, SV, or

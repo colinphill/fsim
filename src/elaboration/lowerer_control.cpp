@@ -898,7 +898,10 @@ using namespace elaboration_detail;
         const frontend::Type& expected_type) {
         const auto aggregate_width = expected_type.width();
         if (!expected_type.vhdl_array
-            || !expected_type.packed_range
+            || expected_type.vhdl_array->dimensions.empty()
+            || !expected_type.vhdl_array->dimensions.front().range
+            || expected_type.vhdl_array->dimensions.front().null
+            || expected_type.vhdl_array->element_types.empty()
             || !aggregate_width
             || *aggregate_width != expected_width
             || expected_width == 0
@@ -916,18 +919,56 @@ using namespace elaboration_detail;
             return std::nullopt;
         }
 
+        const auto& contextual_dimension =
+            expected_type.vhdl_array->dimensions.front();
+        const auto element_width = contextual_dimension.stride;
+        if (element_width == 0
+            || expected_width % element_width != 0
+            || element_width
+                > std::numeric_limits<std::uint32_t>::max()) {
+            report(
+                "FSIM-ELAB-VHARRAYAGG-002",
+                "VHDL array aggregate element stride is inconsistent "
+                "with its contextual layout",
+                expression.span);
+            return std::nullopt;
+        }
+        const auto element_count = expected_width / element_width;
         frontend::Type element_type;
-        element_type.spelling =
-            expected_type.vhdl_array->element_spelling;
-        element_type.domain =
-            expected_type.vhdl_array->element_domain;
+        if (expected_type.vhdl_array->dimensions.size() == 1U) {
+            element_type =
+                expected_type.vhdl_array->element_types.front();
+        } else {
+            element_type = expected_type;
+            auto& array = *element_type.vhdl_array;
+            array.dimensions.erase(array.dimensions.begin());
+            array.index_subtype = array.dimensions.front().index_subtype;
+            array.index_span = array.dimensions.front().index_span;
+            array.index_base_range =
+                array.dimensions.front().index_base_range;
+            array.unconstrained = false;
+            array.flat_width = element_width;
+            element_type.vhdl_array_constraints.clear();
+            element_type.packed_range_expression.reset();
+            if (array.dimensions.size() == 1U
+                && !array.dimensions.front().null) {
+                const auto& range = *array.dimensions.front().range;
+                element_type.packed_range = frontend::PackedRange{
+                    range.left, range.right, range.descending};
+            } else {
+                element_type.packed_range = frontend::PackedRange{
+                    static_cast<std::int64_t>(element_width - 1U),
+                    0,
+                    true};
+            }
+        }
         const auto destination = allocate_register(
             expected_width, expected_type.domain);
         process_.operations.emplace_back(LoadConstant{
             destination,
             default_packed_value(
                 expected_type, expected_width)});
-        std::vector<bool> assigned(expected_width, false);
+        std::vector<bool> assigned(element_count, false);
         std::optional<std::size_t> others_index;
         std::size_t positional_index = 0;
         bool valid = true;
@@ -936,9 +977,9 @@ using namespace elaboration_detail;
             [&](const std::size_t offset) {
               const auto distance =
                   static_cast<std::int64_t>(offset);
-              return expected_type.packed_range->descending
-                  ? expected_type.packed_range->right + distance
-                  : expected_type.packed_range->right - distance;
+              return contextual_dimension.range->descending
+                  ? contextual_dimension.range->right + distance
+                  : contextual_dimension.range->right - distance;
             };
         const auto insert_offset =
             [&](const std::size_t offset,
@@ -963,17 +1004,38 @@ using namespace elaboration_detail;
                   valid = false;
                   return;
               }
+              if (!element_type.packed_members.empty()
+                  && value.kind != ExpressionKind::Aggregate) {
+                  const auto* actual =
+                      value.kind == ExpressionKind::Identifier
+                          ? object_type(value.text)
+                          : nullptr;
+                  if (actual == nullptr
+                      || actual->packed_members.empty()
+                      || actual->nominal_type
+                          != element_type.nominal_type) {
+                      report(
+                          "FSIM-ELAB-VHARRAYAGG-006",
+                          "VHDL array aggregate record element requires "
+                          "the exact nominal record subtype",
+                          span);
+                      valid = false;
+                      return;
+                  }
+              }
               const auto lowered =
-                  lower_expression(value, 1, &element_type);
+                  lower_expression(
+                      value, element_width, &element_type);
               if (!lowered) {
                   valid = false;
                   return;
               }
-              if (register_width(*lowered) != 1) {
+              if (register_width(*lowered) != element_width) {
                   report(
                       "FSIM-ELAB-VHARRAYAGG-006",
-                      "VHDL array aggregate element expects one scalar "
-                      "value but its association has "
+                      "VHDL array aggregate element expects "
+                          + std::to_string(element_width)
+                          + " packed bits but its association has "
                           + std::to_string(register_width(*lowered))
                           + " bits",
                       span);
@@ -996,14 +1058,15 @@ using namespace elaboration_detail;
                   destination,
                   destination,
                   *lowered,
-                  static_cast<std::uint32_t>(offset)});
+                  static_cast<std::uint32_t>(
+                      offset * element_width)});
               assigned[offset] = true;
             };
         const auto insert_index =
             [&](const std::int64_t index,
                 const Expression& value,
                 const frontend::SourceSpan& span) {
-              const auto range = *expected_type.packed_range;
+              const auto& range = *contextual_dimension.range;
               const auto lower =
                   std::min(range.left, range.right);
               const auto upper =
@@ -1050,12 +1113,12 @@ using namespace elaboration_detail;
             const auto& value =
                 expression.operands[association];
             if (choices.empty()) {
-                if (positional_index >= expected_width) {
+                if (positional_index >= element_count) {
                     insert_offset(
-                        expected_width, value, value.span);
+                        element_count, value, value.span);
                 } else {
                     insert_offset(
-                        expected_width - 1
+                        element_count - 1
                             - positional_index,
                         value,
                         value.span);

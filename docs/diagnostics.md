@@ -1206,7 +1206,7 @@ therefore excluded.
 | `FSIM-ELAB-VHARRAYAGG-003` | error | A VHDL array aggregate choice is nonstatic or outside the contextual index range. |
 | `FSIM-ELAB-VHARRAYAGG-004` | error | A VHDL array aggregate covers an index more than once, has too many positional values, or repeats `others`. |
 | `FSIM-ELAB-VHARRAYAGG-005` | error | A VHDL array aggregate leaves a contextual index uncovered without supplying `others`. |
-| `FSIM-ELAB-VHARRAYAGG-006` | error | A VHDL array aggregate element value is not scalar width. |
+| `FSIM-ELAB-VHARRAYAGG-006` | error | A VHDL array aggregate element has the wrong packed width or does not have the required nominal record subtype. |
 | `FSIM-ELAB-VHARRAYAGG-007` | error | A VHDL array aggregate would implicitly lose four- or nine-state information in a two-state element. |
 | `FSIM-ELAB-VHARRAYAGG-008` | error | A VHDL array aggregate combines `others` with another choice in the same association. |
 | `FSIM-ELAB-VHARRAYATTR-001` | error | A VHDL array attribute prefix is unknown, nonarray, unconstrained, null, or otherwise lacks a concrete bounded range. |
