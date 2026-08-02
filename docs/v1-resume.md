@@ -16,12 +16,12 @@ as work lands. Before moving on, retain that batch's list, mark it
 
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: pushed Batch 114 local declarative-region support
-  at commit `c25ac3a`. The working tree contains focused-complete Batch 115
-  Task 2 sequential-statement execution; Task 3 is current.
+- Implementation baseline: pushed Batch 115 Task 2 sequential-statement
+  execution at commit `0b99c11`. The working tree contains focused-complete
+  Batch 115 Task 3 matching selection; Task 4 is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 348 authored C/C++ source, header,
+- The source-size refactor is complete: all 350 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 115-alternative
@@ -1833,9 +1833,9 @@ completed selector-domain contract. All ten Batch 114 tasks are complete.
    unsupported-form diagnostics.
 2. **Complete.** Complete sequential signal/variable assignments, procedure calls, `null`,
    conditionals, loops, and case statements across nested labeled scopes.
-3. **In progress.** Add VHDL-2008 matching case statements and matching selected/conditional
+3. **Complete.** Add VHDL-2008 matching case statements and matching selected/conditional
    assignments with exact wildcard semantics and deterministic legality checks.
-4. **Pending.** Complete discrete case choices with grouped literals, locally static ranges,
+4. **In progress.** Complete discrete case choices with grouped literals, locally static ranges,
    `others`, null ranges, overlap, duplicate, and coverage diagnostics.
 5. **Pending.** Complete concurrent simple, conditional, and selected signal assignments,
    including guarded/delay-mechanism interaction and driver identity.
@@ -1877,6 +1877,22 @@ runs with one process and stable cache reuse. The final five-test focused
 Debug/Release gates pass in 15.90/14.99 seconds with 1,455 production
 diagnostics and all 348 authored sources within the 2,000-line limit. Batch
 115 remains **in progress** with Task 3 current and Tasks 4 through 10 pending.
+
+Task 3 is focused-complete. VHDL-2008 `case? ... end case?`, `select?`, and
+matching equality `?=` retain distinct HIR and lower through the appended
+`vhdl_match_equal` SimIR operator. Matching is symmetric for `-`, normalizes
+0/L and 1/H, returns a known false result for other meta-value comparisons,
+and is exact for bit values. Stable diagnostics reject inconsistent matching-
+case end markers, non-bit/std_ulogic selector or operand domains, nonliteral or
+wrong-width bounded choices, and overlapping wildcard patterns. Native-object
+schema 70 prevents reuse across the added operator. The statement differential
+now reaches integer 13 through matching case, selected-variable, and
+conditional forms across interpreter and LLVM O0/O2 cold/warm runs with one
+process. The final seven-test focused Debug/Release gates pass in 19.04/18.11
+seconds; scoped locals remains quick at 0.84/0.83 seconds. The catalog covers
+1,460 production diagnostics and all 350 authored sources remain within the
+2,000-line limit. Batch 115 remains **in progress** with Task 4 current and
+Tasks 5 through 10 pending.
 
 Batch 110 has advanced through these validated features:
 

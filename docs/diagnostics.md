@@ -396,6 +396,7 @@ therefore excluded.
 | `FSIM-VHDL-SEM-083` | error | A bounded VHDL declarative region repeats an object alias name. |
 | `FSIM-VHDL-SEM-084` | error | A sequential `if`/`case` or process end label is orphaned or does not match its opening label. |
 | `FSIM-VHDL-SEM-085` | error | A `process(all)` sensitivity clause also contains an explicit sensitivity name. |
+| `FSIM-VHDL-SEM-086` | error | A VHDL matching case does not use `?` consistently after its opening and ending `case` keywords. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -1195,7 +1196,7 @@ therefore excluded.
 | `FSIM-ELAB-VHARRAY-004` | error | A VHDL array constraint width overflows the packed runtime representation. |
 | `FSIM-ELAB-VHARRAY-005` | error | A VHDL array object uses an unconstrained or otherwise nonconcrete array subtype. |
 | `FSIM-ELAB-VHARRAY-006` | error | Assignment or comparison mixes values from different nominal VHDL array types. |
-| `FSIM-ELAB-VHARRAY-007` | error | An operator other than equality or inequality is applied to a VHDL array value in the current bounded semantic path. |
+| `FSIM-ELAB-VHARRAY-007` | error | An operator other than equality, inequality, or matching equality is applied to a VHDL array value in the current bounded semantic path. |
 | `FSIM-ELAB-VHARRAYAGG-002` | error | Contextual VHDL array layout or aggregate-choice HIR metadata is inconsistent with the aggregate value. |
 | `FSIM-ELAB-VHARRAYAGG-003` | error | A VHDL array aggregate choice is nonstatic or outside the contextual index range. |
 | `FSIM-ELAB-VHARRAYAGG-004` | error | A VHDL array aggregate covers an index more than once, has too many positional values, or repeats `others`. |
@@ -1207,6 +1208,10 @@ therefore excluded.
 | `FSIM-ELAB-VHARRAYATTR-002` | error | A VHDL array attribute selects a nonstatic or unsupported dimension instead of dimension `1`. |
 | `FSIM-ELAB-VHARRAYATTR-003` | error | VHDL `range` or `reverse_range` is used as a scalar expression rather than a discrete range. |
 | `FSIM-ELAB-VHARRAYATTR-004` | error | A scalar VHDL array attribute result is outside the portable signed 32-bit integer representation. |
+| `FSIM-ELAB-VHDLMATCH-001` | error | A matching case or selected assignment is outside VHDL-2008 or has a selector outside the bounded bit/std_ulogic scalar or one-dimensional-array domain. |
+| `FSIM-ELAB-VHDLMATCH-002` | error | A bounded matching choice is not a locally static bit/std_ulogic literal of the selector width. |
+| `FSIM-ELAB-VHDLMATCH-003` | error | Two matching choices overlap after applying `-` wildcard and 0/L or 1/H equivalence. |
+| `FSIM-ELAB-VHDLMATCH-004` | error | Matching equality operands are outside the bit/std_ulogic scalar or one-dimensional-array domain. |
 | `FSIM-ELAB-VHENUM-001` | error | A contextual VHDL enumeration type has no matching identifier or character literal. |
 | `FSIM-ELAB-VHENUM-002` | error | Assignment or comparison mixes values from different nominal VHDL enumeration types. |
 | `FSIM-ELAB-VHENUM-003` | error | An operator that is not defined for VHDL enumeration values was applied to an enumeration object. |

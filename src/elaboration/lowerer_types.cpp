@@ -671,6 +671,7 @@ using namespace elaboration_detail;
                 || expression.text == "!=="
                 || expression.text == "!="
                 || expression.text == "="
+                || expression.text == "?="
                 || expression.text == "<"
                 || expression.text == "<="
                 || expression.text == ">"

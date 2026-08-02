@@ -6542,9 +6542,9 @@ The current ten implementation tasks are:
    unsupported-form diagnostics.
 2. **Complete.** Complete sequential signal/variable assignments, procedure calls, `null`,
    conditionals, loops, and case statements across nested labeled scopes.
-3. **In progress.** Add VHDL-2008 matching case statements and matching selected/conditional
+3. **Complete.** Add VHDL-2008 matching case statements and matching selected/conditional
    assignments with exact wildcard semantics and deterministic legality checks.
-4. **Pending.** Complete discrete case choices with grouped literals, locally static ranges,
+4. **In progress.** Complete discrete case choices with grouped literals, locally static ranges,
    `others`, null ranges, overlap, duplicate, and coverage diagnostics.
 5. **Pending.** Complete concurrent simple, conditional, and selected signal assignments,
    including guarded/delay-mechanism interaction and driver identity.
@@ -6591,6 +6591,21 @@ final five-test focused Debug/Release gates pass in 15.90/14.99 seconds with
 all 1,455 production diagnostics cataloged and all 348 authored sources within
 the 2,000-line limit. Batch 115 remains **in progress** with Task 3 current
 and Tasks 4 through 10 pending.
+
+Task 3 is focused-complete. The parser and compact HIR distinguish VHDL-2008
+`case? ... end case?`, matching `select?`, and the two-token `?=` operator.
+The appended `vhdl_match_equal` SimIR operator treats `-` symmetrically as a
+wildcard, equates 0/L and 1/H, rejects other meta-value comparisons with a
+known false result, and retains exact bit matching. Selector/operand domain,
+literal width/staticness, wildcard-overlap, and matching-end-marker legality
+use stable cataloged diagnostics. Native-object schema 70 prevents stale
+reuse. The statement application reaches integer 13 through matching case,
+selected-variable, and conditional forms identically in the interpreter and
+LLVM O0/O2 cold/warm paths. The final seven-test focused Debug/Release gates
+pass in 19.04/18.11 seconds, and scoped locals remains quick at 0.84/0.83
+seconds. All 1,460 production diagnostics are cataloged and all 350 authored
+sources remain within the 2,000-line limit. Batch 115 remains **in progress**
+with Task 4 current and Tasks 5 through 10 pending.
 
 ## Forward language-closure feature batches
 

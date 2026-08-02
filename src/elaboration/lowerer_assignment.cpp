@@ -1614,6 +1614,7 @@ using namespace elaboration_detail;
         BinaryOperator match_operation = BinaryOperator::case_equal;
         bool inside_matching = false;
         bool pattern_matching = false;
+        bool vhdl_matching = false;
         switch (statement.case_match_kind) {
         case frontend::CaseMatchKind::Exact:
             break;
@@ -1629,6 +1630,10 @@ using namespace elaboration_detail;
             break;
         case frontend::CaseMatchKind::Matches:
             pattern_matching = true;
+            break;
+        case frontend::CaseMatchKind::VhdlMatching:
+            vhdl_matching = true;
+            match_operation = BinaryOperator::vhdl_match_equal;
             break;
         default:
             report(
@@ -1707,6 +1712,14 @@ using namespace elaboration_detail;
                     ? selector_type
                     : nullptr);
         if (!selector) {
+            return;
+        }
+        if (vhdl_matching
+            && !validate_vhdl_matching_case(
+                statement,
+                selector_type,
+                selector_width,
+                register_domain(*selector))) {
             return;
         }
 

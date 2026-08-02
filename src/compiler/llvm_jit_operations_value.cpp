@@ -505,6 +505,11 @@ void ValueOperationLowerer::lower(
                       make_table(operation.operation));
                 } else if (
                     operation.operation
+                    == BinaryOperator::vhdl_match_equal) {
+                  value = lower_binary(
+                      builder, operation.operation, lhs, rhs);
+                } else if (
+                    operation.operation
                     == BinaryOperator::case_equal) {
                   auto* mask = constant_i64(
                       context, width_mask(lhs.width));

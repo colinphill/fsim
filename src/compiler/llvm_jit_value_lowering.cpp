@@ -647,6 +647,57 @@ void store_register(llvm::IRBuilder<> &builder,
             unknown, llvm::Type::getInt64Ty(context)),
         1};
   }
+  case BinaryOperator::vhdl_match_equal: {
+    if (lhs.kind == ValueKind::logic9 || rhs.kind == ValueKind::logic9) {
+      const auto left_dash = logic9_state_mask(
+          builder, lhs, static_cast<std::uint8_t>(Logic9::dont_care));
+      const auto right_dash = logic9_state_mask(
+          builder, rhs, static_cast<std::uint8_t>(Logic9::dont_care));
+      const auto left_zero = builder.CreateOr(
+          logic9_state_mask(
+              builder, lhs, static_cast<std::uint8_t>(Logic9::zero)),
+          logic9_state_mask(
+              builder, lhs, static_cast<std::uint8_t>(Logic9::l)));
+      const auto right_zero = builder.CreateOr(
+          logic9_state_mask(
+              builder, rhs, static_cast<std::uint8_t>(Logic9::zero)),
+          logic9_state_mask(
+              builder, rhs, static_cast<std::uint8_t>(Logic9::l)));
+      const auto left_one = builder.CreateOr(
+          logic9_state_mask(
+              builder, lhs, static_cast<std::uint8_t>(Logic9::one)),
+          logic9_state_mask(
+              builder, lhs, static_cast<std::uint8_t>(Logic9::h)));
+      const auto right_one = builder.CreateOr(
+          logic9_state_mask(
+              builder, rhs, static_cast<std::uint8_t>(Logic9::one)),
+          logic9_state_mask(
+              builder, rhs, static_cast<std::uint8_t>(Logic9::h)));
+      auto* matched = builder.CreateOr(
+          builder.CreateOr(left_dash, right_dash),
+          builder.CreateOr(
+              builder.CreateAnd(left_zero, right_zero),
+              builder.CreateAnd(left_one, right_one)));
+      auto* equal = builder.CreateICmpEQ(
+          builder.CreateAnd(builder.CreateNot(matched), mask),
+          constant_i64(context, 0));
+      return {
+          builder.CreateZExt(equal, llvm::Type::getInt64Ty(context)),
+          constant_i64(context, 0),
+          1};
+    }
+    auto* mismatch = builder.CreateAnd(
+        builder.CreateOr(
+            builder.CreateXor(lhs.aval, rhs.aval),
+            builder.CreateOr(lhs.bval, rhs.bval)),
+        mask);
+    auto* equal = builder.CreateICmpEQ(
+        mismatch, constant_i64(context, 0));
+    return {
+        builder.CreateZExt(equal, llvm::Type::getInt64Ty(context)),
+        constant_i64(context, 0),
+        1};
+  }
   case BinaryOperator::not_equal:
   case BinaryOperator::less_unsigned:
   case BinaryOperator::less_equal_unsigned:
@@ -727,6 +778,7 @@ void store_register(llvm::IRBuilder<> &builder,
     case BinaryOperator::casez_equal:
     case BinaryOperator::casex_equal:
     case BinaryOperator::wildcard_equal:
+    case BinaryOperator::vhdl_match_equal:
       llvm_unreachable("not a comparison operator");
     }
     auto *compared = builder.CreateICmp(predicate, left, right);

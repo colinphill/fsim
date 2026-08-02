@@ -19,6 +19,7 @@ void test_simir_noninitializing_static_process();
 void test_simir_wide_truth_and_comparison();
 void test_simir_wildcard_case_matching();
 void test_simir_wildcard_equality();
+void test_simir_vhdl_matching_equality();
 void test_simir_wide_reduction_and_shift();
 void test_simir_signed_shift_counts();
 void test_simir_wide_unsigned_arithmetic();

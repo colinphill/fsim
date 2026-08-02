@@ -617,6 +617,9 @@ enum class BinaryOperator : std::uint8_t {
   less_equal_signed,
   greater_signed,
   greater_equal_signed,
+  // VHDL-2008 matching equality. '-' in either operand is a wildcard,
+  // 0/L and 1/H form equivalence classes, and the result is always known.
+  vhdl_match_equal,
 };
 
 struct Binary {

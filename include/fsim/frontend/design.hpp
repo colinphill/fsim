@@ -861,6 +861,7 @@ enum class CaseMatchKind {
   WildcardXZ,
   Inside,
   Matches,
+  VhdlMatching,
 };
 
 enum class CaseQualifier {

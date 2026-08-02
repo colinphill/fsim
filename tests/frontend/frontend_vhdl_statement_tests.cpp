@@ -679,6 +679,57 @@ end architecture;
                 return diagnostic.code == "FSIM-VHDL-SEM-022";
               }),
       "duplicate and nonfinal VHDL case others alternatives are targeted");
+
+  const auto matching = parse_text(
+      "matching_statements.vhd",
+      R"(
+architecture rtl of matching_statements is
+  signal selector : std_logic_vector(3 downto 0);
+  signal result : integer;
+begin
+  choose: process(selector)
+    variable selected : integer;
+  begin
+    matching_case: case? selector is
+      when "1001" => selected := 1;
+      when others => selected := 0;
+    end case? matching_case;
+    matching_select: with selector select?
+      selected := 2 when "10--", selected when others;
+    result <= 3 when selector ?= "1---" else selected;
+  end process choose;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(matching.ok(), "VHDL-2008 matching statements must parse");
+  const auto& matching_statements =
+      matching.design.units.front().processes.front().statements;
+  require(
+      matching_statements.size() == 3
+          && matching_statements[0].case_match_kind
+              == CaseMatchKind::VhdlMatching
+          && matching_statements[1].case_match_kind
+              == CaseMatchKind::VhdlMatching
+          && matching_statements[2].kind == StatementKind::If
+          && matching_statements[2].condition.kind
+              == ExpressionKind::Binary
+          && matching_statements[2].condition.text == "?=",
+      "matching case, selected assignment, and conditional operator HIR");
+
+  const auto mismatched_marker = parse_text(
+      "mismatched_matching_case.vhd",
+      R"(architecture rtl of mismatched_matching_case is begin
+  process begin case? '0' is when others => null; end case; end process;
+end architecture;)",
+      Language::Vhdl2008);
+  require(
+      !mismatched_marker.ok()
+          && std::ranges::any_of(
+              mismatched_marker.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-086";
+              }),
+      "matching case opening and ending markers must agree");
 }
 
 void test_vhdl_sequential_for_loops() {

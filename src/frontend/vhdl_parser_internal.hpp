@@ -316,6 +316,7 @@ class VhdlParser final : private detail::ParserBase {
   struct BinaryOperation {
     int precedence;
     std::string name;
+    std::size_t token_count{1};
   };
 
   std::optional<BinaryOperation> binary_operation() const;

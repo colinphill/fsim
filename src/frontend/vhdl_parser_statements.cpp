@@ -175,6 +175,10 @@ std::optional<Statement> VhdlParser::parse_sequential_statement(
     const auto start = previous();
     Statement statement;
     statement.kind = StatementKind::Case;
+    const bool matching = match(TokenKind::Question);
+    if (matching) {
+      statement.case_match_kind = CaseMatchKind::VhdlMatching;
+    }
     statement.condition = parse_expression();
     expect_keyword("is", true, "FSIM-VHDL-PARSE-094");
     bool saw_others = false;
@@ -217,6 +221,14 @@ std::optional<Statement> VhdlParser::parse_sequential_statement(
     }
     expect_keyword("end", true, "FSIM-VHDL-PARSE-097");
     expect_keyword("case", true, "FSIM-VHDL-PARSE-098");
+    const bool matching_end = match(TokenKind::Question);
+    if (matching != matching_end) {
+      error(
+          previous(),
+          "FSIM-VHDL-SEM-086",
+          "a VHDL matching case must use '?' after both opening and ending "
+          "case keywords");
+    }
     parse_statement_end_label(
         opening_label
             ? vhdl_name(opening_label->text)
@@ -678,6 +690,9 @@ Statement VhdlParser::parse_vhdl_selected_assignment(
   statement.kind = StatementKind::Case;
   statement.condition = parse_expression();
   expect_keyword("select", true, "FSIM-VHDL-PARSE-116");
+  if (match(TokenKind::Question)) {
+    statement.case_match_kind = CaseMatchKind::VhdlMatching;
+  }
   const auto target = parse_lvalue();
   AssignmentKind assignment_kind{};
   if (match(TokenKind::LessEqual)) {

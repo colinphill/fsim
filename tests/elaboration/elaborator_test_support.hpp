@@ -126,5 +126,6 @@ void test_vhdl_generic_subprograms();
 void test_vhdl_generic_associations();
 void test_vhdl_components();
 void test_vhdl_configurations();
+void test_vhdl_matching_statements();
 
 } // namespace fsim::tests::elaboration

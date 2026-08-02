@@ -11,6 +11,9 @@ Expression VhdlParser::parse_expression(int minimum_precedence) {
       break;
     }
     const auto operator_token = advance();
+    for (std::size_t index = 1; index < operation->token_count; ++index) {
+      advance();
+    }
     if (operation->name == "**"
         && (at(TokenKind::Plus) || at(TokenKind::Minus))) {
       error(
@@ -46,6 +49,9 @@ std::optional<VhdlParser::BinaryOperation> VhdlParser::binary_operation() const 
       || at(TokenKind::Less) || at(TokenKind::LessEqual) ||
       at(TokenKind::Greater) || at(TokenKind::GreaterEqual)) {
     return BinaryOperation{3, current().text};
+  }
+  if (at(TokenKind::Question) && at(TokenKind::Assign, 1)) {
+    return BinaryOperation{3, "?=", 2};
   }
   if (keyword("sll", 0, true) || keyword("srl", 0, true)
       || keyword("sla", 0, true) || keyword("sra", 0, true)

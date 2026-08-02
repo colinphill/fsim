@@ -106,6 +106,7 @@ add_executable(
   elaboration/elaborator_vhdl_generic_association_test.cpp
   elaboration/elaborator_vhdl_component_test.cpp
   elaboration/elaborator_vhdl_configuration_test.cpp
+  elaboration/elaborator_vhdl_matching_test.cpp
   elaboration/elaborator_sv_file_test.cpp
   elaboration/elaborator_sv_container_test.cpp
   elaboration/elaborator_sv_aggregate_container_test.cpp

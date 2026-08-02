@@ -9,14 +9,18 @@ void test_logic9_at_level(
   Process process;
   process.id = 91;
   process.name = "logic9_exact";
-  process.register_count = 6;
+  process.register_count = 10;
   process.register_value_kinds = {
       ValueKind::logic9,
       ValueKind::logic9,
       ValueKind::logic9,
       ValueKind::logic9,
       ValueKind::logic4,
-      ValueKind::logic9};
+      ValueKind::logic9,
+      ValueKind::logic9,
+      ValueKind::logic4,
+      ValueKind::logic9,
+      ValueKind::logic4};
   const auto all_high =
       PackedLogic4::from_logic9_msb_string("HHHHHHHH");
   process.operations = {
@@ -26,21 +30,33 @@ void test_logic9_at_level(
       Binary{BinaryOperator::bit_and, 3, 0, 2},
       CopyRegister{4, 0},
       CopyRegister{5, 4},
+      LoadConstant{
+          6,
+          PackedLogic4::from_logic9_msb_string("-01--01-")},
+      Binary{BinaryOperator::vhdl_match_equal, 7, 0, 6},
+      LoadConstant{
+          8,
+          PackedLogic4::from_logic9_msb_string("U01ZWLH-")},
+      Binary{BinaryOperator::vhdl_match_equal, 9, 0, 8},
       WriteBlocking{0, 1},
       WriteUpdate{1, 3},
       WriteBlocking{2, 4},
       WriteAfter{3, 5, 7},
+      WriteBlocking{5, 7},
+      WriteBlocking{6, 9},
       FormatDisplay{
           0, OutputFormat::binary, "", "", true, false},
       Halt{}};
 
-  const std::array<std::uint32_t, 5> widths{8, 8, 8, 8, 8};
-  const std::array<ValueKind, 5> kinds{
+  const std::array<std::uint32_t, 7> widths{8, 8, 8, 8, 8, 1, 1};
+  const std::array<ValueKind, 7> kinds{
       ValueKind::logic9,
       ValueKind::logic9,
       ValueKind::logic4,
       ValueKind::logic9,
-      ValueKind::logic9};
+      ValueKind::logic9,
+      ValueKind::logic4,
+      ValueKind::logic4};
   LlvmJit jit{LlvmJitOptions{optimization, {}}};
   assert(jit.supports_process(process, widths, kinds));
   jit.add_process(symbol, process, widths, kinds);
@@ -101,6 +117,8 @@ void test_logic9_at_level(
   assert(runtime.logic9_signals[1] == planes(expected_and));
   assert(runtime.signals[2] == encode(collapsed));
   assert(runtime.logic9_signals[3] == planes(reexpanded));
+  assert(runtime.signals[5] == encode(PackedLogic4::from_msb_string("1")));
+  assert(runtime.signals[6] == encode(PackedLogic4::from_msb_string("0")));
   assert(runtime.formatted_logic9_values.size() == 1);
   assert(runtime.formatted_logic9_values.front() == planes(source));
 

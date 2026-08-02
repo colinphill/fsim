@@ -1053,6 +1053,64 @@ void test_simir_wildcard_equality() {
   }
 }
 
+void test_simir_vhdl_matching_equality() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  struct Comparison {
+    std::string_view lhs;
+    std::string_view rhs;
+    std::string_view expected;
+  };
+  const std::array comparisons{
+      Comparison{"10LH", "1001", "1"},
+      Comparison{"10LH", "10--", "1"},
+      Comparison{"----", "UXZW", "1"},
+      Comparison{"UXZW", "----", "1"},
+      Comparison{"UXZW", "UXZW", "0"},
+      Comparison{"10LH", "1010", "0"},
+      Comparison{"01", "01", "1"},
+      Comparison{"01", "11", "0"},
+  };
+  Interpreter interpreter;
+  std::array<SignalId, comparisons.size()> results{};
+  Process process;
+  process.id = 0;
+  process.name = "vhdl_matching_equality";
+  process.register_count = 3;
+  process.register_value_kinds = {
+      ValueKind::logic9, ValueKind::logic9, ValueKind::logic4};
+  for (std::size_t index = 0; index < comparisons.size(); ++index) {
+    results[index] = interpreter.add_signal(
+        {"top.vhdl_match_" + std::to_string(index),
+         PackedLogic4::from_msb_string("X")});
+    process.operations.emplace_back(LoadConstant{
+        0,
+        PackedLogic4::from_logic9_msb_string(comparisons[index].lhs)});
+    process.operations.emplace_back(LoadConstant{
+        1,
+        PackedLogic4::from_logic9_msb_string(comparisons[index].rhs)});
+    process.operations.emplace_back(Binary{
+        BinaryOperator::vhdl_match_equal, 2, 0, 1});
+    process.operations.emplace_back(WriteBlocking{results[index], 2});
+  }
+  process.operations.emplace_back(Halt{});
+  (void)interpreter.add_process(std::move(process));
+  require(
+      interpreter.run().status == RunStatus::completed,
+      "VHDL matching equality process completes");
+  for (std::size_t index = 0; index < comparisons.size(); ++index) {
+    const auto observed =
+        interpreter.signal_value(results[index]).to_msb_string();
+    if (observed != comparisons[index].expected) {
+      throw std::runtime_error(
+          "VHDL matching truth-table row " + std::to_string(index)
+          + " expected " + std::string{comparisons[index].expected}
+          + " but observed " + observed);
+    }
+  }
+}
+
 void test_simir_wide_reduction_and_shift() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
@@ -1484,4 +1542,3 @@ void test_simir_wide_signed_arithmetic() {
 }
 
 } // namespace fsim::tests::runtime
-

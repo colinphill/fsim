@@ -964,6 +964,7 @@ validate_process(
             case BinaryOperator::less_equal_signed:
             case BinaryOperator::greater_signed:
             case BinaryOperator::greater_equal_signed:
+            case BinaryOperator::vhdl_match_equal:
               break;
             default:
               reject(process, index,
@@ -978,6 +979,8 @@ validate_process(
                 || operation.operation == BinaryOperator::casez_equal
                 || operation.operation == BinaryOperator::casex_equal
                 || operation.operation == BinaryOperator::wildcard_equal
+                || operation.operation
+                    == BinaryOperator::vhdl_match_equal
                 || operation.operation == BinaryOperator::not_equal
                 || operation.operation
                     == BinaryOperator::less_unsigned

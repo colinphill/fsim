@@ -39,5 +39,6 @@ int main() {
   test_vhdl_generic_associations();
   test_vhdl_components();
   test_vhdl_configurations();
+  test_vhdl_matching_statements();
   std::cout << "elaborator tests passed\n";
 }

@@ -1067,6 +1067,11 @@ private:
 
     void lower_case(const Statement& statement);
     void lower_qualified_case(const Statement& statement);
+    [[nodiscard]] bool validate_vhdl_matching_case(
+        const Statement& statement,
+        const frontend::Type* selector_type,
+        std::size_t selector_width,
+        frontend::ValueDomain selector_domain);
     [[nodiscard]] bool is_bounded_case_pattern_constant(
         const Expression& expression) const;
 

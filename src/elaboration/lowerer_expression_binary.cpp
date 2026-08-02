@@ -401,6 +401,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             if (language_ == frontend::Language::Vhdl2008
                 && (expression.text == "="
                     || expression.text == "/="
+                    || expression.text == "?="
                     || expression.text == "<"
                     || expression.text == "<="
                     || expression.text == ">"
@@ -413,7 +414,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                         rhs_enumeration_type;
                 } else if (
                     expression.text == "="
-                    || expression.text == "/=") {
+                    || expression.text == "/="
+                    || expression.text == "?=") {
                     if (expression.operands[0].kind
                             == ExpressionKind::Aggregate) {
                         binary_context_type = rhs_object_type;
@@ -438,7 +440,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                     && rhs_object_type->vhdl_array.has_value();
                 if (lhs_array || rhs_array) {
                     if (expression.text != "="
-                        && expression.text != "/=") {
+                        && expression.text != "/="
+                        && expression.text != "?=") {
                         report(
                             "FSIM-ELAB-VHARRAY-007",
                             "operator '" + expression.text
@@ -472,6 +475,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             const bool comparison =
                 expression.text == "="
                 || expression.text == "/="
+                || expression.text == "?="
                 || expression.text == "<"
                 || expression.text == "<="
                 || expression.text == ">"
@@ -495,6 +499,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             const bool scalar_result_operator =
                 expression.text == "="
                 || expression.text == "/="
+                || expression.text == "?="
                 || expression.text == "=="
                 || expression.text == "!="
                 || expression.text == "==="
@@ -558,6 +563,39 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                     : width,
                 binary_context_type);
             if (!lhs || !rhs) {
+                return std::nullopt;
+            }
+            const auto direct_nonmatching_domain =
+                [](const Expression& operand,
+                   const frontend::Type* type) {
+                  return operand.kind == ExpressionKind::IntegerLiteral
+                      || operand.kind == ExpressionKind::BooleanLiteral
+                      || (type != nullptr
+                          && type->domain
+                              != frontend::ValueDomain::Bit2
+                          && type->domain
+                              != frontend::ValueDomain::Logic9);
+                };
+            if (language_ == frontend::Language::Vhdl2008
+                && expression.text == "?="
+                && (direct_nonmatching_domain(
+                        expression.operands[0], lhs_object_type)
+                    || direct_nonmatching_domain(
+                        expression.operands[1], rhs_object_type)
+                    || (register_domain(*lhs)
+                         != frontend::ValueDomain::Bit2
+                     && register_domain(*lhs)
+                         != frontend::ValueDomain::Logic9)
+                    || (register_domain(*rhs)
+                            != frontend::ValueDomain::Bit2
+                        && register_domain(*rhs)
+                            != frontend::ValueDomain::Logic9))) {
+                report(
+                    "FSIM-ELAB-VHDLMATCH-004",
+                    "VHDL matching equality operands must be bit, "
+                    "std_ulogic, or one-dimensional arrays of those "
+                    "element types",
+                    expression.span);
                 return std::nullopt;
             }
             if (language_ != frontend::Language::Vhdl2008) {
@@ -635,6 +673,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                     || expression.text == "!=?")) {
                 operation = BinaryOperator::wildcard_equal;
                 invert_result = expression.text == "!=?";
+            } else if (
+                language_ == frontend::Language::Vhdl2008
+                && expression.text == "?=") {
+                operation = BinaryOperator::vhdl_match_equal;
             } else if (
                 language_ != frontend::Language::Vhdl2008
                 && expression.text == "!=") {
@@ -749,6 +791,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 *operation == BinaryOperator::equal
                 || *operation == BinaryOperator::case_equal
                 || *operation == BinaryOperator::wildcard_equal
+                || *operation == BinaryOperator::vhdl_match_equal
                 || *operation == BinaryOperator::not_equal
                 || *operation == BinaryOperator::less_unsigned
                 || *operation

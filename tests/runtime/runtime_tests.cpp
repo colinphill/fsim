@@ -24,6 +24,7 @@ int main() {
     test_simir_wide_truth_and_comparison();
     test_simir_wildcard_case_matching();
     test_simir_wildcard_equality();
+    test_simir_vhdl_matching_equality();
     test_simir_wide_reduction_and_shift();
     test_simir_signed_shift_counts();
     test_simir_wide_unsigned_arithmetic();

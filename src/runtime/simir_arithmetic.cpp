@@ -283,6 +283,29 @@ namespace fsim::runtime::simir {
         unknown ? Logic4::x
                 : mismatch ? Logic4::zero : Logic4::one);
   }
+  if (operation == BinaryOperator::vhdl_match_equal) {
+    const auto match_class = [](const Logic9 value) {
+      if (value == Logic9::dont_care) {
+        return -1;
+      }
+      if (value == Logic9::zero || value == Logic9::l) {
+        return 0;
+      }
+      if (value == Logic9::one || value == Logic9::h) {
+        return 1;
+      }
+      return 2;
+    };
+    for (std::size_t index = 0; index < lhs.width(); ++index) {
+      const auto left = match_class(lhs.get_logic9(index));
+      const auto right = match_class(rhs.get_logic9(index));
+      if (left != -1 && right != -1
+          && (left == 2 || right == 2 || left != right)) {
+        return PackedLogic4(1, Logic4::zero);
+      }
+    }
+    return PackedLogic4(1, Logic4::one);
+  }
   if (operation == BinaryOperator::not_equal
       || operation == BinaryOperator::less_unsigned
       || operation == BinaryOperator::less_equal_unsigned
@@ -367,6 +390,7 @@ namespace fsim::runtime::simir {
     case BinaryOperator::casez_equal:
     case BinaryOperator::casex_equal:
     case BinaryOperator::wildcard_equal:
+    case BinaryOperator::vhdl_match_equal:
       break;
     }
     return PackedLogic4(
@@ -498,6 +522,7 @@ namespace fsim::runtime::simir {
     case BinaryOperator::casez_equal:
     case BinaryOperator::casex_equal:
     case BinaryOperator::wildcard_equal:
+    case BinaryOperator::vhdl_match_equal:
     case BinaryOperator::not_equal:
     case BinaryOperator::less_unsigned:
     case BinaryOperator::less_equal_unsigned:

@@ -488,6 +488,8 @@ vhdl_statement_behavior_source =
 {
   std::ofstream output(vhdl_statement_behavior_source);
   output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
 entity vhdl_statement_behavior is
   port (observed : out integer);
 end entity;
@@ -501,6 +503,7 @@ begin
       target := target + amount;
     end procedure add_value;
     variable local_value : integer := 1;
+    variable matching_selector : std_logic_vector(3 downto 0) := "10LH";
   begin
     choose_variable: with local_value select
       local_value := 2 when 1, 3 when others;
@@ -519,6 +522,16 @@ begin
     end loop iterations;
     choose_signal: with local_value select
       observed <= local_value when 10, 0 when others;
+    matching_case: case? matching_selector is
+      when "1001" => add_value(local_value, 1);
+      when others => null;
+    end case? matching_case;
+    matching_select: with matching_selector select?
+      local_value := local_value + 1 when "10--",
+                     local_value when others;
+    local_value := local_value + 1
+      when matching_selector ?= "1---" else local_value;
+    observed <= local_value;
     suspended: wait;
   end process worker;
 end architecture;

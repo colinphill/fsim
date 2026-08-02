@@ -899,12 +899,12 @@ const auto generated_enum_baseline = verify_generated_behavior(
 verify_generated_behavior(
     vhdl_statement_behavior_config,
     {},
-    {"00000000000000000000000000001010"},
+    {"00000000000000000000000000001101"},
     1);
 verify_generated_behavior(
     vhdl_statement_behavior_o0_config,
     {},
-    {"00000000000000000000000000001010"},
+    {"00000000000000000000000000001101"},
     1);
 verify_generated_behavior(
     generated_static_behavior_sv_config,
