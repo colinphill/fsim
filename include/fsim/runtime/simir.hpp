@@ -1257,6 +1257,16 @@ struct Process {
   std::vector<ContainerType> container_register_types;
   std::vector<Sensitivity> static_sensitivity;
   std::vector<Operation> operations;
+  /// Static packed regions driven by this process. Dynamic or whole-object
+  /// targets retain one `whole` region for conservative ownership.
+  struct DriverRegion {
+    SignalId signal{};
+    std::uint32_t offset{};
+    std::uint32_t width{};
+    bool whole{};
+    friend bool operator==(const DriverRegion&, const DriverRegion&) = default;
+  };
+  std::vector<DriverRegion> driver_regions;
   std::vector<ValueKind> register_value_kinds;
   bool initialize{true};
   // A SystemVerilog final process is excluded from ordinary initialization

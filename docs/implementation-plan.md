@@ -6746,10 +6746,10 @@ The current ten implementation tasks are:
 7. **Complete.** Complete function/procedure parameter, result, local, package, and generated
    callable boundaries for supported array shapes with deterministic copy-in,
    copy-out, return, lifetime, and provenance behavior.
-8. **In progress.** Complete sensitivity inference, partial/composite signal scheduling, driver
+8. **Complete.** Complete sensitivity inference, partial/composite signal scheduling, driver
    resolution, delta/update ordering, and interpreter/LLVM parity for array
    element and slice targets.
-9. **Pending.** Prove positive/negative parser and elaboration coverage plus interpreter,
+9. **In progress.** Prove positive/negative parser and elaboration coverage plus interpreter,
    LLVM O0/O2, cache-edit, hierarchy, debugger, normalized-VCD, null-range, port,
    and callable differentials.
 10. **Pending.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
@@ -6884,6 +6884,27 @@ ASan/UBSan seven-test gate passed outside the ptrace sandbox in 5.79 seconds.
 All 1,477 production diagnostics are cataloged and all 361 authored sources
 remain within the 2,000-line gate. Batch 116 remains **in progress** with Task
 8 current and Tasks 9 through 10 pending.
+
+Task 8 is focused-complete. Lowered processes now retain explicit static packed
+driver regions; whole and runtime-selected targets remain conservatively marked
+as whole-object drivers. VHDL unresolved multidimensional/composite arrays may
+therefore use disjoint process-owned elements or slices while overlapping
+regions still report `FSIM-ELAB-DRV-001`; the existing SystemVerilog variable
+single-process rule is unchanged. Resolved `std_logic` driver slots initialize
+owned static regions to the subtype default and unrelated regions to neutral
+`Z`, so disjoint partial drivers no longer inject phantom `U` values. Runtime
+registration validates every retained region before execution. The merged VHDL
+array application covers disjoint multidimensional rows, record-element array
+updates from separate processes, resolved partial drivers, common update-phase
+coalescing, chained-selection sensitivity, interpreter and LLVM O0/O2 parity,
+cold/warm cache reuse, and package-edit invalidation; an overlapping-slice
+design supplies negative elaboration evidence. Focused eight-test Debug and
+Release gates passed in 6.18 and 5.93 seconds, with VHDL arrays at 2.02/1.89
+seconds and scoped locals at 0.83/0.82 seconds. The LLVM-disabled ASan/UBSan
+seven-test gate passed outside the ptrace sandbox in 5.99 seconds. All 1,477
+production diagnostics are cataloged and all 362 authored sources remain
+within the 2,000-line gate. Batch 116 remains **in progress** with Task 9
+current and Task 10 pending.
 
 ## Forward language-closure feature batches
 

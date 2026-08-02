@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
 
+#include <map>
+
 namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
@@ -160,57 +162,16 @@ void HierarchyBuilder::set_resolution(
 }
 
 void HierarchyBuilder::validate_process_drivers() {
-    std::unordered_map<SignalId, std::vector<ProcessId>> drivers;
+    using DriverRegion = Process::DriverRegion;
+    using ProcessDriver = std::vector<DriverRegion>;
+    std::unordered_map<SignalId, std::vector<ProcessDriver>> drivers;
     for (const auto& process : design_.processes_) {
-        std::set<SignalId> process_outputs;
-        for (const auto& operation : process.operations) {
-            if (const auto* blocking =
-                    fsim::runtime::simir::operation_get_if<WriteBlocking>(&operation)) {
-                process_outputs.insert(blocking->signal);
-            } else if (const auto* update =
-                           fsim::runtime::simir::operation_get_if<WriteUpdate>(&operation)) {
-                process_outputs.insert(update->signal);
-            } else if (const auto* delayed =
-                           fsim::runtime::simir::operation_get_if<WriteAfter>(&operation)) {
-                process_outputs.insert(delayed->signal);
-            } else if (const auto* inertial =
-                           fsim::runtime::simir::operation_get_if<WriteInertial>(&operation)) {
-                process_outputs.insert(inertial->signal);
-            } else if (const auto* projected =
-                           fsim::runtime::simir::operation_get_if<WriteProjected>(&operation)) {
-                process_outputs.insert(projected->signal);
-            } else if (const auto* waveform =
-                           fsim::runtime::simir::operation_get_if<WriteProjectedWaveform>(
-                               &operation)) {
-                process_outputs.insert(waveform->signal);
-            } else if (const auto* blocking_slice =
-                           fsim::runtime::simir::operation_get_if<WriteBlockingSlice>(
-                               &operation)) {
-                process_outputs.insert(blocking_slice->signal);
-            } else if (const auto* update_slice =
-                           fsim::runtime::simir::operation_get_if<WriteUpdateSlice>(
-                               &operation)) {
-                process_outputs.insert(update_slice->signal);
-            } else if (const auto* delayed_slice =
-                           fsim::runtime::simir::operation_get_if<WriteAfterSlice>(
-                               &operation)) {
-                process_outputs.insert(delayed_slice->signal);
-            } else if (const auto* inertial_slice =
-                           fsim::runtime::simir::operation_get_if<WriteInertialSlice>(
-                               &operation)) {
-                process_outputs.insert(inertial_slice->signal);
-            } else if (const auto* projected_slice =
-                           fsim::runtime::simir::operation_get_if<WriteProjectedSlice>(
-                               &operation)) {
-                process_outputs.insert(projected_slice->signal);
-            } else if (const auto* waveform_slice =
-                           fsim::runtime::simir::operation_get_if<WriteProjectedWaveformSlice>(
-                               &operation)) {
-                process_outputs.insert(waveform_slice->signal);
-            }
+        std::map<SignalId, std::vector<DriverRegion>> process_outputs;
+        for (const auto& region : process.driver_regions) {
+            process_outputs[region.signal].push_back(region);
         }
-        for (const auto signal : process_outputs) {
-            drivers[signal].push_back(process.id);
+        for (auto& [signal, regions] : process_outputs) {
+            drivers[signal].push_back(std::move(regions));
         }
     }
     for (SignalId signal = 0;
@@ -223,13 +184,45 @@ void HierarchyBuilder::validate_process_drivers() {
                 native_resolution(
                     design_.signal_info_.at(signal))));
     }
-    for (const auto& [signal, processes] : drivers) {
-        if (processes.size() <= 1
+    const auto regions_overlap = [](
+                                     const DriverRegion& left,
+                                     const DriverRegion& right) {
+        if (left.whole || right.whole) {
+            return true;
+        }
+        const auto left_end =
+            static_cast<std::uint64_t>(left.offset) + left.width;
+        const auto right_end =
+            static_cast<std::uint64_t>(right.offset) + right.width;
+        return left.offset < right_end && right.offset < left_end;
+    };
+    for (const auto& [signal, process_drivers] : drivers) {
+        if (process_drivers.size() <= 1
             || design_.signal_info_.at(signal).resolution
                 != ResolutionKind::none) {
             continue;
         }
+        bool overlap = false;
+        for (std::size_t left = 0;
+             left < process_drivers.size() && !overlap; ++left) {
+            for (std::size_t right = left + 1;
+                 right < process_drivers.size() && !overlap; ++right) {
+                overlap = std::ranges::any_of(
+                    process_drivers[left],
+                    [&](const auto& left_region) {
+                        return std::ranges::any_of(
+                            process_drivers[right],
+                            [&](const auto& right_region) {
+                                return regions_overlap(
+                                    left_region, right_region);
+                            });
+                    });
+            }
+        }
         const auto& info = design_.signal_info_.at(signal);
+        if (!overlap && info.vhdl_array) {
+            continue;
+        }
         if (info.type_name == "wand"
             || info.type_name == "triand"
             || info.type_name == "wor"

@@ -187,14 +187,42 @@ PackedLogic4& Interpreter::Impl::external_driver_slot(
 
 void Interpreter::Impl::register_driver(
     const ProcessId process,
-    const SignalId signal_id)  {
+    const SignalId signal_id,
+    const std::span<const Process::DriverRegion> regions)  {
     const auto& signal = get_signal(signal_id);
+    for (const auto& region : regions) {
+      if (region.signal != signal_id
+          || (!region.whole
+              && (region.width == 0
+                  || region.offset > signal.initial_value.width()
+                  || region.width
+                      > signal.initial_value.width() - region.offset))) {
+        throw std::invalid_argument(
+            "SimIR driver region is outside its signal");
+      }
+    }
     if (signal.resolution == ResolutionKind::none) {
       return;
     }
+    auto initial = initial_driver_value(signal_id);
+    if (signal.resolution == ResolutionKind::std_logic
+        && !regions.empty()
+        && std::ranges::none_of(
+            regions, &Process::DriverRegion::whole)) {
+      auto selected = PackedLogic4{
+          initial.width(), Logic4::z};
+      selected.fill(Logic9::z);
+      for (const auto& region : regions) {
+        selected = insert_value(
+            std::move(selected),
+            extract_value(initial, region.offset, region.width),
+            region.offset);
+      }
+      initial = std::move(selected);
+    }
     auto& values = driver_values.at(signal_id);
     const auto [entry, inserted] = values.try_emplace(
-        process, initial_driver_value(signal_id));
+        process, std::move(initial));
     (void)entry;
     if (!inserted) {
       return;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
+#include "lowerer_driver_regions.hpp"
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
@@ -345,6 +346,8 @@ void Lowerer::validate_read_only_signal_writes(
             process_.register_value_kinds.push_back(
                 value_kind(domain));
         }
+        process_.driver_regions = collect_driver_regions(
+            process_, register_widths_);
         next_register_ = 0;
         next_string_register_ = 0;
         next_container_register_ = 0;

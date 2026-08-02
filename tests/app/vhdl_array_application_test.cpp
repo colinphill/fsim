@@ -63,6 +63,10 @@ struct Capture {
   std::string callable_cells_input;
   std::string callable_local_result;
   std::string callable_procedure_result;
+  std::string disjoint_driver_equal;
+  std::string resolved_driver_equal;
+  std::string composite_driver_equal;
+  std::string partial_sensitivity_result;
   std::string debugger_output;
   std::string vcd;
   std::string application_vcd;
@@ -417,6 +421,14 @@ Capture run_once(
       read("array_top.callable_local_result");
   capture.callable_procedure_result =
       read("array_top.callable_procedure_result");
+  capture.disjoint_driver_equal =
+      read("array_top.disjoint_driver_equal");
+  capture.resolved_driver_equal =
+      read("array_top.resolved_driver_equal");
+  capture.composite_driver_equal =
+      read("array_top.composite_driver_equal");
+  capture.partial_sensitivity_result =
+      read("array_top.partial_sensitivity_result");
   {
     std::ostringstream debugger_output;
     std::ostringstream debugger_error;
@@ -549,6 +561,10 @@ void verify_capture(const Capture& capture) {
   assert(
       capture.callable_procedure_result
       == capture.callable_cells_input);
+  assert(capture.disjoint_driver_equal == "1");
+  assert(capture.resolved_driver_equal == "1");
+  assert(capture.composite_driver_equal == "1");
+  assert(capture.partial_sensitivity_result == "H");
   assert(
       !capture.boundary_identities[0].empty()
       && capture.boundary_identities[0]
@@ -683,6 +699,8 @@ int main() {
       directory.path / "component_shape_failure.vhd";
   const auto callable_shape_failure_source =
       directory.path / "callable_shape_failure.vhd";
+  const auto overlapping_driver_failure_source =
+      directory.path / "overlapping_driver_failure.vhd";
 
   const auto write_package =
       [&](const std::string_view revision) {
@@ -700,6 +718,8 @@ package Array_Types is
   subtype Boolean_Nibble_T is Boolean_Array_T(0 to 3);
   type Boundary_Matrix_T is array
     (natural range <>, positive range <>) of bit;
+  type Resolved_Matrix_T is array
+    (natural range <>, positive range <>) of std_logic;
   type Boundary_Cell_T is record
     Flag : boolean;
     Data : bit_vector(1 downto 0);
@@ -941,6 +961,18 @@ architecture rtl of Array_Top is
   signal Callable_Cells_Input : Callable_Cells_T;
   signal Callable_Local_Result : Callable_Cells_T;
   signal Callable_Procedure_Result : Callable_Cells_T;
+  signal Disjoint_Driver_Matrix : Callable_Matrix_T;
+  signal Disjoint_Driver_Expected : Callable_Matrix_T;
+  signal Disjoint_Driver_Equal : boolean;
+  signal Resolved_Driver_Matrix :
+    Resolved_Matrix_T(0 to 1, 3 downto 1);
+  signal Resolved_Driver_Expected :
+    Resolved_Matrix_T(0 to 1, 3 downto 1);
+  signal Resolved_Driver_Equal : boolean;
+  signal Composite_Driver_Cells : Callable_Cells_T;
+  signal Composite_Driver_Expected : Callable_Cells_T;
+  signal Composite_Driver_Equal : boolean;
+  signal Partial_Sensitivity_Result : std_logic;
 begin
   drive : process
     variable Top_Local : Byte_T := "01LH10Z-";
@@ -1109,6 +1141,34 @@ begin
     Callable_Generated_Result <=
       Generated_Matrix_Copy(Callable_Matrix_Input);
   end generate;
+
+  Disjoint_Driver_Matrix(0, 3 downto 1) <= "101";
+  Disjoint_Driver_Matrix(1, 3 downto 1) <= "010";
+  Disjoint_Driver_Expected <= ("101", "010");
+  Disjoint_Driver_Equal <=
+    Disjoint_Driver_Matrix = Disjoint_Driver_Expected;
+
+  Resolved_Driver_Matrix(0, 3 downto 1) <= "10Z";
+  Resolved_Driver_Matrix(1, 3 downto 1) <= "0H1";
+  Resolved_Driver_Expected <= ("10Z", "0H1");
+  Resolved_Driver_Equal <=
+    Resolved_Driver_Matrix = Resolved_Driver_Expected;
+  Partial_Sensitivity_Result <= Resolved_Driver_Matrix(1, 2);
+
+  composite_zero : process
+  begin
+    Composite_Driver_Cells(0) <= (Flag => true, Data => "11");
+    wait;
+  end process;
+  composite_one : process
+  begin
+    Composite_Driver_Cells(1) <= (Flag => true, Data => "11");
+    wait;
+  end process;
+  Composite_Driver_Expected <=
+    (others => (Flag => true, Data => "11"));
+  Composite_Driver_Equal <=
+    Composite_Driver_Cells = Composite_Driver_Expected;
 
   Conditional_Result <=
     (others => '0') when false else
@@ -1523,6 +1583,30 @@ end architecture;
           "vhdl-callable-shape-failure",
           "vhdl:work.callable_shape_top(rtl)"),
       "FSIM-ELAB-VHOVER-002");
+
+  {
+    std::ofstream output{overlapping_driver_failure_source};
+    output << R"(
+entity Overlapping_Driver_Failure is
+end entity;
+
+architecture rtl of Overlapping_Driver_Failure is
+  type Matrix_T is array (0 to 1, 3 downto 1) of bit;
+  signal Value : Matrix_T;
+begin
+  Value(0, 3 downto 2) <= "10";
+  Value(0, 2 downto 1) <= "01";
+end architecture;
+)";
+    assert(output.good());
+  }
+  expect_build_failure(
+      make_failure_config(
+          directory.path,
+          overlapping_driver_failure_source,
+          "vhdl-overlapping-driver-failure",
+          "vhdl:work.overlapping_driver_failure(rtl)"),
+      "FSIM-ELAB-DRV-001");
 
   std::cout << "VHDL array application tests passed\n";
   return 0;

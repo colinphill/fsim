@@ -194,20 +194,26 @@ ProcessId Interpreter::add_process(Process process) {
           "duplicate SimIR debug-local name"};
     }
   }
-  std::set<SignalId> outputs;
-  for (const auto& operation : process.operations) {
-    const auto signal = output_signal(operation);
-    if (!signal) {
-      continue;
+  std::map<SignalId, std::vector<Process::DriverRegion>> outputs;
+  if (process.driver_regions.empty()) {
+    for (const auto& operation : process.operations) {
+      const auto signal = output_signal(operation);
+      if (signal) {
+        outputs[*signal].push_back(
+            Process::DriverRegion{*signal, 0, 0, true});
+      }
     }
-    if (*signal >= impl_->signals.size()) {
+  } else {
+    for (const auto& region : process.driver_regions) {
+      outputs[region.signal].push_back(region);
+    }
+  }
+  for (const auto& [signal, regions] : outputs) {
+    if (signal >= impl_->signals.size()) {
       throw std::invalid_argument(
           "process output references invalid signal");
     }
-    outputs.insert(*signal);
-  }
-  for (const auto signal : outputs) {
-    impl_->register_driver(id, signal);
+    impl_->register_driver(id, signal, regions);
   }
 
   Impl::ProcessState state;

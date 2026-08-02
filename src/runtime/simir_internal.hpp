@@ -640,7 +640,8 @@ struct Interpreter::Impl {
 
   void register_driver(
       const ProcessId process,
-      const SignalId signal_id);
+      const SignalId signal_id,
+      std::span<const Process::DriverRegion> regions);
 
   void set_driver(
       const ProcessId process,

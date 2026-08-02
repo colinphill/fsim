@@ -34,6 +34,7 @@ void test_strings_at_level(
           StringDisplay{0, "[", "]", true, false},
           Halt{},
       },
+      .driver_regions = {},
       .register_value_kinds = {},
       .initialize = true,
       .final = false,
