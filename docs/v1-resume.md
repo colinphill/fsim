@@ -17,8 +17,8 @@ as work lands. Before moving on, retain that batch's list, mark it
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
 - Implementation baseline: all ten Batch 115 tasks are complete through this
-  handoff; Batch 116 Tasks 1 through 8 are complete and Task 9 differential
-  coverage is current.
+  handoff; Batch 116 Tasks 1 through 9 are complete and Task 10 release-gate
+  closure is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
 - The source-size refactor is complete: all 362 authored C/C++ source, header,
@@ -2021,10 +2021,10 @@ cataloged and all 357 authored sources pass the 2,000-line gate. All ten Batch
 8. **Complete.** Complete sensitivity inference, partial/composite signal scheduling, driver
    resolution, delta/update ordering, and interpreter/LLVM parity for array
    element and slice targets.
-9. **In progress.** Prove positive/negative parser and elaboration coverage plus interpreter,
+9. **Complete.** Prove positive/negative parser and elaboration coverage plus interpreter,
    LLVM O0/O2, cache-edit, hierarchy, debugger, normalized-VCD, null-range, port,
    and callable differentials.
-10. **Pending.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
+10. **In progress.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
     Debug/Release, commit, and push gates before closing Batch 116.
 
 Batch status is **in progress**. Keep this exact ten-task list current in both
@@ -2177,6 +2177,25 @@ seven-test gate passed outside the ptrace sandbox in 5.99 seconds. All 1,477
 production diagnostics are cataloged and all 362 authored sources remain
 within the 2,000-line gate. Batch 116 remains **in progress** with Task 9
 current and Task 10 pending.
+
+Task 9 is focused-complete. The merged VHDL array application now places
+hierarchy-port copies, package-callable results, disjoint resolved and
+unresolved partial drivers, composite array elements, and chained-selection
+sensitivity values in the same normalized custom-VCD stream used for exact
+interpreter/LLVM and cold/warm comparisons. Debugger evidence covers the same
+hierarchy, callable, multidimensional resolved, and composite objects, while
+the application VCD proves their declarations and continues to omit the legal
+zero-width null array. Existing positive parsing and elaboration are paired
+with aggregate/type/bounds/direction/shape, dynamic range, hierarchy-port,
+component-profile, callable-profile, and overlapping-driver negative cases;
+runtime failures are compared exactly between interpreter and compiled modes.
+Both O0/O2 loops retain package-edit cache invalidation and distinct equal-
+width hierarchy specialization keys. Focused eight-test Debug and Release
+gates passed in 6.11 and 5.84 seconds, with VHDL arrays at 2.04/1.92 seconds and
+scoped locals at 0.84/0.81 seconds. The LLVM-disabled ASan/UBSan seven-test gate
+passed outside the ptrace sandbox in 5.10 seconds. All 1,477 production
+diagnostics are cataloged and all 362 authored sources remain within the
+2,000-line gate. Batch 116 remains **in progress** with Task 10 current.
 
 Batch 110 has advanced through these validated features:
 

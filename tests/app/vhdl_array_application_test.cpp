@@ -31,7 +31,7 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 24> values;
+  std::array<std::string, 30> values;
   std::array<std::string, 19> composite_values;
   std::string top_local;
   std::string dynamic_local;
@@ -256,7 +256,7 @@ Capture run_once(
       simulation.compiled_module_count();
   capture.cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 24> paths{
+  constexpr std::array<std::string_view, 30> paths{
       "array_top.source",
       "array_top.result",
       "array_top.conditional_result",
@@ -280,12 +280,19 @@ Capture run_once(
       "array_top.dynamic_slice_read",
       "array_top.dynamic_slice_local_result",
       "array_top.dynamic_slice_signal",
-      "array_top.dynamic_slice_waveform"};
-  constexpr std::array<std::size_t, 24> widths{
+      "array_top.dynamic_slice_waveform",
+      "array_top.boundary_matrix_a_output",
+      "array_top.callable_package_result",
+      "array_top.disjoint_driver_matrix",
+      "array_top.resolved_driver_matrix",
+      "array_top.composite_driver_cells",
+      "array_top.partial_sensitivity_result"};
+  constexpr std::array<std::size_t, 30> widths{
       8, 8, 8, 4, 1, 1, 8, 4, 8, 8, 1,
-      32, 32, 32, 1, 32, 32, 4, 1, 8, 4, 8, 8, 8};
-  std::array<fsim::runtime::simir::SignalId, 24> signals{};
-  std::array<fsim::runtime::VcdSignal, 24> traces{};
+      32, 32, 32, 1, 32, 32, 4, 1, 8, 4, 8, 8, 8,
+      6, 6, 6, 6, 6, 1};
+  std::array<fsim::runtime::simir::SignalId, 30> signals{};
+  std::array<fsim::runtime::VcdSignal, 30> traces{};
   std::ostringstream vcd_output;
   fsim::runtime::VcdWriter vcd{vcd_output, "1ns", 64};
   for (std::size_t index = 0; index < paths.size(); ++index) {
@@ -445,6 +452,10 @@ Capture run_once(
     debugger.execute({"show", "dynamic_slice_local_result"});
     debugger.execute({"show", "dynamic_slice_signal"});
     debugger.execute({"show", "dynamic_slice_waveform"});
+    debugger.execute({"show", "boundary_matrix_a_output"});
+    debugger.execute({"show", "callable_package_result"});
+    debugger.execute({"show", "resolved_driver_matrix"});
+    debugger.execute({"show", "composite_driver_cells"});
     debugger.execute({"show", "null_signal"});
     assert(debugger_error.str().empty());
     assert(!trace_diagnostics.has_error());
@@ -467,7 +478,7 @@ void verify_capture(const Capture& capture) {
       == fsim::runtime::RunStatus::completed);
   assert((
       capture.values
-      == std::array<std::string, 24>{
+      == std::array<std::string, 30>{
           "01LH10Z-",
           "11LH10Z-",
           "1111Z0ZH",
@@ -491,7 +502,13 @@ void verify_capture(const Capture& capture) {
           "1HH1",
           "0Z10X000",
           "010XZ000",
-          "0Z01X000"}));
+          "0Z01X000",
+          "111111",
+          "111111",
+          "101010",
+          "10Z0H1",
+          "111111",
+          "H"}));
   assert((
       capture.composite_values
       == std::array<std::string, 19>{
@@ -606,15 +623,55 @@ void verify_capture(const Capture& capture) {
           "dynamic_slice_waveform = 0Z01X000")
       != std::string::npos);
   assert(
+      capture.debugger_output.find(
+          "boundary_matrix_a_output = 111111")
+      != std::string::npos);
+  assert(
+      capture.debugger_output.find(
+          "callable_package_result = 111111")
+      != std::string::npos);
+  assert(
+      capture.debugger_output.find(
+          "resolved_driver_matrix = 10Z0H1")
+      != std::string::npos);
+  assert(
+      capture.debugger_output.find(
+          "composite_driver_cells = 111111")
+      != std::string::npos);
+  assert(
       capture.debugger_output.find("null_signal = <null>")
       != std::string::npos);
   assert(!capture.application_vcd.empty());
   assert(capture.application_vcd.find("null_signal")
          == std::string::npos);
+  assert(
+      capture.application_vcd.find("boundary_matrix_a_output")
+      != std::string::npos);
+  assert(
+      capture.application_vcd.find("callable_package_result")
+      != std::string::npos);
+  assert(
+      capture.application_vcd.find("resolved_driver_matrix")
+      != std::string::npos);
+  assert(
+      capture.application_vcd.find("composite_driver_cells")
+      != std::string::npos);
   assert(capture.vcd.find("b010110zx") != std::string::npos);
   assert(capture.vcd.find("b110110zx") != std::string::npos);
   assert(capture.vcd.find("b010xz000") != std::string::npos);
   assert(capture.vcd.find("b0z01x000") != std::string::npos);
+  assert(
+      capture.vcd.find("boundary_matrix_a_output")
+      != std::string::npos);
+  assert(
+      capture.vcd.find("callable_package_result")
+      != std::string::npos);
+  assert(
+      capture.vcd.find("resolved_driver_matrix")
+      != std::string::npos);
+  assert(
+      capture.vcd.find("composite_driver_cells")
+      != std::string::npos);
 }
 
 std::string run_expected_dynamic_failure(
