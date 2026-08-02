@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
+#include "vhdl_array_boundary.hpp"
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
@@ -649,13 +650,15 @@ void HierarchyBuilder::validate_boundary_type(
           separator == std::string::npos ? 0 : separator + 1);
   if (!port.type.packed_range
       && !port.type.packed_range_expression
+      && !(port.type.vhdl_array
+           && port.type.vhdl_array->flat_width)
       && (simple_type_name == "bit_vector"
           || simple_type_name == "std_logic_vector"
           || simple_type_name == "std_ulogic_vector")) {
     report(
         "FSIM-ELAB-VHARRAY-005",
         "VHDL array port '" + path + "." + port.name
-            + "' requires a concrete non-null index constraint",
+            + "' requires a concrete index constraint",
         source);
     return;
   }
@@ -719,6 +722,19 @@ void HierarchyBuilder::validate_boundary_type(
             + "' requires the same nominal array type",
         source);
     return;
+  }
+  if (!cross_language && port_array && actual_array) {
+    const auto& formal = *port.type.vhdl_array;
+    const auto& connected = *actual.vhdl_array;
+    if (!vhdl_array_shape_matches(formal, connected, true)) {
+      report(
+          "FSIM-ELAB-BIND-031",
+          "VHDL array rank, element subtype, bounds, direction, or "
+          "flattened stride differs on boundary '" + path + "."
+              + port.name + "'",
+          source);
+      return;
+    }
   }
   const bool port_enumeration =
       !port.type.enumeration_literals.empty();

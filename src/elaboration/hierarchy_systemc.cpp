@@ -1,9 +1,87 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
+#include "vhdl_array_boundary.hpp"
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
+
+namespace {
+
+template <typename SignalMap>
+void adapt_vhdl_array_port_shapes(
+    DesignUnit& unit,
+    const frontend::Instance& instance,
+    const SignalMap& parent_signals,
+    const std::span<const SignalInfo> signal_info,
+    std::vector<std::pair<std::string, std::string>>& identities) {
+  if (unit.language != frontend::Language::Vhdl2008
+      || unit.ports.empty()) {
+    return;
+  }
+  std::vector<bool> connected(unit.ports.size());
+  std::size_t positional = 0;
+  for (const auto& connection : instance.connections) {
+    std::size_t port_index = unit.ports.size();
+    if (connection.port) {
+      const auto found = std::ranges::find_if(
+          unit.ports,
+          [&](const auto& port) {
+            return port.name == *connection.port;
+          });
+      if (found != unit.ports.end()) {
+        port_index = static_cast<std::size_t>(
+            std::distance(unit.ports.begin(), found));
+      }
+    } else {
+      while (positional < unit.ports.size()
+             && connected[positional]) {
+        ++positional;
+      }
+      port_index = positional++;
+    }
+    if (port_index >= unit.ports.size()
+        || connected[port_index]
+        || connection.kind != frontend::PortActualKind::Expression
+        || connection.value.kind
+            != frontend::ExpressionKind::Identifier) {
+      continue;
+    }
+    connected[port_index] = true;
+    auto& formal = unit.ports[port_index];
+    if (!formal.type.vhdl_array) {
+      continue;
+    }
+    const auto actual = parent_signals.find(connection.value.text);
+    if (actual == parent_signals.end()
+        || actual->second >= signal_info.size()) {
+      continue;
+    }
+    const auto& info = signal_info[actual->second];
+    const bool indefinite =
+        !formal.type.vhdl_array->flat_width
+        || std::ranges::any_of(
+            formal.type.vhdl_array->dimensions,
+            [](const auto& dimension) {
+              return dimension.unconstrained;
+            });
+    if (!indefinite || !info.vhdl_array
+        || formal.type.nominal_type != info.nominal_type) {
+      continue;
+    }
+    formal.type.vhdl_array = info.vhdl_array;
+    formal.type.vhdl_array_constraints.clear();
+    formal.type.packed_range = info.packed_range;
+    formal.type.packed_range_expression.reset();
+    formal.type.domain = info.source_domain;
+    formal.type.is_signed = info.is_signed;
+    identities.emplace_back(
+        "__vhdl_port_shape." + formal.name,
+        vhdl_array_shape_identity(formal.type));
+  }
+}
+
+}  // namespace
 
 
 
@@ -1353,6 +1431,12 @@ using namespace elaboration_detail;
                 unit.procedures,
                 package_environment,
                 unit.language);
+            adapt_vhdl_array_port_shapes(
+                child_specialized.unit,
+                *selected_instance,
+                local,
+                design_.signals(),
+                child_specialized.identity_values);
             if (!configured.component_identity.empty()) {
                 if (child_specialized.identity_values.empty()) {
                     child_specialized.identity_values =

@@ -47,6 +47,16 @@ struct Capture {
   std::string null_not_equal;
   std::string null_slice_equal;
   std::string null_iterations;
+  std::array<std::string, 2> boundary_matrix_inputs;
+  std::array<std::string, 2> boundary_matrix_outputs;
+  std::array<std::string, 2> boundary_cell_inputs;
+  std::array<std::string, 2> boundary_cell_outputs;
+  std::array<std::string, 2> boundary_selected;
+  std::array<std::string, 2> boundary_identities;
+  std::string generic_boundary_matrix_input;
+  std::string generic_boundary_matrix_output;
+  std::string generic_boundary_cells_input;
+  std::string generic_boundary_cells_output;
   std::string debugger_output;
   std::string vcd;
   std::string application_vcd;
@@ -100,7 +110,7 @@ Capture run_once(
     }
   }
   assert(project);
-  assert(project->design.specializations().size() == 2);
+  assert(project->design.specializations().size() == 5);
   for (const auto& specialization :
        project->design.specializations()) {
     assert(std::find(
@@ -192,6 +202,42 @@ Capture run_once(
   Capture capture;
   capture.specialization_keys =
       project->specialization_cache_keys;
+  for (const auto& specialization :
+       project->design.specializations()) {
+    if (specialization.instance == "array_top.boundary_a") {
+      capture.boundary_identities[0] =
+          project->specialization_cache_keys.at(specialization.id);
+    } else if (
+        specialization.instance == "array_top.boundary_b") {
+      capture.boundary_identities[1] =
+          project->specialization_cache_keys.at(specialization.id);
+    }
+  }
+  assert(
+      !capture.boundary_identities[0].empty()
+      && !capture.boundary_identities[1].empty()
+      && capture.boundary_identities[0]
+          != capture.boundary_identities[1]);
+  assert(
+      project->design.find_signal(
+          "array_top.boundary_matrix_a_input")
+      == project->design.find_signal(
+          "array_top.boundary_a.matrix_input"));
+  assert(
+      project->design.find_signal(
+          "array_top.boundary_matrix_a_output")
+      == project->design.find_signal(
+          "array_top.boundary_a.matrix_output"));
+  assert(
+      project->design.find_signal(
+          "array_top.boundary_cells_b_input")
+      == project->design.find_signal(
+          "array_top.boundary_b.cells_input"));
+  assert(
+      project->design.find_signal(
+          "array_top.boundary_cells_b_output")
+      == project->design.find_signal(
+          "array_top.boundary_b.cells_output"));
   fsim::app::Simulation simulation{
       std::move(*project), config.run.max_deltas, engine};
   capture.compiled_processes =
@@ -332,6 +378,27 @@ Capture run_once(
   capture.null_local_copy = simulation.read_process_local(
       null_local_copy->first,
       null_local_copy->second).to_msb_string();
+  for (std::size_t index = 0; index < 2; ++index) {
+    const auto suffix = index == 0 ? "a" : "b";
+    capture.boundary_matrix_inputs[index] = read(
+        "array_top.boundary_matrix_" + std::string{suffix} + "_input");
+    capture.boundary_matrix_outputs[index] = read(
+        "array_top.boundary_matrix_" + std::string{suffix} + "_output");
+    capture.boundary_cell_inputs[index] = read(
+        "array_top.boundary_cells_" + std::string{suffix} + "_input");
+    capture.boundary_cell_outputs[index] = read(
+        "array_top.boundary_cells_" + std::string{suffix} + "_output");
+    capture.boundary_selected[index] = read(
+        "array_top.boundary_selected_" + std::string{suffix});
+  }
+  capture.generic_boundary_matrix_input =
+      read("array_top.generic_boundary_matrix_input");
+  capture.generic_boundary_matrix_output =
+      read("array_top.generic_boundary_matrix_output");
+  capture.generic_boundary_cells_input =
+      read("array_top.generic_boundary_cells_input");
+  capture.generic_boundary_cells_output =
+      read("array_top.generic_boundary_cells_output");
   {
     std::ostringstream debugger_output;
     std::ostringstream debugger_error;
@@ -432,6 +499,28 @@ void verify_capture(const Capture& capture) {
   assert(capture.null_slice_equal == "1");
   assert(capture.null_iterations
          == "00000000000000000000000000000000");
+  assert((capture.boundary_matrix_inputs
+          == std::array<std::string, 2>{"111111", "111111"}));
+  assert(capture.boundary_matrix_outputs
+         == capture.boundary_matrix_inputs);
+  assert((capture.boundary_cell_inputs
+          == std::array<std::string, 2>{"111111", "111111"}));
+  assert(capture.boundary_cell_outputs
+         == capture.boundary_cell_inputs);
+  assert((capture.boundary_selected
+          == std::array<std::string, 2>{"1", "1"}));
+  assert(capture.generic_boundary_matrix_input == "111111");
+  assert(
+      capture.generic_boundary_matrix_output
+      == capture.generic_boundary_matrix_input);
+  assert(capture.generic_boundary_cells_input == "111111");
+  assert(
+      capture.generic_boundary_cells_output
+      == capture.generic_boundary_cells_input);
+  assert(
+      !capture.boundary_identities[0].empty()
+      && capture.boundary_identities[0]
+          != capture.boundary_identities[1]);
   assert(
       capture.debugger_output.find(
           "source = 01LH10Z-")
@@ -500,6 +589,41 @@ std::string run_expected_dynamic_failure(
   return {};
 }
 
+void expect_build_failure(
+    const fsim::project::Config& config,
+    const std::string_view expected_code) {
+  fsim::diagnostic::Engine diagnostics;
+  const auto project = fsim::app::build_project(config, diagnostics);
+  assert(!project);
+  assert(std::ranges::any_of(
+      diagnostics.diagnostics(),
+      [&](const auto& diagnostic) {
+        return diagnostic.code == expected_code;
+      }));
+}
+
+fsim::project::Config make_failure_config(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const std::string& name,
+    const std::string& top) {
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = name;
+  config.project.top = top;
+  config.project.time_resolution = "1ns";
+  config.build.optimization = fsim::project::Optimization::o0;
+  config.build.cache_path = directory / (name + "-cache");
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::vhdl;
+  sources.standard = "2008";
+  sources.library = "work";
+  sources.compilation_unit = "file";
+  sources.files = {source};
+  config.source_sets.push_back(std::move(sources));
+  return config;
+}
+
 } // namespace
 
 int main() {
@@ -521,6 +645,10 @@ int main() {
       directory.path / "dynamic_slice_failure.vhd";
   const auto multidimensional_failure_source =
       directory.path / "multidimensional_failure.vhd";
+  const auto boundary_shape_failure_source =
+      directory.path / "boundary_shape_failure.vhd";
+  const auto component_shape_failure_source =
+      directory.path / "component_shape_failure.vhd";
 
   const auto write_package =
       [&](const std::string_view revision) {
@@ -536,6 +664,14 @@ package Array_Types is
   subtype Null_T is Logic_Array_T(3 to 0);
   type Boolean_Array_T is array (natural range <>) of boolean;
   subtype Boolean_Nibble_T is Boolean_Array_T(0 to 3);
+  type Boundary_Matrix_T is array
+    (natural range <>, positive range <>) of bit;
+  type Boundary_Cell_T is record
+    Flag : boolean;
+    Data : bit_vector(1 downto 0);
+  end record;
+  type Boundary_Cells_T is array
+    (natural range <>) of Boundary_Cell_T;
 end package;
 )";
         assert(output.good());
@@ -568,6 +704,48 @@ begin
     Result <= Child_Local;
   end process;
 end architecture;
+
+use work.array_types.all;
+entity Array_Boundary_Child is
+  port (
+    Matrix_Input : in Boundary_Matrix_T;
+    Matrix_Output : out Boundary_Matrix_T;
+    Cells_Input : in Boundary_Cells_T;
+    Cells_Output : out Boundary_Cells_T;
+    Selected : out bit
+  );
+end entity;
+
+use work.array_types.all;
+architecture rtl of Array_Boundary_Child is
+begin
+  Matrix_Output <= Matrix_Input;
+  Cells_Output <= Cells_Input;
+  Selected <= Matrix_Input(0, 1);
+end architecture;
+
+use work.array_types.all;
+entity Array_Generic_Boundary_Child is
+  generic (
+    Rows : positive := 2;
+    Columns : positive := 3
+  );
+  port (
+    Matrix_Input : in Boundary_Matrix_T(
+      0 to Rows - 1, Columns downto 1);
+    Matrix_Output : out Boundary_Matrix_T(
+      0 to Rows - 1, Columns downto 1);
+    Cells_Input : in Boundary_Cells_T(0 to Rows - 1);
+    Cells_Output : out Boundary_Cells_T(0 to Rows - 1)
+  );
+end entity;
+
+use work.array_types.all;
+architecture rtl of Array_Generic_Boundary_Child is
+begin
+  Matrix_Output <= Matrix_Input;
+  Cells_Output <= Cells_Input;
+end architecture;
 )";
     assert(output.good());
   }
@@ -580,6 +758,33 @@ end entity;
 
 use work.array_types.all;
 architecture rtl of Array_Top is
+  component Array_Boundary_Child is
+    port (
+      Matrix_Input : in Boundary_Matrix_T;
+      Matrix_Output : out Boundary_Matrix_T;
+      Cells_Input : in Boundary_Cells_T;
+      Cells_Output : out Boundary_Cells_T;
+      Selected : out bit
+    );
+  end component;
+  component Array_Generic_Boundary_Child is
+    generic (
+      Component_Rows : positive := 2;
+      Component_Columns : positive := 3
+    );
+    port (
+      Matrix_Input : in Boundary_Matrix_T(
+        0 to Component_Rows - 1,
+        Component_Columns downto 1);
+      Matrix_Output : out Boundary_Matrix_T(
+        0 to Component_Rows - 1,
+        Component_Columns downto 1);
+      Cells_Input : in Boundary_Cells_T(
+        0 to Component_Rows - 1);
+      Cells_Output : out Boundary_Cells_T(
+        0 to Component_Rows - 1)
+    );
+  end component;
   type Matrix_T is array (0 to 1, 3 downto 1) of bit;
   type Nibble_Array_T is array (3 downto 0) of bit;
   type Nibble_Memory_T is array (0 to 1) of Nibble_Array_T;
@@ -638,6 +843,28 @@ architecture rtl of Array_Top is
   signal Null_Not_Equal : boolean;
   signal Null_Slice_Equal : boolean;
   signal Null_Iterations : integer;
+  signal Boundary_Matrix_A_Input :
+    Boundary_Matrix_T(0 to 1, 3 downto 1);
+  signal Boundary_Matrix_A_Output :
+    Boundary_Matrix_T(0 to 1, 3 downto 1);
+  signal Boundary_Matrix_B_Input :
+    Boundary_Matrix_T(2 downto 0, 1 to 2);
+  signal Boundary_Matrix_B_Output :
+    Boundary_Matrix_T(2 downto 0, 1 to 2);
+  signal Boundary_Cells_A_Input : Boundary_Cells_T(2 to 3);
+  signal Boundary_Cells_A_Output : Boundary_Cells_T(2 to 3);
+  signal Boundary_Cells_B_Input : Boundary_Cells_T(4 downto 3);
+  signal Boundary_Cells_B_Output : Boundary_Cells_T(4 downto 3);
+  signal Boundary_Selected_A : bit;
+  signal Boundary_Selected_B : bit;
+  signal Generic_Boundary_Matrix_Input :
+    Boundary_Matrix_T(0 to 1, 3 downto 1);
+  signal Generic_Boundary_Matrix_Output :
+    Boundary_Matrix_T(0 to 1, 3 downto 1);
+  signal Generic_Boundary_Cells_Input :
+    Boundary_Cells_T(0 to 1);
+  signal Generic_Boundary_Cells_Output :
+    Boundary_Cells_T(0 to 1);
 begin
   drive : process
     variable Top_Local : Byte_T := "01LH10Z-";
@@ -737,6 +964,45 @@ begin
       Source => Source,
       Result => Result
     );
+
+  boundary_a : entity work.Array_Boundary_Child(rtl)
+    port map (
+      Matrix_Input => Boundary_Matrix_A_Input,
+      Matrix_Output => Boundary_Matrix_A_Output,
+      Cells_Input => Boundary_Cells_A_Input,
+      Cells_Output => Boundary_Cells_A_Output,
+      Selected => Boundary_Selected_A
+    );
+  boundary_b : Array_Boundary_Child
+    port map (
+      Matrix_Input => Boundary_Matrix_B_Input,
+      Matrix_Output => Boundary_Matrix_B_Output,
+      Cells_Input => Boundary_Cells_B_Input,
+      Cells_Output => Boundary_Cells_B_Output,
+      Selected => Boundary_Selected_B
+    );
+  generic_boundary : Array_Generic_Boundary_Child
+    generic map (
+      Component_Rows => 2,
+      Component_Columns => 3
+    )
+    port map (
+      Matrix_Input => Generic_Boundary_Matrix_Input,
+      Matrix_Output => Generic_Boundary_Matrix_Output,
+      Cells_Input => Generic_Boundary_Cells_Input,
+      Cells_Output => Generic_Boundary_Cells_Output
+    );
+
+  Boundary_Matrix_A_Input <= (others => (others => '1'));
+  Boundary_Matrix_B_Input <= (others => (others => '1'));
+  Boundary_Cells_A_Input <=
+    (others => (Flag => true, Data => "11"));
+  Boundary_Cells_B_Input <=
+    (others => (Flag => true, Data => "11"));
+  Generic_Boundary_Matrix_Input <=
+    (others => (others => '1'));
+  Generic_Boundary_Cells_Input <=
+    (others => (Flag => true, Data => "11"));
 
   Conditional_Result <=
     (others => '0') when false else
@@ -844,13 +1110,13 @@ end architecture;
     assert(cold.vcd == warm.vcd);
 #if defined(FSIM_HAS_LLVM)
     assert(cold.compiled_processes > 0);
-    assert(cold.compiled_modules == 2);
+    assert(cold.compiled_modules == 5);
     assert(cold.cache.hits == 0);
-    assert(cold.cache.misses == 2);
-    assert(cold.cache.stores == 2);
+    assert(cold.cache.misses == 5);
+    assert(cold.cache.stores == 5);
     assert(warm.compiled_processes == cold.compiled_processes);
     assert(warm.compiled_modules == cold.compiled_modules);
-    assert(warm.cache.hits == 2);
+    assert(warm.cache.hits == 5);
     assert(warm.cache.misses == 0);
     assert(warm.cache.stores == 0);
 #endif
@@ -866,10 +1132,10 @@ end architecture;
         != warm.specialization_keys);
 #if defined(FSIM_HAS_LLVM)
     assert(changed.compiled_processes == cold.compiled_processes);
-    assert(changed.compiled_modules == 2);
+    assert(changed.compiled_modules == 5);
     assert(changed.cache.hits == 0);
-    assert(changed.cache.misses == 2);
-    assert(changed.cache.stores == 2);
+    assert(changed.cache.misses == 5);
+    assert(changed.cache.stores == 5);
 #endif
     write_package("revision one");
   }
@@ -1035,6 +1301,86 @@ end architecture;
         "VHDL integer subtype range check failed");
     assert(reference == compiled);
   }
+
+  {
+    std::ofstream output{boundary_shape_failure_source};
+    output << R"(
+package Boundary_Shape_Types is
+  type Matrix_T is array
+    (natural range <>, positive range <>) of bit;
+end package;
+
+use work.boundary_shape_types.all;
+entity Boundary_Shape_Child is
+  port (Value : in Matrix_T(0 to 1, 3 downto 1));
+end entity;
+
+architecture rtl of Boundary_Shape_Child is
+begin
+end architecture;
+
+use work.boundary_shape_types.all;
+entity Boundary_Shape_Top is
+end entity;
+
+use work.boundary_shape_types.all;
+architecture rtl of Boundary_Shape_Top is
+  signal Value : Matrix_T(1 downto 0, 1 to 3);
+begin
+  child : entity work.Boundary_Shape_Child(rtl)
+    port map (Value => Value);
+end architecture;
+)";
+    assert(output.good());
+  }
+  expect_build_failure(
+      make_failure_config(
+          directory.path,
+          boundary_shape_failure_source,
+          "vhdl-boundary-shape-failure",
+          "vhdl:work.boundary_shape_top(rtl)"),
+      "FSIM-ELAB-BIND-031");
+
+  {
+    std::ofstream output{component_shape_failure_source};
+    output << R"(
+package Component_Shape_Types is
+  type Matrix_T is array
+    (natural range <>, positive range <>) of bit;
+end package;
+
+use work.component_shape_types.all;
+entity Component_Shape_Child is
+  port (Value : in Matrix_T(0 to 1, 3 downto 1));
+end entity;
+
+architecture rtl of Component_Shape_Child is
+begin
+end architecture;
+
+use work.component_shape_types.all;
+entity Component_Shape_Top is
+end entity;
+
+use work.component_shape_types.all;
+architecture rtl of Component_Shape_Top is
+  component Component_Shape_Child is
+    port (Value : in Matrix_T(1 downto 0, 1 to 3));
+  end component;
+  signal Value : Matrix_T(1 downto 0, 1 to 3);
+begin
+  child : Component_Shape_Child port map (Value => Value);
+end architecture;
+)";
+    assert(output.good());
+  }
+  expect_build_failure(
+      make_failure_config(
+          directory.path,
+          component_shape_failure_source,
+          "vhdl-component-shape-failure",
+          "vhdl:work.component_shape_top(rtl)"),
+      "FSIM-ELAB-VHCOMP-007");
 
   std::cout << "VHDL array application tests passed\n";
   return 0;

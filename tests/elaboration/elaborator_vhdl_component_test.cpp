@@ -116,7 +116,7 @@ end architecture;
             });
         assert(identity != selected.parameter_identity_values.end());
         assert(identity->second.starts_with(
-            "vhdl-component-binding-v6;name=component_leaf"));
+            "vhdl-component-binding-v7;name=component_leaf"));
     }
     assert(std::ranges::any_of(
         specialization(
@@ -580,7 +580,7 @@ end architecture;
         composite_identity
             != composite_child.parameter_identity_values.end()
         && composite_identity->second.starts_with(
-            "vhdl-component-binding-v6")
+            "vhdl-component-binding-v7")
         && composite_identity->second.find(
                ";nominal=composite_component_types.vhd:")
             != std::string::npos
@@ -761,7 +761,7 @@ end architecture;
         nonvalue_identity
             != nonvalue_child.parameter_identity_values.end()
         && nonvalue_identity->second.starts_with(
-            "vhdl-component-binding-v6")
+            "vhdl-component-binding-v7")
         && nonvalue_identity->second.find(
                "actual=component_t:vhdl-type-v1")
             != std::string::npos
@@ -1459,7 +1459,7 @@ end architecture;
             identity
                 != selected.parameter_identity_values.end()
             && identity->second.starts_with(
-                "vhdl-component-binding-v6")
+                "vhdl-component-binding-v7")
             && identity->second.find("state=1")
                 != std::string::npos
             && identity->second.find("state=2")

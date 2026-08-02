@@ -140,7 +140,7 @@ Capture run_once(
         [](const auto& item) {
           return item.first == "__component"
               && item.second.starts_with(
-                  "vhdl-component-binding-v6")
+                  "vhdl-component-binding-v7")
               && item.second.find(
                      "region=2;scope=;owner=work."
                      "component_runtime_profiles")
@@ -183,7 +183,7 @@ Capture run_once(
       [](const auto& item) {
         return item.first == "__component"
             && item.second.starts_with(
-                "vhdl-component-binding-v6")
+                "vhdl-component-binding-v7")
             && item.second.find(
                    "actual=component_t:vhdl-type-v1")
                 != std::string::npos
@@ -211,7 +211,7 @@ Capture run_once(
       [](const auto& item) {
         return item.first == "__component"
             && item.second.starts_with(
-                "vhdl-component-binding-v6")
+                "vhdl-component-binding-v7")
             && item.second.find("state=1")
                 != std::string::npos
             && item.second.find("state=2")

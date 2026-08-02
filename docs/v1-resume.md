@@ -17,11 +17,11 @@ as work lands. Before moving on, retain that batch's list, mark it
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
 - Implementation baseline: all ten Batch 115 tasks are complete through this
-  handoff; Batch 116 Tasks 1 through 5 are complete and Task 6 array-boundary
-  execution is current.
+  handoff; Batch 116 Tasks 1 through 6 are complete and Task 7 callable-array
+  boundaries are current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 359 authored C/C++ source, header,
+- The source-size refactor is complete: all 361 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 115-alternative
@@ -2012,10 +2012,10 @@ cataloged and all 357 authored sources pass the 2,000-line gate. All ten Batch
 5. **Complete.** Execute null arrays and slices through object initialization, aggregates,
    assignments, loops, copies, equality, debugger inspection, and trace behavior
    without allocating or updating phantom elements.
-6. **In progress.** Complete same-language entity/component port and generic boundaries for
+6. **Complete.** Complete same-language entity/component port and generic boundaries for
    multidimensional and composite arrays with exact constraint adaptation,
    aliases, copy direction, driver ownership, and specialization identity.
-7. **Pending.** Complete function/procedure parameter, result, local, package, and generated
+7. **In progress.** Complete function/procedure parameter, result, local, package, and generated
    callable boundaries for supported array shapes with deterministic copy-in,
    copy-out, return, lifetime, and provenance behavior.
 8. **Pending.** Complete sensitivity inference, partial/composite signal scheduling, driver
@@ -2115,6 +2115,28 @@ LLVM-disabled ASan/UBSan six-test gate passed outside the ptrace sandbox in
 2.37 seconds. All 1,477 production diagnostics are cataloged and all 359
 authored sources remain within the 2,000-line gate. Batch 116 remains **in
 progress** with Task 6 current and Tasks 7 through 10 pending.
+
+Task 6 is focused-complete. Same-language VHDL entity and component boundaries
+now adapt unconstrained multidimensional and composite-array formals to the
+actual signal's exact ranges, directions, null state, flattened strides, and
+element profile before specialization. Port aliases retain the parent signal
+ID and existing driver ownership, while the adapted shape participates in a
+dedicated specialization identity. Component compatibility and the
+`vhdl-component-binding-v7` identity now profile every array dimension,
+generic-dependent constraint, flattened width, nested element type, and record
+member; equal-width arrays with different shapes can no longer collide or bind
+silently. The merged VHDL array application covers direct-entity,
+component-bound, and generic-constrained multidimensional/composite ports,
+input/output copies, signal aliases, equal-width/different-shape cache keys,
+interpreter and LLVM O0/O2 execution, cold/warm reuse, and package-edit
+invalidation. Negative evidence reports `FSIM-ELAB-BIND-031` for an incompatible
+direct boundary and `FSIM-ELAB-VHCOMP-007` for an incompatible component/entity
+profile. Focused eight-test Debug and Release gates passed in 5.57 and 5.53
+seconds, with VHDL arrays at 1.51/1.46 seconds and scoped locals at 0.86/0.83
+seconds. The LLVM-disabled ASan/UBSan seven-test gate passed outside the ptrace
+sandbox in 4.71 seconds. All 1,477 production diagnostics are cataloged and all
+361 authored sources remain within the 2,000-line gate. Batch 116 remains **in
+progress** with Task 7 current and Tasks 8 through 10 pending.
 
 Batch 110 has advanced through these validated features:
 
