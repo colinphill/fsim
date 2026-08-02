@@ -1190,6 +1190,8 @@ therefore excluded.
 | `FSIM-ELAB-VHAGG-006` | error | A record aggregate element value does not have the element's exact packed width. |
 | `FSIM-ELAB-VHAGG-007` | error | A record aggregate would implicitly lose four- or nine-state information in a two-state element. |
 | `FSIM-ELAB-VHAGG-008` | error | A record aggregate uses a discrete, range, or choice-list association that is only meaningful for an array. |
+| `FSIM-ELAB-VHRECORD-001` | error | A VHDL record element does not resolve to a concrete bounded packed scalar, vector, enumeration, array, or nested-record layout. |
+| `FSIM-ELAB-VHRECORD-002` | error | A VHDL record element or total recursive record layout overflows the bounded packed representation. |
 | `FSIM-ELAB-VHSUBTYPE-001` | error | A scalar `range` constraint is applied to a resolved noninteger base subtype. |
 | `FSIM-ELAB-VHSUBTYPE-002` | error | A derived integer subtype constraint lies outside its resolved base subtype. |
 | `FSIM-ELAB-VHSUBTYPE-003` | error | A packed index constraint is applied to a scalar, record, or otherwise nonarray base subtype. |

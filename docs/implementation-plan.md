@@ -6947,10 +6947,10 @@ The current ten implementation tasks are:
 1. **Complete.** Audit and retain nested record/enumeration declarations, qualified
    expressions, aggregate choice forms, composite attributes, and composite
    operations in typed HIR with exact spans and targeted diagnostics.
-2. **In progress.** Complete recursive bounded record layout and legality for nested record,
+2. **Complete.** Complete recursive bounded record layout and legality for nested record,
    array, enumeration, vector, and scalar members with nominal identity,
    defaults, constraints, and deterministic flattened storage.
-3. **Pending.** Complete enumeration visibility and overload candidate behavior inside nested
+3. **In progress.** Complete enumeration visibility and overload candidate behavior inside nested
    composites, aggregates, selections, comparisons, choices, conversions, and
    hierarchy/callable profiles.
 4. **Pending.** Lower VHDL qualified expressions and supported subtype conversions with exact
@@ -6992,6 +6992,26 @@ ASan/UBSan nine-test gate passed outside the ptrace sandbox in 5.93 seconds.
 All 1,477 production diagnostics are cataloged and all 362 authored sources
 remain within the 2,000-line gate. Batch 117 remains **in progress** with Task
 2 current.
+
+Task 2 is focused-complete. Named record members now resolve recursively before
+layout, propagate the strongest nested state domain, preserve nominal subtype
+identity, and defer composite array-element width validation until the checked
+layout pass has materialized its record element. Recursive defaults now descend
+through records and arrays, retaining `U` for nine-state vector leaves and the
+left/default ordinal for enumeration and two-state leaves. The focused
+elaboration fixture proves a constrained subtype of an unconstrained
+array-of-record, 6/12/20-bit record/array/envelope widths, exact nested member
+offsets and nominal identities, and `UUUU00`-family default values. Indefinite,
+unknown, and cyclic member types receive `FSIM-ELAB-VHRECORD-001`,
+`FSIM-ELAB-VHTYPE-001`, and `FSIM-ELAB-VHTYPE-002`; recursive width overflow
+is cataloged as `FSIM-ELAB-VHRECORD-002`. The default builder moved to
+`elaboration_defaults.cpp`, restoring the hard source-size gate. Focused
+ten-test Debug and Release gates passed in 3.68 and 3.50 seconds, with VHDL
+arrays at 2.01/1.89 seconds and scoped locals at 0.83/0.83 seconds. The
+LLVM-disabled ASan/UBSan ten-test gate passed outside the ptrace sandbox in
+6.45 seconds. All 1,479 production diagnostics are cataloged and all 364
+authored sources remain within the 2,000-line gate. Batch 117 remains **in
+progress** with Task 3 current.
 
 ## Forward language-closure feature batches
 

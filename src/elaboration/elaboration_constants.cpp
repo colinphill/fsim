@@ -164,62 +164,6 @@ PackedLogic4 integer_value(const std::int64_t value) {
 
 
 
-PackedLogic4 default_packed_value(
-    const frontend::Type& type,
-    const std::size_t width) {
-    if (!type.enumeration_literals.empty()
-        && type.enumeration_range) {
-        return unsigned_value(
-            static_cast<std::uint64_t>(
-                type.enumeration_range->left),
-            width);
-    }
-    auto result = PackedLogic4(
-        width,
-        is_two_state_domain(type.domain)
-            ? Logic4::zero
-            : Logic4::x);
-    if (type.domain == frontend::ValueDomain::Logic9) {
-        result.fill(runtime::Logic9::u);
-    }
-    if (type.domain == frontend::ValueDomain::Integer && width != 0) {
-        return integer_value(
-            type.integer_range
-                ? type.integer_range->left
-                : std::numeric_limits<std::int32_t>::min());
-    }
-    for (const auto& member : type.packed_members) {
-        const auto member_width = member.width();
-        if (!member_width
-            || member.lsb_offset > width
-            || *member_width > width - member.lsb_offset) {
-            continue;
-        }
-        for (std::uint64_t bit = 0; bit < *member_width; ++bit) {
-            const auto index =
-                static_cast<std::size_t>(member.lsb_offset + bit);
-            if (result.is_logic9()) {
-                result.set_logic9(
-                    index,
-                    member.domain == frontend::ValueDomain::Logic9
-                        ? runtime::Logic9::u
-                        : member.domain == frontend::ValueDomain::Logic4
-                            ? runtime::Logic9::x
-                            : runtime::Logic9::zero);
-            } else {
-                result.set(
-                    index,
-                    is_two_state_domain(member.domain)
-                        ? Logic4::zero
-                        : Logic4::x);
-            }
-        }
-    }
-    return result;
-}
-
-
-
 std::optional<std::int64_t> vhdl_enumeration_ordinal(
     const Expression& expression,
     const frontend::Type& type) {
@@ -1791,6 +1735,10 @@ void substitute_parameters(
         const bool is_union =
             type.packed_aggregate
             == frontend::PackedAggregateKind::Union;
+        const bool vhdl_record =
+            language == frontend::Language::Vhdl2008
+            && type.packed_aggregate
+                == frontend::PackedAggregateKind::Struct;
         std::uint64_t total_width = 0;
         std::optional<std::uint64_t> union_width;
         bool valid = true;
@@ -1824,8 +1772,13 @@ void substitute_parameters(
                     : std::nullopt;
                 if (!left || !right) {
                     diagnostics.push_back({
-                        "FSIM-ELAB-SVSTRUCT-001",
-                        "cannot evaluate packed struct member range: "
+                        vhdl_record
+                            ? "FSIM-ELAB-VHRECORD-001"
+                            : "FSIM-ELAB-SVSTRUCT-001",
+                        std::string{
+                            vhdl_record
+                                ? "cannot evaluate VHDL record element range: "
+                                : "cannot evaluate packed struct member range: "}
                             + error,
                         member.packed_range_expression->span});
                     valid = false;
@@ -1838,9 +1791,17 @@ void substitute_parameters(
             const auto width = member.width();
             if (!width || *width == 0) {
                 diagnostics.push_back({
-                    "FSIM-ELAB-SVSTRUCT-001",
-                    "packed aggregate member '" + member.name
-                        + "' has an invalid or overflowing width",
+                    vhdl_record
+                        ? "FSIM-ELAB-VHRECORD-001"
+                        : "FSIM-ELAB-SVSTRUCT-001",
+                    std::string{
+                        vhdl_record
+                            ? "VHDL record element '"
+                            : "packed aggregate member '"}
+                        + member.name
+                        + (vhdl_record
+                            ? "' does not have a concrete bounded packed layout"
+                            : "' has an invalid or overflowing width"),
                     member.span});
                 valid = false;
                 continue;
@@ -1865,8 +1826,14 @@ void substitute_parameters(
                     > std::numeric_limits<std::uint64_t>::max()
                         - total_width) {
                     diagnostics.push_back({
-                        "FSIM-ELAB-SVSTRUCT-001",
-                        "packed struct member '" + member.name
+                        vhdl_record
+                            ? "FSIM-ELAB-VHRECORD-002"
+                            : "FSIM-ELAB-SVSTRUCT-001",
+                        std::string{
+                            vhdl_record
+                                ? "VHDL record element '"
+                                : "packed struct member '"}
+                            + member.name
                             + "' overflows the aggregate width",
                         member.span});
                     valid = false;
@@ -1881,8 +1848,12 @@ void substitute_parameters(
                     std::numeric_limits<std::int64_t>::max())) {
             if (valid) {
                 diagnostics.push_back({
-                    "FSIM-ELAB-SVSTRUCT-001",
-                    "packed aggregate total width exceeds the supported range",
+                    vhdl_record
+                        ? "FSIM-ELAB-VHRECORD-002"
+                        : "FSIM-ELAB-SVSTRUCT-001",
+                    vhdl_record
+                        ? "VHDL record total width exceeds the supported range"
+                        : "packed aggregate total width exceeds the supported range",
                     type.packed_members.front().span});
             }
             type.packed_range.reset();

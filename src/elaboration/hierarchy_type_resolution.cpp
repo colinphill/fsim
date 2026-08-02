@@ -308,6 +308,20 @@ using namespace elaboration_detail;
                 member.packed_range_expression =
                     nested.packed_range_expression;
                 member.is_signed = nested.is_signed;
+                if (vhdl
+                    && type.packed_aggregate
+                        == frontend::PackedAggregateKind::Struct) {
+                    if (nested.domain
+                        == frontend::ValueDomain::Logic9) {
+                        type.domain = frontend::ValueDomain::Logic9;
+                    } else if (
+                        nested.domain
+                            == frontend::ValueDomain::Logic4
+                        && type.domain
+                            != frontend::ValueDomain::Logic9) {
+                        type.domain = frontend::ValueDomain::Logic4;
+                    }
+                }
             }
             if (type.systemverilog_container
                 && type.systemverilog_container
@@ -333,7 +347,11 @@ using namespace elaboration_detail;
                     return false;
                 }
                 const auto width = element.width();
-                if (!width || *width == 0
+                const bool deferred_composite_layout =
+                    !element.packed_members.empty()
+                    || element.vhdl_array.has_value();
+                if (((!width || *width == 0)
+                     && !deferred_composite_layout)
                     || element.domain
                         == frontend::ValueDomain::Integer
                     || element.domain
