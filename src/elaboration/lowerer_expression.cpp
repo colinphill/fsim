@@ -314,6 +314,12 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         if (multidimensional.handled) {
             return multidimensional;
         }
+        auto vhdl_array_selection =
+            lower_vhdl_array_selection_expression(
+                expression, expected_width, expected_type);
+        if (vhdl_array_selection.handled) {
+            return vhdl_array_selection;
+        }
 
         if (expression.kind == ExpressionKind::Call
             && expression.text.starts_with("@sv-cast:")) {
@@ -1444,17 +1450,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 || signals_.contains(expression.text)
                 || packed_member_reference(expression.text))) {
             return lower_expression(
-                Expression{
-                    ExpressionKind::Index,
-                    "index",
-                    {
-                        Expression{
-                            ExpressionKind::Identifier,
-                            expression.text,
-                            {},
-                            expression.span},
-                        expression.operands[0]},
-                    expression.span},
+                Expression{ExpressionKind::Index, "index",
+                    {Expression{ExpressionKind::Identifier,
+                         expression.text, {}, expression.span},
+                     expression.operands[0]}, expression.span},
                 expected_width);
         }
         if (language_ == frontend::Language::Vhdl2008

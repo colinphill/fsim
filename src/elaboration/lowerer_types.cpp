@@ -21,6 +21,18 @@ using namespace elaboration_detail;
         if (expression.kind == ExpressionKind::Aggregate) {
             return std::nullopt;
         }
+        if ((expression.kind == ExpressionKind::Call
+             || expression.kind == ExpressionKind::Index
+             || expression.kind == ExpressionKind::Slice)
+            && language_ == frontend::Language::Vhdl2008) {
+            if (const auto type = vhdl_expression_type(expression)) {
+                const auto width = type->width();
+                if (width && *width <=
+                        std::numeric_limits<std::size_t>::max()) {
+                    return static_cast<std::size_t>(*width);
+                }
+            }
+        }
         if (expression.kind == ExpressionKind::Call
             && expression.text == "inside") {
             return std::size_t{1};
@@ -413,6 +425,12 @@ using namespace elaboration_detail;
                 selected
                 && selected->member->packed_range) {
                 return *selected->member->packed_range;
+            }
+        }
+        if (language_ == frontend::Language::Vhdl2008) {
+            if (const auto type = vhdl_expression_type(expression);
+                type && type->packed_range) {
+                return *type->packed_range;
             }
         }
         if (width == 0
@@ -826,7 +844,7 @@ using namespace elaboration_detail;
         } else if (
             language_ == frontend::Language::Vhdl2008
             && expression.kind == ExpressionKind::Call
-            && expression.operands.size() == 1) {
+            && !expression.operands.empty()) {
             if (const auto selected =
                     packed_member_reference(expression.text)) {
                 output.insert(selected->base);

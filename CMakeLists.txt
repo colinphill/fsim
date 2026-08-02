@@ -423,6 +423,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_sv_file_binary.cpp
       src/elaboration/lowerer_sv_file_scan.cpp
       src/elaboration/lowerer_sv_multidimensional.cpp
+      src/elaboration/lowerer_vhdl_array_selection.cpp
   )
 add_library(fsim::elaboration ALIAS fsim_elaboration)
 fsim_configure_library(fsim_elaboration)

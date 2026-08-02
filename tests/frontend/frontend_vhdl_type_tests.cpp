@@ -530,6 +530,9 @@ begin
   begin
     Cell := Local_Matrix(1, 2);
     Pair := Local_Matrix(1, 3 downto 2);
+    Local_Matrix(1, 2) <= '1';
+    Local_Matrix(0, 3 downto 2) <= "10";
+    Nested(1)(2) := '0';
     Packed_Rows <= Nested;
     wait;
   end process;
@@ -614,20 +617,32 @@ end architecture;
           && composite_architecture.processes.size() == 1
           && composite_architecture.processes[0].variables[0]
                  .initializer->kind
-              == ExpressionKind::Aggregate
-          && composite_architecture.processes[0].statements[0]
-                 .value.kind
+              == ExpressionKind::Aggregate,
+      "composite array objects and nested aggregates retain HIR");
+  const auto& selection_statements =
+      composite_architecture.processes[0].statements;
+  require(
+      selection_statements.size() == 7
+          && selection_statements[0].value.kind
               == ExpressionKind::Call
-          && composite_architecture.processes[0].statements[0]
-                 .value.operands.size()
-              == 2
-          && composite_architecture.processes[0].statements[1]
-                 .value.operands[1].kind
+          && selection_statements[0].value.operands.size() == 2
+          && selection_statements[1].value.operands[1].kind
               == ExpressionKind::Binary
-          && composite_architecture.processes[0].statements[1]
-                 .value.operands[1].text
+          && selection_statements[1].value.operands[1].text
               == "downto",
-      "objects, nested aggregates, indices, and subarray slices retain HIR");
+      "multidimensional reads and subarray slices retain HIR");
+  require(
+      selection_statements[2].target.kind
+              == ExpressionKind::Index
+          && selection_statements[2].target.operands[0].kind
+              == ExpressionKind::Index
+          && selection_statements[3].target.kind
+              == ExpressionKind::Slice
+          && selection_statements[3].target.operands[0].kind
+              == ExpressionKind::Index
+          && selection_statements[4].target.operands[0].kind
+              == ExpressionKind::Index,
+      "multidimensional targets and chained selections retain HIR");
 
   const auto rejected = parse_text(
       "invalid_array_index_type.vhd",

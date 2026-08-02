@@ -177,6 +177,7 @@ using namespace elaboration_detail;
         std::optional<frontend::ValueDomain> selected_domain;
         std::optional<DynamicIndex> dynamic_selection;
         std::optional<DynamicPartIndex> dynamic_part_selection;
+        std::optional<frontend::Type> selected_type;
         std::vector<const Expression*> packed_selections;
         while (base->kind == ExpressionKind::Index
                || base->kind == ExpressionKind::Slice) {
@@ -533,174 +534,13 @@ using namespace elaboration_detail;
             local != locals_.end()
                 ? register_width(local->second)
                 : design_.signal_info_[signal->second].width;
-        for (std::size_t selection_index = 0;
-             selection_index < packed_selections.size();
-             ++selection_index) {
-            const auto& selection_expression =
-                *packed_selections[selection_index];
-            const auto& selection_source =
-                selection_expression.operands.front();
-            const auto selection_source_width =
-                selected_width.value_or(whole_width);
-            const bool final_selection =
-                selection_index + 1U == packed_selections.size();
-            if (dynamic_selection || dynamic_part_selection) {
-                report(
-                    "FSIM-ELAB-SVEXPR-008",
-                    "a runtime-selected procedural target cannot be selected "
-                    "again",
-                    selection_expression.span);
-                return;
-            }
-            const auto base_offset = static_cast<std::uint64_t>(
-                selected_offset);
-            if (selection_expression.kind == ExpressionKind::Index) {
-                const auto index = static_integer_value(
-                    selection_expression.operands[1]);
-                if (index) {
-                    const auto offset = select_offset(
-                        selection_source, *index, selection_source_width);
-                    if (!offset
-                        || base_offset + *offset
-                            > std::numeric_limits<std::uint32_t>::max()) {
-                        report(
-                            "FSIM-ELAB-068",
-                            "an assignment bit-select requires an index "
-                            "inside the target's declared packed range",
-                            selection_expression.span);
-                        return;
-                    }
-                    selected_offset = static_cast<std::uint32_t>(
-                        base_offset + *offset);
-                    has_selected_offset = true;
-                } else {
-                    if (!final_selection) {
-                        report(
-                            "FSIM-ELAB-SVEXPR-008",
-                            "a dynamic bit-select must be the final packed "
-                            "procedural target selection",
-                            selection_expression.span);
-                        return;
-                    }
-                    dynamic_selection = lower_dynamic_index(
-                        selection_source,
-                        selection_expression.operands[1],
-                        selection_source_width,
-                        selected_offset,
-                        selection_expression.span);
-                    if (!dynamic_selection) {
-                        return;
-                    }
-                    selected_offset = 0;
-                    has_selected_offset = false;
-                }
-                selected_width = 1;
-                continue;
-            }
-
-            const auto selection = constant_slice_selection(
-                selection_expression, selection_source_width);
-            if (selection
-                && base_offset + selection->offset
-                    <= std::numeric_limits<std::uint32_t>::max()
-                && selection->width
-                    <= std::numeric_limits<std::uint32_t>::max()) {
-                selected_offset = static_cast<std::uint32_t>(
-                    base_offset + selection->offset);
-                has_selected_offset = true;
-                selected_width = selection->width;
-                continue;
-            }
-            const bool runtime_vhdl_slice =
-                language_ == frontend::Language::Vhdl2008
-                && (!static_integer_value(
-                        selection_expression.operands[1])
-                    || !static_integer_value(
-                        selection_expression.operands[2]));
-            if (runtime_vhdl_slice) {
-                if (!final_selection) {
-                    report(
-                        "FSIM-ELAB-VHSLICE-003",
-                        "a dynamic VHDL slice must be the final packed "
-                        "assignment-target selection",
-                        selection_expression.span);
-                    return;
-                }
-                const auto value_width = infer_width(statement.value);
-                if (!value_width) {
-                    report(
-                        "FSIM-ELAB-VHSLICE-001",
-                        "a dynamic VHDL assignment slice requires a "
-                        "statically sized value",
-                        statement.value.span);
-                    return;
-                }
-                dynamic_part_selection = lower_vhdl_dynamic_slice(
-                    selection_expression,
-                    selection_source_width,
-                    *value_width,
-                    selected_offset);
-                if (!dynamic_part_selection) {
-                    return;
-                }
-                selected_offset = 0;
-                has_selected_offset = false;
-                selected_width = *value_width;
-                continue;
-            }
-            const bool runtime_indexed_part =
-                language_ == frontend::Language::SystemVerilog2017
-                && (selection_expression.text == "+:"
-                    || selection_expression.text == "-:")
-                && !static_integer_value(
-                    selection_expression.operands[1]);
-            if (!runtime_indexed_part || !final_selection) {
-                report(
-                    runtime_indexed_part
-                        ? "FSIM-ELAB-SVEXPR-008"
-                        : "FSIM-ELAB-068",
-                    runtime_indexed_part
-                        ? "a runtime-base part-select must be the final "
-                          "packed procedural target selection"
-                        : "an assignment part-select requires constant "
-                          "in-range bounds, a positive indexed width, and a "
-                          "direction compatible with the target's declared "
-                          "packed range",
-                    selection_expression.span);
-                return;
-            }
-            const auto width = static_integer_value(
-                selection_expression.operands[2]);
-            const auto range = expression_range(
-                selection_source, selection_source_width);
-            if (!width || *width <= 0 || *width > 64 || !range) {
-                report(
-                    "FSIM-ELAB-SVEXPR-004",
-                    "a runtime-base procedural part-select requires a fixed "
-                    "width from 1 through 64 and an inferable packed target "
-                    "range",
-                    selection_expression.span);
-                return;
-            }
-            auto dynamic_base = lower_expression(
-                selection_expression.operands[1], 32);
-            if (!dynamic_base) {
-                return;
-            }
-            if (register_width(*dynamic_base) != 32) {
-                *dynamic_base = resize_register(*dynamic_base, 32, true);
-            }
-            dynamic_part_selection = DynamicPartIndex{
-                *dynamic_base,
-                range->left,
-                range->right,
-                selected_offset,
-                static_cast<std::uint32_t>(*width),
-                selection_expression.text == "+:",
-                range->descending};
-            selected_offset = 0;
-            has_selected_offset = false;
-            selected_width = static_cast<std::size_t>(*width);
+        if (!lower_assignment_selections(
+                statement, base->text, whole_width,
+                packed_selections, selected_offset,
+                has_selected_offset, selected_width,
+                selected_domain, dynamic_selection,
+                dynamic_part_selection, selected_type)) {
+            return;
         }
 
         const auto target_width =
@@ -744,8 +584,9 @@ using namespace elaboration_detail;
                 statement.target.span);
             return;
         }
-        const auto* contextual_target_type =
-            has_selected_offset || dynamic_selection
+        const auto* contextual_target_type = selected_type
+            ? &*selected_type
+            : has_selected_offset || dynamic_selection
                     || dynamic_part_selection
                 ? nullptr
                 : object_type(target_name);

@@ -17,8 +17,8 @@ as work lands. Before moving on, retain that batch's list, mark it
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
 - Implementation baseline: all ten Batch 115 tasks are complete through this
-  handoff; Batch 116 Tasks 1 through 3 are complete and Task 4 selections are
-  current.
+  handoff; Batch 116 Tasks 1 through 4 are complete and Task 5 null-array
+  execution is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
 - The source-size refactor is complete: all 358 authored C/C++ source, header,
@@ -2006,10 +2006,10 @@ cataloged and all 357 authored sources pass the 2,000-line gate. All ten Batch
 3. **Complete.** Complete contextual array aggregates with positional, named, discrete-range,
    choice-list, and final `others` associations, including nested aggregates,
    coverage, overlap, duplicate, and subtype legality.
-4. **In progress.** Lower multidimensional indexing, slicing, and supported chained selections for
+4. **Complete.** Lower multidimensional indexing, slicing, and supported chained selections for
    reads and assignment targets with checked ordinal mapping, bounds, direction,
    and shape compatibility.
-5. **Pending.** Execute null arrays and slices through object initialization, aggregates,
+5. **In progress.** Execute null arrays and slices through object initialization, aggregates,
    assignments, loops, copies, equality, debugger inspection, and trace behavior
    without allocating or updating phantom elements.
 6. **Pending.** Complete same-language entity/component port and generic boundaries for
@@ -2078,6 +2078,26 @@ gate passed the same seven tests in 4.33 seconds. All 1,473 production
 diagnostics are cataloged and all 358 authored sources remain within the
 2,000-line gate. Batch 116 remains **in progress** with Task 4 current and Tasks
 5 through 10 pending.
+
+Task 4 is focused-complete. Multidimensional calls and comma-separated targets
+normalize into source-ordered selection chains. Static and runtime reads and
+local/signal targets use the concrete rightmost-fastest dimension strides;
+runtime indices are signed-32-bit checked, converted to right-relative packed
+ordinals, and combined before fixed-width extract/insert operations. Static and
+runtime partial-dimensional slices retain exact direction and contextual shape,
+while nested named arrays, vector elements/slices, and nominal record elements
+remain typed through supported chains. Concurrent sensitivity discovery now
+retains multi-index array prefixes. Positive frontend/application evidence
+covers scalar, vector, nested-array, and record elements, local and signal
+targets, interpreter execution, LLVM O0/O2, cold/warm cache reuse, and package
+edits; negative evidence covers type, bounds, direction, shape, and identical
+interpreter/compiled runtime range failures. Focused Debug and Release
+seven-test gates passed in 2.46 and 2.30 seconds, with VHDL arrays at 1.18/1.14
+seconds and scoped locals at 0.90/0.81 seconds. The LLVM-disabled ASan/UBSan
+five-test gate passed in 4.51 seconds after exposing and repairing a selected-
+type lifetime defect. All 1,477 production diagnostics are cataloged and all
+359 authored sources remain within the 2,000-line gate. Batch 116 remains **in
+progress** with Task 5 current and Tasks 6 through 10 pending.
 
 Batch 110 has advanced through these validated features:
 

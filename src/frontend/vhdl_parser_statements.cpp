@@ -1014,25 +1014,28 @@ Expression VhdlParser::parse_lvalue() {
   }
   while (match(TokenKind::LeftParen)) {
     const auto open = previous();
-    Expression first = parse_expression();
-    if (match_keyword("downto", true) || match_keyword("to", true)) {
-      const auto direction = previous();
-      Expression second = parse_expression();
-      expect(TokenKind::RightParen, "')' after slice",
-             "FSIM-VHDL-PARSE-031");
-      expression =
-          Expression{ExpressionKind::Slice, detail::ascii_lower(direction.text),
-                     {std::move(expression), std::move(first),
-                      std::move(second)},
-                     cover(expression.span, previous().span)};
-    } else {
-      expect(TokenKind::RightParen, "')' after index",
-             "FSIM-VHDL-PARSE-032");
-      expression =
-          Expression{ExpressionKind::Index, "index",
-                     {std::move(expression), std::move(first)},
-                     cover(expression.span, previous().span)};
-    }
+    bool saw_slice = false;
+    do {
+      Expression first = parse_expression();
+      if (match_keyword("downto", true) || match_keyword("to", true)) {
+        saw_slice = true;
+        const auto direction = previous();
+        Expression second = parse_expression();
+        expression = Expression{
+            ExpressionKind::Slice, detail::ascii_lower(direction.text),
+            {std::move(expression), std::move(first), std::move(second)},
+            cover(expression.span, second.span)};
+      } else {
+        expression = Expression{
+            ExpressionKind::Index, "index",
+            {std::move(expression), std::move(first)},
+            cover(expression.span, first.span)};
+      }
+    } while (match(TokenKind::Comma));
+    expect(TokenKind::RightParen, "')' after indices",
+           saw_slice ? "FSIM-VHDL-PARSE-031"
+                     : "FSIM-VHDL-PARSE-032");
+    expression.span = cover(expression.span, previous().span);
     (void)open;
   }
   return expression;

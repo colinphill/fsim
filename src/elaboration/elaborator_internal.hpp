@@ -988,34 +988,25 @@ private:
     void emit_debug_point(
         const DebugPointKind kind,
         const frontend::SourceSpan& span);
-
     void lower_wait_until(const Statement& statement);
-
     void lower_immediate_condition_wait(
         const Statement& statement);
-
     std::optional<RegisterId> lower_condition(
         const Expression& expression,
         std::string diagnostic_code,
         std::string_view construct);
-
     void lower_assert(const Statement& statement);
-
     [[nodiscard]] const frontend::Type*
     vhdl_array_attribute_prefix_type(
         const Expression& expression) const;
-
     [[nodiscard]] static bool is_vhdl_array_like(
         const frontend::Type& type);
-
     std::optional<frontend::PackedRange>
     vhdl_array_attribute_range(
         const Expression& expression,
         const bool report_errors);
-
     std::optional<std::int64_t>
     static_integer_value(const Expression& expression);
-
     struct ConstantSliceSelection {
         std::size_t offset{};
         std::size_t width{};
@@ -1039,18 +1030,25 @@ private:
         RegisterId captured,
         std::size_t target_width,
         const frontend::Type* contextual_target_type);
-
     std::optional<RegisterId> lower_procedural_update_expression(
         const Expression& expression,
         std::size_t expected_width,
         const frontend::Type* expected_type);
-
     void lower_force_release(const Statement& statement);
-
     void lower_assignment(const Statement& statement);
-
+    bool lower_assignment_selections(
+        const Statement& statement,
+        std::string_view target_name,
+        std::size_t whole_width,
+        const std::vector<const Expression*>& selections,
+        std::uint32_t& selected_offset,
+        bool& has_selected_offset,
+        std::optional<std::size_t>& selected_width,
+        std::optional<frontend::ValueDomain>& selected_domain,
+        std::optional<DynamicIndex>& dynamic_selection,
+        std::optional<DynamicPartIndex>& dynamic_part_selection,
+        std::optional<frontend::Type>& selected_type);
     void lower_if(const Statement& statement);
-
     void lower_case(const Statement& statement);
     void lower_qualified_case(const Statement& statement);
     [[nodiscard]] bool validate_vhdl_matching_case(
@@ -1074,9 +1072,7 @@ private:
         bool selector_signed);
     [[nodiscard]] bool is_bounded_case_pattern_constant(
         const Expression& expression) const;
-
     void lower_loop(const Statement& statement);
-
     void lower_runtime_loop(const Statement& statement);
 
     void lower_runtime_for(const Statement& statement);
@@ -1105,7 +1101,6 @@ private:
     std::optional<RegisterId> lower_enumeration_attribute(
         const Expression& expression,
         const frontend::Type& type);
-
     std::optional<RegisterId> lower_vhdl_array_aggregate(
         const Expression& expression,
         const std::size_t expected_width,
@@ -1120,7 +1115,12 @@ private:
         bool handled{};
         std::optional<RegisterId> value;
     };
-
+    [[nodiscard]] std::optional<frontend::Type>
+    vhdl_expression_type(const Expression& expression) const;
+    ExpressionAttempt lower_vhdl_array_selection_expression(
+        const Expression& expression,
+        std::size_t expected_width,
+        const frontend::Type* expected_type);
     std::optional<RegisterId> lower_expression(
         const Expression& expression,
         const std::size_t expected_width,

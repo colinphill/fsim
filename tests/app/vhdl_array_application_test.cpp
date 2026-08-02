@@ -32,7 +32,7 @@ struct TemporaryDirectory {
 struct Capture {
   fsim::runtime::RunResult result;
   std::array<std::string, 24> values;
-  std::array<std::string, 7> composite_values;
+  std::array<std::string, 19> composite_values;
   std::string top_local;
   std::string dynamic_local;
   std::string dynamic_slice_local;
@@ -216,15 +216,27 @@ Capture run_once(
     traces[index] = vcd.declare_signal(
         std::string{paths[index]}, widths[index]);
   }
-  constexpr std::array<std::string_view, 7> composite_paths{
+  constexpr std::array<std::string_view, 19> composite_paths{
       "array_top.matrix_positional",
       "array_top.matrix_named",
       "array_top.matrix_ranged",
       "array_top.matrix_conditional",
       "array_top.matrix_local_result",
       "array_top.nested",
-      "array_top.cells"};
-  std::array<fsim::runtime::simir::SignalId, 7>
+      "array_top.cells",
+      "array_top.matrix_cell_read",
+      "array_top.matrix_slice_read",
+      "array_top.matrix_dynamic_read",
+      "array_top.nested_read",
+      "array_top.vector_rows",
+      "array_top.vector_read",
+      "array_top.vector_slice_read",
+      "array_top.cell_selected",
+      "array_top.matrix_signal_target",
+      "array_top.matrix_dynamic_signal_target",
+      "array_top.vector_target",
+      "array_top.cell_targets"};
+  std::array<fsim::runtime::simir::SignalId, 19>
       composite_signals{};
   for (std::size_t index = 0;
        index < composite_paths.size(); ++index) {
@@ -336,14 +348,26 @@ void verify_capture(const Capture& capture) {
           "0Z01X000"}));
   assert((
       capture.composite_values
-      == std::array<std::string, 7>{
+      == std::array<std::string, 19>{
           "101010",
           "101000",
           "111001",
           "101010",
-          "011110",
+          "101100",
           "10000101",
-          "110001"}));
+          "110001",
+          "1",
+          "10",
+          "1",
+          "1",
+          "10100101",
+          "0101",
+          "01",
+          "110",
+          "000010",
+          "000010",
+          "10101111",
+          "000111"}));
   assert(capture.top_local == "00LH10Z-");
   assert(capture.dynamic_local == "01HH10Z-");
   assert(capture.dynamic_slice_local == "0Z10X000");
@@ -431,6 +455,8 @@ int main() {
       directory.path / "dynamic_failure.vhd";
   const auto slice_failure_source =
       directory.path / "dynamic_slice_failure.vhd";
+  const auto multidimensional_failure_source =
+      directory.path / "multidimensional_failure.vhd";
 
   const auto write_package =
       [&](const std::string_view revision) {
@@ -492,6 +518,7 @@ architecture rtl of Array_Top is
   type Matrix_T is array (0 to 1, 3 downto 1) of bit;
   type Nibble_Array_T is array (3 downto 0) of bit;
   type Nibble_Memory_T is array (0 to 1) of Nibble_Array_T;
+  type Vector_Rows_T is array (0 to 1) of bit_vector(3 downto 0);
   type Cell_T is record
     Flag : boolean;
     Data : bit_vector(1 downto 0);
@@ -528,6 +555,18 @@ architecture rtl of Array_Top is
   signal Matrix_Local_Result : Matrix_T;
   signal Nested : Nibble_Memory_T;
   signal Cells : Cells_T;
+  signal Matrix_Cell_Read : bit;
+  signal Matrix_Slice_Read : bit_vector(1 downto 0);
+  signal Matrix_Dynamic_Read : bit;
+  signal Nested_Read : bit;
+  signal Vector_Rows : Vector_Rows_T;
+  signal Vector_Read : bit_vector(3 downto 0);
+  signal Vector_Slice_Read : bit_vector(1 downto 0);
+  signal Cell_Selected : Cell_T;
+  signal Matrix_Signal_Target : Matrix_T;
+  signal Matrix_Dynamic_Signal_Target : Matrix_T;
+  signal Vector_Target : Vector_Rows_T;
+  signal Cell_Targets : Cells_T;
 begin
   drive : process
     variable Top_Local : Byte_T := "01LH10Z-";
@@ -545,6 +584,11 @@ begin
     variable Matrix_Local : Matrix_T :=
       ((3 => '0', others => '1'),
        (3 downto 2 => '1', others => '0'));
+    variable Matrix_Row : integer := 1;
+    variable Matrix_Column : integer := 2;
+    variable Vector_Local : Vector_Rows_T := ("1010", "0101");
+    variable Cell_Local : Cells_T :=
+      (others => (Flag => false, Data => "00"));
   begin
     Source <= Top_Local;
     Aggregate_Named <= Top_Aggregate;
@@ -589,7 +633,17 @@ begin
     Attribute_Ascending <= Byte_T'ascending;
     Range_Order <= Forward_Order;
     Reverse_Order <= Backward_Order;
+    Matrix_Dynamic_Read <=
+      Matrix_Local(Matrix_Row, Matrix_Column);
+    Matrix_Local(Matrix_Row, Matrix_Column) := '0';
+    Matrix_Local(0, 3 downto 2) := "10";
     Matrix_Local_Result <= Matrix_Local;
+    Matrix_Signal_Target(1, 2) <= '1';
+    Matrix_Dynamic_Signal_Target(Matrix_Row, Matrix_Column) <= '1';
+    Vector_Local(1) := "1111";
+    Vector_Target <= Vector_Local;
+    Cell_Local(3) := (Flag => true, Data => "11");
+    Cell_Targets <= Cell_Local;
     wait;
   end process;
 
@@ -637,6 +691,13 @@ begin
   Cells <=
     (2 => (Flag => true, Data => "10"),
      others => (Data => "01", Flag => false));
+  Matrix_Cell_Read <= Matrix_Positional(1, 2);
+  Matrix_Slice_Read <= Matrix_Positional(0, 3 downto 2);
+  Nested_Read <= Nested(1)(2);
+  Vector_Rows <= ("1010", "0101");
+  Vector_Read <= Vector_Rows(1);
+  Vector_Slice_Read <= Vector_Rows(0)(2 downto 1);
+  Cell_Selected <= Cells(2);
 end architecture;
 )";
     assert(output.good());
@@ -824,6 +885,61 @@ end architecture;
     sources.library = "work";
     sources.compilation_unit = "file";
     sources.files = {slice_failure_source};
+    config.source_sets.push_back(std::move(sources));
+    const auto reference = run_expected_dynamic_failure(
+        config,
+        fsim::app::SimulationEngine::interpreter,
+        "VHDL integer subtype range check failed");
+    const auto compiled = run_expected_dynamic_failure(
+        config,
+        fsim::app::SimulationEngine::compiled,
+        "VHDL integer subtype range check failed");
+    assert(reference == compiled);
+  }
+
+  {
+    std::ofstream output{multidimensional_failure_source};
+    output << R"(
+entity Multidimensional_Failure is
+end entity;
+
+architecture rtl of Multidimensional_Failure is
+  type Matrix_T is array (0 to 1, 3 downto 1) of bit;
+begin
+  fail : process
+    variable Value : Matrix_T := (others => (others => '0'));
+    variable Row : integer := 2;
+    variable Column : integer := 2;
+  begin
+    Value(Row, Column) := '1';
+    wait;
+  end process;
+end architecture;
+)";
+    assert(output.good());
+  }
+  for (const auto optimization : {
+           fsim::project::Optimization::o0,
+           fsim::project::Optimization::o2}) {
+    fsim::project::Config config;
+    config.base_directory = directory.path;
+    config.project.name = "vhdl-multidimensional-failure";
+    config.project.top =
+        "vhdl:work.multidimensional_failure(rtl)";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path =
+        directory.path
+        / (optimization == fsim::project::Optimization::o0
+               ? "multidimensional-failure-cache-o0"
+               : "multidimensional-failure-cache-o2");
+    config.run.max_deltas = 1000;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::vhdl;
+    sources.standard = "2008";
+    sources.library = "work";
+    sources.compilation_unit = "file";
+    sources.files = {multidimensional_failure_source};
     config.source_sets.push_back(std::move(sources));
     const auto reference = run_expected_dynamic_failure(
         config,

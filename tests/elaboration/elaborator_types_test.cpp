@@ -1257,6 +1257,9 @@ architecture rtl of Invalid_Arrays is
   signal Matrix_Missing : Matrix_T;
   signal Matrix_Inner_Missing : Matrix_T;
   signal Bad_Record_Elements : Records_T;
+  signal Matrix_Value : Matrix_T;
+  signal Matrix_Bit : bit;
+  signal Matrix_Pair : bit_vector(1 downto 0);
   signal Attribute_Error : integer;
 begin
   B <= A;
@@ -1279,6 +1282,13 @@ begin
   Matrix_Inner_Missing <=
     (others => (3 => '1', 2 => '0'));
   Bad_Record_Elements <= (others => "10");
+  Matrix_Bit <= Matrix_Value(2, 2);
+  Matrix_Bit <= Matrix_Value(0, 0);
+  Matrix_Bit <= Matrix_Value(0, Logic_Value);
+  Matrix_Pair <= Matrix_Value(0, 1 to 2);
+  Matrix_Value(2, 2) <= '1';
+  Matrix_Value(0, Logic_Value) <= '1';
+  Matrix_Value(0, 1 to 2) <= "10";
   Attribute_Error <= A_T'left;
   Attribute_Error <= Dynamic_Index'left;
   Attribute_Error <= Fixed_T'left(2);
@@ -1326,6 +1336,15 @@ end architecture;
                   && diagnostic.message.find("nominal record subtype")
                       != std::string::npos;
             }));
+    assert(
+        has_diagnostic(
+            invalid_array_design, "FSIM-ELAB-VHARRAYSEL-002"));
+    assert(
+        has_diagnostic(
+            invalid_array_design, "FSIM-ELAB-VHARRAYSEL-003"));
+    assert(
+        has_diagnostic(
+            invalid_array_design, "FSIM-ELAB-VHARRAYSEL-004"));
     assert(
         has_diagnostic(
             invalid_array_design, "FSIM-ELAB-VHSUBTYPE-004"));
