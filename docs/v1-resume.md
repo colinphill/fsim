@@ -17,7 +17,8 @@ as work lands. Before moving on, retain that batch's list, mark it
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
 - Implementation baseline: all ten Batch 116 tasks are complete through this
-  handoff; Batch 117 Task 1 nested-composite HIR audit is current.
+  handoff; Batch 117 Task 1 is complete and Task 2 recursive composite layout
+  and legality is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
 - The source-size refactor is complete: all 362 authored C/C++ source, header,
@@ -2215,10 +2216,10 @@ sources pass the 2,000-line gate. All ten Batch 116 tasks are complete.
 
 The current ten implementation tasks are:
 
-1. **In progress.** Audit and retain nested record/enumeration declarations, qualified
+1. **Complete.** Audit and retain nested record/enumeration declarations, qualified
    expressions, aggregate choice forms, composite attributes, and composite
    operations in typed HIR with exact spans and targeted diagnostics.
-2. **Pending.** Complete recursive bounded record layout and legality for nested record,
+2. **In progress.** Complete recursive bounded record layout and legality for nested record,
    array, enumeration, vector, and scalar members with nominal identity,
    defaults, constraints, and deterministic flattened storage.
 3. **Pending.** Complete enumeration visibility and overload candidate behavior inside nested
@@ -2247,6 +2248,22 @@ The current ten implementation tasks are:
 Batch status is **in progress**. Keep this exact ten-task list current in both
 the official plan and this handoff. Change it to complete only after all ten
 tasks and their gates close and work moves to Batch 118.
+
+Task 1 is focused-complete. VHDL record declarations now retain named record,
+array, enumeration, and other composite member subtype indications recursively
+in `PackedMember::nested_types` with exact member and type-name spans instead
+of discarding them as unsupported syntax. The frontend fixture combines
+record-of-record, record-of-array, record-of-enumeration, and array-of-record
+declarations with qualified nested record/array aggregates, discrete and
+`others` choices, composite equality, and a composite type attribute. Integer
+record members retain targeted `FSIM-VHDL-UNSUPPORTED-026` rejection while
+their later bounded type families remain outside this task. Focused nine-test
+Debug and Release gates passed in 3.61 and 3.35 seconds, with VHDL arrays at
+2.04/1.86 seconds and scoped locals at 0.86/0.81 seconds. The LLVM-disabled
+ASan/UBSan nine-test gate passed outside the ptrace sandbox in 5.93 seconds.
+All 1,477 production diagnostics are cataloged and all 362 authored sources
+remain within the 2,000-line gate. Batch 117 remains **in progress** with Task
+2 current.
 
 Batch 110 has advanced through these validated features:
 

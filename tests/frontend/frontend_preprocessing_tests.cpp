@@ -1335,6 +1335,7 @@ architecture rtl of invalid_records is
     Item, ITEM : bit;
   end record wrong_name;
   type duplicate_t is record
+    count : integer;
     nested : empty_t;
   end record duplicate_t;
 begin

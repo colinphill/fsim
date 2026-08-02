@@ -343,17 +343,17 @@ void VhdlParser::parse_type_declaration(
         "FSIM-VHDL-PARSE-128");
     const auto member_type = parse_vhdl_type(true, true);
     const bool supported =
-        member_type.named_type.empty()
-        && member_type.domain != ValueDomain::Unknown
-        && member_type.domain != ValueDomain::Integer;
+        !member_type.named_type.empty()
+        || (member_type.domain != ValueDomain::Unknown
+            && member_type.domain != ValueDomain::Integer);
     if (!supported) {
       error(
           member_start,
           "FSIM-VHDL-UNSUPPORTED-026",
-          "bounded VHDL record elements require scalar or statically "
-          "ranged bit, bit_vector, Boolean, std_logic, "
-          "std_ulogic, std_logic_vector, std_ulogic_vector, signed, "
-          "or unsigned types; nested records are not implemented");
+          "bounded VHDL record elements require a scalar, statically "
+          "ranged vector, or named composite/enumeration subtype; "
+          "integer, access, protected, and indefinite element types "
+          "require later bounded type support");
     }
     expect(
         TokenKind::Semicolon,
@@ -381,7 +381,9 @@ void VhdlParser::parse_type_declaration(
           member_type.packed_range_expression,
           0,
           cover(member_start.span, previous().span),
-          {}});
+          member_type.named_type.empty()
+              ? std::vector<Type>{}
+              : std::vector<Type>{member_type}});
       if (member_type.domain == ValueDomain::Logic9) {
         type.domain = ValueDomain::Logic9;
       } else if (

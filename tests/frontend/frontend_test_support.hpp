@@ -15,6 +15,7 @@ void test_signed_type_and_expression_nodes();
 void test_vhdl_runtime_integer_nodes();
 void test_vhdl_subtype_declarations();
 void test_vhdl_array_type_declarations();
+void test_vhdl_nested_composite_hir();
 void test_vhdl_enumeration_declarations();
 void test_vhdl_enumeration_attributes();
 void test_vhdl_enumeration_subtype_ranges();

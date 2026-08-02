@@ -41,6 +41,7 @@ int main() {
     test_vhdl_runtime_integer_nodes();
     test_vhdl_subtype_declarations();
     test_vhdl_array_type_declarations();
+    test_vhdl_nested_composite_hir();
     test_vhdl_enumeration_declarations();
     test_vhdl_enumeration_attributes();
     test_vhdl_enumeration_subtype_ranges();

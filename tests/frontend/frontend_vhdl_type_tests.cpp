@@ -695,6 +695,154 @@ end architecture;
       "stable parser diagnostics");
 }
 
+void test_vhdl_nested_composite_hir() {
+  const auto retained = parse_text(
+      "nested_composite_hir.vhd",
+      R"(
+package Composite_Types is
+  type Mode_T is (Idle, Ready, Busy);
+  type Payload_T is record
+    Lane : std_logic_vector(3 downto 0);
+    Mode : Mode_T;
+  end record Payload_T;
+  type Payload_Array_T is array (0 to 1) of Payload_T;
+  type Envelope_T is record
+    Payload : Payload_T;
+    Items : Payload_Array_T;
+    Tag : Mode_T;
+  end record Envelope_T;
+end package;
+
+use work.composite_types.all;
+entity Nested_Composite_Hir is
+end entity;
+
+use work.composite_types.all;
+architecture rtl of nested_composite_hir is
+  signal Left_Value : Envelope_T;
+  signal Right_Value : Envelope_T;
+  signal Equal_Value : boolean;
+  signal Array_Length : integer;
+begin
+  observe: process
+    variable Local_Value : Envelope_T := Envelope_T'(
+      Payload => Payload_T'(Lane => "1010", Mode => Ready),
+      Items => Payload_Array_T'(
+        0 => Payload_T'(Lane => "0001", Mode => Idle),
+        others => Payload_T'(Lane => "0010", Mode => Busy)),
+      Tag => Ready);
+  begin
+    Left_Value <= Local_Value;
+    Equal_Value <= Left_Value = Right_Value;
+    Array_Length <= Payload_Array_T'length;
+    wait;
+  end process;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      retained.ok(),
+      "nested composite types and qualified expressions must retain HIR");
+  const auto* package = retained.design.find(
+      UnitKind::VhdlPackage, "composite_types");
+  require(
+      package != nullptr && package->type_aliases.size() == 4,
+      "nested composite fixture retains all declarations");
+  const auto& payload = package->type_aliases[1];
+  require(
+      payload.declaration_kind == TypeDeclarationKind::VhdlRecord
+          && payload.type.packed_members.size() == 2
+          && payload.type.packed_members[1].name == "mode"
+          && payload.type.packed_members[1].nested_types.size() == 1
+          && payload.type.packed_members[1]
+                 .nested_types.front().named_type
+              == "mode_t"
+          && payload.type.packed_members[1].span.begin.line == 6,
+      "record enumeration member retains its named type and exact span");
+  const auto& payload_array = package->type_aliases[2].type;
+  require(
+      payload_array.vhdl_array
+          && payload_array.vhdl_array->element_types.size() == 1
+          && payload_array.vhdl_array->element_types.front().named_type
+              == "payload_t",
+      "array-of-record element type remains recursive HIR");
+  const auto& envelope = package->type_aliases[3].type;
+  require(
+      envelope.packed_members.size() == 3
+          && envelope.packed_members[0].nested_types.front().named_type
+              == "payload_t"
+          && envelope.packed_members[1].nested_types.front().named_type
+              == "payload_array_t"
+          && envelope.packed_members[2].nested_types.front().named_type
+              == "mode_t",
+      "nested record, array, and enumeration members retain source order");
+
+  const auto* architecture = retained.design.find(
+      UnitKind::VhdlArchitecture, "rtl");
+  require(
+      architecture != nullptr && architecture->processes.size() == 1
+          && architecture->processes.front().variables.size() == 1,
+      "nested composite expression fixture retains its process region");
+  const auto& initializer =
+      *architecture->processes.front().variables.front().initializer;
+  require(
+      initializer.kind == ExpressionKind::Call
+          && initializer.text == "@vhdl-qualified:envelope_t"
+          && initializer.operands.size() == 1
+          && initializer.operands.front().kind
+              == ExpressionKind::Aggregate
+          && initializer.span.begin.line == 28,
+      "qualified nested aggregate retains its type mark and source span");
+  const auto& outer_aggregate = initializer.operands.front();
+  require(
+      outer_aggregate.aggregate_choices
+              == std::vector<std::string>{"payload", "items", "tag"}
+          && outer_aggregate.operands[1].kind == ExpressionKind::Call
+          && outer_aggregate.operands[1].text
+              == "@vhdl-qualified:payload_array_t",
+      "record choices and nested array qualification retain source order");
+  const auto& array_aggregate =
+      outer_aggregate.operands[1].operands.front();
+  require(
+      array_aggregate.kind == ExpressionKind::Aggregate
+          && array_aggregate.aggregate_choices
+              == std::vector<std::string>{"@array", "others"}
+          && array_aggregate.aggregate_choice_expressions[0].size() == 1
+          && array_aggregate.aggregate_choice_expressions[0][0].kind
+              == ExpressionKind::IntegerLiteral,
+      "array discrete and others choices remain source-spanned HIR");
+  const auto& statements = architecture->processes.front().statements;
+  require(
+      statements.size() == 4
+          && statements[1].value.kind == ExpressionKind::Binary
+          && statements[1].value.text == "="
+          && statements[2].value.kind == ExpressionKind::Call
+          && statements[2].value.text == "'length"
+          && statements[2].value.operands.front().text
+              == "payload_array_t",
+      "composite operation and type attribute remain explicit expression HIR");
+
+  const auto rejected = parse_text(
+      "nested_composite_integer.vhd",
+      R"(
+package Invalid_Composite is
+  type Bad_Record_T is record
+    Count : integer;
+  end record;
+end package;
+)",
+      Language::Vhdl2008);
+  require(
+      !rejected.ok()
+          && std::ranges::any_of(
+              rejected.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code
+                    == "FSIM-VHDL-UNSUPPORTED-026";
+              }),
+      "integer record members retain their targeted bounded diagnostic");
+}
+
 void test_vhdl_enumeration_declarations() {
   const auto result = parse_text(
       "enumeration_declarations.vhd",
