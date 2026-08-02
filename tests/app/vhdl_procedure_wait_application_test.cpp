@@ -51,8 +51,6 @@ struct Capture {
     friend bool operator==(const Point&, const Point&) = default;
   };
   std::vector<Point> points;
-
-  friend bool operator==(const Capture&, const Capture&) = default;
 };
 
 fsim::project::Config make_config(

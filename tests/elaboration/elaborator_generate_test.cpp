@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
 
+#include <string>
 #include <unordered_set>
 
 namespace fsim::tests::elaboration {
@@ -201,9 +202,7 @@ module generated_sv_wide_constant;
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
-    auto generated_vhdl = fsim::frontend::parse_text(
-        "generated-mixed.vhd",
-        R"(
+    std::string generated_vhdl_source = R"(
 package generated_math is
   generic (bias : natural := 0);
   constant selected_value : natural := bias + 1;
@@ -538,7 +537,8 @@ begin
     generated_alias <= architecture_adjust(raw_value);
   end generate lanes;
 end architecture;
-
+)";
+    generated_vhdl_source += R"(
 entity generated_vhdl_block_behavior is
   port (
     observed : out unsigned(3 downto 0)
@@ -867,7 +867,9 @@ begin
     observed <= mapped(1);
   end generate selected;
 end architecture;
-)",
+)";
+    auto generated_vhdl = fsim::frontend::parse_text(
+        "generated-mixed.vhd", generated_vhdl_source,
         fsim::frontend::Language::Vhdl2008);
     assert(generated_sv.ok());
     assert(generated_vhdl.ok());
@@ -910,7 +912,6 @@ end architecture;
             ->signal_value(*generated_sv_true_q)
             .to_msb_string()
         == "1001");
-
     const auto generated_sv_false =
         fsim::elaboration::elaborate(
             generated_design,
@@ -935,7 +936,6 @@ end architecture;
             ->signal_value(*generated_sv_false_q)
             .to_msb_string()
         == "0011");
-
     const std::vector<fsim::elaboration::Binding>
         generated_vhdl_binding{
             {"generated_vhdl_top.selection.nested.child",
