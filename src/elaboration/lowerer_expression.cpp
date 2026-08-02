@@ -1168,7 +1168,9 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
             }
             if (language_ == frontend::Language::Vhdl2008
                 && expected_type != nullptr
-                && expected_type->vhdl_array) {
+                && (expected_type->vhdl_array
+                    || (expected_type->packed_range
+                        && expected_type->packed_members.empty()))) {
                 return lower_vhdl_array_aggregate(
                     expression, expected_width, *expected_type);
             }
@@ -1248,11 +1250,55 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     valid = false;
                     return;
                   }
+                  frontend::Type scalar_type;
+                  const frontend::Type* member_type = &scalar_type;
+                  if (!member.nested_types.empty()) {
+                    member_type = &member.nested_types.front();
+                  } else {
+                    scalar_type.domain = member.domain;
+                    scalar_type.spelling = member.spelling;
+                    scalar_type.packed_range = member.packed_range;
+                    scalar_type.packed_range_expression =
+                        member.packed_range_expression;
+                    scalar_type.is_signed = member.is_signed;
+                  }
+                  const auto actual_type = vhdl_expression_type(value);
+                  if (actual_type
+                      && !vhdl_callable_type_matches(
+                          *member_type, *actual_type)) {
+                    report(
+                        is_two_state_domain(member_type->domain)
+                                && !is_two_state_domain(actual_type->domain)
+                            ? "FSIM-ELAB-VHAGG-007"
+                            : "FSIM-ELAB-VHAGG-009",
+                        is_two_state_domain(member_type->domain)
+                                && !is_two_state_domain(actual_type->domain)
+                            ? "two-state record aggregate element '"
+                                  + member.name
+                                  + "' requires an explicit conversion"
+                            : "record aggregate element '" + member.name
+                                  + "' requires its exact contextual subtype",
+                        span);
+                    valid = false;
+                    return;
+                  }
+                  if (!actual_type
+                      && (member_type->vhdl_array
+                          || !member_type->packed_members.empty())
+                      && !vhdl_expression_matches_type(
+                          value, *member_type)) {
+                    report(
+                        "FSIM-ELAB-VHAGG-009",
+                        "record aggregate element '" + member.name
+                            + "' requires its exact contextual subtype",
+                        span);
+                    valid = false;
+                    return;
+                  }
                   const auto lowered = lower_expression(
                       value,
                       static_cast<std::size_t>(*member_width),
-                      member.nested_types.empty() ? nullptr
-                          : &member.nested_types.front());
+                      member_type);
                   if (!lowered) {
                     valid = false;
                     return;
@@ -1282,6 +1328,23 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                         span);
                     valid = false;
                     return;
+                  }
+                  if (register_domain(*lowered) != member_type->domain) {
+                    report(
+                        "FSIM-ELAB-VHAGG-009",
+                        "record aggregate element '" + member.name
+                            + "' has an incompatible state domain",
+                        span);
+                    valid = false;
+                    return;
+                  }
+                  if (!member_type->enumeration_literals.empty()) {
+                    emit_enumeration_check(*lowered, *member_type);
+                  } else if (
+                      member_type->domain
+                      == frontend::ValueDomain::Integer) {
+                    emit_integer_check(
+                        *lowered, member_type->integer_range);
                   }
                   process_.operations.emplace_back(Insert{
                       destination,
@@ -1338,41 +1401,46 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     }
                     continue;
                 }
-                if (choice_expressions.size() != 1
-                    || choice_expressions.front().kind
-                        != ExpressionKind::Identifier
-                    || choice_expressions.front().text != choice) {
+                if (choice_expressions.empty()
+                    || std::ranges::any_of(
+                        choice_expressions,
+                        [](const Expression& member_choice) {
+                          return member_choice.kind
+                                  != ExpressionKind::Identifier
+                              || member_choice.text == "others";
+                        })) {
                     report(
                         "FSIM-ELAB-VHAGG-008",
-                        "record aggregates do not accept discrete, range, "
-                        "or choice-list associations",
+                        "record aggregate choices must be one or more "
+                        "element names",
                         expression.operands[index].span);
                     valid = false;
                     continue;
                 }
-                const auto member = std::find_if(
-                    expected_type->packed_members.begin(),
-                    expected_type->packed_members.end(),
-                    [&](const frontend::PackedMember& candidate) {
-                        return candidate.name == choice;
-                    });
-                if (member
-                    == expected_type->packed_members.end()) {
-                    report(
-                        "FSIM-ELAB-VHAGG-003",
-                        "record aggregate type '"
-                            + expected_type->spelling
-                            + "' has no element '" + choice + "'",
-                        expression.operands[index].span);
-                    valid = false;
-                    continue;
+                for (const auto& member_choice : choice_expressions) {
+                    const auto member = std::ranges::find(
+                        expected_type->packed_members,
+                        member_choice.text,
+                        &frontend::PackedMember::name);
+                    if (member
+                        == expected_type->packed_members.end()) {
+                        report(
+                            "FSIM-ELAB-VHAGG-003",
+                            "record aggregate type '"
+                                + expected_type->spelling
+                                + "' has no element '"
+                                + member_choice.text + "'",
+                            member_choice.span);
+                        valid = false;
+                        continue;
+                    }
+                    insert_member(
+                        static_cast<std::size_t>(std::distance(
+                            expected_type->packed_members.begin(),
+                            member)),
+                        expression.operands[index],
+                        member_choice.span);
                 }
-                insert_member(
-                    static_cast<std::size_t>(std::distance(
-                        expected_type->packed_members.begin(),
-                        member)),
-                    expression.operands[index],
-                    expression.operands[index].span);
             }
             if (others_index) {
                 for (std::size_t member = 0;

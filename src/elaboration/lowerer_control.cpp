@@ -896,6 +896,37 @@ using namespace elaboration_detail;
         const Expression& expression,
         const std::size_t expected_width,
         const frontend::Type& expected_type) {
+        if (!expected_type.vhdl_array && expected_type.packed_range
+            && expected_type.packed_members.empty()
+            && (expected_type.domain == frontend::ValueDomain::Bit2
+                || expected_type.domain
+                    == frontend::ValueDomain::Logic9)) {
+            auto contextual_type = expected_type;
+            const auto& packed = *expected_type.packed_range;
+            frontend::VhdlArrayDimension dimension;
+            dimension.index_subtype = "integer";
+            dimension.range = frontend::IntegerRange{
+                packed.left, packed.right, packed.descending};
+            dimension.null = packed.descending
+                ? packed.left < packed.right
+                : packed.left > packed.right;
+            dimension.stride = 1;
+            frontend::Type element_type;
+            element_type.domain = expected_type.domain;
+            element_type.spelling =
+                expected_type.domain == frontend::ValueDomain::Logic9
+                ? "std_logic" : "bit";
+            frontend::VhdlArrayInfo array;
+            array.index_subtype = "integer";
+            array.element_spelling = element_type.spelling;
+            array.element_domain = element_type.domain;
+            array.flat_width = expected_type.width();
+            array.dimensions.push_back(std::move(dimension));
+            array.element_types.push_back(std::move(element_type));
+            contextual_type.vhdl_array = std::move(array);
+            return lower_vhdl_array_aggregate(
+                expression, expected_width, contextual_type);
+        }
         const auto aggregate_width = expected_type.width();
         if (!expected_type.vhdl_array
             || expected_type.vhdl_array->dimensions.empty()
@@ -1005,24 +1036,38 @@ using namespace elaboration_detail;
                   valid = false;
                   return;
               }
-              if (!element_type.packed_members.empty()
-                  && value.kind != ExpressionKind::Aggregate) {
-                  const auto* actual =
-                      value.kind == ExpressionKind::Identifier
-                          ? object_type(value.text)
-                          : nullptr;
-                  if (actual == nullptr
-                      || actual->packed_members.empty()
-                      || actual->nominal_type
-                          != element_type.nominal_type) {
-                      report(
-                          "FSIM-ELAB-VHARRAYAGG-006",
-                          "VHDL array aggregate record element requires "
-                          "the exact nominal record subtype",
-                          span);
-                      valid = false;
-                      return;
-                  }
+              const auto actual_type = vhdl_expression_type(value);
+              if (actual_type
+                  && !vhdl_callable_type_matches(
+                      element_type, *actual_type)) {
+                  const bool state_loss =
+                      is_two_state_domain(element_type.domain)
+                      && !is_two_state_domain(actual_type->domain);
+                  report(
+                      state_loss ? "FSIM-ELAB-VHARRAYAGG-007"
+                                 : "FSIM-ELAB-VHARRAYAGG-009",
+                      state_loss
+                          ? "two-state VHDL array aggregate element requires "
+                                "an explicit conversion from a four- or "
+                                "nine-state value"
+                          : "VHDL array aggregate element requires its exact "
+                                "contextual subtype",
+                      span);
+                  valid = false;
+                  return;
+              }
+              if (!actual_type
+                  && (element_type.vhdl_array
+                      || !element_type.packed_members.empty())
+                  && !vhdl_expression_matches_type(
+                      value, element_type)) {
+                  report(
+                      "FSIM-ELAB-VHARRAYAGG-009",
+                      "VHDL array aggregate element requires its exact "
+                      "contextual subtype",
+                      span);
+                  valid = false;
+                  return;
               }
               const auto lowered =
                   lower_expression(
@@ -1054,6 +1099,23 @@ using namespace elaboration_detail;
                       span);
                   valid = false;
                   return;
+              }
+              if (register_domain(*lowered) != element_type.domain) {
+                  report(
+                      "FSIM-ELAB-VHARRAYAGG-009",
+                      "VHDL array aggregate element has an incompatible "
+                      "state domain",
+                      span);
+                  valid = false;
+                  return;
+              }
+              if (!element_type.enumeration_literals.empty()) {
+                  emit_enumeration_check(*lowered, element_type);
+              } else if (
+                  element_type.domain
+                  == frontend::ValueDomain::Integer) {
+                  emit_integer_check(
+                      *lowered, element_type.integer_range);
               }
               process_.operations.emplace_back(Insert{
                   destination,

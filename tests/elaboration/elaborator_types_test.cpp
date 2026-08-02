@@ -1277,7 +1277,7 @@ begin
   Scalar_Target <= (0 => '0');
   Scalar_Target <= A(Logic_Value);
   A(Logic_Value) <= '1';
-  Record_Target <= (X | Y => '0');
+  Record_Target <= (0 to 1 => '0');
   Matrix_Missing <= (0 => (others => '0'));
   Matrix_Inner_Missing <=
     (others => (3 => '1', 2 => '0'));
@@ -1332,8 +1332,8 @@ end architecture;
             invalid_array_design.diagnostics,
             [](const auto& diagnostic) {
               return diagnostic.code
-                      == "FSIM-ELAB-VHARRAYAGG-006"
-                  && diagnostic.message.find("nominal record subtype")
+                      == "FSIM-ELAB-VHARRAYAGG-009"
+                  && diagnostic.message.find("contextual subtype")
                       != std::string::npos;
             }));
     assert(

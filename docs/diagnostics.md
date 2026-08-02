@@ -1195,7 +1195,8 @@ therefore excluded.
 | `FSIM-ELAB-VHAGG-005` | error | A record aggregate omits an element without supplying `others`. |
 | `FSIM-ELAB-VHAGG-006` | error | A record aggregate element value does not have the element's exact packed width. |
 | `FSIM-ELAB-VHAGG-007` | error | A record aggregate would implicitly lose four- or nine-state information in a two-state element. |
-| `FSIM-ELAB-VHAGG-008` | error | A record aggregate uses a discrete, range, or choice-list association that is only meaningful for an array. |
+| `FSIM-ELAB-VHAGG-008` | error | A record aggregate choice is empty, names `others` with another choice, or uses a discrete/range form instead of element names. |
+| `FSIM-ELAB-VHAGG-009` | error | A record aggregate element value has an incompatible contextual subtype or state domain. |
 | `FSIM-ELAB-VHRECORD-001` | error | A VHDL record element does not resolve to a concrete bounded packed scalar, vector, enumeration, array, or nested-record layout. |
 | `FSIM-ELAB-VHRECORD-002` | error | A VHDL record element or total recursive record layout overflows the bounded packed representation. |
 | `FSIM-ELAB-VHSUBTYPE-001` | error | A scalar `range` constraint is applied to a resolved noninteger base subtype. |
@@ -1214,9 +1215,10 @@ therefore excluded.
 | `FSIM-ELAB-VHARRAYAGG-003` | error | A VHDL array aggregate choice is nonstatic or outside the contextual index range. |
 | `FSIM-ELAB-VHARRAYAGG-004` | error | A VHDL array aggregate covers an index more than once, has too many positional values, or repeats `others`. |
 | `FSIM-ELAB-VHARRAYAGG-005` | error | A VHDL array aggregate leaves a contextual index uncovered without supplying `others`. |
-| `FSIM-ELAB-VHARRAYAGG-006` | error | A VHDL array aggregate element has the wrong packed width or does not have the required nominal record subtype. |
+| `FSIM-ELAB-VHARRAYAGG-006` | error | A VHDL array aggregate element has the wrong packed width. |
 | `FSIM-ELAB-VHARRAYAGG-007` | error | A VHDL array aggregate would implicitly lose four- or nine-state information in a two-state element. |
 | `FSIM-ELAB-VHARRAYAGG-008` | error | A VHDL array aggregate combines `others` with another choice in the same association. |
+| `FSIM-ELAB-VHARRAYAGG-009` | error | A VHDL array aggregate element value has an incompatible contextual subtype or state domain. |
 | `FSIM-ELAB-VHARRAYSEL-001` | error | A multidimensional or composite VHDL array selection has no concrete executable packed layout or representable shape. |
 | `FSIM-ELAB-VHARRAYSEL-002` | error | A runtime multidimensional VHDL array index is not an integer-family signed 32-bit value with representable bounds. |
 | `FSIM-ELAB-VHARRAYSEL-003` | error | A multidimensional VHDL array read or target index is outside its selected source dimension. |

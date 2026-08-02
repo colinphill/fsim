@@ -119,6 +119,7 @@ void test_selection_and_assignment_lowering();
 void test_vhdl_dynamic_slices();
 void test_vhdl_recursive_composite_layout();
 void test_vhdl_qualified_expressions_and_conversions();
+void test_vhdl_aggregate_choice_closure();
 void test_assertion_types_and_random_lowering();
 void test_vhdl_interface_type_generics();
 void test_vhdl_interface_function_generics();

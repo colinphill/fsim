@@ -32,6 +32,7 @@ int main() {
   test_vhdl_dynamic_slices();
   test_vhdl_recursive_composite_layout();
   test_vhdl_qualified_expressions_and_conversions();
+  test_vhdl_aggregate_choice_closure();
   test_assertion_types_and_random_lowering();
   test_vhdl_interface_type_generics();
   test_vhdl_interface_function_generics();

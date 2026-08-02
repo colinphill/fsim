@@ -2227,10 +2227,10 @@ The current ten implementation tasks are:
    hierarchy/callable profiles.
 4. **Complete.** Lower VHDL qualified expressions and supported subtype conversions with exact
    contextual type, constraint, state-domain, bounds, and nominal checks.
-5. **In progress.** Complete record and array aggregate element-choice, range, choice-list,
+5. **Complete.** Complete record and array aggregate element-choice, range, choice-list,
    qualified, nested, and final `others` forms with exact order, coverage,
    overlap, duplicate, and subtype legality.
-6. **Pending.** Complete scalar and composite type/object attributes across nested records,
+6. **In progress.** Complete scalar and composite type/object attributes across nested records,
    arrays, and enumerations, including static folding, executable results,
    dimensions, bounds, ranges, positions, and checked failures.
 7. **Pending.** Complete supported composite equality, inequality, matching, concatenation,
@@ -2403,6 +2403,35 @@ sandbox prevents LeakSanitizer initialization. All 1,485 production
 diagnostics are cataloged and all 366 authored sources pass the 2,000-line
 gate. Batch 117 remains **in progress** with Task 5 current and is not a
 CI-inspection boundary.
+
+Task 5 is focused-complete. Record aggregates now accept ordered element-name
+choice lists, diagnose overlap at the exact repeated choice span, and retain
+positional/named/choice-list/final-`others` coverage semantics. Record and
+array elements are checked against their exact contextual nominal subtype and
+state domain before insertion, with integer and enumeration subtype checks
+emitted for runtime values. Qualified nested record and array aggregates flow
+through the same contextual path instead of being rejected as non-record
+objects. Bounded built-in `bit_vector`/`std_logic_vector` aggregate contexts
+materialize an exact one-dimensional array profile so discrete, range,
+choice-list, coverage, and `others` logic is shared with declared array types.
+`FSIM-ELAB-VHAGG-009` and `FSIM-ELAB-VHARRAYAGG-009` distinguish contextual
+subtype/domain failures from width and state-loss diagnostics.
+
+The new 288-line focused fixture proves record choice-list and final-`others`
+ordering; nested qualified records, arrays, and array-of-record values;
+declared and built-in vector ranges and choice lists; exact interpreter
+layouts; overlap, outside, missing, unknown, discrete-record, nominal, and
+domain failures with source spans; and runtime enumeration-subtype rejection.
+The eight-worker LLVM 22.1.8 Debug and Release 11-test gates passed in 7.88 and
+7.13 seconds, with elaboration at 0.16/0.11 seconds, arrays at 2.27/1.98
+seconds, record aggregates at 0.16/0.16 seconds, and scoped locals at
+0.87/0.85 seconds. The LLVM-disabled ASan/UBSan 11-test gate passed in 10.14
+seconds with leak detection disabled because the managed ptrace sandbox
+prevents LeakSanitizer initialization. All 1,487 production diagnostics are
+cataloged and all 367 authored sources pass the 2,000-line gate;
+`lowerer_expression.cpp` remains within the limit at 1,993 lines. Batch 117
+remains **in progress** with Task 6 current and is not a CI-inspection
+boundary.
 
 Batch 110 has advanced through these validated features:
 
