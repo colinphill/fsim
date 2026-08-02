@@ -205,7 +205,7 @@ std::optional<Statement> VhdlParser::parse_sequential_statement(
         saw_others = true;
       } else {
         do {
-          alternative.choices.push_back(parse_expression());
+          alternative.choices.push_back(parse_vhdl_case_choice());
         } while (match(TokenKind::Pipe));
       }
       expect(
@@ -753,7 +753,7 @@ Statement VhdlParser::parse_vhdl_selected_assignment(
             "assignment");
       }
       do {
-        alternative.choices.push_back(parse_expression());
+        alternative.choices.push_back(parse_vhdl_case_choice());
       } while (match(TokenKind::Pipe));
     }
     assignment.span =
@@ -777,6 +777,24 @@ Statement VhdlParser::parse_vhdl_selected_assignment(
       "FSIM-VHDL-PARSE-119");
   statement.span = span_from(start, previous());
   return statement;
+}
+
+Expression VhdlParser::parse_vhdl_case_choice() {
+  auto left = parse_expression();
+  if (!match_keyword("to", true)
+      && !match_keyword("downto", true)) {
+    return left;
+  }
+  const auto direction = vhdl_name(previous().text);
+  auto right = parse_expression();
+  const auto span = cover(left.span, right.span);
+  return Expression{
+      ExpressionKind::Call,
+      direction == "downto"
+          ? "@vhdl-case-range-downto"
+          : "@vhdl-case-range-to",
+      {std::move(left), std::move(right)},
+      span};
 }
 
 Statement VhdlParser::parse_conditional_signal_assignment(Statement assignment) {

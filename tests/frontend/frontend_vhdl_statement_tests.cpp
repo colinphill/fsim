@@ -651,6 +651,35 @@ end architecture;
                  .is_default,
       "VHDL case alternatives and choices are retained");
 
+  const auto ranges = parse_text(
+      "case_ranges.vhd",
+      R"(architecture rtl of case_ranges is begin
+  process begin
+    case 4 is
+      when 0 | 1 to 3 => null;
+      when 6 downto 4 | 8 to 7 => null;
+      when others => null;
+    end case;
+  end process;
+end architecture;)",
+      Language::Vhdl2008);
+  require(ranges.ok(), "VHDL discrete case ranges must parse");
+  const auto& range_case =
+      ranges.design.units.front().processes.front().statements.front();
+  require(
+      range_case.case_alternatives.size() == 3
+          && range_case.case_alternatives[0].choices.size() == 2
+          && range_case.case_alternatives[0].choices[1].kind
+              == ExpressionKind::Call
+          && range_case.case_alternatives[0].choices[1].text
+              == "@vhdl-case-range-to"
+          && range_case.case_alternatives[0].choices[1].operands.size() == 2
+          && range_case.case_alternatives[1].choices.size() == 2
+          && range_case.case_alternatives[1].choices[0].text
+              == "@vhdl-case-range-downto"
+          && range_case.case_alternatives[2].is_default,
+      "grouped ascending, descending, null, and others choices are retained");
+
   const auto duplicate_others = parse_text(
       "duplicate_others.vhd",
       R"(

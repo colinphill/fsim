@@ -27,19 +27,6 @@ using frontend::StatementKind;
 using runtime::Logic4;
 using runtime::PackedLogic4;
 using namespace runtime::simir;
-
-
-using frontend::AssignmentKind;
-using frontend::DesignUnit;
-using frontend::Expression;
-using frontend::ExpressionKind;
-using frontend::ProcessKind;
-using frontend::Statement;
-using frontend::StatementKind;
-using runtime::Logic4;
-using runtime::PackedLogic4;
-using namespace runtime::simir;
-
 using ConstantEnvironment =
     std::unordered_map<std::string, std::int64_t>;
 
@@ -71,7 +58,6 @@ struct SystemVerilogConstantValue {
 
 using SystemVerilogConstantEnvironment =
     std::unordered_map<std::string, SystemVerilogConstantValue>;
-
 struct SystemVerilogStringValue {
     std::string bytes;
     frontend::SourceSpan source;
@@ -1072,6 +1058,20 @@ private:
         const frontend::Type* selector_type,
         std::size_t selector_width,
         frontend::ValueDomain selector_domain);
+    [[nodiscard]] bool validate_vhdl_case_choices(
+        const Statement& statement,
+        const frontend::Type* selector_type,
+        std::size_t selector_width,
+        frontend::ValueDomain selector_domain);
+    [[nodiscard]] std::optional<std::int64_t> vhdl_case_choice_ordinal(
+        const Expression& expression,
+        const frontend::Type* selector_type,
+        frontend::ValueDomain selector_domain);
+    std::optional<RegisterId> lower_vhdl_case_range_condition(
+        const Expression& choice,
+        RegisterId selector,
+        const frontend::Type* selector_type,
+        bool selector_signed);
     [[nodiscard]] bool is_bounded_case_pattern_constant(
         const Expression& expression) const;
 

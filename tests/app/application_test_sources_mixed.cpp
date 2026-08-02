@@ -531,6 +531,12 @@ begin
                      local_value when others;
     local_value := local_value + 1
       when matching_selector ?= "1---" else local_value;
+    exact_range: case local_value is
+      when 0 | 1 to 12 => null;
+      when 15 downto 13 => add_value(local_value, 1);
+      when 20 to 19 => add_value(local_value, 100);
+      when others => null;
+    end case exact_range;
     observed <= local_value;
     suspended: wait;
   end process worker;

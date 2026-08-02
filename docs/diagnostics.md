@@ -1212,6 +1212,12 @@ therefore excluded.
 | `FSIM-ELAB-VHDLMATCH-002` | error | A bounded matching choice is not a locally static bit/std_ulogic literal of the selector width. |
 | `FSIM-ELAB-VHDLMATCH-003` | error | Two matching choices overlap after applying `-` wildcard and 0/L or 1/H equivalence. |
 | `FSIM-ELAB-VHDLMATCH-004` | error | Matching equality operands are outside the bit/std_ulogic scalar or one-dimensional-array domain. |
+| `FSIM-ELAB-VHDLCASE-001` | error | A VHDL case choice or range bound is not a locally static value of the selector's discrete or packed literal type. |
+| `FSIM-ELAB-VHDLCASE-002` | error | A VHDL case choice or range lies outside the selector subtype constraint. |
+| `FSIM-ELAB-VHDLCASE-003` | error | A VHDL case statement repeats a discrete or packed choice. |
+| `FSIM-ELAB-VHDLCASE-004` | error | Two VHDL case choices or nonnull ranges overlap. |
+| `FSIM-ELAB-VHDLCASE-005` | error | A VHDL case statement neither covers its complete selector subtype nor supplies `others`. |
+| `FSIM-ELAB-VHDLCASE-006` | error | Validated VHDL case-range HIR is malformed or lost its static bounds before lowering. |
 | `FSIM-ELAB-VHENUM-001` | error | A contextual VHDL enumeration type has no matching identifier or character literal. |
 | `FSIM-ELAB-VHENUM-002` | error | Assignment or comparison mixes values from different nominal VHDL enumeration types. |
 | `FSIM-ELAB-VHENUM-003` | error | An operator that is not defined for VHDL enumeration values was applied to an enumeration object. |

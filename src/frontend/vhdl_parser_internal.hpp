@@ -297,6 +297,8 @@ class VhdlParser final : private detail::ParserBase {
       const Token& start,
       bool concurrent);
 
+  Expression parse_vhdl_case_choice();
+
   Statement parse_conditional_signal_assignment(Statement assignment);
 
   void parse_vhdl_waveform(Statement& statement);

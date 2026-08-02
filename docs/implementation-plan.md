@@ -6544,9 +6544,9 @@ The current ten implementation tasks are:
    conditionals, loops, and case statements across nested labeled scopes.
 3. **Complete.** Add VHDL-2008 matching case statements and matching selected/conditional
    assignments with exact wildcard semantics and deterministic legality checks.
-4. **In progress.** Complete discrete case choices with grouped literals, locally static ranges,
+4. **Complete.** Complete discrete case choices with grouped literals, locally static ranges,
    `others`, null ranges, overlap, duplicate, and coverage diagnostics.
-5. **Pending.** Complete concurrent simple, conditional, and selected signal assignments,
+5. **In progress.** Complete concurrent simple, conditional, and selected signal assignments,
    including guarded/delay-mechanism interaction and driver identity.
 6. **Pending.** Preserve process, loop, case-alternative, and labeled statement scopes in
    hierarchy, name lookup, debugger metadata, and specialization provenance.
@@ -6606,6 +6606,20 @@ pass in 19.04/18.11 seconds, and scoped locals remains quick at 0.84/0.83
 seconds. All 1,460 production diagnostics are cataloged and all 350 authored
 sources remain within the 2,000-line limit. Batch 115 remains **in progress**
 with Task 4 current and Tasks 5 through 10 pending.
+
+Task 4 is focused-complete. Grouped exact choices and ascending/descending
+discrete ranges retain compact HIR for sequential cases and selected
+assignments. Validation accepts locally static integer, Boolean, enumeration,
+and packed choices of the selector type, treats null ranges as empty, checks
+subtype bounds, duplicate/overlap legality, and complete subtype coverage, and
+uses stable `FSIM-ELAB-VHDLCASE-001` through `-006` diagnostics. Runtime range
+selection uses signed or unsigned inclusive comparisons. The statement
+application reaches integer 14 through a descending choice and proves a null
+range inert across interpreter and LLVM O0/O2 cold/warm execution. The final
+five-test focused Debug/Release gates pass in 15.83/15.19 seconds, with scoped
+locals at 0.85/0.88 seconds. The catalog covers 1,466 production diagnostics
+and all 352 authored sources pass the 2,000-line gate. Batch 115 remains **in
+progress** with Task 5 current and Tasks 6 through 10 pending.
 
 ## Forward language-closure feature batches
 

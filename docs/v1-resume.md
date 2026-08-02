@@ -16,12 +16,11 @@ as work lands. Before moving on, retain that batch's list, mark it
 
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: pushed Batch 115 Task 2 sequential-statement
-  execution at commit `0b99c11`. The working tree contains focused-complete
-  Batch 115 Task 3 matching selection; Task 4 is current.
+- Implementation baseline: Batch 115 Tasks 1 through 4 are complete through
+  this handoff; Task 5 concurrent-assignment execution is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 350 authored C/C++ source, header,
+- The source-size refactor is complete: all 352 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 115-alternative
@@ -52,7 +51,7 @@ as work lands. Before moving on, retain that batch's list, mark it
   seconds, files in 2.11/0.68 seconds, containers in 375.83/99.00 seconds, and
   the monolithic application in 40.66/14.10 seconds. Debug aggregate/
   multidimensional execution completed in 2.03 seconds.
-- The diagnostic catalog covers all 1,447 production codes.
+- The diagnostic catalog covers all 1,466 production codes.
 - Batch 111 requires deterministic VHDL semantic analysis in manifest order
   after parallel parsing. Architectures, package bodies, use/context clauses,
   configuration declarations, and explicit entity/configuration bindings now
@@ -1835,9 +1834,9 @@ completed selector-domain contract. All ten Batch 114 tasks are complete.
    conditionals, loops, and case statements across nested labeled scopes.
 3. **Complete.** Add VHDL-2008 matching case statements and matching selected/conditional
    assignments with exact wildcard semantics and deterministic legality checks.
-4. **In progress.** Complete discrete case choices with grouped literals, locally static ranges,
+4. **Complete.** Complete discrete case choices with grouped literals, locally static ranges,
    `others`, null ranges, overlap, duplicate, and coverage diagnostics.
-5. **Pending.** Complete concurrent simple, conditional, and selected signal assignments,
+5. **In progress.** Complete concurrent simple, conditional, and selected signal assignments,
    including guarded/delay-mechanism interaction and driver identity.
 6. **Pending.** Preserve process, loop, case-alternative, and labeled statement scopes in
    hierarchy, name lookup, debugger metadata, and specialization provenance.
@@ -1893,6 +1892,20 @@ seconds; scoped locals remains quick at 0.84/0.83 seconds. The catalog covers
 1,460 production diagnostics and all 350 authored sources remain within the
 2,000-line limit. Batch 115 remains **in progress** with Task 4 current and
 Tasks 5 through 10 pending.
+
+Task 4 is focused-complete. Exact VHDL case and selected-assignment choices
+retain grouped literals plus ascending and descending discrete-range HIR.
+Elaboration accepts locally static integer, Boolean, enumeration, and packed
+choices of the selector type; ignores null ranges; rejects wrong-type or
+nonstatic choices, subtype violations, duplicates, and overlaps; and proves
+complete subtype coverage when `others` is absent. Range execution lowers to
+checked signed or unsigned comparisons. The statement differential reaches
+integer 14 through a descending range while a null range remains inert across
+the interpreter and LLVM O0/O2 cold/warm paths. The final five-test focused
+Debug/Release gates pass in 15.83/15.19 seconds, and scoped locals remains
+quick at 0.85/0.88 seconds. All 1,466 production diagnostics are cataloged and
+all 352 authored sources remain within the 2,000-line limit. Batch 115 remains
+**in progress** with Task 5 current and Tasks 6 through 10 pending.
 
 Batch 110 has advanced through these validated features:
 

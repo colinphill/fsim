@@ -1722,6 +1722,15 @@ using namespace elaboration_detail;
                 register_domain(*selector))) {
             return;
         }
+        if (!vhdl_matching
+            && language_ == frontend::Language::Vhdl2008
+            && !validate_vhdl_case_choices(
+                statement,
+                selector_type,
+                selector_width,
+                register_domain(*selector))) {
+            return;
+        }
 
         const auto lower_inside_operand =
             [&](const Expression& operand)
@@ -1779,7 +1788,17 @@ using namespace elaboration_detail;
             std::vector<InstructionIndex> branches;
             for (const auto& choice : alternative.choices) {
                 std::optional<RegisterId> condition;
-                if (pattern_matching
+                if (language_ == frontend::Language::Vhdl2008
+                    && choice.kind == ExpressionKind::Call
+                    && (choice.text == "@vhdl-case-range-to"
+                        || choice.text
+                            == "@vhdl-case-range-downto")) {
+                    condition = lower_vhdl_case_range_condition(
+                        choice,
+                        *selector,
+                        selector_type,
+                        selector_signed);
+                } else if (pattern_matching
                     && choice.kind == ExpressionKind::Call
                     && choice.text == "@match-wildcard") {
                     condition = allocate_register(
@@ -1900,6 +1919,9 @@ using namespace elaboration_detail;
                         *condition,
                         *selector,
                         *choice_register});
+                }
+                if (!condition) {
+                    continue;
                 }
                 branches.push_back(
                     static_cast<InstructionIndex>(
