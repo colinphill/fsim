@@ -16,9 +16,8 @@ as work lands. Before moving on, retain that batch's list, mark it
 
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: all ten Batch 115 tasks are complete through this
-  handoff; Batch 116 Tasks 1 through 9 are complete and Task 10 release-gate
-  closure is current.
+- Implementation baseline: all ten Batch 116 tasks are complete through this
+  handoff; Batch 117 Task 1 nested-composite HIR audit is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
 - The source-size refactor is complete: all 362 authored C/C++ source, header,
@@ -2024,12 +2023,11 @@ cataloged and all 357 authored sources pass the 2,000-line gate. All ten Batch
 9. **Complete.** Prove positive/negative parser and elaboration coverage plus interpreter,
    LLVM O0/O2, cache-edit, hierarchy, debugger, normalized-VCD, null-range, port,
    and callable differentials.
-10. **In progress.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
+10. **Complete.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
     Debug/Release, commit, and push gates before closing Batch 116.
 
-Batch status is **in progress**. Keep this exact ten-task list current in both
-the official plan and this handoff. Change it to complete only after all ten
-tasks and their gates close and work moves to Batch 117.
+Batch status is **complete**. This exact completed ten-task list is retained in
+both the official plan and this handoff now that work has moved to Batch 117.
 
 Task 1 is focused-complete. Typed HIR now retains every source-ordered
 integer-family array dimension, mixed constrained/unconstrained ranges, the
@@ -2196,6 +2194,59 @@ scoped locals at 0.84/0.81 seconds. The LLVM-disabled ASan/UBSan seven-test gate
 passed outside the ptrace sandbox in 5.10 seconds. All 1,477 production
 diagnostics are cataloged and all 362 authored sources remain within the
 2,000-line gate. Batch 116 remains **in progress** with Task 10 current.
+
+Task 10 is complete. Feature-matrix rows VH-231 through VH-238 and the compact
+language-support contract now record bounded multidimensional/composite array
+HIR, layout, aggregates, selections, null values, hierarchy and callable
+boundaries, partial drivers, sensitivity, and differential evidence. The full
+gate found and repaired missing static-expression traversal of retained array
+dimension constraints, then updated legacy resolved partial-driver expectations
+to the neutral `Z` values required outside each owned region. The
+LLVM-disabled ASan/UBSan eleven-test frontend/catalog/source/elaboration,
+expression, scoped-local, overload, component, array, projected-waveform, and
+runtime gate passed outside the ptrace sandbox in 10.87 seconds. Exact LLVM
+22.1.8 warnings-as-errors Debug passed all 66 tests in 182.13 seconds, with
+VHDL arrays at 1.97 seconds and scoped locals at 0.84 seconds; Release passed
+all 66 in 160.21 seconds, with arrays at 1.91 seconds and scoped locals at 0.84
+seconds. All 1,477 production diagnostics are cataloged and all 362 authored
+sources pass the 2,000-line gate. All ten Batch 116 tasks are complete.
+
+### Batch 117 — VHDL nested composites and expression closure — In progress
+
+The current ten implementation tasks are:
+
+1. **In progress.** Audit and retain nested record/enumeration declarations, qualified
+   expressions, aggregate choice forms, composite attributes, and composite
+   operations in typed HIR with exact spans and targeted diagnostics.
+2. **Pending.** Complete recursive bounded record layout and legality for nested record,
+   array, enumeration, vector, and scalar members with nominal identity,
+   defaults, constraints, and deterministic flattened storage.
+3. **Pending.** Complete enumeration visibility and overload candidate behavior inside nested
+   composites, aggregates, selections, comparisons, choices, conversions, and
+   hierarchy/callable profiles.
+4. **Pending.** Lower VHDL qualified expressions and supported subtype conversions with exact
+   contextual type, constraint, state-domain, bounds, and nominal checks.
+5. **Pending.** Complete record and array aggregate element-choice, range, choice-list,
+   qualified, nested, and final `others` forms with exact order, coverage,
+   overlap, duplicate, and subtype legality.
+6. **Pending.** Complete scalar and composite type/object attributes across nested records,
+   arrays, and enumerations, including static folding, executable results,
+   dimensions, bounds, ranges, positions, and checked failures.
+7. **Pending.** Complete supported composite equality, inequality, matching, concatenation,
+   selection, assignment, conditional/case choice, and conversion operations
+   with interpreter/LLVM parity.
+8. **Pending.** Complete nested-composite hierarchy ports, generic and callable boundaries,
+   aliases/copies, driver ownership, sensitivity, scheduling, debugger/VCD,
+   provenance, and specialization/cache identity.
+9. **Pending.** Prove positive/negative parser and elaboration coverage plus interpreter,
+   LLVM O0/O2, cold/warm/edit, hierarchy, callable, debugger, normalized-VCD,
+   null/constraint, and exact-failure differentials.
+10. **Pending.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
+    Debug/Release, commit, and push gates before closing Batch 117.
+
+Batch status is **in progress**. Keep this exact ten-task list current in both
+the official plan and this handoff. Change it to complete only after all ten
+tasks and their gates close and work moves to Batch 118.
 
 Batch 110 has advanced through these validated features:
 

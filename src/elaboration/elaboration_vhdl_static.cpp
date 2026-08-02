@@ -252,6 +252,14 @@ void fold_vhdl_static_type_expressions(
       fold_range(type.enumeration_range_expression);
       fold_range(type.enumeration_base_range_expression);
       fold_range(type.discrete_range_expression);
+      if (type.vhdl_array) {
+        for (auto& dimension : type.vhdl_array->dimensions) {
+          fold_range(dimension.constraint);
+        }
+        for (auto& element : type.vhdl_array->element_types) {
+          self(self, element);
+        }
+      }
       for (auto& member : type.packed_members) {
         for (auto& nested : member.nested_types) {
           self(self, nested);

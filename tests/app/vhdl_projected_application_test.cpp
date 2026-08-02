@@ -195,7 +195,7 @@ void verify_capture(const Capture& capture) {
   assert((
       changes_for(capture, "vhdl_projected.slice_output")
       == std::vector<TimedValue>{
-          {"U00U", 3}, {"U11U", 23}}));
+          {"Z00Z", 3}, {"Z11Z", 23}}));
   assert((
       changes_for(capture, "vhdl_projected.conditional_output")
       == std::vector<TimedValue>{
@@ -211,7 +211,7 @@ void verify_capture(const Capture& capture) {
   assert((
       changes_for(capture, "vhdl_projected.waveform_slice_output")
       == std::vector<TimedValue>{
-          {"U00U", 2}, {"U11U", 5}}));
+          {"Z00Z", 2}, {"Z11Z", 5}}));
   assert((
       changes_for(capture, "vhdl_projected.conditional_waveform_output")
       == std::vector<TimedValue>{
