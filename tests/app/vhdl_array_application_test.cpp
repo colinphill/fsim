@@ -39,8 +39,17 @@ struct Capture {
   std::string top_aggregate;
   std::string child_local;
   std::string generic_aggregate;
+  std::string null_signal;
+  std::string null_copy;
+  std::string null_local;
+  std::string null_local_copy;
+  std::string null_equal;
+  std::string null_not_equal;
+  std::string null_slice_equal;
+  std::string null_iterations;
   std::string debugger_output;
   std::string vcd;
+  std::string application_vcd;
   std::vector<std::string> specialization_keys;
   std::size_t compiled_processes{};
   std::size_t compiled_modules{};
@@ -64,6 +73,7 @@ fsim::project::Config make_config(
       / (optimization == fsim::project::Optimization::o0
              ? "cache-o0"
              : "cache-o2");
+  config.run.trace_file = config.build.cache_path / "arrays.vcd";
   config.run.max_deltas = 1000;
 
   fsim::project::SourceSet sources;
@@ -118,6 +128,12 @@ Capture run_once(
   std::optional<std::pair<
       fsim::runtime::simir::ProcessId,
       std::size_t>> generic_aggregate;
+  std::optional<std::pair<
+      fsim::runtime::simir::ProcessId,
+      std::size_t>> null_local;
+  std::optional<std::pair<
+      fsim::runtime::simir::ProcessId,
+      std::size_t>> null_local_copy;
   for (const auto& process : project->design.processes()) {
     for (std::size_t index = 0;
          index < process.debug_locals.size();
@@ -159,12 +175,19 @@ Capture run_once(
             && local.value_kind
                 == fsim::runtime::simir::ValueKind::logic9);
         generic_aggregate = std::pair{process.id, index};
+      } else if (local.name == "null_local") {
+        assert(local.width == 0);
+        null_local = std::pair{process.id, index};
+      } else if (local.name == "null_local_copy") {
+        assert(local.width == 0);
+        null_local_copy = std::pair{process.id, index};
       }
     }
   }
   assert(
       top_local && dynamic_local && dynamic_slice_local && top_aggregate
-      && child_local && generic_aggregate);
+      && child_local && generic_aggregate && null_local
+      && null_local_copy);
 
   Capture capture;
   capture.specialization_keys =
@@ -293,11 +316,29 @@ Capture run_once(
   capture.generic_aggregate = simulation.read_process_local(
       generic_aggregate->first,
       generic_aggregate->second).to_msb_string();
+  const auto read = [&](const std::string_view path) {
+    const auto signal = simulation.find_signal(path);
+    assert(signal);
+    return simulation.read_signal(*signal).to_msb_string();
+  };
+  capture.null_signal = read("array_top.null_signal");
+  capture.null_copy = read("array_top.null_copy");
+  capture.null_equal = read("array_top.null_equal");
+  capture.null_not_equal = read("array_top.null_not_equal");
+  capture.null_slice_equal = read("array_top.null_slice_equal");
+  capture.null_iterations = read("array_top.null_iterations");
+  capture.null_local = simulation.read_process_local(
+      null_local->first, null_local->second).to_msb_string();
+  capture.null_local_copy = simulation.read_process_local(
+      null_local_copy->first,
+      null_local_copy->second).to_msb_string();
   {
     std::ostringstream debugger_output;
     std::ostringstream debugger_error;
+    fsim::diagnostic::Engine trace_diagnostics;
     fsim::app::DebuggerControl debugger{
-        simulation, debugger_output, debugger_error};
+        simulation, debugger_output, debugger_error,
+        config, trace_diagnostics};
     debugger.execute({"show", "source"});
     debugger.execute({"show", "result"});
     debugger.execute({"show", "aggregate_named"});
@@ -307,8 +348,16 @@ Capture run_once(
     debugger.execute({"show", "dynamic_slice_local_result"});
     debugger.execute({"show", "dynamic_slice_signal"});
     debugger.execute({"show", "dynamic_slice_waveform"});
+    debugger.execute({"show", "null_signal"});
     assert(debugger_error.str().empty());
+    assert(!trace_diagnostics.has_error());
     capture.debugger_output = debugger_output.str();
+  }
+  {
+    std::ifstream input{*config.run.trace_file};
+    capture.application_vcd = {
+        std::istreambuf_iterator<char>{input},
+        std::istreambuf_iterator<char>{}};
   }
   vcd.flush();
   capture.vcd = vcd_output.str();
@@ -374,6 +423,15 @@ void verify_capture(const Capture& capture) {
   assert(capture.top_aggregate == "1111Z0ZH");
   assert(capture.child_local == "11LH10Z-");
   assert(capture.generic_aggregate == "10000000");
+  assert(capture.null_signal.empty());
+  assert(capture.null_copy.empty());
+  assert(capture.null_local.empty());
+  assert(capture.null_local_copy.empty());
+  assert(capture.null_equal == "1");
+  assert(capture.null_not_equal == "0");
+  assert(capture.null_slice_equal == "1");
+  assert(capture.null_iterations
+         == "00000000000000000000000000000000");
   assert(
       capture.debugger_output.find(
           "source = 01LH10Z-")
@@ -410,6 +468,12 @@ void verify_capture(const Capture& capture) {
       capture.debugger_output.find(
           "dynamic_slice_waveform = 0Z01X000")
       != std::string::npos);
+  assert(
+      capture.debugger_output.find("null_signal = <null>")
+      != std::string::npos);
+  assert(!capture.application_vcd.empty());
+  assert(capture.application_vcd.find("null_signal")
+         == std::string::npos);
   assert(capture.vcd.find("b010110zx") != std::string::npos);
   assert(capture.vcd.find("b110110zx") != std::string::npos);
   assert(capture.vcd.find("b010xz000") != std::string::npos);
@@ -469,6 +533,7 @@ package Array_Types is
   subtype Byte_T is Logic_Array_T(Byte_Width - 1 downto 0);
   subtype Nibble_T is Logic_Array_T(3 downto 0);
   subtype Ascending_Byte_T is Logic_Array_T(0 to 7);
+  subtype Null_T is Logic_Array_T(3 to 0);
   type Boolean_Array_T is array (natural range <>) of boolean;
   subtype Boolean_Nibble_T is Boolean_Array_T(0 to 3);
 end package;
@@ -567,6 +632,12 @@ architecture rtl of Array_Top is
   signal Matrix_Dynamic_Signal_Target : Matrix_T;
   signal Vector_Target : Vector_Rows_T;
   signal Cell_Targets : Cells_T;
+  signal Null_Signal : Null_T;
+  signal Null_Copy : Null_T;
+  signal Null_Equal : boolean;
+  signal Null_Not_Equal : boolean;
+  signal Null_Slice_Equal : boolean;
+  signal Null_Iterations : integer;
 begin
   drive : process
     variable Top_Local : Byte_T := "01LH10Z-";
@@ -589,6 +660,9 @@ begin
     variable Vector_Local : Vector_Rows_T := ("1010", "0101");
     variable Cell_Local : Cells_T :=
       (others => (Flag => false, Data => "00"));
+    variable Null_Local : Null_T := (others => '0');
+    variable Null_Local_Copy : Null_T;
+    variable Null_Count : integer := 0;
   begin
     Source <= Top_Local;
     Aggregate_Named <= Top_Aggregate;
@@ -644,6 +718,16 @@ begin
     Vector_Target <= Vector_Local;
     Cell_Local(3) := (Flag => true, Data => "11");
     Cell_Targets <= Cell_Local;
+    Null_Local := (others => '1');
+    Null_Local_Copy := Null_Local;
+    Null_Copy <= Null_Signal;
+    Null_Equal <= Null_Local = Null_Local_Copy;
+    Null_Not_Equal <= Null_Local /= Null_Local_Copy;
+    Null_Slice_Equal <= Source(0 downto 1) = Null_Local;
+    for Index in Null_Local'range loop
+      Null_Count := Null_Count + 1;
+    end loop;
+    Null_Iterations <= Null_Count + Null_Local'length;
     wait;
   end process;
 

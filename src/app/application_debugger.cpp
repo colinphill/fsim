@@ -300,6 +300,9 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
 [[nodiscard]] std::string DebuggerSession::format_value(
     const PackedLogic4& value,
     const std::vector<std::string>& enumeration_literals)  {
+    if (value.width() == 0) {
+      return "<null>";
+    }
     const auto bits = value.to_msb_string();
     if (enumeration_literals.empty()
         || value.width()

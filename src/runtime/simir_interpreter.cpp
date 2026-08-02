@@ -152,7 +152,7 @@ ProcessId Interpreter::add_process(Process process) {
   }
   std::set<std::string> local_names;
   for (const auto& local : process.debug_locals) {
-    if (local.name.empty() || local.width == 0
+    if (local.name.empty()
         || local.register_id >= process.register_count) {
       throw std::invalid_argument{"invalid SimIR debug-local metadata"};
     }

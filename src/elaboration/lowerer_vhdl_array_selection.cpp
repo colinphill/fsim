@@ -8,6 +8,10 @@ namespace {
 
 std::optional<std::uint64_t> range_count(
     const frontend::IntegerRange& range) {
+  if (range.descending ? range.left < range.right
+                       : range.left > range.right) {
+    return std::uint64_t{0};
+  }
   const auto left = static_cast<std::uint64_t>(range.left);
   const auto right = static_cast<std::uint64_t>(range.right);
   const auto distance = range.left >= range.right
@@ -74,7 +78,7 @@ std::optional<frontend::Type> array_slice_type(
   auto& array = *result.vhdl_array;
   auto& first = array.dimensions.front();
   first.range = range;
-  first.null = false;
+  first.null = *count == 0;
   first.unconstrained = false;
   array.unconstrained = false;
   array.flat_width = *count * stride;
@@ -83,7 +87,7 @@ std::optional<frontend::Type> array_slice_type(
   array.index_base_range = first.index_base_range;
   result.vhdl_array_constraints.clear();
   result.packed_range_expression.reset();
-  if (array.dimensions.size() == 1U) {
+  if (array.dimensions.size() == 1U && *count != 0) {
     result.packed_range = frontend::PackedRange{
         range.left, range.right, range.descending};
   } else if (*array.flat_width != 0
@@ -231,6 +235,36 @@ Lowerer::lower_vhdl_array_selection_expression(
     return {};
   }
   const auto& array = *source_type->vhdl_array;
+  if (!array.dimensions.empty()
+      && array.dimensions.front().range
+      && array.dimensions.front().stride != 0
+      && expression.kind == ExpressionKind::Slice) {
+    const bool descending = expression.text == "downto";
+    const auto left = static_integer_value(expression.operands[1]);
+    const auto right = static_integer_value(expression.operands[2]);
+    const bool null_slice = left && right
+        && (descending ? *left < *right : *left > *right);
+    if (null_slice) {
+      const auto& dimension = array.dimensions.front();
+      const bool exact_null_source = dimension.null
+          && dimension.range->left == *left
+          && dimension.range->right == *right
+          && dimension.range->descending == descending;
+      if ((expression.text != "to" && !descending)
+          || dimension.range->descending != descending
+          || (!exact_null_source
+              && (!dimension.range->contains(*left)
+                  || !dimension.range->contains(*right)))) {
+        report(
+            "FSIM-ELAB-VHARRAYSEL-004",
+            "VHDL null slice bounds must retain the selected dimension "
+            "direction and index subtype",
+            expression.span);
+        return std::nullopt;
+      }
+      return allocate_register(0, source_type->domain);
+    }
+  }
   if (!array.dimensions.empty()
       && array.dimensions.size() == 1U
       && array.dimensions.front().stride == 1U
@@ -474,7 +508,9 @@ bool Lowerer::lower_assignment_selections(
       const auto& array = *current_type->vhdl_array;
       if (array.dimensions.empty()
           || !array.dimensions.front().range
-          || array.dimensions.front().null
+          || (array.dimensions.front().null
+              && selection_expression.kind
+                  != ExpressionKind::Slice)
           || array.dimensions.front().stride == 0) {
         report(
             "FSIM-ELAB-VHARRAYSEL-001",
@@ -591,6 +627,34 @@ bool Lowerer::lower_assignment_selections(
       const auto right = static_integer_value(
           selection_expression.operands[2]);
       if (left && right) {
+        const bool null_slice =
+            descending ? *left < *right : *left > *right;
+        if (null_slice) {
+          const bool exact_null_source = dimension.null
+              && dimension.range->left == *left
+              && dimension.range->right == *right
+              && dimension.range->descending == descending;
+          if (!exact_null_source
+              && (!dimension.range->contains(*left)
+                  || !dimension.range->contains(*right))) {
+            report(
+                "FSIM-ELAB-VHARRAYSEL-004",
+                "VHDL null target slice bounds must retain the selected "
+                "dimension index subtype",
+                selection_expression.span);
+            return false;
+          }
+          selected_offset = 0;
+          has_selected_offset = false;
+          selected_width = 0;
+          current_type = array_slice_type(
+              *current_type,
+              frontend::IntegerRange{*left, *right, descending});
+          selected_type = current_type;
+          selected_domain = current_type->domain;
+          array_selection_active = true;
+          continue;
+        }
         if (!dimension.range->contains(*left)
             || !dimension.range->contains(*right)
             || (descending ? *left < *right : *left > *right)) {

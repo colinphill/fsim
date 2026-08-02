@@ -426,7 +426,14 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
             } else if (expression.text == "'high") {
                 result = std::max(range->left, range->right);
             } else {
-                const auto width = range->width();
+                const auto* type =
+                    vhdl_array_attribute_prefix_type(expression);
+                const bool null_array =
+                    type != nullptr && type->vhdl_array
+                    && !type->vhdl_array->dimensions.empty()
+                    && type->vhdl_array->dimensions.front().null;
+                const auto width =
+                    null_array ? std::uint64_t{0} : range->width();
                 if (width
                     > static_cast<std::uint64_t>(
                         std::numeric_limits<std::int32_t>::max())) {

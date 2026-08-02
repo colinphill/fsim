@@ -1069,8 +1069,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     type != nullptr
                         ? type->domain
                         : signal.source_domain);
-                process_.operations.emplace_back(
-                    ReadSignal{destination, found->second});
+                if (signal.width != 0) {
+                    process_.operations.emplace_back(
+                        ReadSignal{destination, found->second});
+                }
                 return destination;
             }
             if (const auto selected =

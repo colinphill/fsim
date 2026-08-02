@@ -709,7 +709,11 @@ void Lowerer::validate_read_only_signal_writes(
                 continue;
             }
             const auto width = variable.type.width();
-            if (!width || *width == 0) {
+            const bool null_vhdl_array =
+                variable.type.vhdl_array
+                && variable.type.vhdl_array->flat_width
+                && *variable.type.vhdl_array->flat_width == 0;
+            if (!width || (*width == 0 && !null_vhdl_array)) {
                 report(
                     "FSIM-ELAB-052",
                     "local variable '" + variable.name
@@ -846,6 +850,9 @@ void Lowerer::validate_read_only_signal_writes(
                         variable.span);
                     continue;
                 }
+                if (local.width == 0) {
+                    continue;
+                }
                 if (variable.type.domain
                         == frontend::ValueDomain::Integer) {
                     emit_integer_check(
@@ -857,6 +864,9 @@ void Lowerer::validate_read_only_signal_writes(
                 }
                 process_.operations.emplace_back(
                     CopyRegister{local.register_id, *value});
+                continue;
+            }
+            if (local.width == 0) {
                 continue;
             }
             auto initial_value =

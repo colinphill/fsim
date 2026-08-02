@@ -338,9 +338,12 @@ namespace fsim::app::application_detail {
 [[nodiscard]] PackedLogic4 LlvmProcessExecutor::read_register(
     const runtime::simir::RegisterId id,
     const std::size_t width) const  {
-    if (id >= register_aval_.size() || width == 0 || width > 64) {
+    if (id >= register_aval_.size() || width > 64) {
       throw compiler::LlvmJitError{
           "compiled process debug-register request is out of range"};
+    }
+    if (width == 0) {
+      return PackedLogic4{};
     }
     if (register_initialized_[id] == 0) {
       throw std::logic_error{
@@ -367,11 +370,13 @@ namespace fsim::app::application_detail {
 void LlvmProcessExecutor::write_register(
     const runtime::simir::RegisterId id,
     const PackedLogic4& value)  {
-    if (id >= register_aval_.size()
-        || value.width() == 0
-        || value.width() > 64) {
+    if (id >= register_aval_.size() || value.width() > 64) {
       throw compiler::LlvmJitError{
           "compiled process register write is out of range"};
+    }
+    if (value.width() == 0) {
+      register_initialized_[id] = 1;
+      return;
     }
     const auto kind =
         process_.register_value_kinds.empty()

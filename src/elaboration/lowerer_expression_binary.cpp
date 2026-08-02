@@ -466,6 +466,30 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                         lhs_array
                             ? lhs_object_type
                             : rhs_object_type;
+                    const auto lhs_type =
+                        vhdl_expression_type(expression.operands[0]);
+                    const auto rhs_type =
+                        vhdl_expression_type(expression.operands[1]);
+                    const auto lhs_width = lhs_type
+                        ? lhs_type->width() : std::nullopt;
+                    const auto rhs_width = rhs_type
+                        ? rhs_type->width() : std::nullopt;
+                    if (lhs_width && rhs_width
+                        && (*lhs_width == 0 || *rhs_width == 0)) {
+                        const bool equal =
+                            *lhs_width == 0 && *rhs_width == 0;
+                        const bool result = expression.text == "/="
+                            ? !equal : equal;
+                        const auto destination = allocate_register(
+                            1, frontend::ValueDomain::Boolean);
+                        process_.operations.emplace_back(LoadConstant{
+                            destination,
+                            PackedLogic4{
+                                1,
+                                result ? Logic4::one
+                                       : Logic4::zero}});
+                        return destination;
+                    }
                 }
             }
             const bool lhs_enumeration =

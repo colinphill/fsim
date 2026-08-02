@@ -597,12 +597,11 @@ using namespace elaboration_detail;
             return std::nullopt;
         }
         if (declaration.type.vhdl_array
-            && (!declaration.type.width()
-                || *declaration.type.width() == 0)) {
+            && !declaration.type.width()) {
             report(
                 "FSIM-ELAB-VHARRAY-005",
                 "VHDL array object '" + declaration.name
-                    + "' requires a concrete non-null index constraint",
+                    + "' requires a concrete index constraint",
                 declaration.span);
             return std::nullopt;
         }
@@ -615,6 +614,8 @@ using namespace elaboration_detail;
                     : separator + 1);
         if (!declaration.type.packed_range
             && !declaration.type.packed_range_expression
+            && !(declaration.type.vhdl_array
+                 && declaration.type.vhdl_array->flat_width)
             && (simple_type_name == "bit_vector"
                 || simple_type_name == "std_logic_vector"
                 || simple_type_name == "std_ulogic_vector")) {
@@ -626,7 +627,12 @@ using namespace elaboration_detail;
             return std::nullopt;
         }
         const auto width = declaration.type.width().value_or(1);
-        if (width == 0 || width > std::numeric_limits<std::size_t>::max()) {
+        const bool null_vhdl_array =
+            declaration.type.vhdl_array
+            && declaration.type.vhdl_array->flat_width
+            && *declaration.type.vhdl_array->flat_width == 0;
+        if ((!null_vhdl_array && width == 0)
+            || width > std::numeric_limits<std::size_t>::max()) {
             report(
                 "FSIM-ELAB-010",
                 "signal '" + declaration.name + "' has an invalid width",

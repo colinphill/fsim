@@ -85,13 +85,20 @@ using namespace elaboration_detail;
                 return std::nullopt;
             }
         }
-        if (!type->packed_range
-            || type->packed_range->width() == 0) {
+        if (type->vhdl_array
+            && !type->vhdl_array->dimensions.empty()
+            && type->vhdl_array->dimensions.front().range) {
+            const auto& range =
+                *type->vhdl_array->dimensions.front().range;
+            return frontend::PackedRange{
+                range.left, range.right, range.descending};
+        }
+        if (!type->packed_range) {
             if (report_errors) {
                 report(
                     "FSIM-ELAB-VHARRAYATTR-001",
                     expression.text
-                        + " requires a concrete non-null array "
+                        + " requires a concrete array "
                           "constraint",
                     expression.operands.front().span);
             }
@@ -145,7 +152,14 @@ using namespace elaboration_detail;
               } else if (candidate.text == "'ascending") {
                   value = range->descending ? 0 : 1;
               } else {
-                  const auto width = range->width();
+                  const auto* type =
+                      vhdl_array_attribute_prefix_type(candidate);
+                  const bool null_array =
+                      type != nullptr && type->vhdl_array
+                      && !type->vhdl_array->dimensions.empty()
+                      && type->vhdl_array->dimensions.front().null;
+                  const auto width =
+                      null_array ? std::uint64_t{0} : range->width();
                   if (width
                       > static_cast<std::uint64_t>(
                           std::numeric_limits<
@@ -593,6 +607,28 @@ using namespace elaboration_detail;
         if (!has_disconnect
             && !validate_sv_nominal_assignment(
                 contextual_target_type, statement.value)) {
+            return;
+        }
+        const bool null_vhdl_target =
+            language_ == frontend::Language::Vhdl2008
+            && target_width == 0
+            && contextual_target_type != nullptr
+            && contextual_target_type->vhdl_array
+            && contextual_target_type->vhdl_array->flat_width
+            && *contextual_target_type->vhdl_array->flat_width == 0;
+        if (null_vhdl_target) {
+            const auto value = lower_expression(
+                statement.value, 0, contextual_target_type);
+            if (!value) {
+                return;
+            }
+            if (register_width(*value) != 0) {
+                report(
+                    "FSIM-ELAB-047",
+                    "assignment to null VHDL array '" + target_name
+                        + "' requires a null array value",
+                    statement.span);
+            }
             return;
         }
         const auto assignment_control =

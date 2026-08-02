@@ -900,13 +900,12 @@ using namespace elaboration_detail;
         if (!expected_type.vhdl_array
             || expected_type.vhdl_array->dimensions.empty()
             || !expected_type.vhdl_array->dimensions.front().range
-            || expected_type.vhdl_array->dimensions.front().null
             || expected_type.vhdl_array->element_types.empty()
             || !aggregate_width
             || *aggregate_width != expected_width
-            || expected_width == 0
-            || expected_width - 1
-                > std::numeric_limits<std::uint32_t>::max()
+            || (expected_width != 0
+                && expected_width - 1
+                    > std::numeric_limits<std::uint32_t>::max())
             || expression.aggregate_choices.size()
                 != expression.operands.size()
             || expression.aggregate_choice_expressions.size()
@@ -964,10 +963,12 @@ using namespace elaboration_detail;
         }
         const auto destination = allocate_register(
             expected_width, expected_type.domain);
-        process_.operations.emplace_back(LoadConstant{
-            destination,
-            default_packed_value(
-                expected_type, expected_width)});
+        if (expected_width != 0) {
+            process_.operations.emplace_back(LoadConstant{
+                destination,
+                default_packed_value(
+                    expected_type, expected_width)});
+        }
         std::vector<bool> assigned(element_count, false);
         std::optional<std::size_t> others_index;
         std::size_t positional_index = 0;

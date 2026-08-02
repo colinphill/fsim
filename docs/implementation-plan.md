@@ -6737,10 +6737,10 @@ The current ten implementation tasks are:
 4. **Complete.** Lower multidimensional indexing, slicing, and supported chained selections for
    reads and assignment targets with checked ordinal mapping, bounds, direction,
    and shape compatibility.
-5. **In progress.** Execute null arrays and slices through object initialization, aggregates,
+5. **Complete.** Execute null arrays and slices through object initialization, aggregates,
    assignments, loops, copies, equality, debugger inspection, and trace behavior
    without allocating or updating phantom elements.
-6. **Pending.** Complete same-language entity/component port and generic boundaries for
+6. **In progress.** Complete same-language entity/component port and generic boundaries for
    multidimensional and composite arrays with exact constraint adaptation,
    aliases, copy direction, driver ownership, and specialization identity.
 7. **Pending.** Complete function/procedure parameter, result, local, package, and generated
@@ -6826,6 +6826,23 @@ five-test gate passed in 4.51 seconds after exposing and repairing a selected-
 type lifetime defect. All 1,477 production diagnostics are cataloged and all
 359 authored sources remain within the 2,000-line gate. Batch 116 remains **in
 progress** with Task 5 current and Tasks 6 through 10 pending.
+
+Task 5 is focused-complete. Concrete null VHDL array signals and
+locals now retain their declared ranges and nominal types while using true
+zero-bit packed values. Null initialization, contextual `others` aggregates,
+whole-object and null-slice assignments, copies, equality/inequality,
+zero-iteration `'range` loops, and `'length = 0` lower without emitting phantom
+loads, writes, or scheduled updates. Interpreter and LLVM debugger reads render
+the values as `<null>`; application tracing omits zero-width declarations because
+VCD has no legal zero-width net. The merged VHDL array application covers
+interpreter and LLVM O0/O2 execution, cold/warm cache reuse, package-edit
+invalidation, debugger inspection, and application VCD behavior. The focused
+eight-test Debug and Release gates each passed in 3.04/2.96 seconds, with VHDL
+arrays at 1.40/1.40 seconds and scoped locals at 0.87/0.93 seconds. The
+LLVM-disabled ASan/UBSan six-test gate passed outside the ptrace sandbox in
+2.37 seconds. All 1,477 production diagnostics are cataloged and all 359
+authored sources remain within the 2,000-line gate. Batch 116 remains **in
+progress** with Task 6 current and Tasks 7 through 10 pending.
 
 ## Forward language-closure feature batches
 

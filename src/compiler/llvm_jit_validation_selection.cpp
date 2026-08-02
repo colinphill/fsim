@@ -170,12 +170,6 @@ validate_selection_operation_bounds(
 validate_expression_profile_metadata(
     const std::span<const ExpressionProfile> profiles) {
   for (const auto& profile : profiles) {
-    if (profile.width == 0) {
-      return "expression profile width must be greater than zero at "
-          + profile.source.path + ":"
-          + std::to_string(profile.source.line) + ":"
-          + std::to_string(profile.source.column);
-    }
     switch (profile.sizing) {
     case ExpressionSizingKind::self_determined:
     case ExpressionSizingKind::context_determined:

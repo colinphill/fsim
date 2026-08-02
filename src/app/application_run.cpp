@@ -403,8 +403,8 @@ std::unique_ptr<TraceState> attach_trace(
     for (const auto& signal : simulation.design().signals()) {
       const auto selected =
           trace_selected(config.run.trace_filters, signal.name);
-      trace->enabled[signal.id] = selected;
-      if (dynamic_selection || selected) {
+      trace->enabled[signal.id] = selected && signal.width != 0;
+      if (signal.width != 0 && (dynamic_selection || selected)) {
         trace->handles[signal.id] =
             trace->writer->declare_signal(signal.name, signal.width);
       }
