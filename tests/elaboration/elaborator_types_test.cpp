@@ -3,6 +3,8 @@
 
 namespace fsim::tests::elaboration {
 
+void test_vhdl_textio_lowering();
+
 void test_assertion_types_and_random_lowering() {
 const auto invalid_vhdl_assertion =
         fsim::frontend::parse_text(
@@ -133,6 +135,219 @@ endmodule
         && vector_assertion_reports
             == std::vector<std::string>{
                 "vector condition failed"});
+
+    const auto dynamic_vhdl_reports = fsim::frontend::parse_text(
+        "dynamic_reports.vhd",
+        R"(
+entity dynamic_reports is end entity;
+architecture rtl of dynamic_reports is begin
+  worker: process
+    variable prefix : string := "dynamic";
+    variable level : severity_level := warning;
+  begin
+    report prefix & " report" severity level;
+    assert false report prefix & " assertion" severity level;
+    level := error;
+    report prefix & " error" severity level;
+    assert true report prefix & " skipped" severity failure;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(dynamic_vhdl_reports.ok());
+    const auto dynamic_vhdl_result = fsim::elaboration::elaborate(
+        dynamic_vhdl_reports.design,
+        "vhdl:work.dynamic_reports(rtl)");
+    if (!dynamic_vhdl_result.ok()) {
+      for (const auto& diagnostic : dynamic_vhdl_result.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(dynamic_vhdl_result.ok());
+    const auto& dynamic_process =
+        dynamic_vhdl_result.design->processes().front();
+    assert(std::ranges::count_if(
+               dynamic_process.operations,
+               [](const fsim::runtime::simir::Operation& operation) {
+                 return fsim::runtime::simir::operation_holds<
+                     fsim::runtime::simir::StringReport>(operation);
+               })
+           == 4);
+    auto dynamic_interpreter =
+        dynamic_vhdl_result.design->create_interpreter();
+    std::vector<std::pair<
+        std::string,
+        fsim::runtime::simir::AssertionSeverity>> dynamic_events;
+    dynamic_interpreter->set_report_hook(
+        [&dynamic_events](
+            const fsim::runtime::simir::ProcessId,
+            const std::string_view message,
+            const fsim::runtime::simir::AssertionSeverity severity,
+            const fsim::runtime::simir::SourceLocation& source,
+            const fsim::runtime::SimulationTick,
+            const std::uint64_t) {
+          assert(source.path == "dynamic_reports.vhd");
+          dynamic_events.emplace_back(message, severity);
+        });
+    const auto dynamic_run = dynamic_interpreter->run();
+    assert(dynamic_run.status == fsim::runtime::RunStatus::completed);
+    assert((dynamic_events
+            == std::vector<std::pair<
+                std::string,
+                fsim::runtime::simir::AssertionSeverity>>{
+                {"dynamic report",
+                 fsim::runtime::simir::AssertionSeverity::warning},
+                {"dynamic assertion",
+                 fsim::runtime::simir::AssertionSeverity::warning},
+                {"dynamic error",
+                 fsim::runtime::simir::AssertionSeverity::error}}));
+
+    const auto invalid_vhdl_reports = fsim::frontend::parse_text(
+        "invalid_reports.vhd",
+        R"(
+entity invalid_reports is end entity;
+architecture rtl of invalid_reports is begin
+  worker: process begin
+    report 1 severity warning;
+    report "message" severity 1;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(invalid_vhdl_reports.ok());
+    const auto invalid_vhdl_report_result =
+        fsim::elaboration::elaborate(
+            invalid_vhdl_reports.design,
+            "vhdl:work.invalid_reports(rtl)");
+    assert(!invalid_vhdl_report_result.ok());
+    assert(has_diagnostic(
+        invalid_vhdl_report_result,
+        "FSIM-ELAB-VHREPORT-001"));
+    assert(has_diagnostic(
+        invalid_vhdl_report_result,
+        "FSIM-ELAB-VHREPORT-002"));
+
+    const auto vhdl_files = fsim::frontend::parse_text(
+        "vhdl_files.vhd",
+        R"(
+entity vhdl_files is end entity;
+architecture rtl of vhdl_files is
+  type integer_file is file of integer;
+begin
+  worker: process
+    file input_file : integer_file open read_mode is "input.txt";
+    file output_file : integer_file;
+    variable status : file_open_status;
+    variable value : integer;
+    procedure close_alias(file target : integer_file) is
+    begin
+      file_close(target);
+    end procedure;
+  begin
+    assert not endfile(input_file);
+    read(input_file, value);
+    assert endfile(input_file);
+    file_open(status, output_file, "output.txt", write_mode);
+    write(output_file, value);
+    close_alias(output_file);
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_files.ok());
+    const auto vhdl_file_result = fsim::elaboration::elaborate(
+        vhdl_files.design, "vhdl:work.vhdl_files(rtl)");
+    if (!vhdl_file_result.ok()) {
+      for (const auto& diagnostic : vhdl_file_result.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(vhdl_file_result.ok());
+    const auto& vhdl_file_operations =
+        vhdl_file_result.design->processes().front().operations;
+    const auto file_operation_count = [&](const auto& example) {
+      using Type = std::decay_t<decltype(example)>;
+      return std::ranges::count_if(
+          vhdl_file_operations,
+          [](const fsim::runtime::simir::Operation& operation) {
+            return fsim::runtime::simir::operation_holds<Type>(operation);
+          });
+    };
+    using namespace fsim::runtime::simir;
+    assert(file_operation_count(FileOpen{}) == 2);
+    assert(file_operation_count(FileEndOfFile{}) == 2);
+    assert(file_operation_count(FileScan{}) == 1);
+    assert(file_operation_count(FileWriteFormatted{}) == 1);
+    assert(file_operation_count(FileClose{}) >= 1);
+    assert(std::ranges::any_of(
+        vhdl_file_operations,
+        [](const Operation& operation) {
+          const auto* open = operation_get_if<FileOpen>(&operation);
+          return open != nullptr && open->vhdl && open->status.has_value();
+        }));
+    assert(std::ranges::any_of(
+        vhdl_file_operations,
+        [](const Operation& operation) {
+          const auto* scan = operation_get_if<FileScan>(&operation);
+          return scan != nullptr && scan->require_assignments;
+        }));
+    assert(std::ranges::any_of(
+        vhdl_file_operations,
+        [](const Operation& operation) {
+          const auto* close = operation_get_if<FileClose>(&operation);
+          return close != nullptr && close->clear_handle;
+        }));
+
+    const auto invalid_vhdl_files = fsim::frontend::parse_text(
+        "invalid_vhdl_files.vhd",
+        R"(
+entity invalid_vhdl_files is end entity;
+architecture rtl of invalid_vhdl_files is
+  type integer_file is file of integer;
+  type bit_file is file of bit;
+begin
+  worker: process
+    file integer_data : integer_file;
+    file bit_data : bit_file;
+    variable status : integer;
+    variable value : integer;
+    variable kind : file_open_kind := read_mode;
+  begin
+    file_close(value);
+    file_open(status, integer_data, "data", read_mode);
+    file_open(integer_data, "data", kind);
+    read(bit_data, value);
+    read(integer_data, 1);
+    assert endfile(value);
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(invalid_vhdl_files.ok());
+    const auto invalid_vhdl_file_result =
+        fsim::elaboration::elaborate(
+            invalid_vhdl_files.design,
+            "vhdl:work.invalid_vhdl_files(rtl)");
+    assert(!invalid_vhdl_file_result.ok());
+    assert(has_diagnostic(
+        invalid_vhdl_file_result, "FSIM-ELAB-VHFILE-004"));
+    assert(has_diagnostic(
+        invalid_vhdl_file_result, "FSIM-ELAB-VHFILE-005"));
+    assert(has_diagnostic(
+        invalid_vhdl_file_result, "FSIM-ELAB-VHFILE-008"));
+    assert(has_diagnostic(
+        invalid_vhdl_file_result, "FSIM-ELAB-VHFILE-009"));
+    assert(has_diagnostic(
+        invalid_vhdl_file_result, "FSIM-ELAB-VHFILE-011"));
+    assert(has_diagnostic(
+        invalid_vhdl_file_result, "FSIM-ELAB-VHFILE-012"));
+    test_vhdl_textio_lowering();
 
     const auto named_event_source = fsim::frontend::parse_text(
         "named_event.sv",

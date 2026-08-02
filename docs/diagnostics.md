@@ -109,7 +109,6 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-027` | error | Expected `;` after `null`. |
 | `FSIM-VHDL-PARSE-028` | error | Expected `then` after an `if` condition. |
 | `FSIM-VHDL-PARSE-029` | error | Expected `;` after an assignment. |
-| `FSIM-VHDL-PARSE-030` | error | Expected a delay magnitude after `after`. |
 | `FSIM-VHDL-PARSE-031` | error | Expected `)` after a slice. |
 | `FSIM-VHDL-PARSE-032` | error | Expected `)` after an index. |
 | `FSIM-VHDL-PARSE-033` | error | Expected `)` after call arguments. |
@@ -123,7 +122,6 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-042` | error | Expected `)` after port associations. |
 | `FSIM-VHDL-PARSE-043` | error | Expected `;` after a VHDL instance. |
 | `FSIM-VHDL-PARSE-044` | error | A VHDL library, use, or context-reference clause is malformed or unterminated. |
-| `FSIM-VHDL-PARSE-045` | error | Expected a string literal after an assertion `report`. |
 | `FSIM-VHDL-PARSE-046` | error | Expected `;` after an assertion. |
 | `FSIM-VHDL-PARSE-047` | error | Expected `:` after process-variable names. |
 | `FSIM-VHDL-PARSE-048` | error | Expected `;` after a process-variable declaration. |
@@ -199,7 +197,6 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-118` | error | Expected `when` after a selected-assignment waveform. |
 | `FSIM-VHDL-PARSE-119` | error | Expected `;` after a selected signal assignment. |
 | `FSIM-VHDL-PARSE-120` | error | Expected `)` after a VHDL array-attribute dimension. |
-| `FSIM-VHDL-PARSE-121` | error | Expected a literal string after a bounded VHDL `report`. |
 | `FSIM-VHDL-PARSE-122` | error | Expected `;` after a VHDL `report` statement. |
 | `FSIM-VHDL-PARSE-123` | error | Expected `inertial` after a VHDL `reject` time. |
 | `FSIM-VHDL-PARSE-124` | error | A VHDL delay mechanism appears anywhere other than immediately after `<=`. |
@@ -332,6 +329,15 @@ therefore excluded.
 | `FSIM-VHDL-PARSE-251` | error | A dereferenced index is missing its closing parenthesis, or a shared declaration is missing `variable`. |
 | `FSIM-VHDL-PARSE-252` | error | A VHDL shared-variable declaration is missing the colon after its names. |
 | `FSIM-VHDL-PARSE-253` | error | A VHDL shared-variable declaration is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-254` | error | A VHDL file type declaration is missing `of` before its element subtype. |
+| `FSIM-VHDL-PARSE-255` | error | A VHDL file type declaration is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-256` | error | A VHDL file object declaration is missing the colon after its names. |
+| `FSIM-VHDL-PARSE-257` | error | A VHDL file object `open` clause is missing its open-kind expression. |
+| `FSIM-VHDL-PARSE-258` | error | A VHDL file object `is` clause is missing its logical-name expression. |
+| `FSIM-VHDL-PARSE-259` | error | A VHDL file object open-kind expression is not followed by `is` and a logical name. |
+| `FSIM-VHDL-PARSE-260` | error | A VHDL file object declaration is missing its terminating semicolon. |
+| `FSIM-VHDL-PARSE-261` | error | A VHDL report statement or assertion report clause is missing its expression. |
+| `FSIM-VHDL-PARSE-262` | error | A VHDL severity clause is missing its expression. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -339,8 +345,6 @@ therefore excluded.
 |---|---|---|
 | `FSIM-VHDL-SEM-002` | error | Duplicate port declaration. |
 | `FSIM-VHDL-SEM-003` | error | Duplicate signal declaration. |
-| `FSIM-VHDL-SEM-004` | error | A delay magnitude is not an integer literal. |
-| `FSIM-VHDL-SEM-011` | error | An assertion severity is not `note`, `warning`, `error`, or `failure`. |
 | `FSIM-VHDL-SEM-012` | error | A process combines a sensitivity list with an explicit wait statement. |
 | `FSIM-VHDL-SEM-013` | error | A generic name is declared more than once. |
 | `FSIM-VHDL-SEM-014` | error | A generic conflicts with a port or signal in the same declarative namespace. |
@@ -421,6 +425,9 @@ therefore excluded.
 | `FSIM-VHDL-SEM-091` | error | A VHDL protected body repeats a private-variable name. |
 | `FSIM-VHDL-SEM-092` | error | A VHDL protected declaration or body end name does not match its declaration name. |
 | `FSIM-VHDL-SEM-093` | error | A VHDL declarative region repeats a shared-variable name. |
+| `FSIM-VHDL-SEM-094` | error | A VHDL declarative region repeats a file-object name. |
+| `FSIM-VHDL-SEM-095` | error | A VHDL file interface declaration incorrectly specifies a parameter mode. |
+| `FSIM-VHDL-SEM-096` | error | A VHDL file interface declaration incorrectly specifies a default expression. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -431,8 +438,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-012` | error | Signal initializers are parsed but not executable. |
 | `FSIM-VHDL-UNSUPPORTED-014` | error | An integer-family subtype appears in a declaration context that does not yet admit scalar integer objects. |
 | `FSIM-VHDL-UNSUPPORTED-015` | error | A nested context declaration appears where only a context reference is permitted. |
-| `FSIM-VHDL-UNSUPPORTED-017` | error | A wait is nested in conditional control flow requiring suspension-path analysis. |
-| `FSIM-VHDL-UNSUPPORTED-018` | error | A generic type is outside the bounded scalar integer, Boolean, and bit subset. |
+| `FSIM-VHDL-UNSUPPORTED-018` | error | A generic type is outside the bounded scalar integer, Boolean, bit, and physical-time subset. |
 | `FSIM-VHDL-UNSUPPORTED-020` | error | A generate branch contains an item outside the bounded constant, local-signal, assignment, process, instance, and nested-generate subset. |
 | `FSIM-VHDL-UNSUPPORTED-022` | error | A package declaration item is outside the bounded constant, type, subtype, or function subset. |
 | `FSIM-VHDL-UNSUPPORTED-023` | error | A package constant is outside the scalar integer, Boolean, or bit subset. |
@@ -453,7 +459,7 @@ therefore excluded.
 | `FSIM-VHDL-UNSUPPORTED-040` | error | A VHDL procedure formal type is outside the bounded scalar integral or visible scalar-subtype profile. |
 | `FSIM-VHDL-UNSUPPORTED-042` | error | A VHDL procedure uses an operator-symbol designator. |
 | `FSIM-VHDL-UNSUPPORTED-043` | error | A VHDL procedure declarative item is outside the bounded local constant, type/subtype, variable, alias, package-instance, and callable subset. |
-| `FSIM-VHDL-UNSUPPORTED-044` | error | A bounded VHDL procedure body contains timing, signal updates, or another unsupported statement. |
+| `FSIM-VHDL-UNSUPPORTED-044` | error | A bounded VHDL procedure body contains a signal update or another unsupported statement other than a wait. |
 | `FSIM-VHDL-UNSUPPORTED-045` | error | A nested interface-package formal appears in a bounded generic subprogram template. |
 | `FSIM-VHDL-UNSUPPORTED-046` | error | A generic function instantiation carries a `pure` or `impure` prefix. |
 | `FSIM-VHDL-UNSUPPORTED-047` | error | A bounded generic function template is impure. |
@@ -1113,6 +1119,33 @@ therefore excluded.
 | `FSIM-ELAB-VHLEGAL-006` | error | A pure VHDL function calls a procedure. |
 | `FSIM-ELAB-VHLEGAL-007` | error | A VHDL function formal default does not match its subtype. |
 | `FSIM-ELAB-VHLEGAL-008` | error | A VHDL procedure formal default does not match its subtype. |
+| `FSIM-ELAB-VHLEGAL-009` | error | A VHDL function contains a wait or calls a suspending procedure. |
+| `FSIM-ELAB-VHREPORT-001` | error | A VHDL report expression does not have string type. |
+| `FSIM-ELAB-VHREPORT-002` | error | A VHDL severity expression does not have severity_level type. |
+| `FSIM-ELAB-VHFILE-001` | error | A VHDL scope declares the same file object more than once. |
+| `FSIM-ELAB-VHFILE-002` | error | A VHDL file object has no visible retained file type. |
+| `FSIM-ELAB-VHFILE-003` | error | A VHDL file declaration logical name is not a string expression. |
+| `FSIM-ELAB-VHFILE-004` | error | A VHDL file open kind is not the supported static `read_mode`, `write_mode`, or `append_mode` value. |
+| `FSIM-ELAB-VHFILE-005` | error | A VHDL file operation does not name a visible whole file object. |
+| `FSIM-ELAB-VHFILE-006` | error | `file_close` does not have exactly one file-object actual. |
+| `FSIM-ELAB-VHFILE-007` | error | `file_open` has an invalid actual count or non-string logical name. |
+| `FSIM-ELAB-VHFILE-008` | error | Status-form `file_open` does not have a writable `file_open_status` actual. |
+| `FSIM-ELAB-VHFILE-009` | error | `endfile` does not have exactly one visible whole file-object actual. |
+| `FSIM-ELAB-VHFILE-010` | error | Direct VHDL file `read` or `write` does not have exactly one value actual. |
+| `FSIM-ELAB-VHFILE-011` | error | Direct VHDL file I/O uses an element type outside the bounded integer subset. |
+| `FSIM-ELAB-VHFILE-012` | error | Direct VHDL file `read` does not target a writable integer variable. |
+| `FSIM-ELAB-VHTEXTIO-001` | error | `readline` or `writeline` does not have one text-file and one writable `line` actual. |
+| `FSIM-ELAB-VHTEXTIO-002` | error | A selected TextIO `read` or `write` line actual is not writable. |
+| `FSIM-ELAB-VHTEXTIO-003` | error | A TextIO `read` or `write` profile has an invalid actual count or no value actual. |
+| `FSIM-ELAB-VHTEXTIO-004` | error | A TextIO `read` value is not a writable bounded scalar. |
+| `FSIM-ELAB-VHTEXTIO-005` | error | A TextIO `read` value type is outside the bounded integer, Boolean, and bit profiles. |
+| `FSIM-ELAB-VHTEXTIO-006` | error | A TextIO `read` `good` actual is not a writable Boolean. |
+| `FSIM-ELAB-VHTEXTIO-007` | error | A TextIO `write` justification is not the static `left` or `right` value. |
+| `FSIM-ELAB-VHTEXTIO-008` | error | A TextIO `write` field is not a static value in the bounded range 0 through 4096. |
+| `FSIM-ELAB-VHTEXTIO-009` | error | A TextIO `write` value type is outside the bounded integer, Boolean, bit, and string profiles. |
+| `FSIM-ELAB-VHTIME-001` | error | A VHDL delay or physical-time literal does not have a locally static integral magnitude. |
+| `FSIM-ELAB-VHTIME-002` | error | A VHDL physical-time value overflows the bounded signed 64-bit tick representation. |
+| `FSIM-ELAB-VHTIME-003` | error | A VHDL physical-time literal is not exactly representable at the selected project resolution. |
 | `FSIM-ELAB-VHNAME-001` | error | A VHDL function or type mark is not visible in an expression context. |
 | `FSIM-ELAB-VHRESOLVE-001` | error | A VHDL resolution indication names no visible function with an executable body. |
 | `FSIM-ELAB-VHRESOLVE-002` | error | A VHDL resolution function does not have the required pure array-input/base-result profile. |
@@ -1526,7 +1559,7 @@ therefore excluded.
 | `FSIM-ELAB-GENERIC-007` | error | A generic-dependent packed range width overflows the supported range. |
 | `FSIM-ELAB-GENERIC-008` | error | A generic value violates its bounded scalar subtype constraint. |
 | `FSIM-ELAB-GENERIC-009` | error | An architecture signal conflicts with an entity generic. |
-| `FSIM-ELAB-GENERIC-010` | error | A bounded subtype-typed VHDL generic resolves outside the supported scalar or up-to-64-bit packed value set. |
+| `FSIM-ELAB-GENERIC-010` | error | A bounded subtype-typed VHDL generic resolves outside the supported scalar, physical-time, or up-to-64-bit packed value set. |
 | `FSIM-ELAB-GENTYPE-001` | error | A required VHDL interface type generic has no associated subtype indication. |
 | `FSIM-ELAB-GENTYPE-002` | error | A VHDL interface type generic actual is not syntactically a subtype indication. |
 | `FSIM-ELAB-GENTYPE-003` | error | A VHDL interface type generic actual names a type that is not visible at the association. |

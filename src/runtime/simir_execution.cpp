@@ -1780,6 +1780,56 @@ void Interpreter::Impl::execute(ProcessId id) {
                   scheduler.delta());
             }
             ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, StringReport>) {
+            const auto& encoded = get_register(process, op.severity);
+            if (encoded.width() != 2
+                || encoded.get(0) == Logic4::x
+                || encoded.get(0) == Logic4::z
+                || encoded.get(1) == Logic4::x
+                || encoded.get(1) == Logic4::z) {
+              fail(
+                  process,
+                  "VHDL severity expression produced an invalid value");
+            }
+            const auto ordinal =
+                (encoded.get(0) == Logic4::one ? 1U : 0U)
+                | (encoded.get(1) == Logic4::one ? 2U : 0U);
+            const auto severity =
+                static_cast<AssertionSeverity>(ordinal);
+            const auto& message =
+                get_string_register(process, op.message);
+            if (severity == AssertionSeverity::failure) {
+              if (op.standalone && report_hook) {
+                report_hook(
+                    process.program.id,
+                    message,
+                    severity,
+                    op.source,
+                    scheduler.now(),
+                    scheduler.delta());
+              }
+              throw AssertionError(
+                  process.program.id,
+                  process.pc,
+                  message.empty()
+                      ? (op.standalone
+                             ? "report failure"
+                             : "assertion failed")
+                      : message,
+                  severity,
+                  op.source,
+                  op.standalone);
+            }
+            if (report_hook) {
+              report_hook(
+                  process.program.id,
+                  message,
+                  severity,
+                  op.source,
+                  scheduler.now(),
+                  scheduler.delta());
+            }
+            ++process.pc;
           } else if constexpr (std::is_same_v<OperationType, TimeDisplay>) {
             auto text = make_time_output(
                 op.prefix,

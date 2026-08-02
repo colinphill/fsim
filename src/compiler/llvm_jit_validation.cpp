@@ -666,9 +666,16 @@ validate_process(
                 operation.mode, index, "mode");
             record_definition(operation.destination, index);
             constrain_width(operation.destination, 32U, index);
+            if (operation.status) {
+              record_definition(*operation.status, index);
+              constrain_width(*operation.status, 2U, index);
+            }
           } else if constexpr (std::is_same_v<OperationType, FileClose>) {
             result.uses_files = true;
             record_use(operation.handle, index); constrain_width(operation.handle, 32U, index);
+            if (operation.clear_handle) {
+              record_definition(operation.handle, index);
+            }
           } else if constexpr (std::is_same_v<OperationType, FileWriteLiteral>) {
             result.uses_files = true;
             record_use(operation.handle, index);
@@ -708,7 +715,10 @@ validate_process(
             result.uses_files = true;
             record_use(operation.handle, index); constrain_width(operation.handle, 32U, index);
             record_definition(operation.destination, index);
-            constrain_width(operation.destination, 32U, index);
+            constrain_width(
+                operation.destination,
+                operation.lookahead ? 1U : 32U,
+                index);
           } else if constexpr (std::is_same_v<OperationType, FileErrorStatus>) {
             result.uses_files = true;
             result.uses_strings = true;
@@ -721,6 +731,12 @@ validate_process(
           } else if constexpr (std::is_same_v<OperationType, FileScan>) {
             if (!operation.string_source) result.uses_files = true;
             result.uses_strings = true;
+            if (operation.consume_string_source
+                && !operation.string_source) {
+              reject(
+                  process, index,
+                  "FileScan can consume only a string source");
+            }
             if (!operation.string_source) {
               record_use(operation.handle, index);
               constrain_width(operation.handle, 32U, index);
@@ -733,6 +749,10 @@ validate_process(
             for (const auto& value : registers) {
               record_definition(value.id, index);
               constrain_width(value.id, value.width, index);
+            }
+            if (operation.success) {
+              record_definition(*operation.success, index);
+              constrain_width(*operation.success, 1U, index);
             }
             record_definition(operation.destination, index);
             constrain_width(operation.destination, 32U, index);
@@ -775,6 +795,13 @@ validate_process(
                 || operation.postponed;
             validate_string_register(
                 operation.source, index, "source");
+          } else if constexpr (std::is_same_v<OperationType, StringReport>) {
+            result.uses_strings = true;
+            result.uses_report = true;
+            validate_string_register(
+                operation.message, index, "message");
+            record_use(operation.severity, index);
+            constrain_width(operation.severity, 2U, index);
           } else if constexpr (std::is_same_v<OperationType, UnaryNot>) {
             record_definition(operation.destination, index);
             record_use(operation.source, index);

@@ -148,9 +148,9 @@ struct Delay {
   std::uint64_t divisor{1};
   // Empty when the source supplies no physical unit or active `timescale.
   std::string unit;
-  // Present for a locally constant SystemVerilog delay expression. The
-  // expression remains specialization-aware while `magnitude` is normalized
-  // into the number of project ticks per expression unit.
+  // Present for a locally constant SystemVerilog delay expression or a VHDL
+  // physical-time expression that is not the legacy integer/unit literal.
+  // Language-specific semantic analysis resolves it into project ticks.
   std::optional<Expression> expression;
   // Present together only for a parenthesized min:typ:max delay triple.
   std::optional<DelayAlternative> minimum;
@@ -312,6 +312,15 @@ struct VhdlAccessInfo {
   bool simulation_lifetime{true};
 };
 
+/// Source-level metadata for a VHDL file type declaration. The element
+/// subtype remains vector-backed for the same value-copyable recursion used
+/// by access and array types; a well-formed declaration has exactly one
+/// entry.
+struct VhdlFileInfo {
+  std::vector<Type> element_types;
+  SourceSpan element_span;
+};
+
 /// One source-ordered unit from a VHDL physical type declaration. The primary
 /// unit has no scale expression. A secondary unit retains its complete
 /// physical literal expression until semantic analysis resolves unit ratios.
@@ -434,6 +443,10 @@ struct Type {
   // view of one. Allocation and ownership semantics are added during
   // elaboration; the frontend never loses the designated subtype.
   std::optional<VhdlAccessInfo> vhdl_access;
+  // Present only for a source-level VHDL file type declaration or a resolved
+  // view of one. Runtime lifetime and services are semantic concerns; the
+  // frontend retains the exact element subtype.
+  std::optional<VhdlFileInfo> vhdl_file;
   // Present only for a source-level VHDL physical type declaration or a
   // resolved view of one. Source units and exact scale expressions remain
   // declaration ordered.
@@ -476,6 +489,7 @@ enum class TypeDeclarationKind {
   VhdlEnumeration,
   VhdlArray,
   VhdlAccess,
+  VhdlFile,
   VhdlProtected,
   VhdlProtectedBody,
   VhdlPhysical,
@@ -543,6 +557,26 @@ struct VariableDeclaration {
   // True only for a VHDL `shared variable` object. Ordinary process and
   // callable variables, and SystemVerilog module variables, leave this false.
   bool vhdl_shared{};
+  // VHDL file objects reuse `type` for the named file subtype and
+  // `initializer` for the optional external logical-name expression.
+  bool vhdl_file{};
+  std::optional<Expression> vhdl_file_open_kind;
+
+  VariableDeclaration() = default;
+  VariableDeclaration(
+      std::string variable_name,
+      Type variable_type,
+      std::optional<Expression> variable_initializer,
+      SourceSpan variable_span,
+      bool variable_vhdl_shared = false,
+      bool variable_vhdl_file = false,
+      std::optional<Expression> variable_file_open_kind = std::nullopt)
+      : name(std::move(variable_name)), type(std::move(variable_type)),
+        initializer(std::move(variable_initializer)),
+        span(std::move(variable_span)),
+        vhdl_shared(variable_vhdl_shared),
+        vhdl_file(variable_vhdl_file),
+        vhdl_file_open_kind(std::move(variable_file_open_kind)) {}
 };
 
 struct FunctionArgument {
@@ -552,6 +586,7 @@ struct FunctionArgument {
   SourceSpan span;
   bool reference{};
   std::optional<Expression> default_value;
+  bool vhdl_file{};
 
   FunctionArgument() = default;
   FunctionArgument(
@@ -560,16 +595,19 @@ struct FunctionArgument {
       PortDirection argument_direction,
       SourceSpan argument_span,
       bool argument_reference = false,
-      std::optional<Expression> argument_default = std::nullopt)
+      std::optional<Expression> argument_default = std::nullopt,
+      bool argument_vhdl_file = false)
       : name(std::move(argument_name)), type(std::move(argument_type)),
         direction(argument_direction), span(std::move(argument_span)),
         reference(argument_reference),
-        default_value(std::move(argument_default)) {}
+        default_value(std::move(argument_default)),
+        vhdl_file(argument_vhdl_file) {}
 };
 
 enum class InterfaceObjectClass {
   Constant,
   Variable,
+  File,
 };
 
 struct ProcedureArgument {
@@ -1104,6 +1142,10 @@ struct Statement {
   std::vector<VhdlWaveformElement> vhdl_waveform;
   bool vhdl_unaffected{};
   std::vector<Sensitivity> sensitivities;
+  // Exact VHDL report and severity expressions. Literal text and predefined
+  // severity literals also mirror into the compact legacy fields below.
+  Expression vhdl_report_expression;
+  Expression vhdl_severity_expression;
   std::string assertion_message;
   AssertionSeverity assertion_severity{AssertionSeverity::Error};
   // SystemVerilog immediate assertions retain explicit action-block
@@ -1360,6 +1402,7 @@ struct GenerateBody {
   std::vector<TypeAliasDeclaration> type_aliases;
   std::vector<SignalDeclaration> signals;
   std::vector<SignalAliasDeclaration> signal_aliases;
+  std::vector<VariableDeclaration> variables;
   std::vector<FunctionDeclaration> functions;
   std::vector<TaskDeclaration> tasks;
   std::vector<ProcedureDeclaration> procedures;

@@ -51,6 +51,7 @@ struct Capture {
   std::vector<OutputEvent> output;
   std::vector<ReportEvent> reports;
   std::size_t compiled_processes{};
+  fsim::app::NativeCacheStatistics cache;
 };
 
 struct FailureCapture {
@@ -88,6 +89,7 @@ Capture execute(
       std::move(project), 1000, engine};
   Capture capture;
   capture.compiled_processes = simulation.compiled_process_count();
+  capture.cache = simulation.native_cache_statistics();
   simulation.set_output_hook(
       [&capture](
           const fsim::runtime::simir::ProcessId process,
@@ -328,25 +330,33 @@ void test_vhdl_report(
       fsim::app::build_project(config, diagnostics);
   auto compiled_project =
       fsim::app::build_project(config, diagnostics);
-  assert(reference_project && compiled_project);
+  auto warm_project =
+      fsim::app::build_project(config, diagnostics);
+  assert(reference_project && compiled_project && warm_project);
   const auto reference = execute(
       std::move(*reference_project),
       fsim::app::SimulationEngine::interpreter);
   const auto compiled = execute(
       std::move(*compiled_project),
       fsim::app::SimulationEngine::compiled);
+  const auto warm = execute(
+      std::move(*warm_project),
+      fsim::app::SimulationEngine::compiled);
   assert(reference.result.status == fsim::runtime::RunStatus::completed);
   assert(compiled.result.status == fsim::runtime::RunStatus::completed);
+  assert(warm.result.status == fsim::runtime::RunStatus::completed);
   assert(reference.output == compiled.output);
+  assert(reference.output == warm.output);
   assert(reference.output.empty());
   assert(reference.reports == compiled.reports);
-  assert(reference.reports.size() == 3);
+  assert(reference.reports == warm.reports);
+  assert(reference.reports.size() == 6);
   assert(reference.reports[0].message == "vhdl \"quote\"");
   assert(
       reference.reports[0].severity
       == fsim::runtime::simir::AssertionSeverity::note);
   assert(reference.reports[0].source.path == source.string());
-  assert(reference.reports[0].source.line == 8);
+  assert(reference.reports[0].source.line == 10);
   assert(reference.reports[0].time == 0);
   assert(reference.reports[0].delta == 0);
   assert(reference.reports[1].message.empty());
@@ -356,11 +366,36 @@ void test_vhdl_report(
   assert(
       reference.reports[2].severity
       == fsim::runtime::simir::AssertionSeverity::error);
+  assert(reference.reports[3].message == "dynamic report");
+  assert(
+      reference.reports[3].severity
+      == fsim::runtime::simir::AssertionSeverity::warning);
+  assert(reference.reports[3].source.path == source.string());
+  assert(reference.reports[3].source.line == 13);
+  assert(reference.reports[4].message == "dynamic assertion");
+  assert(
+      reference.reports[4].severity
+      == fsim::runtime::simir::AssertionSeverity::warning);
+  assert(reference.reports[4].source.path == source.string());
+  assert(reference.reports[4].source.line == 14);
+  assert(reference.reports[5].message == "dynamic error");
+  assert(
+      reference.reports[5].severity
+      == fsim::runtime::simir::AssertionSeverity::error);
+  assert(reference.reports[5].source.path == source.string());
+  assert(reference.reports[5].source.line == 16);
   assert(reference.compiled_processes == 0);
 #if defined(FSIM_HAS_LLVM)
   assert(compiled.compiled_processes == 1);
+  assert(compiled.cache.hits == 0);
+  assert(compiled.cache.misses == 1);
+  assert(compiled.cache.stores == 1);
+  assert(warm.compiled_processes == 1);
+  assert(warm.cache.hits == 1);
+  assert(warm.cache.misses == 0);
 #else
   assert(compiled.compiled_processes == 0);
+  assert(warm.compiled_processes == 0);
 #endif
 }
 
@@ -402,7 +437,7 @@ void test_vhdl_failure_report(
   assert(reference.failed && compiled.failed);
   assert(reference.reports == compiled.reports);
   assert(reference.reports.size() == 1);
-  assert(reference.reports[0].message == "terminal");
+  assert(reference.reports[0].message == "dynamic failure");
   assert(
       reference.reports[0].severity
       == fsim::runtime::simir::AssertionSeverity::failure);
@@ -490,10 +525,17 @@ end entity;
 architecture rtl of reporter is
 begin
   process
+    variable prefix : string := "dynamic";
+    variable level : severity_level := warning;
   begin
     report "vhdl ""quote""" severity note;
     report "" severity warning;
     report "error" severity error;
+    report prefix & " report" severity level;
+    assert false report prefix & " assertion" severity level;
+    level := error;
+    report prefix & " error" severity level;
+    assert true report prefix & " skipped" severity failure;
     wait;
   end process;
 end architecture;
@@ -510,8 +552,10 @@ end entity;
 architecture rtl of failure_reporter is
 begin
   process
+    variable prefix : string := "dynamic";
+    variable level : severity_level := failure;
   begin
-    report "terminal" severity failure;
+    report prefix & " failure" severity level;
     report "unreachable" severity note;
     wait;
   end process;

@@ -186,8 +186,15 @@ Expression VhdlParser::parse_primary() {
   }
   if (at(TokenKind::StringLiteral)) {
     const auto token = advance();
-    return Expression{ExpressionKind::StringLiteral, token.text, {},
-                      token.span};
+    return Expression{
+        ExpressionKind::StringLiteral,
+        token.text,
+        {},
+        token.span,
+        {},
+        {},
+        {},
+        string_literal_text(token)};
   }
   if (at(TokenKind::Identifier)) {
     const auto name = advance();

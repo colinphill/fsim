@@ -79,6 +79,7 @@ int fsim_application_case_vhdl_type_generics();
 int fsim_application_case_vhdl_function_generics();
 int fsim_application_case_vhdl_overloads();
 int fsim_application_case_vhdl_procedure_generics();
+int fsim_application_case_vhdl_procedure_waits();
 int fsim_application_case_vhdl_package_generics();
 int fsim_application_case_vhdl_generic_subprograms();
 int fsim_application_case_vhdl_configurations();
@@ -94,6 +95,7 @@ constexpr NamedApplicationCase application_cases[] = {
     {"vhdl_function_generics", fsim_application_case_vhdl_function_generics},
     {"vhdl_overloads", fsim_application_case_vhdl_overloads},
     {"vhdl_procedure_generics", fsim_application_case_vhdl_procedure_generics},
+    {"vhdl_procedure_waits", fsim_application_case_vhdl_procedure_waits},
     {"vhdl_package_generics", fsim_application_case_vhdl_package_generics},
     {"vhdl_generic_subprograms",
      fsim_application_case_vhdl_generic_subprograms},

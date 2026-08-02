@@ -7417,47 +7417,276 @@ and physical-literal helpers now live in `elaboration_vhdl_values.cpp`, leaving
 1,998 lines. All ten Batch 118 tasks are complete; Batch 118 is not a
 CI-inspection boundary.
 
-### One-hundred-nineteenth feature batch — VHDL waits, reports, files, time, and transactions — In progress
+### One-hundred-nineteenth feature batch — VHDL waits, reports, files, time, and transactions — Complete
 
 The current ten implementation tasks are:
 
-1. **In progress.** Audit and retain nested wait forms, assertions and reports,
+1. **Complete.** Audit and retain nested wait forms, assertions and reports,
    file declarations and operations, TextIO profiles, physical time literals,
    and inertial, transport, and reject waveform syntax with exact source spans
    and diagnostics.
-2. **Pending.** Complete wait legality and lowering in nested procedures, loops,
+2. **Complete.** Complete wait legality and lowering in nested procedures, loops,
    conditionals, and process-local call chains, including sensitivity, timeout,
    condition, resume, and forbidden-context behavior.
-3. **Pending.** Complete general assertion and report expressions, severity
+3. **Complete.** Complete general assertion and report expressions, severity
    evaluation, message formatting, failure policy, source provenance, and
    interpreter/LLVM parity.
-4. **Pending.** Complete bounded VHDL file types, file objects, open modes,
+4. **Complete.** Complete bounded VHDL file types, file objects, open modes,
    status, close, lifetime, aliasing, and deterministic manifest-confined I/O.
-5. **Pending.** Complete the supported `std.textio` line, read, write, endfile,
+5. **Complete.** Complete the supported `std.textio` line, read, write, endfile,
    and formatting profiles with exact cursor, whitespace, conversion, and
    failure behavior.
-6. **Pending.** Complete physical `time` units, literals, conversions,
+6. **Complete.** Complete physical `time` units, literals, conversions,
    resolution limits, static folding, arithmetic, comparison, timeout, and
    scheduling interoperability.
-7. **Pending.** Complete inertial and transport waveform scheduling, reject
+7. **Complete.** Complete inertial and transport waveform scheduling, reject
    limits, pulse cancellation, transaction ordering, delta behavior, and
    multi-driver resolution.
-8. **Pending.** Complete supported hierarchy, callable, debugger, VCD,
+8. **Complete.** Complete supported hierarchy, callable, debugger, VCD,
    provenance, specialization, and cache behavior across waits, reports,
    files/TextIO, time, and transaction modes.
-9. **Pending.** Prove positive/negative parser and elaboration coverage plus
+9. **Complete.** Prove positive/negative parser and elaboration coverage plus
    interpreter, LLVM O0/O2, cold/warm/edit, scheduling, debugger,
    normalized-VCD, I/O, time-resolution, and exact-failure differentials.
-10. **Pending.** Update matrix/diagnostics/docs and pass sanitizer,
+10. **Complete.** Update matrix/diagnostics/docs and pass sanitizer,
     source/catalog, full Debug/Release, commit, and push gates before closing
     Batch 119.
 
+Batch status is **complete**. All ten tasks and their gates are closed, and the
+current in-progress ten-task record has moved to Batch 120 below. Tasks 1
+through 9 used the corrected accumulated working-tree cadence; Task 10 owned
+the single batch sanitizer, full-regression, commit, and push gate. Batch 119
+was not a CI-inspection boundary.
+
+Task 1 audits and retains the complete Batch 119 frontend surface. Nominal
+`file of` types now preserve their element subtype, and file objects in
+package, architecture, process, and block regions preserve source spans,
+open-kind expressions, logical-name expressions, and file-interface object
+classes. Ordinary `file_open`, `file_close`, `readline`, `writeline`,
+`read`/`write`, and `endfile` calls remain exact selected-name/call HIR.
+Assertions and reports retain general report and severity expressions while
+literal text and predefined severities continue to mirror the legacy compact
+metadata. Wait, rejection-limit, and waveform delays retain general physical-
+time expressions while integer/unit literals preserve the established compact
+form. The stale parser-only nested-wait rejection was removed after confirming
+that the complete statement tree was already retained; the independent
+process-sensitivity-list legality diagnostic remains. The new positive and
+malformed frontend fixture covers nested waits, TextIO-like profiles/calls,
+file declarations/open information, physical literals and expressions,
+inertial/transport/reject waveforms, exact spans, and targeted diagnostics.
+Eight-worker warnings-as-errors Debug builds of the frontend and elaboration
+targets succeeded; focused frontend, elaboration, catalog, and source gates
+passed in 0.40 seconds. The catalog covers 1,577 production codes, and all 380
+authored sources pass the 2,000-line gate. No sanitizer, Release, full
+regression, commit, push, or CI inspection was run at this task boundary.
+
+Task 2 completes nested wait execution and legality. VHDL procedures may now
+retain supported waits, and the ordinary SimIR `Call` frame remains live while
+the process suspends inside a procedure. Lowering records exact overload-
+resolved process-to-procedure, procedure-to-procedure, and function-to-
+procedure dependencies, then chooses implicit process repetition only after
+all reachable callable bodies have been lowered. This admits waits nested
+through conditionals, static loops, and multi-level procedure chains without
+misclassifying a same-name nonsuspending overload. Sensitized processes and
+functions diagnose direct or transitive suspension. A focused elaboration
+fixture proves event, condition, absolute timeout, resume, overload, and
+forbidden-context behavior in the interpreter; a dedicated application
+differential proves the same procedure-chain schedule in the interpreter and
+LLVM O0/O2. Eight-worker Debug builds and focused `fsim.elaboration` and
+`fsim.application.vhdl_procedure_waits` tests pass. The catalog covers 1,578
+production codes, and all 382 authored sources pass
+the 2,000-line gate with `elaborator_internal.hpp` exactly at the limit. No
+sanitizer, Release, full regression, commit, push, or CI inspection was run at
+this task boundary.
+
+Task 3 completes general VHDL assertion and report execution. The frontend
+recognizes `string` and `severity_level`, decodes doubled-quote string
+literals, and retains runtime string concatenation. Lowering evaluates report
+and severity expressions at the statement execution point, but branches over
+both for a passing assertion. Static forms keep the compact `Assert`/`Report`
+operations; dynamic forms use typed string and two-bit severity registers in
+a `StringReport` operation. Interpreter and LLVM paths validate the runtime
+severity ordinal, preserve exact source metadata, continue after note through
+error, report a standalone failure exactly once before terminating, and avoid
+double-reporting a failed assertion. `FSIM-ELAB-VHREPORT-001` and `-002`
+diagnose non-string report expressions and non-`severity_level` severities.
+The elaboration fixture covers dynamic messages, severities, skipped passing
+assertions, and both diagnostics. The merged display application proves exact
+messages, severities, source lines, failure policy, and interpreter/LLVM O0/O2
+parity. Eight-worker warnings-as-errors Debug builds succeeded; focused
+frontend, elaboration, application, catalog, and source gates passed in 0.59
+seconds. The catalog covers 1,580 production codes, and all 382 authored
+sources pass the 2,000-line gate. No sanitizer, Release, full regression,
+commit, push, or CI inspection was run at this task boundary.
+
+Task 4 completes bounded executable VHDL file objects in process, procedure,
+and nested block regions. Nominal file objects use opaque 32-bit service
+handles rather than host descriptors, remain confined to the manifest root,
+and support declaration opens plus status and nonstatus `file_open`, static
+`read_mode`/`write_mode`/`append_mode`, `file_close`, lookahead-preserving
+`endfile`, and direct signed-integer element `read`/`write`. Status-form opens
+return `open_ok`, `status_error`, `name_error`, or `mode_error` without
+terminating the process; reopening an open object preserves its handle.
+Procedure file formals alias state through copy-in/out, lexical fallthrough
+closes block-owned objects, and a common procedure epilogue closes every owned
+file even after an early nested return. Direct reads require one complete
+conversion and fail deterministically otherwise. `FSIM-ELAB-VHFILE-001`
+through `-012` reject invalid declarations, modes, objects, profiles, element
+types, and targets. The merged file application proves status, close/alias,
+lookahead, input/output bytes, and interpreter/LLVM O0/O2 parity. An
+eight-worker warnings-as-errors Debug build succeeded; focused diagnostics,
+source, elaboration, file-application, and runtime gates passed in 1.15
+seconds. The catalog covers 1,592 production codes, and all 382 authored
+sources pass the 2,000-line gate. No sanitizer, Release, full regression,
+commit, push, or CI inspection was run at this task boundary.
+
+Task 5 completes the bounded `std.textio` execution profile. Built-in `line`
+objects use the existing 4,096-byte string-register plane and `side` retains
+the `right`/`left` ordinals. `readline` strips LF or CRLF and fails at true
+EOF; `writeline` appends one newline and clears the line. Integer, Boolean,
+and bit `read` skip leading whitespace, consume exactly the parsed cursor
+prefix, update an optional Boolean `good`, preserve the value on conversion
+failure, and otherwise fail deterministically. Integer, Boolean, bit, and
+string `write` append to the line with static `left`/`right` justification and
+a bounded static field width. All paths reuse `FileReadLine`, `FileScan`,
+`StringMethod`, and `FileWriteString`; scan cursor, success, line-clear, and
+TextIO mode metadata participate in native schema 73. Nine exact
+`FSIM-ELAB-VHTEXTIO-*` diagnostics bound unsupported profiles. The merged
+file application proves whitespace/cursor behavior, success and failure,
+formatting, line clearing, exact bytes, and interpreter/LLVM O0/O2 parity.
+An eight-worker warnings-as-errors Debug build succeeded; focused catalog,
+source, elaboration, application, and runtime gates passed in 1.29 seconds.
+The catalog covers 1,601 production codes, and all 384 authored sources pass
+the 2,000-line gate. No sanitizer, Release, full regression, commit, push, or
+CI inspection was run at this task boundary.
+
+Task 6 completes bounded predefined VHDL physical time. `time` is a
+nonnegative signed-64-bit tick type, and standard `fs`, `ps`, `ns`, `us`,
+`ms`, `sec`, `min`, and `hr` literals are recursively normalized before
+elaboration. Exact rational cancellation handles coarse resolutions without
+intermediate femtosecond overflow; qualifications, declaration-ordered static
+arithmetic/comparison, expression waits, and procedure timeouts therefore
+share one integer SimIR representation. Expression-valued units contribute to
+automatic resolution selection. `FSIM-ELAB-VHTIME-001` through `-003`
+separate nonstatic, final-representation overflow, and inexact-resolution
+failures. The focused application proves all units, conversion, arithmetic,
+comparison, timeout, automatic resolution, exact failures, scheduling, and
+interpreter/LLVM O0/O2 parity. Native schema 74 isolates the changed time
+semantics. Eight-worker warnings-as-errors Debug builds succeeded; focused
+frontend, catalog, source, elaboration, and application gates passed in 0.46
+seconds. The catalog covers 1,604 production codes, and all 384 authored
+sources pass the 2,000-line gate. No sanitizer, Release, full regression,
+commit, push, or CI inspection was run at this task boundary.
+
+Task 7 completes bounded VHDL projected-output transaction semantics. Whole,
+static-slice, and runtime-slice assignments atomically replace each
+process-owned scalar driver's ordered future transaction list. Transport
+truncates at the first new timestamp; inertial mode applies the LRM marking
+algorithm with either the explicit static rejection expression or the first
+waveform delay. Cancellation is independent per scalar, same-time updates
+coalesce deterministically, zero-delay cascades advance exact delta cycles,
+and resolved `std_logic` drivers publish one effective value after every
+update phase. The focused projected-waveform application now combines
+implicit and explicit pulse rejection, transport preservation, ordered
+multi-element whole/slice/conditional/selected waveforms, expression-valued
+rejection and delay, a two-driver `0`/`1`/`Z` resolution sequence, a two-delta
+zero-time cascade, exact VCD, cold/warm native cache reuse, and
+interpreter/LLVM O0/O2 parity. Eight-worker warnings-as-errors Debug builds
+succeeded; focused frontend, catalog, source, elaboration, application, and
+runtime gates passed in 0.60 seconds. The catalog remains at 1,604 production
+codes, and all 384 authored sources pass the 2,000-line gate. No sanitizer,
+Release, full regression, commit, push, or CI inspection was run at this task
+boundary.
+
+Task 8 closes the supported cross-feature metadata and specialization paths.
+A time-generic VHDL child now accepts an exact 64-bit physical-time actual and
+suspends through its nested procedure chain while driving parent-visible
+ports. The hierarchy differential compares interpreter, compiled O0/O2, and
+forced-O0 debug execution points including source, lexical child scope,
+process/instruction identity, final values, scheduler changes, and normalized
+VCD. Its two specialization modules prove cold stores and warm hits without
+changing canonical specialization keys. VHDL report runs now prove cold/warm
+cache identity while retaining exact severity/source metadata; VHDL file and
+TextIO runs do the same while retaining source-bearing execution points and
+deterministic bytes. The projected-waveform differential already covers
+VCD, cold/warm cache reuse, time normalization, and resolved transactions.
+Eight-worker warnings-as-errors Debug builds succeeded; the focused
+frontend, catalog, source, elaboration, report, file/TextIO, wait/time,
+projected-waveform, and runtime gates passed in 2.05 seconds. The catalog
+remains at 1,604 production codes, and all 384 authored sources pass the
+2,000-line gate. No sanitizer, Release, full regression, commit, push, or CI
+inspection was run at this task boundary.
+
+Task 9 closes the accumulated Batch 119 differential matrix. The frontend and
+elaboration suites retain positive and malformed waits, reports, file/TextIO,
+physical-time, and waveform cases with exact diagnostics. Runtime applications
+now compare interpreter, LLVM O0/O2, and forced-O0 debug results across nested
+callable suspension, source/severity reports, manifest-confined I/O, standard
+time units and resolution failures, projected scheduling, delta cycles,
+resolved drivers, and normalized VCD. Cold/warm runs cover every native path;
+the wait/time hierarchy also edits its VHDL source, changes both canonical
+specialization keys, misses and stores both native modules, and proves the new
+six-tick schedule. TextIO conversion failures execute in both engines, while
+file-input and source edits remain independently distinguished. The focused
+nine-test accumulated gate passed in 1.83 seconds with eight-worker builds,
+1,604 cataloged production diagnostics, and all 384 authored sources under the
+2,000-line limit. No sanitizer, Release, full regression, commit, push, or CI
+inspection was run at this task boundary.
+
+Task 10 is complete. Feature-matrix rows `V1-VH-06` and `V1-VH-07` now carry
+executable evidence for nested waits, reports, files/TextIO, physical time,
+and projected inertial/transport/reject transactions. The LLVM-disabled
+ASan/UBSan suite passed all 67 tests in 340.81 seconds outside the ptrace-
+restricted sandbox. Exact LLVM 22.1.8 warnings-as-errors Debug passed all 70
+tests in 188.12 seconds, and Release passed all 70 tests in 164.46 seconds.
+`fsim.application.scoped_locals` remained quick at 0.58 seconds under the
+sanitizers and 0.87 seconds in both Debug and Release. The diagnostic catalog
+covers 1,604 production codes, and all 384 authored sources pass the
+2,000-line gate. The single Batch 119 commit and push close the accumulated
+gate; no CI inspection is required at this non-tenth-batch boundary.
+
+### One-hundred-twentieth feature batch — reviewed Apache-2.0 IEEE packages and VHDL v1 audit — In progress
+
+The current ten implementation tasks are:
+
+1. **In progress.** Audit the existing standard-library loader, bundled-source
+   inventory, licenses, package dependencies, VHDL revisions, and current IEEE
+   package coverage before selecting the reviewed Apache-2.0 source bundle.
+2. **Pending.** Review, bundle, analyze, and execute the supported
+   `ieee.std_logic_1164` declarations, bodies, tables, conversions, resolution,
+   edges, and vector operations with retained license and provenance.
+3. **Pending.** Review, bundle, analyze, and execute the supported
+   `ieee.numeric_std` and `ieee.numeric_bit` signed, unsigned, conversion,
+   resize, comparison, arithmetic, shift, rotate, and boundary profiles.
+4. **Pending.** Complete the bundled bit and logic utility package profiles,
+   including vector/string conversions, matching values, edge behavior,
+   overload visibility, and exact unsupported-profile diagnostics.
+5. **Pending.** Review, bundle, analyze, and execute bounded
+   `ieee.fixed_generic_pkg` and `ieee.fixed_pkg` types, generics, conversions,
+   resize, rounding, overflow, arithmetic, comparison, and slice behavior.
+6. **Pending.** Review, bundle, analyze, and execute bounded
+   `ieee.float_generic_pkg` and `ieee.float_pkg` types, generics, conversions,
+   classification, rounding, arithmetic, comparison, and exceptional values.
+7. **Pending.** Complete dependency-ordered implicit/explicit library,
+   context, `use`, package-body, overload, generic-package, and type-identity
+   integration for every bundled package without host-install dependencies.
+8. **Pending.** Complete hierarchy, callable, debugger, VCD, provenance,
+   specialization, cold/warm/edit cache, interpreter, and LLVM O0/O2 behavior
+   for designs consuming the reviewed packages.
+9. **Pending.** Audit every required VHDL v1 feature-matrix row and prove the
+   accumulated positive, negative, elaboration, runtime, portability, license,
+   and package-conformance differential matrix.
+10. **Pending.** Update matrix/diagnostics/docs, pass sanitizer,
+    source/catalog, full Debug/Release, commit, and push gates, then inspect and
+    repair every non-documentation GitHub CI failure at the mandatory Batch 120
+    boundary.
+
 Batch status is **in progress** with Task 1 current. Keep this exact ten-task
-list current in both the official plan and resume handoff. Change it to
-complete only after all ten tasks and their gates close and work moves to
-Batch 120. Tasks 1 through 9 use the corrected accumulated working-tree
-cadence; Task 10 owns the single batch sanitizer, full-regression, commit, and
-push gate. Batch 119 is not a CI-inspection boundary.
+list current in both the official plan and resume handoff. Tasks 1 through 9
+use the corrected accumulated working-tree cadence; Task 10 owns the single
+batch sanitizer, full-regression, commit, push, and mandatory non-documentation
+CI inspection gate. Local builds use at least eight workers; GitHub Actions
+builds use parallelism four.
 
 ## Forward language-closure feature batches
 

@@ -73,6 +73,7 @@ using runtime::simir::ReductionOperator;
 using runtime::simir::RegisterId;
 using runtime::simir::RandomValue;
 using runtime::simir::Report;
+using runtime::simir::StringReport;
 using runtime::simir::ReleaseSignalSlice;
 using runtime::simir::Return;
 using runtime::simir::Shift;
@@ -1845,6 +1846,8 @@ void lower_process(llvm::Module &module, const std::string &symbol,
                 EncodedValue{aval, bval, 32});
             branch_to_next();
           } else if constexpr (std::is_same_v<OperationType, Report>) {
+            output_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, StringReport>) {
             output_lowerer.lower(operation);
           } else if constexpr (std::is_same_v<OperationType, Jump>) {
             control_lowerer.lower(operation);

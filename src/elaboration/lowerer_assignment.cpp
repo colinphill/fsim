@@ -5,6 +5,43 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
+void Lowerer::validate_read_only_signal_writes(
+    const frontend::SourceSpan& source) {
+  std::set<SignalId> reported;
+  const auto check = [&](const SignalId signal) {
+    if (read_only_signals_.contains(signal)
+        && reported.insert(signal).second) {
+      report(
+          "FSIM-ELAB-SVIFACE-006",
+          "a modport input member is read-only within process '"
+              + process_.name + "'",
+          source);
+    }
+  };
+  for (const auto& operation : process_.operations) {
+    fsim::runtime::simir::visit_operation(
+        [&](const auto& candidate) {
+          using Operation = std::decay_t<decltype(candidate)>;
+          if constexpr (
+              std::is_same_v<Operation, WriteBlocking>
+              || std::is_same_v<Operation, WriteUpdate>
+              || std::is_same_v<Operation, WriteAfter>
+              || std::is_same_v<Operation, WriteInertial>
+              || std::is_same_v<Operation, WriteProjected>
+              || std::is_same_v<Operation, WriteProjectedWaveform>
+              || std::is_same_v<Operation, WriteBlockingSlice>
+              || std::is_same_v<Operation, WriteUpdateSlice>
+              || std::is_same_v<Operation, WriteAfterSlice>
+              || std::is_same_v<Operation, WriteInertialSlice>
+              || std::is_same_v<Operation, WriteProjectedSlice>
+              || std::is_same_v<Operation, WriteProjectedWaveformSlice>) {
+            check(candidate.signal);
+          }
+        },
+        operation);
+  }
+}
+
     std::optional<std::int64_t>
     Lowerer::static_integer_value(const Expression& expression) {
         if (language_ != frontend::Language::Vhdl2008) {

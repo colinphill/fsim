@@ -33,12 +33,12 @@ std::optional<std::int64_t> vhdl_physical_literal_value(
     if (*magnitude != 0
         && (*magnitude > 0
                 ? (*unit->scale_factor
-                    > std::numeric_limits<std::int32_t>::max()
+                    > std::numeric_limits<std::int64_t>::max()
                         / *magnitude)
                 : (*magnitude
-                    < std::numeric_limits<std::int32_t>::min()
+                    < std::numeric_limits<std::int64_t>::min()
                         / *unit->scale_factor))) {
-        error = "physical literal overflows signed 32-bit primary-unit ticks";
+        error = "physical literal overflows its signed runtime representation";
         return std::nullopt;
     }
     const auto value = *magnitude * *unit->scale_factor;
@@ -89,7 +89,8 @@ std::optional<PackedLogic4> static_vhdl_value(
         std::string physical_error;
         if (const auto physical = vhdl_physical_literal_value(
                 expression, type, physical_error)) {
-            return normalize(integer_value(*physical));
+            return normalize(unsigned_value(
+                static_cast<std::uint64_t>(*physical), width));
         }
         if (type.vhdl_physical
             && expression.kind == ExpressionKind::Call

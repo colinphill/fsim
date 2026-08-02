@@ -187,10 +187,10 @@ end architecture;
   require(
       has_code("FSIM-VHDL-SEM-049")
           && has_code("FSIM-VHDL-UNSUPPORTED-038")
-          && has_code("FSIM-VHDL-UNSUPPORTED-044")
           && has_code("FSIM-VHDL-SEM-056")
-          && has_code("FSIM-VHDL-SEM-046"),
-      "VHDL procedure class, timing, and return diagnostics");
+          && has_code("FSIM-VHDL-SEM-046")
+          && !has_code("FSIM-VHDL-UNSUPPORTED-044"),
+      "VHDL procedure class/default and return diagnostics");
 }
 
 } // namespace fsim::tests::frontend

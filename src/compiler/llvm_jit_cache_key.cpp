@@ -92,6 +92,7 @@ using runtime::simir::SignalLastEvent;
 using runtime::simir::SignalLastValue;
 using runtime::simir::Stop;
 using runtime::simir::StringDisplay;
+using runtime::simir::StringReport;
 using runtime::simir::StringIndex;
 using runtime::simir::StringLength;
 using runtime::simir::StringMethod;
@@ -135,7 +136,7 @@ using runtime::simir::DisableFork;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v72";
+    "fsim-llvm-native-object-v74";
 
 void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
                  const std::uint64_t value) {
@@ -752,9 +753,18 @@ void add_dynamic_part_index_key(
             add_key_u64(builder, "destination", value.destination);
             add_key_u64(builder, "path", value.path);
             add_key_u64(builder, "mode", value.mode);
+            add_key_u64(
+                builder, "has-status", value.status ? 1U : 0U);
+            add_key_u64(
+                builder, "status", value.status.value_or(0));
+            add_key_u64(builder, "vhdl", value.vhdl ? 1U : 0U);
           } else if constexpr (std::is_same_v<OperationType, FileClose>) {
             builder.add("operation", "FileClose");
             add_key_u64(builder, "handle", value.handle);
+            add_key_u64(
+                builder, "clear", value.clear_handle ? 1U : 0U);
+            add_key_u64(
+                builder, "ignore-zero", value.ignore_zero ? 1U : 0U);
           } else if constexpr (std::is_same_v<OperationType, FileWriteLiteral>) {
             builder.add("operation", "FileWriteLiteral");
             add_key_u64(builder, "handle", value.handle);
@@ -797,6 +807,8 @@ void add_dynamic_part_index_key(
             builder.add("suffix", value.suffix);
             add_key_u64(
                 builder, "newline", value.newline ? 1U : 0U);
+            add_key_u64(
+                builder, "clear-source", value.clear_source ? 1U : 0U);
           } else if constexpr (std::is_same_v<OperationType, FileReadLine>) {
             builder.add("operation", "FileReadLine");
             add_key_u64(builder, "destination", value.destination);
@@ -806,10 +818,14 @@ void add_dynamic_part_index_key(
             add_key_u64(
                 builder, "kind",
                 static_cast<std::uint8_t>(value.kind));
+            add_key_u64(
+                builder, "vhdl-textio", value.vhdl_textio ? 1U : 0U);
           } else if constexpr (std::is_same_v<OperationType, FileEndOfFile>) {
             builder.add("operation", "FileEndOfFile");
             add_key_u64(builder, "destination", value.destination);
             add_key_u64(builder, "handle", value.handle);
+            add_key_u64(
+                builder, "lookahead", value.lookahead ? 1U : 0U);
           } else if constexpr (std::is_same_v<OperationType, FileErrorStatus>) {
             builder.add("operation", "FileErrorStatus");
             add_key_u64(builder, "destination", value.destination);
@@ -841,6 +857,19 @@ void add_dynamic_part_index_key(
                   conversion.target.two_state ? 1U : 0U);
             }
             builder.add("scan-trailing", value.trailing_text);
+            add_key_u64(
+                builder,
+                "scan-require-assignments",
+                value.require_assignments ? 1U : 0U);
+            add_key_u64(
+                builder, "scan-has-success", value.success ? 1U : 0U);
+            if (value.success) {
+              add_key_u64(builder, "scan-success", *value.success);
+            }
+            add_key_u64(
+                builder,
+                "scan-consume-string-source",
+                value.consume_string_source ? 1U : 0U);
           } else if constexpr (std::is_same_v<OperationType, FileBinaryRead>) {
             builder.add("operation", "FileBinaryRead");
             add_key_u64(builder, "destination", value.destination);
@@ -1341,6 +1370,15 @@ void add_dynamic_part_index_key(
                 builder,
                 "postponed",
                 value.postponed ? 1U : 0U);
+          } else if constexpr (std::is_same_v<OperationType, StringReport>) {
+            builder.add("operation", "StringReport");
+            add_key_u64(builder, "message", value.message);
+            add_key_u64(builder, "severity", value.severity);
+            builder.add("source-path", value.source.path);
+            add_key_u64(builder, "source-line", value.source.line);
+            add_key_u64(builder, "source-column", value.source.column);
+            add_key_u64(
+                builder, "standalone", value.standalone ? 1U : 0U);
           } else if constexpr (std::is_same_v<OperationType, MonitorInstall>) {
             builder.add("operation", "MonitorInstall");
             add_key_u64(

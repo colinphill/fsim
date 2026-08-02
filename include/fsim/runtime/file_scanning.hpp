@@ -21,6 +21,7 @@ struct InputScanValue {
 struct InputScanResult {
   std::int32_t assignments{};
   std::vector<std::optional<InputScanValue>> values;
+  std::size_t consumed{};
 };
 
 [[nodiscard]] InputScanResult scan_formatted_input(

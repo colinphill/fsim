@@ -1175,7 +1175,7 @@ endmodule
           && sv_assertions[2].span.source_name == "assertions.sv",
       "SystemVerilog pass/failure action metadata");
 
-  const auto invalid_vhdl_severity = parse_text(
+  const auto contextual_vhdl_severity = parse_text(
       "bad_assertion.vhd",
       R"(
 entity bad_assertion is end entity;
@@ -1186,15 +1186,16 @@ architecture rtl of bad_assertion is begin
 end architecture;
 )",
       Language::Vhdl2008);
+  const auto& contextual_assertion =
+      contextual_vhdl_severity.design.units.back()
+          .processes.front().statements.front();
   require(
-      !invalid_vhdl_severity.ok()
-          && std::any_of(
-              invalid_vhdl_severity.diagnostics.begin(),
-              invalid_vhdl_severity.diagnostics.end(),
-              [](const Diagnostic& diagnostic) {
-                return diagnostic.code == "FSIM-VHDL-SEM-011";
-              }),
-      "invalid VHDL assertion severity diagnostic");
+      contextual_vhdl_severity.ok()
+          && contextual_assertion.vhdl_severity_expression.kind
+              == ExpressionKind::Identifier
+          && contextual_assertion.vhdl_severity_expression.text
+              == "panic",
+      "VHDL assertion severity remains a contextual expression");
 
   const auto invalid_sv_report = parse_text(
       "bad_report.sv",
@@ -1734,15 +1735,11 @@ end architecture;
 )",
       Language::Vhdl2008);
   require(
-      !nested_vhdl.ok()
-          && std::any_of(
-              nested_vhdl.diagnostics.begin(),
-              nested_vhdl.diagnostics.end(),
-              [](const Diagnostic& diagnostic) {
-                return diagnostic.code
-                    == "FSIM-VHDL-UNSUPPORTED-017";
-              }),
-      "nested VHDL wait diagnostic");
+      nested_vhdl.ok()
+          && nested_vhdl.design.units.back()
+                 .processes.front().statements.front().statements.front().kind
+              == StatementKind::Delay,
+      "nested VHDL waits retain their exact statement tree");
 
   const auto wildcard_sv = parse_text(
       "wildcard_event.sv",

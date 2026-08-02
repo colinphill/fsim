@@ -1267,10 +1267,14 @@ void substitute_parameters(
     }
     if (type.domain == frontend::ValueDomain::Integer
         && type.integer_range) {
-        constexpr auto minimum =
-            std::int64_t{std::numeric_limits<std::int32_t>::min()};
-        constexpr auto maximum =
-            std::int64_t{std::numeric_limits<std::int32_t>::max()};
+        const bool builtin_time =
+            type.nominal_type == "@builtin:time";
+        const auto minimum = builtin_time
+            ? std::int64_t{0}
+            : std::int64_t{std::numeric_limits<std::int32_t>::min()};
+        const auto maximum = builtin_time
+            ? std::numeric_limits<std::int64_t>::max()
+            : std::int64_t{std::numeric_limits<std::int32_t>::max()};
         const auto& range = *type.integer_range;
         const bool null =
             range.descending ? range.left < range.right
@@ -1283,8 +1287,11 @@ void substitute_parameters(
                 null
                     ? "null VHDL integer subtype constraints are not "
                       "executable in this bounded runtime"
-                    : "VHDL integer subtype constraint lies outside the "
-                      "portable signed 32-bit representation",
+                    : builtin_time
+                        ? "VHDL time constraint lies outside the "
+                          "nonnegative signed 64-bit representation"
+                        : "VHDL integer subtype constraint lies outside the "
+                          "portable signed 32-bit representation",
                 integer_range_span});
             type.integer_range.reset();
         } else {

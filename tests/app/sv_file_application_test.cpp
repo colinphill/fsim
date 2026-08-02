@@ -228,12 +228,112 @@ endmodule
   try {
     static_cast<void>(simulation.run());
     assert(false);
-  } catch (const fsim::runtime::simir::InterpreterError& error) {
+  } catch (const std::exception& error) {
     assert(
         std::string{error.what()}.find(
             "manifest root")
         != std::string::npos);
   }
+}
+
+fsim::project::Config make_vhdl_config(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization,
+    const std::string_view top = "vhdl_file_top") {
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = std::string{top};
+  config.project.top = "vhdl:work." + std::string{top} + "(rtl)";
+  config.project.time_resolution = "1ns";
+  config.build.optimization = optimization;
+  config.build.cache_path = directory
+      / (optimization == fsim::project::Optimization::o0
+             ? "vhdl-cache-o0" : "vhdl-cache-o2");
+  config.run.max_deltas = 1000;
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::vhdl;
+  sources.standard = "2008";
+  sources.library = "work";
+  sources.files = {source};
+  config.source_sets.push_back(std::move(sources));
+  return config;
+}
+
+void verify_vhdl_textio_failure(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization,
+    const fsim::app::SimulationEngine engine) {
+  const auto config = make_vhdl_config(
+      directory, source, optimization, "vhdl_textio_failure");
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  assert(project);
+  fsim::app::Simulation simulation{
+      std::move(*project), config.run.max_deltas, engine};
+  bool failed{};
+  try {
+    static_cast<void>(simulation.run());
+  } catch (const std::exception& error) {
+    failed = true;
+    assert(
+        std::string_view{error.what()}.find(
+            "VHDL file read did not convert the requested element")
+        != std::string_view::npos);
+  }
+  assert(failed);
+}
+
+fsim::app::NativeCacheStatistics verify_vhdl_file_objects(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization,
+    const fsim::app::SimulationEngine engine) {
+  const auto config = make_vhdl_config(
+      directory, source, optimization);
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  if (!project) {
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
+  assert(project);
+  assert(project->specialization_cache_keys.size() == 1);
+  fsim::app::Simulation simulation{
+      std::move(*project), config.run.max_deltas, engine};
+  const auto cache = simulation.native_cache_statistics();
+  std::vector<fsim::runtime::simir::ExecutionPoint> points;
+  simulation.set_execution_point_hook(
+      [&](fsim::runtime::Scheduler&,
+          const fsim::runtime::simir::ExecutionPoint& point) {
+        points.push_back(point);
+      });
+  const auto result = simulation.run();
+  assert(result.status == fsim::runtime::RunStatus::completed);
+  const auto done = simulation.find_signal("vhdl_file_top.done");
+  assert(done);
+  assert(simulation.read_signal(*done).to_msb_string() == "1");
+  assert(std::filesystem::exists(directory / "vhdl-output.txt"));
+  assert(read_text(directory / "vhdl-output.txt") == "27\n");
+  assert(
+      read_text(directory / "vhdl-text-output.txt")
+      == "   7TRUE0  |\nX\n");
+  assert(std::ranges::any_of(
+      points,
+      [&](const auto& point) {
+        return point.source.path == source.string()
+            && point.scope.find("vhdl_file_top") != std::string::npos;
+      }));
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      engine == fsim::app::SimulationEngine::interpreter
+          ? simulation.compiled_process_count() == 0
+          : simulation.compiled_process_count() == 1);
+#endif
+  return cache;
 }
 
 }  // namespace
@@ -251,6 +351,7 @@ int main() {
   const auto scan_input = directory.path / "scan.txt";
   const auto binary_input = directory.path / "binary.bin";
   const auto packet_input = directory.path / "packets.hex";
+  const auto vhdl_source = directory.path / "vhdl_file.vhd";
   write_text(
       stable,
       R"(
@@ -258,6 +359,95 @@ module stable_child;
   initial begin end
 endmodule
 )");
+  write_text(
+      vhdl_source,
+      R"(
+entity vhdl_file_top is end entity;
+architecture rtl of vhdl_file_top is
+  type integer_file is file of integer;
+  type text_file is file of string;
+  signal done : bit;
+begin
+  worker: process
+    file input_file : integer_file open read_mode is "vhdl-input.txt";
+    file empty_file : integer_file open read_mode is "vhdl-empty.txt";
+    file output_file : integer_file;
+    file text_input : text_file open read_mode is "vhdl-text-input.txt";
+    file text_output : text_file open write_mode is "vhdl-text-output.txt";
+    variable status : file_open_status;
+    variable value : integer;
+    variable flag : boolean;
+    variable digit : bit;
+    variable good : boolean;
+    variable input_line, output_line : line;
+    procedure close_alias(file target : integer_file) is
+    begin
+      file_close(target);
+    end procedure;
+  begin
+    assert not endfile(input_file)
+      report "nonempty file reported endfile" severity failure;
+    read(input_file, value);
+    assert value = 17 report "direct file read" severity failure;
+    assert endfile(input_file)
+      report "consumed file did not report endfile" severity failure;
+    assert endfile(empty_file)
+      report "empty file did not report endfile" severity failure;
+    readline(text_input, input_line);
+    read(input_line, value, good);
+    assert good and value = 42 report "TextIO integer read" severity failure;
+    read(input_line, flag);
+    assert flag report "TextIO boolean read" severity failure;
+    read(input_line, digit);
+    assert digit = '0' report "TextIO bit read" severity failure;
+    read(input_line, value, good);
+    assert not good and value = 42
+      report "TextIO good failure" severity failure;
+    write(output_line, 7, right, 4);
+    write(output_line, true);
+    write(output_line, digit, left, 3);
+    write(output_line, "|");
+    writeline(text_output, output_line);
+    write(output_line, "X");
+    writeline(text_output, output_line);
+    file_open(status, output_file, "vhdl-output.txt", write_mode);
+    assert status = open_ok report "open status" severity failure;
+    write(output_file, 27);
+    file_open(status, output_file, "vhdl-output.txt", append_mode);
+    assert status = status_error report "already-open status" severity failure;
+    close_alias(output_file);
+    file_open(status, output_file, "missing-input.txt", read_mode);
+    assert status = name_error report "missing-name status" severity failure;
+    file_close(input_file);
+    file_close(empty_file);
+    file_close(text_input);
+    file_close(text_output);
+    done <= '1';
+    wait;
+  end process;
+end architecture;
+
+entity vhdl_textio_failure is end entity;
+architecture rtl of vhdl_textio_failure is
+  type text_file is file of string;
+begin
+  worker: process
+    file input_file : text_file open read_mode is "vhdl-bad-text-input.txt";
+    variable input_line : line;
+    variable value : integer;
+  begin
+    readline(input_file, input_line);
+    read(input_line, value);
+    wait;
+  end process;
+end architecture;
+)");
+  write_text(directory.path / "vhdl-input.txt", "17");
+  write_text(directory.path / "vhdl-empty.txt", "");
+  write_text(
+      directory.path / "vhdl-text-input.txt",
+      "  42 TRUE 0 bad\n");
+  write_text(directory.path / "vhdl-bad-text-input.txt", "bad\n");
   const auto write_source =
       [&](const std::string_view label) {
         std::ofstream output(
@@ -507,6 +697,31 @@ endmodule
         config, source, fsim::app::SimulationEngine::interpreter);
     verify_bad_path(
         config, source, fsim::app::SimulationEngine::compiled);
+    static_cast<void>(verify_vhdl_file_objects(
+        directory.path, vhdl_source, optimization,
+        fsim::app::SimulationEngine::interpreter));
+    const auto vhdl_cold = verify_vhdl_file_objects(
+        directory.path, vhdl_source, optimization,
+        fsim::app::SimulationEngine::compiled);
+    const auto vhdl_warm = verify_vhdl_file_objects(
+        directory.path, vhdl_source, optimization,
+        fsim::app::SimulationEngine::compiled);
+#if defined(FSIM_HAS_LLVM)
+    assert(vhdl_cold.hits == 0);
+    assert(vhdl_cold.misses == 1);
+    assert(vhdl_cold.stores == 1);
+    assert(vhdl_warm.hits == 1);
+    assert(vhdl_warm.misses == 0);
+#else
+    static_cast<void>(vhdl_cold);
+    static_cast<void>(vhdl_warm);
+#endif
+    verify_vhdl_textio_failure(
+        directory.path, vhdl_source, optimization,
+        fsim::app::SimulationEngine::interpreter);
+    verify_vhdl_textio_failure(
+        directory.path, vhdl_source, optimization,
+        fsim::app::SimulationEngine::compiled);
   }
   return 0;
 }

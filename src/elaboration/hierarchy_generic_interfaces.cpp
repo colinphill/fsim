@@ -12,7 +12,12 @@ void HierarchyBuilder::validate_vhdl_generic_type(
         && (generic.type.domain == frontend::ValueDomain::Bit2
             || generic.type.domain == frontend::ValueDomain::Logic4
             || generic.type.domain == frontend::ValueDomain::Logic9);
-    if ((generic.type.packed_range && !supported_packed)
+    const bool supported_time =
+        generic.type.nominal_type == "@builtin:time"
+        && generic.type.domain == frontend::ValueDomain::Integer
+        && generic.type.width().value_or(0) == 64;
+    if ((generic.type.packed_range
+         && !supported_packed && !supported_time)
         || !generic.type.packed_members.empty()
         || (generic.type.named_type.empty()
             && generic.type.domain != frontend::ValueDomain::Integer
@@ -21,7 +26,7 @@ void HierarchyBuilder::validate_vhdl_generic_type(
         report(
             "FSIM-ELAB-GENERIC-010",
             "a bounded VHDL generic subtype must resolve to a supported "
-            "scalar or up-to-64-bit packed type",
+            "scalar, physical-time, or up-to-64-bit packed type",
             generic.span);
     }
 }

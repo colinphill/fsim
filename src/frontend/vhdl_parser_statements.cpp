@@ -125,28 +125,45 @@ std::optional<Statement> VhdlParser::parse_sequential_statement(
     Statement statement;
     statement.kind = StatementKind::Report;
     statement.assertion_severity = AssertionSeverity::Note;
-    const auto message = expect(
-        TokenKind::StringLiteral,
-        "literal string after report",
-        "FSIM-VHDL-PARSE-121");
-    statement.output_text = string_literal_text(message);
+    if (keyword("severity", 0, true)
+        || at(TokenKind::Semicolon)) {
+      error(
+          current(),
+          "FSIM-VHDL-PARSE-261",
+          "a VHDL report statement requires a report expression");
+    } else {
+      statement.vhdl_report_expression = parse_expression();
+      if (statement.vhdl_report_expression.kind
+          == ExpressionKind::StringLiteral) {
+        statement.output_text = string_literal_text(Token{
+            TokenKind::StringLiteral,
+            statement.vhdl_report_expression.text,
+            statement.vhdl_report_expression.span,
+            {}});
+      }
+    }
     if (match_keyword("severity", true)) {
-      const auto severity =
-          expect_identifier("report severity");
-      if (detail::iequals(severity.text, "note")) {
-        statement.assertion_severity = AssertionSeverity::Note;
-      } else if (detail::iequals(severity.text, "warning")) {
-        statement.assertion_severity = AssertionSeverity::Warning;
-      } else if (detail::iequals(severity.text, "error")) {
-        statement.assertion_severity = AssertionSeverity::Error;
-      } else if (detail::iequals(severity.text, "failure")) {
-        statement.assertion_severity = AssertionSeverity::Failure;
-      } else {
+      if (at(TokenKind::Semicolon)) {
         error(
-            severity,
-            "FSIM-VHDL-SEM-011",
-            "report severity must be note, warning, error, or "
-            "failure");
+            current(),
+            "FSIM-VHDL-PARSE-262",
+            "a VHDL severity clause requires an expression");
+      } else {
+        statement.vhdl_severity_expression = parse_expression();
+      }
+      const auto& severity = statement.vhdl_severity_expression;
+      if (severity.kind == ExpressionKind::Identifier
+          && severity.text == "note") {
+        statement.assertion_severity = AssertionSeverity::Note;
+      } else if (severity.kind == ExpressionKind::Identifier
+                 && severity.text == "warning") {
+        statement.assertion_severity = AssertionSeverity::Warning;
+      } else if (severity.kind == ExpressionKind::Identifier
+                 && severity.text == "error") {
+        statement.assertion_severity = AssertionSeverity::Error;
+      } else if (severity.kind == ExpressionKind::Identifier
+                 && severity.text == "failure") {
+        statement.assertion_severity = AssertionSeverity::Failure;
       }
     }
     expect(
@@ -534,26 +551,46 @@ Statement VhdlParser::parse_vhdl_assertion(const Token& start) {
   statement.kind = StatementKind::Assert;
   statement.condition = parse_expression();
   if (match_keyword("report", true)) {
-    const auto message = expect(
-        TokenKind::StringLiteral, "string literal after report",
-        "FSIM-VHDL-PARSE-045");
-    statement.assertion_message = string_literal_text(message);
+    if (keyword("severity", 0, true)
+        || at(TokenKind::Semicolon)) {
+      error(
+          current(),
+          "FSIM-VHDL-PARSE-261",
+          "a VHDL assertion report clause requires an expression");
+    } else {
+      statement.vhdl_report_expression = parse_expression();
+      if (statement.vhdl_report_expression.kind
+          == ExpressionKind::StringLiteral) {
+        statement.assertion_message = string_literal_text(Token{
+            TokenKind::StringLiteral,
+            statement.vhdl_report_expression.text,
+            statement.vhdl_report_expression.span,
+            {}});
+      }
+    }
   }
   if (match_keyword("severity", true)) {
-    const auto severity = expect_identifier("assertion severity");
-    const auto canonical = detail::ascii_lower(severity.text);
-    if (canonical == "note") {
-      statement.assertion_severity = AssertionSeverity::Note;
-    } else if (canonical == "warning") {
-      statement.assertion_severity = AssertionSeverity::Warning;
-    } else if (canonical == "error") {
-      statement.assertion_severity = AssertionSeverity::Error;
-    } else if (canonical == "failure") {
-      statement.assertion_severity = AssertionSeverity::Failure;
-    } else {
+    if (at(TokenKind::Semicolon)) {
       error(
-          severity, "FSIM-VHDL-SEM-011",
-          "assertion severity must be note, warning, error, or failure");
+          current(),
+          "FSIM-VHDL-PARSE-262",
+          "a VHDL severity clause requires an expression");
+    } else {
+      statement.vhdl_severity_expression = parse_expression();
+    }
+    const auto& severity = statement.vhdl_severity_expression;
+    if (severity.kind == ExpressionKind::Identifier
+        && severity.text == "note") {
+      statement.assertion_severity = AssertionSeverity::Note;
+    } else if (severity.kind == ExpressionKind::Identifier
+               && severity.text == "warning") {
+      statement.assertion_severity = AssertionSeverity::Warning;
+    } else if (severity.kind == ExpressionKind::Identifier
+               && severity.text == "error") {
+      statement.assertion_severity = AssertionSeverity::Error;
+    } else if (severity.kind == ExpressionKind::Identifier
+               && severity.text == "failure") {
+      statement.assertion_severity = AssertionSeverity::Failure;
     }
   }
   expect(TokenKind::Semicolon, "';' after assertion",
@@ -987,17 +1024,22 @@ Expression VhdlParser::parse_conditional_assignment_value() {
 
 Delay VhdlParser::parse_vhdl_delay(const Token& start) {
   Delay delay;
-  const auto magnitude =
-      expect(TokenKind::Number, "delay magnitude", "FSIM-VHDL-PARSE-030");
-  if (const auto parsed = decimal_u64(magnitude.text)) {
-    delay.magnitude = *parsed;
-  } else {
-    error(magnitude, "FSIM-VHDL-SEM-004",
-          "delay magnitude must be an integer literal");
+  auto expression = parse_expression();
+  delay.span = cover(start.span, expression.span);
+  constexpr std::string_view physical_prefix{"@vhdl-physical:"};
+  if (expression.kind == ExpressionKind::Call
+      && expression.text.starts_with(physical_prefix)
+      && expression.operands.size() == 1
+      && expression.operands.front().kind
+          == ExpressionKind::IntegerLiteral) {
+    if (const auto magnitude =
+            decimal_u64(expression.operands.front().text)) {
+      delay.magnitude = *magnitude;
+      delay.unit = expression.text.substr(physical_prefix.size());
+      return delay;
+    }
   }
-  const auto unit = expect_identifier("physical time unit");
-  delay.unit = detail::ascii_lower(unit.text);
-  delay.span = span_from(start, unit);
+  delay.expression = std::move(expression);
   return delay;
 }
 

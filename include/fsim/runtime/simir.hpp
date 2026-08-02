@@ -1157,6 +1157,15 @@ struct Report {
   SourceLocation source;
 };
 
+/// Emit a VHDL assertion/report whose message and severity were evaluated at
+/// the statement execution point.
+struct StringReport {
+  StringRegisterId message{};
+  RegisterId severity{};
+  SourceLocation source;
+  bool standalone{};
+};
+
 /// Stop the complete simulation, as requested by `$finish` or an equivalent
 /// language construct.
 struct Stop {};

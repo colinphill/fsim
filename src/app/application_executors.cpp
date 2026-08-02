@@ -1677,53 +1677,6 @@ void LlvmProcessExecutor::schedule_output(
     }
   }
 
-void LlvmProcessExecutor::write_report(
-    void* context,
-    const std::uint32_t process,
-    const std::uint32_t instruction) noexcept  {
-    auto& state = *static_cast<CallbackState*>(context);
-    if (state.failure) {
-      return;
-    }
-    try {
-      if (state.context == nullptr
-          || state.process == nullptr
-          || state.process->id != process
-          || instruction >= state.process->operations.size()) {
-        throw std::logic_error{
-            "invalid generated report callback"};
-      }
-      const auto* report =
-          fsim::runtime::simir::operation_get_if<runtime::simir::Report>(
-              &state.process->operations[instruction]);
-      if (report != nullptr) {
-        state.context->report(
-            report->message,
-            report->severity,
-            report->source);
-        return;
-      }
-      const auto* assertion =
-          fsim::runtime::simir::operation_get_if<runtime::simir::Assert>(
-              &state.process->operations[instruction]);
-      if (assertion == nullptr
-          || assertion->severity
-              == runtime::simir::AssertionSeverity::failure) {
-        throw std::logic_error{
-            "generated report callback references an incompatible "
-            "instruction"};
-      }
-      state.context->report(
-          assertion->message.empty()
-              ? std::string_view{"assertion failed"}
-              : std::string_view{assertion->message},
-          assertion->severity,
-          assertion->source);
-    } catch (...) {
-      capture_failure(state);
-    }
-  }
-
 void LlvmProcessExecutor::write_formatted(
     void* context,
     const std::uint32_t process,

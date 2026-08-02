@@ -83,13 +83,23 @@ void FileOperationLowerer::check(
 void FileOperationLowerer::lower(
     const runtime::simir::FileOpen& operation) {
   auto* result = builder.CreateAlloca(i32, nullptr, "file.open.result");
-  check(
-      builder.CreateCall(
-          callback_types[0],
-          callbacks[0],
-          {context_pointer, id(i32, process), id(i32, instruction),
-           result}),
-      "file.open");
+  builder.CreateStore(id(i32, 0), result);
+  auto* status = builder.CreateCall(
+      callback_types[0],
+      callbacks[0],
+      {context_pointer, id(i32, process), id(i32, instruction),
+       result});
+  if (operation.status) {
+    store_register(
+        builder,
+        registers,
+        *operation.status,
+        {builder.CreateZExt(status, i64),
+         constant_i64(context, 0),
+         2});
+  } else {
+    check(status, "file.open");
+  }
   auto* value = builder.CreateLoad(i32, result);
   store_register(
       builder,
@@ -118,7 +128,25 @@ void FileOperationLowerer::lower_handle_only(
 
 void FileOperationLowerer::lower(
     const runtime::simir::FileClose& operation) {
-  lower_handle_only(operation.handle, 1, "file.close");
+  const auto value = load_register(
+      builder, registers, operation.handle);
+  check(
+      builder.CreateCall(
+          callback_types[1],
+          callbacks[1],
+          {context_pointer, id(i32, process), id(i32, instruction),
+           value.aval, value.bval}),
+      "file.close");
+  if (operation.clear_handle) {
+    store_register(
+        builder,
+        registers,
+        operation.handle,
+        {constant_i64(context, 0),
+         constant_i64(context, 0),
+         32});
+  }
+  branch_to_next();
 }
 
 void FileOperationLowerer::lower(
@@ -197,8 +225,23 @@ void FileOperationLowerer::lower(
 
 void FileOperationLowerer::lower(
     const runtime::simir::FileEndOfFile& operation) {
-  lower_result(
-      operation.destination, operation.handle, 4, "file.end-of-file");
+  const auto value = load_register(
+      builder, registers, operation.handle);
+  auto* result = builder.CreateAlloca(i32, nullptr, "file.eof.result");
+  check(
+      builder.CreateCall(
+          callback_types[4], callbacks[4],
+          {context_pointer, id(i32, process), id(i32, instruction),
+           value.aval, value.bval, result}),
+      "file.end-of-file");
+  store_register(
+      builder,
+      registers,
+      operation.destination,
+      {builder.CreateZExt(builder.CreateLoad(i32, result), i64),
+       constant_i64(context, 0),
+       operation.lookahead ? 1U : 32U});
+  branch_to_next();
 }
 
 void FileOperationLowerer::lower(

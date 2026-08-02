@@ -16,7 +16,9 @@ bool Lowerer::is_string_expression(
             && object_type(expression.text)->domain
                 == frontend::ValueDomain::String);
   }
-  if (expression.kind == ExpressionKind::Concatenation) {
+  if (expression.kind == ExpressionKind::Concatenation
+      || (expression.kind == ExpressionKind::Binary
+          && expression.text == "&")) {
     return !expression.operands.empty()
         && std::ranges::all_of(
             expression.operands,
@@ -87,7 +89,9 @@ Lowerer::lower_string_expression(
         expression.span);
     return std::nullopt;
   }
-  if (expression.kind == ExpressionKind::Concatenation) {
+  if (expression.kind == ExpressionKind::Concatenation
+      || (expression.kind == ExpressionKind::Binary
+          && expression.text == "&")) {
     if (expression.operands.empty()) {
       report(
           "FSIM-ELAB-SVSTRING-009",

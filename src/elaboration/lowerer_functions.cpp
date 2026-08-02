@@ -124,6 +124,13 @@ void Lowerer::initialize_function_support() {
                     argument.default_value->span);
             }
         }
+        if (contains_explicit_wait(function.statements)) {
+            report(
+                "FSIM-ELAB-VHLEGAL-009",
+                "VHDL function '" + function.name
+                    + "' contains a wait statement",
+                function.span);
+        }
         if (!function.pure) {
             continue;
         }

@@ -71,8 +71,8 @@ using ControlOperationGroup =
                    Pause, Stop, Halt>;
 
 using OutputOperationGroup =
-    OperationGroup<Display, FormatDisplay, StringDisplay, TimeDisplay,
-                   MonitorInstall, MonitorControl>;
+    OperationGroup<Display, FormatDisplay, StringDisplay, StringReport,
+                   TimeDisplay, MonitorInstall, MonitorControl>;
 
 template <typename Alternative, typename Variant>
 struct VariantContains;
@@ -180,7 +180,7 @@ static_assert(
         + std::variant_size_v<SchedulingOperationGroup::Storage>
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
-    == 115);
+    == 116);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept {

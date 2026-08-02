@@ -368,12 +368,14 @@ VhdlParser::parse_vhdl_function_parameters() {
   while (!at_end() && !at(TokenKind::RightParen)) {
     const auto declaration_start = current();
     bool supported_class = true;
+    bool file_class = false;
     if (match_keyword("constant", true)) {
       // Constant is the default class for function parameters.
+    } else if (match_keyword("file", true)) {
+      file_class = true;
     } else if (
         match_keyword("signal", true)
-        || match_keyword("variable", true)
-        || match_keyword("file", true)) {
+        || match_keyword("variable", true)) {
       supported_class = false;
       error(
           previous(),
@@ -393,18 +395,28 @@ VhdlParser::parse_vhdl_function_parameters() {
         "FSIM-VHDL-PARSE-152");
 
     bool input_mode = true;
+    bool explicit_mode = false;
     if (match_keyword("in", true)) {
+      explicit_mode = true;
       // In is the default mode for function parameters.
     } else if (
         match_keyword("out", true)
         || match_keyword("inout", true)
         || match_keyword("buffer", true)
         || match_keyword("linkage", true)) {
+      explicit_mode = true;
       input_mode = false;
       error(
           previous(),
           "FSIM-VHDL-UNSUPPORTED-030",
           "bounded VHDL functions require input parameters");
+    }
+    if (file_class && explicit_mode) {
+      supported_class = false;
+      error(
+          previous(),
+          "FSIM-VHDL-SEM-095",
+          "a VHDL file interface declaration does not have a mode");
     }
 
     const auto type_start = current();
@@ -424,6 +436,13 @@ VhdlParser::parse_vhdl_function_parameters() {
     std::optional<Expression> default_value;
     if (match(TokenKind::ColonEqual)) {
       default_value = parse_expression();
+      if (file_class) {
+        supported_class = false;
+        error(
+            previous(),
+            "FSIM-VHDL-SEM-096",
+            "a VHDL file interface declaration cannot have a default");
+      }
     }
 
     for (const auto& name : names) {
@@ -446,7 +465,8 @@ VhdlParser::parse_vhdl_function_parameters() {
             PortDirection::Input,
             span_from(name, previous()),
             false,
-            default_value});
+            default_value,
+            file_class});
       }
     }
 
@@ -482,9 +502,9 @@ VhdlParser::parse_vhdl_procedure_parameters() {
       explicit_class = InterfaceObjectClass::Constant;
     } else if (match_keyword("variable", true)) {
       explicit_class = InterfaceObjectClass::Variable;
-    } else if (
-        match_keyword("signal", true)
-        || match_keyword("file", true)) {
+    } else if (match_keyword("file", true)) {
+      explicit_class = InterfaceObjectClass::File;
+    } else if (match_keyword("signal", true)) {
       supported_class = false;
       error(
           previous(),
@@ -506,15 +526,20 @@ VhdlParser::parse_vhdl_procedure_parameters() {
         "FSIM-VHDL-PARSE-168");
 
     auto direction = PortDirection::Input;
+    bool explicit_mode = false;
     if (match_keyword("in", true)) {
+      explicit_mode = true;
       direction = PortDirection::Input;
     } else if (match_keyword("out", true)) {
+      explicit_mode = true;
       direction = PortDirection::Output;
     } else if (match_keyword("inout", true)) {
+      explicit_mode = true;
       direction = PortDirection::Inout;
     } else if (
         match_keyword("buffer", true)
         || match_keyword("linkage", true)) {
+      explicit_mode = true;
       supported_class = false;
       error(
           previous(),
@@ -526,6 +551,14 @@ VhdlParser::parse_vhdl_procedure_parameters() {
         direction == PortDirection::Input
             ? InterfaceObjectClass::Constant
             : InterfaceObjectClass::Variable);
+    if (object_class == InterfaceObjectClass::File
+        && explicit_mode) {
+      supported_class = false;
+      error(
+          previous(),
+          "FSIM-VHDL-SEM-095",
+          "a VHDL file interface declaration does not have a mode");
+    }
     if (object_class == InterfaceObjectClass::Constant
         && direction != PortDirection::Input) {
       supported_class = false;
@@ -558,6 +591,13 @@ VhdlParser::parse_vhdl_procedure_parameters() {
             default_start,
             "FSIM-VHDL-SEM-074",
             "a VHDL procedure parameter default requires mode in");
+      }
+      if (object_class == InterfaceObjectClass::File) {
+        supported_class = false;
+        error(
+            default_start,
+            "FSIM-VHDL-SEM-096",
+            "a VHDL file interface declaration cannot have a default");
       }
     }
 
@@ -782,6 +822,11 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
   expect_keyword(
       "is", true, "FSIM-VHDL-PARSE-158");
   while (!at_end() && !keyword("begin", 0, true)) {
+    if (match_keyword("file", true)) {
+      parse_vhdl_file_declaration(
+          function.variables, previous());
+      continue;
+    }
     if (parse_vhdl_local_nonobject_declaration(
             function.constants,
             function.type_aliases,
@@ -986,6 +1031,11 @@ ProcedureDeclaration VhdlParser::parse_vhdl_procedure(
   expect_keyword(
       "is", true, "FSIM-VHDL-PARSE-173");
   while (!at_end() && !keyword("begin", 0, true)) {
+    if (match_keyword("file", true)) {
+      parse_vhdl_file_declaration(
+          procedure.variables, previous());
+      continue;
+    }
     if (parse_vhdl_local_nonobject_declaration(
             procedure.constants,
             procedure.type_aliases,
@@ -1140,6 +1190,9 @@ ProcedureDeclaration VhdlParser::parse_vhdl_procedure(
                 || statement.kind == StatementKind::Break
                 || statement.kind == StatementKind::Continue
                 || statement.kind == StatementKind::Return
+                || statement.kind == StatementKind::Delay
+                || statement.kind == StatementKind::WaitOn
+                || statement.kind == StatementKind::WaitUntil
                 || statement.kind == StatementKind::Null
                 || statement.kind == StatementKind::Block;
           }
@@ -1151,8 +1204,8 @@ ProcedureDeclaration VhdlParser::parse_vhdl_procedure(
                     statement.span,
                     {}},
                 "FSIM-VHDL-UNSUPPORTED-044",
-                "bounded VHDL procedure bodies must be time-free and may "
-                "only update variables and procedure formals");
+                "bounded VHDL procedure bodies may wait but may only "
+                "update variables and procedure formals");
           }
           self(self, statement.statements);
           self(self, statement.else_statements);

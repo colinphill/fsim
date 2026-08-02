@@ -30,6 +30,7 @@ void test_vhdl_array_attributes();
 void test_vhdl_selected_assignments();
 void test_vhdl_delay_mechanisms();
 void test_vhdl_ordered_waveforms();
+void test_vhdl_batch119_retained_surface();
 void test_vhdl_case_statements();
 void test_vhdl_sequential_for_loops();
 void test_systemverilog_vertical_slice();

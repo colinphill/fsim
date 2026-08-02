@@ -499,16 +499,57 @@ quote, backslash, and one-byte octal escapes; SimIR and generated code retain
 the exact byte string, including embedded NUL bytes.
 The same decoder is used for bounded `$fatal` and immediate-assertion `$error`
 literal messages before assertion metadata enters SimIR.
-Bounded VHDL literal `report` statements lower to a distinct typed `Report`
-operation retaining severity and source metadata. `note`, `warning`, and
-`error` reports invoke a synchronous report hook and continue; the LLVM
-adapter uses an append-only instruction-index callback to recover the same
-immutable metadata. CLI/Tcl render the report and the native C assertion
-callback receives it without terminating the session. A `failure` report
-publishes through that hook once, then terminates through the common typed
-assertion-failure boundary before any following statement. VHDL doubled
-quotes are decoded in the frontend; a configurable stop threshold remains
-targeted.
+VHDL assertions and `report` statements retain general string report and
+`severity_level` expressions. Literal/predefined forms keep the compact typed
+`Assert` and `Report` operations; dynamic forms lower string concatenation and
+the two-bit severity ordinal into registers consumed by `StringReport`.
+Passing assertions branch over both expression evaluations. `note`, `warning`,
+and `error` invoke a synchronous report hook and continue in both engines.
+The LLVM adapter uses the same instruction-index callback to read dynamic
+registers without extending the C ABI. A standalone `failure` publishes once
+then terminates, while a failed assertion terminates without double-reporting.
+Both preserve exact source metadata. VHDL doubled quotes are decoded in the
+frontend; a configurable stop threshold remains targeted.
+VHDL file objects reuse the common manifest-confined file service while
+keeping their source-level state in opaque 32-bit registers. `FileOpen`
+distinguishes status and nonstatus calls, returns the four predefined status
+ordinals without clearing an already-open object, and never exposes a host
+descriptor. VHDL `FileClose` clears the owning register; epilogue cleanup can
+therefore close lexical and procedure-owned objects idempotently, including
+after an early return. Lookahead `FileEndOfFile` reads and restores one byte.
+Direct integer-element `read` uses `FileScan` with required-assignment metadata
+so both engines reject incomplete conversion, while direct `write` shares the
+signed-decimal formatter. File-formal call frames copy the opaque state in and
+back out, preserving alias behavior without transferring host ownership.
+Bounded TextIO maps `line` to the existing byte-string register plane.
+`FileReadLine` marks TextIO reads so the common service strips LF/CRLF and
+rejects true EOF; `FileWriteString` can clear its source after the newline.
+String-backed `FileScan` reports consumed bytes and optionally stores a
+one-bit success result, allowing `read(line, value, good)` to advance the same
+cursor without mutating a failed target. Required reads share the same scan
+but turn incomplete conversion into an exact runtime failure. TextIO writes
+append through `StringMethod` formatting, so interpreter and compiled paths
+share width, justification, byte-limit, and Boolean spelling behavior. Schema
+73 keys every added TextIO/file operation field.
+VHDL's predefined `time` is a nonnegative signed-64-bit tick value. Before
+elaboration, the application recursively rewrites standard physical units
+from `fs` through `hr` into exact project ticks, including units nested in
+locally static constants, qualifications, arithmetic, comparisons, and
+expression-valued waits. Rational cancellation avoids an intermediate
+femtosecond overflow, while nonstatic, final-tick overflow, and inexact
+resolution cases receive distinct diagnostics. Expression-valued units also
+participate in automatic resolution selection. The resulting integer SimIR
+wait/timeout representation is shared unchanged by the interpreter and LLVM;
+native schema 74 separates these semantics from prior cached objects.
+The Batch 119 integration boundary keeps those operations inside ordinary
+specialization ownership. A time-generic VHDL child produces a distinct
+canonical native module beside its parent; both modules retain the same keys
+across reference, O0/O2, warm-cache, and forced-O0 debug construction.
+Execution-point metadata carries the child lexical scope and original VHDL
+source through nested callable suspension. Reports and file/TextIO operations
+likewise retain source points across cold/warm compiled runs, while VCD
+observes only committed parent-visible values and resolved projected
+transactions.
 Literal-only `$monitor` retains its one initial postponed publication.
 Value-sensitive `$monitor` installs one runtime-owned global registration.
 The current direct packed-signal slice publishes once after installation,
@@ -613,6 +654,15 @@ to the selector and every alternative value dependency; choice expressions
 also participate defensively, although the supported source form expects
 locally static exact choices. A final `others` is required by the bounded form
 to guarantee that every evaluation schedules exactly one alternative.
+
+VHDL procedure calls use the ordinary resumable SimIR call stack, so a wait
+inside a called procedure suspends the owning process without discarding its
+return frame. Elaboration records exact overload-resolved procedure edges as
+call sites are lowered. After all reachable callable bodies are present, the
+transitive suspension closure selects a no-sensitivity process's implicit
+repeat jump and rejects the same closure from a sensitized process or a
+function. Deferring that decision avoids both name-only overload false
+positives and fallthrough from the process body into appended subroutines.
 
 SystemVerilog final procedures lower to ordinary resumable SimIR processes
 marked `final` and `initialize = false`. When ordinary scheduling becomes

@@ -50,9 +50,14 @@ void substitute_delay_parameters(
         && ((value->bits >> (value->width - 1U)) & 1U) != 0;
     if (!value || !value->known() || negative) {
       diagnostics.push_back({
-          "FSIM-ELAB-SVDELAY-001",
-          "SystemVerilog delay expression must be a known "
-          "nonnegative locally constant integral value"
+          language == frontend::Language::Vhdl2008
+              ? "FSIM-ELAB-VHTIME-001"
+              : "FSIM-ELAB-SVDELAY-001",
+          std::string{language == frontend::Language::Vhdl2008
+              ? "VHDL time expression must be a known nonnegative "
+                "locally static value"
+              : "SystemVerilog delay expression must be a known "
+                "nonnegative locally constant integral value"}
               + (error.empty() ? std::string{} : ": " + error),
           delay.expression->span});
       delay.magnitude = 0;
@@ -63,9 +68,14 @@ void substitute_delay_parameters(
               > std::numeric_limits<std::uint64_t>::max()
                   / magnitude) {
         diagnostics.push_back({
-            "FSIM-ELAB-SVDELAY-002",
-            "SystemVerilog delay expression overflows the 64-bit "
-            "simulation time range after time-unit normalization",
+            language == frontend::Language::Vhdl2008
+                ? "FSIM-ELAB-VHTIME-002"
+                : "FSIM-ELAB-SVDELAY-002",
+            std::string{language == frontend::Language::Vhdl2008
+                ? "VHDL time expression overflows the 64-bit simulation "
+                  "time range after resolution normalization"
+                : "SystemVerilog delay expression overflows the 64-bit "
+                  "simulation time range after time-unit normalization"},
             delay.expression->span});
         delay.magnitude = 0;
       } else {

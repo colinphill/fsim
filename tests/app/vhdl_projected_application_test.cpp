@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -92,7 +93,7 @@ Capture run_once(
   capture.compiled_processes = simulation.compiled_process_count();
   capture.native_cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 11> names{
+  constexpr std::array<std::string_view, 13> names{
       "vhdl_projected.default_output",
       "vhdl_projected.explicit_output",
       "vhdl_projected.transport_output",
@@ -103,7 +104,9 @@ Capture run_once(
       "vhdl_projected.waveform_output",
       "vhdl_projected.waveform_slice_output",
       "vhdl_projected.conditional_waveform_output",
-      "vhdl_projected.selected_waveform_output"};
+      "vhdl_projected.selected_waveform_output",
+      "vhdl_projected.resolved_output",
+      "vhdl_projected.delta_output"};
   std::array<fsim::runtime::simir::SignalId, names.size()> signals{};
   std::array<fsim::runtime::VcdSignal, names.size()> vcd_signals{};
   std::ostringstream vcd_output;
@@ -171,6 +174,25 @@ changes_for(
   return result;
 }
 
+std::vector<std::tuple<
+    std::string,
+    fsim::runtime::SimulationTick,
+    std::uint64_t>>
+changes_with_delta(
+    const Capture& capture,
+    const std::string_view signal) {
+  std::vector<std::tuple<
+      std::string,
+      fsim::runtime::SimulationTick,
+      std::uint64_t>> result;
+  for (const auto& change : capture.changes) {
+    if (change.signal == signal) {
+      result.emplace_back(change.value, change.time, change.delta);
+    }
+  }
+  return result;
+}
+
 void verify_capture(const Capture& capture) {
   using TimedValue =
       std::pair<std::string, fsim::runtime::SimulationTick>;
@@ -220,6 +242,16 @@ void verify_capture(const Capture& capture) {
       changes_for(capture, "vhdl_projected.selected_waveform_output")
       == std::vector<TimedValue>{
           {"1", 22}, {"0", 25}}));
+  assert((
+      changes_for(capture, "vhdl_projected.resolved_output")
+      == std::vector<TimedValue>{
+          {"0", 1}, {"X", 21}, {"1", 23}, {"0", 24}}));
+  assert((
+      changes_with_delta(capture, "vhdl_projected.delta_output")
+      == std::vector<std::tuple<
+          std::string,
+          fsim::runtime::SimulationTick,
+          std::uint64_t>>{{"0", 0, 2}}));
   assert(capture.vcd.find("$timescale 1ps $end")
          != std::string::npos);
   assert(capture.vcd.find("#28") != std::string::npos);
@@ -349,10 +381,19 @@ architecture rtl of vhdl_projected is
   signal waveform_slice_output : std_logic_vector(3 downto 0);
   signal conditional_waveform_output : std_logic;
   signal selected_waveform_output : std_logic;
+  signal resolved_a : std_logic;
+  signal resolved_b : std_logic;
+  signal resolved_output : std_logic;
+  signal delta_source : std_logic;
+  signal delta_middle : std_logic;
+  signal delta_output : std_logic;
+  constant rejection_limit : time := 2 ps;
+  constant projected_delay : time := 5 ps;
 begin
   default_output <= default_drive after 5 ps;
   explicit_output <=
-      reject 2 ps inertial explicit_drive after 5 ps;
+      reject rejection_limit inertial
+      explicit_drive after projected_delay;
   transport_output <= transport transport_drive after 5 ps;
   with selector select
     selected_output <= reject 2 ps inertial
@@ -373,6 +414,10 @@ begin
     selected_waveform_output <= transport
       '1' after 2 ps, '0' after 5 ps when true,
       unaffected when others;
+  resolved_output <= transport resolved_a after 1 ps;
+  resolved_output <= transport resolved_b after 1 ps;
+  delta_middle <= transport delta_source;
+  delta_output <= transport delta_middle;
 
   stimulus: process
   begin
@@ -382,6 +427,9 @@ begin
     selected_drive <= '0';
     slice_drive <= "00";
     selector <= false;
+    resolved_a <= '0';
+    resolved_b <= 'Z';
+    delta_source <= '0';
     wait for 20 ps;
     default_drive <= '1';
     explicit_drive <= '1';
@@ -389,12 +437,16 @@ begin
     selected_drive <= '1';
     slice_drive <= "11";
     selector <= true;
+    resolved_a <= '1';
+    resolved_b <= '0';
     wait for 2 ps;
     default_drive <= '0';
     transport_drive <= '0';
+    resolved_b <= 'Z';
     wait for 1 ps;
     explicit_drive <= '0';
     selector <= false;
+    resolved_a <= '0';
     wait for 10 ps;
     wait;
   end process;
@@ -434,11 +486,11 @@ end architecture;
     assert(reference.final_values == warm.final_values);
     assert(reference.vcd == warm.vcd);
 #if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 12);
+    assert(cold.compiled_processes == 16);
     assert(cold.native_cache.hits == 0);
     assert(cold.native_cache.misses == 1);
     assert(cold.native_cache.stores == 1);
-    assert(warm.compiled_processes == 12);
+    assert(warm.compiled_processes == 16);
     assert(warm.native_cache.hits == 1);
     assert(warm.native_cache.misses == 0);
 #else

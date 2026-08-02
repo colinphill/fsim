@@ -36,6 +36,42 @@ void VhdlParser::parse_type_declaration(
   }
   expect_keyword(
       "is", true, "FSIM-VHDL-PARSE-127");
+  if (match_keyword("file", true)) {
+    expect_keyword(
+        "of", true, "FSIM-VHDL-PARSE-254");
+    const auto element_start = current();
+    auto element_type = parse_vhdl_type(true, true);
+    const auto element_span =
+        cover(element_start.span, previous().span);
+    expect(
+        TokenKind::Semicolon,
+        "';' after file type declaration",
+        "FSIM-VHDL-PARSE-255");
+
+    Type type;
+    type.spelling = canonical_name;
+    type.nominal_type =
+        start.span.source_name + ":"
+        + std::to_string(start.span.begin.offset) + ":"
+        + canonical_name;
+    type.vhdl_type_declaration = type.nominal_type;
+    VhdlFileInfo file;
+    file.element_span = element_span;
+    file.element_types.push_back(std::move(element_type));
+    type.vhdl_file = std::move(file);
+    if (!duplicate) {
+      if (!nested_scope) {
+        vhdl_named_types_.insert(canonical_name);
+      }
+      unit.type_aliases.push_back(TypeAliasDeclaration{
+          canonical_name,
+          std::move(type),
+          span_from(start, previous()),
+          {},
+          TypeDeclarationKind::VhdlFile});
+    }
+    return;
+  }
   if (match_keyword("access", true)) {
     const auto designated_start = current();
     auto designated_type = parse_vhdl_type(true, true);
@@ -792,6 +828,77 @@ void VhdlParser::parse_vhdl_shared_variable(
         initializer,
         span_from(start, previous()),
         true});
+  }
+}
+
+void VhdlParser::parse_vhdl_file_declaration(
+    std::vector<VariableDeclaration>& files,
+    const Token& start) {
+  std::vector<Token> names{
+      expect_identifier("file object name")};
+  while (match(TokenKind::Comma)) {
+    names.push_back(expect_identifier("file object name"));
+  }
+  expect(
+      TokenKind::Colon,
+      "':' after file object names",
+      "FSIM-VHDL-PARSE-256");
+  const auto type = parse_vhdl_type(true, true);
+
+  std::optional<Expression> open_kind;
+  std::optional<Expression> logical_name;
+  const bool has_open = match_keyword("open", true);
+  if (has_open) {
+    if (keyword("is", 0, true) || at(TokenKind::Semicolon)) {
+      error(
+          current(),
+          "FSIM-VHDL-PARSE-257",
+          "expected a file open-kind expression after 'open'");
+    } else {
+      open_kind = parse_expression();
+    }
+  }
+  if (match_keyword("is", true)) {
+    if (at(TokenKind::Semicolon)) {
+      error(
+          current(),
+          "FSIM-VHDL-PARSE-258",
+          "expected a file logical-name expression after 'is'");
+    } else {
+      logical_name = parse_expression();
+    }
+  } else if (has_open) {
+    error(
+        current(),
+        "FSIM-VHDL-PARSE-259",
+        "a file open-kind expression requires 'is' and a logical name");
+  }
+  expect(
+      TokenKind::Semicolon,
+      "';' after file object declaration",
+      "FSIM-VHDL-PARSE-260");
+
+  for (const auto& name : names) {
+    const auto canonical = vhdl_name(name.text);
+    if (std::ranges::any_of(
+            files,
+            [&](const auto& existing) {
+              return existing.name == canonical;
+            })) {
+      error(
+          name,
+          "FSIM-VHDL-SEM-094",
+          "duplicate file object declaration '" + canonical + "'");
+      continue;
+    }
+    VariableDeclaration file{
+        canonical,
+        type,
+        logical_name,
+        span_from(start, previous())};
+    file.vhdl_file = true;
+    file.vhdl_file_open_kind = open_kind;
+    files.push_back(std::move(file));
   }
 }
 

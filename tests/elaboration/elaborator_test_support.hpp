@@ -130,6 +130,7 @@ void test_vhdl_interface_type_generics();
 void test_vhdl_interface_function_generics();
 void test_vhdl_callable_overloads();
 void test_vhdl_interface_procedure_generics();
+void test_vhdl_procedure_waits();
 void test_vhdl_interface_package_generics();
 void test_vhdl_generic_subprograms();
 void test_vhdl_generic_associations();

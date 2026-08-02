@@ -93,6 +93,9 @@ std::optional<std::uint64_t> PackedMember::width() const noexcept {
 }
 
 std::optional<std::uint64_t> Type::width() const noexcept {
+  if (vhdl_file) {
+    return 32;
+  }
   if (vhdl_array && vhdl_array->flat_width) {
     return vhdl_array->flat_width;
   }

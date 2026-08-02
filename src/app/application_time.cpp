@@ -49,8 +49,14 @@ std::optional<std::uint64_t> unit_femtoseconds(std::string_view unit)  {
   if (unit == "ms") {
     return 1'000'000'000'000;
   }
-  if (unit == "s") {
+  if (unit == "s" || unit == "sec") {
     return 1'000'000'000'000'000;
+  }
+  if (unit == "min") {
+    return 60'000'000'000'000'000;
+  }
+  if (unit == "hr") {
+    return 3'600'000'000'000'000'000;
   }
   return std::nullopt;
 }
@@ -101,6 +107,16 @@ void visit_signal_delays(
 }
 
 template <typename Function>
+void visit_procedure_delays(
+    frontend::ProcedureDeclaration& procedure,
+    Function& function) {
+  visit_delays(procedure.statements, function);
+  for (auto& nested : procedure.procedures) {
+    visit_procedure_delays(nested, function);
+  }
+}
+
+template <typename Function>
 void visit_generate_delays(
     std::vector<frontend::GenerateRegion>& regions,
     Function& function) {
@@ -109,9 +125,15 @@ void visit_generate_delays(
     visit_delays(body.concurrent_statements, function);
     for (auto& process : body.processes) {
       visit_delays(process.statements, function);
+      for (auto& procedure : process.procedures) {
+        visit_procedure_delays(procedure, function);
+      }
     }
     for (auto& task : body.tasks) {
       visit_delays(task.statements, function);
+    }
+    for (auto& procedure : body.procedures) {
+      visit_procedure_delays(procedure, function);
     }
     visit_generate_delays(body.generate_regions, function);
   };
@@ -222,22 +244,42 @@ std::string effective_resolution(
       consider_resolution(unit.time_precision);
     }
     auto consider = [&](const frontend::Delay& delay) {
-      if (delay.unit.empty()) {
+      if (!delay.unit.empty()) {
+        consider_resolution("1" + delay.unit);
+      }
+      if (!delay.expression) {
         return;
       }
-      consider_resolution("1" + delay.unit);
+      const auto visit_expression =
+          [&](const auto& self,
+              const frontend::Expression& expression) -> void {
+        constexpr std::string_view prefix{"@vhdl-physical:"};
+        if (expression.kind == frontend::ExpressionKind::Call
+            && expression.text.starts_with(prefix)
+            && unit_femtoseconds(expression.text.substr(prefix.size()))) {
+          consider_resolution(
+              "1" + expression.text.substr(prefix.size()));
+        }
+        for (const auto& operand : expression.operands) {
+          self(self, operand);
+        }
+      };
+      visit_expression(visit_expression, *delay.expression);
     };
     visit_signal_delays(unit.ports, consider);
     visit_signal_delays(unit.signals, consider);
     visit_delays(unit.concurrent_statements, consider);
     for (auto& process : unit.processes) {
       visit_delays(process.statements, consider);
+      for (auto& procedure : process.procedures) {
+        visit_procedure_delays(procedure, consider);
+      }
     }
     for (auto& task : unit.tasks) {
       visit_delays(task.statements, consider);
     }
     for (auto& procedure : unit.procedures) {
-      visit_delays(procedure.statements, consider);
+      visit_procedure_delays(procedure, consider);
     }
     visit_generate_delays(unit.generate_regions, consider);
   }
@@ -268,7 +310,202 @@ bool normalize_delays(
   const auto tick_femtoseconds = femtoseconds(effective_resolution);
   bool valid = true;
   for (auto& unit : parsed.units) {
+    std::function<bool(frontend::Expression&)> normalize_time_literals;
+    normalize_time_literals = [&](frontend::Expression& expression) {
+      for (auto& operand : expression.operands) {
+        if (!normalize_time_literals(operand)) return false;
+      }
+      constexpr std::string_view qualification{"@vhdl-qualified:time"};
+      if (expression.kind == frontend::ExpressionKind::Call
+          && expression.text == qualification
+          && expression.operands.size() == 1) {
+        const auto retained_span = expression.span;
+        auto replacement = std::move(expression.operands.front());
+        expression = std::move(replacement);
+        expression.span = retained_span;
+        return true;
+      }
+      constexpr std::string_view prefix{"@vhdl-physical:"};
+      if (expression.kind != frontend::ExpressionKind::Call
+          || !expression.text.starts_with(prefix)) {
+        return true;
+      }
+      const auto unit_name = expression.text.substr(prefix.size());
+      const auto factor = unit_femtoseconds(unit_name);
+      if (!factor) {
+        return true;
+      }
+      if (expression.operands.size() != 1
+          || expression.operands.front().kind
+              != frontend::ExpressionKind::IntegerLiteral) {
+        diagnostics.error(
+            "FSIM-ELAB-VHTIME-001",
+            "a physical time literal requires a static integer magnitude",
+            span(expression.span));
+        valid = false;
+        return false;
+      }
+      const auto parsed_literal = magnitude_and_unit(
+          expression.operands.front().text + unit_name);
+      if (!parsed_literal || !tick_femtoseconds) {
+        diagnostics.error(
+            "FSIM-ELAB-VHTIME-002",
+            "physical time literal overflows the supported exact range",
+            span(expression.span));
+        valid = false;
+        return false;
+      }
+      if (*tick_femtoseconds == 0) {
+        diagnostics.error(
+            "FSIM-ELAB-VHTIME-002",
+            "physical time literal overflows the supported exact range",
+            span(expression.span));
+        valid = false;
+        return false;
+      }
+      const auto common = std::gcd(*factor, *tick_femtoseconds);
+      const auto literal_factor = *factor / common;
+      const auto resolution_factor = *tick_femtoseconds / common;
+      if (parsed_literal->magnitude % resolution_factor != 0) {
+        diagnostics.error(
+            "FSIM-ELAB-VHTIME-003",
+            "physical time literal is not exactly representable at project "
+            "resolution '" + std::string{effective_resolution} + "'",
+            span(expression.span));
+        valid = false;
+        return false;
+      }
+      const auto scaled_magnitude =
+          parsed_literal->magnitude / resolution_factor;
+      if (scaled_magnitude
+          > static_cast<std::uint64_t>(
+                std::numeric_limits<std::int64_t>::max())
+              / literal_factor) {
+        diagnostics.error(
+            "FSIM-ELAB-VHTIME-002",
+            "physical time literal overflows the supported exact range",
+            span(expression.span));
+        valid = false;
+        return false;
+      }
+      expression.kind = frontend::ExpressionKind::IntegerLiteral;
+      expression.text = std::to_string(
+          scaled_magnitude * literal_factor);
+      expression.operands.clear();
+      return true;
+    };
+    const auto normalize_constants = [&](auto& constants) {
+      for (auto& constant : constants) {
+        if (constant.default_value.valid()) {
+          (void)normalize_time_literals(constant.default_value);
+        }
+      }
+    };
+    if (unit.language == frontend::Language::Vhdl2008) {
+      normalize_constants(unit.parameters);
+      std::function<void(frontend::FunctionDeclaration&)>
+          normalize_function;
+      std::function<void(frontend::ProcedureDeclaration&)>
+          normalize_procedure;
+      normalize_function = [&](frontend::FunctionDeclaration& function) {
+        normalize_constants(function.constants);
+        for (auto& argument : function.arguments) {
+          if (argument.default_value) {
+            (void)normalize_time_literals(*argument.default_value);
+          }
+        }
+        for (auto& nested : function.functions) {
+          normalize_function(nested);
+        }
+        for (auto& nested : function.procedures) {
+          normalize_procedure(nested);
+        }
+      };
+      normalize_procedure =
+          [&](frontend::ProcedureDeclaration& procedure) {
+        normalize_constants(procedure.constants);
+        for (auto& argument : procedure.arguments) {
+          if (argument.default_value) {
+            (void)normalize_time_literals(*argument.default_value);
+          }
+        }
+        for (auto& nested : procedure.functions) {
+          normalize_function(nested);
+        }
+        for (auto& nested : procedure.procedures) {
+          normalize_procedure(nested);
+        }
+      };
+      for (auto& process : unit.processes) {
+        normalize_constants(process.constants);
+        for (auto& function : process.functions) {
+          normalize_function(function);
+        }
+        for (auto& procedure : process.procedures) {
+          normalize_procedure(procedure);
+        }
+      }
+      for (auto& function : unit.functions) {
+        normalize_function(function);
+      }
+      for (auto& procedure : unit.procedures) {
+        normalize_procedure(procedure);
+      }
+      for (auto& function_template : unit.generic_function_templates) {
+        normalize_function(function_template.function);
+      }
+      for (auto& procedure_template : unit.generic_procedure_templates) {
+        normalize_procedure(procedure_template.procedure);
+      }
+      const auto normalize_generate_body =
+          [&](const auto& self, frontend::GenerateBody& body) -> void {
+        normalize_constants(body.constants);
+        for (auto& process : body.processes) {
+          normalize_constants(process.constants);
+          for (auto& function : process.functions) {
+            normalize_function(function);
+          }
+          for (auto& procedure : process.procedures) {
+            normalize_procedure(procedure);
+          }
+        }
+        for (auto& function : body.functions) {
+          normalize_function(function);
+        }
+        for (auto& procedure : body.procedures) {
+          normalize_procedure(procedure);
+        }
+        for (auto& function_template : body.generic_function_templates) {
+          normalize_function(function_template.function);
+        }
+        for (auto& procedure_template : body.generic_procedure_templates) {
+          normalize_procedure(procedure_template.procedure);
+        }
+        for (auto& region : body.generate_regions) {
+          self(self, region.then_body);
+          self(self, region.else_body);
+          for (auto& alternative : region.alternatives) {
+            self(self, alternative.body);
+          }
+        }
+      };
+      for (auto& region : unit.generate_regions) {
+        normalize_generate_body(normalize_generate_body, region.then_body);
+        normalize_generate_body(normalize_generate_body, region.else_body);
+        for (auto& alternative : region.alternatives) {
+          normalize_generate_body(
+              normalize_generate_body, alternative.body);
+        }
+      }
+    }
     auto normalize = [&](frontend::Delay& delay) {
+      if (unit.language == frontend::Language::Vhdl2008
+          && delay.expression) {
+        if (normalize_time_literals(*delay.expression)) {
+          delay.magnitude = 1;
+        }
+        return;
+      }
       if (delay.unit.empty()) {
         if (delay.divisor != 1) {
           diagnostics.error(
@@ -413,12 +650,15 @@ bool normalize_delays(
     visit_delays(unit.concurrent_statements, normalize);
     for (auto& process : unit.processes) {
       visit_delays(process.statements, normalize);
+      for (auto& procedure : process.procedures) {
+        visit_procedure_delays(procedure, normalize);
+      }
     }
     for (auto& task : unit.tasks) {
       visit_delays(task.statements, normalize);
     }
     for (auto& procedure : unit.procedures) {
-      visit_delays(procedure.statements, normalize);
+      visit_procedure_delays(procedure, normalize);
     }
     visit_generate_delays(unit.generate_regions, normalize);
     validate_vhdl_rejection_limits(

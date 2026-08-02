@@ -102,6 +102,19 @@ void OutputOperationLowerer::lower(
 }
 
 void OutputOperationLowerer::lower(
+    const runtime::simir::StringReport&) {
+  builder.CreateCall(
+      report_type,
+      report_callback,
+      {
+          context_pointer,
+          llvm::ConstantInt::get(i32, process_id),
+          llvm::ConstantInt::get(i32, instruction),
+      });
+  branch_to_next();
+}
+
+void OutputOperationLowerer::lower(
     const runtime::simir::WaitFor& operation) {
   return_result(
       FSIM_JIT_RESUME_STATUS_WAIT_FOR,

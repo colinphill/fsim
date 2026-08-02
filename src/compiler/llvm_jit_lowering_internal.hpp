@@ -490,6 +490,7 @@ struct OutputOperationLowerer {
   void lower(const runtime::simir::MonitorInstall& operation);
   void lower(const runtime::simir::MonitorControl& operation);
   void lower(const runtime::simir::Report& operation);
+  void lower(const runtime::simir::StringReport& operation);
   void lower(const runtime::simir::WaitFor& operation);
   void lower(const runtime::simir::WaitOn& operation);
 };

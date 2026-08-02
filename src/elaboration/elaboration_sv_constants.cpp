@@ -497,6 +497,7 @@ enum class Truth { False, True, Unknown };
         return bitwise(*left, *right, expression.text, expression.span);
     }
     if (expression.text == "==" || expression.text == "!="
+        || expression.text == "=" || expression.text == "/="
         || expression.text == "===" || expression.text == "!==") {
         const bool case_equality =
             expression.text == "===" || expression.text == "!==";
@@ -513,7 +514,8 @@ enum class Truth { False, True, Unknown };
                 || (lhs.unknown_bits == rhs.unknown_bits
                     && lhs.high_impedance_bits
                         == rhs.high_impedance_bits));
-        if (expression.text == "!=" || expression.text == "!==") {
+        if (expression.text == "!=" || expression.text == "!=="
+            || expression.text == "/=") {
             equal = !equal;
         }
         return logical_result(

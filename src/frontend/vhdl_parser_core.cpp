@@ -258,6 +258,9 @@ DesignUnit VhdlParser::parse_package(
     } else if (match_keyword("procedure", true)) {
       parse_vhdl_procedure_item(
           unit, previous(), true);
+    } else if (match_keyword("file", true)) {
+      parse_vhdl_file_declaration(
+          unit.variables, previous());
     } else if (match_keyword("type", true)) {
       parse_type_declaration(unit, previous());
     } else if (match_keyword("subtype", true)) {
@@ -412,6 +415,9 @@ DesignUnit VhdlParser::parse_entity(const Token& start) {
     } else if (match_keyword("procedure", true)) {
       parse_vhdl_procedure_item(
           unit, previous(), true);
+    } else if (match_keyword("file", true)) {
+      parse_vhdl_file_declaration(
+          unit.variables, previous());
     } else if (match_keyword("package", true)) {
       const auto package_start = previous();
       auto instance =
@@ -675,6 +681,7 @@ void VhdlParser::parse_vhdl_generics(
     }
     const auto type = parse_vhdl_type(true);
     if (type.named_type.empty()
+        && type.nominal_type != "@builtin:time"
         && (type.packed_range
             || (type.domain != ValueDomain::Integer
                 && type.domain != ValueDomain::Boolean
@@ -683,7 +690,7 @@ void VhdlParser::parse_vhdl_generics(
           names.front(),
           "FSIM-VHDL-UNSUPPORTED-018",
           "this generic type is outside the bounded scalar integer, "
-          "Boolean, and bit subset");
+          "Boolean, bit, and physical-time subset");
     }
     Expression default_value;
     if (match(TokenKind::ColonEqual)) {
@@ -844,6 +851,35 @@ Type VhdlParser::parse_vhdl_type(
     type.is_signed = simple_name == "signed";
   } else if (simple_name == "boolean") {
     type.domain = ValueDomain::Boolean;
+  } else if (simple_name == "string" || simple_name == "line") {
+    type.domain = ValueDomain::String;
+  } else if (simple_name == "side") {
+    type.domain = ValueDomain::Bit2;
+    type.packed_range = PackedRange{0, 0, true};
+    type.enumeration_literals = {"right", "left"};
+  } else if (simple_name == "severity_level") {
+    type.domain = ValueDomain::Bit2;
+    type.packed_range = PackedRange{1, 0, true};
+    type.enumeration_literals = {
+        "note", "warning", "error", "failure"};
+  } else if (simple_name == "file_open_kind") {
+    type.domain = ValueDomain::Bit2;
+    type.packed_range = PackedRange{1, 0, true};
+    type.enumeration_literals = {
+        "read_mode", "write_mode", "append_mode"};
+  } else if (simple_name == "file_open_status") {
+    type.domain = ValueDomain::Bit2;
+    type.packed_range = PackedRange{1, 0, true};
+    type.enumeration_literals = {
+        "open_ok", "status_error", "name_error", "mode_error"};
+  } else if (simple_name == "time") {
+    type.domain = ValueDomain::Integer;
+    type.is_signed = true;
+    type.packed_range = PackedRange{63, 0, true};
+    type.integer_range = IntegerRange{
+        0, std::numeric_limits<std::int64_t>::max(), false};
+    type.nominal_type = "@builtin:time";
+    type.vhdl_type_declaration = type.nominal_type;
   } else if (simple_name == "integer" || simple_name == "natural" ||
              simple_name == "positive") {
     type.domain = ValueDomain::Integer;
@@ -1001,6 +1037,9 @@ DesignUnit VhdlParser::parse_architecture(const Token& start) {
       parse_signal_declaration(unit.signals, &unit.parameters);
     } else if (match_keyword("shared", true)) {
       parse_vhdl_shared_variable(unit, previous());
+    } else if (match_keyword("file", true)) {
+      parse_vhdl_file_declaration(
+          unit.variables, previous());
     } else if (match_keyword("alias", true)) {
       parse_vhdl_object_alias(unit.signal_aliases, previous());
     } else if (match_keyword("constant", true)) {

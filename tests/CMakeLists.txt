@@ -8,6 +8,7 @@ add_executable(
   frontend/frontend_preprocessing_tests.cpp
   frontend/frontend_vhdl_type_tests.cpp
   frontend/frontend_vhdl_statement_tests.cpp
+  frontend/frontend_vhdl_time_file_tests.cpp
   frontend/frontend_declaration_tests.cpp
   frontend/frontend_interface_tests.cpp
   frontend/frontend_package_tests.cpp
@@ -103,10 +104,12 @@ add_executable(
   elaboration/elaborator_vhdl_attribute_test.cpp
   elaboration/elaborator_vhdl_composite_operation_test.cpp
   elaboration/elaborator_types_test.cpp
+  elaboration/elaborator_vhdl_textio_test.cpp
   elaboration/elaborator_type_generic_test.cpp
   elaboration/elaborator_vhdl_function_test.cpp
   elaboration/elaborator_vhdl_overload_test.cpp
   elaboration/elaborator_vhdl_procedure_test.cpp
+  elaboration/elaborator_vhdl_wait_test.cpp
   elaboration/elaborator_vhdl_package_test.cpp
   elaboration/elaborator_vhdl_generic_subprogram_test.cpp
   elaboration/elaborator_vhdl_generic_association_test.cpp
@@ -431,6 +434,10 @@ if(TARGET fsim_application)
       fsim.application.vhdl_procedure_generics
       fast procedures generics vhdl cache hierarchy)
     fsim_add_application_case(
+      2 vhdl_procedure_waits app/vhdl_procedure_wait_application_test.cpp
+      fsim.application.vhdl_procedure_waits
+      fast procedures timing vhdl llvm)
+    fsim_add_application_case(
       2 vhdl_package_generics app/vhdl_package_generic_application_test.cpp
       fsim.application.vhdl_package_generics
       fast packages functions procedures generics vhdl cache hierarchy)
@@ -695,6 +702,24 @@ add_test(
 set_tests_properties(
   fsim.application.vhdl_procedure_generics
   PROPERTIES LABELS "fast;procedures;generics;vhdl;cache;hierarchy"
+)
+
+add_executable(
+  fsim_vhdl_procedure_wait_application_tests
+  app/vhdl_procedure_wait_application_test.cpp
+)
+fsim_configure_test(fsim_vhdl_procedure_wait_application_tests)
+target_link_libraries(
+  fsim_vhdl_procedure_wait_application_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.vhdl_procedure_waits
+  COMMAND fsim_vhdl_procedure_wait_application_tests
+)
+set_tests_properties(
+  fsim.application.vhdl_procedure_waits
+  PROPERTIES LABELS "fast;procedures;timing;vhdl;llvm"
 )
 
 add_executable(

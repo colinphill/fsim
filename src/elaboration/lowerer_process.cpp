@@ -67,45 +67,6 @@ Lowerer::Lowerer(
           procedures_(procedures),
           diagnostics_(diagnostics) {}
 
-void Lowerer::validate_read_only_signal_writes(
-    const frontend::SourceSpan& source) {
-  std::set<SignalId> reported;
-  const auto check = [&](const SignalId signal) {
-    if (read_only_signals_.contains(signal)
-        && reported.insert(signal).second) {
-      report(
-          "FSIM-ELAB-SVIFACE-006",
-          "a modport input member is read-only within process '"
-              + process_.name + "'",
-          source);
-    }
-  };
-  for (const auto& operation : process_.operations) {
-    fsim::runtime::simir::visit_operation(
-        [&](const auto& candidate) {
-          using Operation = std::decay_t<decltype(candidate)>;
-          if constexpr (
-              std::is_same_v<Operation, WriteBlocking>
-              || std::is_same_v<Operation, WriteUpdate>
-              || std::is_same_v<Operation, WriteAfter>
-              || std::is_same_v<Operation, WriteInertial>
-              || std::is_same_v<Operation, WriteProjected>
-              || std::is_same_v<Operation, WriteProjectedWaveform>
-              || std::is_same_v<Operation, WriteBlockingSlice>
-              || std::is_same_v<Operation, WriteUpdateSlice>
-              || std::is_same_v<Operation, WriteAfterSlice>
-              || std::is_same_v<Operation, WriteInertialSlice>
-              || std::is_same_v<Operation, WriteProjectedSlice>
-              || std::is_same_v<Operation, WriteProjectedWaveformSlice>) {
-            check(candidate.signal);
-          }
-        },
-        operation);
-  }
-}
-
-
-
     Process Lowerer::lower_process(
         const frontend::Process& source,
         const frontend::Language language,
@@ -247,6 +208,7 @@ void Lowerer::validate_read_only_signal_writes(
         const bool vhdl_explicit_wait =
             language == frontend::Language::Vhdl2008
             && contains_explicit_wait(source.statements);
+        std::optional<InstructionIndex> vhdl_trailing_wait;
         const auto resume_entry =
             static_cast<InstructionIndex>(process_.operations.size());
         std::optional<InstructionIndex> event_wait_entry;
@@ -324,10 +286,14 @@ void Lowerer::validate_read_only_signal_writes(
             process_.operations.emplace_back(Jump{resume_entry});
         } else if (
             language == frontend::Language::Vhdl2008
-            && source.sensitivities.empty()
-            && vhdl_explicit_wait) {
-            // A VHDL process implicitly repeats. Explicit waits inside the
-            // body provide the required suspension boundary.
+            && source.sensitivities.empty()) {
+            // Reserve the implicit trailing sensitivity point until exact,
+            // overload-resolved procedure dependencies have been lowered.
+            // A direct or transitively called wait replaces this first
+            // operation with the process-repeat jump below.
+            vhdl_trailing_wait = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(WaitSensitivity{});
             process_.operations.emplace_back(Jump{resume_entry});
         } else {
             // A VHDL process with a sensitivity list executes once at time
@@ -335,9 +301,44 @@ void Lowerer::validate_read_only_signal_writes(
             process_.operations.emplace_back(WaitSensitivity{});
             process_.operations.emplace_back(Jump{resume_entry});
         }
-        lower_pending_tasks();
-        lower_pending_procedures();
-        lower_pending_functions();
+        do {
+            lower_pending_tasks();
+            lower_pending_procedures();
+            lower_pending_functions();
+        } while (!pending_tasks_.empty()
+                 || !pending_procedures_.empty()
+                 || !pending_functions_.empty());
+        const bool vhdl_procedure_wait =
+            language == frontend::Language::Vhdl2008
+            && procedure_dependencies_suspend(
+                process_procedure_dependencies_);
+        if (vhdl_trailing_wait
+            && (vhdl_explicit_wait || vhdl_procedure_wait)) {
+            process_.operations[*vhdl_trailing_wait] =
+                Jump{resume_entry};
+        }
+        if (language == frontend::Language::Vhdl2008
+            && !source.sensitivities.empty()
+            && (vhdl_explicit_wait || vhdl_procedure_wait)) {
+            report(
+                "FSIM-VHDL-SEM-012",
+                "a process sensitivity list cannot be combined with a "
+                "direct or transitively called wait statement",
+                source.span);
+        }
+        for (std::size_t index = 0;
+             index < function_procedure_dependencies_.size();
+             ++index) {
+            if (procedure_dependencies_suspend(
+                    function_procedure_dependencies_[index])) {
+                report(
+                    "FSIM-ELAB-VHLEGAL-009",
+                    "VHDL function '"
+                        + function_frames_[index].source->name
+                        + "' calls a suspending procedure",
+                    function_frames_[index].source->span);
+            }
+        }
         validate_read_only_signal_writes(source.span);
         process_.register_count = next_register_;
         process_.string_register_count = next_string_register_;
@@ -613,287 +614,6 @@ void Lowerer::validate_read_only_signal_writes(
 
 
 
-    void Lowerer::initialize_variables(
-        const std::vector<frontend::VariableDeclaration>& variables) {
-        struct Pending {
-            const frontend::VariableDeclaration* declaration{};
-            RegisterId register_id{};
-            std::size_t width{};
-        };
-        std::vector<Pending> pending;
-        pending.reserve(variables.size());
-        std::unordered_set<std::string> declared_here;
-        for (const auto& variable : variables) {
-            if (variable.type.systemverilog_container) {
-                if (!declared_here.emplace(variable.name).second) {
-                    report(
-                        "FSIM-ELAB-SVCONTAINER-001",
-                        "duplicate container variable in the same scope '"
-                            + variable.name + "'",
-                        variable.span);
-                    continue;
-                }
-                const auto type =
-                    container_type(variable.type, variable.span);
-                if (!type) {
-                    continue;
-                }
-                const auto register_id =
-                    allocate_container_register(*type);
-                container_locals_.insert_or_assign(
-                    variable.name, register_id);
-                local_types_.insert_or_assign(
-                    variable.name, &variable.type);
-                process_.debug_container_locals.push_back(
-                    DebugContainerLocal{
-                        scoped_local_name(variable.name),
-                        register_id,
-                        *type,
-                        SourceLocation{
-                            variable.span.source_name,
-                            static_cast<std::uint32_t>(
-                                variable.span.begin.line),
-                            static_cast<std::uint32_t>(
-                                variable.span.begin.column)}});
-                if (variable.initializer) {
-                    const auto value =
-                        type->fixed
-                            ? lower_static_container_assignment_value(
-                                  *variable.initializer, *type)
-                            : lower_container_expression(
-                                  *variable.initializer);
-                    if (value) {
-                        if (process_.container_register_types.at(*value)
-                            != *type) {
-                            report(
-                                variable.initializer->kind
-                                        == ExpressionKind::Call
-                                    ? "FSIM-ELAB-SVFUNC-008"
-                                    : "FSIM-ELAB-SVCONTAINER-010",
-                                "container initializer requires an "
-                                "exactly compatible kind and profile",
-                                variable.initializer->span);
-                        } else {
-                            process_.operations.emplace_back(
-                                CopyContainerRegister{
-                                    register_id, *value});
-                        }
-                    }
-                }
-                continue;
-            }
-            if (variable.type.domain
-                == frontend::ValueDomain::String) {
-                if (!declared_here.emplace(variable.name).second) {
-                    report(
-                        "FSIM-ELAB-SVSTRING-005",
-                        "duplicate string variable in the same scope '"
-                            + variable.name + "'",
-                        variable.span);
-                    continue;
-                }
-                const auto register_id =
-                    allocate_string_register();
-                string_locals_.insert_or_assign(
-                    variable.name, register_id);
-                local_types_.insert_or_assign(
-                    variable.name, &variable.type);
-                process_.debug_string_locals.push_back(
-                    DebugStringLocal{
-                        scoped_local_name(variable.name),
-                        register_id,
-                        SourceLocation{
-                            variable.span.source_name,
-                            static_cast<std::uint32_t>(
-                                variable.span.begin.line),
-                            static_cast<std::uint32_t>(
-                                variable.span.begin.column)}});
-                if (variable.initializer) {
-                    const auto value =
-                        lower_string_expression(
-                            *variable.initializer);
-                    if (value) {
-                        process_.operations.emplace_back(
-                            CopyStringRegister{
-                                register_id, *value});
-                    }
-                } else {
-                    process_.operations.emplace_back(
-                        LoadStringConstant{register_id, {}});
-                }
-                continue;
-            }
-            const auto width = variable.type.width();
-            const bool null_vhdl_array =
-                variable.type.vhdl_array
-                && variable.type.vhdl_array->flat_width
-                && *variable.type.vhdl_array->flat_width == 0;
-            if (!width || (*width == 0 && !null_vhdl_array)) {
-                report(
-                    "FSIM-ELAB-052",
-                    "local variable '" + variable.name
-                        + "' has no executable packed width",
-                    variable.span);
-                continue;
-            }
-            if (!declared_here.emplace(variable.name).second) {
-                report(
-                    "FSIM-ELAB-053",
-                    "duplicate local variable in the same scope '"
-                        + variable.name + "'",
-                    variable.span);
-                continue;
-            }
-            const auto key = declaration_key(variable);
-            const auto register_found = declaration_registers_.find(key);
-            RegisterId register_id{};
-            if (register_found == declaration_registers_.end()) {
-                register_id =
-                    allocate_register(*width, variable.type.domain);
-                declaration_registers_.emplace(key, register_id);
-                auto debug_name = scoped_local_name(variable.name);
-                if (!debug_local_names_.emplace(debug_name).second) {
-                    debug_name += "@"
-                        + std::to_string(variable.span.begin.line)
-                        + ":" + std::to_string(
-                            variable.span.begin.column);
-                    debug_local_names_.emplace(debug_name);
-                }
-                process_.debug_locals.push_back(DebugLocal{
-                    std::move(debug_name),
-                    variable.type.spelling,
-                    register_id,
-                    *width,
-                    SourceLocation{
-                        variable.span.source_name,
-                        static_cast<std::uint32_t>(
-                            variable.span.begin.line),
-                        static_cast<std::uint32_t>(
-                            variable.span.begin.column)},
-                    {},
-                    {},
-                    value_kind(variable.type.domain),
-                    {}});
-                if (variable.type.integer_range) {
-                    const auto [lower, upper] =
-                        integer_bounds(variable.type.integer_range);
-                    process_.debug_locals.back().integer_lower =
-                        lower;
-                    process_.debug_locals.back().integer_upper =
-                        upper;
-                }
-                process_.debug_locals.back().enumeration_literals =
-                    variable.type.enumeration_literals;
-            } else {
-                register_id = register_found->second;
-            }
-            locals_.insert_or_assign(variable.name, register_id);
-            local_signed_.insert_or_assign(
-                variable.name, variable.type.is_signed);
-            local_ranges_.insert_or_assign(
-                variable.name, variable.type.packed_range);
-            local_integer_ranges_.insert_or_assign(
-                variable.name, variable.type.integer_range);
-            local_members_.insert_or_assign(
-                variable.name, variable.type.packed_members);
-            local_types_.insert_or_assign(
-                variable.name, &variable.type);
-            pending.push_back(Pending{&variable, register_id, *width});
-        }
-        for (const auto& local : pending) {
-            const auto& variable = *local.declaration;
-            if (variable.initializer) {
-                if (variable.type.domain
-                        == frontend::ValueDomain::Integer
-                    && !is_integer_expression(
-                        *variable.initializer)) {
-                    report(
-                        "FSIM-ELAB-INTEGER-004",
-                        "VHDL integer local initializer requires an "
-                        "integer-family expression",
-                        variable.span);
-                    continue;
-                }
-                if (variable.type.domain
-                        == frontend::ValueDomain::Integer
-                    && !validate_static_integer_assignment(
-                        *variable.initializer,
-                        variable.type.integer_range,
-                        variable.span)) {
-                    continue;
-                }
-                if (!variable.type.enumeration_literals.empty()
-                    && !validate_static_enumeration_assignment(
-                        *variable.initializer,
-                        variable.type,
-                        variable.span)) {
-                    continue;
-                }
-                auto value =
-                    lower_expression(
-                        *variable.initializer,
-                        local.width,
-                        &variable.type);
-                if (!value) {
-                    continue;
-                }
-                if (register_width(*value) != local.width
-                    && language_
-                        != frontend::Language::Vhdl2008) {
-                    *value = resize_register(
-                        *value,
-                        local.width,
-                        is_signed_expression(
-                            *variable.initializer));
-                }
-                if (register_width(*value) != local.width) {
-                    report(
-                        "FSIM-ELAB-054",
-                        "local variable initializer width mismatch for '"
-                            + variable.name + "'",
-                        variable.span);
-                    continue;
-                }
-                if (is_two_state_domain(variable.type.domain)
-                    && !is_two_state_domain(
-                        register_domain(*value))) {
-                    report(
-                        "FSIM-ELAB-058",
-                        "two-state local variable initializer for '"
-                            + variable.name
-                            + "' requires an explicit conversion",
-                        variable.span);
-                    continue;
-                }
-                if (local.width == 0) {
-                    continue;
-                }
-                if (variable.type.domain
-                        == frontend::ValueDomain::Integer) {
-                    emit_integer_check(
-                        *value, variable.type.integer_range);
-                }
-                if (!variable.type.enumeration_literals.empty()) {
-                    emit_enumeration_check(
-                        *value, variable.type);
-                }
-                process_.operations.emplace_back(
-                    CopyRegister{local.register_id, *value});
-                continue;
-            }
-            if (local.width == 0) {
-                continue;
-            }
-            auto initial_value =
-                default_packed_value(variable.type, local.width);
-            process_.operations.emplace_back(
-                LoadConstant{
-                    local.register_id,
-                    std::move(initial_value)});
-        }
-    }
-
-
 
     [[nodiscard]] std::string Lowerer::declaration_key(
         const frontend::VariableDeclaration& variable) {
@@ -999,6 +719,15 @@ void Lowerer::validate_read_only_signal_writes(
         local_scope_.push_back(block_scope_name(statement));
         initialize_variables(statement.declarations);
         lower_statements(statement.statements);
+        for (const auto& variable : statement.declarations) {
+            if (variable.vhdl_file || variable.type.vhdl_file) {
+                const auto file = locals_.find(variable.name);
+                if (file != locals_.end()) {
+                    process_.operations.emplace_back(
+                        FileClose{file->second, true, true});
+                }
+            }
+        }
         local_scope_.pop_back();
         locals_ = std::move(outer_locals);
         string_locals_ = std::move(outer_string_locals);
@@ -1709,31 +1438,7 @@ void Lowerer::validate_read_only_signal_writes(
             break;
         }
         case StatementKind::Report: {
-            AssertionSeverity severity = AssertionSeverity::note;
-            switch (statement.assertion_severity) {
-            case frontend::AssertionSeverity::Note:
-                severity = AssertionSeverity::note;
-                break;
-            case frontend::AssertionSeverity::Warning:
-                severity = AssertionSeverity::warning;
-                break;
-            case frontend::AssertionSeverity::Error:
-                severity = AssertionSeverity::error;
-                break;
-            case frontend::AssertionSeverity::Failure:
-                severity = AssertionSeverity::failure;
-                break;
-            }
-            process_.operations.emplace_back(
-                runtime::simir::Report{
-                    statement.output_text,
-                    severity,
-                    SourceLocation{
-                        statement.span.source_name,
-                        static_cast<std::uint32_t>(
-                            statement.span.begin.line),
-                        static_cast<std::uint32_t>(
-                            statement.span.begin.column)}});
+            lower_assert(statement);
             break;
         }
         case StatementKind::Pause:

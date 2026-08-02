@@ -43,6 +43,7 @@ int main() {
   test_vhdl_interface_function_generics();
   test_vhdl_callable_overloads();
   test_vhdl_interface_procedure_generics();
+  test_vhdl_procedure_waits();
   test_vhdl_interface_package_generics();
   test_vhdl_generic_subprograms();
   test_vhdl_generic_associations();

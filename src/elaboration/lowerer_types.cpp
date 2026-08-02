@@ -1368,6 +1368,366 @@ using namespace elaboration_detail;
 
 
 
+    void Lowerer::initialize_variables(
+        const std::vector<frontend::VariableDeclaration>& variables) {
+        struct Pending {
+            const frontend::VariableDeclaration* declaration{};
+            RegisterId register_id{};
+            std::size_t width{};
+        };
+        std::vector<Pending> pending;
+        pending.reserve(variables.size());
+        std::unordered_set<std::string> declared_here;
+        for (const auto& variable : variables) {
+            if (variable.vhdl_file || variable.type.vhdl_file) {
+                if (!declared_here.emplace(variable.name).second) {
+                    report(
+                        "FSIM-ELAB-VHFILE-001",
+                        "duplicate VHDL file object in the same scope '"
+                            + variable.name + "'",
+                        variable.span);
+                    continue;
+                }
+                if (!variable.type.vhdl_file) {
+                    report(
+                        "FSIM-ELAB-VHFILE-002",
+                        "VHDL file object '" + variable.name
+                            + "' requires a visible file type",
+                        variable.span);
+                    continue;
+                }
+                const auto handle = allocate_register(
+                    32, frontend::ValueDomain::Bit2);
+                if (active_procedure_) {
+                    procedure_file_handles_.push_back(handle);
+                }
+                locals_.insert_or_assign(variable.name, handle);
+                local_types_.insert_or_assign(
+                    variable.name, &variable.type);
+                process_.debug_locals.push_back(DebugLocal{
+                    scoped_local_name(variable.name),
+                    variable.type.spelling,
+                    handle,
+                    32,
+                    SourceLocation{
+                        variable.span.source_name,
+                        static_cast<std::uint32_t>(
+                            variable.span.begin.line),
+                        static_cast<std::uint32_t>(
+                            variable.span.begin.column)},
+                    {},
+                    {},
+                    ValueKind::logic4,
+                    {}});
+                process_.operations.emplace_back(
+                    LoadConstant{handle, unsigned_value(0, 32)});
+                if (!variable.initializer) {
+                    continue;
+                }
+                if (!is_string_expression(*variable.initializer)) {
+                    report(
+                        "FSIM-ELAB-VHFILE-003",
+                        "VHDL file logical name must be a string expression",
+                        variable.initializer->span);
+                    continue;
+                }
+                const auto path = lower_string_expression(
+                    *variable.initializer);
+                const auto kind = variable.vhdl_file_open_kind
+                    ? variable.vhdl_file_open_kind->text
+                    : std::string{"read_mode"};
+                const auto spelling =
+                    kind == "read_mode" ? "r"
+                    : kind == "write_mode" ? "w"
+                    : kind == "append_mode" ? "a" : "";
+                if (*spelling == '\0') {
+                    report(
+                        "FSIM-ELAB-VHFILE-004",
+                        "VHDL file open kind must be read_mode, "
+                        "write_mode, or append_mode",
+                        variable.vhdl_file_open_kind->span);
+                    continue;
+                }
+                const auto mode = allocate_string_register();
+                process_.operations.emplace_back(
+                    LoadStringConstant{mode, spelling});
+                if (path) {
+                    process_.operations.emplace_back(
+                        FileOpen{handle, *path, mode, std::nullopt, true});
+                }
+                continue;
+            }
+            if (variable.type.systemverilog_container) {
+                if (!declared_here.emplace(variable.name).second) {
+                    report(
+                        "FSIM-ELAB-SVCONTAINER-001",
+                        "duplicate container variable in the same scope '"
+                            + variable.name + "'",
+                        variable.span);
+                    continue;
+                }
+                const auto type =
+                    container_type(variable.type, variable.span);
+                if (!type) {
+                    continue;
+                }
+                const auto register_id =
+                    allocate_container_register(*type);
+                container_locals_.insert_or_assign(
+                    variable.name, register_id);
+                local_types_.insert_or_assign(
+                    variable.name, &variable.type);
+                process_.debug_container_locals.push_back(
+                    DebugContainerLocal{
+                        scoped_local_name(variable.name),
+                        register_id,
+                        *type,
+                        SourceLocation{
+                            variable.span.source_name,
+                            static_cast<std::uint32_t>(
+                                variable.span.begin.line),
+                            static_cast<std::uint32_t>(
+                                variable.span.begin.column)}});
+                if (variable.initializer) {
+                    const auto value =
+                        type->fixed
+                            ? lower_static_container_assignment_value(
+                                  *variable.initializer, *type)
+                            : lower_container_expression(
+                                  *variable.initializer);
+                    if (value) {
+                        if (process_.container_register_types.at(*value)
+                            != *type) {
+                            report(
+                                variable.initializer->kind
+                                        == ExpressionKind::Call
+                                    ? "FSIM-ELAB-SVFUNC-008"
+                                    : "FSIM-ELAB-SVCONTAINER-010",
+                                "container initializer requires an "
+                                "exactly compatible kind and profile",
+                                variable.initializer->span);
+                        } else {
+                            process_.operations.emplace_back(
+                                CopyContainerRegister{
+                                    register_id, *value});
+                        }
+                    }
+                }
+                continue;
+            }
+            if (variable.type.domain
+                == frontend::ValueDomain::String) {
+                if (!declared_here.emplace(variable.name).second) {
+                    report(
+                        "FSIM-ELAB-SVSTRING-005",
+                        "duplicate string variable in the same scope '"
+                            + variable.name + "'",
+                        variable.span);
+                    continue;
+                }
+                const auto register_id =
+                    allocate_string_register();
+                string_locals_.insert_or_assign(
+                    variable.name, register_id);
+                local_types_.insert_or_assign(
+                    variable.name, &variable.type);
+                process_.debug_string_locals.push_back(
+                    DebugStringLocal{
+                        scoped_local_name(variable.name),
+                        register_id,
+                        SourceLocation{
+                            variable.span.source_name,
+                            static_cast<std::uint32_t>(
+                                variable.span.begin.line),
+                            static_cast<std::uint32_t>(
+                                variable.span.begin.column)}});
+                if (variable.initializer) {
+                    const auto value =
+                        lower_string_expression(
+                            *variable.initializer);
+                    if (value) {
+                        process_.operations.emplace_back(
+                            CopyStringRegister{
+                                register_id, *value});
+                    }
+                } else {
+                    process_.operations.emplace_back(
+                        LoadStringConstant{register_id, {}});
+                }
+                continue;
+            }
+            const auto width = variable.type.width();
+            const bool null_vhdl_array =
+                variable.type.vhdl_array
+                && variable.type.vhdl_array->flat_width
+                && *variable.type.vhdl_array->flat_width == 0;
+            if (!width || (*width == 0 && !null_vhdl_array)) {
+                report(
+                    "FSIM-ELAB-052",
+                    "local variable '" + variable.name
+                        + "' has no executable packed width",
+                    variable.span);
+                continue;
+            }
+            if (!declared_here.emplace(variable.name).second) {
+                report(
+                    "FSIM-ELAB-053",
+                    "duplicate local variable in the same scope '"
+                        + variable.name + "'",
+                    variable.span);
+                continue;
+            }
+            const auto key = declaration_key(variable);
+            const auto register_found = declaration_registers_.find(key);
+            RegisterId register_id{};
+            if (register_found == declaration_registers_.end()) {
+                register_id =
+                    allocate_register(*width, variable.type.domain);
+                declaration_registers_.emplace(key, register_id);
+                auto debug_name = scoped_local_name(variable.name);
+                if (!debug_local_names_.emplace(debug_name).second) {
+                    debug_name += "@"
+                        + std::to_string(variable.span.begin.line)
+                        + ":" + std::to_string(
+                            variable.span.begin.column);
+                    debug_local_names_.emplace(debug_name);
+                }
+                process_.debug_locals.push_back(DebugLocal{
+                    std::move(debug_name),
+                    variable.type.spelling,
+                    register_id,
+                    *width,
+                    SourceLocation{
+                        variable.span.source_name,
+                        static_cast<std::uint32_t>(
+                            variable.span.begin.line),
+                        static_cast<std::uint32_t>(
+                            variable.span.begin.column)},
+                    {},
+                    {},
+                    value_kind(variable.type.domain),
+                    {}});
+                if (variable.type.integer_range) {
+                    const auto [lower, upper] =
+                        integer_bounds(variable.type.integer_range);
+                    process_.debug_locals.back().integer_lower =
+                        lower;
+                    process_.debug_locals.back().integer_upper =
+                        upper;
+                }
+                process_.debug_locals.back().enumeration_literals =
+                    variable.type.enumeration_literals;
+            } else {
+                register_id = register_found->second;
+            }
+            locals_.insert_or_assign(variable.name, register_id);
+            local_signed_.insert_or_assign(
+                variable.name, variable.type.is_signed);
+            local_ranges_.insert_or_assign(
+                variable.name, variable.type.packed_range);
+            local_integer_ranges_.insert_or_assign(
+                variable.name, variable.type.integer_range);
+            local_members_.insert_or_assign(
+                variable.name, variable.type.packed_members);
+            local_types_.insert_or_assign(
+                variable.name, &variable.type);
+            pending.push_back(Pending{&variable, register_id, *width});
+        }
+        for (const auto& local : pending) {
+            const auto& variable = *local.declaration;
+            if (variable.initializer) {
+                if (variable.type.domain
+                        == frontend::ValueDomain::Integer
+                    && !is_integer_expression(
+                        *variable.initializer)) {
+                    report(
+                        "FSIM-ELAB-INTEGER-004",
+                        "VHDL integer local initializer requires an "
+                        "integer-family expression",
+                        variable.span);
+                    continue;
+                }
+                if (variable.type.domain
+                        == frontend::ValueDomain::Integer
+                    && !validate_static_integer_assignment(
+                        *variable.initializer,
+                        variable.type.integer_range,
+                        variable.span)) {
+                    continue;
+                }
+                if (!variable.type.enumeration_literals.empty()
+                    && !validate_static_enumeration_assignment(
+                        *variable.initializer,
+                        variable.type,
+                        variable.span)) {
+                    continue;
+                }
+                auto value =
+                    lower_expression(
+                        *variable.initializer,
+                        local.width,
+                        &variable.type);
+                if (!value) {
+                    continue;
+                }
+                if (register_width(*value) != local.width
+                    && language_
+                        != frontend::Language::Vhdl2008) {
+                    *value = resize_register(
+                        *value,
+                        local.width,
+                        is_signed_expression(
+                            *variable.initializer));
+                }
+                if (register_width(*value) != local.width) {
+                    report(
+                        "FSIM-ELAB-054",
+                        "local variable initializer width mismatch for '"
+                            + variable.name + "'",
+                        variable.span);
+                    continue;
+                }
+                if (is_two_state_domain(variable.type.domain)
+                    && !is_two_state_domain(
+                        register_domain(*value))) {
+                    report(
+                        "FSIM-ELAB-058",
+                        "two-state local variable initializer for '"
+                            + variable.name
+                            + "' requires an explicit conversion",
+                        variable.span);
+                    continue;
+                }
+                if (local.width == 0) {
+                    continue;
+                }
+                if (variable.type.domain
+                        == frontend::ValueDomain::Integer) {
+                    emit_integer_check(
+                        *value, variable.type.integer_range);
+                }
+                if (!variable.type.enumeration_literals.empty()) {
+                    emit_enumeration_check(
+                        *value, variable.type);
+                }
+                process_.operations.emplace_back(
+                    CopyRegister{local.register_id, *value});
+                continue;
+            }
+            if (local.width == 0) {
+                continue;
+            }
+            auto initial_value =
+                default_packed_value(variable.type, local.width);
+            process_.operations.emplace_back(
+                LoadConstant{
+                    local.register_id,
+                    std::move(initial_value)});
+        }
+    }
+
+
+
     void Lowerer::report(std::string code, std::string message, frontend::SourceSpan span) {
         diagnostics_.push_back({std::move(code), std::move(message), std::move(span)});
     }

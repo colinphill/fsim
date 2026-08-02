@@ -56,6 +56,7 @@ int main() {
     test_vhdl_selected_assignments();
     test_vhdl_delay_mechanisms();
     test_vhdl_ordered_waveforms();
+    test_vhdl_batch119_retained_surface();
     test_vhdl_case_statements();
     test_vhdl_sequential_for_loops();
     test_systemverilog_vertical_slice();

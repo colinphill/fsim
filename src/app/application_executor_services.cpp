@@ -4,6 +4,8 @@
 #include "fsim/runtime/file_scanning.hpp"
 #include "fsim/runtime/string_methods.hpp"
 
+#include <algorithm>
+
 namespace fsim::app::application_detail {
 
 SystemCProcessExecutor::SystemCProcessExecutor(
@@ -75,6 +77,94 @@ std::uint64_t entropy_seed() {
 }
 
 #if defined(FSIM_HAS_LLVM)
+
+void LlvmProcessExecutor::write_report(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t instruction) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure) {
+    return;
+  }
+  try {
+    if (state.context == nullptr
+        || state.process == nullptr
+        || state.process->id != process
+        || instruction >= state.process->operations.size()) {
+      throw std::logic_error{
+          "invalid generated report callback"};
+    }
+    const auto* report =
+        fsim::runtime::simir::operation_get_if<runtime::simir::Report>(
+            &state.process->operations[instruction]);
+    if (report != nullptr) {
+      state.context->report(
+          report->message, report->severity, report->source);
+      return;
+    }
+    const auto* string_report =
+        fsim::runtime::simir::operation_get_if<runtime::simir::StringReport>(
+            &state.process->operations[instruction]);
+    if (string_report != nullptr) {
+      const auto encoded = state.executor->read_register(
+          string_report->severity, 2);
+      if (encoded.get(0) == runtime::Logic4::x
+          || encoded.get(0) == runtime::Logic4::z
+          || encoded.get(1) == runtime::Logic4::x
+          || encoded.get(1) == runtime::Logic4::z) {
+        throw runtime::simir::InterpreterError(
+            process,
+            instruction,
+            "VHDL severity expression produced an invalid value");
+      }
+      const auto ordinal =
+          (encoded.get(0) == runtime::Logic4::one ? 1U : 0U)
+          | (encoded.get(1) == runtime::Logic4::one ? 2U : 0U);
+      const auto severity = static_cast<
+          runtime::simir::AssertionSeverity>(ordinal);
+      const auto message = state.executor->read_string_register(
+          string_report->message);
+      if (severity == runtime::simir::AssertionSeverity::failure) {
+        if (string_report->standalone) {
+          state.context->report(
+              message, severity, string_report->source);
+        }
+        throw runtime::simir::AssertionError(
+            process,
+            instruction,
+            message.empty()
+                ? (string_report->standalone
+                       ? "report failure"
+                       : "assertion failed")
+                : message,
+            severity,
+            string_report->source,
+            string_report->standalone);
+      }
+      state.context->report(
+          message, severity, string_report->source);
+      return;
+    }
+    const auto* assertion =
+        fsim::runtime::simir::operation_get_if<runtime::simir::Assert>(
+            &state.process->operations[instruction]);
+    if (assertion == nullptr
+        || assertion->severity
+            == runtime::simir::AssertionSeverity::failure) {
+      throw std::logic_error{
+          "generated report callback references an incompatible "
+          "instruction"};
+    }
+    state.context->report(
+        assertion->message.empty()
+            ? std::string_view{"assertion failed"}
+            : std::string_view{assertion->message},
+        assertion->severity,
+        assertion->source);
+  } catch (...) {
+    capture_failure(state);
+  }
+}
 
 [[nodiscard]] std::string LlvmProcessExecutor::read_string_register(
     const runtime::simir::StringRegisterId id) const {
@@ -169,22 +259,50 @@ std::uint32_t LlvmProcessExecutor::file_open(
   if (state.failure) {
     return 1;
   }
+  const runtime::simir::FileOpen* operation{};
   try {
     if (result == nullptr) {
       throw compiler::LlvmJitError{
           "compiled file-open result pointer is null"};
     }
-    const auto* operation =
+    operation =
         fsim::runtime::simir::operation_get_if<runtime::simir::FileOpen>(
             &callback_operation(state, process, instruction));
     if (operation == nullptr) {
       throw compiler::LlvmJitError{
           "compiled file-open callback has the wrong operation"};
     }
+    if (operation->vhdl) {
+      const auto current = state.executor->read_register(
+          operation->destination, 32).low_word();
+      if (current.bval != 0) {
+        throw compiler::LlvmJitError{
+            "VHDL file object handle is unknown"};
+      }
+      if (current.aval != 0) {
+        if (!operation->status) {
+          throw runtime::simir::InterpreterError(
+              process, instruction,
+              "VHDL file object is already open");
+        }
+        *result = static_cast<std::uint32_t>(current.aval);
+        return 1;
+      }
+    }
     *result = state.context->open_file(
         state.executor->string_registers_.at(operation->path),
         state.executor->string_registers_.at(operation->mode));
     return 0;
+  } catch (const std::exception& error) {
+    if (operation != nullptr && operation->status) {
+      *result = 0;
+      const auto message = std::string_view{error.what()};
+      return message.find("unsupported") != std::string_view::npos
+              && message.find("mode") != std::string_view::npos
+          ? 3U : 2U;
+    }
+    capture_file_failure(state, process, instruction);
+    return 1;
   } catch (...) {
     capture_file_failure(state, process, instruction);
     return 1;
@@ -202,13 +320,23 @@ std::uint32_t LlvmProcessExecutor::file_close(
     return 1;
   }
   try {
-    if (!fsim::runtime::simir::operation_holds<runtime::simir::FileClose>(
-            callback_operation(state, process, instruction))) {
+    const auto* operation =
+        fsim::runtime::simir::operation_get_if<runtime::simir::FileClose>(
+            &callback_operation(state, process, instruction));
+    if (operation == nullptr) {
       throw compiler::LlvmJitError{
           "compiled file-close callback has the wrong operation"};
     }
-    state.context->close_file(
-        checked_file_handle(handle_aval, handle_bval));
+    const auto handle = checked_file_handle(handle_aval, handle_bval);
+    if (handle != 0) {
+      state.context->close_file(handle);
+    } else if (!operation->ignore_zero) {
+      if (operation->clear_handle) {
+        throw runtime::simir::InterpreterError(
+            process, instruction, "VHDL file object is not open");
+      }
+      state.context->close_file(handle);
+    }
     return 0;
   } catch (...) {
     capture_file_failure(state, process, instruction);
@@ -270,6 +398,9 @@ std::uint32_t LlvmProcessExecutor::file_write(
               + state.executor->string_registers_.at(string->source)
               + string->suffix,
           string->newline);
+      if (string->clear_source) {
+        state.executor->write_string_register(string->source, {});
+      }
       return 0;
     }
     throw compiler::LlvmJitError{
@@ -305,6 +436,14 @@ std::uint32_t LlvmProcessExecutor::file_read_line(
     }
     auto line = state.context->read_file_line(
         checked_file_handle(handle_aval, handle_bval), *result);
+    if (operation->vhdl_textio) {
+      if (*result == 0) {
+        throw compiler::LlvmJitError{
+            "VHDL readline reached end of file"};
+      }
+      if (!line.empty() && line.back() == '\n') line.pop_back();
+      if (!line.empty() && line.back() == '\r') line.pop_back();
+    }
     state.executor->write_string_register(
         operation->target, line);
     return 0;
@@ -326,16 +465,26 @@ std::uint32_t LlvmProcessExecutor::file_end_of_file(
     return 1;
   }
   try {
-    if (result == nullptr
-        || !fsim::runtime::simir::operation_holds<
-            runtime::simir::FileEndOfFile>(
-            callback_operation(state, process, instruction))) {
+    const auto* operation =
+        fsim::runtime::simir::operation_get_if<runtime::simir::FileEndOfFile>(
+            &callback_operation(state, process, instruction));
+    if (result == nullptr || operation == nullptr) {
       throw compiler::LlvmJitError{
           "compiled file-eof callback metadata is invalid"};
     }
-    *result = state.context->file_end_of_file(
-        checked_file_handle(handle_aval, handle_bval))
-        ? 1U : 0U;
+    const auto handle = checked_file_handle(handle_aval, handle_bval);
+    if (operation->lookahead) {
+      const auto character = state.context->read_file_character(handle);
+      *result = character < 0 ? 1U : 0U;
+      if (character >= 0
+          && state.context->unread_file_character(handle, character)
+              != character) {
+        throw compiler::LlvmJitError{
+            "compiled VHDL endfile could not preserve lookahead"};
+      }
+    } else {
+      *result = state.context->file_end_of_file(handle) ? 1U : 0U;
+    }
     return 0;
   } catch (...) {
     capture_file_failure(state, process, instruction);
@@ -521,8 +670,12 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             fsim::runtime::simir::operation_get_if<runtime::simir::FileScan>(&operation)) {
       runtime::simir::InputScanResult scanned;
       if (scan->string_source) {
+        auto& source = state.executor->string_registers_.at(scan->source);
         scanned = runtime::simir::scan_formatted_string(
-            *scan, state.executor->string_registers_.at(scan->source));
+            *scan, source);
+        if (scan->consume_string_source) {
+          source.erase(0, std::min(source.size(), scanned.consumed));
+        }
       } else {
         const auto handle = checked_file_handle(input0_aval, input0_bval);
         const std::function<std::int32_t()> read = [&] {
@@ -535,6 +688,23 @@ std::uint32_t LlvmProcessExecutor::container_operation(
           }
         };
         scanned = runtime::simir::scan_formatted_input(*scan, read, unread);
+      }
+      const auto expected = static_cast<std::int32_t>(
+          std::ranges::count_if(
+              scan->conversions,
+              [](const runtime::simir::InputScanConversion& conversion) {
+                return !conversion.suppress;
+              }));
+      const bool complete = scanned.assignments == expected;
+      if (scan->success) {
+        state.executor->write_register(
+            *scan->success,
+            runtime::PackedLogic4::from_aval_bval(
+                1, complete ? 1U : 0U, 0));
+      }
+      if (scan->require_assignments && !complete) {
+        throw compiler::LlvmJitError{
+            "VHDL file read did not convert the requested element"};
       }
       for (std::size_t index = 0; index < scanned.values.size(); ++index) {
         if (!scanned.values[index]) continue;

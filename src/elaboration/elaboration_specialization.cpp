@@ -838,6 +838,8 @@ SpecializedUnit specialize_unit(
         }
         if (is_vhdl) {
             const auto spelling = parameter_type.spelling;
+            const bool builtin_time =
+                parameter_type.nominal_type == "@builtin:time";
             const bool enumeration =
                 !parameter_type.enumeration_literals.empty();
             const bool supported_packed =
@@ -851,7 +853,8 @@ SpecializedUnit specialize_unit(
                     || parameter_type.domain
                         == frontend::ValueDomain::Logic9);
             const bool violates_supported_type =
-                (parameter_type.packed_range && !supported_packed)
+                (parameter_type.packed_range
+                    && !supported_packed && !builtin_time)
                 || !parameter_type.packed_members.empty()
                 || (!parameter_type.packed_range
                     && parameter_type.domain

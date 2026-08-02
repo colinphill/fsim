@@ -189,7 +189,7 @@ std::optional<std::string> validate_file_scan_metadata(
       || operation.trailing_text.size() > maximum_string_bytes)
     return "FileScan format metadata is empty or oversized";
   for (const auto& conversion : operation.conversions) {
-    if (conversion.format > InputScanFormat::string
+    if (conversion.format > InputScanFormat::boolean_value
         || conversion.prefix.size() > maximum_string_bytes
         || conversion.maximum_characters > maximum_string_bytes)
       return "FileScan conversion metadata is invalid or oversized";

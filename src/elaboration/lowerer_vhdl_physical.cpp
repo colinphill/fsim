@@ -17,10 +17,10 @@ Lowerer::lower_vhdl_physical_expression(
       || !expression.text.starts_with("@vhdl-physical:")) {
     return ExpressionAttempt{};
   }
-  if (expected_width != 32) {
+  if (expected_width != 32 && expected_width != 64) {
     report(
         "FSIM-ELAB-VHPHYSICAL-005",
-        "bounded physical values require the signed 32-bit runtime "
+        "bounded physical values require a signed 32- or 64-bit runtime "
         "representation",
         expression.span);
     return ExpressionAttempt{std::nullopt};
@@ -37,9 +37,12 @@ Lowerer::lower_vhdl_physical_expression(
     return ExpressionAttempt{std::nullopt};
   }
   const auto result = allocate_register(
-      32, frontend::ValueDomain::Integer);
+      expected_width, frontend::ValueDomain::Integer);
   process_.operations.emplace_back(
-      LoadConstant{result, integer_value(*value)});
+      LoadConstant{
+          result,
+          unsigned_value(
+              static_cast<std::uint64_t>(*value), expected_width)});
   return ExpressionAttempt{result};
 }
 

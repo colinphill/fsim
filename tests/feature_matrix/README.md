@@ -91,6 +91,7 @@ These suites are the evidence currently referenced by the matrix:
 | [app/delay_mode_application_test.cpp](../app/delay_mode_application_test.cpp) | Manifest and CLI `min`/`typ`/`max` delay selection, typical default, selection-before-rounding timestamps, branch-specific `auto` resolution, interpreter versus LLVM O0/O2 semantic equivalence, normalized VCD, and cold/warm mode-distinct native-cache behavior |
 | [app/transition_delay_application_test.cpp](../app/transition_delay_application_test.cpp) | SystemVerilog one/two/three-value rise/fall/turnoff delays for continuous whole/slice writes and supported gates, actual-transition selection, pulse rejection, interpreter versus LLVM O0/O2 equivalence, normalized VCD, and cold/warm cache reuse |
 | [app/vhdl_projected_application_test.cpp](../app/vhdl_projected_application_test.cpp) | VHDL implicit/explicit inertial, transport, explicit rejection, sequential/conditional/selected concurrent whole and slice assignments, exact pulse-boundary timestamps, greater-than-delay rejection, interpreter versus LLVM O0/O2 equivalence, normalized VCD, and cold/warm cache reuse |
+| [app/vhdl_procedure_wait_application_test.cpp](../app/vhdl_procedure_wait_application_test.cpp) | VHDL waits nested through static loops, conditionals, and two-level procedure calls, including event/condition rechecks, preserved absolute timeout, process repetition, and interpreter versus LLVM O0/O2 schedule equivalence |
 | [app/vhdl_enumeration_application_test.cpp](../app/vhdl_enumeration_application_test.cpp) | VHDL package enumeration types and ascending/descending constrained subtypes, literal/constant/prior-generic bounds, identifier/character literals, typed constants/generics, subtype-left defaults, direction-aware scalar attributes through imported/subtype type marks, static package/generic folding, checked dynamic successor and constrained-store failures, directionally safe hierarchy aliases, delayed/multi-waveform stores, assignments, case choices, equality/ordinal comparison, debugger literal names, interpreter versus LLVM O0/O2 equivalence, normalized VCD, cold/warm cache reuse, and package-edit invalidation |
 | [app/vhdl_array_application_test.cpp](../app/vhdl_array_application_test.cpp) | Nominal multidimensional, null, nested-array, and array-of-nested-record VHDL values; interleaved index/member reads and targets; direct/component/generic-dependent and callable copies; recursive specialization identity; disjoint/resolved/nested drivers and selected sensitivity; debug-visible locals and projected single/multi signal targets; hierarchy/debugger inspection, normalized VCD, interpreter/LLVM O0/O2 cold-warm parity, package-edit invalidation, and identical runtime-bound failures |
 | [api/api_test.cpp](../api/api_test.cpp) | C ABI lifecycle, generation-checked hierarchy/value handles, force/deposit/release, synchronous process-bearing safe-point callbacks and re-entry guards, ordered VHDL/SystemVerilog note/warning/error/failure callbacks without fatal duplication, run, statement/process/delta/time stepping, callback-issued asynchronous stop/resume, and terminal-stop precedence |
@@ -105,6 +106,40 @@ These suites are the evidence currently referenced by the matrix:
 Several current executables cover many features at once. They are useful
 architecture-gate tests, but they do not replace the atomic positive, negative,
 elaboration, and runtime matrix required for v1.
+
+The Batch 119 frontend fixture
+[`frontend_vhdl_time_file_tests.cpp`](../frontend/frontend_vhdl_time_file_tests.cpp)
+retains nested wait trees, general report and severity expressions, nominal
+file types and file objects across package/architecture/process/block regions,
+file-interface subprogram profiles, TextIO-like calls, physical-time
+expressions, and inertial/transport/reject waveform metadata. Its malformed
+companion proves the new file/open/report/severity diagnostics. This is P+/P-
+evidence only for the remaining areas. Batch 119 Task 2 adds exact
+overload-resolved nested-procedure wait legality, interpreter execution, and
+LLVM O0/O2 differential evidence. Task 3 adds general runtime report and
+severity evaluation, skipped passing assertions, exact type diagnostics,
+source metadata, standalone/assertion failure policy, and interpreter/LLVM
+O0/O2 differential evidence. Task 4 adds bounded manifest-confined VHDL file
+objects, declaration/status opens, modes, close/lifetime, file-formal aliasing,
+lookahead `endfile`, integer-element direct I/O, exact diagnostics, and merged
+interpreter/LLVM O0/O2 file-application evidence. Task 5 adds bounded TextIO
+line/cursor reads, writes, success/failure, side/field formatting, line
+clearing, profile diagnostics, and exact interpreter/LLVM O0/O2 bytes. Task 6
+adds the signed-64-bit predefined `time` type, exact standard-unit and
+resolution normalization, qualification, static arithmetic/comparison,
+expression-valued wait/timeout scheduling, automatic-resolution selection,
+three exact failure classes, and interpreter/LLVM O0/O2 parity. Task 7
+completes scalarized projected-waveform replacement, transport truncation,
+inertial pulse rejection, ordered whole/slice waveforms, exact delta behavior,
+multi-driver resolution, VCD, cold/warm cache reuse, and interpreter/LLVM
+O0/O2 parity. Task 8 adds same-language time-generic hierarchy,
+nested-callable suspension,
+source-scoped interpreter/O0/O2/debug execution points, normalized VCD,
+stable specialization keys, and cold/warm report, file/TextIO, time, and
+transaction cache evidence. Task 9 adds the accumulated positive/negative,
+interpreter/O0/O2/debug, cold/warm/source-edit, scheduling, normalized-VCD,
+I/O, time-resolution, and exact-failure differential gate. Task 10 owns the
+batch release gates.
 
 ## Differential runtime rule
 

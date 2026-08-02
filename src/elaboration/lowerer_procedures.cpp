@@ -19,11 +19,238 @@ bool writable_procedure_actual(const Expression& expression) {
 
 } // namespace
 
+bool Lowerer::lower_vhdl_file_procedure_call(
+        const Statement& statement) {
+    const bool open = statement.procedure_name == "file_open";
+    const bool close = statement.procedure_name == "file_close";
+    const bool read = statement.procedure_name == "read";
+    const bool write = statement.procedure_name == "write";
+    if (!open && !close && !read && !write) {
+        return false;
+    }
+    const auto positional = [&] {
+        std::vector<const Expression*> result;
+        for (const auto& argument : statement.procedure_arguments) {
+            if (!argument.formal) {
+                result.push_back(&argument.value);
+            }
+        }
+        return result;
+    }();
+    const auto actual = [&](const std::string_view formal,
+                            const std::size_t index)
+            -> const Expression* {
+        const auto named = std::ranges::find_if(
+            statement.procedure_arguments,
+            [&](const auto& argument) {
+                return argument.formal && *argument.formal == formal;
+            });
+        if (named != statement.procedure_arguments.end()) {
+            return &named->value;
+        }
+        return index < positional.size() ? positional[index] : nullptr;
+    };
+    bool status_form = false;
+    if (open) {
+        status_form = statement.procedure_arguments.size() == 4
+            || std::ranges::any_of(
+                statement.procedure_arguments,
+                [](const auto& argument) {
+                    return argument.formal
+                        && *argument.formal == "status";
+                });
+        if (!status_form
+            && statement.procedure_arguments.size() == 3
+            && !positional.empty()) {
+            const auto* first_type = positional.front()->kind
+                    == ExpressionKind::Identifier
+                ? object_type(positional.front()->text) : nullptr;
+            status_form = first_type != nullptr
+                && !first_type->vhdl_file;
+        }
+    }
+    const auto* file = actual(
+        "f", status_form ? 1U : 0U);
+    if ((read || write)
+        && (file == nullptr
+            || file->kind != ExpressionKind::Identifier
+            || object_type(file->text) == nullptr
+            || !object_type(file->text)->vhdl_file)) {
+        return false;
+    }
+    if (file == nullptr
+        || file->kind != ExpressionKind::Identifier) {
+        report(
+            "FSIM-ELAB-VHFILE-005",
+            "VHDL file operation requires a whole file object",
+            file == nullptr ? statement.span : file->span);
+        return true;
+    }
+    const auto local = locals_.find(file->text);
+    const auto* type = object_type(file->text);
+    if (local == locals_.end() || type == nullptr
+        || !type->vhdl_file) {
+        report(
+            "FSIM-ELAB-VHFILE-005",
+            "unknown VHDL file object '" + file->text + "'",
+            file->span);
+        return true;
+    }
+    if (close) {
+        if (statement.procedure_arguments.size() != 1) {
+            report(
+                "FSIM-ELAB-VHFILE-006",
+                "file_close requires exactly one file object",
+                statement.span);
+            return true;
+        }
+        process_.operations.emplace_back(
+            FileClose{local->second, true, false});
+        return true;
+    }
+    if (read || write) {
+        const auto* value = actual("value", 1);
+        const auto& element = type->vhdl_file->element_types.front();
+        if (statement.procedure_arguments.size() != 2
+            || value == nullptr) {
+            report(
+                "FSIM-ELAB-VHFILE-010",
+                "direct VHDL file read/write requires a file object "
+                "and one value",
+                statement.span);
+            return true;
+        }
+        if (element.domain != frontend::ValueDomain::Integer) {
+            report(
+                "FSIM-ELAB-VHFILE-011",
+                "bounded direct VHDL file I/O requires an integer "
+                "element subtype",
+                statement.span);
+            return true;
+        }
+        if (write) {
+            auto source = lower_expression(*value, 32, &element);
+            if (!source) {
+                return true;
+            }
+            FileWriteFormatted operation;
+            operation.handle = local->second;
+            operation.source = *source;
+            operation.width = 32;
+            operation.format = OutputFormat::decimal;
+            operation.newline = true;
+            operation.signed_decimal = true;
+            process_.operations.emplace_back(std::move(operation));
+            return true;
+        }
+        const auto target = value->kind == ExpressionKind::Identifier
+            ? locals_.find(value->text) : locals_.end();
+        const auto* target_type = value->kind == ExpressionKind::Identifier
+            ? object_type(value->text) : nullptr;
+        if (target == locals_.end() || target_type == nullptr
+            || target_type->domain != frontend::ValueDomain::Integer) {
+            report(
+                "FSIM-ELAB-VHFILE-012",
+                "direct VHDL file read target must be a writable "
+                "integer variable",
+                value->span);
+            return true;
+        }
+        InputScanConversion conversion;
+        conversion.format = InputScanFormat::decimal;
+        conversion.target = InputScanTarget{
+            InputScanTargetKind::packed_register,
+            target->second,
+            32,
+            true};
+        const auto count = allocate_register(
+            32, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(FileScan{
+            count,
+            local->second,
+            0,
+            false,
+            {std::move(conversion)},
+            {},
+            true});
+        return true;
+    }
+    const auto* path = actual(
+        "external_name", status_form ? 2U : 1U);
+    const auto* kind = actual(
+        "open_kind", status_form ? 3U : 2U);
+    const auto minimum = status_form ? 3U : 2U;
+    const auto maximum = status_form ? 4U : 3U;
+    if (statement.procedure_arguments.size() < minimum
+        || statement.procedure_arguments.size() > maximum
+        || path == nullptr || !is_string_expression(*path)) {
+        report(
+            "FSIM-ELAB-VHFILE-007",
+            "file_open requires a file object, string logical name, "
+            "and optional file_open_kind",
+            statement.span);
+        return true;
+    }
+    const auto kind_name = kind == nullptr
+        ? std::string_view{"read_mode"}
+        : std::string_view{kind->text};
+    const auto mode_text =
+        kind_name == "read_mode" ? std::string_view{"r"}
+        : kind_name == "write_mode" ? std::string_view{"w"}
+        : kind_name == "append_mode" ? std::string_view{"a"}
+        : std::string_view{};
+    if (mode_text.empty()) {
+        report(
+            "FSIM-ELAB-VHFILE-004",
+            "VHDL file open kind must be read_mode, write_mode, "
+            "or append_mode",
+            kind->span);
+        return true;
+    }
+    std::optional<RegisterId> status;
+    if (status_form) {
+        const auto* target = actual("status", 0);
+        const auto target_local = target != nullptr
+                && target->kind == ExpressionKind::Identifier
+            ? locals_.find(target->text) : locals_.end();
+        const auto* target_type = target != nullptr
+                && target->kind == ExpressionKind::Identifier
+            ? object_type(target->text) : nullptr;
+        if (target == nullptr || target_local == locals_.end()
+            || target_type == nullptr
+            || target_type->enumeration_literals
+                != std::vector<std::string>{
+                    "open_ok", "status_error", "name_error", "mode_error"}) {
+            report(
+                "FSIM-ELAB-VHFILE-008",
+                "file_open status actual must be a writable "
+                "file_open_status object",
+                target == nullptr ? statement.span : target->span);
+            return true;
+        }
+        status = target_local->second;
+    }
+    const auto path_register = lower_string_expression(*path);
+    const auto mode_register = allocate_string_register();
+    process_.operations.emplace_back(
+        LoadStringConstant{mode_register, std::string{mode_text}});
+    if (path_register) {
+        process_.operations.emplace_back(FileOpen{
+            local->second, *path_register, mode_register, status, true});
+    }
+    return true;
+}
+
 void Lowerer::initialize_procedure_support() {
     procedure_frames_.clear();
     procedure_indices_.clear();
     pending_procedures_.clear();
     procedure_dependencies_.clear();
+    procedure_suspending_.clear();
+    process_procedure_dependencies_.clear();
+    function_procedure_dependencies_.clear();
+    function_procedure_dependencies_.resize(
+        function_frames_.size());
     active_procedure_.reset();
     procedure_return_jumps_.clear();
     procedure_call_stack_ = {};
@@ -87,6 +314,11 @@ void Lowerer::initialize_procedure_support() {
         overloads.push_back(index);
     }
     procedure_dependencies_.resize(procedure_frames_.size());
+    procedure_suspending_.reserve(procedure_frames_.size());
+    for (const auto& frame : procedure_frames_) {
+        procedure_suspending_.push_back(
+            contains_explicit_wait(frame.source->statements));
+    }
     if (procedure_frames_.empty()) {
         return;
     }
@@ -124,6 +356,14 @@ void Lowerer::initialize_procedure_support() {
 }
 
 void Lowerer::lower_procedure_call(const Statement& statement) {
+    if (language_ == frontend::Language::Vhdl2008
+        && lower_vhdl_textio_procedure_call(statement)) {
+        return;
+    }
+    if (language_ == frontend::Language::Vhdl2008
+        && lower_vhdl_file_procedure_call(statement)) {
+        return;
+    }
     if (language_ == frontend::Language::Vhdl2008
         && lower_vhdl_protected_procedure_call(statement)) {
         return;
@@ -271,6 +511,8 @@ void Lowerer::lower_procedure_call(const Statement& statement) {
             writable_procedure_actual(actual);
         if ((formal.object_class
                  == frontend::InterfaceObjectClass::Variable
+             || formal.object_class
+                 == frontend::InterfaceObjectClass::File
              || formal.direction
                  != frontend::PortDirection::Input)
             && !writable) {
@@ -320,12 +562,30 @@ void Lowerer::lower_procedure_call(const Statement& statement) {
     if (active_procedure_) {
         procedure_dependencies_[*active_procedure_].insert(
             procedure_index);
+    } else if (active_function_) {
+        function_procedure_dependencies_[*active_function_].insert(
+            procedure_index);
+    } else {
+        process_procedure_dependencies_.insert(procedure_index);
     }
 
     for (std::size_t index = 0;
          index < procedure.arguments.size(); ++index) {
         const auto& formal = procedure.arguments[index];
-        if (formal.direction == frontend::PortDirection::Input) {
+        if (formal.direction == frontend::PortDirection::Input
+            && formal.object_class
+                != frontend::InterfaceObjectClass::File) {
+            continue;
+        }
+        if (formal.object_class
+            == frontend::InterfaceObjectClass::File) {
+            const auto actual_local = actuals[index]->kind
+                    == ExpressionKind::Identifier
+                ? locals_.find(actuals[index]->text) : locals_.end();
+            if (actual_local != locals_.end()) {
+                process_.operations.emplace_back(CopyRegister{
+                    actual_local->second, frame.arguments[index]});
+            }
             continue;
         }
         const auto temporary =
@@ -405,6 +665,8 @@ void Lowerer::lower_procedure_body(
     auto saved_loop_controls = std::move(loop_controls_);
     auto saved_return_jumps =
         std::move(procedure_return_jumps_);
+    auto saved_file_handles =
+        std::move(procedure_file_handles_);
     const auto saved_active = active_procedure_;
     locals_.clear();
     local_signed_.clear();
@@ -415,6 +677,7 @@ void Lowerer::lower_procedure_body(
     local_scope_ = {frame.source->name};
     loop_controls_.clear();
     procedure_return_jumps_.clear();
+    procedure_file_handles_.clear();
     active_procedure_ = procedure_index;
 
     const auto bind =
@@ -474,12 +737,18 @@ void Lowerer::lower_procedure_body(
     for (const auto jump : procedure_return_jumps_) {
         process_.operations[jump] = Jump{epilogue};
     }
+    for (const auto handle : procedure_file_handles_) {
+        process_.operations.emplace_back(
+            FileClose{handle, true, true});
+    }
     process_.operations.emplace_back(
         Return{procedure_call_stack_});
 
     active_procedure_ = saved_active;
     procedure_return_jumps_ =
         std::move(saved_return_jumps);
+    procedure_file_handles_ =
+        std::move(saved_file_handles);
     loop_controls_ = std::move(saved_loop_controls);
     local_scope_ = std::move(saved_scope);
     local_types_ = std::move(saved_types);
@@ -525,6 +794,31 @@ void Lowerer::diagnose_procedure_cycles() {
             (void)visit(visit, index);
         }
     }
+}
+
+bool Lowerer::procedure_dependencies_suspend(
+    const std::unordered_set<std::size_t>& roots) const {
+    std::vector<bool> visited(procedure_frames_.size(), false);
+    const auto visit = [&](const auto& self,
+                           const std::size_t index) -> bool {
+        if (index >= procedure_frames_.size() || visited[index]) {
+            return false;
+        }
+        visited[index] = true;
+        if (procedure_suspending_[index]) {
+            return true;
+        }
+        return std::ranges::any_of(
+            procedure_dependencies_[index],
+            [&](const std::size_t dependency) {
+                return self(self, dependency);
+            });
+    };
+    return std::ranges::any_of(
+        roots,
+        [&](const std::size_t root) {
+            return visit(visit, root);
+        });
 }
 
 void Lowerer::lower_pending_procedures() {

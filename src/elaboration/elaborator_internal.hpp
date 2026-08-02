@@ -1108,6 +1108,7 @@ private:
     ExpressionAttempt lower_vhdl_physical_expression(
         const Expression&, std::size_t, const frontend::Type*);
     bool lower_vhdl_protected_procedure_call(const Statement&);
+    bool lower_vhdl_file_procedure_call(const Statement&); bool lower_vhdl_textio_procedure_call(const Statement&);
     bool lower_vhdl_access_assignment(const Statement&);
     std::optional<ContainerRegisterId> vhdl_access_heap(
         const frontend::Type&, const frontend::SourceSpan&);
@@ -1357,7 +1358,6 @@ private:
         const std::vector<RegisterId>& registers);
 
     void lower_task_call(const Statement& statement);
-
     void lower_pending_tasks();
 
     void lower_task_body(std::size_t task_index);
@@ -1367,16 +1367,13 @@ private:
     void diagnose_task_cycles();
 
     void initialize_procedure_support();
-
     void lower_procedure_call(const Statement& statement);
-
     void lower_pending_procedures();
-
     void lower_procedure_body(std::size_t procedure_index);
-
     void lower_procedure_return(const Statement& statement);
-
     void diagnose_procedure_cycles();
+    [[nodiscard]] bool procedure_dependencies_suspend(
+        const std::unordered_set<std::size_t>& roots) const;
 
     void validate_read_only_signal_writes(
         const frontend::SourceSpan& source);
@@ -1534,10 +1531,15 @@ private:
     std::deque<std::size_t> pending_procedures_;
     std::vector<std::unordered_set<std::size_t>>
         procedure_dependencies_;
+    std::vector<bool> procedure_suspending_;
+    std::unordered_set<std::size_t>
+        process_procedure_dependencies_;
+    std::vector<std::unordered_set<std::size_t>>
+        function_procedure_dependencies_;
     std::optional<std::size_t> active_procedure_;
     std::vector<InstructionIndex> procedure_return_jumps_;
-    CallStack procedure_call_stack_;
-    bool procedure_support_initialized_{};
+    std::vector<RegisterId> procedure_file_handles_;
+    CallStack procedure_call_stack_; bool procedure_support_initialized_{};
     frontend::ProcessKind process_kind_{
         frontend::ProcessKind::VhdlProcess};
     frontend::Language language_{frontend::Language::Vhdl2008};

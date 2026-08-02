@@ -3,6 +3,7 @@
 
 #include "fsim/runtime/simir.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <limits>
 #include <tuple>
@@ -22,11 +23,18 @@ public:
       const std::function<void(std::int32_t)>& unread_value)
       : read_(read_value), unread_(unread_value) {}
 
-  [[nodiscard]] std::int32_t read() const { return read_(); }
-  void unread(const std::int32_t character) const {
-    if (character >= 0) unread_(character);
+  [[nodiscard]] std::int32_t read() {
+    const auto value = read_();
+    if (value >= 0) ++consumed_;
+    return value;
   }
-  [[nodiscard]] bool skip_space() const {
+  void unread(const std::int32_t character) {
+    if (character >= 0) {
+      unread_(character);
+      if (consumed_ > 0) --consumed_;
+    }
+  }
+  [[nodiscard]] bool skip_space() {
     auto character = read();
     while (space(character)) character = read();
     unread(character);
@@ -34,7 +42,7 @@ public:
   }
 
   enum class Match : std::uint8_t { matched, mismatch, eof };
-  [[nodiscard]] Match match(const std::string_view literal) const {
+  [[nodiscard]] Match match(const std::string_view literal) {
     for (std::size_t index = 0; index < literal.size(); ++index) {
       const auto expected = static_cast<unsigned char>(literal[index]);
       if (space(expected)) {
@@ -54,10 +62,14 @@ public:
     }
     return Match::matched;
   }
+  [[nodiscard]] std::size_t consumed() const noexcept {
+    return consumed_;
+  }
 
 private:
   const std::function<std::int32_t()>& read_;
   const std::function<void(std::int32_t)>& unread_;
+  std::size_t consumed_{};
 };
 
 [[nodiscard]] std::uint64_t low_mask(const std::uint32_t width) noexcept {
@@ -69,6 +81,18 @@ private:
     std::string token,
     const InputScanFormat format,
     const InputScanTarget& target) {
+  if (format == InputScanFormat::boolean_value) {
+    std::ranges::transform(token, token.begin(), [](const char character) {
+      return static_cast<char>(std::tolower(
+          static_cast<unsigned char>(character)));
+    });
+    if (token != "true" && token != "false") return std::nullopt;
+    return InputScanValue{
+        PackedLogic4::from_aval_bval(
+            target.width, token == "true" ? 1U : 0U, 0),
+        {},
+        false};
+  }
   bool negative = false;
   if (!token.empty() && (token.front() == '+' || token.front() == '-')) {
     negative = token.front() == '-';
@@ -175,6 +199,10 @@ private:
     const InputScanFormat format,
     const bool first) noexcept {
   if (character < 0) return false;
+  if (format == InputScanFormat::boolean_value) {
+    return (character >= 'a' && character <= 'z')
+        || (character >= 'A' && character <= 'Z');
+  }
   if (first && (character == '+' || character == '-')) return true;
   if (character == '_' || character == '?' || character == 'x'
       || character == 'X' || character == 'z' || character == 'Z') return true;
@@ -189,7 +217,7 @@ private:
 }
 
 [[nodiscard]] std::tuple<std::string, bool, bool> read_conversion_text(
-    const Scanner& scanner, const InputScanConversion& conversion) {
+    Scanner& scanner, const InputScanConversion& conversion) {
   std::string text;
   bool eof = false;
   const auto default_limit = conversion.format == InputScanFormat::character
@@ -235,12 +263,14 @@ InputScanResult scan_formatted_input(
     if (prefix != Scanner::Match::matched) {
       if (prefix == Scanner::Match::eof && result.assignments == 0)
         result.assignments = -1;
+      result.consumed = scanner.consumed();
       return result;
     }
     auto [text, complete, eof] = read_conversion_text(scanner, conversion);
     if (text.empty() || !complete) {
       if (eof && result.assignments == 0)
         result.assignments = -1;
+      result.consumed = scanner.consumed();
       return result;
     }
     std::optional<InputScanValue> value;
@@ -256,13 +286,17 @@ InputScanResult scan_formatted_input(
     } else {
       value = packed_digits(std::move(text), conversion.format, conversion.target);
     }
-    if (!value) return result;
+    if (!value) {
+      result.consumed = scanner.consumed();
+      return result;
+    }
     if (!conversion.suppress) {
       result.values[index] = std::move(value);
       ++result.assignments;
     }
   }
   (void)scanner.match(operation.trailing_text);
+  result.consumed = scanner.consumed();
   return result;
 }
 

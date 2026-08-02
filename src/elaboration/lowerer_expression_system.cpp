@@ -102,6 +102,35 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
                 static_cast<std::uint32_t>(*width)});
             return destination;
         }
+        if (language_ == frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::Call
+            && expression.text == "endfile") {
+          if (expression.operands.size() != 1
+              || expression.operands.front().kind
+                  != ExpressionKind::Identifier) {
+            report(
+                "FSIM-ELAB-VHFILE-009",
+                "endfile requires exactly one whole VHDL file object",
+                expression.span);
+            return std::nullopt;
+          }
+          const auto& file = expression.operands.front();
+          const auto local = locals_.find(file.text);
+          const auto* type = object_type(file.text);
+          if (local == locals_.end() || type == nullptr
+              || !type->vhdl_file) {
+            report(
+                "FSIM-ELAB-VHFILE-009",
+                "unknown VHDL file object '" + file.text + "'",
+                file.span);
+            return std::nullopt;
+          }
+          const auto destination = allocate_register(
+              1, frontend::ValueDomain::Boolean);
+          process_.operations.emplace_back(FileEndOfFile{
+              destination, local->second, true});
+          return destination;
+        }
         const auto lower_handle =
             [&](const Expression& handle)
                 -> std::optional<RegisterId> {

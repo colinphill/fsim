@@ -3,6 +3,7 @@
 #include "fsim/runtime/file_binary.hpp"
 #include "fsim/runtime/file_scanning.hpp"
 
+#include <algorithm>
 #include <system_error>
 
 namespace fsim::runtime::simir {
@@ -74,6 +75,13 @@ struct Mode {
         true};
   }
   return std::nullopt;
+}
+
+[[nodiscard]] std::uint32_t vhdl_open_status(
+    const std::string_view message) {
+  return message.find("unsupported") != std::string_view::npos
+          && message.find("mode") != std::string_view::npos
+      ? 3U : 2U;
 }
 
 }  // namespace
@@ -429,16 +437,40 @@ void Interpreter::Impl::execute_file(
     ProcessState& process,
     const FileOpen& operation) {
   try {
+    if (operation.vhdl
+        && known_file_handle(process, operation.destination) != 0) {
+      if (!operation.status) {
+        throw std::runtime_error{
+            "VHDL file object is already open"};
+      }
+      get_register(process, *operation.status) =
+          PackedLogic4::from_aval_bval(2, 1, 0);
+      ++process.pc;
+      return;
+    }
     const auto handle = open_file(
         process.program.id,
         get_string_register(process, operation.path),
         get_string_register(process, operation.mode));
     get_register(process, operation.destination) =
         PackedLogic4::from_aval_bval(32, handle, 0);
+    if (operation.status) {
+      get_register(process, *operation.status) =
+          PackedLogic4::from_aval_bval(2, 0, 0);
+    }
     ++process.pc;
   } catch (const InterpreterError&) {
     throw;
   } catch (const std::exception& error) {
+    if (operation.status) {
+      get_register(process, operation.destination) =
+          PackedLogic4::from_aval_bval(32, 0, 0);
+      get_register(process, *operation.status) =
+          PackedLogic4::from_aval_bval(
+              2, vhdl_open_status(error.what()), 0);
+      ++process.pc;
+      return;
+    }
     throw InterpreterError{
         process.program.id, process.pc, error.what()};
   }
@@ -448,9 +480,19 @@ void Interpreter::Impl::execute_file(
     ProcessState& process,
     const FileClose& operation) {
   try {
-    close_file(
-        process.program.id,
-        known_file_handle(process, operation.handle));
+    const auto handle = known_file_handle(process, operation.handle);
+    if (handle != 0) {
+      close_file(process.program.id, handle);
+    } else if (!operation.ignore_zero) {
+      if (operation.clear_handle) {
+        throw std::runtime_error{"VHDL file object is not open"};
+      }
+      close_file(process.program.id, handle);
+    }
+    if (operation.clear_handle) {
+      get_register(process, operation.handle) =
+          PackedLogic4::from_aval_bval(32, 0, 0);
+    }
     ++process.pc;
   } catch (const InterpreterError&) {
     throw;
@@ -516,6 +558,9 @@ void Interpreter::Impl::execute_file(
             + get_string_register(process, operation.source)
             + operation.suffix,
         operation.newline);
+    if (operation.clear_source) {
+      get_string_register(process, operation.source).clear();
+    }
     ++process.pc;
   } catch (const InterpreterError&) {
     throw;
@@ -534,6 +579,13 @@ void Interpreter::Impl::execute_file(
     if (operation.kind == FileReadKind::line) {
       std::uint32_t count{};
       auto line = read_file_line(process.program.id, handle, count);
+      if (operation.vhdl_textio) {
+        if (count == 0) {
+          throw std::runtime_error{"VHDL readline reached end of file"};
+        }
+        if (!line.empty() && line.back() == '\n') line.pop_back();
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+      }
       get_string_register(process, operation.target) = std::move(line);
       result = static_cast<std::int32_t>(count);
     } else if (operation.kind == FileReadKind::character) {
@@ -563,12 +615,24 @@ void Interpreter::Impl::execute_file(
     ProcessState& process,
     const FileEndOfFile& operation) {
   try {
-    const bool eof = file_end_of_file(
-        process.program.id,
-        known_file_handle(process, operation.handle));
+    const auto handle = known_file_handle(process, operation.handle);
+    bool eof{};
+    if (operation.lookahead) {
+      const auto character = read_file_character(
+          process.program.id, handle);
+      eof = character < 0;
+      if (!eof && unread_file_character(
+              process.program.id, handle, character) != character) {
+        throw std::runtime_error{
+            "VHDL endfile could not preserve lookahead"};
+      }
+    } else {
+      eof = file_end_of_file(process.program.id, handle);
+    }
     get_register(process, operation.destination) =
         PackedLogic4::from_aval_bval(
-            32, eof ? 1U : 0U, 0);
+            operation.lookahead ? 1U : 32U,
+            eof ? 1U : 0U, 0);
     ++process.pc;
   } catch (const InterpreterError&) {
     throw;
@@ -606,8 +670,12 @@ void Interpreter::Impl::execute_file(
   try {
     InputScanResult scanned;
     if (operation.string_source) {
+      auto& source = get_string_register(process, operation.source);
       scanned = scan_formatted_string(
-          operation, get_string_register(process, operation.source));
+          operation, source);
+      if (operation.consume_string_source) {
+        source.erase(0, std::min(source.size(), scanned.consumed));
+      }
     } else {
       const auto handle = known_file_handle(process, operation.handle);
       const std::function<std::int32_t()> read = [&] {
@@ -619,6 +687,20 @@ void Interpreter::Impl::execute_file(
         }
       };
       scanned = scan_formatted_input(operation, read, unread);
+    }
+    const auto expected = static_cast<std::int32_t>(std::ranges::count_if(
+        operation.conversions,
+        [](const InputScanConversion& conversion) {
+          return !conversion.suppress;
+        }));
+    const bool complete = scanned.assignments == expected;
+    if (operation.success) {
+      get_register(process, *operation.success) =
+          PackedLogic4::from_aval_bval(1, complete ? 1U : 0U, 0);
+    }
+    if (operation.require_assignments && !complete) {
+      throw std::runtime_error{
+          "VHDL file read did not convert the requested element"};
     }
     for (std::size_t index = 0; index < scanned.values.size(); ++index) {
       if (!scanned.values[index]) continue;

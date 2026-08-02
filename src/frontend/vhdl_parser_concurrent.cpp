@@ -325,6 +325,7 @@ bool VhdlParser::parse_vhdl_generate_declarations(
     append(body.type_aliases, "type");
     append(body.signals, "signal");
     append(body.signal_aliases, "signal alias");
+    append(body.variables, "file");
     append(body.functions, "function", true);
     append(body.tasks, "task", true);
     append(body.procedures, "procedure", true);
@@ -387,6 +388,12 @@ bool VhdlParser::parse_vhdl_generate_declarations(
       parsed = true;
       parse_vhdl_generate_constant(
           body, previous());
+      continue;
+    }
+    if (match_keyword("file", true)) {
+      parsed = true;
+      parse_vhdl_file_declaration(
+          body.variables, previous());
       continue;
     }
     if (match_keyword("type", true)) {
@@ -520,7 +527,6 @@ bool VhdlParser::parse_vhdl_generate_declarations(
     }
     if (keyword("variable", 0, true)
         || keyword("shared", 0, true)
-        || keyword("file", 0, true)
         || keyword("attribute", 0, true)
         || keyword("use", 0, true)
         || keyword("group", 0, true)
@@ -967,6 +973,11 @@ Process VhdlParser::parse_process(std::optional<Token> label) {
   }
   match_keyword("is", true);
   while (!at_end() && !keyword("begin", 0, true)) {
+    if (match_keyword("file", true)) {
+      parse_vhdl_file_declaration(
+          process.variables, previous());
+      continue;
+    }
     if (parse_vhdl_local_nonobject_declaration(
             process.constants,
             process.type_aliases,
@@ -1050,20 +1061,6 @@ Process VhdlParser::parse_process(std::optional<Token> label) {
         "FSIM-VHDL-SEM-012",
         "a process sensitivity list cannot be combined with an explicit "
         "wait statement");
-  }
-  for (const auto& statement : process.statements) {
-    if (contains_explicit_wait(
-            contains_explicit_wait, statement.statements)
-        || contains_explicit_wait(
-            contains_explicit_wait, statement.else_statements)) {
-      error(
-          start,
-          "FSIM-VHDL-UNSUPPORTED-017",
-          "wait statements nested in conditional control flow require "
-          "suspension-path analysis not implemented in this frontend "
-          "slice");
-      break;
-    }
   }
   expect_keyword("end", true, "FSIM-VHDL-PARSE-022");
   match_keyword("process", true);
