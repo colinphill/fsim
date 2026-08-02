@@ -98,6 +98,7 @@ add_executable(
   elaboration/elaborator_selection_test.cpp
   elaboration/elaborator_vhdl_dynamic_slice_test.cpp
   elaboration/elaborator_vhdl_composite_test.cpp
+  elaboration/elaborator_vhdl_conversion_test.cpp
   elaboration/elaborator_types_test.cpp
   elaboration/elaborator_type_generic_test.cpp
   elaboration/elaborator_vhdl_function_test.cpp

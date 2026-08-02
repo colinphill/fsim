@@ -1440,8 +1440,24 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     expression.span);
                 return std::nullopt;
             }
-            const auto destination =
-                allocate_register(literal->value.width(), literal->domain);
+            auto literal_domain = literal->domain;
+            if (language_ == frontend::Language::Vhdl2008
+                && expected_type != nullptr) {
+                if (expression.kind == ExpressionKind::IntegerLiteral
+                    && expected_type->domain
+                        == frontend::ValueDomain::Integer) {
+                    literal_domain = frontend::ValueDomain::Integer;
+                } else if (
+                    (expression.kind == ExpressionKind::LogicLiteral
+                     || expression.kind == ExpressionKind::StringLiteral)
+                    && literal_domain == frontend::ValueDomain::Bit2
+                    && expected_type->domain
+                        == frontend::ValueDomain::Logic9) {
+                    literal_domain = frontend::ValueDomain::Logic9;
+                }
+            }
+            const auto destination = allocate_register(
+                literal->value.width(), literal_domain);
             process_.operations.emplace_back(
                 LoadConstant{destination, std::move(literal->value)});
             return destination;
@@ -1462,101 +1478,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         if (language_ == frontend::Language::Vhdl2008
             && expression.kind == ExpressionKind::Call
             && expression.operands.size() == 1) {
-            constexpr std::string_view qualification_prefix{
-                "@vhdl-qualified:"};
-            const bool qualified =
-                expression.text.starts_with(qualification_prefix);
-            const auto conversion_name = qualified
-                ? std::string_view{expression.text}.substr(
-                      qualification_prefix.size())
-                : std::string_view{expression.text};
-            const auto* conversion_type =
-                visible_type_mark(conversion_name);
-            frontend::Type builtin;
-            if (conversion_type == nullptr) {
-                builtin.spelling = conversion_name;
-                if (conversion_name == "integer"
-                    || conversion_name == "natural"
-                    || conversion_name == "positive") {
-                    builtin.domain = frontend::ValueDomain::Integer;
-                    builtin.is_signed = true;
-                    if (conversion_name == "natural") {
-                        builtin.integer_range = frontend::IntegerRange{
-                            0,
-                            std::numeric_limits<std::int32_t>::max(),
-                            false};
-                    } else if (conversion_name == "positive") {
-                        builtin.integer_range = frontend::IntegerRange{
-                            1,
-                            std::numeric_limits<std::int32_t>::max(),
-                            false};
-                    }
-                    conversion_type = &builtin;
-                } else if (conversion_name == "boolean") {
-                    builtin.domain = frontend::ValueDomain::Boolean;
-                    conversion_type = &builtin;
-                } else if (conversion_name == "bit") {
-                    builtin.domain = frontend::ValueDomain::Bit2;
-                    conversion_type = &builtin;
-                }
-            }
-            if (conversion_type == nullptr && expected_type != nullptr) {
-                const auto simple_name = [](const std::string_view name) {
-                  const auto separator = name.find_last_of('.');
-                  return name.substr(
-                      separator == std::string_view::npos
-                          ? 0 : separator + 1);
-                };
-                const auto expected_name =
-                    expected_type->named_type.empty()
-                    ? std::string_view{expected_type->spelling}
-                    : std::string_view{expected_type->named_type};
-                if (simple_name(conversion_name)
-                    == simple_name(expected_name)) {
-                    conversion_type = expected_type;
-                }
-            }
-            if (conversion_type != nullptr) {
-                const auto width = conversion_type->width();
-                if (!width || *width == 0 || *width > 64) {
-                    report(
-                        "FSIM-ELAB-VHOVER-007",
-                        "VHDL conversion type '"
-                            + std::string{conversion_name}
-                            + "' has no executable width in 1..64",
-                        expression.span);
-                    return std::nullopt;
-                }
-                auto source = lower_expression(
-                    expression.operands.front(),
-                    *width,
-                    conversion_type);
-                if (!source) {
-                    return std::nullopt;
-                }
-                if (register_width(*source) != *width) {
-                    *source = resize_register(
-                        *source,
-                        *width,
-                        is_signed_expression(
-                            expression.operands.front()));
-                }
-                if (register_domain(*source)
-                    != conversion_type->domain) {
-                    const auto destination = allocate_register(
-                        *width, conversion_type->domain);
-                    process_.operations.emplace_back(
-                        CopyRegister{destination, *source});
-                    source = destination;
-                }
-                if (!conversion_type->enumeration_literals.empty()) {
-                    emit_enumeration_check(*source, *conversion_type);
-                } else if (conversion_type->domain
-                           == frontend::ValueDomain::Integer) {
-                    emit_integer_check(
-                        *source, conversion_type->integer_range);
-                }
-                return source;
+            auto conversion = lower_vhdl_conversion_expression(
+                expression, expected_width, expected_type);
+            if (conversion.handled) {
+                return conversion.value;
             }
         }
         if (expression.kind == ExpressionKind::Call) {

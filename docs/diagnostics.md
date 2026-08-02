@@ -1068,13 +1068,19 @@ therefore excluded.
 | `FSIM-ELAB-VHFUNC-007` | error | A selected function actual has no executable body. |
 | `FSIM-ELAB-VHFUNC-008` | error | A selected function actual is impure in the bounded interface-function subset. |
 | `FSIM-ELAB-VHFUNC-009` | error | An interface-function binding conflicts with a child-local function name. |
+| `FSIM-ELAB-VHCONV-002` | error | A visible VHDL conversion target has no bounded executable width from 1 through 64 bits. |
+| `FSIM-ELAB-VHCONV-003` | error | A VHDL conversion operand is not a supported closely related type or would change packed width or state domain. |
+| `FSIM-ELAB-VHCONV-004` | error | A VHDL conversion result is incompatible with its contextual type. |
 | `FSIM-ELAB-VHOVER-001` | error | A VHDL function call is ambiguous among the visible overloads after result and actual-profile filtering. |
 | `FSIM-ELAB-VHOVER-002` | error | A VHDL function call matches no visible overload after result and actual-profile filtering. |
 | `FSIM-ELAB-VHOVER-003` | error | Two visible VHDL function declarations have the same callable profile. |
 | `FSIM-ELAB-VHOVER-004` | error | A VHDL procedure call is ambiguous among the visible overloads after actual-profile filtering. |
 | `FSIM-ELAB-VHOVER-005` | error | A VHDL procedure call matches no visible overload after actual-profile filtering. |
 | `FSIM-ELAB-VHOVER-006` | error | Two visible VHDL procedure declarations have the same callable profile. |
-| `FSIM-ELAB-VHOVER-007` | error | A VHDL type conversion selects a type without a bounded executable width. |
+| `FSIM-ELAB-VHQUAL-001` | error | A VHDL qualified expression names a type mark that is not visible. |
+| `FSIM-ELAB-VHQUAL-002` | error | A VHDL qualification target has no bounded executable width from 1 through 64 bits. |
+| `FSIM-ELAB-VHQUAL-003` | error | A VHDL qualified expression operand does not have the target base type, exact bounded shape, width, nominal identity, or state domain. |
+| `FSIM-ELAB-VHQUAL-004` | error | A VHDL qualified-expression result is incompatible with its contextual type. |
 | `FSIM-ELAB-VHLEGAL-001` | error | A VHDL package function body does not conform to any same-designator declaration. |
 | `FSIM-ELAB-VHLEGAL-002` | error | A VHDL package function declaration has no conforming body. |
 | `FSIM-ELAB-VHLEGAL-003` | error | A VHDL package procedure body does not conform to any same-designator declaration. |

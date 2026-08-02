@@ -776,6 +776,23 @@ using namespace elaboration_detail;
                 && is_integer_expression(expression.operands[0])
                 && is_integer_expression(expression.operands[1]);
         case ExpressionKind::Call:
+            if (expression.operands.size() == 1) {
+                constexpr std::string_view qualification_prefix{
+                    "@vhdl-qualified:"};
+                auto type_name = std::string_view{expression.text};
+                if (type_name.starts_with(qualification_prefix)) {
+                    type_name.remove_prefix(qualification_prefix.size());
+                }
+                if (const auto* type = visible_type_mark(type_name)) {
+                    if (type->domain == frontend::ValueDomain::Integer) {
+                        return true;
+                    }
+                } else if (
+                    type_name == "integer" || type_name == "natural"
+                    || type_name == "positive") {
+                    return true;
+                }
+            }
             if (const auto* function =
                     visible_function(expression.text)) {
                 return function->return_type.domain

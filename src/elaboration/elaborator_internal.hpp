@@ -1121,6 +1121,8 @@ private:
         const Expression& expression,
         std::size_t expected_width,
         const frontend::Type* expected_type);
+    ExpressionAttempt lower_vhdl_conversion_expression(
+        const Expression&, std::size_t, const frontend::Type*);
     std::optional<RegisterId> lower_expression(
         const Expression& expression,
         const std::size_t expected_width,
@@ -1409,9 +1411,7 @@ private:
         RegisterId source,
         std::size_t width,
         bool sign_extend);
-
     void report(std::string code, std::string message, frontend::SourceSpan span);
-
     ElaboratedDesign& design_;
     const std::unordered_map<std::string, SignalId>& signals_;
     const std::unordered_set<SignalId>& read_only_signals_;

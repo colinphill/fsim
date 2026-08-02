@@ -130,7 +130,9 @@ bool Lowerer::vhdl_expression_matches_type(
   }
   if (expression.kind == ExpressionKind::StringLiteral) {
     return formal.domain == frontend::ValueDomain::String
-        || formal.vhdl_array.has_value();
+        || formal.vhdl_array.has_value()
+        || (formal.packed_range.has_value()
+            && formal.packed_members.empty());
   }
   if (expression.kind == ExpressionKind::Aggregate) {
     return formal.vhdl_array.has_value()

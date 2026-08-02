@@ -6953,9 +6953,9 @@ The current ten implementation tasks are:
 3. **Complete.** Complete enumeration visibility and overload candidate behavior inside nested
    composites, aggregates, selections, comparisons, choices, conversions, and
    hierarchy/callable profiles.
-4. **In progress.** Lower VHDL qualified expressions and supported subtype conversions with exact
+4. **Complete.** Lower VHDL qualified expressions and supported subtype conversions with exact
    contextual type, constraint, state-domain, bounds, and nominal checks.
-5. **Pending.** Complete record and array aggregate element-choice, range, choice-list,
+5. **In progress.** Complete record and array aggregate element-choice, range, choice-list,
    qualified, nested, and final `others` forms with exact order, coverage,
    overlap, duplicate, and subtype legality.
 6. **Pending.** Complete scalar and composite type/object attributes across nested records,
@@ -7067,6 +7067,34 @@ nested-record, assignment, call, and return contexts plus negative invisible,
 nominally incompatible, wrong-width/shape/direction, indefinite, overflow, and
 out-of-subtype cases. No Task 4 implementation edits had begun at this
 checkpoint.
+
+Task 4 is focused-complete. Qualification/conversion lowering is structurally
+isolated in the 266-line `lowerer_vhdl_conversion.cpp`, restoring
+`lowerer_expression.cpp` to 1,925 lines while the narrow helper declaration
+leaves `elaborator_internal.hpp` exactly at the 2,000-line gate. Qualified
+expressions lower in their exact contextual type without truncating resizes or
+state-domain copies. Supported conversions admit the integer family or exact
+bounded nominal, array-shape/direction/element-profile, record, enumeration,
+width, and state-domain matches, with target subtype checks retained at
+runtime. Contextual integer and logic-array literals now use the selected
+VHDL execution domain, and integer-family qualification/conversion results are
+recognized by assignment type analysis. Seven dedicated qualification and
+conversion diagnostics replace the former generic
+`FSIM-ELAB-VHOVER-007` route.
+
+The new focused fixture executes enum/subtype, integer/natural/positive,
+sibling-array-subtype, logic-vector, nested-record, assignment, call, and
+qualified-return cases. Its negative matrix covers invisible, indefinite,
+oversized, wrong-width, state-domain, nominal enum/record, array rank, bounds,
+direction, element-profile, contextual-result, and runtime integer/enum
+subtype failures. The eight-worker LLVM 22.1.8 Debug and Release 12-test gates
+passed in 8.00 and 7.72 seconds, with elaboration at 0.17/0.12 seconds, arrays
+at 2.14/2.05 seconds, and scoped locals at 0.92/0.87 seconds. The LLVM-disabled
+ASan/UBSan 12-test gate passed in 9.86 seconds with leak detection disabled
+because the managed ptrace sandbox prevents LeakSanitizer initialization. The
+catalog now covers 1,485 production diagnostics and all 366 authored sources
+pass the 2,000-line gate. Batch 117 remains **in progress** with Task 5
+current; Batch 117 is not a CI-inspection boundary.
 
 ## Forward language-closure feature batches
 

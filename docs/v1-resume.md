@@ -2225,9 +2225,9 @@ The current ten implementation tasks are:
 3. **Complete.** Complete enumeration visibility and overload candidate behavior inside nested
    composites, aggregates, selections, comparisons, choices, conversions, and
    hierarchy/callable profiles.
-4. **In progress.** Lower VHDL qualified expressions and supported subtype conversions with exact
+4. **Complete.** Lower VHDL qualified expressions and supported subtype conversions with exact
    contextual type, constraint, state-domain, bounds, and nominal checks.
-5. **Pending.** Complete record and array aggregate element-choice, range, choice-list,
+5. **In progress.** Complete record and array aggregate element-choice, range, choice-list,
    qualified, nested, and final `others` forms with exact order, coverage,
    overlap, duplicate, and subtype legality.
 6. **Pending.** Complete scalar and composite type/object attributes across nested records,
@@ -2375,6 +2375,34 @@ helpers where their contracts match. Run every local build with at least eight
 workers, retain the quick `fsim.application.scoped_locals` check, and keep
 Task 4 **in progress** until its focused Debug, Release, sanitizer, catalog,
 source-size, and differential evidence is recorded.
+
+Task 4 is focused-complete. Qualification/conversion lowering now lives in the
+dedicated 266-line `lowerer_vhdl_conversion.cpp`, leaving
+`lowerer_expression.cpp` at 1,925 lines while the narrow internal declaration
+keeps `elaborator_internal.hpp` at the 2,000-line limit. Qualified expressions
+use their type mark as context without truncation or cross-domain copies;
+supported conversions require integer-family compatibility or an exact
+bounded nominal, array-shape, direction, element-profile, record,
+enumeration, width, and state-domain match. Contextual VHDL integer and logic
+array literals now retain their selected execution domain, and integer-family
+qualification/conversion results participate in assignment type analysis.
+The seven dedicated `FSIM-ELAB-VHQUAL-*` and `FSIM-ELAB-VHCONV-*`
+diagnostics replace the former generic `FSIM-ELAB-VHOVER-007` path.
+
+The focused fixture executes enum/subtype, integer/natural/positive,
+sibling-array-subtype, logic-vector, nested-record, assignment, call, and
+qualified-return cases. It rejects invisible and indefinite or oversized type
+marks, wrong scalar width, state domain, nominal enum/record identity, array
+rank, bounds, direction, and element type, contextual result mismatch, and
+out-of-range integer/enumeration subtype values. The eight-worker LLVM 22.1.8
+Debug and Release 12-test gates passed in 8.00 and 7.72 seconds, with
+elaboration at 0.17/0.12 seconds, arrays at 2.14/2.05 seconds, and scoped
+locals at 0.92/0.87 seconds. The LLVM-disabled ASan/UBSan 12-test gate passed
+in 9.86 seconds with leak detection disabled because the managed ptrace
+sandbox prevents LeakSanitizer initialization. All 1,485 production
+diagnostics are cataloged and all 366 authored sources pass the 2,000-line
+gate. Batch 117 remains **in progress** with Task 5 current and is not a
+CI-inspection boundary.
 
 Batch 110 has advanced through these validated features:
 
