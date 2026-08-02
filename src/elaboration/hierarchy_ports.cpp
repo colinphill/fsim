@@ -60,7 +60,8 @@ bool HierarchyBuilder::connect_vhdl_expression_port(
     DesignUnit& dependency_owner) {
     if (connection.kind == frontend::PortActualKind::Expression
         && connection.value.kind
-            == frontend::ExpressionKind::Identifier) {
+            == frontend::ExpressionKind::Identifier
+        && parent_signals.contains(connection.value.text)) {
         return false;
     }
     if (port.direction != frontend::PortDirection::Input) {
@@ -115,7 +116,15 @@ bool HierarchyBuilder::connect_vhdl_expression_port(
     std::size_t alias_index = 0;
     bool mapped_signal = false;
     const auto bind_parent_name = [&](std::string& name) {
-        const auto parent = parent_signals.find(name);
+        auto parent = parent_signals.find(name);
+        std::string suffix;
+        if (parent == parent_signals.end()) {
+            const auto separator = name.find('.');
+            if (separator != std::string::npos) {
+                parent = parent_signals.find(name.substr(0, separator));
+                suffix = name.substr(separator);
+            }
+        }
         if (parent == parent_signals.end()) {
             return;
         }
@@ -126,7 +135,7 @@ bool HierarchyBuilder::connect_vhdl_expression_port(
                 + "_" + std::to_string(alias_index++);
         } while (result.signals.contains(alias));
         result.signals.emplace(alias, parent->second);
-        name = std::move(alias);
+        name = std::move(alias) + suffix;
         mapped_signal = true;
     };
     std::function<void(frontend::Expression&)> rewrite;

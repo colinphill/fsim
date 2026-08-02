@@ -103,6 +103,189 @@ end architecture;
       && interpreter->signal_value(*envelope).to_msb_string()
           == "UUUU00UUUU00UUUU0000");
 
+  const auto enumeration = fsim::frontend::parse_text(
+      "vhdl_nested_enumeration.vhd",
+      R"(
+entity Nested_Enumeration is
+end entity;
+
+architecture rtl of nested_enumeration is
+  type Mode_T is (Idle, Ready, Busy);
+  type Other_Mode_T is (Cold, Hot);
+  type Payload_T is record
+    Mode : Mode_T;
+  end record;
+  type Envelope_T is record
+    Payload : Payload_T;
+    Tag : Mode_T;
+  end record;
+  function Choose(Value : Mode_T) return Mode_T is
+  begin
+    return Ready;
+  end function;
+  function Choose(Value : Other_Mode_T) return Mode_T is
+  begin
+    return Busy;
+  end function;
+  procedure Observe(Value : in Mode_T) is
+  begin
+    null;
+  end procedure;
+  procedure Observe(Value : in Other_Mode_T) is
+  begin
+    null;
+  end procedure;
+  signal Source : Envelope_T;
+  signal Result : Envelope_T;
+  signal Chosen : Mode_T;
+  signal Equal_Result : boolean;
+begin
+  exercise : process
+  begin
+    Source <= (Payload => (Mode => Ready), Tag => Busy);
+    Result <= (Payload => (Mode => Idle), Tag => Idle);
+    wait for 1 ns;
+    Chosen <= Choose(Source.Payload.Mode);
+    Observe(Source.Payload.Mode);
+    Equal_Result <= Source.Payload.Mode = Ready;
+    case Source.Payload.Mode is
+      when Ready =>
+        Result.Payload.Mode <= Busy;
+        Result.Tag <= Source.Payload.Mode;
+      when others =>
+        Result <= (Payload => (Mode => Idle), Tag => Idle);
+    end case;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(enumeration.ok());
+  const auto enumeration_result = fsim::elaboration::elaborate(
+      enumeration.design, "vhdl:work.nested_enumeration(rtl)");
+  if (!enumeration_result.ok()) {
+    for (const auto& diagnostic : enumeration_result.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message
+                << '\n';
+    }
+  }
+  assert(enumeration_result.ok());
+  const auto source = enumeration_result.design->find_signal("source");
+  const auto result = enumeration_result.design->find_signal("result");
+  const auto chosen = enumeration_result.design->find_signal("chosen");
+  const auto equal =
+      enumeration_result.design->find_signal("equal_result");
+  assert(source && result && chosen && equal);
+  auto enumeration_interpreter =
+      enumeration_result.design->create_interpreter();
+  const auto run = enumeration_interpreter->run();
+  assert(
+      run.status == fsim::runtime::RunStatus::completed
+      && enumeration_interpreter->signal_value(*source).to_msb_string()
+          == "0110"
+      && enumeration_interpreter->signal_value(*result).to_msb_string()
+          == "1001"
+      && enumeration_interpreter->signal_value(*chosen).to_msb_string()
+          == "01"
+      && enumeration_interpreter->signal_value(*equal).to_msb_string()
+          == "1");
+
+  const auto component = fsim::frontend::parse_text(
+      "vhdl_nested_enumeration_component.vhd",
+      R"(
+package Nested_Enumeration_Component_Types is
+  type Mode_T is (Idle, Active, Done);
+  subtype Active_Mode_T is Mode_T range Active to Done;
+  type Other_Mode_T is (Cold, Hot);
+  type Mode_Box_T is record
+    Mode : Active_Mode_T;
+  end record;
+end package;
+
+use work.Nested_Enumeration_Component_Types.all;
+package Nested_Enumeration_Component_Profiles is
+  component Nested_Enumeration_Leaf is
+    port (Value : in Active_Mode_T);
+  end component;
+  component Nested_Enumeration_Leaf is
+    port (Value : in Other_Mode_T);
+  end component;
+end package;
+
+use work.Nested_Enumeration_Component_Types.all;
+entity Nested_Enumeration_Leaf is
+  port (Target_Value : in Active_Mode_T);
+end entity;
+
+architecture rtl of Nested_Enumeration_Leaf is
+begin
+end architecture;
+
+entity Nested_Enumeration_Component_Top is
+end entity;
+
+use work.Nested_Enumeration_Component_Types.all;
+use work.Nested_Enumeration_Component_Profiles.all;
+architecture rtl of Nested_Enumeration_Component_Top is
+  signal Box : Mode_Box_T;
+begin
+  Child : Nested_Enumeration_Leaf port map (Box.Mode);
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(component.ok());
+  const auto component_result = fsim::elaboration::elaborate(
+      component.design,
+      "vhdl:work.nested_enumeration_component_top(rtl)");
+  if (!component_result.ok()) {
+    for (const auto& diagnostic : component_result.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message
+                << '\n';
+    }
+  }
+  assert(component_result.ok());
+  const auto component_child = std::ranges::find_if(
+      component_result.design->specializations(),
+      [](const auto& specialization) {
+        return specialization.instance
+            == "nested_enumeration_component_top.child";
+      });
+  assert(
+      component_child != component_result.design->specializations().end()
+      && component_child->unit
+          == "vhdl:work.nested_enumeration_leaf(rtl)");
+
+  const auto nominal_mismatch = fsim::frontend::parse_text(
+      "vhdl_nested_enumeration_mismatch.vhd",
+      R"(
+entity Nested_Enumeration_Mismatch is
+end entity;
+
+architecture rtl of nested_enumeration_mismatch is
+  type First_Mode_T is (Idle, Ready);
+  type Second_Mode_T is (Idle, Ready);
+  type First_Box_T is record
+    Mode : First_Mode_T;
+  end record;
+  type Second_Box_T is record
+    Mode : Second_Mode_T;
+  end record;
+  signal First_Value : First_Box_T;
+  signal Second_Value : Second_Box_T;
+  signal Equal_Result : boolean;
+begin
+  Equal_Result <= First_Value.Mode = Second_Value.Mode;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(nominal_mismatch.ok());
+  const auto nominal_rejected = fsim::elaboration::elaborate(
+      nominal_mismatch.design,
+      "vhdl:work.nested_enumeration_mismatch(rtl)");
+  assert(
+      !nominal_rejected.ok()
+      && has_diagnostic(nominal_rejected, "FSIM-ELAB-VHENUM-002"));
+
   const auto invalid = fsim::frontend::parse_text(
       "vhdl_invalid_recursive_composite.vhd",
       R"(

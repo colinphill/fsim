@@ -387,7 +387,19 @@ void Lowerer::validate_read_only_signal_writes(
             local != local_types_.end()) {
             return local->second;
         }
-        return visible_type(name);
+        if (const auto* type = visible_type(name);
+            type != nullptr) {
+            return type;
+        }
+        if (language_ != frontend::Language::Vhdl2008) {
+            return nullptr;
+        }
+        const auto selected = packed_member_reference(name);
+        if (!selected || selected->member->nested_types.empty()) {
+            return nullptr;
+        }
+        const auto& type = selected->member->nested_types.front();
+        return !type.enumeration_literals.empty() ? &type : nullptr;
     }
 
 

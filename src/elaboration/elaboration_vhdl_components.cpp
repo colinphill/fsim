@@ -390,22 +390,8 @@ bool component_actual_profile_matches(
                 != frontend::ExpressionKind::Identifier) {
             continue;
         }
-        const auto signal = std::ranges::find_if(
-            unit.signals,
-            [&](const auto& candidate) {
-              return candidate.name == connection.value.text;
-            });
-        const auto port = std::ranges::find_if(
-            unit.ports,
-            [&](const auto& candidate) {
-              return candidate.name == connection.value.text;
-            });
-        const frontend::Type* actual_type = nullptr;
-        if (signal != unit.signals.end()) {
-            actual_type = &signal->type;
-        } else if (port != unit.ports.end()) {
-            actual_type = &port->type;
-        }
+        const auto* actual_type =
+            vhdl_object_type(unit, connection.value.text);
         if (actual_type != nullptr
             && !known_type_matches(
                 formal->type,

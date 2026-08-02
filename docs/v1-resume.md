@@ -14,14 +14,14 @@ as work lands. Before moving on, retain that batch's list, mark it
 
 ## Snapshot
 
-- Recorded: 2026-08-01.
+- Recorded: 2026-08-02.
 - Branch: `codex/resumable-jit`.
 - Implementation baseline: all ten Batch 116 tasks are complete through this
-  handoff; Batch 117 Tasks 1 and 2 are complete and Task 3 nested enumeration
-  visibility and overload behavior is current.
+  handoff; Batch 117 Tasks 1 through 3 are complete and Task 4 qualified
+  expression and subtype-conversion lowering is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 362 authored C/C++ source, header,
+- The source-size refactor is complete: all 364 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 115-alternative
@@ -2222,10 +2222,10 @@ The current ten implementation tasks are:
 2. **Complete.** Complete recursive bounded record layout and legality for nested record,
    array, enumeration, vector, and scalar members with nominal identity,
    defaults, constraints, and deterministic flattened storage.
-3. **In progress.** Complete enumeration visibility and overload candidate behavior inside nested
+3. **Complete.** Complete enumeration visibility and overload candidate behavior inside nested
    composites, aggregates, selections, comparisons, choices, conversions, and
    hierarchy/callable profiles.
-4. **Pending.** Lower VHDL qualified expressions and supported subtype conversions with exact
+4. **In progress.** Lower VHDL qualified expressions and supported subtype conversions with exact
    contextual type, constraint, state-domain, bounds, and nominal checks.
 5. **Pending.** Complete record and array aggregate element-choice, range, choice-list,
    qualified, nested, and final `others` forms with exact order, coverage,
@@ -2284,6 +2284,97 @@ LLVM-disabled ASan/UBSan ten-test gate passed outside the ptrace sandbox in
 6.45 seconds. All 1,479 production diagnostics are cataloged and all 364
 authored sources remain within the 2,000-line gate. Batch 117 remains **in
 progress** with Task 3 current.
+
+Task 3 is focused-complete. VHDL object-type lookup now descends retained
+record members for nested enumeration selections, and component profile
+matching uses the same declaration-aware traversal. Selected enum reads,
+writes, comparisons, case choices, nested aggregates, and callable actuals
+retain exact nominal type and subtype context. Ordinary calls whose first
+actual is enum-typed no longer enter the apostrophe-attribute path. A selected
+input component actual materializes a bounded expression driver by aliasing
+the parent record signal and retaining its member suffix; whole-signal
+connections retain direct aliases. The focused fixture disambiguates function,
+procedure, and component overloads whose result/entity context cannot choose
+the candidate, executes exact nested aggregate and selected-member values, and
+rejects equality between distinct nested enumeration types with
+`FSIM-ELAB-VHENUM-002`.
+
+The twelve-test LLVM 22.1.8 Debug and Release gates passed in 9.86 and 9.34
+seconds. Scoped locals remained quick at 0.82/0.80 seconds; VHDL arrays passed
+in 1.96/1.82 seconds, components in 0.94/0.91 seconds, and overloads in
+2.01/1.83 seconds. The LLVM-disabled ASan/UBSan eleven-test gate passed in
+8.63 seconds with leak detection disabled because the managed ptrace sandbox
+prevents LeakSanitizer initialization; the requested unsandboxed execution was
+denied by environment policy. All 1,479 diagnostics remain cataloged and all
+364 authored sources pass the 2,000-line gate, with
+`lowerer_expression.cpp` exactly at 2,000 lines. `git diff --check` passes.
+Batch 117 remains **in progress** with Task 4 current and is not a CI-inspection
+boundary.
+
+#### Clean-context restart checkpoint — 2026-08-02
+
+The live branch is `codex/resumable-jit`. Local `HEAD` and
+`origin/codex/resumable-jit` both resolve to
+`87eff95d800d88c2221f6a309acf1c54c38df86e`. Preserve the intentional,
+unstaged Task 3 checkpoint in these ten modified files:
+
+- `docs/implementation-plan.md`;
+- `docs/v1-resume.md`;
+- `src/elaboration/elaboration_constants.cpp`;
+- `src/elaboration/elaboration_vhdl_components.cpp`;
+- `src/elaboration/hierarchy_ports.cpp`;
+- `src/elaboration/hierarchy_types.cpp`;
+- `src/elaboration/lowerer_assignment.cpp`;
+- `src/elaboration/lowerer_expression.cpp`;
+- `src/elaboration/lowerer_process.cpp`; and
+- `tests/elaboration/elaborator_vhdl_composite_test.cpp`.
+
+Do not reset these files to the pushed base. Their validated contents are the
+Task 3 implementation and evidence described immediately above. The
+workspace-write sandbox keeps `.git` read-only, but on 2026-08-02 the user
+installed a deterministic outside-sandbox allow rule for `git add`,
+`git commit`, and `git push`. The exact ten-path `git add` above then completed
+without a prompt, restoring the routine checkpoint workflow while retaining
+the sandbox for other commands. The subsequent Task 3 commit and push establish
+the clean continuation base; on restart, verify local and remote identity and
+preserve a newer intentional checkpoint if present. Do not inspect CI because
+Batch 117 is not a tenth-batch boundary.
+
+Task 4 has been audited but no Task 4 implementation edits have begun. The
+parser already represents `Type'(expression)` as a one-operand call named
+`@vhdl-qualified:<canonical-type>`, while `Type(expression)` remains an
+ordinary call. Current lowering treats qualification and conversion nearly
+identically: it lowers directly in the target width and type, resizes, copies
+between state domains, and applies only the existing enum/integer runtime
+checks. This can incorrectly truncate qualified values or admit incompatible
+nominal, scalar-domain, array-shape, record, and enumeration conversions.
+
+Before changing behavior, structurally move the complete VHDL qualification/
+conversion lowering block out of the exactly 2,000-line
+`lowerer_expression.cpp` into a new
+`src/elaboration/lowerer_vhdl_conversion.cpp`. Declare the narrow private
+helper in `elaborator_internal.hpp`, call it from primary expression lowering,
+and register the source in CMake. Then separate qualification-as-context from
+conversion semantics and enforce exact nominal/base identity, subtype bounds,
+array dimensions/direction/element compatibility, record compatibility,
+state-domain legality, and scalar width. Add dedicated qualified-expression
+and conversion diagnostics rather than overloading
+`FSIM-ELAB-VHOVER-007`.
+
+Add the focused matrix in a new
+`tests/elaboration/elaborator_vhdl_conversion_test.cpp` and register it in the
+test support, main, and CMake inventory. Positive evidence must cover enum and
+subtype qualification, bounded array/string and nested-record aggregates,
+integer/natural/positive conversions, same-base enum and array subtype
+conversions, and contextual assignment/call/return use. Negative evidence must
+cover invisible type marks, wrong nominal type or width, incompatible state
+domains, unrelated enum/record/array types, indefinite or wider-than-64-bit
+targets, out-of-subtype values, and wrong array rank, bounds, direction, or
+element type. Reuse the existing array-shape and callable-type compatibility
+helpers where their contracts match. Run every local build with at least eight
+workers, retain the quick `fsim.application.scoped_locals` check, and keep
+Task 4 **in progress** until its focused Debug, Release, sanitizer, catalog,
+source-size, and differential evidence is recorded.
 
 Batch 110 has advanced through these validated features:
 

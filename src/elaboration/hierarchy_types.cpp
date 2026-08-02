@@ -1245,20 +1245,20 @@ using namespace elaboration_detail;
                 }
                 continue;
             }
+            if (!cross_language
+                && dependency_owner != nullptr
+                && dependency_owner->language
+                    == frontend::Language::Vhdl2008
+                && connect_vhdl_expression_port(
+                    port,
+                    connection,
+                    path,
+                    parent_signals,
+                    result,
+                    *dependency_owner)) {
+                continue;
+            }
             if (connection.value.kind != frontend::ExpressionKind::Identifier) {
-                if (!cross_language
-                    && dependency_owner != nullptr
-                    && dependency_owner->language
-                        == frontend::Language::Vhdl2008
-                    && connect_vhdl_expression_port(
-                        port,
-                        connection,
-                        path,
-                        parent_signals,
-                        result,
-                        *dependency_owner)) {
-                    continue;
-                }
                 report(
                     "FSIM-ELAB-BIND-027",
                     "boundary connection actuals must be whole signals",

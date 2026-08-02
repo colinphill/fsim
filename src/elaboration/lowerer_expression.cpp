@@ -1000,22 +1000,19 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
             };
         if (language_ == frontend::Language::Vhdl2008
             && expression.kind == ExpressionKind::Call
+            && expression.text.starts_with("'")
             && !expression.operands.empty()
             && expression.operands.front().kind
                 == ExpressionKind::Identifier) {
-            const auto& prefix =
-                expression.operands.front().text;
+            const auto& prefix = expression.operands.front().text;
             if (const auto* type =
                     visible_type_mark(prefix);
                 type != nullptr
                 && !type->enumeration_literals.empty()) {
                 const bool enumeration_result =
-                    expression.text == "'left"
-                    || expression.text == "'right"
-                    || expression.text == "'low"
-                    || expression.text == "'high"
-                    || expression.text == "'val"
-                    || expression.text == "'succ"
+                    expression.text == "'left" || expression.text == "'right"
+                    || expression.text == "'low" || expression.text == "'high"
+                    || expression.text == "'val" || expression.text == "'succ"
                     || expression.text == "'pred"
                     || expression.text == "'leftof"
                     || expression.text == "'rightof";
@@ -1027,10 +1024,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     expression, *type);
             }
             const bool enumeration_attribute =
-                expression.text == "'pos"
-                || expression.text == "'val"
-                || expression.text == "'succ"
-                || expression.text == "'pred"
+                expression.text == "'pos" || expression.text == "'val"
+                || expression.text == "'succ" || expression.text == "'pred"
                 || expression.text == "'leftof"
                 || expression.text == "'rightof";
             const auto* prefix_object = object_type(prefix);
@@ -1049,8 +1044,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         if (expression.kind == ExpressionKind::Identifier) {
             if (const auto local = locals_.find(expression.text);
                 local != locals_.end()) {
-                if (!enumeration_context_compatible(
-                        object_type(expression.text))) {
+                if (!enumeration_context_compatible(object_type(
+                        expression.text))) {
                     return std::nullopt;
                 }
                 return local->second;
@@ -1077,6 +1072,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
             }
             if (const auto selected =
                     packed_member_reference(expression.text)) {
+                if (!enumeration_context_compatible(object_type(
+                        expression.text))) {
+                    return std::nullopt;
+                }
                 const auto base_width =
                     infer_width(Expression{
                         ExpressionKind::Identifier,
@@ -1251,7 +1250,9 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                   }
                   const auto lowered = lower_expression(
                       value,
-                      static_cast<std::size_t>(*member_width));
+                      static_cast<std::size_t>(*member_width),
+                      member.nested_types.empty() ? nullptr
+                          : &member.nested_types.front());
                   if (!lowered) {
                     valid = false;
                     return;

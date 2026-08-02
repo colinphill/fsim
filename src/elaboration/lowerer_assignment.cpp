@@ -533,6 +533,13 @@ using namespace elaboration_detail;
                 has_selected_offset = true;
                 selected_width = static_cast<std::size_t>(*width);
                 selected_domain = selected->member->domain;
+                if (language_ == frontend::Language::Vhdl2008
+                    && !selected->member->nested_types.empty()
+                    && !selected->member->nested_types.front()
+                            .enumeration_literals.empty()) {
+                    selected_type =
+                        selected->member->nested_types.front();
+                }
             }
         }
         const auto local = locals_.find(target_name);

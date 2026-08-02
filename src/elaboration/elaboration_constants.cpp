@@ -255,33 +255,61 @@ const frontend::Type* vhdl_enumeration_type_mark(
 const frontend::Type* vhdl_object_type(
     const DesignUnit& unit,
     const std::string_view name) {
+    const auto separator = name.find('.');
+    const auto base = separator == std::string_view::npos
+        ? name : name.substr(0, separator);
     const auto parameter = std::find_if(
         unit.parameters.begin(),
         unit.parameters.end(),
         [&](const auto& candidate) {
-            return candidate.name == name;
+            return candidate.name == base;
         });
+    const frontend::Type* type = nullptr;
     if (parameter != unit.parameters.end()) {
-        return &parameter->type;
+        type = &parameter->type;
     }
-    const auto port = std::find_if(
-        unit.ports.begin(),
-        unit.ports.end(),
-        [&](const auto& candidate) {
-            return candidate.name == name;
-        });
-    if (port != unit.ports.end()) {
-        return &port->type;
+    if (type == nullptr) {
+        const auto port = std::find_if(
+            unit.ports.begin(),
+            unit.ports.end(),
+            [&](const auto& candidate) {
+                return candidate.name == base;
+            });
+        if (port != unit.ports.end()) {
+            type = &port->type;
+        }
     }
-    const auto signal = std::find_if(
-        unit.signals.begin(),
-        unit.signals.end(),
-        [&](const auto& candidate) {
-            return candidate.name == name;
-        });
-    return signal == unit.signals.end()
-        ? nullptr
-        : &signal->type;
+    if (type == nullptr) {
+        const auto signal = std::find_if(
+            unit.signals.begin(),
+            unit.signals.end(),
+            [&](const auto& candidate) {
+                return candidate.name == base;
+            });
+        if (signal != unit.signals.end()) {
+            type = &signal->type;
+        }
+    }
+    if (type == nullptr || separator == std::string_view::npos) {
+        return type;
+    }
+    auto member_name = name.substr(separator + 1);
+    for (;;) {
+        const auto dot = member_name.find('.');
+        const auto segment = member_name.substr(0, dot);
+        const auto member = std::ranges::find(
+            type->packed_members, segment,
+            &frontend::PackedMember::name);
+        if (member == type->packed_members.end()
+            || member->nested_types.empty()) {
+            return nullptr;
+        }
+        type = &member->nested_types.front();
+        if (dot == std::string_view::npos) {
+            return type;
+        }
+        member_name.remove_prefix(dot + 1);
+    }
 }
 
 

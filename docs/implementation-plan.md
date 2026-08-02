@@ -6950,10 +6950,10 @@ The current ten implementation tasks are:
 2. **Complete.** Complete recursive bounded record layout and legality for nested record,
    array, enumeration, vector, and scalar members with nominal identity,
    defaults, constraints, and deterministic flattened storage.
-3. **In progress.** Complete enumeration visibility and overload candidate behavior inside nested
+3. **Complete.** Complete enumeration visibility and overload candidate behavior inside nested
    composites, aggregates, selections, comparisons, choices, conversions, and
    hierarchy/callable profiles.
-4. **Pending.** Lower VHDL qualified expressions and supported subtype conversions with exact
+4. **In progress.** Lower VHDL qualified expressions and supported subtype conversions with exact
    contextual type, constraint, state-domain, bounds, and nominal checks.
 5. **Pending.** Complete record and array aggregate element-choice, range, choice-list,
    qualified, nested, and final `others` forms with exact order, coverage,
@@ -7012,6 +7012,61 @@ LLVM-disabled ASan/UBSan ten-test gate passed outside the ptrace sandbox in
 6.45 seconds. All 1,479 production diagnostics are cataloged and all 364
 authored sources remain within the 2,000-line gate. Batch 117 remains **in
 progress** with Task 3 current.
+
+Task 3 is focused-complete. VHDL object-type lookup now descends retained
+record members for nested enumeration selections, and component profile
+matching uses the same declaration-aware traversal. Selected enum reads,
+writes, comparisons, case choices, nested aggregates, and callable actuals
+retain exact nominal type and subtype context. Ordinary calls whose first
+actual is enum-typed no longer enter the apostrophe-attribute path. A selected
+input component actual materializes a bounded expression driver by aliasing
+the parent record signal and retaining its member suffix; whole-signal
+connections retain direct aliases. The focused fixture disambiguates function,
+procedure, and component overloads whose result/entity context cannot choose
+the candidate, executes exact nested aggregate and selected-member values, and
+rejects equality between distinct nested enumeration types with
+`FSIM-ELAB-VHENUM-002`.
+
+The twelve-test LLVM 22.1.8 Debug and Release gates passed in 9.86 and 9.34
+seconds. Scoped locals remained quick at 0.82/0.80 seconds; VHDL arrays passed
+in 1.96/1.82 seconds, components in 0.94/0.91 seconds, and overloads in
+2.01/1.83 seconds. The LLVM-disabled ASan/UBSan eleven-test gate passed in
+8.63 seconds with leak detection disabled because the managed ptrace sandbox
+prevents LeakSanitizer initialization; the requested unsandboxed execution was
+denied by environment policy. All 1,479 diagnostics remain cataloged and all
+364 authored sources pass the 2,000-line gate, with
+`lowerer_expression.cpp` exactly at 2,000 lines. `git diff --check` passes.
+Batch 117 remains **in progress** with Task 4 current and is not a CI-inspection
+boundary.
+
+The 2026-08-02 clean-context checkpoint is based on local and remote commit
+`87eff95d800d88c2221f6a309acf1c54c38df86e`. The validated Task 3 work is an
+intentional unstaged ten-file checkpoint; its exact path inventory, focused
+gate evidence, and recovery instructions are recorded in `docs/v1-resume.md`.
+The workspace-write sandbox keeps `.git` read-only, but on 2026-08-02 the user
+installed a deterministic outside-sandbox allow rule for `git add`,
+`git commit`, and `git push`. The exact recorded ten-path `git add` then
+completed without a prompt, restoring the routine checkpoint workflow while
+retaining the sandbox for other commands. The subsequent Task 3 commit and
+push establish the clean base for Task 4; verify local/remote identity before
+editing it. Batch 117 is not a CI-inspection boundary.
+
+The Task 4 audit found that the parser already distinguishes qualified
+expressions (`@vhdl-qualified:<canonical-type>`) from ordinary type-conversion
+calls, but current lowering shares a target-width resize/domain-copy path that
+does not sufficiently distinguish qualification-as-context from legal
+conversion. The first Task 4 change is therefore a structural extraction from
+the exactly 2,000-line `lowerer_expression.cpp` into
+`lowerer_vhdl_conversion.cpp`, with a narrow declaration in
+`elaborator_internal.hpp` and CMake registration. The extracted logic will
+then enforce separate nominal/base identity, subtype, bounds, array shape and
+direction, record, enumeration, width, and state-domain contracts, with
+dedicated qualification/conversion diagnostics. A new focused VHDL conversion
+test component will cover positive enum, integer-subtype, bounded-array,
+nested-record, assignment, call, and return contexts plus negative invisible,
+nominally incompatible, wrong-width/shape/direction, indefinite, overflow, and
+out-of-subtype cases. No Task 4 implementation edits had begun at this
+checkpoint.
 
 ## Forward language-closure feature batches
 
