@@ -524,13 +524,17 @@ void Interpreter::Impl::notify_execution_point(
     Interpreter::Impl::ProcessState& process,
     const InstructionIndex instruction,
     const ExecutionPointKind kind,
-    const SourceLocation& source)  {
+    const SourceLocation& source,
+    const std::string_view scope)  {
     if (execution_point_hook) {
+      const auto effective_scope = scope.empty()
+          ? std::string_view{process.current_scope}
+          : scope;
       execution_point_hook(
           scheduler,
           ExecutionPoint{
               process.program.id, process.design_process,
-              instruction, kind, source});
+              instruction, kind, source, std::string{effective_scope}});
     }
   }
 

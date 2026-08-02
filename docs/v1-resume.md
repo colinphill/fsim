@@ -16,8 +16,8 @@ as work lands. Before moving on, retain that batch's list, mark it
 
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: Batch 115 Tasks 1 through 5 are complete through
-  this handoff; Task 6 statement-scope preservation is current.
+- Implementation baseline: Batch 115 Tasks 1 through 6 are complete through
+  this handoff; Task 7 dynamic-selection lowering is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
 - The source-size refactor is complete: all 354 authored C/C++ source, header,
@@ -1838,9 +1838,9 @@ completed selector-domain contract. All ten Batch 114 tasks are complete.
    `others`, null ranges, overlap, duplicate, and coverage diagnostics.
 5. **Complete.** Complete concurrent simple, conditional, and selected signal assignments,
    including guarded/delay-mechanism interaction and driver identity.
-6. **In progress.** Preserve process, loop, case-alternative, and labeled statement scopes in
+6. **Complete.** Preserve process, loop, case-alternative, and labeled statement scopes in
    hierarchy, name lookup, debugger metadata, and specialization provenance.
-7. **Pending.** Lower dynamic packed/composite indices, slices, and chained selections for
+7. **In progress.** Lower dynamic packed/composite indices, slices, and chained selections for
    supported expression and assignment targets with checked bounds and direction.
 8. **Pending.** Complete sensitivity, scheduling, delta/update ordering, and exact
    interpreter/LLVM behavior for the newly retained statement and selection forms.
@@ -1923,6 +1923,20 @@ scoped locals remains quick at 0.82/0.83 seconds. All 1,469 production
 diagnostics are cataloged and all 354 authored sources pass the 2,000-line
 gate. Batch 115 remains **in progress** with Task 6 current and Tasks 7
 through 10 pending.
+
+Task 6 is focused-complete. SimIR debug points and runtime execution points
+carry canonical process-rooted lexical scope paths for labeled statements,
+labeled or anonymous loops, and source-stable case alternatives. Debugger
+hierarchy navigation retains each scope and ancestor, while signal/string/
+container lookup walks outward from a selected statement scope. The statement
+application navigates `worker.iterations.choice` and resolves architecture
+signal `observed` through that parent search. Native-object schema 71 includes
+the execution scope in specialization provenance, with a dedicated scope-only
+cache miss. The final six-test source/runtime/elaboration/LLVM/application/
+scoped-locals gates pass in 19.47/19.01 seconds for Debug/Release; scoped
+locals remains quick at 0.82/0.81 seconds. All 1,469 production diagnostics
+are cataloged and all 354 authored sources pass the 2,000-line gate. Batch 115
+remains **in progress** with Task 7 current and Tasks 8 through 10 pending.
 
 Batch 110 has advanced through these validated features:
 

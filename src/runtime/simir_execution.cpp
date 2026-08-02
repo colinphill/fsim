@@ -626,6 +626,7 @@ void Interpreter::Impl::handle_boundary(
   if (const auto* point = fsim::runtime::simir::operation_get_if<DebugPoint>(&operation)) {
     clear_wait_timeout(process);
     process.current_source = point->source;
+    process.current_scope = point->scope;
     auto kind = ExecutionPointKind::statement;
     switch (point->kind) {
     case DebugPointKind::statement:
@@ -645,7 +646,8 @@ void Interpreter::Impl::handle_boundary(
       break;
     }
     notify_execution_point(
-        process, instruction, kind, process.current_source);
+        process, instruction, kind, process.current_source,
+        process.current_scope);
     if (scheduler.stop_requested()) {
       queue_current(process.program.id);
     }

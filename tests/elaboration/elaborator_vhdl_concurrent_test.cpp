@@ -103,6 +103,85 @@ end architecture;
   assert(!rejected_target.ok());
   assert(has_diagnostic(
       rejected_target, "FSIM-ELAB-VHDLGUARD-002"));
+
+  const auto scoped = fsim::frontend::parse_text(
+      "vhdl_statement_scopes.vhd",
+      R"(
+entity vhdl_statement_scopes is
+  port (enabled, selector : in boolean;
+        q : out integer range 0 to 7);
+end entity;
+architecture rtl of vhdl_statement_scopes is begin
+  worker: process
+    variable local_value : integer range 0 to 7 := 0;
+  begin
+    scan: for lane in 0 to 0 loop
+      choose: if enabled then
+        dispatch: case selector is
+          when false => selected: local_value := lane + 1;
+          when true => alternate: local_value := lane + 2;
+        end case dispatch;
+      end if choose;
+    end loop scan;
+    q <= local_value;
+    wait;
+  end process worker;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(scoped.ok());
+  const auto scoped_result = fsim::elaboration::elaborate(
+      scoped.design, "vhdl:work.vhdl_statement_scopes(rtl)");
+  assert(scoped_result.ok() && scoped_result.design);
+  const auto& scoped_process = scoped_result.design->processes().front();
+  assert(scoped_process.name == "vhdl_statement_scopes.worker");
+  std::vector<std::string> retained_scopes;
+  for (const auto& operation : scoped_process.operations) {
+    if (const auto* point =
+            fsim::runtime::simir::operation_get_if<
+                fsim::runtime::simir::DebugPoint>(&operation)) {
+      retained_scopes.push_back(point->scope);
+    }
+  }
+  const auto has_scope = [&](const std::string_view suffix) {
+    return std::ranges::any_of(
+        retained_scopes,
+        [&](const std::string& scope) {
+          return scope.ends_with(suffix);
+        });
+  };
+  assert(has_scope("vhdl_statement_scopes.worker"));
+  assert(has_scope("worker.scan"));
+  assert(has_scope("worker.scan.choose"));
+  assert(has_scope("worker.scan.choose.dispatch"));
+  assert(std::ranges::any_of(
+      retained_scopes,
+      [](const std::string& scope) {
+        return scope.find("worker.scan.choose.dispatch.$when_")
+                   != std::string::npos
+            && (scope.ends_with(".selected")
+                || scope.ends_with(".alternate"));
+      }));
+  std::vector<fsim::runtime::simir::ExecutionPoint> execution_points;
+  auto scoped_interpreter = scoped_result.design->create_interpreter();
+  const auto scoped_enabled =
+      scoped_result.design->find_signal("enabled");
+  assert(scoped_enabled);
+  scoped_interpreter->deposit_signal(
+      *scoped_enabled,
+      fsim::runtime::PackedLogic4::from_msb_string("1"));
+  scoped_interpreter->set_execution_point_hook(
+      [&](fsim::runtime::Scheduler&,
+          const fsim::runtime::simir::ExecutionPoint& point) {
+        execution_points.push_back(point);
+      });
+  (void)scoped_interpreter->run();
+  assert(std::ranges::any_of(
+      execution_points,
+      [](const fsim::runtime::simir::ExecutionPoint& point) {
+        return point.scope.find("worker.scan.choose.dispatch.$when_")
+            != std::string::npos;
+      }));
 }
 
 }  // namespace fsim::tests::elaboration

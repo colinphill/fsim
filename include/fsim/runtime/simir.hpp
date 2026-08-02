@@ -1032,6 +1032,17 @@ enum class DebugPointKind : std::uint8_t {
 struct DebugPoint {
   DebugPointKind kind{DebugPointKind::statement};
   SourceLocation source;
+  // Canonical hierarchy-qualified lexical execution scope. This is metadata
+  // rather than a scheduler operand, but remains part of native provenance.
+  std::string scope;
+
+  DebugPoint() = default;
+  DebugPoint(
+      const DebugPointKind point_kind,
+      SourceLocation point_source,
+      std::string point_scope = {})
+      : kind(point_kind), source(std::move(point_source)),
+        scope(std::move(point_scope)) {}
 };
 
 struct Assert {
@@ -1715,6 +1726,20 @@ struct ExecutionPoint {
   InstructionIndex instruction{};
   ExecutionPointKind kind{ExecutionPointKind::statement};
   SourceLocation source;
+  std::string scope;
+
+  ExecutionPoint() = default;
+  ExecutionPoint(
+      const ProcessId execution_process,
+      const ProcessId source_process,
+      const InstructionIndex execution_instruction,
+      const ExecutionPointKind execution_kind,
+      SourceLocation execution_source,
+      std::string execution_scope = {})
+      : process(execution_process), design_process(source_process),
+        instruction(execution_instruction), kind(execution_kind),
+        source(std::move(execution_source)),
+        scope(std::move(execution_scope)) {}
 };
 class ProcessExecutor {
 public:

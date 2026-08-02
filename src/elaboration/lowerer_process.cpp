@@ -910,6 +910,58 @@ void Lowerer::validate_read_only_signal_writes(
 
 
 
+    [[nodiscard]] std::string Lowerer::debug_scope_name() const {
+        auto result = process_.name;
+        for (const auto& scope : local_scope_) {
+            if (!result.empty()) {
+                result += ".";
+            }
+            result += scope;
+        }
+        return result;
+    }
+
+
+
+    [[nodiscard]] std::string Lowerer::vhdl_statement_scope_name(
+        const Statement& statement) const {
+        if (language_ != frontend::Language::Vhdl2008
+            || statement.kind == StatementKind::Block) {
+            return {};
+        }
+        if (!statement.label.empty()) {
+            return statement.label;
+        }
+        if (statement.kind == StatementKind::Loop) {
+            return "$loop_"
+                + std::to_string(statement.span.begin.line) + "_"
+                + std::to_string(statement.span.begin.column) + "_"
+                + std::to_string(statement.span.begin.offset);
+        }
+        return {};
+    }
+
+
+
+    void Lowerer::lower_case_alternative(
+        const frontend::CaseAlternative& alternative) {
+        const bool scoped =
+            language_ == frontend::Language::Vhdl2008;
+        if (scoped) {
+            local_scope_.push_back(
+                "$when_"
+                + std::to_string(alternative.span.begin.line) + "_"
+                + std::to_string(alternative.span.begin.column) + "_"
+                + std::to_string(alternative.span.begin.offset));
+        }
+        lower_statements(alternative.statements);
+        if (scoped) {
+            local_scope_.pop_back();
+        }
+    }
+
+
+
     void Lowerer::lower_block(const Statement& statement) {
         auto outer_locals = locals_;
         auto outer_string_locals = string_locals_;
@@ -1034,6 +1086,11 @@ void Lowerer::validate_read_only_signal_writes(
 
 
     void Lowerer::lower_statement(const Statement& statement) {
+        const auto statement_scope =
+            vhdl_statement_scope_name(statement);
+        if (!statement_scope.empty()) {
+            local_scope_.push_back(statement_scope);
+        }
         if (statement.kind != StatementKind::Block
             && !(statement.kind == StatementKind::Loop
                  && statement.loop_runtime)) {
@@ -1675,6 +1732,9 @@ void Lowerer::validate_read_only_signal_writes(
         case StatementKind::Null:
             break;
         }
+        if (!statement_scope.empty()) {
+            local_scope_.pop_back();
+        }
     }
 
 
@@ -1687,7 +1747,8 @@ void Lowerer::validate_read_only_signal_writes(
             SourceLocation{
                 span.source_name,
                 static_cast<std::uint32_t>(span.begin.line),
-                static_cast<std::uint32_t>(span.begin.column)}});
+                static_cast<std::uint32_t>(span.begin.column)},
+            debug_scope_name()});
     }
 
 

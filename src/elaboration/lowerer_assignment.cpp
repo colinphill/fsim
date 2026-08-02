@@ -1962,7 +1962,7 @@ using namespace elaboration_detail;
             process_.operations.emplace_back(Jump{0});
             const auto body_start =
                 static_cast<InstructionIndex>(process_.operations.size());
-            lower_statements(alternative.statements);
+            lower_case_alternative(alternative);
             exit_jumps.push_back(
                 static_cast<InstructionIndex>(
                     process_.operations.size()));
@@ -1988,7 +1988,7 @@ using namespace elaboration_detail;
         }
 
         if (default_alternative != nullptr) {
-            lower_statements(default_alternative->statements);
+            lower_case_alternative(*default_alternative);
         }
         const auto end =
             static_cast<InstructionIndex>(process_.operations.size());

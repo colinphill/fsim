@@ -906,6 +906,33 @@ verify_generated_behavior(
     {},
     {"00000000000000000000000000001110"},
     1);
+{
+  fsim::diagnostic::Engine scope_diagnostics;
+  auto scope_project = fsim::app::build_project(
+      vhdl_statement_behavior_config, scope_diagnostics);
+  assert(scope_project);
+  fsim::app::Simulation scope_simulation{
+      std::move(*scope_project),
+      1000,
+      fsim::app::SimulationEngine::interpreter};
+  std::ostringstream scope_output;
+  std::ostringstream scope_error;
+  fsim::app::DebuggerControl scope_debugger{
+      scope_simulation, scope_output, scope_error};
+  scope_debugger.execute({"scopes"});
+  scope_debugger.execute({"scope", "worker.iterations.choice"});
+  scope_debugger.execute({"show", "observed"});
+  assert(scope_error.str().empty());
+  assert(
+      scope_output.str().find("vhdl_statement_behavior.worker")
+          != std::string::npos
+      && scope_output.str().find(
+             "scope vhdl_statement_behavior.worker.iterations.choice")
+          != std::string::npos
+      && scope_output.str().find(
+             "vhdl_statement_behavior.observed = ")
+          != std::string::npos);
+}
 verify_generated_behavior(
     generated_static_behavior_sv_config,
     {"direct_value", "named_scope.nested_value"},

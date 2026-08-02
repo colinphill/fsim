@@ -226,6 +226,7 @@ struct Interpreter::Impl {
     std::vector<Sensitivity> dynamic_sensitivity;
     std::vector<bool> dynamic_triggered;
     SourceLocation current_source;
+    std::string current_scope;
     bool queued{};
     bool waiting_on_static{};
     bool waiting_on_signal{};
@@ -578,7 +579,8 @@ struct Interpreter::Impl {
       ProcessState& process,
       const InstructionIndex instruction,
       const ExecutionPointKind kind,
-      const SourceLocation& source);
+      const SourceLocation& source,
+      std::string_view scope = {});
 
   [[nodiscard]] bool monitor_watches(
       const SignalId signal) const;

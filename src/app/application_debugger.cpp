@@ -76,6 +76,34 @@ DebuggerSession::DebuggerSession(
        scope_(simulation.design().top()),
        signal_paths_(simulation.design().signal_paths()),
        container_paths_(simulation.design().container_paths())  {
+    const auto retain_scope = [&](const std::string_view path) {
+      auto candidate = std::string{path};
+      while (!candidate.empty()) {
+        if (std::ranges::find(execution_scope_paths_, candidate)
+            == execution_scope_paths_.end()) {
+          execution_scope_paths_.push_back(candidate);
+        }
+        if (candidate == simulation.design().top()) {
+          break;
+        }
+        const auto separator = candidate.rfind('.');
+        if (separator == std::string::npos) {
+          break;
+        }
+        candidate.resize(separator);
+      }
+    };
+    for (const auto& process : simulation.design().processes()) {
+      retain_scope(process.name);
+      for (const auto& operation : process.operations) {
+        if (const auto* point =
+                runtime::simir::operation_get_if<
+                    runtime::simir::DebugPoint>(&operation)) {
+          retain_scope(point->scope);
+        }
+      }
+    }
+    std::ranges::sort(execution_scope_paths_);
     observer_ = simulation_.add_signal_change_hook(
         [this](
             const SignalId signal,
@@ -307,8 +335,32 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
             container_paths_.begin(), container_paths_.end(),
             [&](const auto& entry) {
               return entry.first.starts_with(prefix);
-            });
+            })
+        || std::ranges::find(execution_scope_paths_, path)
+            != execution_scope_paths_.end();
   }
+
+[[nodiscard]] std::vector<std::string> DebuggerSession::lexical_paths(
+    const std::string_view name) const {
+  std::vector<std::string> paths;
+  auto scope = scope_;
+  const auto& top = simulation_.design().top();
+  while (true) {
+    paths.push_back(scope + "." + std::string{name});
+    if (scope == top) {
+      break;
+    }
+    const auto separator = scope.rfind('.');
+    if (separator == std::string::npos) {
+      break;
+    }
+    scope.resize(separator);
+  }
+  if (std::ranges::find(paths, name) == paths.end()) {
+    paths.emplace_back(name);
+  }
+  return paths;
+}
 
 [[nodiscard]] std::optional<std::string> DebuggerSession::resolve_scope(
     const std::string_view requested) const  {
@@ -345,9 +397,10 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
 
 [[nodiscard]] std::optional<std::pair<std::string, SignalId>>
 DebuggerSession::resolve_signal(const std::string_view name)  {
-    const auto relative = scope_ + "." + std::string(name);
-    if (const auto signal = simulation_.find_signal(relative)) {
-      return std::pair{relative, *signal};
+    for (const auto& path : lexical_paths(name)) {
+      if (const auto signal = simulation_.find_signal(path)) {
+        return std::pair{path, *signal};
+      }
     }
     if (const auto signal = simulation_.find_signal(name)) {
       const auto found = std::find_if(
@@ -369,10 +422,11 @@ DebuggerSession::resolve_signal(const std::string_view name)  {
     std::string, runtime::simir::StringObjectId>>
 DebuggerSession::resolve_string_object(
     const std::string_view name) const {
-  const auto relative = scope_ + "." + std::string{name};
-  for (const auto& object : simulation_.design().string_objects()) {
-    if (object.name == name || object.name == relative) {
-      return std::pair{object.name, object.id};
+  for (const auto& path : lexical_paths(name)) {
+    for (const auto& object : simulation_.design().string_objects()) {
+      if (object.name == path) {
+        return std::pair{object.name, object.id};
+      }
     }
   }
   return std::nullopt;
@@ -382,13 +436,10 @@ DebuggerSession::resolve_string_object(
     std::string, runtime::simir::ContainerObjectId>>
 DebuggerSession::resolve_container_object(
     const std::string_view name) const {
-  const auto relative = scope_ + "." + std::string{name};
-  if (const auto object =
-          simulation_.design().find_container(relative)) {
-    return std::pair{relative, *object};
-  }
-  if (const auto object = simulation_.design().find_container(name)) {
-    return std::pair{std::string{name}, *object};
+  for (const auto& path : lexical_paths(name)) {
+    if (const auto object = simulation_.design().find_container(path)) {
+      return std::pair{path, *object};
+    }
   }
   return std::nullopt;
 }
@@ -459,6 +510,16 @@ void DebuggerSession::scopes_command(const std::vector<std::string>& command)  {
         children.insert(
             prefix + std::string(remainder.substr(0, separator)));
       }
+    }
+    for (const auto& path : execution_scope_paths_) {
+      if (!path.starts_with(prefix)) {
+        continue;
+      }
+      const auto remainder = std::string_view{path}.substr(prefix.size());
+      const auto separator = remainder.find('.');
+      children.insert(
+          prefix
+          + std::string(remainder.substr(0, separator)));
     }
     if (children.empty()) {
       output_ << "(no child scopes)\n";

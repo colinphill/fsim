@@ -135,7 +135,7 @@ using runtime::simir::DisableFork;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v70";
+    "fsim-llvm-native-object-v71";
 
 void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
                  const std::uint64_t value) {
@@ -1267,6 +1267,7 @@ void add_dynamic_part_index_key(
             builder.add("source-path", value.source.path);
             add_key_u64(builder, "source-line", value.source.line);
             add_key_u64(builder, "source-column", value.source.column);
+            builder.add("scope", value.scope);
           } else if constexpr (std::is_same_v<OperationType, Display>) {
             builder.add("operation", "Display");
             builder.add("text", value.text);

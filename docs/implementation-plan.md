@@ -6548,9 +6548,9 @@ The current ten implementation tasks are:
    `others`, null ranges, overlap, duplicate, and coverage diagnostics.
 5. **Complete.** Complete concurrent simple, conditional, and selected signal assignments,
    including guarded/delay-mechanism interaction and driver identity.
-6. **In progress.** Preserve process, loop, case-alternative, and labeled statement scopes in
+6. **Complete.** Preserve process, loop, case-alternative, and labeled statement scopes in
    hierarchy, name lookup, debugger metadata, and specialization provenance.
-7. **Pending.** Lower dynamic packed/composite indices, slices, and chained selections for
+7. **In progress.** Lower dynamic packed/composite indices, slices, and chained selections for
    supported expression and assignment targets with checked bounds and direction.
 8. **Pending.** Complete sensitivity, scheduling, delta/update ordering, and exact
    interpreter/LLVM behavior for the newly retained statement and selection forms.
@@ -6639,6 +6639,23 @@ Debug/Release gates pass in 16.88/16.26 seconds, with scoped locals at
 0.82/0.83 seconds. The catalog covers 1,469 production diagnostics and all 354
 authored sources pass the 2,000-line gate. Batch 115 remains **in progress**
 with Task 6 current and Tasks 7 through 10 pending.
+
+Task 6 is focused-complete. Every lowered debug point and runtime execution
+point now retains a canonical hierarchy-qualified scope rooted at its process,
+with user labels for labeled statements and loops plus deterministic
+source-derived identities for unlabeled loops and every case alternative.
+The debugger includes those scopes and their ancestors in hierarchy
+navigation, and name lookup from a statement scope walks outward through its
+lexical parents. The existing VHDL statement application navigates
+`worker.iterations.choice` and resolves the architecture-level `observed`
+signal from that nested scope. Native-object schema 71 serializes execution
+scope, and a scope-only cache test proves a deterministic miss without an
+operation or source-coordinate change. The final six-test source/runtime/
+elaboration/LLVM/application/scoped-locals gates pass in 19.47/19.01 seconds
+for Debug/Release, with scoped locals at 0.82/0.81 seconds. The catalog still
+covers 1,469 production diagnostics and all 354 authored sources pass the
+2,000-line gate. Batch 115 remains **in progress** with Task 7 current and
+Tasks 8 through 10 pending.
 
 ## Forward language-closure feature batches
 

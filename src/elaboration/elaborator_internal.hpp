@@ -815,9 +815,6 @@ specialize_systemc_construction(
     const frontend::Language association_language,
     std::vector<Diagnostic>& diagnostics);
 
-
-
-
 const DesignUnit* choose_unit(
     const frontend::ParsedDesign& parsed, const std::string& requested);
 
@@ -851,8 +848,6 @@ const DesignUnit* choose_same_language_instance(
     const std::string_view name);
 
 std::string unit_identity(const DesignUnit& unit);
-
-
 } // namespace elaboration_detail
 
 using frontend::AssignmentKind;
@@ -959,6 +954,11 @@ private:
 
     [[nodiscard]] static std::string block_scope_name(
         const Statement& statement);
+
+    [[nodiscard]] std::string debug_scope_name() const;
+    [[nodiscard]] std::string vhdl_statement_scope_name(
+        const Statement&) const;
+    void lower_case_alternative(const frontend::CaseAlternative&);
 
     void lower_block(const Statement& statement);
 

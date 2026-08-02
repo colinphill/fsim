@@ -215,17 +215,14 @@ make_cached_wait_process(const bool static_wait,
 }
 
 [[nodiscard]] Process make_cached_debug_point_process(
-    const DebugPointKind kind,
-    const std::uint32_t source_line) {
+    const DebugPointKind kind, const std::uint32_t source_line,
+    const std::string_view scope = "cached_debug_point_process") {
   Process process;
   process.id = 16;
   process.name = "cached_debug_point_process";
-  process.operations = {
-      DebugPoint{
-          kind,
-          SourceLocation{"cache_debug_point.sv", source_line, 5}},
-      Halt{},
-  };
+  process.operations = {DebugPoint{
+      kind, SourceLocation{"cache_debug_point.sv", source_line, 5},
+      std::string{scope}}, Halt{}};
   return process;
 }
 
@@ -823,13 +820,16 @@ void test_object_cache_at_level(const JitOptimizationLevel optimization,
     expect_cache_statistics(warm, 1, 0, 0);
   }
 
-  // Debug-point kind and source location are generated behavior because the
-  // returned instruction indexes immutable SimIR metadata.
+  // Scope is immutable debugger/specialization provenance even when the
+  // operation kind and source location are unchanged.
   {
     LlvmJit changed_metadata{options};
     changed_metadata.add_process(
         debug_symbol,
-        make_cached_debug_point_process(DebugPointKind::wait, 12),
+        make_cached_debug_point_process(
+            DebugPointKind::statement,
+            11,
+            "cached_debug_point_process.scan.$when_11_5_42"),
         no_signals);
     assert(changed_metadata.lookup(debug_symbol));
     expect_cache_statistics(changed_metadata, 0, 1, 1);

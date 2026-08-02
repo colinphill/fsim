@@ -872,6 +872,9 @@ class DebuggerSession final {
 
   [[nodiscard]] bool canonical_path(const std::string_view path) const;
 
+  [[nodiscard]] std::vector<std::string> lexical_paths(
+      std::string_view name) const;
+
   [[nodiscard]] std::optional<std::string> resolve_scope(
       const std::string_view requested) const;
 
@@ -947,6 +950,7 @@ class DebuggerSession final {
   std::vector<std::pair<
       std::string, runtime::simir::ContainerObjectId>>
       container_paths_;
+  std::vector<std::string> execution_scope_paths_;
   std::vector<DebugBreakpoint> breakpoints_;
   std::optional<DebugBreakpointHit> hit_;
   std::optional<runtime::simir::ExecutionPoint> current_execution_point_;
