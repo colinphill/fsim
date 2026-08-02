@@ -57,6 +57,12 @@ struct Capture {
   std::string generic_boundary_matrix_output;
   std::string generic_boundary_cells_input;
   std::string generic_boundary_cells_output;
+  std::string callable_matrix_input;
+  std::string callable_package_result;
+  std::string callable_generated_result;
+  std::string callable_cells_input;
+  std::string callable_local_result;
+  std::string callable_procedure_result;
   std::string debugger_output;
   std::string vcd;
   std::string application_vcd;
@@ -399,6 +405,18 @@ Capture run_once(
       read("array_top.generic_boundary_cells_input");
   capture.generic_boundary_cells_output =
       read("array_top.generic_boundary_cells_output");
+  capture.callable_matrix_input =
+      read("array_top.callable_matrix_input");
+  capture.callable_package_result =
+      read("array_top.callable_package_result");
+  capture.callable_generated_result =
+      read("array_top.callable_generated_result");
+  capture.callable_cells_input =
+      read("array_top.callable_cells_input");
+  capture.callable_local_result =
+      read("array_top.callable_local_result");
+  capture.callable_procedure_result =
+      read("array_top.callable_procedure_result");
   {
     std::ostringstream debugger_output;
     std::ostringstream debugger_error;
@@ -517,6 +535,20 @@ void verify_capture(const Capture& capture) {
   assert(
       capture.generic_boundary_cells_output
       == capture.generic_boundary_cells_input);
+  assert(capture.callable_matrix_input == "111111");
+  assert(
+      capture.callable_package_result
+      == capture.callable_matrix_input);
+  assert(
+      capture.callable_generated_result
+      == capture.callable_matrix_input);
+  assert(capture.callable_cells_input == "111111");
+  assert(
+      capture.callable_local_result
+      == capture.callable_cells_input);
+  assert(
+      capture.callable_procedure_result
+      == capture.callable_cells_input);
   assert(
       !capture.boundary_identities[0].empty()
       && capture.boundary_identities[0]
@@ -649,6 +681,8 @@ int main() {
       directory.path / "boundary_shape_failure.vhd";
   const auto component_shape_failure_source =
       directory.path / "component_shape_failure.vhd";
+  const auto callable_shape_failure_source =
+      directory.path / "callable_shape_failure.vhd";
 
   const auto write_package =
       [&](const std::string_view revision) {
@@ -672,7 +706,34 @@ package Array_Types is
   end record;
   type Boundary_Cells_T is array
     (natural range <>) of Boundary_Cell_T;
+  subtype Callable_Matrix_T is
+    Boundary_Matrix_T(0 to 1, 3 downto 1);
+  subtype Callable_Cells_T is Boundary_Cells_T(0 to 1);
+  function Package_Matrix_Copy(
+    Value : Callable_Matrix_T) return Callable_Matrix_T;
+  procedure Package_Cells_Copy(
+    constant Source : in Callable_Cells_T;
+    variable Target : inout Callable_Cells_T);
 end package;
+
+package body Array_Types is
+  function Package_Matrix_Copy(
+    Value : Callable_Matrix_T) return Callable_Matrix_T is
+    variable Result : Callable_Matrix_T :=
+      (others => (others => '0'));
+  begin
+    Result := Value;
+    return Result;
+  end function;
+
+  procedure Package_Cells_Copy(
+    constant Source : in Callable_Cells_T;
+    variable Target : inout Callable_Cells_T) is
+    variable Snapshot : Callable_Cells_T := Source;
+  begin
+    Target := Snapshot;
+  end procedure;
+end package body;
 )";
         assert(output.good());
       };
@@ -785,6 +846,15 @@ architecture rtl of Array_Top is
         0 to Component_Rows - 1)
     );
   end component;
+  function Local_Cells_Copy(
+    Value : Callable_Cells_T) return Callable_Cells_T is
+    variable First : Callable_Cells_T := Value;
+    variable Second : Callable_Cells_T :=
+      (others => (Flag => false, Data => "00"));
+  begin
+    Second := First;
+    return Second;
+  end function;
   type Matrix_T is array (0 to 1, 3 downto 1) of bit;
   type Nibble_Array_T is array (3 downto 0) of bit;
   type Nibble_Memory_T is array (0 to 1) of Nibble_Array_T;
@@ -865,6 +935,12 @@ architecture rtl of Array_Top is
     Boundary_Cells_T(0 to 1);
   signal Generic_Boundary_Cells_Output :
     Boundary_Cells_T(0 to 1);
+  signal Callable_Matrix_Input : Callable_Matrix_T;
+  signal Callable_Package_Result : Callable_Matrix_T;
+  signal Callable_Generated_Result : Callable_Matrix_T;
+  signal Callable_Cells_Input : Callable_Cells_T;
+  signal Callable_Local_Result : Callable_Cells_T;
+  signal Callable_Procedure_Result : Callable_Cells_T;
 begin
   drive : process
     variable Top_Local : Byte_T := "01LH10Z-";
@@ -1003,6 +1079,36 @@ begin
     (others => (others => '1'));
   Generic_Boundary_Cells_Input <=
     (others => (Flag => true, Data => "11"));
+
+  Callable_Matrix_Input <= (others => (others => '1'));
+  Callable_Package_Result <=
+    Package_Matrix_Copy(Callable_Matrix_Input);
+  Callable_Cells_Input <=
+    (others => (Flag => true, Data => "11"));
+  Callable_Local_Result <=
+    Local_Cells_Copy(Local_Cells_Copy(Callable_Cells_Input));
+
+  callable_procedure : process(Callable_Cells_Input)
+    variable Target : Callable_Cells_T :=
+      (others => (Flag => false, Data => "00"));
+  begin
+    Package_Cells_Copy(Callable_Cells_Input, Target);
+    Callable_Procedure_Result <= Target;
+  end process;
+
+  callable_generate : if true generate
+    function Generated_Matrix_Copy(
+      Value : Callable_Matrix_T) return Callable_Matrix_T is
+      variable Result : Callable_Matrix_T :=
+        (others => (others => '0'));
+    begin
+      Result := Value;
+      return Result;
+    end function;
+  begin
+    Callable_Generated_Result <=
+      Generated_Matrix_Copy(Callable_Matrix_Input);
+  end generate;
 
   Conditional_Result <=
     (others => '0') when false else
@@ -1381,6 +1487,42 @@ end architecture;
           "vhdl-component-shape-failure",
           "vhdl:work.component_shape_top(rtl)"),
       "FSIM-ELAB-VHCOMP-007");
+
+  {
+    std::ofstream output{callable_shape_failure_source};
+    output << R"(
+package Callable_Shape_Types is
+  type Matrix_T is array
+    (natural range <>, positive range <>) of bit;
+end package;
+
+use work.callable_shape_types.all;
+entity Callable_Shape_Top is
+end entity;
+
+use work.callable_shape_types.all;
+architecture rtl of Callable_Shape_Top is
+  function Copy_Matrix(
+    Value : Matrix_T(0 to 1, 3 downto 1))
+    return Matrix_T(0 to 1, 3 downto 1) is
+  begin
+    return Value;
+  end function;
+  signal Source : Matrix_T(1 downto 0, 1 to 3);
+  signal Result : Matrix_T(0 to 1, 3 downto 1);
+begin
+  Result <= Copy_Matrix(Source);
+end architecture;
+)";
+    assert(output.good());
+  }
+  expect_build_failure(
+      make_failure_config(
+          directory.path,
+          callable_shape_failure_source,
+          "vhdl-callable-shape-failure",
+          "vhdl:work.callable_shape_top(rtl)"),
+      "FSIM-ELAB-VHOVER-002");
 
   std::cout << "VHDL array application tests passed\n";
   return 0;

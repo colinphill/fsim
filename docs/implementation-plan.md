@@ -6743,10 +6743,10 @@ The current ten implementation tasks are:
 6. **Complete.** Complete same-language entity/component port and generic boundaries for
    multidimensional and composite arrays with exact constraint adaptation,
    aliases, copy direction, driver ownership, and specialization identity.
-7. **In progress.** Complete function/procedure parameter, result, local, package, and generated
+7. **Complete.** Complete function/procedure parameter, result, local, package, and generated
    callable boundaries for supported array shapes with deterministic copy-in,
    copy-out, return, lifetime, and provenance behavior.
-8. **Pending.** Complete sensitivity inference, partial/composite signal scheduling, driver
+8. **In progress.** Complete sensitivity inference, partial/composite signal scheduling, driver
    resolution, delta/update ordering, and interpreter/LLVM parity for array
    element and slice targets.
 9. **Pending.** Prove positive/negative parser and elaboration coverage plus interpreter,
@@ -6865,6 +6865,25 @@ seconds. The LLVM-disabled ASan/UBSan seven-test gate passed outside the ptrace
 sandbox in 4.71 seconds. All 1,477 production diagnostics are cataloged and all
 361 authored sources remain within the 2,000-line gate. Batch 116 remains **in
 progress** with Task 7 current and Tasks 8 through 10 pending.
+
+Task 7 is focused-complete for concrete supported array shapes. Callable
+overload matching now requires same-nominal VHDL arrays to have compatible
+rank, element subtype, bounds, directions, null state, and flattened strides;
+same-width but differently constrained multidimensional actuals no longer pass
+profile selection. The merged VHDL array application executes constrained
+multidimensional and record-element arrays through package function parameters,
+locals, and results; package procedure constant/inout parameters and
+deterministic copy-in/copy-out; nested local function calls; and a function
+declared inside a selected generate body. Interpreter and LLVM O0/O2 runs,
+cold/warm cache reuse, package-edit invalidation, and signal-value comparisons
+cover return lifetime and source provenance. Negative evidence reports
+`FSIM-ELAB-VHOVER-002` for an incompatible callable shape. Focused eight-test
+Debug and Release gates passed in 5.88 and 5.75 seconds, with VHDL arrays at
+1.88/1.76 seconds and scoped locals at 0.83/0.81 seconds. The LLVM-disabled
+ASan/UBSan seven-test gate passed outside the ptrace sandbox in 5.79 seconds.
+All 1,477 production diagnostics are cataloged and all 361 authored sources
+remain within the 2,000-line gate. Batch 116 remains **in progress** with Task
+8 current and Tasks 9 through 10 pending.
 
 ## Forward language-closure feature batches
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
+#include "vhdl_array_boundary.hpp"
 
 namespace fsim::elaboration {
 using namespace elaboration_detail;
@@ -67,8 +68,13 @@ bool Lowerer::vhdl_callable_type_matches(
   const bool formal_nominal = !formal.nominal_type.empty();
   const bool actual_nominal = !actual.nominal_type.empty();
   if (formal_nominal || actual_nominal) {
-    return formal_nominal && actual_nominal
-        && formal.nominal_type == actual.nominal_type;
+    if (!formal_nominal || !actual_nominal
+        || formal.nominal_type != actual.nominal_type) {
+      return false;
+    }
+    return !formal.vhdl_array || !actual.vhdl_array
+        || vhdl_array_shape_matches(
+            *formal.vhdl_array, *actual.vhdl_array, true);
   }
   if (formal.systemverilog_container
       || actual.systemverilog_container) {
