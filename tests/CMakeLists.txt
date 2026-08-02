@@ -54,6 +54,29 @@ add_test(
 )
 
 add_test(
+  NAME fsim.ieee-package-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckIeeePackageInventory.cmake"
+)
+add_test(
+  NAME fsim.v1-vhdl-matrix
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1VhdlMatrix.cmake"
+)
+set_tests_properties(
+  fsim.v1-vhdl-matrix
+  PROPERTIES LABELS "fast;vhdl;matrix;cmake"
+)
+set_tests_properties(
+  fsim.ieee-package-inventory
+  PROPERTIES LABELS "fast;vhdl;packages;license;cmake"
+)
+
+add_test(
   NAME fsim.tcl.version-selection
   COMMAND
     "${CMAKE_COMMAND}"
@@ -464,6 +487,19 @@ if(TARGET fsim_application)
     fsim_add_application_case(
       2 vhdl_logic9 app/vhdl_logic9_application_test.cpp
       fsim.application.vhdl_logic9 fast vhdl logic9 resolution)
+    fsim_add_application_case(
+      2 vhdl_numeric app/vhdl_numeric_application_test.cpp
+      fsim.application.vhdl_numeric fast vhdl packages numeric)
+    fsim_add_application_case(
+      2 vhdl_fixed app/vhdl_fixed_application_test.cpp
+      fsim.application.vhdl_fixed fast vhdl packages fixed)
+    fsim_add_application_case(
+      2 vhdl_float app/vhdl_float_application_test.cpp
+      fsim.application.vhdl_float fast vhdl packages floating)
+    fsim_add_application_case(
+      2 vhdl_ieee_integration app/vhdl_ieee_integration_application_test.cpp
+      fsim.application.vhdl_ieee_integration
+      fast vhdl packages contexts integration)
     fsim_add_application_case(
       2 vhdl_records app/vhdl_record_application_test.cpp
       fsim.application.vhdl_records fast vhdl records logic9)

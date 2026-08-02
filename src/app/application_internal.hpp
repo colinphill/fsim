@@ -12,6 +12,7 @@
 #include "fsim/frontend/preprocessor.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/support/environment.hpp"
 #include "fsim/systemc/hierarchy.hpp"
 #include "fsim/systemc/plugin_compiler.hpp"
 #include "fsim/version.hpp"
@@ -659,6 +660,10 @@ std::string unit_key(const frontend::DesignUnit& unit);
 
 void validate_vhdl_analysis_order(
     std::span<const frontend::DesignUnit> units,
+    diagnostic::Engine& diagnostics);
+
+void inject_vhdl_standard_libraries(
+    CheckedProject& checked,
     diagnostic::Engine& diagnostics);
 
 std::string selected_top(

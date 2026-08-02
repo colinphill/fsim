@@ -1286,14 +1286,14 @@ HierarchyBuilder::HierarchyBuilder(
                                 != alias.type
                                        .enumeration_literals.end();
                         });
-                const bool type_mark =
-                    std::any_of(
+                const bool type_mark = std::any_of(
                         specialized_package->unit.type_aliases.begin(),
                         specialized_package->unit.type_aliases.end(),
-                        [&](const auto& alias) {
-                            return alias.name == constant_name;
-                        });
-                if (!enumeration_literal && !type_mark) {
+                        [&](const auto& alias) { return alias.name == constant_name; });
+                const bool standard_item = std::ranges::find(
+                    package->standard_package_declarations, constant_name)
+                    != package->standard_package_declarations.end();
+                if (!enumeration_literal && !type_mark && !standard_item) {
                     report(
                         "FSIM-ELAB-PKG-010",
                         "VHDL package '" + requested_library
@@ -1302,7 +1302,7 @@ HierarchyBuilder::HierarchyBuilder(
                             + constant_name + "'",
                         reference_span);
                 }
-                if (enumeration_literal || type_mark) {
+                if (enumeration_literal || type_mark || standard_item) {
                     const auto package_source = std::string{
                         frontend::physical_source(package->span)};
                     if (dependencies.insert(package_source).second) {

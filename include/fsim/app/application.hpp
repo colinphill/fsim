@@ -40,7 +40,10 @@ struct CheckedSource {
 
 struct CheckedProject {
   frontend::ParsedDesign parsed;
+  /// HDL roots named by the project manifest, in manifest order.
   std::vector<CheckedSource> hdl_sources;
+  /// Checksum-pinned compiler-supplied standard-library roots.
+  std::vector<CheckedSource> standard_sources;
   std::size_t source_count{};
 };
 

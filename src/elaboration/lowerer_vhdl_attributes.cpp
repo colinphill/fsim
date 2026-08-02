@@ -29,7 +29,10 @@ bool Lowerer::is_vhdl_array_like(const frontend::Type& type) {
       separator == std::string::npos ? 0 : separator + 1);
   return name == "bit_vector" || name == "std_logic_vector"
       || name == "std_ulogic_vector" || name == "signed"
-      || name == "unsigned";
+      || name == "unsigned" || name == "ufixed" || name == "sfixed"
+      || name == "unresolved_ufixed" || name == "unresolved_sfixed"
+      || name == "float" || name == "unresolved_float"
+      || name == "u_float";
 }
 
 std::optional<frontend::PackedRange> Lowerer::vhdl_array_attribute_range(

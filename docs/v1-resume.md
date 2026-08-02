@@ -24,12 +24,13 @@ risky structural transition that needs a durable boundary.
 
 - Recorded: 2026-08-02.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: all ten Batch 119 tasks are complete through this
-  handoff; Batch 120 Task 1, the reviewed Apache-2.0 IEEE package inventory and
-  license/dependency audit, is current.
+- Implementation baseline: all ten Batch 119 tasks and Batch 120 Tasks 1-9 are
+  complete through this handoff; Batch 120 Task 10 local release gates pass,
+  and the accumulated commit/push checkpoint is current. Stop before the
+  mandatory GitHub CI inspection.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 384 authored C/C++ source, header,
+- The source-size refactor is complete: all 393 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 116-alternative
@@ -2952,44 +2953,218 @@ gate; no CI inspection is required at this non-tenth-batch boundary.
 
 The current ten implementation tasks are:
 
-1. **In progress.** Audit the existing standard-library loader, bundled-source
+1. **Complete.** Audit the existing standard-library loader, bundled-source
    inventory, licenses, package dependencies, VHDL revisions, and current IEEE
    package coverage before selecting the reviewed Apache-2.0 source bundle.
-2. **Pending.** Review, bundle, analyze, and execute the supported
+2. **Complete.** Review, bundle, analyze, and execute the supported
    `ieee.std_logic_1164` declarations, bodies, tables, conversions, resolution,
    edges, and vector operations with retained license and provenance.
-3. **Pending.** Review, bundle, analyze, and execute the supported
+3. **Complete.** Review, bundle, analyze, and execute the supported
    `ieee.numeric_std` and `ieee.numeric_bit` signed, unsigned, conversion,
    resize, comparison, arithmetic, shift, rotate, and boundary profiles.
-4. **Pending.** Complete the bundled bit and logic utility package profiles,
+4. **Complete.** Complete the bundled bit and logic utility package profiles,
    including vector/string conversions, matching values, edge behavior,
    overload visibility, and exact unsupported-profile diagnostics.
-5. **Pending.** Review, bundle, analyze, and execute bounded
+5. **Complete.** Review, bundle, analyze, and execute bounded
    `ieee.fixed_generic_pkg` and `ieee.fixed_pkg` types, generics, conversions,
    resize, rounding, overflow, arithmetic, comparison, and slice behavior.
-6. **Pending.** Review, bundle, analyze, and execute bounded
+6. **Complete.** Review, bundle, analyze, and execute bounded
    `ieee.float_generic_pkg` and `ieee.float_pkg` types, generics, conversions,
    classification, rounding, arithmetic, comparison, and exceptional values.
-7. **Pending.** Complete dependency-ordered implicit/explicit library,
+7. **Complete.** Complete dependency-ordered implicit/explicit library,
    context, `use`, package-body, overload, generic-package, and type-identity
    integration for every bundled package without host-install dependencies.
-8. **Pending.** Complete hierarchy, callable, debugger, VCD, provenance,
+8. **Complete.** Complete hierarchy, callable, debugger, VCD, provenance,
    specialization, cold/warm/edit cache, interpreter, and LLVM O0/O2 behavior
    for designs consuming the reviewed packages.
-9. **Pending.** Audit every required VHDL v1 feature-matrix row and prove the
+9. **Complete.** Audit every required VHDL v1 feature-matrix row and prove the
    accumulated positive, negative, elaboration, runtime, portability, license,
    and package-conformance differential matrix.
-10. **Pending.** Update matrix/diagnostics/docs, pass sanitizer,
+10. **In progress.** Update matrix/diagnostics/docs, pass sanitizer,
     source/catalog, full Debug/Release, commit, and push gates, then inspect and
     repair every non-documentation GitHub CI failure at the mandatory Batch 120
     boundary.
 
-Batch status is **in progress** with Task 1 current. Keep this exact ten-task
+Batch status is **in progress** with Task 10 current. Keep this exact ten-task
 list current in both the official plan and this handoff. Tasks 1 through 9 use
 the corrected accumulated working-tree cadence; Task 10 owns the single batch
 sanitizer, full-regression, commit, push, and mandatory non-documentation CI
 inspection gate. Local builds use at least eight workers; GitHub Actions builds
 use parallelism four.
+
+Task 1 selects and retains the official IEEE-P1076 `1076-2019` package tag at
+commit `16a012320947d378611cc7457f64ed76cb52bac4`. The upstream `ieee` and
+`std` VHDL directories, Apache-2.0 license, and authorship file are bundled
+byte-for-byte; checked SHA-256 values cover all 28 imported files. A separate
+fsim-authored inventory records the only supported dependency order and review
+stage for the predefined, TextIO, environment, reflection, logic, numeric,
+math, fixed, and floating packages. CMake installs the complete reviewed-source
+snapshot, while the application activates only stages with executable evidence
+and a corresponding standard-library cache version. An eight-worker exact LLVM
+22.1.8 Debug regeneration succeeded;
+the new integrity/license test plus the diagnostic-catalog and source-line
+gates passed all three tests in 0.23 seconds. The catalog remains at 1,604
+production codes, and all 384 authored C/C++ sources remain within the
+2,000-line limit. No sanitizer, Release, full regression, commit, push, or CI
+inspection was run at this task boundary.
+
+Task 2 activates the checksum-pinned `ieee.std_logic_1164` declaration and
+body only for VHDL contexts that explicitly consume that package. The exact
+upstream bytes remain separate compiler-supplied checked sources; their paths,
+contents, compilation-unit digests, and semantic dependency identity enter the
+design and specialization cache keys without changing project-manifest source
+counts or ordering. A compact intrinsic projection preserves the existing
+nine-state runtime type identity while recording the reviewed upstream
+revision and declaration inventory. The focused application proves all nine
+input states through NOT/AND/OR/XOR and derived NAND/NOR/XNOR vector tables,
+two-driver standard resolution, `rising_edge`/`falling_edge`, bounded
+same-domain `std_logic_vector`/`std_ulogic_vector` conversions, projected
+transactions, exact locals, VCD, cold/warm native reuse, and interpreter versus
+LLVM O0/O2 parity. It also proves the pinned declaration/body SHA-256 values
+and rejects a project redeclaration with `FSIM-FE-VHSTD-004`. An eight-worker
+Debug build succeeded; frontend, elaboration, runtime, package-integrity,
+diagnostic-catalog, source-line, and focused application tests passed all seven
+tests in 0.80 seconds, with the application itself at 0.33 seconds. Task 3 is
+now current; the batch worktree remains intentionally uncommitted and no
+sanitizer, Release, full regression, push, or CI inspection was run.
+
+Task 3 activates the exact reviewed `numeric_std` or `numeric_bit` declaration
+and body on explicit use, with `numeric_std` also bringing its pinned
+`std_logic_1164` dependency into deterministic analysis and cache order. The
+parser distinguishes two-state `numeric_bit` signed/unsigned objects from the
+nine-state `numeric_std` profiles. Bounded intrinsic lowering now executes
+`to_integer`, `to_signed`, `to_unsigned`, `resize`, `shift_left`,
+`shift_right`, `rotate_left`, and `rotate_right`; direct signed/unsigned
+conversion preserves bits while changing arithmetic interpretation. The
+focused application covers add, subtract, multiply, divide, modulo, absolute
+value, comparison, sign extension, truncation/conversion, shift/rotate,
+integer conversion, exact package hashes and declaration metadata, O0/O2
+interpreter/LLVM parity, and cold/warm native reuse for both packages. Invalid
+result sizes and out-of-profile integer-conversion widths produce
+`FSIM-ELAB-VHNUM-002` and `FSIM-ELAB-VHNUM-003`. After returning the shared
+elaborator header from 2,004 to exactly 2,000 lines, the eight-worker Debug
+build and all nine focused frontend, elaboration, runtime, integer-shift,
+logic9, numeric, package-integrity, catalog, and source-budget tests passed in
+1.44 seconds; the numeric application took 0.52 seconds. Task 4 is current;
+the accumulated batch remains uncommitted, and no sanitizer, Release, full
+regression, push, or CI inspection was run.
+
+Task 4 completes the bounded bit/logic utilities without adding another
+backend operation family. Scalar and vector conversions lower into existing
+extract, exact-compare, conditional-select, concatenate, and typed-copy SimIR,
+covering `to_bit`, `to_bitvector`, bit-to-logic promotion, `to_01`, `to_x01`,
+`to_x01z`, `to_ux01`, and `is_x` across all nine states. Static one- through
+64-bit `to_string`, `to_ostring`, and `to_hstring` profiles produce exact
+binary/octal/hex strings; dynamic or unknown octal/hex profiles fail with
+`FSIM-ELAB-VHLOGIC-003`. The checksum-pinned `std_logic_textio` declaration is
+now loaded after `std_logic_1164` and retains its reviewed alias inventory.
+The expanded logic application proves scalar/vector overloads, xmap behavior,
+matching-known/unknown predicates, edges, exact reports, interpreter/LLVM
+O0/O2, VCD, and cold/warm cache behavior. The eight focused frontend,
+elaboration, runtime, logic, numeric, package-integrity, catalog, and source
+tests passed in 2.17 seconds; the logic application took 1.20 seconds. Task 5
+is current, with no batch commit, sanitizer, Release, full regression, push,
+or CI inspection yet.
+
+Task 5 activates the checksum-pinned `math_real`, `fixed_float_types`,
+`fixed_generic_pkg`, and `fixed_pkg` dependency chain while retaining the
+reviewed default fixed-package rounding and overflow profiles. Constrained
+`ufixed` and `sfixed` objects carry their descending binary-point ranges over
+the common exact nine-state packed representation. Bounded lowering executes
+locally static integer `to_ufixed`/`to_sfixed` conversions with saturation,
+same-range add/subtract and comparison through the shared signed/unsigned
+arithmetic kernels, unsigned fractional `resize` with nearest rounding,
+scale-preserving resize, and fixed-point slices. The focused application
+proves all ten exact compiler-supplied source dependencies, declaration
+inventory/revision, O0/O2 interpreter/LLVM parity, cold/warm native reuse,
+positive and negative conversion, rounding, saturation, arithmetic,
+comparison, and slicing. Ascending contextual ranges and widths above 64
+produce `FSIM-ELAB-VHFIX-004` and `FSIM-ELAB-VHFIX-002`. The eight-worker
+Debug builds succeeded and all nine focused frontend, elaboration, runtime,
+logic, numeric, fixed, package-integrity, catalog, and source-budget tests
+passed in 2.53 seconds; the fixed application took 0.33 seconds. Task 6 is
+current; the accumulated batch remains intentionally uncommitted, and no
+sanitizer, Release, full regression, push, or CI inspection was run.
+
+Task 6 activates the checksum-pinned `float_generic_pkg` declaration/body and
+`float_pkg` instance after their complete 13-source logic, numeric, math,
+fixed, and floating dependency chain. The bounded default generic profile is
+IEEE-754 binary32: constrained `float(8 downto -23)` values retain their exact
+32 nine-state bits, while locally static package calls fold before SimIR into
+ordinary typed constants. Integer conversion, default binary32 rounding,
+`add`, `subtract`, `multiply`, `divide`, `sqrt`, named comparisons,
+`to_integer`, and raw standard-logic-vector conversion are covered alongside
+finite, NaN, unordered, and sign classification. Canonical positive/negative
+zero, infinity, signaling/quiet NaN constructors preserve exact bits.
+Nonstatic operations, non-binary32 ranges, and exceptional integer conversion
+produce `FSIM-ELAB-VHFLT-001`, `FSIM-ELAB-VHFLT-002`, and
+`FSIM-ELAB-VHFLT-004`. The eight-worker Debug builds succeeded and all ten
+focused frontend, elaboration, runtime, logic, numeric, fixed, float,
+package-integrity, catalog, and source-budget tests passed in 2.95 seconds;
+the float application took 0.26 seconds. Task 7 is current; no sanitizer,
+Release, full regression,
+commit, push, or CI inspection was run.
+
+Task 7 completes the dependency/visibility integration boundary for all ten
+activated package declarations and their six bodies. One reusable project
+context imports `std_logic_1164`, `std_logic_textio`, `numeric_bit`,
+`numeric_std`, `fixed_pkg`, and `float_pkg`; their implicit math/fixed/generic
+dependencies expand into 16 exact compiler-supplied sources before the three
+manifest units without changing manifest counts or order. The integration
+fixture proves declaration-before-body and complete package dependency order,
+context-reference visibility, default generic-package instances, independent
+two-state `ieee.numeric_bit.unsigned` and nine-state
+`ieee.numeric_std.unsigned` identity, and simultaneous overload dispatch for
+logic mapping, numeric conversion/resize, fixed resize, and floating
+arithmetic. Fully qualified reviewed intrinsic declarations now count as
+package exports in package-reference specialization, retain source closure,
+and pass unchanged to their intrinsic lowerers; unknown ordinary exports keep
+the existing `FSIM-ELAB-PKG-010` path. After compressing the qualified-export
+change from 2,003 to 1,999 lines, the eight-worker Debug build and all 11
+focused frontend, elaboration, runtime, per-package, integration,
+package-integrity, catalog, and source-budget tests passed in 3.54 seconds;
+the integration application took 0.52 seconds. Task 8 is current; no
+sanitizer, Release, full regression, commit, push, or CI inspection was run.
+
+Task 8 extends the all-package context fixture through the complete consumer
+execution boundary. The top specialization retains the exact numeric-bit,
+numeric-standard, fixed, and floating package source closure; stable hierarchy
+paths expose every result signal. A waiting VHDL process retains independently
+typed two-state numeric, nine-state numeric, fixed, and binary32 debugger
+locals with exact values. The interpreter and LLVM O0/O2 runs produce the
+same signal values, locals, and normalized VCD, while cold/warm cache telemetry
+proves module stores and hits. A comment-only edit to the reusable context
+invalidates every affected O2 native module and preserves behavior. The
+eight-worker Debug builds and all 11 focused frontend, elaboration, runtime,
+per-package, integration, package-integrity, catalog, and source-budget tests
+passed in 3.43 seconds; the expanded integration application took 0.69
+seconds. Task 9 is current; the batch remains intentionally uncommitted,
+with no sanitizer, Release, full regression, push, or CI inspection yet.
+
+Task 9 closes the VHDL release-authority audit. Aggregate rows `V1-VH-01`
+through `V1-VH-05` now state the bounded contracts actually completed by
+Batches 111–118 and join `V1-VH-06` through `V1-VH-08` at executable status;
+every row carries positive, negative, elaboration, and runtime evidence. The
+new `fsim.v1-vhdl-matrix` gate requires exactly eight ordered executable rows
+with no empty evidence column. After building the previously untouched third
+application shard with eight workers, the complete Debug VHDL-labeled suite
+passed 28/28 tests in 12.99 seconds across analysis order, contexts, overloads,
+all generic kinds, components/configurations, statements, composites,
+advanced types, transactions, reviewed packages, interpreter/LLVM, hierarchy,
+debugger, VCD, and cache behavior.
+
+Task 10's local release gates pass. The LLVM-disabled ASan/UBSan regression
+passed all 73 tests in 340.64 seconds with LeakSanitizer disabled for the
+managed ptrace environment; `fsim.application.scoped_locals` took 0.51
+seconds. Exact LLVM 22.1.8 warnings-as-errors Debug passed all 76 tests in
+186.74 seconds, and Release passed all 76 in 161.14 seconds; scoped locals
+took 0.82 seconds in each. The reviewed IEEE integration application took
+0.73 seconds in Debug and 0.62 seconds in Release. The diagnostic catalog
+covers 1,623 production codes, all 393 authored sources pass the 2,000-line
+gate, and the IEEE inventory and exact eight-row VHDL v1 matrix gates pass.
+This record is the single accumulated commit/push checkpoint. Task 10 and
+Batch 120 remain in progress until the mandatory non-documentation GitHub CI
+inspection is completed; stop before that inspection as requested.
 
 Batch 110 has advanced through these validated features:
 

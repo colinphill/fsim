@@ -134,7 +134,12 @@ bool fold_type_attribute(
         || simple_name == "bit_vector"
         || simple_name == "std_logic_vector"
         || simple_name == "std_ulogic_vector"
-        || simple_name == "signed" || simple_name == "unsigned";
+        || simple_name == "signed" || simple_name == "unsigned"
+        || simple_name == "ufixed" || simple_name == "sfixed"
+        || simple_name == "unresolved_ufixed"
+        || simple_name == "unresolved_sfixed"
+        || simple_name == "float" || simple_name == "unresolved_float"
+        || simple_name == "u_float";
     std::int64_t left = 0;
     std::int64_t right = 0;
     bool descending = false;

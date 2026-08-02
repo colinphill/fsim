@@ -339,6 +339,7 @@ class VhdlParser final : private detail::ParserBase {
   std::unordered_set<std::string> vhdl_named_types_;
   std::vector<std::string> sequential_loop_labels_;
   std::vector<std::string> sequential_loop_labels_seen_;
+  bool numeric_bit_context_{};
   bool in_vhdl_function_{};
   bool in_vhdl_procedure_{};
 };

@@ -1253,21 +1253,21 @@ private:
         const Expression& expression,
         std::size_t expected_width,
         const frontend::Type* expected_type);
-    ExpressionAttempt lower_user_function_expression(
-        const Expression& expression,
+    ExpressionAttempt lower_vhdl_logic_function_expression(const Expression&, std::size_t, const frontend::Type*);
+    ExpressionAttempt lower_vhdl_fixed_function_expression(const Expression&, std::size_t, const frontend::Type*);
+    ExpressionAttempt lower_vhdl_float_function_expression(const Expression&, std::size_t, const frontend::Type*);
+    ExpressionAttempt lower_vhdl_numeric_function_expression(const Expression&, std::size_t, const frontend::Type*);
+    ExpressionAttempt lower_user_function_expression(const Expression& expression,
         std::size_t expected_width,
         const frontend::Type* expected_type);
     ExpressionAttempt lower_binary_expression(
         const Expression& expression,
         std::size_t expected_width,
         const frontend::Type*);
-
     std::optional<std::size_t> infer_width(const Expression& expression) const;
-
     std::optional<frontend::PackedRange> expression_range(
         const Expression& expression,
         const std::size_t width) const;
-
     std::optional<std::size_t> select_offset(
         const Expression& expression,
         const std::int64_t index,

@@ -65,6 +65,25 @@ therefore excluded.
 | `FSIM-FE-VHORDER-006` | error | A VHDL configuration declaration or binding names an architecture that has not yet been analyzed. |
 | `FSIM-FE-VHORDER-007` | error | A VHDL entity binding names an entity that has not yet been analyzed. |
 | `FSIM-FE-VHORDER-008` | error | A VHDL configuration binding names a configuration that has not yet been analyzed. |
+| `FSIM-FE-VHSTD-001` | error | A required compiler-supplied IEEE 1076-2019 source file is unavailable or unreadable. |
+| `FSIM-FE-VHSTD-002` | error | A compiler-supplied IEEE 1076-2019 source file does not match its pinned upstream checksum. |
+| `FSIM-FE-VHSTD-003` | error | fsim's intrinsic semantic projection of a pinned IEEE package is internally invalid. |
+| `FSIM-FE-VHSTD-004` | error | A project source attempts to redeclare a compiler-supplied IEEE package. |
+| `FSIM-ELAB-VHNUM-001` | error | A bounded IEEE numeric function has the wrong arity or value profile. |
+| `FSIM-ELAB-VHNUM-002` | error | A numeric conversion or resize result size is not locally static in 1 through 64. |
+| `FSIM-ELAB-VHNUM-003` | error | `to_integer` exceeds the bounded signed or unsigned input-width profile. |
+| `FSIM-ELAB-VHNUM-004` | error | A numeric conversion or resize result size differs from its contextual width. |
+| `FSIM-ELAB-VHLOGIC-001` | error | A bounded standard-logic conversion or predicate has an unsupported argument count. |
+| `FSIM-ELAB-VHLOGIC-002` | error | A standard-logic conversion has an unsupported scalar/vector width, state domain, or contextual result width. |
+| `FSIM-ELAB-VHLOGIC-003` | error | A standard-logic mapping or string conversion is outside the supported static mapping profile. |
+| `FSIM-ELAB-VHFIX-001` | error | A bounded fixed-point conversion or resize has the wrong arity, operand type, or value profile. |
+| `FSIM-ELAB-VHFIX-002` | error | A fixed-point result range is not locally static, descending, and from 1 through 64 bits. |
+| `FSIM-ELAB-VHFIX-003` | error | A fixed-point conversion, scale expansion, or rounded resize is outside the bounded static/default profile. |
+| `FSIM-ELAB-VHFIX-004` | error | Fixed-point conversion or resize bounds differ from the contextual fixed-point range. |
+| `FSIM-ELAB-VHFLT-001` | error | A bounded floating conversion has an unsupported argument or value profile. |
+| `FSIM-ELAB-VHFLT-002` | error | A floating result does not have the reviewed binary32 `float(8 downto -23)` context. |
+| `FSIM-ELAB-VHFLT-003` | error | Floating arithmetic or vector conversion is not locally static in the bounded binary32 profile. |
+| `FSIM-ELAB-VHFLT-004` | error | Floating-to-integer conversion has a NaN, infinity, or out-of-range result. |
 | `FSIM-FE-IO-001` | error | An HDL source file could not be opened. |
 | `FSIM-FE-IO-002` | error | Reading an HDL source file failed after it was opened. |
 | `FSIM-FE-IO-003` | error | HDL language inference failed for the source-file extension. |

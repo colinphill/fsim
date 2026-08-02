@@ -9,6 +9,26 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
         const Expression& expression,
         const std::size_t expected_width,
         const frontend::Type* expected_type) {
+        if (auto floating = lower_vhdl_float_function_expression(
+                expression, expected_width, expected_type);
+            floating.handled) {
+            return floating;
+        }
+        if (auto logic = lower_vhdl_logic_function_expression(
+                expression, expected_width, expected_type);
+            logic.handled) {
+            return logic;
+        }
+        if (auto fixed = lower_vhdl_fixed_function_expression(
+                expression, expected_width, expected_type);
+            fixed.handled) {
+            return fixed;
+        }
+        if (auto numeric = lower_vhdl_numeric_function_expression(
+                expression, expected_width, expected_type);
+            numeric.handled) {
+            return numeric;
+        }
         if (auto binary = lower_file_binary_read(expression); binary.handled) {
             return binary;
         }

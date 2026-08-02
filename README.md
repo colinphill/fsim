@@ -718,5 +718,8 @@ fixtures and Windows execution evidence remain open.
 fsim source code is licensed under the
 [Apache License 2.0](LICENSE). Files use SPDX identifier
 `Apache-2.0`. Third-party sources and dependencies retain their own licenses
-and must pass license review before they are bundled. The planned IEEE VHDL
-package sources are not yet bundled in this vertical slice.
+and must pass license review before they are bundled. The official IEEE-P1076
+`1076-2019` VHDL package source snapshot is bundled byte-for-byte under its
+Apache-2.0 license with pinned provenance and checksums; the
+[feature matrix](docs/feature-matrix.md) identifies which reviewed package
+profiles are currently executable.

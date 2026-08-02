@@ -35,6 +35,7 @@ struct Capture {
   std::vector<std::string> values;
   std::string local_value;
   std::vector<std::string> resolved_drivers;
+  std::vector<std::string> reports;
   std::string vcd;
   std::size_t compiled_processes{};
   std::size_t compiled_modules{};
@@ -67,7 +68,7 @@ fsim::project::Config make_config(
   return config;
 }
 
-constexpr std::array<std::string_view, 16> signal_names{
+constexpr std::array<std::string_view, 30> signal_names{
     "vhdl_logic9.source",
     "vhdl_logic9.inverted",
     "vhdl_logic9.anded",
@@ -83,7 +84,21 @@ constexpr std::array<std::string_view, 16> signal_names{
     "vhdl_logic9.different_result",
     "vhdl_logic9.local_result",
     "vhdl_logic9.last_value_result",
-    "vhdl_logic9.resolved_value"};
+    "vhdl_logic9.resolved_value",
+    "vhdl_logic9.converted_ulogic",
+    "vhdl_logic9.converted_logic",
+    "vhdl_logic9.rise_seen",
+    "vhdl_logic9.fall_seen",
+    "vhdl_logic9.bit_mapped",
+    "vhdl_logic9.x01_mapped",
+    "vhdl_logic9.x01z_mapped",
+    "vhdl_logic9.ux01_mapped",
+    "vhdl_logic9.promoted",
+    "vhdl_logic9.unknown_seen",
+    "vhdl_logic9.known_seen",
+    "vhdl_logic9.mapped_01",
+    "vhdl_logic9.scalar_bit",
+    "vhdl_logic9.scalar_unknown"};
 
 Capture run_once(
     const fsim::project::Config& config,
@@ -161,6 +176,15 @@ Capture run_once(
       simulation.compiled_module_count();
   capture.native_cache =
       simulation.native_cache_statistics();
+  simulation.set_report_hook(
+      [&](const fsim::runtime::simir::ProcessId,
+          const std::string_view message,
+          const fsim::runtime::simir::AssertionSeverity,
+          const fsim::runtime::simir::SourceLocation&,
+          const fsim::runtime::SimulationTick,
+          const std::uint64_t) {
+        capture.reports.emplace_back(message);
+      });
 
   std::array<
       fsim::runtime::simir::SignalId,
@@ -179,8 +203,12 @@ Capture run_once(
     signals[index] = *signal;
     const auto width =
         index == 8 ? 4U
-        : index == 11 || index == 12 ? 1U
-                                     : 8U;
+        : index == 11 || index == 12
+              || index == 18 || index == 19
+              || index == 25 || index == 26
+              || index == 28 || index == 29 ? 1U
+        : index == 24 ? 4U
+                                             : 8U;
     traces[index] = vcd.declare_signal(
         std::string{signal_names[index]}, width);
   }
@@ -247,7 +275,23 @@ void verify_capture(const Capture& capture) {
           "1",
           "ULH-WZ01",
           "ULH-WZ01",
-          "HLXWUXXW"}));
+          "HLXWUXXW",
+          "ULH-WZ01",
+          "ULH-WZ01",
+          "1",
+          "1",
+          "10111101",
+          "X01XXX01",
+          "X01XXZ01",
+          "U01XXX01",
+          "1010",
+          "1",
+          "0",
+          "10111101",
+          "1",
+          "0"}));
+  assert((capture.reports
+          == std::vector<std::string>{"ULH-WZ01", "065", "AC"}));
   assert(capture.local_value == "ULH-WZ01");
   assert((
       capture.resolved_drivers
@@ -350,6 +394,9 @@ int main() {
   {
     std::ofstream output{source};
     output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity vhdl_logic9 is
   port (
     source : out std_logic_vector(7 downto 0);
@@ -367,12 +414,27 @@ entity vhdl_logic9 is
     different_result : out boolean;
     local_result : out std_logic_vector(7 downto 0);
     last_value_result : out std_logic_vector(7 downto 0);
-    resolved_value : out std_logic_vector(7 downto 0)
+    resolved_value : out std_logic_vector(7 downto 0);
+    converted_ulogic : out std_ulogic_vector(7 downto 0);
+    converted_logic : out std_logic_vector(7 downto 0);
+    rise_seen : out std_logic;
+    fall_seen : out std_logic;
+    bit_mapped : out bit_vector(7 downto 0);
+    x01_mapped : out std_logic_vector(7 downto 0);
+    x01z_mapped : out std_logic_vector(7 downto 0);
+    ux01_mapped : out std_logic_vector(7 downto 0);
+    promoted : out std_logic_vector(3 downto 0);
+    unknown_seen : out boolean;
+    known_seen : out boolean;
+    mapped_01 : out std_logic_vector(7 downto 0);
+    scalar_bit : out bit;
+    scalar_unknown : out boolean
   );
 end entity;
 
 architecture rtl of vhdl_logic9 is
   signal attribute_source : std_logic_vector(7 downto 0);
+  signal edge_clock : std_logic;
 begin
   source <= "ULH-WZ01";
   inverted <= not source;
@@ -400,9 +462,201 @@ begin
   last_value_result <= attribute_source'last_value;
   resolved_value <= "ZL-HU01Z";
   resolved_value <= "HZZLZ10W";
+  converted_ulogic <= std_ulogic_vector(source);
+  converted_logic <= std_logic_vector(std_ulogic_vector(source));
+  bit_mapped <= to_bitvector(source, '1');
+  x01_mapped <= to_x01(source);
+  x01z_mapped <= to_x01z(source);
+  ux01_mapped <= to_ux01(source);
+  promoted <= to_stdlogicvector("1010");
+  unknown_seen <= is_x(source);
+  known_seen <= is_x("01LH");
+  mapped_01 <= to_01(source, '1');
+  scalar_bit <= to_bit('U', '1');
+  scalar_unknown <= is_x('H');
+  edge_clock <= transport '0', '1' after 1 ns, '0' after 2 ns;
+  rising_probe : process(edge_clock)
+  begin
+    if rising_edge(edge_clock) then
+      rise_seen <= '1';
+    end if;
+  end process;
+  falling_probe : process(edge_clock)
+  begin
+    if falling_edge(edge_clock) then
+      fall_seen <= '1';
+    end if;
+  end process;
+  string_probe : process
+  begin
+    report to_string("ULH-WZ01");
+    report to_ostring("00110101");
+    report to_hstring("10101100");
+    wait;
+  end process;
 end architecture;
 )";
     assert(output.good());
+  }
+
+  {
+    const auto config = make_config(
+        directory.path,
+        source,
+        fsim::project::Optimization::o0);
+    fsim::diagnostic::Engine diagnostics;
+    const auto checked = fsim::app::check_project(config, diagnostics);
+    assert(checked);
+    assert(!diagnostics.has_error());
+    assert(checked->source_count == 1);
+    assert(checked->hdl_sources.size() == 1);
+    assert(checked->standard_sources.size() == 2);
+    assert(
+        checked->standard_sources[0].content_digest
+        == "2a34c7d7b2c8ba21b1e91153741399cf2cd23c8b04028dcf53765efeea76de55");
+    assert(
+        checked->standard_sources[1].content_digest
+        == "6534fe4842c1133199db93725e36a9e973ea8e2ab03890433c013af813d5ce2c");
+    assert(
+        checked->standard_sources[0].path.filename()
+        == "std_logic_1164.vhdl");
+    assert(
+        checked->standard_sources[1].path.filename()
+        == "std_logic_1164-body.vhdl");
+    const auto package = std::ranges::find_if(
+        checked->parsed.units,
+        [](const fsim::frontend::DesignUnit& unit) {
+          return unit.kind == fsim::frontend::UnitKind::VhdlPackage
+              && unit.library == "ieee"
+              && unit.name == "std_logic_1164"
+              && unit.primary_name.empty();
+        });
+    assert(package != checked->parsed.units.end());
+    assert(package->type_aliases.empty());
+    assert(
+        package->standard_package_revision
+        == "ieee-p1076:1076-2019:16a012320947d378611cc7457f64ed76cb52bac4");
+    assert(std::ranges::find(
+               package->standard_package_declarations, "std_ulogic")
+           != package->standard_package_declarations.end());
+    assert(std::ranges::find(
+               package->standard_package_declarations, "std_logic_vector")
+           != package->standard_package_declarations.end());
+    assert(std::ranges::find(
+               package->standard_package_declarations, "resolved")
+           != package->standard_package_declarations.end());
+    assert(std::ranges::find(
+               package->standard_package_declarations, "rising_edge")
+           != package->standard_package_declarations.end());
+    assert(std::ranges::any_of(
+        checked->parsed.units,
+        [](const fsim::frontend::DesignUnit& unit) {
+          return unit.kind == fsim::frontend::UnitKind::VhdlPackage
+              && unit.library == "ieee"
+              && unit.name == "std_logic_1164"
+              && !unit.primary_name.empty();
+        }));
+  }
+
+  const auto conflict_source =
+      directory.path / "std_logic_1164_conflict.vhd";
+  {
+    std::ofstream output{conflict_source};
+    output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+package std_logic_1164 is
+end package std_logic_1164;
+)";
+    assert(output.good());
+  }
+  {
+    auto config = make_config(
+        directory.path,
+        conflict_source,
+        fsim::project::Optimization::o0);
+    config.source_sets.front().library = "ieee";
+    fsim::diagnostic::Engine diagnostics;
+    const auto checked = fsim::app::check_project(config, diagnostics);
+    assert(!checked);
+    assert(std::ranges::any_of(
+        diagnostics.diagnostics(),
+        [](const fsim::diagnostic::Diagnostic& diagnostic) {
+          return diagnostic.code == "FSIM-FE-VHSTD-004";
+        }));
+  }
+
+  const auto textio_source = directory.path / "std_logic_textio_use.vhd";
+  {
+    std::ofstream output{textio_source};
+    output << R"(
+library ieee;
+use ieee.std_logic_textio.all;
+entity std_logic_textio_use is
+end entity;
+)";
+    assert(output.good());
+  }
+  {
+    const auto config = make_config(
+        directory.path,
+        textio_source,
+        fsim::project::Optimization::o0);
+    fsim::diagnostic::Engine diagnostics;
+    const auto checked = fsim::app::check_project(config, diagnostics);
+    assert(checked);
+    assert(!diagnostics.has_error());
+    assert(checked->standard_sources.size() == 3);
+    assert(std::ranges::any_of(
+        checked->standard_sources,
+        [](const fsim::app::CheckedSource& candidate) {
+          return candidate.content_digest
+              == "526a2e1e0a05f35ae97fb046ec90ebe8250324390aab2f3adccde73e605e3937";
+        }));
+    assert(std::ranges::any_of(
+        checked->parsed.units,
+        [](const fsim::frontend::DesignUnit& unit) {
+          return unit.kind == fsim::frontend::UnitKind::VhdlPackage
+              && unit.library == "ieee"
+              && unit.name == "std_logic_textio";
+        }));
+  }
+
+  const auto dynamic_string_source =
+      directory.path / "dynamic_logic_string.vhd";
+  {
+    std::ofstream output{dynamic_string_source};
+    output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity dynamic_logic_string is
+end entity;
+architecture rtl of dynamic_logic_string is
+  signal value : std_logic_vector(3 downto 0);
+begin
+  value <= "1010";
+  probe : process(value)
+  begin
+    report to_hstring(value);
+  end process;
+end architecture;
+)";
+    assert(output.good());
+  }
+  {
+    auto config = make_config(
+        directory.path,
+        dynamic_string_source,
+        fsim::project::Optimization::o0);
+    config.project.top = "vhdl:work.dynamic_logic_string(rtl)";
+    fsim::diagnostic::Engine diagnostics;
+    const auto project = fsim::app::build_project(config, diagnostics);
+    assert(!project);
+    assert(std::ranges::any_of(
+        diagnostics.diagnostics(),
+        [](const fsim::diagnostic::Diagnostic& diagnostic) {
+          return diagnostic.code == "FSIM-ELAB-VHLOGIC-003";
+        }));
   }
 
   const auto sv_parent_source =
@@ -484,6 +738,7 @@ endmodule
     assert(reference.result.delta == compiled.result.delta);
     assert(reference.values == compiled.values);
     assert(reference.local_value == compiled.local_value);
+    assert(reference.reports == compiled.reports);
     assert(
         reference.resolved_drivers
         == compiled.resolved_drivers);

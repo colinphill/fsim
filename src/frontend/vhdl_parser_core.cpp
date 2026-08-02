@@ -11,6 +11,17 @@ ParseResult VhdlParser::run() {
   ParsedDesign design;
   std::vector<VhdlContextItem> pending_context;
   while (!at_end()) {
+    numeric_bit_context_ = std::ranges::any_of(
+        pending_context,
+        [](const VhdlContextItem& item) {
+          return item.kind == VhdlContextItemKind::UseClause
+              && std::ranges::any_of(
+                  item.selected_names,
+                  [](const std::string_view name) {
+                    return name == "ieee.numeric_bit"
+                        || name.starts_with("ieee.numeric_bit.");
+                  });
+        });
     if (keyword("context", 0, true)
         && at(TokenKind::Identifier, 1)
         && keyword("is", 2, true)) {
@@ -845,10 +856,28 @@ Type VhdlParser::parse_vhdl_type(
   } else if (simple_name == "std_logic" ||
              simple_name == "std_logic_vector" ||
              simple_name == "std_ulogic" ||
-             simple_name == "std_ulogic_vector" ||
-             simple_name == "signed" || simple_name == "unsigned") {
+             simple_name == "std_ulogic_vector") {
     type.domain = ValueDomain::Logic9;
+  } else if (simple_name == "signed" || simple_name == "unsigned") {
+    type.domain = numeric_bit_context_
+            || spelling.starts_with("ieee.numeric_bit.")
+        ? ValueDomain::Bit2
+        : ValueDomain::Logic9;
     type.is_signed = simple_name == "signed";
+  } else if (simple_name == "ufixed" || simple_name == "sfixed"
+             || simple_name == "unresolved_ufixed"
+             || simple_name == "unresolved_sfixed") {
+    type.domain = ValueDomain::Logic9;
+    type.is_signed = simple_name == "sfixed"
+        || simple_name == "unresolved_sfixed";
+  } else if (simple_name == "float" || simple_name == "unresolved_float"
+             || simple_name == "u_float") {
+    type.domain = ValueDomain::Logic9;
+  } else if (simple_name == "float32"
+             || simple_name == "unresolved_float32"
+             || simple_name == "u_float32") {
+    type.domain = ValueDomain::Logic9;
+    type.packed_range = PackedRange{8, -23, true};
   } else if (simple_name == "boolean") {
     type.domain = ValueDomain::Boolean;
   } else if (simple_name == "string" || simple_name == "line") {

@@ -87,6 +87,10 @@ int fsim_application_case_vhdl_analysis_order();
 int fsim_application_case_vhdl_components();
 int fsim_application_case_vhdl_integer_shifts();
 int fsim_application_case_vhdl_logic9();
+int fsim_application_case_vhdl_numeric();
+int fsim_application_case_vhdl_fixed();
+int fsim_application_case_vhdl_float();
+int fsim_application_case_vhdl_ieee_integration();
 int fsim_application_case_vhdl_records();
 int fsim_application_case_vhdl_package_records();
 
@@ -104,6 +108,10 @@ constexpr NamedApplicationCase application_cases[] = {
     {"vhdl_components", fsim_application_case_vhdl_components},
     {"vhdl_integer_shifts", fsim_application_case_vhdl_integer_shifts},
     {"vhdl_logic9", fsim_application_case_vhdl_logic9},
+    {"vhdl_numeric", fsim_application_case_vhdl_numeric},
+    {"vhdl_fixed", fsim_application_case_vhdl_fixed},
+    {"vhdl_float", fsim_application_case_vhdl_float},
+    {"vhdl_ieee_integration", fsim_application_case_vhdl_ieee_integration},
     {"vhdl_records", fsim_application_case_vhdl_records},
     {"vhdl_package_records", fsim_application_case_vhdl_package_records},
 };

@@ -1517,6 +1517,12 @@ struct DesignUnit {
   // For a VHDL architecture, `name` is the architecture and `primary_name`
   // is the entity it implements.
   std::string primary_name;
+  // Nonempty only for a checksum-pinned compiler-supplied standard package.
+  // Intrinsic exports remain explicit without masquerading as ordinary user
+  // declarations whose bodies and nominal types would require general source
+  // lowering. The exact upstream files remain source dependencies.
+  std::string standard_package_revision;
+  std::vector<std::string> standard_package_declarations;
   // Verilog/SystemVerilog compilation-unit timing context. Empty when no
   // `timescale directive precedes this unit.
   std::string time_unit;

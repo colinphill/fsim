@@ -27,6 +27,17 @@ bool Lowerer::is_string_expression(
             });
   }
   if (expression.kind == ExpressionKind::Call) {
+    if (language_ == frontend::Language::Vhdl2008) {
+      const auto separator = expression.text.find_last_of('.');
+      const auto name = std::string_view{expression.text}.substr(
+          separator == std::string::npos ? 0 : separator + 1);
+      if (name == "to_string" || name == "to_bstring"
+          || name == "to_binary_string" || name == "to_ostring"
+          || name == "to_octal_string" || name == "to_hstring"
+          || name == "to_hex_string") {
+        return true;
+      }
+    }
     if (expression.text == "$sformatf") {
       return true;
     }
@@ -119,6 +130,78 @@ Lowerer::lower_string_expression(
     return destination;
   }
   if (expression.kind == ExpressionKind::Call) {
+    if (language_ == frontend::Language::Vhdl2008) {
+      const auto separator = expression.text.find_last_of('.');
+      const auto name = std::string_view{expression.text}.substr(
+          separator == std::string::npos ? 0 : separator + 1);
+      const bool binary = name == "to_string" || name == "to_bstring"
+          || name == "to_binary_string";
+      const bool octal = name == "to_ostring" || name == "to_octal_string";
+      const bool hexadecimal =
+          name == "to_hstring" || name == "to_hex_string";
+      if (binary || octal || hexadecimal) {
+        if (expression.operands.size() != 1) {
+          report(
+              "FSIM-ELAB-VHLOGIC-001",
+              std::string{name} + " requires exactly one packed value",
+              expression.span);
+          return std::nullopt;
+        }
+        const auto width = infer_width(expression.operands.front());
+        const auto value = width
+            ? literal_value(
+                  expression.operands.front(),
+                  *width,
+                  frontend::Language::Vhdl2008)
+            : std::nullopt;
+        if (!width || *width == 0 || *width > 64 || !value) {
+          report(
+              "FSIM-ELAB-VHLOGIC-003",
+              std::string{name}
+                  + " currently requires a static packed value of width 1 through 64",
+              expression.operands.front().span);
+          return std::nullopt;
+        }
+        std::string text;
+        if (binary) {
+          text = value->value.to_msb_string();
+        } else {
+          const auto group = octal ? 3U : 4U;
+          const auto digits = (*width + group - 1U) / group;
+          text.assign(digits, '0');
+          for (std::size_t digit = 0; digit < digits; ++digit) {
+            unsigned numeric = 0;
+            for (std::size_t bit = 0; bit < group; ++bit) {
+              const auto offset = digit * group + bit;
+              if (offset >= *width) {
+                continue;
+              }
+              const auto state = value->value.is_logic9()
+                  ? runtime::to_logic4(value->value.get_logic9(offset))
+                  : value->value.get(offset);
+              if (state != runtime::Logic4::zero
+                  && state != runtime::Logic4::one) {
+                report(
+                    "FSIM-ELAB-VHLOGIC-003",
+                    std::string{name}
+                        + " static octal/hex profile requires only 0/1 states",
+                    expression.operands.front().span);
+                return std::nullopt;
+              }
+              if (state == runtime::Logic4::one) {
+                numeric |= 1U << bit;
+              }
+            }
+            constexpr std::string_view digits_text{"0123456789ABCDEF"};
+            text[digits - digit - 1U] = digits_text[numeric];
+          }
+        }
+        const auto destination = allocate_string_register();
+        process_.operations.emplace_back(
+            LoadStringConstant{destination, std::move(text)});
+        return destination;
+      }
+    }
     if (expression.text == "$sformatf") {
       return lower_string_format(
           expression.operands, 0U, expression.text, expression.span);

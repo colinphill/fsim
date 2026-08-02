@@ -14,9 +14,15 @@ frontend::Type builtin_vhdl_type(const std::string_view name) {
     } else if (
         name == "std_logic" || name == "std_logic_vector"
         || name == "std_ulogic" || name == "std_ulogic_vector"
-        || name == "signed" || name == "unsigned") {
+        || name == "signed" || name == "unsigned"
+        || name == "ufixed" || name == "sfixed"
+        || name == "unresolved_ufixed"
+        || name == "unresolved_sfixed"
+        || name == "float" || name == "unresolved_float"
+        || name == "u_float") {
         type.domain = frontend::ValueDomain::Logic9;
-        type.is_signed = name == "signed";
+        type.is_signed = name == "signed" || name == "sfixed"
+            || name == "unresolved_sfixed";
     } else if (name == "boolean") {
         type.domain = frontend::ValueDomain::Boolean;
     } else if (
@@ -677,7 +683,12 @@ bool is_packed_array_type(const frontend::Type& type) {
         || name == "std_logic_vector"
         || name == "std_ulogic_vector"
         || name == "signed"
-        || name == "unsigned";
+        || name == "unsigned"
+        || name == "ufixed" || name == "sfixed"
+        || name == "unresolved_ufixed"
+        || name == "unresolved_sfixed"
+        || name == "float" || name == "unresolved_float"
+        || name == "u_float";
 }
 
 frontend::SourceSpan constraint_span(const frontend::Type& type) {

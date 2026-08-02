@@ -234,6 +234,59 @@ using namespace elaboration_detail;
             return std::size_t{32};
         }
         if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008) {
+            const auto separator = expression.text.find_last_of('.');
+            const auto name = std::string_view{expression.text}.substr(
+                separator == std::string::npos ? 0 : separator + 1);
+            if (name == "to_integer") {
+                return std::size_t{32};
+            }
+            if (name == "is_x") {
+                return std::size_t{1};
+            }
+            if ((name == "to_ufixed" || name == "to_sfixed"
+                 || name == "resize")
+                && expression.operands.size() == 3) {
+                std::string left_error;
+                std::string right_error;
+                const auto left = evaluate_constant_expression(
+                    expression.operands[1], {}, left_error);
+                const auto right = evaluate_constant_expression(
+                    expression.operands[2], {}, right_error);
+                if (left && right && *left >= *right
+                    && static_cast<std::uint64_t>(*left - *right) < 64) {
+                    return static_cast<std::size_t>(*left - *right + 1);
+                }
+            }
+            if ((name == "to_signed" || name == "to_unsigned"
+                 || name == "resize")
+                && expression.operands.size() == 2) {
+                std::string error;
+                const auto width = evaluate_constant_expression(
+                    expression.operands[1], {}, error);
+                if (width && *width > 0 && *width <= 64) {
+                    return static_cast<std::size_t>(*width);
+                }
+            }
+            if ((name == "shift_left" || name == "shift_right"
+                 || name == "rotate_left" || name == "rotate_right")
+                && !expression.operands.empty()) {
+                return infer_width(expression.operands.front());
+            }
+            if ((name == "to_bit" || name == "to_bitvector"
+                 || name == "to_bit_vector" || name == "to_bv"
+                 || name == "to_stdulogic"
+                 || name == "to_stdlogicvector"
+                 || name == "to_std_logic_vector" || name == "to_slv"
+                 || name == "to_stdulogicvector"
+                 || name == "to_std_ulogic_vector" || name == "to_sulv"
+                 || name == "to_01" || name == "to_x01"
+                 || name == "to_x01z" || name == "to_ux01")
+                && !expression.operands.empty()) {
+                return infer_width(expression.operands.front());
+            }
+        }
+        if (expression.kind == ExpressionKind::Call
             && language_ == frontend::Language::Vhdl2008
             && !expression.operands.empty()
             && expression.operands.front().kind
@@ -563,6 +616,23 @@ using namespace elaboration_detail;
                 const auto type = vhdl_expression_type(expression);
                 return type && type->is_signed;
             }
+            if (language_ == frontend::Language::Vhdl2008) {
+                const auto separator = expression.text.find_last_of('.');
+                const auto name = std::string_view{expression.text}.substr(
+                    separator == std::string::npos ? 0 : separator + 1);
+                if (name == "to_signed" || name == "to_integer") {
+                    return true;
+                }
+                if (name == "to_unsigned") {
+                    return false;
+                }
+                if ((name == "resize" || name == "shift_left"
+                     || name == "shift_right" || name == "rotate_left"
+                     || name == "rotate_right")
+                    && !expression.operands.empty()) {
+                    return is_signed_expression(expression.operands.front());
+                }
+            }
             if (expression.operands.size() == 1
                 && (expression.text == ".sum"
                     || expression.text == ".product"
@@ -826,6 +896,14 @@ using namespace elaboration_detail;
                 && is_integer_expression(expression.operands[0])
                 && is_integer_expression(expression.operands[1]);
         case ExpressionKind::Call:
+            if (language_ == frontend::Language::Vhdl2008) {
+                const auto separator = expression.text.find_last_of('.');
+                const auto name = std::string_view{expression.text}.substr(
+                    separator == std::string::npos ? 0 : separator + 1);
+                if (name == "to_integer") {
+                    return true;
+                }
+            }
             if (language_ == frontend::Language::Vhdl2008
                 && expression.text.starts_with(
                     "@vhdl-physical:")) {

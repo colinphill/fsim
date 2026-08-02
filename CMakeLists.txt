@@ -406,6 +406,10 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_vhdl_composite_operations.cpp
       src/elaboration/lowerer_vhdl_attributes.cpp
       src/elaboration/lowerer_vhdl_matching.cpp
+      src/elaboration/lowerer_vhdl_logic.cpp
+      src/elaboration/lowerer_vhdl_numeric.cpp
+      src/elaboration/lowerer_vhdl_fixed.cpp
+      src/elaboration/lowerer_vhdl_float.cpp
       src/elaboration/lowerer_vhdl_physical.cpp
       src/elaboration/lowerer_vhdl_protected.cpp
       src/elaboration/lowerer_control.cpp
@@ -625,6 +629,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_analysis.cpp
       src/app/application_build.cpp
       src/app/application_check.cpp
+      src/app/application_standard_library.cpp
       src/app/application_vhdl_analysis.cpp
       src/app/application_debug_control.cpp
       src/app/application_debugger.cpp
@@ -639,6 +644,23 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
   )
   add_library(fsim::application ALIAS fsim_application)
   fsim_configure_library(fsim_application)
+  file(
+    RELATIVE_PATH
+    FSIM_IEEE_LIBRARY_RELATIVE_TO_BINDIR
+    "${CMAKE_INSTALL_FULL_BINDIR}"
+    "${CMAKE_INSTALL_FULL_DATADIR}/fsim/vhdl/ieee-1076-2019"
+  )
+  file(
+    TO_CMAKE_PATH
+    "${FSIM_IEEE_LIBRARY_RELATIVE_TO_BINDIR}"
+    FSIM_IEEE_LIBRARY_RELATIVE_TO_BINDIR
+  )
+  target_compile_definitions(
+    fsim_application
+    PRIVATE
+      "FSIM_IEEE_LIBRARY_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}/third_party/ieee-1076-2019\""
+      "FSIM_IEEE_LIBRARY_RELATIVE_TO_BINDIR=\"${FSIM_IEEE_LIBRARY_RELATIVE_TO_BINDIR}\""
+  )
   target_link_libraries(
     fsim_application
     PUBLIC
@@ -756,4 +778,8 @@ install(
   DIRECTORY docs/
   DESTINATION "${CMAKE_INSTALL_DOCDIR}"
   FILES_MATCHING PATTERN "*.md"
+)
+install(
+  DIRECTORY third_party/ieee-1076-2019/
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/fsim/vhdl/ieee-1076-2019"
 )

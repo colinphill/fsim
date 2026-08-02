@@ -57,9 +57,68 @@ associated with their own source set, and its language, standard, library,
 compilation-unit policy, defines, and include settings enter the provenance
 key. Package visibility may recurse through other constant-only project
 packages; the full acyclic source closure is retained, while a visibility cycle
-is diagnosed with its package chain. Package bodies, types/subprograms,
-standard-package loading, and general VHDL visibility remain future semantic
-layer work.
+is diagnosed with its package chain. General project package bodies,
+types/subprograms, and full VHDL visibility remain future semantic-layer work.
+The official IEEE-P1076 `1076-2019` source snapshot is retained
+byte-for-byte under `third_party/ieee-1076-2019` with its Apache-2.0 license,
+authors, exact checksums, and dependency-ordered inventory. Bundling is not
+activation: reviewed stages enter analysis individually. An explicit
+`ieee.std_logic_1164` use currently activates the checksum-pinned declaration
+and body through an intrinsic package projection that retains fsim's existing
+nine-state type and operator identity. Compiler-supplied roots are stored
+separately from manifest roots so source counts and manifest/cache alignment
+remain stable; their exact path, bytes, compilation-unit digest, and semantic
+dependency identity still enter design and specialization cache keys. The
+native-cache standard-library version changes whenever a reviewed package
+profile changes.
+
+The numeric package stage uses the same projection and provenance boundary.
+`numeric_std` records an explicit standard-logic dependency; `numeric_bit`
+selects two-state signed/unsigned types while `numeric_std` selects nine-state
+types. Their bounded conversion, resize, shift, and rotate calls lower directly
+to the existing typed SimIR resize, copy, arithmetic, and shift operations, so
+the interpreter and LLVM backends do not carry a parallel package evaluator.
+Result-size and integer-width checks occur before execution, while runtime
+integer range checks retain the existing deterministic failure path.
+
+The fixed-point stage extends that boundary through `math_real`,
+`fixed_float_types`, `fixed_generic_pkg`, and `fixed_pkg` in deterministic
+dependency order. A constrained `ufixed` or `sfixed` remains an exact packed
+nine-state value; its declared descending range supplies the binary-point
+position, so no parallel runtime value kind is needed. Static integer
+conversion performs checked 64-bit scale alignment and saturation during
+lowering. Resize uses typed copies and existing arithmetic/shift operations for
+scale alignment and bounded unsigned nearest rounding. Equal-range addition,
+subtraction, comparison, and slices reuse the common packed kernels, preserving
+interpreter/LLVM and cache identity.
+
+The floating stage extends the same dependency graph through
+`float_generic_pkg` and `float_pkg`. The default reviewed v1 profile is
+binary32 only: a constrained `float(8 downto -23)` is stored as its exact
+32-bit nine-state encoding. Locally static conversions, arithmetic,
+classification, comparisons, and exceptional constructors are evaluated
+during lowering and emitted as ordinary typed constants. Thus both engines
+consume identical bits, native cache keys retain the complete package source
+closure, and no platform floating-point ABI enters SimIR or the JIT boundary.
+
+Reusable VHDL contexts may activate the reviewed package set once and expose
+it to later entity/architecture units. Injection follows the fixed dependency
+order before manifest analysis while keeping compiler-supplied and manifest
+source inventories separate. Fully qualified references to declarations in an
+intrinsic package are validated against its reviewed declaration inventory,
+add that package's complete semantic source closure, and remain qualified until
+the matching intrinsic lowerer selects the overload. This also preserves the
+distinct two-state `numeric_bit` and nine-state `numeric_std` type views when
+both libraries are visible.
+
+Standard-logic mapping functions expand during lowering into exact scalar
+state comparisons and conditional selections, then concatenate in declared
+runtime order. This keeps all nine-state table behavior in the already
+validated packed-value kernels and LLVM lowering. Static binary/octal/hex
+string conversions become ordinary string constants; unsupported dynamic
+profiles fail before SimIR emission. The declaration-only
+`std_logic_textio` compatibility package records its dependency and aliases
+without duplicating the common TextIO runtime.
 
 Executable VHDL units and package declarations may also name a constant as
 `package.constant` in their own library or

@@ -55,7 +55,12 @@ using namespace elaboration_detail;
                     || name == "std_logic_vector"
                     || name == "std_ulogic_vector"
                     || name == "signed"
-                    || name == "unsigned";
+                    || name == "unsigned"
+                    || name == "ufixed" || name == "sfixed"
+                    || name == "unresolved_ufixed"
+                    || name == "unresolved_sfixed"
+                    || name == "float" || name == "unresolved_float"
+                    || name == "u_float";
             };
         const auto constraint_span =
             [](const frontend::Type& type) {

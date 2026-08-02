@@ -82,6 +82,15 @@ std::string make_cache_key(
         "parsed HDL source count is inconsistent with the project manifest");
     return {};
   }
+  for (const auto& source : checked.standard_sources) {
+    key.add(
+        "standard-source-path",
+        source.path.lexically_normal().generic_string());
+    key.add("standard-source-content", source.content_digest);
+    key.add(
+        "standard-source-compilation-unit",
+        source.compilation_unit_digest);
+  }
   for (const auto& binding : config.bindings) {
     key.add("binding-instance", binding.instance);
     key.add("binding-target", binding.target);
@@ -100,6 +109,14 @@ make_specialization_cache_keys(
     const project::SourceSet* source_set{};
     const CheckedSource* checked_source{};
   };
+  const project::SourceSet standard_source_set = [] {
+    project::SourceSet source_set;
+    source_set.language = project::Language::vhdl;
+    source_set.standard = "2008";
+    source_set.library = "ieee";
+    source_set.compilation_unit = "file";
+    return source_set;
+  }();
   const auto settings_for =
       [&](const elaboration::SpecializationInfo& specialization,
           const std::string_view source,
@@ -122,32 +139,41 @@ make_specialization_cache_keys(
             break;
           }
         }
-        if (checked_source == nullptr) {
+        if (checked_source != nullptr) {
+          for (const auto& source_set : config.source_sets) {
+            if (source_set.language == project::Language::systemc) {
+              continue;
+            }
+            if (frontend_language(source_set.language)
+                != specialization.language) {
+              continue;
+            }
+            if (require_specialization_library
+                && (source_set.library.empty()
+                        ? "work"
+                        : source_set.library)
+                    != specialization.library) {
+              continue;
+            }
+            if (std::any_of(
+                    source_set.files.begin(),
+                    source_set.files.end(),
+                    [&](const std::filesystem::path& candidate) {
+                      return same_source_path(
+                          candidate, checked_source->path);
+                    })) {
+              return SourceSettings{&source_set, checked_source};
+            }
+          }
+        }
+        if (specialization.language != frontend::Language::Vhdl2008
+            || (require_specialization_library
+                && specialization.library != "ieee")) {
           return std::nullopt;
         }
-        for (const auto& source_set : config.source_sets) {
-          if (source_set.language == project::Language::systemc) {
-            continue;
-          }
-          if (frontend_language(source_set.language)
-              != specialization.language) {
-            continue;
-          }
-          if (require_specialization_library
-              && (source_set.library.empty()
-                      ? "work"
-                      : source_set.library)
-                  != specialization.library) {
-            continue;
-          }
-          if (std::any_of(
-                  source_set.files.begin(),
-                  source_set.files.end(),
-                  [&](const std::filesystem::path& candidate) {
-                    return same_source_path(
-                        candidate, checked_source->path);
-                  })) {
-            return SourceSettings{&source_set, checked_source};
+        for (const auto& candidate : checked.standard_sources) {
+          if (same_source_path(candidate.path, source_path)) {
+            return SourceSettings{&standard_source_set, &candidate};
           }
         }
         return std::nullopt;

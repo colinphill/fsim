@@ -57,6 +57,17 @@ namespace {
 [[nodiscard]] bool supported_conversion_match(
     const frontend::Type& target,
     const frontend::Type& source) {
+  const auto numeric_vector = [](const frontend::Type& type) {
+    const auto separator = type.spelling.find_last_of('.');
+    const auto name = std::string_view{type.spelling}.substr(
+        separator == std::string::npos ? 0 : separator + 1);
+    return name == "signed" || name == "unsigned";
+  };
+  if (numeric_vector(target) && numeric_vector(source)
+      && target.domain == source.domain
+      && target.width() == source.width()) {
+    return true;
+  }
   const bool composite = target.vhdl_array || source.vhdl_array
       || !target.packed_members.empty() || !source.packed_members.empty();
   if (!composite
@@ -117,8 +128,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_conversion_expression(
       && builtin.domain != frontend::ValueDomain::Unknown) {
     conversion_type = &builtin;
   }
-  if (conversion_type == nullptr && expected_type != nullptr) {
-    const auto simple_name = [](const std::string_view name) {
+  if (expected_type != nullptr) {
+    const auto simple_type_name = [](const std::string_view name) {
       const auto separator = name.find_last_of('.');
       return name.substr(
           separator == std::string_view::npos ? 0 : separator + 1);
@@ -126,7 +137,12 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_conversion_expression(
     const auto expected_name = expected_type->named_type.empty()
         ? std::string_view{expected_type->spelling}
         : std::string_view{expected_type->named_type};
-    if (simple_name(conversion_name) == simple_name(expected_name)) {
+    const auto conversion_simple = simple_type_name(conversion_name);
+    if (simple_type_name(conversion_name)
+            == simple_type_name(expected_name)
+        && (conversion_type == nullptr
+            || conversion_simple == "signed"
+            || conversion_simple == "unsigned")) {
       conversion_type = expected_type;
     }
   }
