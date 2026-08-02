@@ -8,7 +8,7 @@ evidence-backed progress of the current repository. It complements the
 [feature matrix](feature-matrix.md), which tracks individual language and
 runtime features.
 
-Last updated: 2026-08-01.
+Last updated: 2026-08-02.
 
 The repository is currently a pre-alpha architecture vertical slice. It is not
 the fsim v1 release, and a milestone is not complete merely because its
@@ -7645,7 +7645,7 @@ covers 1,604 production codes, and all 384 authored sources pass the
 2,000-line gate. The single Batch 119 commit and push close the accumulated
 gate; no CI inspection is required at this non-tenth-batch boundary.
 
-### One-hundred-twentieth feature batch — reviewed Apache-2.0 IEEE packages and VHDL v1 audit — In progress
+### One-hundred-twentieth feature batch — reviewed Apache-2.0 IEEE packages and VHDL v1 audit — Complete
 
 The current ten implementation tasks are:
 
@@ -7676,13 +7676,13 @@ The current ten implementation tasks are:
 9. **Complete.** Audit every required VHDL v1 feature-matrix row and prove the
    accumulated positive, negative, elaboration, runtime, portability, license,
    and package-conformance differential matrix.
-10. **In progress.** Update matrix/diagnostics/docs, pass sanitizer,
+10. **Complete.** Update matrix/diagnostics/docs, pass sanitizer,
     source/catalog, full Debug/Release, commit, and push gates, then inspect and
     repair every non-documentation GitHub CI failure at the mandatory Batch 120
     boundary.
 
-Batch status is **in progress** with Task 10 current. Keep this exact ten-task
-list current in both the official plan and resume handoff. Tasks 1 through 9
+Batch status is **complete**. This exact ten-task list remains the retained
+record in both the official plan and resume handoff. Tasks 1 through 9
 use the corrected accumulated working-tree cadence; Task 10 owns the single
 batch sanitizer, full-regression, commit, push, and mandatory non-documentation
 CI inspection gate. Local builds use at least eight workers; GitHub Actions
@@ -7858,9 +7858,60 @@ took 0.82 seconds in each. The reviewed IEEE integration application took
 0.73 seconds in Debug and 0.62 seconds in Release. The diagnostic catalog
 covers 1,623 production codes, all 393 authored sources pass the 2,000-line
 gate, and the IEEE inventory and exact eight-row VHDL v1 matrix gates pass.
-This record is the single accumulated commit/push checkpoint. Task 10 and
-Batch 120 remain in progress until the mandatory non-documentation GitHub CI
-inspection is completed; stop before that inspection as requested.
+This record is the single accumulated commit/push checkpoint. Initial CI run
+`30763877162` exposed an MSVC oversized string literal and a clang-cl deleted
+defaulted comparison warning. Repair run `30764329695` exposed one signed/
+unsigned comparison plus Windows newline conversion of checksum-pinned IEEE
+sources. Repair run `30765075997` then exposed one CRLF-sensitive generated-
+source edit locator. Commits `deb27c4`, `15ac189`, and `4ad6153` repair those
+failures while preserving exact IEEE bytes and newline-neutral source edits.
+Final non-documentation run `30765734570` passed all 12 jobs. Standard MSVC
+Debug passed 75/75 tests in 372.25 seconds with scoped locals in 0.27 seconds;
+MSVC plus LLVM Debug passed 76/76 in 1,160.90 seconds with scoped locals in
+1.77 seconds. Batch 120 and its mandatory CI boundary are complete.
+
+### One-hundred-twenty-first feature batch — mixed-language value-boundary conversions — In progress
+
+The current ten implementation tasks are:
+
+1. **In progress.** Audit existing VHDL/SystemVerilog/SystemC boundary type
+   metadata, shared-signal aliases, direction rules, diagnostics, and ML-005/
+   ML-006 evidence; define the bounded conversion and failure matrix.
+2. **Pending.** Implement equal-count ordinal vector mapping across differing
+   ascending/descending VHDL and SystemVerilog packed ranges in both hierarchy
+   directions, with stable conversion ownership and source metadata.
+3. **Pending.** Implement bounded input/output width adaptation with explicit
+   truncation, zero extension, sign extension, and inout/lossy-width rejection
+   rules instead of requiring every boundary width to be identical.
+4. **Pending.** Implement signed/unsigned integral boundary adaptation after
+   each language's width rules, including direction-aware legality and exact
+   diagnostics for unsafe aliases.
+5. **Pending.** Implement VHDL Boolean to/from one-bit SystemVerilog bit/logic
+   conversions with canonical false/true ordinals and checked noncanonical
+   incoming values.
+6. **Pending.** Complete VHDL integer-family to/from 32-bit signed
+   SystemVerilog integral conversion, subtype range checks, and both hierarchy
+   directions without conflating integer and packed-vector identity.
+7. **Pending.** Complete two-state VHDL bit/bit_vector and SystemVerilog bit
+   scalar/vector boundaries, including ordinal range conversion and explicit
+   rejection of state-losing reverse flows.
+8. **Pending.** Complete four-state SystemVerilog logic and nine-state VHDL
+   std_logic/std_ulogic scalar/vector conversion tables, exact legal collapse,
+   unknown/high-impedance handling, and lossy-domain diagnostics.
+9. **Pending.** Prove the complete conversion matrix through recursive mixed
+   hierarchy, interpreter, LLVM O0/O2, cold/warm/edit cache, debugger, VCD,
+   provenance, and positive/negative elaboration evidence; close ML-005 and
+   ML-006 in the feature matrix.
+10. **Pending.** Update matrix/diagnostics/docs, pass sanitizer, source/catalog,
+    and full Debug/Release gates, then create and push the single Batch 121
+    checkpoint. This is not a mandatory CI-inspection boundary.
+
+Batch status is **in progress** with Task 1 current. Keep this exact ten-task
+list current in both the official plan and resume handoff. Tasks 1 through 9
+use one accumulated dirty worktree with focused eight-worker Debug builds and
+tests; Task 10 owns the sanitizer, full regressions, documentation, commit, and
+push gate. GitHub builds use parallelism four, and Batch 121 does not require a
+non-documentation CI inspection.
 
 ## Forward language-closure feature batches
 
