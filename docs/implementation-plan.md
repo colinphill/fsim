@@ -6533,9 +6533,9 @@ Feature-matrix row VH-229, language-support status, and generate diagnostic
 descriptions record the completed enumeration/character choice contract. All
 ten Batch 114 tasks are complete.
 
-### One-hundred-fifteenth feature batch — VHDL statement and dynamic-selection closure — In progress
+### One-hundred-fifteenth feature batch — VHDL statement and dynamic-selection closure — Complete
 
-The current ten implementation tasks are:
+The retained ten implementation tasks are:
 
 1. **Complete.** Audit and retain every remaining synthesizable sequential and concurrent
    statement form in typed HIR, with exact labels, spans, and targeted
@@ -6556,12 +6556,11 @@ The current ten implementation tasks are:
    interpreter/LLVM behavior for the newly retained statement and selection forms.
 9. **Complete.** Prove positive/negative parser and elaboration coverage plus interpreter,
    LLVM O0/O2, cache-edit, hierarchy, debugger, and normalized-VCD differentials.
-10. **In progress.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
+10. **Complete.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
     Debug/Release, commit, and push gates before closing Batch 115.
 
-Batch status is **in progress**. Keep this exact ten-task list current in both
-the official plan and resume handoff. Change it to complete only after all ten
-tasks and their gates close and work moves to Batch 116.
+Batch status is **complete**. Keep this exact completed ten-task list retained
+in both the official plan and resume handoff while Batch 116 is current.
 
 Task 1 is focused-complete. A generalized sequential-label path retains exact
 canonical labels and full source spans on assignments, selected assignments,
@@ -6708,6 +6707,57 @@ in 4.99/4.67 seconds for Debug/Release, with the array differential at
 0.85/0.78 seconds and scoped locals at 0.83/0.80 seconds. All 1,472 diagnostics
 and 357 authored sources remain within their gates. Batch 115 remains **in
 progress** with Task 10 current.
+
+Task 10 is complete. Feature-matrix row VH-230, the architecture and language
+support contracts, and the evidence inventory record fixed-width dynamic VHDL
+slice reads, local writes, projected signal waveforms, bounds, sensitivity,
+cache, hierarchy, debugger, Logic9, and normalized-VCD behavior. The full gate
+also corrected the Tcl debugger regression to expect the process scope added
+by Task 6. The LLVM-disabled ASan/UBSan focused seven-test gate passed in 3.91
+seconds. Exact LLVM 22.1.8 warnings-as-errors Debug passed all 66 tests in
+182.10 seconds, with scoped locals at 0.83 seconds and VHDL arrays at 0.84
+seconds; Release passed all 66 in 160.13 seconds, with scoped locals at 0.82
+seconds and VHDL arrays at 0.80 seconds. All 1,472 production diagnostics are
+cataloged and all 357 authored sources pass the 2,000-line gate. All ten Batch
+115 tasks are complete.
+
+### One-hundred-sixteenth feature batch — VHDL multidimensional and composite-array closure — In progress
+
+The current ten implementation tasks are:
+
+1. **In progress.** Audit and retain multidimensional and composite-element array declarations,
+   constraints, objects, aggregates, selections, ports, and callable boundaries
+   in typed HIR with exact spans and targeted diagnostics.
+2. **Pending.** Complete type/subtype layout for multidimensional and composite arrays,
+   preserving every index range, direction, null range, element subtype, nominal
+   identity, and deterministic flattened storage mapping.
+3. **Pending.** Complete contextual array aggregates with positional, named, discrete-range,
+   choice-list, and final `others` associations, including nested aggregates,
+   coverage, overlap, duplicate, and subtype legality.
+4. **Pending.** Lower multidimensional indexing, slicing, and supported chained selections for
+   reads and assignment targets with checked ordinal mapping, bounds, direction,
+   and shape compatibility.
+5. **Pending.** Execute null arrays and slices through object initialization, aggregates,
+   assignments, loops, copies, equality, debugger inspection, and trace behavior
+   without allocating or updating phantom elements.
+6. **Pending.** Complete same-language entity/component port and generic boundaries for
+   multidimensional and composite arrays with exact constraint adaptation,
+   aliases, copy direction, driver ownership, and specialization identity.
+7. **Pending.** Complete function/procedure parameter, result, local, package, and generated
+   callable boundaries for supported array shapes with deterministic copy-in,
+   copy-out, return, lifetime, and provenance behavior.
+8. **Pending.** Complete sensitivity inference, partial/composite signal scheduling, driver
+   resolution, delta/update ordering, and interpreter/LLVM parity for array
+   element and slice targets.
+9. **Pending.** Prove positive/negative parser and elaboration coverage plus interpreter,
+   LLVM O0/O2, cache-edit, hierarchy, debugger, normalized-VCD, null-range, port,
+   and callable differentials.
+10. **Pending.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
+    Debug/Release, commit, and push gates before closing Batch 116.
+
+Batch status is **in progress**. Keep this exact ten-task list current in both
+the official plan and resume handoff. Change it to complete only after all ten
+tasks and their gates close and work moves to Batch 117.
 
 ## Forward language-closure feature batches
 

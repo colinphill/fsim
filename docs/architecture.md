@@ -841,6 +841,18 @@ existing static-slice runtime callbacks and driver scheduling; this keeps the
 plain-C callback ABI unchanged while giving delayed, inertial, NBA/update,
 projected, and projected-waveform writes identical target-index semantics.
 
+Fixed-width dynamic VHDL slices extend that representation with a contextual
+1-through-64-bit selection width and two signed 32-bit integer-family bounds.
+Elaboration checks both bounds against the declared packed range, preserves
+ascending or descending direction, and requires their runtime distance to
+match the contextual width exactly. The right bound anchors the normalized
+offset, so reads and local writes reuse dynamic extract/insert while signal
+writes reuse the dynamic update, delayed, inertial, projected, and atomic
+projected-waveform paths. Target bounds are captured when the assignment
+executes; concurrent target-bound expressions contribute sensitivity without
+making the written signal self-sensitive. Runtime-sized results and another
+selection after a dynamic slice remain outside this bounded contract.
+
 The deterministic simulation kernel owns process PCs and boundary scheduling.
 Reference processes use interpreter-owned register frames; compiled processes
 use caller-owned LLVM frames through the `ProcessExecutor` boundary. Both paths

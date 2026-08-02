@@ -352,8 +352,9 @@ if {![string match "time 0, delta 0, scope tb" $where]} {
   error "bad initial location: $where"
 }
 if {[fsim::debug scope] ne "tb"} {error "bad current scope"}
-if {[fsim::debug scopes] ne "(no child scopes)"} {
-  error "bad child scopes"
+set child_scopes [fsim::debug scopes]
+if {$child_scopes ne "tb.process_0"} {
+  error "bad child scopes: $child_scopes"
 }
 set initial_signals [fsim::debug signals]
 if {![string match "*tb.q = *" $initial_signals]} {
