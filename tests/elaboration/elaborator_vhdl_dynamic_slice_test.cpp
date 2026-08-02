@@ -201,6 +201,29 @@ end architecture;
   assert(!bad_bound.ok());
   assert(has_diagnostic(bad_bound, "FSIM-ELAB-VHSLICE-002"));
 
+  const auto malformed = fsim::frontend::parse_text(
+      "malformed_dynamic_slice.vhd",
+      R"(
+entity Malformed_Dynamic_Slice is end entity;
+architecture Rtl of Malformed_Dynamic_Slice is
+begin
+  Worker : process
+    variable Value : std_logic_vector(7 downto 0);
+    variable Result : std_logic_vector(3 downto 0);
+    variable Left_Bound : integer;
+  begin
+    Result := Value(Left_Bound downto );
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(!malformed.ok());
+  assert(std::ranges::any_of(
+      malformed.diagnostics, [](const auto& diagnostic) {
+        return diagnostic.code.starts_with("FSIM-VHDL-PARSE-");
+      }));
+
   const auto failing = fsim::frontend::parse_text(
       "failing_dynamic_slice.vhd",
       R"(

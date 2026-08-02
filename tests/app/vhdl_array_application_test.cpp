@@ -31,9 +31,10 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 20> values;
+  std::array<std::string, 24> values;
   std::string top_local;
   std::string dynamic_local;
+  std::string dynamic_slice_local;
   std::string top_aggregate;
   std::string child_local;
   std::string generic_aggregate;
@@ -112,6 +113,9 @@ Capture run_once(
       std::size_t>> dynamic_local;
   std::optional<std::pair<
       fsim::runtime::simir::ProcessId,
+      std::size_t>> dynamic_slice_local;
+  std::optional<std::pair<
+      fsim::runtime::simir::ProcessId,
       std::size_t>> generic_aggregate;
   for (const auto& process : project->design.processes()) {
     for (std::size_t index = 0;
@@ -130,6 +134,12 @@ Capture run_once(
             && local.value_kind
                 == fsim::runtime::simir::ValueKind::logic9);
         dynamic_local = std::pair{process.id, index};
+      } else if (local.name == "dynamic_slice_local") {
+        assert(
+            local.width == 8
+            && local.value_kind
+                == fsim::runtime::simir::ValueKind::logic9);
+        dynamic_slice_local = std::pair{process.id, index};
       } else if (local.name == "top_aggregate") {
         assert(
             local.width == 8
@@ -152,7 +162,7 @@ Capture run_once(
     }
   }
   assert(
-      top_local && dynamic_local && top_aggregate
+      top_local && dynamic_local && dynamic_slice_local && top_aggregate
       && child_local && generic_aggregate);
 
   Capture capture;
@@ -166,7 +176,7 @@ Capture run_once(
       simulation.compiled_module_count();
   capture.cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 20> paths{
+  constexpr std::array<std::string_view, 24> paths{
       "array_top.source",
       "array_top.result",
       "array_top.conditional_result",
@@ -186,12 +196,16 @@ Capture run_once(
       "array_top.reverse_order",
       "array_top.attribute_slice",
       "array_top.dynamic_read",
-      "array_top.dynamic_result"};
-  constexpr std::array<std::size_t, 20> widths{
+      "array_top.dynamic_result",
+      "array_top.dynamic_slice_read",
+      "array_top.dynamic_slice_local_result",
+      "array_top.dynamic_slice_signal",
+      "array_top.dynamic_slice_waveform"};
+  constexpr std::array<std::size_t, 24> widths{
       8, 8, 8, 4, 1, 1, 8, 4, 8, 8, 1,
-      32, 32, 32, 1, 32, 32, 4, 1, 8};
-  std::array<fsim::runtime::simir::SignalId, 20> signals{};
-  std::array<fsim::runtime::VcdSignal, 20> traces{};
+      32, 32, 32, 1, 32, 32, 4, 1, 8, 4, 8, 8, 8};
+  std::array<fsim::runtime::simir::SignalId, 24> signals{};
+  std::array<fsim::runtime::VcdSignal, 24> traces{};
   std::ostringstream vcd_output;
   fsim::runtime::VcdWriter vcd{vcd_output, "1ns", 64};
   for (std::size_t index = 0; index < paths.size(); ++index) {
@@ -232,6 +246,9 @@ Capture run_once(
   capture.dynamic_local = simulation.read_process_local(
       dynamic_local->first,
       dynamic_local->second).to_msb_string();
+  capture.dynamic_slice_local = simulation.read_process_local(
+      dynamic_slice_local->first,
+      dynamic_slice_local->second).to_msb_string();
   capture.top_aggregate = simulation.read_process_local(
       top_aggregate->first,
       top_aggregate->second).to_msb_string();
@@ -250,6 +267,10 @@ Capture run_once(
     debugger.execute({"show", "aggregate_named"});
     debugger.execute({"show", "attribute_slice"});
     debugger.execute({"show", "slice_result"});
+    debugger.execute({"show", "dynamic_slice_read"});
+    debugger.execute({"show", "dynamic_slice_local_result"});
+    debugger.execute({"show", "dynamic_slice_signal"});
+    debugger.execute({"show", "dynamic_slice_waveform"});
     assert(debugger_error.str().empty());
     capture.debugger_output = debugger_output.str();
   }
@@ -264,7 +285,7 @@ void verify_capture(const Capture& capture) {
       == fsim::runtime::RunStatus::completed);
   assert((
       capture.values
-      == std::array<std::string, 20>{
+      == std::array<std::string, 24>{
           "01LH10Z-",
           "11LH10Z-",
           "1111Z0ZH",
@@ -284,9 +305,14 @@ void verify_capture(const Capture& capture) {
           "00000000000000000011000000111001",
           "1111",
           "L",
-          "00H00000"}));
+          "00H00000",
+          "1HH1",
+          "0Z10X000",
+          "010XZ000",
+          "0Z01X000"}));
   assert(capture.top_local == "00LH10Z-");
   assert(capture.dynamic_local == "01HH10Z-");
+  assert(capture.dynamic_slice_local == "0Z10X000");
   assert(capture.top_aggregate == "1111Z0ZH");
   assert(capture.child_local == "11LH10Z-");
   assert(capture.generic_aggregate == "10000000");
@@ -310,13 +336,32 @@ void verify_capture(const Capture& capture) {
       capture.debugger_output.find(
           "slice_result = 10Z-")
       != std::string::npos);
+  assert(
+      capture.debugger_output.find(
+          "dynamic_slice_read = 1HH1")
+      != std::string::npos);
+  assert(
+      capture.debugger_output.find(
+          "dynamic_slice_local_result = 0Z10X000")
+      != std::string::npos);
+  assert(
+      capture.debugger_output.find(
+          "dynamic_slice_signal = 010XZ000")
+      != std::string::npos);
+  assert(
+      capture.debugger_output.find(
+          "dynamic_slice_waveform = 0Z01X000")
+      != std::string::npos);
   assert(capture.vcd.find("b010110zx") != std::string::npos);
   assert(capture.vcd.find("b110110zx") != std::string::npos);
+  assert(capture.vcd.find("b010xz000") != std::string::npos);
+  assert(capture.vcd.find("b0z01x000") != std::string::npos);
 }
 
 std::string run_expected_dynamic_failure(
     const fsim::project::Config& config,
-    const fsim::app::SimulationEngine engine) {
+    const fsim::app::SimulationEngine engine,
+    const std::string_view expected_message) {
   fsim::diagnostic::Engine diagnostics;
   auto project = fsim::app::build_project(config, diagnostics);
   assert(project);
@@ -327,10 +372,7 @@ std::string run_expected_dynamic_failure(
     assert(false && "dynamic packed-index failure was not reported");
   } catch (const fsim::runtime::simir::InterpreterError& error) {
     const auto message = std::string{error.what()};
-    assert(
-        message.find(
-            "dynamic packed index is outside the declared range")
-        != std::string::npos);
+    assert(message.find(expected_message) != std::string::npos);
     return message;
   }
   return {};
@@ -353,6 +395,8 @@ int main() {
       directory.path / "array_top.vhd";
   const auto failure_source =
       directory.path / "dynamic_failure.vhd";
+  const auto slice_failure_source =
+      directory.path / "dynamic_slice_failure.vhd";
 
   const auto write_package =
       [&](const std::string_view revision) {
@@ -431,11 +475,18 @@ architecture rtl of Array_Top is
   signal Attribute_Slice : Nibble_T;
   signal Dynamic_Read : std_logic;
   signal Dynamic_Result : Byte_T;
+  signal Dynamic_Slice_Read : Nibble_T;
+  signal Dynamic_Slice_Local_Result : Byte_T;
+  signal Dynamic_Slice_Signal : Byte_T;
+  signal Dynamic_Slice_Waveform : Byte_T;
 begin
   drive : process
     variable Top_Local : Byte_T := "01LH10Z-";
     variable Dynamic_Local : Byte_T := "01LH10Z-";
+    variable Dynamic_Slice_Local : Byte_T := "00000000";
     variable Dynamic_Index : integer := 5;
+    variable Dynamic_Left : integer := 6;
+    variable Dynamic_Right : integer := 3;
     variable Top_Aggregate : Byte_T :=
       (Byte_T'left downto Byte_T'high - 3 => '1',
        3 | 1 => 'Z',
@@ -450,6 +501,16 @@ begin
     Dynamic_Local(Dynamic_Index) := 'H';
     Dynamic_Result <= (others => '0');
     Dynamic_Result(Dynamic_Index) <= 'H';
+    Dynamic_Slice_Read <=
+      Dynamic_Local(Dynamic_Left downto Dynamic_Right);
+    Dynamic_Slice_Local(Dynamic_Left downto Dynamic_Right) := "Z10X";
+    Dynamic_Slice_Local_Result <= Dynamic_Slice_Local;
+    Dynamic_Slice_Signal <= (others => '0');
+    Dynamic_Slice_Signal(Dynamic_Left downto Dynamic_Right) <=
+      transport "10XZ" after 2 ns;
+    Dynamic_Slice_Waveform <= (others => '0');
+    Dynamic_Slice_Waveform(Dynamic_Left downto Dynamic_Right) <=
+      transport "1010" after 1 ns, "Z01X" after 3 ns;
     Top_Aggregate :=
       (Byte_T'left downto Byte_T'high - 3 => '1',
        3 | 1 => 'Z',
@@ -541,6 +602,9 @@ end architecture;
     assert(reference.values == cold.values);
     assert(reference.top_local == cold.top_local);
     assert(reference.dynamic_local == cold.dynamic_local);
+    assert(
+        reference.dynamic_slice_local
+        == cold.dynamic_slice_local);
     assert(reference.top_aggregate == cold.top_aggregate);
     assert(reference.child_local == cold.child_local);
     assert(
@@ -551,6 +615,9 @@ end architecture;
     assert(cold.values == warm.values);
     assert(cold.top_local == warm.top_local);
     assert(cold.dynamic_local == warm.dynamic_local);
+    assert(
+        cold.dynamic_slice_local
+        == warm.dynamic_slice_local);
     assert(cold.top_aggregate == warm.top_aggregate);
     assert(cold.child_local == warm.child_local);
     assert(
@@ -633,9 +700,67 @@ end architecture;
     sources.files = {failure_source};
     config.source_sets.push_back(std::move(sources));
     const auto reference = run_expected_dynamic_failure(
-        config, fsim::app::SimulationEngine::interpreter);
+        config,
+        fsim::app::SimulationEngine::interpreter,
+        "dynamic packed index is outside the declared range");
     const auto compiled = run_expected_dynamic_failure(
-        config, fsim::app::SimulationEngine::compiled);
+        config,
+        fsim::app::SimulationEngine::compiled,
+        "dynamic packed index is outside the declared range");
+    assert(reference == compiled);
+  }
+
+  {
+    std::ofstream output{slice_failure_source};
+    output << R"(
+entity Dynamic_Slice_Failure is
+end entity;
+
+architecture rtl of Dynamic_Slice_Failure is
+begin
+  fail : process
+    variable Value : std_logic_vector(7 downto 0) := "00000000";
+    variable Result : std_logic_vector(3 downto 0);
+    variable Left_Bound : integer := 6;
+    variable Right_Bound : integer := 4;
+  begin
+    Result := Value(Left_Bound downto Right_Bound);
+    wait;
+  end process;
+end architecture;
+)";
+    assert(output.good());
+  }
+  for (const auto optimization : {
+           fsim::project::Optimization::o0,
+           fsim::project::Optimization::o2}) {
+    fsim::project::Config config;
+    config.base_directory = directory.path;
+    config.project.name = "vhdl-dynamic-slice-failure";
+    config.project.top = "vhdl:work.dynamic_slice_failure(rtl)";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path =
+        directory.path
+        / (optimization == fsim::project::Optimization::o0
+               ? "slice-failure-cache-o0"
+               : "slice-failure-cache-o2");
+    config.run.max_deltas = 1000;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::vhdl;
+    sources.standard = "2008";
+    sources.library = "work";
+    sources.compilation_unit = "file";
+    sources.files = {slice_failure_source};
+    config.source_sets.push_back(std::move(sources));
+    const auto reference = run_expected_dynamic_failure(
+        config,
+        fsim::app::SimulationEngine::interpreter,
+        "VHDL integer subtype range check failed");
+    const auto compiled = run_expected_dynamic_failure(
+        config,
+        fsim::app::SimulationEngine::compiled,
+        "VHDL integer subtype range check failed");
     assert(reference == compiled);
   }
 

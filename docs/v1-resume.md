@@ -16,8 +16,8 @@ as work lands. Before moving on, retain that batch's list, mark it
 
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: Batch 115 Tasks 1 through 8 are complete through
-  this handoff; Task 9 end-to-end differential evidence is current.
+- Implementation baseline: Batch 115 Tasks 1 through 9 are complete through
+  this handoff; Task 10 documentation and final gates are current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
 - The source-size refactor is complete: all 357 authored C/C++ source, header,
@@ -1844,9 +1844,9 @@ completed selector-domain contract. All ten Batch 114 tasks are complete.
    supported expression and assignment targets with checked bounds and direction.
 8. **Complete.** Complete sensitivity, scheduling, delta/update ordering, and exact
    interpreter/LLVM behavior for the newly retained statement and selection forms.
-9. **In progress.** Prove positive/negative parser and elaboration coverage plus interpreter,
+9. **Complete.** Prove positive/negative parser and elaboration coverage plus interpreter,
    LLVM O0/O2, cache-edit, hierarchy, debugger, and normalized-VCD differentials.
-10. **Pending.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
+10. **In progress.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
     Debug/Release, commit, and push gates before closing Batch 115.
 
 Batch status is **in progress**. Keep this exact ten-task list current in both
@@ -1968,6 +1968,19 @@ Logic9/scoped-locals tests pass in 4.44/4.24 seconds for Debug/Release, with
 scoped locals at 0.85/0.81 seconds. All 1,472 diagnostics are cataloged and all
 357 authored sources pass the line gate. Batch 115 remains **in progress**
 with Task 9 current and Task 10 pending.
+
+Task 9 is focused-complete. Positive and negative frontend/elaboration cases
+cover ascending/descending, packed-record-member, read/local/signal target,
+single/multi projected waveform, malformed syntax, direction/type, and runtime
+length behavior. The merged VHDL array application proves dynamic slices in
+debug-visible locals and projected signals across interpreter and LLVM O0/O2
+cold/warm runs, package-source cache invalidation, hierarchy/debugger lookup,
+normalized VCD, exact Logic9 values, and identical O0/O2 runtime-failure
+messages. Seven focused diagnostic/source/elaboration/LLVM/application/runtime/
+scoped-locals tests pass in 4.99/4.67 seconds for Debug/Release; the array case
+is 0.85/0.78 seconds and scoped locals is 0.83/0.80 seconds. All 1,472
+diagnostics and 357 authored sources remain gated. Batch 115 remains **in
+progress** with Task 10 current.
 
 Batch 110 has advanced through these validated features:
 

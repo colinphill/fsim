@@ -6554,9 +6554,9 @@ The current ten implementation tasks are:
    supported expression and assignment targets with checked bounds and direction.
 8. **Complete.** Complete sensitivity, scheduling, delta/update ordering, and exact
    interpreter/LLVM behavior for the newly retained statement and selection forms.
-9. **In progress.** Prove positive/negative parser and elaboration coverage plus interpreter,
+9. **Complete.** Prove positive/negative parser and elaboration coverage plus interpreter,
    LLVM O0/O2, cache-edit, hierarchy, debugger, and normalized-VCD differentials.
-10. **Pending.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
+10. **In progress.** Update matrix/diagnostics/docs and pass sanitizer, source/catalog, full
     Debug/Release, commit, and push gates before closing Batch 115.
 
 Batch status is **in progress**. Keep this exact ten-task list current in both
@@ -6692,6 +6692,22 @@ gates pass in 4.44/4.24 seconds for Debug/Release, with scoped locals at
 0.85/0.81 seconds. All 1,472 diagnostics remain cataloged and all 357 authored
 sources pass the hard line limit. Batch 115 remains **in progress** with Task
 9 current and Task 10 pending.
+
+Task 9 is focused-complete. The frontend/elaboration fixture covers positive
+ascending, descending, packed-record-member, read, local-target, signal-target,
+single-waveform, and multi-waveform forms plus malformed syntax, incompatible
+direction, noninteger bounds, and runtime length failure. The merged VHDL
+array application now carries dynamic slice reads, persistent debug-visible
+locals, projected single/multi signal targets, exact Logic9 results, hierarchy
+paths, debugger inspection, and normalized VCD through interpreter and LLVM
+O0/O2 cold/warm runs. Package-source edits invalidate both specializations and
+native objects, while runtime length failures have identical interpreter and
+compiled instruction/message behavior at O0/O2. The final seven-test
+diagnostic/source/elaboration/LLVM/application/runtime/scoped-locals gates pass
+in 4.99/4.67 seconds for Debug/Release, with the array differential at
+0.85/0.78 seconds and scoped locals at 0.83/0.80 seconds. All 1,472 diagnostics
+and 357 authored sources remain within their gates. Batch 115 remains **in
+progress** with Task 10 current.
 
 ## Forward language-closure feature batches
 
