@@ -1,0 +1,2 @@
+# The reviewed IEEE bundle is verified byte-for-byte at runtime and in CTest.
+third_party/ieee-1076-2019/** -text

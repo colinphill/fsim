@@ -478,7 +478,7 @@ end architecture;
       process.container_register_count == 3
       && process.container_register_types.size() == 3
       && process.container_register_types[0].queue
-      && process.container_register_types[0].maximum_elements == 4096
+      && process.container_register_types[0].maximum_elements == 4096U
       && process.container_register_types[0].element_width == 8
       && process.container_register_types[1].element_width == 32
       && process.container_register_types[2].element_width == 5);
