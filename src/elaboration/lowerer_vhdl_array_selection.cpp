@@ -102,6 +102,25 @@ std::optional<frontend::Type> array_slice_type(
   return result;
 }
 
+std::optional<frontend::Type> record_member_type(
+    const frontend::Type& source,
+    const std::string_view name) {
+  const auto member = std::ranges::find(
+      source.packed_members, name, &frontend::PackedMember::name);
+  if (member == source.packed_members.end()) {
+    return std::nullopt;
+  }
+  if (!member->nested_types.empty()) {
+    return member->nested_types.front();
+  }
+  frontend::Type result;
+  result.domain = member->domain;
+  result.spelling = member->spelling;
+  result.packed_range = member->packed_range;
+  result.is_signed = member->is_signed;
+  return result;
+}
+
 std::optional<std::uint64_t> static_array_offset(
     const frontend::VhdlArrayDimension& dimension,
     const std::int64_t index) {
@@ -137,6 +156,69 @@ std::optional<frontend::Type> Lowerer::vhdl_expression_type(
         : std::nullopt;
   }
   if (expression.kind == ExpressionKind::Call) {
+    constexpr std::string_view member_prefix{"@vhdl-member:"};
+    if (expression.text.starts_with(member_prefix)
+        && expression.operands.size() == 1) {
+      const auto source = vhdl_expression_type(
+          expression.operands.front());
+      return source
+          ? record_member_type(
+              *source,
+              std::string_view{expression.text}.substr(
+                  member_prefix.size()))
+          : std::nullopt;
+    }
+    if (expression.text == "?:" && expression.operands.size() == 3) {
+      auto when_true = vhdl_expression_type(expression.operands[1]);
+      auto when_false = vhdl_expression_type(expression.operands[2]);
+      if (when_true && when_false
+          && vhdl_callable_type_matches(*when_true, *when_false)) {
+        return when_true;
+      }
+      if (when_true
+          && expression.operands[2].kind
+              == ExpressionKind::Aggregate) {
+        return when_true;
+      }
+      if (when_false
+          && expression.operands[1].kind
+              == ExpressionKind::Aggregate) {
+        return when_false;
+      }
+      return std::nullopt;
+    }
+    constexpr std::string_view qualification_prefix{
+        "@vhdl-qualified:"};
+    auto type_name = std::string_view{expression.text};
+    if (type_name.starts_with(qualification_prefix)) {
+      type_name.remove_prefix(qualification_prefix.size());
+    }
+    if (expression.operands.size() == 1
+        && object_type(expression.text) == nullptr) {
+      if (const auto* converted = visible_type_mark(type_name)) {
+        return *converted;
+      }
+    }
+    const auto functions = function_indices_.find(expression.text);
+    if (functions != function_indices_.end()) {
+      std::optional<frontend::Type> result;
+      for (const auto index : functions->second) {
+        const auto& function = *function_frames_[index].source;
+        if (!vhdl_function_profile_matches(
+                expression, function, nullptr)) {
+          continue;
+        }
+        if (!result) {
+          result = function.return_type;
+        } else if (!vhdl_callable_type_matches(
+                       *result, function.return_type)) {
+          return std::nullopt;
+        }
+      }
+      if (result) {
+        return result;
+      }
+    }
     const auto* root = object_type(expression.text);
     if (root == nullptr || !root->vhdl_array
         || expression.operands.empty()) {
@@ -198,6 +280,53 @@ Lowerer::lower_vhdl_array_selection_expression(
     return {};
   }
   if (expression.kind == ExpressionKind::Call) {
+    constexpr std::string_view member_prefix{"@vhdl-member:"};
+    if (expression.text.starts_with(member_prefix)
+        && expression.operands.size() == 1) {
+      const auto source_type = vhdl_expression_type(
+          expression.operands.front());
+      const auto selected_type = vhdl_expression_type(expression);
+      if (!source_type || !selected_type) {
+        report(
+            "FSIM-ELAB-VHCOMPOP-004",
+            "a chained VHDL member selection requires a visible record "
+            "element after its array selection",
+            expression.span);
+        return std::nullopt;
+      }
+      const auto name = std::string_view{expression.text}.substr(
+          member_prefix.size());
+      const auto member = std::ranges::find(
+          source_type->packed_members, name,
+          &frontend::PackedMember::name);
+      const auto source_width = source_type->width();
+      const auto member_width = selected_type->width();
+      if (member == source_type->packed_members.end()
+          || !source_width || !member_width || *member_width == 0
+          || *source_width > 64 || *member_width > 64
+          || member->lsb_offset + *member_width > *source_width) {
+        report(
+            "FSIM-ELAB-VHCOMPOP-004",
+            "a chained VHDL member selection has no bounded executable "
+            "record layout",
+            expression.span);
+        return std::nullopt;
+      }
+      const auto source = lower_expression(
+          expression.operands.front(),
+          static_cast<std::size_t>(*source_width), &*source_type);
+      if (!source) {
+        return std::nullopt;
+      }
+      const auto destination = allocate_register(
+          static_cast<std::size_t>(*member_width),
+          selected_type->domain);
+      process_.operations.emplace_back(Extract{
+          destination, *source,
+          static_cast<std::uint32_t>(member->lsb_offset),
+          static_cast<std::uint32_t>(*member_width)});
+      return destination;
+    }
     const auto* root_type = object_type(expression.text);
     if (root_type == nullptr || !root_type->vhdl_array
         || expression.operands.empty()) {
@@ -500,6 +629,50 @@ bool Lowerer::lower_assignment_selections(
         selected_width.value_or(whole_width);
     const bool final_selection =
         selection_index + 1U == selections.size();
+    constexpr std::string_view member_prefix{"@vhdl-member:"};
+    if (selection_expression.kind == ExpressionKind::Call
+        && selection_expression.text.starts_with(member_prefix)
+        && selection_expression.operands.size() == 1) {
+      const auto name = std::string_view{selection_expression.text}.substr(
+          member_prefix.size());
+      const frontend::PackedMember* member = nullptr;
+      if (current_type) {
+        const auto found = std::ranges::find(
+            current_type->packed_members, name,
+            &frontend::PackedMember::name);
+        if (found != current_type->packed_members.end()) {
+          member = &*found;
+        }
+      }
+      if (member == nullptr) {
+        report(
+            "FSIM-ELAB-VHCOMPOP-004",
+            "a chained VHDL assignment member does not name an element "
+            "of the selected record",
+            selection_expression.span);
+        return false;
+      }
+      const auto width = member->width();
+      if (!width || *width == 0 || *width > 64
+          || member->lsb_offset
+              > std::numeric_limits<std::uint32_t>::max()
+                  - selected_offset) {
+        report(
+            "FSIM-ELAB-VHCOMPOP-004",
+            "a chained VHDL assignment member has no bounded executable "
+            "record layout",
+            selection_expression.span);
+        return false;
+      }
+      selected_offset += static_cast<std::uint32_t>(
+          member->lsb_offset);
+      has_selected_offset = true;
+      selected_width = static_cast<std::size_t>(*width);
+      selected_domain = member->domain;
+      current_type = record_member_type(*current_type, name);
+      selected_type = current_type;
+      continue;
+    }
     if (current_type && current_type->vhdl_array
         && (current_type->vhdl_array->dimensions.size() != 1U
             || current_type->vhdl_array->dimensions.front().stride

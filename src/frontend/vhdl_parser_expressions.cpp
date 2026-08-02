@@ -50,8 +50,12 @@ std::optional<VhdlParser::BinaryOperation> VhdlParser::binary_operation() const 
       at(TokenKind::Greater) || at(TokenKind::GreaterEqual)) {
     return BinaryOperation{3, current().text};
   }
-  if (at(TokenKind::Question) && at(TokenKind::Assign, 1)) {
-    return BinaryOperation{3, "?=", 2};
+  if (at(TokenKind::Question)
+      && (at(TokenKind::Assign, 1)
+          || (at(TokenKind::NotEqual, 1)
+              && current(1).text == "/="))) {
+    return BinaryOperation{
+        3, at(TokenKind::Assign, 1) ? "?=" : "?/=", 2};
   }
   if (keyword("sll", 0, true) || keyword("srl", 0, true)
       || keyword("sla", 0, true) || keyword("sra", 0, true)
@@ -266,6 +270,15 @@ Expression VhdlParser::parse_primary() {
               {std::move(call), std::move(first)},
               cover(name.span, previous().span)};
         }
+      }
+      while (match(TokenKind::Dot)) {
+        const auto member = expect_identifier(
+            "selected record element");
+        call = Expression{
+            ExpressionKind::Call,
+            "@vhdl-member:" + vhdl_name(member.text),
+            {std::move(call)},
+            cover(name.span, member.span)};
       }
       return call;
     }

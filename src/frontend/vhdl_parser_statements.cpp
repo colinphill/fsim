@@ -1038,6 +1038,14 @@ Expression VhdlParser::parse_lvalue() {
     expression.span = cover(expression.span, previous().span);
     (void)open;
   }
+  while (match(TokenKind::Dot)) {
+    const auto member = expect_identifier("selected record element");
+    expression = Expression{
+        ExpressionKind::Call,
+        "@vhdl-member:" + vhdl_name(member.text),
+        {std::move(expression)},
+        cover(name.span, member.span)};
+  }
   return expression;
 }
 

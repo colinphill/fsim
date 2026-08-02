@@ -1090,14 +1090,11 @@ private:
 
     std::optional<PackedMemberReference> packed_member_reference(
         const std::string_view name) const;
-
     [[nodiscard]] RegisterId widen_enumeration_ordinal(
         const RegisterId source);
-
     [[nodiscard]] RegisterId narrow_enumeration_ordinal(
         const RegisterId source,
         const frontend::Type& type);
-
     std::optional<RegisterId> lower_vhdl_scalar_attribute(
         const Expression& expression,
         const frontend::Type* expected_type);
@@ -1123,6 +1120,10 @@ private:
         const frontend::Type* expected_type);
     ExpressionAttempt lower_vhdl_conversion_expression(
         const Expression&, std::size_t, const frontend::Type*);
+    ExpressionAttempt lower_vhdl_composite_expression(const Expression&,
+        std::size_t, const frontend::Type*);
+    bool validate_vhdl_composite_assignment(const frontend::Type*,
+        const Expression&);
     std::optional<RegisterId> lower_expression(
         const Expression& expression,
         const std::size_t expected_width,
@@ -1297,8 +1298,7 @@ private:
     };
 
     [[nodiscard]] CallableSelection select_function_overload(
-        const Expression& expression,
-        const frontend::Type* expected_type,
+        const Expression& expression, const frontend::Type* expected_type,
         FunctionResultKind result_kind);
 
     [[nodiscard]] CallableSelection select_procedure_overload(

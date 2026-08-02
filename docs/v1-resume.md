@@ -17,11 +17,11 @@ as work lands. Before moving on, retain that batch's list, mark it
 - Recorded: 2026-08-02.
 - Branch: `codex/resumable-jit`.
 - Implementation baseline: all ten Batch 116 tasks are complete through this
-  handoff; Batch 117 Tasks 1 through 6 are complete and Task 7 composite
-  operation closure is current.
+  handoff; Batch 117 Tasks 1 through 7 are complete and Task 8 nested-composite
+  boundary, scheduling, debug, and provenance closure is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 370 authored C/C++ source, header,
+- The source-size refactor is complete: all 373 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 115-alternative
@@ -2233,10 +2233,10 @@ The current ten implementation tasks are:
 6. **Complete.** Complete scalar and composite type/object attributes across nested records,
    arrays, and enumerations, including static folding, executable results,
    dimensions, bounds, ranges, positions, and checked failures.
-7. **In progress.** Complete supported composite equality, inequality, matching, concatenation,
+7. **Complete.** Complete supported composite equality, inequality, matching, concatenation,
    selection, assignment, conditional/case choice, and conversion operations
    with interpreter/LLVM parity.
-8. **Pending.** Complete nested-composite hierarchy ports, generic and callable boundaries,
+8. **In progress.** Complete nested-composite hierarchy ports, generic and callable boundaries,
    aliases/copies, driver ownership, sensitivity, scheduling, debugger/VCD,
    provenance, and specialization/cache identity.
 9. **Pending.** Prove positive/negative parser and elaboration coverage plus interpreter,
@@ -2460,6 +2460,47 @@ managed ptrace sandbox. The catalog covers 1,490 production diagnostics and
 all 370 authored sources pass the 2,000-line gate;
 `lowerer_expression.cpp` is 1,984 lines. Batch 117 remains **in progress**
 with Task 7 current and is not a CI-inspection boundary.
+
+Task 7 is focused-complete. The dedicated 456-line
+`lowerer_vhdl_composite_operations.cpp` now owns bounded VHDL record/array
+comparison and contextual concatenation plus nominal composite-assignment
+validation. Equality and inequality require one record or array base and exact
+recursive element profiles; differently constrained arrays of that base
+compare by sequence length instead of being resized or rejected. Matching
+equality and the newly retained matching inequality stay restricted to bit or
+`std_ulogic` scalars and one-dimensional arrays. VHDL `&` no longer reaches
+the generic bitwise-AND path: chained scalar/array concatenands are flattened,
+checked against the contextual one-dimensional element profile, and retain
+two-/nine-state execution domains, including arrays of records and legacy
+`bit_vector`/`std_logic_vector` contexts.
+
+Record and array assignments, conditional alternatives, case-selected
+values, and supported conversions now preserve nominal base, rank, recursive
+element profile, and per-dimension lengths rather than accepting unrelated
+same-width packed values. The parser retains a member selected after an array
+index as typed HIR; read and assignment lowering carry the array element's
+record type and exact member offset through chains such as
+`Pair_Value(0).Mode`. Four dedicated `FSIM-ELAB-VHCOMPOP-*` diagnostics cover
+comparison, assignment, concatenation, and chained-selection failures while
+the established array and overload diagnostics retain their prior contracts.
+
+The 191-line elaboration fixture executes nested record/array equality and
+inequality, matching equality/inequality, scalar/array/record-element
+concatenation, unequal-length comparison, whole and selected assignment,
+conditional/case values, conversion, and chained member reads/writes. Its
+negative matrix covers unrelated records and arrays, conditional and length
+mismatches, invalid matching domains, concatenation length, and unknown
+post-index members with exact diagnostic codes. The 202-line application
+differential proves interpreter and LLVM O0/O2 cold/warm equality and cache
+reuse. The eight-worker 11-test Debug and Release gates passed in 4.15 and
+3.98 seconds, with composite operations at 0.10/0.09 seconds, arrays at
+1.92/1.87 seconds, and scoped locals at 0.84/0.80 seconds. The LLVM-disabled
+ASan/UBSan 11-test gate passed in 6.93 seconds with leak detection disabled
+under the managed ptrace sandbox; composite operations took 0.32 seconds and
+scoped locals 0.49 seconds. The catalog covers 1,494 production diagnostics
+and all 373 authored sources pass the 2,000-line gate;
+`lowerer_expression.cpp` is 1,922 lines. Batch 117 remains **in progress**
+with Task 8 current and is not a CI-inspection boundary.
 
 Batch 110 has advanced through these validated features:
 

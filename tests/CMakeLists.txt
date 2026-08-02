@@ -101,6 +101,7 @@ add_executable(
   elaboration/elaborator_vhdl_conversion_test.cpp
   elaboration/elaborator_vhdl_aggregate_choice_test.cpp
   elaboration/elaborator_vhdl_attribute_test.cpp
+  elaboration/elaborator_vhdl_composite_operation_test.cpp
   elaboration/elaborator_types_test.cpp
   elaboration/elaborator_type_generic_test.cpp
   elaboration/elaborator_vhdl_function_test.cpp
@@ -483,6 +484,11 @@ if(TARGET fsim_application)
       3 vhdl_attributes app/vhdl_attribute_application_test.cpp
       fsim.application.vhdl_attributes
       fast vhdl attributes arrays enumerations integer cache)
+    fsim_add_application_case(
+      3 vhdl_composite_operations
+      app/vhdl_composite_operation_application_test.cpp
+      fsim.application.vhdl_composite_operations
+      fast vhdl records arrays expressions cache)
     fsim_add_application_case(
       3 vhdl_projected app/vhdl_projected_application_test.cpp
       fsim.application.vhdl_projected fast vhdl projected-waveforms)
@@ -1401,6 +1407,24 @@ set_tests_properties(
   set_tests_properties(
     fsim.application.vhdl_attributes
     PROPERTIES LABELS "fast;vhdl;attributes;arrays;enumerations;integer;cache"
+  )
+
+  add_executable(
+    fsim_vhdl_composite_operation_application_tests
+    app/vhdl_composite_operation_application_test.cpp
+  )
+  fsim_configure_test(fsim_vhdl_composite_operation_application_tests)
+  target_link_libraries(
+    fsim_vhdl_composite_operation_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.vhdl_composite_operations
+    COMMAND fsim_vhdl_composite_operation_application_tests
+  )
+  set_tests_properties(
+    fsim.application.vhdl_composite_operations
+    PROPERTIES LABELS "fast;vhdl;records;arrays;expressions;cache"
   )
 
   add_executable(

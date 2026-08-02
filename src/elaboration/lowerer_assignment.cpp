@@ -96,10 +96,14 @@ using namespace elaboration_detail;
         std::optional<DynamicPartIndex> dynamic_part_selection;
         std::optional<frontend::Type> selected_type;
         std::vector<const Expression*> packed_selections;
+        constexpr std::string_view vhdl_member_prefix{
+            "@vhdl-member:"};
         while (base->kind == ExpressionKind::Index
-               || base->kind == ExpressionKind::Slice) {
-            const auto expected_operands =
-                base->kind == ExpressionKind::Index ? 2U : 3U;
+               || base->kind == ExpressionKind::Slice
+               || (base->kind == ExpressionKind::Call
+                   && base->text.starts_with(vhdl_member_prefix))) {
+            const auto expected_operands = base->kind == ExpressionKind::Index
+                ? 2U : base->kind == ExpressionKind::Slice ? 3U : 1U;
             if (base->operands.size() != expected_operands) {
                 break;
             }
@@ -437,9 +441,7 @@ using namespace elaboration_detail;
                 selected_width = static_cast<std::size_t>(*width);
                 selected_domain = selected->member->domain;
                 if (language_ == frontend::Language::Vhdl2008
-                    && !selected->member->nested_types.empty()
-                    && !selected->member->nested_types.front()
-                            .enumeration_literals.empty()) {
+                    && !selected->member->nested_types.empty()) {
                     selected_type =
                         selected->member->nested_types.front();
                 }
@@ -516,6 +518,11 @@ using namespace elaboration_detail;
                 : object_type(target_name);
         if (!has_disconnect
             && !validate_sv_nominal_assignment(
+                contextual_target_type, statement.value)) {
+            return;
+        }
+        if (!has_disconnect
+            && !validate_vhdl_composite_assignment(
                 contextual_target_type, statement.value)) {
             return;
         }
@@ -797,6 +804,11 @@ using namespace elaboration_detail;
                               .source_domain);
             std::optional<runtime::SimulationTick> previous_delay;
             for (const auto& element : statement.vhdl_waveform) {
+                if (!element.disconnect
+                    && !validate_vhdl_composite_assignment(
+                        contextual_target_type, element.value)) {
+                    return;
+                }
                 const auto value = element.disconnect
                     ? std::optional<RegisterId>{load_disconnect()}
                     : lower_expression(

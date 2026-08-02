@@ -34,6 +34,11 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 }
             }
         }
+        auto vhdl_composite = lower_vhdl_composite_expression(
+            expression, expected_width, expected_type);
+        if (vhdl_composite.handled) {
+            return vhdl_composite;
+        }
         if (expression.kind == ExpressionKind::Binary
             && expression.operands.size() == 2
             && (is_container_expression(expression.operands[0])
@@ -402,6 +407,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 && (expression.text == "="
                     || expression.text == "/="
                     || expression.text == "?="
+                    || expression.text == "?/="
                     || expression.text == "<"
                     || expression.text == "<="
                     || expression.text == ">"
@@ -415,7 +421,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 } else if (
                     expression.text == "="
                     || expression.text == "/="
-                    || expression.text == "?=") {
+                    || expression.text == "?="
+                    || expression.text == "?/=") {
                     if (expression.operands[0].kind
                             == ExpressionKind::Aggregate) {
                         binary_context_type = rhs_object_type;
@@ -500,6 +507,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 expression.text == "="
                 || expression.text == "/="
                 || expression.text == "?="
+                || expression.text == "?/="
                 || expression.text == "<"
                 || expression.text == "<="
                 || expression.text == ">"
@@ -524,6 +532,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 expression.text == "="
                 || expression.text == "/="
                 || expression.text == "?="
+                || expression.text == "?/="
                 || expression.text == "=="
                 || expression.text == "!="
                 || expression.text == "==="
@@ -601,7 +610,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                               != frontend::ValueDomain::Logic9);
                 };
             if (language_ == frontend::Language::Vhdl2008
-                && expression.text == "?="
+                && (expression.text == "?="
+                    || expression.text == "?/=")
                 && (direct_nonmatching_domain(
                         expression.operands[0], lhs_object_type)
                     || direct_nonmatching_domain(
@@ -699,8 +709,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                 invert_result = expression.text == "!=?";
             } else if (
                 language_ == frontend::Language::Vhdl2008
-                && expression.text == "?=") {
+                && (expression.text == "?="
+                    || expression.text == "?/=")) {
                 operation = BinaryOperator::vhdl_match_equal;
+                invert_result = expression.text == "?/=";
             } else if (
                 language_ != frontend::Language::Vhdl2008
                 && expression.text == "!=") {

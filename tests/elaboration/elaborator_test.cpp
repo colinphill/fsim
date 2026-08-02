@@ -34,6 +34,7 @@ int main() {
   test_vhdl_qualified_expressions_and_conversions();
   test_vhdl_aggregate_choice_closure();
   test_vhdl_attribute_closure();
+  test_vhdl_composite_operation_closure();
   test_assertion_types_and_random_lowering();
   test_vhdl_interface_type_generics();
   test_vhdl_interface_function_generics();

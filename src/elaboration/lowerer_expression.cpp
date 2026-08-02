@@ -1916,68 +1916,6 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 static_cast<std::uint32_t>(width)});
             return destination;
         }
-        if (language_ == frontend::Language::Vhdl2008
-            && expression.kind == ExpressionKind::Binary
-            && expression.text == "&"
-            && expression.operands.size() == 2) {
-            std::vector<RegisterId> operands;
-            operands.reserve(2);
-            std::size_t width = 0;
-            auto result_domain = frontend::ValueDomain::Bit2;
-            for (const auto& operand_expression : expression.operands) {
-                const auto operand_width =
-                    infer_width(operand_expression);
-                if (!operand_width || *operand_width == 0
-                    || *operand_width
-                        > std::numeric_limits<std::uint32_t>::max()
-                    || *operand_width
-                        > std::numeric_limits<std::size_t>::max()
-                            - width) {
-                    report(
-                        "FSIM-ELAB-069",
-                        "VHDL concatenation operand width is not "
-                        "statically inferable or the total width "
-                        "overflows",
-                        operand_expression.span);
-                    return std::nullopt;
-                }
-                const auto operand = lower_expression(
-                    operand_expression, *operand_width);
-                if (!operand) {
-                    return std::nullopt;
-                }
-                operands.push_back(*operand);
-                width += register_width(*operand);
-                const auto domain = register_domain(*operand);
-                if (domain == frontend::ValueDomain::Logic9) {
-                    result_domain = frontend::ValueDomain::Logic9;
-                } else if (
-                    domain != frontend::ValueDomain::Bit2
-                    && domain != frontend::ValueDomain::Boolean
-                    && result_domain
-                        != frontend::ValueDomain::Logic9) {
-                    result_domain = frontend::ValueDomain::Logic4;
-                }
-            }
-            if (width == 0
-                || width
-                    > std::numeric_limits<std::uint32_t>::max()) {
-                report(
-                    "FSIM-ELAB-069",
-                    "VHDL concatenation result width is outside the "
-                    "supported range",
-                    expression.span);
-                return std::nullopt;
-            }
-            const auto destination =
-                allocate_register(width, result_domain);
-            process_.operations.emplace_back(Concatenate{
-                destination,
-                std::move(operands),
-                static_cast<std::uint32_t>(width)});
-            return destination;
-        }
-
         return ExpressionAttempt{};
     }
 
