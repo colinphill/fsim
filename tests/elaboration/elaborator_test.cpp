@@ -29,6 +29,7 @@ int main() {
   test_systemverilog_membership_lowering();
   test_numeric_and_system_function_lowering();
   test_selection_and_assignment_lowering();
+  test_vhdl_dynamic_slices();
   test_assertion_types_and_random_lowering();
   test_vhdl_interface_type_generics();
   test_vhdl_interface_function_generics();

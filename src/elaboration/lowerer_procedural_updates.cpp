@@ -49,6 +49,110 @@ std::optional<DynamicIndex> Lowerer::lower_dynamic_index(
       *lowered, range->left, range->right, base_offset};
 }
 
+std::optional<DynamicPartIndex> Lowerer::lower_vhdl_dynamic_slice(
+    const Expression& expression,
+    const std::size_t source_width,
+    const std::size_t selected_width,
+    const std::uint32_t base_offset) {
+  if (language_ != frontend::Language::Vhdl2008
+      || expression.kind != ExpressionKind::Slice
+      || expression.operands.size() != 3
+      || (expression.text != "to" && expression.text != "downto")) {
+    return std::nullopt;
+  }
+  const auto range = expression_range(
+      expression.operands.front(), source_width);
+  const bool descending = expression.text == "downto";
+  if (!range
+      || range->left < std::numeric_limits<std::int32_t>::min()
+      || range->left > std::numeric_limits<std::int32_t>::max()
+      || range->right < std::numeric_limits<std::int32_t>::min()
+      || range->right > std::numeric_limits<std::int32_t>::max()
+      || range->descending != descending
+      || selected_width == 0 || selected_width > 64) {
+    report(
+        "FSIM-ELAB-VHSLICE-001",
+        "a dynamic VHDL slice requires a fixed width from 1 through 64, "
+        "a concrete signed 32-bit source range, and matching direction",
+        expression.span);
+    return std::nullopt;
+  }
+  const auto& left_expression = expression.operands[1];
+  const auto& right_expression = expression.operands[2];
+  if (!is_integer_expression(left_expression)
+      || !is_integer_expression(right_expression)) {
+    report(
+        "FSIM-ELAB-VHSLICE-002",
+        "dynamic VHDL slice bounds require integer-family expressions",
+        expression.span);
+    return std::nullopt;
+  }
+  const auto left = lower_expression(left_expression, 32);
+  const auto right = lower_expression(right_expression, 32);
+  if (!left || !right || register_width(*left) != 32
+      || register_width(*right) != 32) {
+    report(
+        "FSIM-ELAB-VHSLICE-002",
+        "dynamic VHDL slice bounds must lower to signed 32-bit values",
+        expression.span);
+    return std::nullopt;
+  }
+  const auto lower = static_cast<std::int32_t>(
+      std::min(range->left, range->right));
+  const auto upper = static_cast<std::int32_t>(
+      std::max(range->left, range->right));
+  process_.operations.emplace_back(IntegerCheck{*left, lower, upper});
+  process_.operations.emplace_back(IntegerCheck{*right, lower, upper});
+  const auto distance = allocate_register(
+      32, frontend::ValueDomain::Integer);
+  process_.operations.emplace_back(IntegerBinary{
+      IntegerBinaryOperator::subtract,
+      distance,
+      descending ? *left : *right,
+      descending ? *right : *left});
+  const auto required_distance = static_cast<std::int32_t>(
+      selected_width - 1U);
+  process_.operations.emplace_back(IntegerCheck{
+      distance, required_distance, required_distance});
+  return DynamicPartIndex{
+      descending ? *right : *left,
+      range->left,
+      range->right,
+      base_offset,
+      static_cast<std::uint32_t>(selected_width),
+      true,
+      range->descending};
+}
+
+std::optional<RegisterId>
+Lowerer::lower_vhdl_dynamic_slice_expression(
+    const Expression& expression,
+    const std::size_t source_width,
+    const std::size_t selected_width) {
+  const auto selection = lower_vhdl_dynamic_slice(
+      expression, source_width, selected_width, 0);
+  const auto source = selection
+      ? lower_expression(expression.operands.front(), source_width)
+      : std::nullopt;
+  if (!selection || !source) {
+    return std::nullopt;
+  }
+  const auto destination = allocate_register(
+      selected_width, register_domain(*source));
+  process_.operations.emplace_back(DynamicPartSelect{
+      destination,
+      *source,
+      selection->base,
+      selection->left,
+      selection->right,
+      selection->width,
+      selection->increasing,
+      selection->source_descending,
+      is_two_state_domain(register_domain(*source)),
+      selection->base_offset});
+  return destination;
+}
+
 std::optional<Lowerer::ConstantSliceSelection>
 Lowerer::constant_slice_selection(
     const Expression& expression,

@@ -16,11 +16,11 @@ as work lands. Before moving on, retain that batch's list, mark it
 
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: Batch 115 Tasks 1 through 6 are complete through
-  this handoff; Task 7 dynamic-selection lowering is current.
+- Implementation baseline: Batch 115 Tasks 1 through 7 are complete through
+  this handoff; Task 8 selection scheduling and engine parity is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 354 authored C/C++ source, header,
+- The source-size refactor is complete: all 356 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 115-alternative
@@ -1840,9 +1840,9 @@ completed selector-domain contract. All ten Batch 114 tasks are complete.
    including guarded/delay-mechanism interaction and driver identity.
 6. **Complete.** Preserve process, loop, case-alternative, and labeled statement scopes in
    hierarchy, name lookup, debugger metadata, and specialization provenance.
-7. **In progress.** Lower dynamic packed/composite indices, slices, and chained selections for
+7. **Complete.** Lower dynamic packed/composite indices, slices, and chained selections for
    supported expression and assignment targets with checked bounds and direction.
-8. **Pending.** Complete sensitivity, scheduling, delta/update ordering, and exact
+8. **In progress.** Complete sensitivity, scheduling, delta/update ordering, and exact
    interpreter/LLVM behavior for the newly retained statement and selection forms.
 9. **Pending.** Prove positive/negative parser and elaboration coverage plus interpreter,
    LLVM O0/O2, cache-edit, hierarchy, debugger, and normalized-VCD differentials.
@@ -1937,6 +1937,21 @@ scoped-locals gates pass in 19.47/19.01 seconds for Debug/Release; scoped
 locals remains quick at 0.82/0.81 seconds. All 1,469 production diagnostics
 are cataloged and all 354 authored sources pass the 2,000-line gate. Batch 115
 remains **in progress** with Task 7 current and Tasks 8 through 10 pending.
+
+Task 7 is focused-complete. Fixed-width dynamic VHDL slices lower both
+integer-family bounds through declared-range and direction-aware exact-length
+checks before reusing common dynamic-part SimIR. Ascending/descending reads,
+process-variable targets, and packed-record member chains preserve exact
+four-/nine-state values; stable diagnostics cover incompatible source
+direction/profile, noninteger bounds, unknown assignment width, and another
+selection after a runtime slice. Runtime bounds outside the declared range or
+with the wrong direction/length fail deterministically. The condition lowerer
+now has its own source partition, keeping every authored file within the hard
+limit. Focused diagnostic/source/elaboration/LLVM/runtime/scoped-locals gates
+pass in 4.09/3.93 seconds for Debug/Release, with scoped locals at 0.83/0.82
+seconds. All 1,472 production diagnostics are cataloged and all 356
+authored sources pass the 2,000-line gate. Batch 115 remains **in progress**
+with Task 8 current and Tasks 9 through 10 pending.
 
 Batch 110 has advanced through these validated features:
 

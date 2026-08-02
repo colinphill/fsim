@@ -6550,9 +6550,9 @@ The current ten implementation tasks are:
    including guarded/delay-mechanism interaction and driver identity.
 6. **Complete.** Preserve process, loop, case-alternative, and labeled statement scopes in
    hierarchy, name lookup, debugger metadata, and specialization provenance.
-7. **In progress.** Lower dynamic packed/composite indices, slices, and chained selections for
+7. **Complete.** Lower dynamic packed/composite indices, slices, and chained selections for
    supported expression and assignment targets with checked bounds and direction.
-8. **Pending.** Complete sensitivity, scheduling, delta/update ordering, and exact
+8. **In progress.** Complete sensitivity, scheduling, delta/update ordering, and exact
    interpreter/LLVM behavior for the newly retained statement and selection forms.
 9. **Pending.** Prove positive/negative parser and elaboration coverage plus interpreter,
    LLVM O0/O2, cache-edit, hierarchy, debugger, and normalized-VCD differentials.
@@ -6656,6 +6656,23 @@ for Debug/Release, with scoped locals at 0.82/0.81 seconds. The catalog still
 covers 1,469 production diagnostics and all 354 authored sources pass the
 2,000-line gate. Batch 115 remains **in progress** with Task 7 current and
 Tasks 8 through 10 pending.
+
+Task 7 is focused-complete. Bounded VHDL runtime slices now use a statically
+known 1-through-64-bit contextual width and lower both integer-family bounds,
+declared-range checks, direction-aware exact-length validation, and the
+normalized fixed-width selection through common integer and dynamic-part
+SimIR. Ascending and descending reads, process-variable targets, and packed
+record-member read/write chains preserve exact four-/nine-state values. Stable
+diagnostics reject noninteger bounds, incompatible direction/profile, unknown
+assignment width, and a further target selection; execution fails
+deterministically when runtime bounds leave the declared range or do not match
+the required direction and length. `lower_condition` moved to its own source
+partition so `lowerer_assignment.cpp` and the internal header remain within
+the hard limit. Focused diagnostic/source/elaboration/LLVM/runtime/scoped-
+locals gates pass in 4.09/3.93 seconds for Debug/Release, with scoped locals
+at 0.83/0.82 seconds. The catalog covers 1,472 production diagnostics and
+all 356 authored sources pass the 2,000-line gate. Batch 115 remains **in
+progress** with Task 8 current and Tasks 9 through 10 pending.
 
 ## Forward language-closure feature batches
 

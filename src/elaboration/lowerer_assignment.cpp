@@ -5,50 +5,6 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
-    std::optional<RegisterId> Lowerer::lower_condition(
-        const Expression& expression,
-        std::string diagnostic_code,
-        std::string_view construct) {
-        const auto expression_width =
-            infer_width(expression).value_or(std::size_t{1});
-        const auto source =
-            lower_expression(expression, expression_width);
-        if (!source) {
-            return std::nullopt;
-        }
-        if (language_ == frontend::Language::Vhdl2008) {
-            if (register_width(*source) != 1
-                || register_domain(*source)
-                    != frontend::ValueDomain::Boolean) {
-                report(
-                    std::move(diagnostic_code),
-                    "a VHDL " + std::string{construct}
-                        + " condition must have type boolean",
-                    expression.span);
-                return std::nullopt;
-            }
-            return source;
-        }
-
-        // SystemVerilog conditionals apply logical truth conversion to the
-        // complete expression. Reusing logical negation twice preserves 0,
-        // 1, and unknown truth while normalizing any packed width to a
-        // scalar. Branching subsequently treats X/Z as false, as required
-        // for procedural conditions.
-        const auto truth_domain =
-            is_two_state_domain(register_domain(*source))
-                ? frontend::ValueDomain::Bit2
-                : frontend::ValueDomain::Logic4;
-        const auto inverted =
-            allocate_register(1, truth_domain);
-        process_.operations.emplace_back(LogicalNot{inverted, *source});
-        const auto normalized =
-            allocate_register(1, truth_domain);
-        process_.operations.emplace_back(
-            LogicalNot{normalized, inverted});
-        return normalized;
-    }
-
     void Lowerer::lower_assert(const Statement& statement) {
         const auto condition = lower_condition(
             statement.condition, "FSIM-ELAB-051", "assertion");
@@ -734,6 +690,43 @@ using namespace elaboration_detail;
                     base_offset + selection->offset);
                 has_selected_offset = true;
                 selected_width = selection->width;
+                continue;
+            }
+            const bool runtime_vhdl_slice =
+                language_ == frontend::Language::Vhdl2008
+                && (!static_integer_value(
+                        selection_expression.operands[1])
+                    || !static_integer_value(
+                        selection_expression.operands[2]));
+            if (runtime_vhdl_slice) {
+                if (!final_selection) {
+                    report(
+                        "FSIM-ELAB-VHSLICE-003",
+                        "a dynamic VHDL slice must be the final packed "
+                        "assignment-target selection",
+                        selection_expression.span);
+                    return;
+                }
+                const auto value_width = infer_width(statement.value);
+                if (!value_width) {
+                    report(
+                        "FSIM-ELAB-VHSLICE-001",
+                        "a dynamic VHDL assignment slice requires a "
+                        "statically sized value",
+                        statement.value.span);
+                    return;
+                }
+                dynamic_part_selection = lower_vhdl_dynamic_slice(
+                    selection_expression,
+                    selection_source_width,
+                    *value_width,
+                    selected_offset);
+                if (!dynamic_part_selection) {
+                    return;
+                }
+                selected_offset = 0;
+                has_selected_offset = false;
+                selected_width = *value_width;
                 continue;
             }
             const bool runtime_indexed_part =

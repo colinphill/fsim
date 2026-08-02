@@ -941,6 +941,9 @@ therefore excluded.
 | `FSIM-ELAB-068` | error | A bit/part select does not have constant in-range bounds, a positive indexed width, or a direction compatible with its declared packed range. |
 | `FSIM-ELAB-DYNINDEX-001` | error | A dynamic packed selection has a nonconcrete, null, overflowing, or otherwise unrepresentable declared range or base offset. |
 | `FSIM-ELAB-DYNINDEX-002` | error | A dynamic packed selection index is not an executable VHDL `integer` value or the common signed 32-bit index representation required by this bounded implementation. |
+| `FSIM-ELAB-VHSLICE-001` | error | A dynamic VHDL packed slice lacks a fixed supported width, a concrete signed 32-bit source range, matching direction, or a statically sized assignment value. |
+| `FSIM-ELAB-VHSLICE-002` | error | A dynamic VHDL packed slice bound is not an executable signed 32-bit `integer`-family expression. |
+| `FSIM-ELAB-VHSLICE-003` | error | A dynamic VHDL packed slice is followed by another assignment-target selection in the bounded one-dimensional composite subset. |
 | `FSIM-ELAB-069` | error | A concatenation is empty or has an operand/result width that cannot be inferred or represented. |
 | `FSIM-ELAB-070` | error | A dynamic VHDL packed shift or rotate count does not have the executable base `integer` subtype. |
 | `FSIM-ELAB-071` | error | A sequential VHDL for-loop initial bound is not locally static. |

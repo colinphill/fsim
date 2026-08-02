@@ -1701,6 +1701,13 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     return destination;
                 }
             }
+            if (source_width && !selection
+                && language_ == frontend::Language::Vhdl2008
+                && (!static_integer_value(expression.operands[1])
+                    || !static_integer_value(expression.operands[2]))) {
+                return lower_vhdl_dynamic_slice_expression(
+                    expression, *source_width, expected_width);
+            }
             if (!source_width || !selection
                 || selection->offset
                     > std::numeric_limits<std::uint32_t>::max()

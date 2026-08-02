@@ -1020,20 +1020,20 @@ private:
         std::size_t offset{};
         std::size_t width{};
     };
-
-    std::optional<DynamicIndex>
-    lower_dynamic_index(
-        const Expression& source,
-        const Expression& index,
-        const std::size_t source_width,
-        const std::uint32_t base_offset,
+    std::optional<DynamicIndex> lower_dynamic_index(
+        const Expression& source, const Expression& index,
+        std::size_t source_width, std::uint32_t base_offset,
         const frontend::SourceSpan& span);
-
+    std::optional<DynamicPartIndex> lower_vhdl_dynamic_slice(
+        const Expression& expression, std::size_t source_width,
+        std::size_t selected_width, std::uint32_t base_offset);
+    std::optional<RegisterId> lower_vhdl_dynamic_slice_expression(
+        const Expression& expression, std::size_t source_width,
+        std::size_t selected_width);
     std::optional<ConstantSliceSelection>
     constant_slice_selection(
         const Expression& expression,
         const std::size_t source_width);
-
     std::optional<RegisterId> lower_procedural_update_value(
         const Statement& statement,
         RegisterId captured,
