@@ -184,6 +184,48 @@ struct SignalInfo {
         runtime::simir::ResolutionKind::none};
 };
 
+/// One explicit cross-language scalar or vector boundary conversion.
+///
+/// Packed values store the leftmost declared element at the most-significant
+/// ordinal independently of source-language index spelling. Compatible
+/// ordinal and Logic4/Logic9 boundaries share one scheduler signal. Width,
+/// signedness, Boolean, and integer conversions use a separately owned formal
+/// signal and deterministic adapter process. This record retains both
+/// language-local profiles and the connection's ownership and source identity
+/// for diagnostics, debugging, and cache projection.
+enum class BoundaryConversionKind : std::uint8_t {
+    ordinal_alias,
+    width_adapter,
+    signedness_adapter,
+    width_signedness_adapter,
+    boolean_adapter,
+    integer_adapter,
+    state_domain_alias,
+};
+
+struct BoundaryConversionInfo {
+    BoundaryConversionKind kind{BoundaryConversionKind::ordinal_alias};
+    std::string path;
+    runtime::simir::SignalId formal_signal{};
+    runtime::simir::SignalId actual_signal{};
+    std::optional<runtime::simir::ProcessId> process;
+    frontend::PortDirection direction{frontend::PortDirection::Unknown};
+    std::size_t formal_width{};
+    std::size_t actual_width{};
+    frontend::ValueDomain formal_domain{frontend::ValueDomain::Unknown};
+    frontend::ValueDomain actual_domain{frontend::ValueDomain::Unknown};
+    bool formal_signed{};
+    bool actual_signed{};
+    bool state_domain_changed{};
+    std::optional<frontend::PackedRange> formal_range;
+    std::optional<frontend::PackedRange> actual_range;
+    std::optional<frontend::IntegerRange> formal_integer_range;
+    std::optional<frontend::IntegerRange> actual_integer_range;
+    frontend::SourceSpan connection_span;
+    frontend::SourceSpan formal_span;
+    frontend::SourceSpan actual_span;
+};
+
 struct StringObjectInfo {
     runtime::simir::StringObjectId id{};
     std::string name;
@@ -311,6 +353,8 @@ public:
 
     [[nodiscard]] const std::string& top() const noexcept;
     [[nodiscard]] const std::vector<SignalInfo>& signals() const noexcept;
+    [[nodiscard]] const std::vector<BoundaryConversionInfo>&
+    boundary_conversions() const noexcept;
     [[nodiscard]] const std::vector<StringObjectInfo>&
     string_objects() const noexcept;
     [[nodiscard]] const std::vector<ContainerObjectInfo>&
@@ -368,6 +412,7 @@ private:
 
     std::string top_;
     std::vector<SignalInfo> signal_info_;
+    std::vector<BoundaryConversionInfo> boundary_conversions_;
     std::vector<runtime::simir::Signal> signals_;
     std::vector<StringObjectInfo> string_object_info_;
     std::vector<runtime::simir::StringObject> string_objects_;

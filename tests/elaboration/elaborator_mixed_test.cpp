@@ -169,6 +169,580 @@ end architecture rtl;
         mixed_interpreter->signal_value(*mixed_inverted).to_msb_string()
         == "11111110");
 
+    const auto ordinal_vhdl_parent = fsim::frontend::parse_text(
+        "ordinal_vhdl_parent.vhd",
+        R"(
+entity ordinal_vhdl_parent is
+end entity;
+architecture rtl of ordinal_vhdl_parent is
+  signal source : std_logic_vector(7 downto 4);
+  signal result : std_logic_vector(20 to 23);
+begin
+  source <= "10XZ";
+  child: ordinal_sv_child
+    port map (data => source, result => result);
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    const auto ordinal_sv_child = fsim::frontend::parse_text(
+        "ordinal_sv_child.sv",
+        R"(
+module ordinal_sv_child(
+  input logic [1:4] data,
+  output logic [9:6] result
+);
+  assign result[9] = data[1];
+  assign result[8] = data[2];
+  assign result[7] = data[3];
+  assign result[6] = data[4];
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(ordinal_vhdl_parent.ok() && ordinal_sv_child.ok());
+    auto vhdl_to_sv_design = ordinal_vhdl_parent.design;
+    vhdl_to_sv_design.units.insert(
+        vhdl_to_sv_design.units.end(),
+        ordinal_sv_child.design.units.begin(),
+        ordinal_sv_child.design.units.end());
+    const std::vector<fsim::elaboration::Binding>
+        vhdl_to_sv_bindings{{
+            "ordinal_vhdl_parent.child",
+            "sv:work.ordinal_sv_child",
+            std::nullopt}};
+    const auto elaborated_vhdl_to_sv = fsim::elaboration::elaborate(
+        vhdl_to_sv_design,
+        "vhdl:work.ordinal_vhdl_parent(rtl)",
+        vhdl_to_sv_bindings);
+    if (!elaborated_vhdl_to_sv.ok()) {
+      for (const auto& diagnostic : elaborated_vhdl_to_sv.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(elaborated_vhdl_to_sv.ok());
+    const auto& vhdl_to_sv_conversions =
+        elaborated_vhdl_to_sv.design->boundary_conversions();
+    assert(vhdl_to_sv_conversions.size() == 2);
+    const auto vhdl_to_sv_data = std::ranges::find(
+        vhdl_to_sv_conversions,
+        "ordinal_vhdl_parent.child.data",
+        &fsim::elaboration::BoundaryConversionInfo::path);
+    const auto vhdl_to_sv_result = std::ranges::find(
+        vhdl_to_sv_conversions,
+        "ordinal_vhdl_parent.child.result",
+        &fsim::elaboration::BoundaryConversionInfo::path);
+    assert(vhdl_to_sv_data != vhdl_to_sv_conversions.end());
+    assert(vhdl_to_sv_result != vhdl_to_sv_conversions.end());
+    assert(vhdl_to_sv_data->formal_range->left == 1);
+    assert(vhdl_to_sv_data->formal_range->right == 4);
+    assert(!vhdl_to_sv_data->formal_range->descending);
+    assert(vhdl_to_sv_data->actual_range->left == 7);
+    assert(vhdl_to_sv_data->actual_range->right == 4);
+    assert(vhdl_to_sv_data->actual_range->descending);
+    assert(vhdl_to_sv_result->formal_range->left == 9);
+    assert(vhdl_to_sv_result->formal_range->right == 6);
+    assert(vhdl_to_sv_result->formal_range->descending);
+    assert(vhdl_to_sv_result->actual_range->left == 20);
+    assert(vhdl_to_sv_result->actual_range->right == 23);
+    assert(!vhdl_to_sv_result->actual_range->descending);
+    assert(
+        fsim::frontend::physical_source(
+            vhdl_to_sv_data->connection_span)
+        == "ordinal_vhdl_parent.vhd");
+    assert(
+        fsim::frontend::physical_source(vhdl_to_sv_data->formal_span)
+        == "ordinal_sv_child.sv");
+    assert(
+        fsim::frontend::physical_source(vhdl_to_sv_data->actual_span)
+        == "ordinal_vhdl_parent.vhd");
+    auto vhdl_to_sv_interpreter =
+        elaborated_vhdl_to_sv.design->create_interpreter();
+    const auto vhdl_to_sv_output =
+        elaborated_vhdl_to_sv.design->find_signal("result");
+    assert(vhdl_to_sv_output);
+    assert(
+        vhdl_to_sv_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        vhdl_to_sv_interpreter
+            ->signal_value(*vhdl_to_sv_output)
+            .to_msb_string()
+        == "10XZ");
+
+    const auto ordinal_sv_parent = fsim::frontend::parse_text(
+        "ordinal_sv_parent.sv",
+        R"(
+module ordinal_sv_parent;
+  logic [9:6] source;
+  logic [2:5] result;
+  assign source = 4'b10xz;
+  vhdl_ordinal_child child(.data(source), .result(result));
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    const auto ordinal_vhdl_child = fsim::frontend::parse_text(
+        "ordinal_vhdl_child.vhd",
+        R"(
+entity vhdl_ordinal_child is
+  port (
+    data : in std_logic_vector(20 to 23);
+    result : out std_logic_vector(7 downto 4)
+  );
+end entity;
+architecture rtl of vhdl_ordinal_child is
+begin
+  map_ordinals: process(data)
+  begin
+    result(7) <= data(20);
+    result(6) <= data(21);
+    result(5) <= data(22);
+    result(4) <= data(23);
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(ordinal_sv_parent.ok() && ordinal_vhdl_child.ok());
+    auto sv_to_vhdl_design = ordinal_sv_parent.design;
+    sv_to_vhdl_design.units.insert(
+        sv_to_vhdl_design.units.end(),
+        ordinal_vhdl_child.design.units.begin(),
+        ordinal_vhdl_child.design.units.end());
+    const std::vector<fsim::elaboration::Binding>
+        sv_to_vhdl_bindings{{
+            "ordinal_sv_parent.child",
+            "vhdl:work.vhdl_ordinal_child(rtl)",
+            std::nullopt}};
+    const auto elaborated_sv_to_vhdl = fsim::elaboration::elaborate(
+        sv_to_vhdl_design,
+        "sv:work.ordinal_sv_parent",
+        sv_to_vhdl_bindings);
+    if (!elaborated_sv_to_vhdl.ok()) {
+      for (const auto& diagnostic : elaborated_sv_to_vhdl.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(elaborated_sv_to_vhdl.ok());
+    const auto& sv_to_vhdl_conversions =
+        elaborated_sv_to_vhdl.design->boundary_conversions();
+    assert(sv_to_vhdl_conversions.size() == 2);
+    const auto sv_to_vhdl_data = std::ranges::find(
+        sv_to_vhdl_conversions,
+        "ordinal_sv_parent.child.data",
+        &fsim::elaboration::BoundaryConversionInfo::path);
+    const auto sv_to_vhdl_result = std::ranges::find(
+        sv_to_vhdl_conversions,
+        "ordinal_sv_parent.child.result",
+        &fsim::elaboration::BoundaryConversionInfo::path);
+    assert(sv_to_vhdl_data != sv_to_vhdl_conversions.end());
+    assert(sv_to_vhdl_result != sv_to_vhdl_conversions.end());
+    assert(sv_to_vhdl_data->formal_range->left == 20);
+    assert(sv_to_vhdl_data->formal_range->right == 23);
+    assert(!sv_to_vhdl_data->formal_range->descending);
+    assert(sv_to_vhdl_data->actual_range->left == 9);
+    assert(sv_to_vhdl_data->actual_range->right == 6);
+    assert(sv_to_vhdl_data->actual_range->descending);
+    assert(sv_to_vhdl_result->formal_range->left == 7);
+    assert(sv_to_vhdl_result->formal_range->right == 4);
+    assert(sv_to_vhdl_result->formal_range->descending);
+    assert(sv_to_vhdl_result->actual_range->left == 2);
+    assert(sv_to_vhdl_result->actual_range->right == 5);
+    assert(!sv_to_vhdl_result->actual_range->descending);
+    auto sv_to_vhdl_interpreter =
+        elaborated_sv_to_vhdl.design->create_interpreter();
+    const auto sv_to_vhdl_output =
+        elaborated_sv_to_vhdl.design->find_signal("result");
+    assert(sv_to_vhdl_output);
+    assert(
+        sv_to_vhdl_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        sv_to_vhdl_interpreter
+            ->signal_value(*sv_to_vhdl_output)
+            .to_msb_string()
+        == "10XZ");
+
+    const auto width_vhdl_parent = fsim::frontend::parse_text(
+        "width_vhdl_parent.vhd",
+        R"(
+entity width_vhdl_parent is
+end entity;
+architecture rtl of width_vhdl_parent is
+  signal zero_source : std_logic_vector(3 downto 0);
+  signal sign_source : signed(3 downto 0);
+  signal trunc_source : std_logic_vector(7 downto 0);
+  signal widened_result : std_logic_vector(7 downto 0);
+  signal truncated_result : std_logic_vector(3 downto 0);
+begin
+  zero_source <= "1010";
+  sign_source <= "1010";
+  trunc_source <= "11010110";
+  child: width_sv_child port map (
+    zero_in => zero_source,
+    sign_in => sign_source,
+    trunc_in => trunc_source,
+    widen_out => widened_result,
+    truncate_out => truncated_result
+  );
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    const auto width_sv_child = fsim::frontend::parse_text(
+        "width_sv_child.sv",
+        R"(
+module width_sv_child(
+  input logic [7:0] zero_in,
+  input logic signed [7:0] sign_in,
+  input logic [3:0] trunc_in,
+  output logic [3:0] widen_out,
+  output logic [7:0] truncate_out
+);
+  assign widen_out = zero_in[3:0];
+  assign truncate_out = {4'b1101, trunc_in};
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(width_vhdl_parent.ok() && width_sv_child.ok());
+    auto vhdl_width_design = width_vhdl_parent.design;
+    vhdl_width_design.units.insert(
+        vhdl_width_design.units.end(),
+        width_sv_child.design.units.begin(),
+        width_sv_child.design.units.end());
+    const std::vector<fsim::elaboration::Binding> vhdl_width_bindings{{
+        "width_vhdl_parent.child",
+        "sv:work.width_sv_child",
+        std::nullopt}};
+    const auto elaborated_vhdl_width = fsim::elaboration::elaborate(
+        vhdl_width_design,
+        "vhdl:work.width_vhdl_parent(rtl)",
+        vhdl_width_bindings);
+    if (!elaborated_vhdl_width.ok()) {
+      for (const auto& diagnostic : elaborated_vhdl_width.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(elaborated_vhdl_width.ok());
+    const auto& vhdl_width_conversions =
+        elaborated_vhdl_width.design->boundary_conversions();
+    assert(vhdl_width_conversions.size() == 5);
+    assert(std::ranges::all_of(
+        vhdl_width_conversions,
+        [](const auto& conversion) {
+          return conversion.kind
+                  == fsim::elaboration::BoundaryConversionKind::width_adapter
+              && conversion.formal_signal != conversion.actual_signal
+              && conversion.process.has_value();
+        }));
+    auto vhdl_width_interpreter =
+        elaborated_vhdl_width.design->create_interpreter();
+    assert(
+        vhdl_width_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto read_vhdl_width = [&](const std::string_view name) {
+      const auto signal = elaborated_vhdl_width.design->find_signal(name);
+      assert(signal);
+      return vhdl_width_interpreter
+          ->signal_value(*signal).to_msb_string();
+    };
+    assert(read_vhdl_width("width_vhdl_parent.child.zero_in")
+           == "00001010");
+    assert(read_vhdl_width("width_vhdl_parent.child.sign_in")
+           == "11111010");
+    assert(read_vhdl_width("width_vhdl_parent.child.trunc_in") == "0110");
+    assert(read_vhdl_width("widened_result") == "00001010");
+    assert(read_vhdl_width("truncated_result") == "0110");
+
+    const auto width_sv_parent = fsim::frontend::parse_text(
+        "width_sv_parent.sv",
+        R"(
+module width_sv_parent;
+  logic [3:0] zero_source;
+  logic signed [3:0] sign_source;
+  logic [7:0] trunc_source;
+  logic [7:0] widened_result;
+  logic [3:0] truncated_result;
+  assign zero_source = 4'b1010;
+  assign sign_source = 4'b1010;
+  assign trunc_source = 8'b11010110;
+  width_vhdl_child child(
+    .zero_in(zero_source),
+    .sign_in(sign_source),
+    .trunc_in(trunc_source),
+    .widen_out(widened_result),
+    .truncate_out(truncated_result)
+  );
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    const auto width_vhdl_child = fsim::frontend::parse_text(
+        "width_vhdl_child.vhd",
+        R"(
+entity width_vhdl_child is
+  port (
+    zero_in : in std_logic_vector(7 downto 0);
+    sign_in : in signed(7 downto 0);
+    trunc_in : in std_logic_vector(3 downto 0);
+    widen_out : out std_logic_vector(3 downto 0);
+    truncate_out : out std_logic_vector(7 downto 0)
+  );
+end entity;
+architecture rtl of width_vhdl_child is
+begin
+  widen_out <= zero_in(3 downto 0);
+  truncate_out <= "11010110";
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(width_sv_parent.ok() && width_vhdl_child.ok());
+    auto sv_width_design = width_sv_parent.design;
+    sv_width_design.units.insert(
+        sv_width_design.units.end(),
+        width_vhdl_child.design.units.begin(),
+        width_vhdl_child.design.units.end());
+    const std::vector<fsim::elaboration::Binding> sv_width_bindings{{
+        "width_sv_parent.child",
+        "vhdl:work.width_vhdl_child(rtl)",
+        std::nullopt}};
+    const auto elaborated_sv_width = fsim::elaboration::elaborate(
+        sv_width_design,
+        "sv:work.width_sv_parent",
+        sv_width_bindings);
+    if (!elaborated_sv_width.ok()) {
+      for (const auto& diagnostic : elaborated_sv_width.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(elaborated_sv_width.ok());
+    const auto& sv_width_conversions =
+        elaborated_sv_width.design->boundary_conversions();
+    assert(sv_width_conversions.size() == 5);
+    assert(std::ranges::all_of(
+        sv_width_conversions,
+        [](const auto& conversion) {
+          return conversion.kind
+                  == fsim::elaboration::BoundaryConversionKind::width_adapter
+              && conversion.formal_signal != conversion.actual_signal
+              && conversion.process.has_value();
+        }));
+    auto sv_width_interpreter =
+        elaborated_sv_width.design->create_interpreter();
+    assert(
+        sv_width_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto read_sv_width = [&](const std::string_view name) {
+      const auto signal = elaborated_sv_width.design->find_signal(name);
+      assert(signal);
+      return sv_width_interpreter
+          ->signal_value(*signal).to_msb_string();
+    };
+    assert(read_sv_width("width_sv_parent.child.zero_in") == "00001010");
+    assert(read_sv_width("width_sv_parent.child.sign_in") == "11111010");
+    assert(read_sv_width("width_sv_parent.child.trunc_in") == "0110");
+    assert(read_sv_width("widened_result") == "00001010");
+    assert(read_sv_width("truncated_result") == "0110");
+
+    const auto signed_vhdl_parent = fsim::frontend::parse_text(
+        "signed_vhdl_parent.vhd",
+        R"(
+entity signed_vhdl_parent is
+end entity;
+architecture rtl of signed_vhdl_parent is
+  signal zero_source : std_logic_vector(3 downto 0);
+  signal copy_source : std_logic_vector(3 downto 0);
+  signal wide_result : std_logic_vector(7 downto 0);
+  signal copy_result : std_logic_vector(3 downto 0);
+begin
+  zero_source <= "1010";
+  copy_source <= "1010";
+  child: signed_sv_child port map (
+    zero_in => zero_source,
+    copy_in => copy_source,
+    sign_out => wide_result,
+    copy_out => copy_result
+  );
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    const auto signed_sv_child = fsim::frontend::parse_text(
+        "signed_sv_child.sv",
+        R"(
+module signed_sv_child(
+  input logic signed [7:0] zero_in,
+  input logic signed [3:0] copy_in,
+  output logic signed [3:0] sign_out,
+  output logic signed [3:0] copy_out
+);
+  assign sign_out = 4'b1010;
+  assign copy_out = copy_in;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(signed_vhdl_parent.ok() && signed_sv_child.ok());
+    auto vhdl_signed_design = signed_vhdl_parent.design;
+    vhdl_signed_design.units.insert(
+        vhdl_signed_design.units.end(),
+        signed_sv_child.design.units.begin(),
+        signed_sv_child.design.units.end());
+    const std::vector<fsim::elaboration::Binding> vhdl_signed_bindings{{
+        "signed_vhdl_parent.child",
+        "sv:work.signed_sv_child",
+        std::nullopt}};
+    const auto elaborated_vhdl_signed = fsim::elaboration::elaborate(
+        vhdl_signed_design,
+        "vhdl:work.signed_vhdl_parent(rtl)",
+        vhdl_signed_bindings);
+    assert(elaborated_vhdl_signed.ok());
+    const auto& vhdl_signed_conversions =
+        elaborated_vhdl_signed.design->boundary_conversions();
+    assert(std::ranges::count(
+        vhdl_signed_conversions,
+        fsim::elaboration::BoundaryConversionKind::signedness_adapter,
+        &fsim::elaboration::BoundaryConversionInfo::kind) == 2);
+    assert(std::ranges::count(
+        vhdl_signed_conversions,
+        fsim::elaboration::BoundaryConversionKind::width_signedness_adapter,
+        &fsim::elaboration::BoundaryConversionInfo::kind) == 2);
+    auto vhdl_signed_interpreter =
+        elaborated_vhdl_signed.design->create_interpreter();
+    assert(
+        vhdl_signed_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto read_vhdl_signed = [&](const std::string_view name) {
+      const auto signal = elaborated_vhdl_signed.design->find_signal(name);
+      assert(signal);
+      return vhdl_signed_interpreter
+          ->signal_value(*signal).to_msb_string();
+    };
+    assert(read_vhdl_signed("signed_vhdl_parent.child.zero_in")
+           == "00001010");
+    assert(read_vhdl_signed("signed_vhdl_parent.child.copy_in") == "1010");
+    assert(read_vhdl_signed("wide_result") == "11111010");
+    assert(read_vhdl_signed("copy_result") == "1010");
+
+    const auto signed_sv_parent = fsim::frontend::parse_text(
+        "signed_sv_parent.sv",
+        R"(
+module signed_sv_parent;
+  logic [3:0] zero_source;
+  logic signed [3:0] copy_source;
+  logic [7:0] wide_result;
+  logic signed [3:0] copy_result;
+  assign zero_source = 4'b1010;
+  assign copy_source = 4'b1010;
+  signed_vhdl_child child(
+    .zero_in(zero_source),
+    .copy_in(copy_source),
+    .sign_out(wide_result),
+    .copy_out(copy_result)
+  );
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    const auto signed_vhdl_child = fsim::frontend::parse_text(
+        "signed_vhdl_child.vhd",
+        R"(
+entity signed_vhdl_child is
+  port (
+    zero_in : in signed(7 downto 0);
+    copy_in : in std_logic_vector(3 downto 0);
+    sign_out : out signed(3 downto 0);
+    copy_out : out std_logic_vector(3 downto 0)
+  );
+end entity;
+architecture rtl of signed_vhdl_child is
+begin
+  sign_out <= "1010";
+  copy_out <= copy_in;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(signed_sv_parent.ok() && signed_vhdl_child.ok());
+    auto sv_signed_design = signed_sv_parent.design;
+    sv_signed_design.units.insert(
+        sv_signed_design.units.end(),
+        signed_vhdl_child.design.units.begin(),
+        signed_vhdl_child.design.units.end());
+    const std::vector<fsim::elaboration::Binding> sv_signed_bindings{{
+        "signed_sv_parent.child",
+        "vhdl:work.signed_vhdl_child(rtl)",
+        std::nullopt}};
+    const auto elaborated_sv_signed = fsim::elaboration::elaborate(
+        sv_signed_design,
+        "sv:work.signed_sv_parent",
+        sv_signed_bindings);
+    assert(elaborated_sv_signed.ok());
+    const auto& sv_signed_conversions =
+        elaborated_sv_signed.design->boundary_conversions();
+    assert(std::ranges::count(
+        sv_signed_conversions,
+        fsim::elaboration::BoundaryConversionKind::signedness_adapter,
+        &fsim::elaboration::BoundaryConversionInfo::kind) == 2);
+    assert(std::ranges::count(
+        sv_signed_conversions,
+        fsim::elaboration::BoundaryConversionKind::width_signedness_adapter,
+        &fsim::elaboration::BoundaryConversionInfo::kind) == 2);
+    auto sv_signed_interpreter =
+        elaborated_sv_signed.design->create_interpreter();
+    assert(
+        sv_signed_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto read_sv_signed = [&](const std::string_view name) {
+      const auto signal = elaborated_sv_signed.design->find_signal(name);
+      assert(signal);
+      return sv_signed_interpreter
+          ->signal_value(*signal).to_msb_string();
+    };
+    assert(read_sv_signed("signed_sv_parent.child.zero_in") == "00001010");
+    assert(read_sv_signed("signed_sv_parent.child.copy_in") == "1010");
+    assert(read_sv_signed("wide_result") == "11111010");
+    assert(read_sv_signed("copy_result") == "1010");
+
+    const auto width_inout_vhdl = fsim::frontend::parse_text(
+        "width_inout.vhd",
+        R"(
+entity width_inout is
+end entity;
+architecture rtl of width_inout is
+  signal bus_value : std_logic_vector(7 downto 0);
+  signal signed_value : std_logic_vector(7 downto 0);
+begin
+  child: width_inout_child port map (
+    value => bus_value,
+    signed_value => signed_value
+  );
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    const auto width_inout_sv = fsim::frontend::parse_text(
+        "width_inout.sv",
+        R"(
+module width_inout_child(
+  inout logic [3:0] value,
+  inout logic signed [7:0] signed_value
+);
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(width_inout_vhdl.ok() && width_inout_sv.ok());
+    auto width_inout_design = width_inout_vhdl.design;
+    width_inout_design.units.insert(
+        width_inout_design.units.end(),
+        width_inout_sv.design.units.begin(),
+        width_inout_sv.design.units.end());
+    const std::vector<fsim::elaboration::Binding> width_inout_bindings{{
+        "width_inout.child",
+        "sv:work.width_inout_child",
+        std::string{"std_logic"}}};
+    const auto rejected_width_inout = fsim::elaboration::elaborate(
+        width_inout_design,
+        "vhdl:work.width_inout(rtl)",
+        width_inout_bindings);
+    assert(!rejected_width_inout.ok());
+    assert(has_diagnostic(rejected_width_inout, "FSIM-ELAB-BIND-020"));
+    assert(has_diagnostic(rejected_width_inout, "FSIM-ELAB-BIND-021"));
+
     const auto integer_boundary_vhdl =
         fsim::frontend::parse_text(
             "integer_boundary.vhd",
@@ -244,7 +818,7 @@ endmodule
     assert(
         integer_source && integer_result
         && integer_child_source);
-    assert(*integer_source == *integer_child_source);
+    assert(*integer_source != *integer_child_source);
     auto integer_boundary_interpreter =
         elaborated_integer_boundary.design
             ->create_interpreter();
@@ -265,15 +839,12 @@ endmodule
                 "sv:work.sv_logic_integer_child",
                 std::nullopt},
         };
-    const auto rejected_lossy_integer_boundary =
+    const auto checked_logic_integer_boundary =
         fsim::elaboration::elaborate(
             integer_boundary_design,
             "vhdl:work.integer_boundary(rtl)",
             lossy_integer_boundary_binding);
-    assert(!rejected_lossy_integer_boundary.ok());
-    assert(has_diagnostic(
-        rejected_lossy_integer_boundary,
-        "FSIM-ELAB-BIND-022"));
+    assert(checked_logic_integer_boundary.ok());
 
     const auto vhdl_integer_output =
         fsim::frontend::parse_text(
@@ -320,16 +891,19 @@ endmodule
     assert(elaborated_reverse_integer.ok());
     assert(
         std::ranges::any_of(
-            elaborated_reverse_integer.design
-                ->processes().front().operations,
-            [](const auto& operation) {
-              const auto* check =
-                  fsim::runtime::simir::operation_get_if<
-                      fsim::runtime::simir::IntegerCheck>(
-                      &operation);
-              return check != nullptr
-                  && check->lower == 1
-                  && check->upper == 4;
+            elaborated_reverse_integer.design->processes(),
+            [](const auto& process) {
+              return std::ranges::any_of(
+                  process.operations,
+                  [](const auto& operation) {
+                    const auto* check =
+                        fsim::runtime::simir::operation_get_if<
+                            fsim::runtime::simir::IntegerCheck>(
+                            &operation);
+                    return check != nullptr
+                        && check->lower == 1
+                        && check->upper == 4;
+                  });
             }));
     const auto reverse_integer_result_signal =
         elaborated_reverse_integer.design->find_signal("result");

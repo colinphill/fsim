@@ -18,6 +18,11 @@ ElaboratedDesign::signals() const noexcept {
   return signal_info_;
 }
 
+const std::vector<BoundaryConversionInfo>&
+ElaboratedDesign::boundary_conversions() const noexcept {
+  return boundary_conversions_;
+}
+
 const std::vector<StringObjectInfo>&
 ElaboratedDesign::string_objects() const noexcept {
   return string_object_info_;

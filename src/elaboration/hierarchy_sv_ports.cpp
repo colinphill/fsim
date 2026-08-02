@@ -801,7 +801,39 @@ void HierarchyBuilder::validate_boundary_type(
     }
   }
   const auto width = port.type.width().value_or(1);
-  if (width != actual.width) {
+  const bool boolean_involved =
+      port.type.domain == frontend::ValueDomain::Boolean
+      || actual.source_domain == frontend::ValueDomain::Boolean;
+  const bool integer_involved =
+      port.type.domain == frontend::ValueDomain::Integer
+      || actual.source_domain == frontend::ValueDomain::Integer;
+  const bool boolean_boundary =
+      cross_language && width == 1 && actual.width == 1
+      && ((port.type.domain == frontend::ValueDomain::Boolean
+           && (actual.source_domain == frontend::ValueDomain::Bit2
+               || actual.source_domain == frontend::ValueDomain::Logic4))
+          || (actual.source_domain == frontend::ValueDomain::Boolean
+              && (port.type.domain == frontend::ValueDomain::Bit2
+                  || port.type.domain == frontend::ValueDomain::Logic4)));
+  const bool integer_boundary =
+      cross_language && width == 32 && actual.width == 32
+      && port.type.is_signed && actual.is_signed
+      && ((port.type.domain == frontend::ValueDomain::Integer
+           && (actual.source_domain == frontend::ValueDomain::Bit2
+               || actual.source_domain == frontend::ValueDomain::Logic4))
+          || (actual.source_domain == frontend::ValueDomain::Integer
+              && (port.type.domain == frontend::ValueDomain::Bit2
+                  || port.type.domain == frontend::ValueDomain::Logic4)));
+  const bool adaptable_direction =
+      port.direction == frontend::PortDirection::Input
+      || port.direction == frontend::PortDirection::Output
+      || port.direction == frontend::PortDirection::Buffer;
+  const bool adaptable_width =
+      cross_language
+      && !boolean_involved && !integer_involved
+      && adaptable_direction
+      && width <= 64 && actual.width <= 64;
+  if (width != actual.width && !adaptable_width) {
     report(
         "FSIM-ELAB-BIND-020",
         "width mismatch on '" + path + "." + port.name + "': "
@@ -824,14 +856,19 @@ void HierarchyBuilder::validate_boundary_type(
             + path + "." + port.name + "'",
         source);
   }
-  if (port.type.is_signed != actual.is_signed && width > 1) {
+  const bool adaptable_signedness =
+      cross_language
+      && !boolean_involved && !integer_involved
+      && adaptable_direction
+      && width <= 64 && actual.width <= 64;
+  if (port.type.is_signed != actual.is_signed && width > 1
+      && !adaptable_signedness) {
     report(
         "FSIM-ELAB-BIND-021",
         "signedness mismatch on '" + path + "." + port.name + "'",
         source);
   }
-  if (port.type.domain == frontend::ValueDomain::Integer
-      || actual.source_domain == frontend::ValueDomain::Integer) {
+  if (integer_involved) {
     const auto bounds =
         [](const std::optional<frontend::IntegerRange>& range) {
           if (!range) {
@@ -845,25 +882,28 @@ void HierarchyBuilder::validate_boundary_type(
               static_cast<std::int32_t>(
                   std::max(range->left, range->right))};
         };
-    const auto port_bounds = bounds(port.type.integer_range);
-    const auto actual_bounds = bounds(actual.integer_range);
-    const auto contains =
-        [](const auto& outer, const auto& inner) {
-          return outer.first <= inner.first
-              && outer.second >= inner.second;
-        };
-    const bool compatible =
-        port.direction == frontend::PortDirection::Input
-            ? contains(port_bounds, actual_bounds)
-        : port.direction == frontend::PortDirection::Output
-            ? contains(actual_bounds, port_bounds)
-            : port_bounds == actual_bounds;
+    bool compatible = integer_boundary && adaptable_direction;
+    if (!cross_language) {
+      const auto port_bounds = bounds(port.type.integer_range);
+      const auto actual_bounds = bounds(actual.integer_range);
+      const auto contains =
+          [](const auto& outer, const auto& inner) {
+            return outer.first <= inner.first
+                && outer.second >= inner.second;
+          };
+      compatible =
+          port.direction == frontend::PortDirection::Input
+              ? contains(port_bounds, actual_bounds)
+          : port.direction == frontend::PortDirection::Output
+              ? contains(actual_bounds, port_bounds)
+              : port_bounds == actual_bounds;
+    }
     if (!compatible) {
       report(
           "FSIM-ELAB-BIND-051",
           "integer subtype ranges on boundary '" + path + "."
-              + port.name
-              + "' cannot guarantee a range-safe alias",
+              + port.name + "' cannot guarantee a range-safe "
+                "32-bit signed conversion",
           source);
     }
   }
@@ -879,7 +919,12 @@ void HierarchyBuilder::validate_boundary_type(
                 actual.source_domain, port.type.domain)
           : lossy_into_two_state(
                 port.type.domain, actual.source_domain);
-  if (lossy) {
+  const bool checked_boolean_loss =
+      boolean_boundary
+      && adaptable_direction;
+  const bool checked_integer_loss =
+      integer_boundary && adaptable_direction;
+  if (lossy && !checked_boolean_loss && !checked_integer_loss) {
     report(
         "FSIM-ELAB-BIND-022",
         "implicit lossy conversion into a 2-state boundary at '"

@@ -67,9 +67,20 @@ add_test(
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1VhdlMatrix.cmake"
 )
+add_test(
+  NAME fsim.v1-mixed-conversion-matrix
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1MixedConversionMatrix.cmake"
+)
 set_tests_properties(
   fsim.v1-vhdl-matrix
   PROPERTIES LABELS "fast;vhdl;matrix;cmake"
+)
+set_tests_properties(
+  fsim.v1-mixed-conversion-matrix
+  PROPERTIES LABELS "fast;mixed-language;conversions;matrix;cmake"
 )
 set_tests_properties(
   fsim.ieee-package-inventory
@@ -111,6 +122,7 @@ add_executable(
   elaboration/elaborator_sv_type_parameter_test.cpp
   elaboration/elaborator_generate_test.cpp
   elaboration/elaborator_mixed_test.cpp
+  elaboration/elaborator_mixed_conversion_test.cpp
   elaboration/elaborator_process_test.cpp
   elaboration/elaborator_fork_test.cpp
   elaboration/elaborator_function_test.cpp
@@ -543,6 +555,10 @@ if(TARGET fsim_application)
     fsim_add_application_case(
       3 systemc_datatypes app/systemc_datatype_application_test.cpp
       fsim.application.systemc_datatypes fast systemc datatypes)
+    fsim_add_application_case(
+      3 mixed_conversions app/mixed_conversion_application_test.cpp
+      fsim.application.mixed_conversions
+      fast mixed-language conversions cache debugger vcd)
 
     set_tests_properties(
       fsim.application.scoped_locals
@@ -1273,6 +1289,25 @@ set_tests_properties(
   set_tests_properties(
     fsim.application.resolution
     PROPERTIES LABELS "fast;resolution;mixed-language"
+  )
+
+  add_executable(
+    fsim_mixed_conversion_application_tests
+    app/mixed_conversion_application_test.cpp
+  )
+  fsim_configure_test(fsim_mixed_conversion_application_tests)
+  target_link_libraries(
+    fsim_mixed_conversion_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.mixed_conversions
+    COMMAND fsim_mixed_conversion_application_tests
+  )
+  set_tests_properties(
+    fsim.application.mixed_conversions
+    PROPERTIES
+      LABELS "fast;mixed-language;conversions;cache;debugger;vcd"
   )
 
   add_executable(

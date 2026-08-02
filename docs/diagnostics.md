@@ -1648,7 +1648,7 @@ therefore excluded.
 | `FSIM-ELAB-BIND-048` | error | A typed SystemC export is unbound, cyclic, references an unknown object, or conflicts with another hierarchy alias. |
 | `FSIM-ELAB-BIND-049` | error | A packed aggregate crosses a language boundary without a same-language scalar/vector wrapper. |
 | `FSIM-ELAB-BIND-050` | error | An elaboration binding names a resolver other than `std_logic` or `sv_wire`. |
-| `FSIM-ELAB-BIND-051` | error | Integer subtype ranges on a hierarchy boundary cannot guarantee a range-safe alias in the port's data-flow direction. |
+| `FSIM-ELAB-BIND-051` | error | An integer hierarchy boundary cannot guarantee a range-safe same-language alias or cross-language 32-bit signed conversion in the port's data-flow direction. |
 | `FSIM-ELAB-BIND-052` | error | A VHDL enumeration crosses a language boundary without a same-language scalar/vector wrapper. |
 | `FSIM-ELAB-BIND-053` | error | A same-language VHDL hierarchy boundary connects different nominal enumeration types. |
 | `FSIM-ELAB-BIND-054` | error | Same-language VHDL enumeration subtype ranges cannot guarantee a range-safe alias in the port's data-flow direction. |

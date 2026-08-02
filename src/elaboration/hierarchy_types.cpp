@@ -1276,13 +1276,264 @@ using namespace elaboration_detail;
                     connection.value.span);
                 continue;
             }
-            const auto& actual_info = design_.signal_info_.at(actual->second);
+            // Adapter creation may append an owned formal signal and reallocate
+            // signal_info_.  Keep the actual metadata by value across that
+            // append instead of retaining a reference into the vector.
+            const auto actual_info = design_.signal_info_.at(actual->second);
+            const auto diagnostics_before = diagnostics_.size();
             validate_boundary_type(
                 port,
                 actual_info,
                 path,
                 connection.span,
                 cross_language);
+            const auto formal_width = static_cast<std::size_t>(
+                port.type.width().value_or(1));
+            auto formal_signal = actual->second;
+            std::optional<ProcessId> conversion_process;
+            const bool width_changed = formal_width != actual_info.width;
+            const bool signedness_changed =
+                formal_width > 1
+                && port.type.is_signed != actual_info.is_signed;
+            const bool boolean_boundary =
+                formal_width == 1 && actual_info.width == 1
+                && ((port.type.domain == frontend::ValueDomain::Boolean
+                     && (actual_info.source_domain
+                             == frontend::ValueDomain::Bit2
+                         || actual_info.source_domain
+                             == frontend::ValueDomain::Logic4))
+                    || (actual_info.source_domain
+                            == frontend::ValueDomain::Boolean
+                        && (port.type.domain
+                                == frontend::ValueDomain::Bit2
+                            || port.type.domain
+                                == frontend::ValueDomain::Logic4)));
+            const bool integer_boundary =
+                formal_width == 32 && actual_info.width == 32
+                && port.type.is_signed && actual_info.is_signed
+                && ((port.type.domain
+                         == frontend::ValueDomain::Integer
+                     && (actual_info.source_domain
+                             == frontend::ValueDomain::Bit2
+                         || actual_info.source_domain
+                             == frontend::ValueDomain::Logic4))
+                    || (actual_info.source_domain
+                            == frontend::ValueDomain::Integer
+                        && (port.type.domain
+                                == frontend::ValueDomain::Bit2
+                            || port.type.domain
+                                == frontend::ValueDomain::Logic4)));
+            const bool two_state_boundary =
+                port.type.domain == frontend::ValueDomain::Bit2
+                && actual_info.source_domain
+                    == frontend::ValueDomain::Bit2;
+            const bool state_domain_boundary =
+                (port.type.domain == frontend::ValueDomain::Logic4
+                 && actual_info.source_domain
+                     == frontend::ValueDomain::Logic9)
+                || (port.type.domain == frontend::ValueDomain::Logic9
+                    && actual_info.source_domain
+                        == frontend::ValueDomain::Logic4);
+            const bool needs_adapter =
+                diagnostics_.size() == diagnostics_before
+                && cross_language
+                && (width_changed || signedness_changed
+                    || boolean_boundary || integer_boundary)
+                && formal_width <= 64 && actual_info.width <= 64
+                && (port.direction == frontend::PortDirection::Input
+                    || port.direction == frontend::PortDirection::Output
+                    || port.direction == frontend::PortDirection::Buffer);
+            if (needs_adapter) {
+                const auto owned = add_owned_signal(port, path, aliases);
+                if (!owned) {
+                    continue;
+                }
+                formal_signal = *owned;
+                const bool input =
+                    port.direction == frontend::PortDirection::Input;
+                const auto source = input ? actual->second : formal_signal;
+                const auto destination = input ? formal_signal : actual->second;
+                const auto source_width =
+                    input ? actual_info.width : formal_width;
+                const auto destination_width =
+                    input ? formal_width : actual_info.width;
+                const auto source_domain = input
+                    ? actual_info.source_domain : port.type.domain;
+                const auto destination_domain = input
+                    ? port.type.domain : actual_info.source_domain;
+                const bool sign_extend = input
+                    ? actual_info.is_signed : port.type.is_signed;
+                Process adapter;
+                adapter.id = static_cast<ProcessId>(
+                    design_.processes_.size());
+                adapter.name = path + "." + port.name
+                    + (boolean_boundary
+                        ? "$boundary_boolean"
+                        : integer_boundary
+                            ? "$boundary_integer"
+                            : "$boundary_integral");
+                adapter.static_sensitivity.push_back(
+                    Sensitivity{source, EdgeKind::any});
+                InstructionIndex conversion_start = 0;
+                if (destination_domain
+                        == frontend::ValueDomain::Boolean
+                    || (destination_domain
+                            == frontend::ValueDomain::Integer
+                        && !is_two_state_domain(source_domain))) {
+                    adapter.operations.emplace_back(WaitSensitivity{});
+                    adapter.operations.emplace_back(Jump{2});
+                    conversion_start = 2;
+                }
+                adapter.operations.emplace_back(ReadSignal{0, source});
+                RegisterId converted = 1;
+                if (destination_domain
+                    == frontend::ValueDomain::Boolean) {
+                    adapter.register_count = 3;
+                    converted = 0;
+                    adapter.register_value_kinds = {
+                        value_kind(source_domain),
+                        value_kind(source_domain),
+                        value_kind(source_domain)};
+                    adapter.operations.emplace_back(
+                        LoadConstant{
+                            1,
+                            PackedLogic4(31, Logic4::zero)});
+                    adapter.operations.emplace_back(
+                        Concatenate{2, {1, 0}, 32});
+                    adapter.operations.emplace_back(
+                        IntegerCheck{2, 0, 1});
+                } else if (destination_domain
+                    == frontend::ValueDomain::Integer) {
+                    const auto range = input
+                        ? port.type.integer_range
+                        : actual_info.integer_range;
+                    const auto lower = range
+                        ? static_cast<std::int32_t>(
+                            std::min(range->left, range->right))
+                        : std::numeric_limits<std::int32_t>::min();
+                    const auto upper = range
+                        ? static_cast<std::int32_t>(
+                            std::max(range->left, range->right))
+                        : std::numeric_limits<std::int32_t>::max();
+                    adapter.register_count = 1;
+                    converted = 0;
+                    adapter.register_value_kinds = {
+                        value_kind(source_domain)};
+                    adapter.operations.emplace_back(
+                        IntegerCheck{0, lower, upper});
+                } else if (destination_width == source_width) {
+                    adapter.register_count = 2;
+                    adapter.register_value_kinds = {
+                        value_kind(source_domain),
+                        value_kind(destination_domain)};
+                    adapter.operations.emplace_back(
+                        CopyRegister{converted, 0});
+                } else if (destination_width < source_width) {
+                    adapter.register_count = 2;
+                    adapter.register_value_kinds = {
+                        value_kind(source_domain),
+                        value_kind(destination_domain)};
+                    adapter.operations.emplace_back(
+                        Extract{
+                            converted,
+                            0,
+                            0,
+                            static_cast<std::uint32_t>(destination_width)});
+                } else {
+                    adapter.register_count = 3;
+                    converted = 2;
+                    std::vector<RegisterId> operands;
+                    if (sign_extend) {
+                        adapter.operations.emplace_back(
+                            Extract{
+                                1,
+                                0,
+                                static_cast<std::uint32_t>(
+                                    source_width - 1U),
+                                1});
+                        operands.assign(
+                            destination_width - source_width, 1);
+                    } else {
+                        adapter.operations.emplace_back(
+                            LoadConstant{
+                                1,
+                                PackedLogic4(
+                                    destination_width - source_width,
+                                    Logic4::zero)});
+                        operands.push_back(1);
+                    }
+                    operands.push_back(0);
+                    adapter.register_value_kinds = {
+                        value_kind(source_domain),
+                        value_kind(sign_extend
+                            ? source_domain : destination_domain),
+                        value_kind(destination_domain)};
+                    adapter.operations.emplace_back(
+                        Concatenate{
+                            converted,
+                            std::move(operands),
+                            static_cast<std::uint32_t>(destination_width)});
+                }
+                adapter.operations.emplace_back(
+                    WriteUpdate{destination, converted});
+                adapter.operations.emplace_back(WaitSensitivity{});
+                adapter.operations.emplace_back(
+                    Jump{conversion_start});
+                adapter.driver_regions.push_back(
+                    Process::DriverRegion{
+                        destination,
+                        0,
+                        static_cast<std::uint32_t>(destination_width),
+                        true});
+                conversion_process = adapter.id;
+                design_.specializations_.back().processes.push_back(adapter.id);
+                design_.processes_.push_back(std::move(adapter));
+            }
+            if (diagnostics_.size() == diagnostics_before
+                && cross_language
+                && ((port.type.packed_range
+                    && actual_info.packed_range)
+                    || boolean_boundary || integer_boundary
+                    || two_state_boundary || state_domain_boundary)) {
+                design_.boundary_conversions_.push_back(
+                    BoundaryConversionInfo{
+                        boolean_boundary
+                            ? BoundaryConversionKind::boolean_adapter
+                        : integer_boundary
+                            ? BoundaryConversionKind::integer_adapter
+                        : state_domain_boundary && !width_changed
+                                && !signedness_changed
+                            ? BoundaryConversionKind::state_domain_alias
+                        : width_changed && signedness_changed
+                            ? BoundaryConversionKind::width_signedness_adapter
+                        : width_changed
+                            ? BoundaryConversionKind::width_adapter
+                        : signedness_changed
+                            ? BoundaryConversionKind::signedness_adapter
+                            : BoundaryConversionKind::ordinal_alias,
+                        path + "." + port.name,
+                        formal_signal,
+                        actual_info.id,
+                        conversion_process,
+                        port.direction,
+                        formal_width,
+                        actual_info.width,
+                        port.type.domain,
+                        actual_info.source_domain,
+                        port.type.is_signed,
+                        actual_info.is_signed,
+                        state_domain_boundary,
+                        port.type.packed_range,
+                        actual_info.packed_range,
+                        port.type.integer_range,
+                        actual_info.integer_range,
+                        connection.span,
+                        port.span,
+                        frontend::physical_source(
+                            actual_info.declaration_span).empty()
+                            ? connection.value.span
+                            : actual_info.declaration_span});
+            }
             if (cross_language
                 && port.direction == frontend::PortDirection::Inout) {
                 if (binding == nullptr || !binding->resolver) {
@@ -1294,10 +1545,10 @@ using namespace elaboration_detail;
                         connection.span);
                 }
             }
-            aliases.emplace(port.name, actual->second);
-            aliases.emplace(path + "." + port.name, actual->second);
+            aliases.emplace(port.name, formal_signal);
+            aliases.emplace(path + "." + port.name, formal_signal);
             design_.signal_by_name_.emplace(
-                path + "." + port.name, actual->second);
+                path + "." + port.name, formal_signal);
             if (port.direction == frontend::PortDirection::Output
                 || port.direction == frontend::PortDirection::Inout
                 || port.direction == frontend::PortDirection::Buffer) {

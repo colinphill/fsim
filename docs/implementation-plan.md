@@ -7870,47 +7870,282 @@ Debug passed 75/75 tests in 372.25 seconds with scoped locals in 0.27 seconds;
 MSVC plus LLVM Debug passed 76/76 in 1,160.90 seconds with scoped locals in
 1.77 seconds. Batch 120 and its mandatory CI boundary are complete.
 
-### One-hundred-twenty-first feature batch — mixed-language value-boundary conversions — In progress
+### One-hundred-twenty-first feature batch — mixed-language value-boundary conversions — Complete
 
 The current ten implementation tasks are:
 
-1. **In progress.** Audit existing VHDL/SystemVerilog/SystemC boundary type
+1. **Complete.** Audit existing VHDL/SystemVerilog/SystemC boundary type
    metadata, shared-signal aliases, direction rules, diagnostics, and ML-005/
    ML-006 evidence; define the bounded conversion and failure matrix.
-2. **Pending.** Implement equal-count ordinal vector mapping across differing
+2. **Complete.** Implement equal-count ordinal vector mapping across differing
    ascending/descending VHDL and SystemVerilog packed ranges in both hierarchy
    directions, with stable conversion ownership and source metadata.
-3. **Pending.** Implement bounded input/output width adaptation with explicit
+3. **Complete.** Implement bounded input/output width adaptation with explicit
    truncation, zero extension, sign extension, and inout/lossy-width rejection
    rules instead of requiring every boundary width to be identical.
-4. **Pending.** Implement signed/unsigned integral boundary adaptation after
+4. **Complete.** Implement signed/unsigned integral boundary adaptation after
    each language's width rules, including direction-aware legality and exact
    diagnostics for unsafe aliases.
-5. **Pending.** Implement VHDL Boolean to/from one-bit SystemVerilog bit/logic
+5. **Complete.** Implement VHDL Boolean to/from one-bit SystemVerilog bit/logic
    conversions with canonical false/true ordinals and checked noncanonical
    incoming values.
-6. **Pending.** Complete VHDL integer-family to/from 32-bit signed
+6. **Complete.** Complete VHDL integer-family to/from 32-bit signed
    SystemVerilog integral conversion, subtype range checks, and both hierarchy
    directions without conflating integer and packed-vector identity.
-7. **Pending.** Complete two-state VHDL bit/bit_vector and SystemVerilog bit
+7. **Complete.** Complete two-state VHDL bit/bit_vector and SystemVerilog bit
    scalar/vector boundaries, including ordinal range conversion and explicit
    rejection of state-losing reverse flows.
-8. **Pending.** Complete four-state SystemVerilog logic and nine-state VHDL
+8. **Complete.** Complete four-state SystemVerilog logic and nine-state VHDL
    std_logic/std_ulogic scalar/vector conversion tables, exact legal collapse,
    unknown/high-impedance handling, and lossy-domain diagnostics.
-9. **Pending.** Prove the complete conversion matrix through recursive mixed
+9. **Complete.** Prove the complete conversion matrix through recursive mixed
    hierarchy, interpreter, LLVM O0/O2, cold/warm/edit cache, debugger, VCD,
    provenance, and positive/negative elaboration evidence; close ML-005 and
    ML-006 in the feature matrix.
-10. **Pending.** Update matrix/diagnostics/docs, pass sanitizer, source/catalog,
+10. **Complete.** Update matrix/diagnostics/docs, pass sanitizer, source/catalog,
     and full Debug/Release gates, then create and push the single Batch 121
+    checkpoint. This is not a mandatory CI-inspection boundary.
+
+Batch status is **complete**. Keep this exact ten-task
+list current in both the official plan and resume handoff. Tasks 1 through 9
+use one accumulated dirty worktree with focused eight-worker Debug builds and
+tests; Task 10 owns the sanitizer, full regressions, documentation, commit, and
+push gate. GitHub builds use parallelism four, and Batch 121 does not require a
+non-documentation CI inspection.
+
+Task 1 confirms that every ordinary boundary reaches one shared validator and
+that `SignalInfo` already retains width, source domain, signedness, packed
+range/direction, integer subtype range, nominal identity, aggregate shape, and
+declaration metadata. HDL and SystemC connections currently bind the formal
+and actual names directly to one scheduler signal ID after validation. The
+validator rejects unknown domains, cross-language aggregates/arrays/
+enumerations, unequal widths, multi-bit signedness differences, unsafe integer
+subtype aliases, state-losing flows into two-state destinations, and unresolved
+cross-language inouts. Existing common-domain selection and language-local
+reads provide equal-width bidirectional Logic9/four-state collapse, while the
+integer fixture proves exact signed 32-bit aliases and range checks. The
+remaining ML-005/ML-006 gaps are structural: no boundary conversion object or
+process owns provenance/cache identity, cross-language packed bounds and
+directions do not produce ordinal remapping, width and signedness adaptation is
+rejected rather than executed, and Boolean/integer/state conversions lack one
+complete atomic matrix. Exact LLVM Debug elaboration, the mixed application,
+and the Logic9 application passed 3/3 focused tests in 17.36 seconds (0.17,
+15.98, and 1.22 seconds). Task 2 is current; the Batch 121 worktree is now the
+intentional accumulated dirty checkpoint, with no sanitizer, Release, full
+regression, commit, push, or CI inspection at this task boundary.
+
+Task 2 makes equal-count ordinal vector boundaries explicit without adding a
+redundant runtime copy. Both frontends already normalize the leftmost declared
+packed element to the most-significant canonical ordinal, so opposite numeric
+bounds and directions can safely share one scheduler signal. The new
+`BoundaryConversionInfo` DesignIR record is emitted only after successful
+cross-language packed validation and retains the owning port path, canonical
+signal ID, direction, formal/actual domains and signedness, both declared
+ranges, connection span, formal declaration span, and actual declaration span.
+Bidirectional VHDL/SystemVerilog fixtures use explicit per-index reads/writes
+to prove `"10XZ"` across `[1:4]` to `7 downto 4`, `[9:6]` to `20 to 23`, and
+the reverse hierarchy direction while checking stable metadata and physical
+source identities. The exact LLVM Debug elaboration target built with eight
+workers; diagnostics catalog, source-line budget, and elaboration passed 3/3
+tests in 0.34 seconds. The internal elaborator header remains exactly 2,000
+lines. Task 3 is current; no sanitizer, Release, full regression, commit, push,
+or CI inspection ran at this task boundary.
+
+Task 3 implements one- through 64-bit width-changing input, output, and buffer
+boundaries while retaining targeted rejection of unequal-width inouts. A
+width-changing connection owns a separate formal signal and one deterministic
+adapter process in the parent specialization. The process reads the source on
+initialization and any-change sensitivity, truncates least-significant
+ordinals with `Extract`, zero-extends unsigned values or replicates the dynamic
+sign ordinal before `Concatenate`, writes in the common update phase, and
+retains an exact whole-signal driver region. Its process ID, formal/actual
+signal IDs, widths, ranges, domains, signedness, path, and source spans are
+retained in `BoundaryConversionInfo`, so ordinary process/cache identity sees
+the conversion rather than hiding it in an alias. Five adapters in each
+VHDL-parent/SV-child and SV-parent/VHDL-child direction prove input zero/sign
+extension and truncation plus output zero extension and truncation; the
+observed values are `00001010`, `11111010`, `0110`, `00001010`, and `0110`.
+An unequal-width resolved inout remains rejected by `FSIM-ELAB-BIND-020`.
+Eight-worker LLVM Debug builds succeeded; diagnostics catalog, source budget,
+and elaboration passed 3/3 in 0.35 seconds. Authored files remain within 2,000
+lines. Task 4 is current; no sanitizer, Release, full regression, commit, push,
+or CI inspection ran at this task boundary.
+
+Task 4 permits explicit signed/unsigned adaptation for one- through 64-bit
+cross-language input, output, and buffer ports while retaining the same-
+language and inout safety checks. Equal-width signedness changes receive a
+bit-preserving `CopyRegister` adapter rather than an unsafe shared type alias.
+When width also changes, truncation remains ordinal and widening follows the
+source side's signedness: unsigned sources zero-extend and signed sources
+replicate their dynamic most-significant ordinal before the destination type
+view is applied. DesignIR distinguishes `signedness_adapter` from
+`width_signedness_adapter`, with both signal identities and the adapter process
+retained. Each VHDL-parent/SV-child and SV-parent/VHDL-child fixture proves two
+signedness-only and two combined adapters: unsigned `1010` widens into a signed
+destination as `00001010`, a signed `1010` source widens into an unsigned
+destination as `11111010`, and equal-width conversions preserve `1010`.
+Resolved inout width and signedness mismatches remain targeted
+`FSIM-ELAB-BIND-020`/`FSIM-ELAB-BIND-021` failures. The exact eight-worker LLVM
+Debug build succeeded; diagnostics catalog, source-line budget, and elaboration
+passed 3/3 in 0.34 seconds, with the largest touched test at 1,730 lines. Task
+5 is current; no sanitizer, Release, full regression, commit, push, or CI
+inspection ran at this task boundary.
+
+Task 5 gives every one-bit VHDL Boolean/SystemVerilog `bit` or `logic`
+boundary its own `boolean_adapter` process and formal signal instead of
+conflating the nominal Boolean with a packed alias. Boolean-to-SystemVerilog
+copies preserve the canonical false/true ordinals. SystemVerilog-to-Boolean
+adapters widen the incoming scalar to the existing checked 32-bit integer
+representation and require the exact range zero through one before committing
+the original bit; four-state `X`/`Z` therefore raises the existing unknown or
+high-impedance runtime failure. A Logic4-to-Boolean checker arms its sensitivity
+before the first read so an undriven time-zero `logic` default is not mistaken
+for a driven noncanonical value. VHDL-parent/SV-child and SV-parent/VHDL-child
+fixtures each prove Boolean-to/from both `logic` and `bit`; a post-start `X`
+transition proves checked rejection. Scalar conversion metadata retains both
+domains, signals, process identity, direction, and source spans with absent
+packed ranges. The conversion tests now have a separate 235-line translation
+unit, preserving the existing 1,730-line mixed test. The exact eight-worker
+LLVM Debug build succeeded; diagnostics catalog, source-line budget, and
+elaboration passed 3/3 in 0.36 seconds. Task 6 is current; no sanitizer,
+Release, full regression, commit, push, or CI inspection ran at this task
+boundary.
+
+Task 6 gives each exact 32-bit signed VHDL integer-family/SystemVerilog `bit`
+or `logic` boundary a distinct `integer_adapter` process and formal signal, so
+integer nominal identity is no longer conflated with packed-vector identity.
+The destination VHDL subtype's bounds are retained in DesignIR and enforced by
+`IntegerCheck` before the original 32-bit value is committed; four-state
+unknown or high-impedance operands fail the same checked path. Logic4 sources
+arm sensitivity before their first read to avoid inspecting an undriven
+time-zero default. Both VHDL-parent/SV-child and SV-parent/VHDL-child fixtures
+prove signed `bit` and `logic` flow in both directions, distinct signal
+ownership, negative values, destination range metadata, a deliberate
+out-of-range transition, and an all-`X` transition. Unsigned SystemVerilog
+profiles are rejected by `FSIM-ELAB-BIND-021` and the generalized range-safe
+conversion diagnostic `FSIM-ELAB-BIND-051`; same-language integer subtype
+aliases retain their direction-aware containment checks. The exact
+eight-worker LLVM Debug build succeeded; diagnostics catalog, source-line
+budget, and elaboration passed 3/3 in 0.38 seconds. The new conversion test is
+458 lines and the largest touched test remains 1,730 lines. Task 7 is current;
+no sanitizer, Release, full regression, commit, push, or CI inspection ran at
+this task boundary.
+
+Task 7 completes equal-width VHDL `bit`/`bit_vector` and SystemVerilog `bit`
+boundaries as canonical two-state ordinal aliases. Vector ports retain both
+declared ranges and directions, while scalar ports now also emit an explicit
+`ordinal_alias` DesignIR record with absent packed ranges; both forms retain
+one scheduler signal and require no adapter process. VHDL-parent/SV-child and
+SV-parent/VHDL-child fixtures each prove vector transfer across opposing and
+differently numbered ranges plus scalar transfer, exact Bit2 domains, alias
+identity, and `1010`/`0101`/`1` runtime values. Separate negative fixtures
+prove both output-directed and input-directed Logic4-to-Bit2 state loss remains
+an elaboration-time `FSIM-ELAB-BIND-022` failure. The exact eight-worker LLVM
+Debug build succeeded; diagnostics catalog, source-line budget, and
+elaboration passed 3/3 in 0.36 seconds. The accumulated conversion test is 729
+lines and `hierarchy_types.cpp` is 1,627 lines. Task 8 is current; no sanitizer,
+Release, full regression, commit, push, or CI inspection ran at this task
+boundary.
+
+Task 8 makes equal-width Logic4/Logic9 coercion explicit in DesignIR as a
+`state_domain_alias` while retaining the canonical shared scheduler signal.
+The owning signal's value kind and each language-local register kind already
+perform the conversion at every read and write, so no redundant process is
+needed; width/signedness adapters retain their structural kind and now carry a
+separate `state_domain_changed` flag. The locked collapse table is
+`U/X/W/- -> X`, `0/L -> 0`, `1/H -> 1`, and `Z -> Z`; reverse expansion is
+`0/1/X/Z -> 0/1/X/Z`. VHDL-parent/SV-child evidence drives every Logic9 value
+through `std_logic_vector`, `std_ulogic_vector`, `std_ulogic`, and `std_logic`
+ports and observes `XX01ZX01X` plus `1`. SV-parent/VHDL-child evidence expands
+and returns `01XZ` plus scalar `Z`. Both hierarchy directions retain exact
+domains, alias identity, source metadata, and optional scalar/vector ranges.
+Logic9-to-SystemVerilog-`bit` state loss remains a targeted
+`FSIM-ELAB-BIND-022` elaboration failure, complementing Task 7's Logic4-to-Bit2
+input/output failures. The exact eight-worker LLVM Debug build succeeded;
+diagnostics catalog, source-line budget, and elaboration passed 3/3 in 0.36
+seconds. The accumulated conversion test is 965 lines and
+`hierarchy_types.cpp` is 1,638 lines. Task 9 is current; no sanitizer, Release,
+full regression, commit, push, or CI inspection ran at this task boundary.
+
+Task 9 adds `fsim.application.mixed_conversions`, a selector-hosted recursive
+SV-to-VHDL-to-SV application covering width, combined signedness/width,
+Boolean, integer, Bit2, and Logic4/Logic9 boundaries in one hierarchy. Each
+build retains exactly 28 source-spanned conversion records and 11 owned adapter
+processes; an empty specialized declaration span discovered by the provenance
+assertions now falls back to the exact connection-identifier span. Interpreter,
+LLVM O0, and LLVM O2 agree on `00001010`, `00001010`, `11111010`, `1`, signed
+`-1`, `0110`, and `01XZ`, as well as a VHDL `boundary_probe` debugger local and
+normalized VCD. Both optimization levels prove cold misses/stores, exact warm
+hits, stable specialization keys, then a leaf-only source edit changes the
+first result to `00001011`, changes cache identity, incurs native misses, and
+again matches the interpreter. The application completes in 0.75 seconds.
+ML-005 and ML-006 are now `execute` rows with positive, negative, elaboration,
+and runtime evidence; the new `fsim.v1-mixed-conversion-matrix` gate requires
+both ordered rows and forbids empty evidence columns. Diagnostics catalog,
+source-line budget, the matrix gate, elaboration, and the recursive application
+passed 5/5 in 1.12 seconds. The application test is 445 lines, the accumulated
+conversion elaboration test is 965 lines, and `hierarchy_types.cpp` is 1,641
+lines. Task 10 is current; no sanitizer, Release, full regression, commit, push,
+or CI inspection ran at this task boundary.
+
+Task 10 closes the batch on the final lifetime-safe implementation. The first
+sanitizer pass exposed a heap use-after-free in `connect_ports`: appending an
+owned adapter signal could reallocate `signal_info_` while the conversion path
+retained a reference to the actual signal metadata. Copying that small metadata
+record across adapter construction removes the invalid vector reference; the
+focused sanitizer elaboration test then passed in 2.34 seconds. Final exact
+eight-worker builds succeeded, LLVM Debug passed 78/78 tests in 181.04 seconds,
+LLVM Release passed 78/78 in 161.04 seconds, and ASan/UBSan with leak detection
+disabled for the managed ptrace environment passed 75/75 in 331.67 seconds.
+Scoped locals remained quick at 0.81, 0.83, and 0.50 seconds respectively, and
+the recursive mixed-conversion application passed in 0.76, 0.70, and 1.08
+seconds. The full suites include the diagnostics catalog, source-line budget,
+VHDL inventory, and both v1 matrix gates. Batch 121 is the single accumulated
+commit/push checkpoint and, because it is not a tenth-batch boundary, requires
+no GitHub Actions inspection.
+
+### One-hundred-twenty-second feature batch — mixed-language construction, drivers, and phase semantics — In progress
+
+The current ten implementation tasks are:
+
+1. **In progress.** Audit VHDL/SystemVerilog/SystemC construction actuals,
+   cross-language driver ownership and resolution, delay propagation,
+   scheduler phases, diagnostics, and ML-007/ML-008/ML-010 evidence; define the
+   bounded positive and failure matrix.
+2. **Pending.** Complete SystemVerilog parameter overrides transferred into
+   VHDL value generics, including named/ordered association, type conversion,
+   defaults, dependent port shapes, and specialization identity.
+3. **Pending.** Complete VHDL generic maps transferred into SystemVerilog value
+   parameters, including case rules, explicit/named values, defaults, width and
+   signedness semantics, dependent generates, and specialization identity.
+4. **Pending.** Complete supported Boolean, integer, packed logic, string, and
+   SystemC construction-actual transfer in every hierarchy direction with
+   canonical typed provenance and cold/warm/edit cache behavior.
+5. **Pending.** Make cross-language input/output/buffer/inout driver ownership
+   explicit through recursive aliases and adapters, admitting one logical
+   forwarded writer while rejecting sibling, overlapping, and read-only writes.
+6. **Pending.** Complete mixed VHDL resolved-signal and SystemVerilog wired-net
+   multiple-driver behavior, including Logic9/Logic4 collapse, high impedance,
+   update fanout, resolver selection, and deterministic conflict diagnostics.
+7. **Pending.** Preserve zero and positive boundary delays plus VHDL
+   inertial/transport/reject and SystemVerilog transition-delay behavior across
+   adapters without duplicate, lost, or prematurely visible transactions.
+8. **Pending.** Complete the cross-language active, inactive, NBA/update, and
+   postponed phase lattice, including recursive feedback, same-slot races,
+   stable source order, debugger stops, callbacks, and VCD observation.
+9. **Pending.** Prove the combined construction/driver/timing matrix through
+   recursive mixed hierarchy, interpreter, LLVM O0/O2, cold/warm/edit cache,
+   debugger, VCD, provenance, and exact positive/negative diagnostics; close
+   ML-008 and ML-010 in the feature matrix.
+10. **Pending.** Update matrix/diagnostics/docs, pass sanitizer, source/catalog,
+    and full Debug/Release gates, then create and push the single Batch 122
     checkpoint. This is not a mandatory CI-inspection boundary.
 
 Batch status is **in progress** with Task 1 current. Keep this exact ten-task
 list current in both the official plan and resume handoff. Tasks 1 through 9
 use one accumulated dirty worktree with focused eight-worker Debug builds and
 tests; Task 10 owns the sanitizer, full regressions, documentation, commit, and
-push gate. GitHub builds use parallelism four, and Batch 121 does not require a
+push gate. GitHub builds use parallelism four, and Batch 122 does not require a
 non-documentation CI inspection.
 
 ## Forward language-closure feature batches
