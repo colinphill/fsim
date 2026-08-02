@@ -394,6 +394,8 @@ therefore excluded.
 | `FSIM-VHDL-SEM-081` | error | A generated VHDL declarative item conflicts with an earlier declaration from a different non-overloadable family. |
 | `FSIM-VHDL-SEM-082` | error | A process or subprogram local declarative item conflicts with an earlier declaration from a different non-overloadable family. |
 | `FSIM-VHDL-SEM-083` | error | A bounded VHDL declarative region repeats an object alias name. |
+| `FSIM-VHDL-SEM-084` | error | A sequential `if`/`case` or process end label is orphaned or does not match its opening label. |
+| `FSIM-VHDL-SEM-085` | error | A `process(all)` sensitivity clause also contains an explicit sensitivity name. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |

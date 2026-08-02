@@ -789,8 +789,7 @@ void VhdlParser::parse_concurrent_statement(DesignUnit& unit) {
   }
 
   if (keyword("process", 0, true)) {
-    unit.processes.push_back(parse_process(
-        label_token ? vhdl_name(label_token->text) : std::string{}));
+    unit.processes.push_back(parse_process(label_token));
     return;
   }
   if (match_keyword("assert", true)) {
@@ -802,7 +801,7 @@ void VhdlParser::parse_concurrent_statement(DesignUnit& unit) {
     return;
   }
   if (match_keyword("with", true)) {
-    auto statement = parse_vhdl_selected_assignment(previous());
+    auto statement = parse_vhdl_selected_assignment(previous(), true);
     if (label_token) {
       statement.label = vhdl_name(label_token->text);
     }
@@ -843,6 +842,19 @@ void VhdlParser::parse_concurrent_statement(DesignUnit& unit) {
     return;
   }
   if (label_token) {
+    const auto label = vhdl_name(label_token->text);
+    if (auto procedure = parse_vhdl_procedure_call()) {
+      procedure->label = label;
+      procedure->span = cover(label_token->span, procedure->span);
+      unit.concurrent_statements.push_back(std::move(*procedure));
+      return;
+    }
+    if (auto statement = parse_assignment(true)) {
+      statement->label = label;
+      statement->span = cover(label_token->span, statement->span);
+      unit.concurrent_statements.push_back(std::move(*statement));
+      return;
+    }
     error(previous(), "FSIM-VHDL-UNSUPPORTED-005",
           "this labeled concurrent statement is not supported");
   }
@@ -854,6 +866,10 @@ void VhdlParser::parse_concurrent_statement(DesignUnit& unit) {
     return;
   }
   rewind(before);
+  if (auto procedure = parse_vhdl_procedure_call()) {
+    unit.concurrent_statements.push_back(std::move(*procedure));
+    return;
+  }
   const auto unexpected = advance();
   error(unexpected, "FSIM-VHDL-UNSUPPORTED-006",
         "unsupported concurrent statement starting with '" +

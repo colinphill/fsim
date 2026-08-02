@@ -616,14 +616,23 @@ void VhdlParser::parse_vhdl_generate_branch(
       advance();
     }
     if (keyword("process", 0, true)) {
-      body.processes.push_back(parse_process(
-          label ? vhdl_name(label->text) : std::string{}));
+      body.processes.push_back(parse_process(label));
       continue;
     }
     if (match_keyword("assert", true)) {
       auto statement = parse_vhdl_assertion(previous());
       if (label) {
         statement.label = vhdl_name(label->text);
+      }
+      body.concurrent_statements.push_back(std::move(statement));
+      continue;
+    }
+    if (match_keyword("with", true)) {
+      auto statement =
+          parse_vhdl_selected_assignment(previous(), true);
+      if (label) {
+        statement.label = vhdl_name(label->text);
+        statement.span = cover(label->span, statement.span);
       }
       body.concurrent_statements.push_back(std::move(statement));
       continue;
@@ -664,11 +673,23 @@ void VhdlParser::parse_vhdl_generate_branch(
     const auto before = position();
     auto assignment = parse_assignment(true);
     if (assignment) {
+      if (label) {
+        assignment->label = vhdl_name(label->text);
+        assignment->span = cover(label->span, assignment->span);
+      }
       body.concurrent_statements.push_back(
           std::move(*assignment));
       continue;
     }
     rewind(before);
+    if (auto procedure = parse_vhdl_procedure_call()) {
+      if (label) {
+        procedure->label = vhdl_name(label->text);
+        procedure->span = cover(label->span, procedure->span);
+      }
+      body.concurrent_statements.push_back(std::move(*procedure));
+      continue;
+    }
     const auto unsupported = advance();
     error(
         unsupported,
@@ -908,22 +929,38 @@ void VhdlParser::skip_vhdl_connection_actual() {
   }
 }
 
-Process VhdlParser::parse_process(std::string label) {
+Process VhdlParser::parse_process(std::optional<Token> label) {
   const auto start =
       expect_keyword("process", true, "FSIM-VHDL-PARSE-019");
   Process process;
   process.kind = ProcessKind::VhdlProcess;
-  process.name = std::move(label);
+  process.name = label ? vhdl_name(label->text) : std::string{};
 
   if (match(TokenKind::LeftParen)) {
     while (!at_end() && !at(TokenKind::RightParen)) {
       const auto signal = expect_identifier("sensitivity name");
+      const bool wildcard = detail::iequals(signal.text, "all");
       process.sensitivities.push_back(
           Sensitivity{
-              EdgeKind::Any, vhdl_name(signal.text), signal.span, {}});
+              EdgeKind::Any,
+              wildcard ? "*" : vhdl_name(signal.text),
+              signal.span,
+              {}});
       if (!match(TokenKind::Comma)) {
         break;
       }
+    }
+    if (process.sensitivities.size() > 1
+        && std::ranges::any_of(
+            process.sensitivities,
+            [](const Sensitivity& sensitivity) {
+              return sensitivity.signal == "*";
+            })) {
+      error(
+          start,
+          "FSIM-VHDL-SEM-085",
+          "process(all) cannot combine all with another sensitivity "
+          "name");
     }
     expect(TokenKind::RightParen, "')' after sensitivity list",
            "FSIM-VHDL-PARSE-020");
@@ -1030,12 +1067,11 @@ Process VhdlParser::parse_process(std::string label) {
   }
   expect_keyword("end", true, "FSIM-VHDL-PARSE-022");
   match_keyword("process", true);
-  if (at(TokenKind::Identifier)) {
-    advance();
-  }
+  parse_statement_end_label(process.name, "process");
   expect(TokenKind::Semicolon, "';' after process",
          "FSIM-VHDL-PARSE-023");
-  process.span = span_from(start, previous());
+  process.span = label ? span_from(*label, previous())
+                       : span_from(start, previous());
   infer_process_edge(process);
   return process;
 }

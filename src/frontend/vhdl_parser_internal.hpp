@@ -266,12 +266,13 @@ class VhdlParser final : private detail::ParserBase {
 
   void skip_vhdl_connection_actual();
 
-  Process parse_process(std::string label);
+  Process parse_process(std::optional<Token> label);
 
   std::vector<Statement> parse_statement_list(
       std::initializer_list<std::string_view> terminators);
 
-  std::optional<Statement> parse_sequential_statement();
+  std::optional<Statement> parse_sequential_statement(
+      const std::optional<Token>& opening_label);
 
   std::optional<Statement> parse_vhdl_procedure_call();
 
@@ -284,11 +285,17 @@ class VhdlParser final : private detail::ParserBase {
   void parse_loop_end_label(
       const std::string_view opening_label);
 
+  void parse_statement_end_label(
+      std::string_view opening_label,
+      std::string_view statement_kind);
+
   Statement parse_if_branch(const Token& start);
 
   std::optional<Statement> parse_assignment(bool concurrent);
 
-  Statement parse_vhdl_selected_assignment(const Token& start);
+  Statement parse_vhdl_selected_assignment(
+      const Token& start,
+      bool concurrent);
 
   Statement parse_conditional_signal_assignment(Statement assignment);
 

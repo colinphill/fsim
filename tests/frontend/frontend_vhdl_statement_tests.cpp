@@ -254,6 +254,147 @@ end architecture;
               }),
       "duplicate and nonfinal selected-assignment others alternatives "
       "must be diagnosed");
+
+  const auto inventory = parse_text(
+      "statement_inventory.vhd",
+      R"(
+architecture rtl of statement_inventory is
+  signal selector : std_logic;
+  signal source : std_logic;
+  signal result : std_logic;
+begin
+  direct_write: result <= source;
+  direct_call: tick(result);
+  generated: if true generate
+    generated_select: with selector select
+      result <= source when '1', '0' when others;
+    generated_call: tick(result);
+  end generate generated;
+  reactive: process(all)
+  begin
+    result <= source;
+  end process reactive;
+  worker: process
+    variable local_value : std_logic;
+  begin
+    sequential_select: with selector select
+      result <= source when '1', '0' when others;
+    variable_select: with selector select
+      local_value := source when '1', '0' when others;
+    branch: if selector = '1' then
+      branch_null: null;
+    end if branch;
+    choice: case selector is
+      when '1' => selected_null: null;
+      when others => fallback_null: null;
+    end case choice;
+    suspended: wait;
+  end process worker;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      inventory.ok(),
+      "labeled sequential/concurrent statement inventory must parse");
+  const auto& inventory_unit = inventory.design.units.front();
+  require(
+      inventory_unit.concurrent_statements.size() == 2
+          && inventory_unit.concurrent_statements[0].label
+              == "direct_write"
+          && inventory_unit.concurrent_statements[0]
+                 .assignment_kind
+              == AssignmentKind::Continuous
+          && inventory_unit.concurrent_statements[1].label
+              == "direct_call"
+          && inventory_unit.concurrent_statements[1].kind
+              == StatementKind::ProcedureCall,
+      "labeled concurrent assignment and procedure-call HIR");
+  require(
+      inventory_unit.generate_regions.size() == 1
+          && inventory_unit.generate_regions.front()
+                 .then_body.concurrent_statements.size()
+              == 2
+          && inventory_unit.generate_regions.front()
+                 .then_body.concurrent_statements[0].label
+              == "generated_select"
+          && inventory_unit.generate_regions.front()
+                 .then_body.concurrent_statements[1].label
+              == "generated_call",
+      "generated selected assignment and procedure-call HIR");
+  require(
+      inventory_unit.processes.size() == 2
+          && inventory_unit.processes[0].name == "reactive"
+          && inventory_unit.processes[0].sensitivities.size() == 1
+          && inventory_unit.processes[0].sensitivities.front().signal
+              == "*"
+          && inventory_unit.processes[1].name == "worker"
+          && inventory_unit.processes[1].span.begin.offset
+              < inventory_unit.processes[1].statements.front()
+                    .span.begin.offset,
+      "process(all), opening/end label, and complete source span");
+  const auto& sequential =
+      inventory_unit.processes[1].statements;
+  require(
+      sequential.size() == 5
+          && sequential[0].label == "sequential_select"
+          && sequential[0].kind == StatementKind::Case
+          && sequential[0].case_alternatives[0]
+                 .statements[0].assignment_kind
+              == AssignmentKind::VhdlSignal
+          && sequential[1].label == "variable_select"
+          && sequential[1].case_alternatives[0]
+                 .statements[0].assignment_kind
+              == AssignmentKind::Blocking
+          && sequential[2].label == "branch"
+          && sequential[2].statements[0].label == "branch_null"
+          && sequential[3].label == "choice"
+          && sequential[3].case_alternatives[0]
+                 .statements[0].label
+              == "selected_null"
+          && sequential[3].case_alternatives[1]
+                 .statements[0].label
+              == "fallback_null"
+          && sequential[4].label == "suspended",
+      "labeled sequential selected/if/case/simple statement HIR");
+
+  const auto bad_end_labels = parse_text(
+      "bad_statement_end_labels.vhd",
+      R"(
+architecture rtl of bad_statement_end_labels is
+begin
+  worker: process
+  begin
+    branch: if true then
+      null;
+    end if wrong_branch;
+    choice: case true is
+      when others => null;
+    end case wrong_choice;
+  end process wrong_worker;
+  mixed: process(all, wrong_worker)
+  begin
+    null;
+  end process mixed;
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !bad_end_labels.ok()
+          && std::ranges::count_if(
+                 bad_end_labels.diagnostics,
+                 [](const auto& diagnostic) {
+                   return diagnostic.code
+                       == "FSIM-VHDL-SEM-084";
+                 })
+              == 3,
+      "mismatched if/case/process end labels are targeted");
+  require(
+      std::ranges::any_of(
+          bad_end_labels.diagnostics,
+          [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-VHDL-SEM-085";
+          }),
+      "process(all) cannot mix explicit sensitivity names");
 }
 
 void test_vhdl_delay_mechanisms() {

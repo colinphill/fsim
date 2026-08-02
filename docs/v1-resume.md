@@ -17,9 +17,8 @@ as work lands. Before moving on, retain that batch's list, mark it
 - Recorded: 2026-08-01.
 - Branch: `codex/resumable-jit`.
 - Implementation baseline: pushed Batch 114 local declarative-region support
-  at commit `f2fdd88`. This document's containing checkpoint closes Batch 114
-  enumeration/character selection-generate choices and all local gates. Batch
-  115 is current with Task 1 in progress.
+  at commit `4e716e6`. The working tree contains focused-complete Batch 115
+  Task 1 statement-HIR/label coverage; Task 2 is current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
 - The source-size refactor is complete: all 348 authored C/C++ source, header,
@@ -1829,10 +1828,10 @@ completed selector-domain contract. All ten Batch 114 tasks are complete.
 
 ## In-progress feature batch 115
 
-1. **In progress.** Audit and retain every remaining synthesizable sequential and concurrent
+1. **Complete.** Audit and retain every remaining synthesizable sequential and concurrent
    statement form in typed HIR, with exact labels, spans, and targeted
    unsupported-form diagnostics.
-2. **Pending.** Complete sequential signal/variable assignments, procedure calls, `null`,
+2. **In progress.** Complete sequential signal/variable assignments, procedure calls, `null`,
    conditionals, loops, and case statements across nested labeled scopes.
 3. **Pending.** Add VHDL-2008 matching case statements and matching selected/conditional
    assignments with exact wildcard semantics and deterministic legality checks.
@@ -1854,6 +1853,20 @@ completed selector-domain contract. All ten Batch 114 tasks are complete.
 Batch status is **in progress**. Keep this exact ten-task list current in both
 the official plan and this handoff. Change it to complete only after all ten
 tasks and their gates close and work moves to Batch 116.
+
+Task 1 is focused-complete. Generalized sequential labels retain canonical
+identity and full spans on every currently retained assignment, call, report,
+wait, `null`, conditional, case, and loop HIR node. Sequential selected signal
+and variable assignments retain their distinct assignment kinds; labeled
+simple/conditional/selected assignments and procedure calls are also retained
+in architecture and generated regions. `process(all)` becomes wildcard
+sensitivity, while `FSIM-VHDL-SEM-084` checks `if`/`case`/process end labels
+and `FSIM-VHDL-SEM-085` rejects mixing `all` with explicit names. The final
+five-test focused Debug/Release gates pass in 16.21/15.30 seconds with 1,455
+production diagnostics and all 348 authored sources within the 2,000-line
+limit. The late Batch 114 negative fixture is compacted from 2,010 to exactly
+2,000 lines. Batch 115 remains **in progress** with Task 2 current and Tasks 3
+through 10 pending.
 
 Batch 110 has advanced through these validated features:
 

@@ -6537,10 +6537,10 @@ ten Batch 114 tasks are complete.
 
 The current ten implementation tasks are:
 
-1. **In progress.** Audit and retain every remaining synthesizable sequential and concurrent
+1. **Complete.** Audit and retain every remaining synthesizable sequential and concurrent
    statement form in typed HIR, with exact labels, spans, and targeted
    unsupported-form diagnostics.
-2. **Pending.** Complete sequential signal/variable assignments, procedure calls, `null`,
+2. **In progress.** Complete sequential signal/variable assignments, procedure calls, `null`,
    conditionals, loops, and case statements across nested labeled scopes.
 3. **Pending.** Add VHDL-2008 matching case statements and matching selected/conditional
    assignments with exact wildcard semantics and deterministic legality checks.
@@ -6562,6 +6562,22 @@ The current ten implementation tasks are:
 Batch status is **in progress**. Keep this exact ten-task list current in both
 the official plan and resume handoff. Change it to complete only after all ten
 tasks and their gates close and work moves to Batch 116.
+
+Task 1 is focused-complete. A generalized sequential-label path retains exact
+canonical labels and full source spans on assignments, selected assignments,
+procedure calls, assertions/reports, waits, `null`, `if`, `case`, and loop
+statements; optional `end if`, `end case`, and `end process` labels are checked
+against their openings by `FSIM-VHDL-SEM-084`. Sequential VHDL-2008 selected
+signal and variable assignments retain distinct signal/blocking assignment
+kinds. Architecture and generated regions now retain labeled simple/
+conditional/selected assignments and concurrent procedure calls instead of
+rejecting or dropping their labels. `process(all)` normalizes to wildcard
+sensitivity while `FSIM-VHDL-SEM-085` rejects a mixed explicit list. The final
+five-test focused Debug/Release gates pass in 16.21/15.30 seconds with all
+1,455 production diagnostics cataloged and all 348 authored sources within
+the 2,000-line limit; the late Batch 114 negative fixture is compacted from
+2,010 to exactly 2,000 lines. Batch 115 remains **in progress** with Task 2
+current and Tasks 3 through 10 pending.
 
 ## Forward language-closure feature batches
 

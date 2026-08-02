@@ -326,7 +326,6 @@ begin
         port map ();
   end generate selection;
 end architecture;
-
 package generated_choice_types is
   type state_t is (idle, ready, 'Z', done);
   type foreign_state_t is (cold, hot);
@@ -355,9 +354,7 @@ begin
 end architecture;
 
 use work.generated_choice_types.all;
-entity generated_vhdl_enum_overlap is
-  generic (mode : state_t := 'Z');
-end entity;
+entity generated_vhdl_enum_overlap is generic (mode : state_t := 'Z'); end;
 architecture rtl of generated_vhdl_enum_overlap is
 begin
   selection: case mode generate
@@ -365,29 +362,22 @@ begin
     second_choice: when 'Z' to done =>
   end generate selection;
 end architecture;
-
 use work.generated_choice_types.all;
-entity generated_vhdl_enum_bad_choice is
-  generic (mode : state_t := 'Z');
-end entity;
+entity generated_vhdl_enum_bad_choice is generic (mode : state_t := 'Z'); end;
 architecture rtl of generated_vhdl_enum_bad_choice is
 begin
   selection: case mode generate
     invalid_choice: when missing_state =>
   end generate selection;
 end architecture;
-
 use work.generated_choice_types.all;
-entity generated_vhdl_enum_wrong_domain is
-  generic (mode : state_t := 'Z');
-end entity;
+entity generated_vhdl_enum_wrong_domain is generic (mode : state_t := 'Z'); end;
 architecture rtl of generated_vhdl_enum_wrong_domain is
 begin
   selection: case mode generate
     invalid_choice: when foreign_choice =>
   end generate selection;
 end architecture;
-
 entity generated_vhdl_overlapping_ranges is
 end entity;
 architecture rtl of generated_vhdl_overlapping_ranges is

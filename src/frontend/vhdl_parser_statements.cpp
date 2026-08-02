@@ -14,8 +14,19 @@ std::vector<Statement> VhdlParser::parse_statement_list(
     if (stop) {
       break;
     }
+    std::optional<Token> opening_label;
+    if (at(TokenKind::Identifier)
+        && at(TokenKind::Colon, 1)) {
+      opening_label = advance();
+      advance();
+    }
     const auto before = position();
-    if (auto statement = parse_sequential_statement()) {
+    if (auto statement =
+            parse_sequential_statement(opening_label)) {
+      if (opening_label) {
+        statement->label = vhdl_name(opening_label->text);
+        statement->span = cover(opening_label->span, statement->span);
+      }
       statements.push_back(std::move(*statement));
     }
     if (position() == before) {
@@ -25,15 +36,10 @@ std::vector<Statement> VhdlParser::parse_statement_list(
   return statements;
 }
 
-std::optional<Statement> VhdlParser::parse_sequential_statement() {
-  std::optional<Token> opening_loop_label;
-  if (at(TokenKind::Identifier)
-      && at(TokenKind::Colon, 1)
-      && (keyword("for", 2, true)
-          || keyword("while", 2, true)
-          || keyword("loop", 2, true))) {
-    opening_loop_label = advance();
-    advance();
+std::optional<Statement> VhdlParser::parse_sequential_statement(
+    const std::optional<Token>& opening_label) {
+  if (match_keyword("with", true)) {
+    return parse_vhdl_selected_assignment(previous(), false);
   }
   if (match_keyword("wait", true)) {
     const auto start = previous();
@@ -155,6 +161,11 @@ std::optional<Statement> VhdlParser::parse_sequential_statement() {
     auto statement = parse_if_branch(start);
     expect_keyword("end", true, "FSIM-VHDL-PARSE-024");
     expect_keyword("if", true, "FSIM-VHDL-PARSE-025");
+    parse_statement_end_label(
+        opening_label
+            ? vhdl_name(opening_label->text)
+            : std::string_view{},
+        "if");
     expect(TokenKind::Semicolon, "';' after if statement",
            "FSIM-VHDL-PARSE-026");
     statement.span = span_from(start, previous());
@@ -206,6 +217,11 @@ std::optional<Statement> VhdlParser::parse_sequential_statement() {
     }
     expect_keyword("end", true, "FSIM-VHDL-PARSE-097");
     expect_keyword("case", true, "FSIM-VHDL-PARSE-098");
+    parse_statement_end_label(
+        opening_label
+            ? vhdl_name(opening_label->text)
+            : std::string_view{},
+        "case");
     expect(
         TokenKind::Semicolon,
         "';' after VHDL case statement",
@@ -214,13 +230,12 @@ std::optional<Statement> VhdlParser::parse_sequential_statement() {
     return statement;
   }
   if (match_keyword("for", true)) {
-    const auto start =
-        opening_loop_label.value_or(previous());
+    const auto start = opening_label.value_or(previous());
     Statement statement;
     statement.kind = StatementKind::Loop;
     statement.loop_label =
-        opening_loop_label
-            ? vhdl_name(opening_loop_label->text)
+        opening_label
+            ? vhdl_name(opening_label->text)
             : std::string{};
     const auto variable =
         expect_identifier("for-loop parameter");
@@ -255,7 +270,7 @@ std::optional<Statement> VhdlParser::parse_sequential_statement() {
     expect_keyword("loop", true, "FSIM-VHDL-PARSE-102");
     validate_opening_loop_label(
         statement.loop_label,
-        opening_loop_label.value_or(start));
+        opening_label.value_or(start));
     ++sequential_loop_depth_;
     sequential_loop_labels_.push_back(
         statement.loop_label);
@@ -273,20 +288,19 @@ std::optional<Statement> VhdlParser::parse_sequential_statement() {
     return statement;
   }
   if (match_keyword("while", true)) {
-    const auto start =
-        opening_loop_label.value_or(previous());
+    const auto start = opening_label.value_or(previous());
     Statement statement;
     statement.kind = StatementKind::Loop;
     statement.loop_label =
-        opening_loop_label
-            ? vhdl_name(opening_loop_label->text)
+        opening_label
+            ? vhdl_name(opening_label->text)
             : std::string{};
     statement.loop_runtime = true;
     statement.condition = parse_expression();
     expect_keyword("loop", true, "FSIM-VHDL-PARSE-106");
     validate_opening_loop_label(
         statement.loop_label,
-        opening_loop_label.value_or(start));
+        opening_label.value_or(start));
     ++sequential_loop_depth_;
     sequential_loop_labels_.push_back(
         statement.loop_label);
@@ -304,13 +318,12 @@ std::optional<Statement> VhdlParser::parse_sequential_statement() {
     return statement;
   }
   if (match_keyword("loop", true)) {
-    const auto start =
-        opening_loop_label.value_or(previous());
+    const auto start = opening_label.value_or(previous());
     Statement statement;
     statement.kind = StatementKind::Loop;
     statement.loop_label =
-        opening_loop_label
-            ? vhdl_name(opening_loop_label->text)
+        opening_label
+            ? vhdl_name(opening_label->text)
             : std::string{};
     statement.loop_runtime = true;
     statement.condition = Expression{
@@ -320,7 +333,7 @@ std::optional<Statement> VhdlParser::parse_sequential_statement() {
         start.span};
     validate_opening_loop_label(
         statement.loop_label,
-        opening_loop_label.value_or(start));
+        opening_label.value_or(start));
     ++sequential_loop_depth_;
     sequential_loop_labels_.push_back(
         statement.loop_label);
@@ -580,6 +593,30 @@ void VhdlParser::parse_loop_end_label(
   }
 }
 
+void VhdlParser::parse_statement_end_label(
+    const std::string_view opening_label,
+    const std::string_view statement_kind) {
+  if (!at(TokenKind::Identifier)) {
+    return;
+  }
+  const auto end_label = advance();
+  const auto canonical = vhdl_name(end_label.text);
+  if (opening_label.empty()) {
+    error(
+        end_label,
+        "FSIM-VHDL-SEM-084",
+        "an end-" + std::string{statement_kind}
+            + " label requires a matching opening label");
+  } else if (canonical != opening_label) {
+    error(
+        end_label,
+        "FSIM-VHDL-SEM-084",
+        "end-" + std::string{statement_kind} + " label '"
+            + canonical + "' does not match opening label '"
+            + std::string{opening_label} + "'");
+  }
+}
+
 Statement VhdlParser::parse_if_branch(const Token& start) {
   Statement statement;
   statement.kind = StatementKind::If;
@@ -634,20 +671,34 @@ std::optional<Statement> VhdlParser::parse_assignment(bool concurrent) {
   return statement;
 }
 
-Statement VhdlParser::parse_vhdl_selected_assignment(const Token& start) {
+Statement VhdlParser::parse_vhdl_selected_assignment(
+    const Token& start,
+    const bool concurrent) {
   Statement statement;
   statement.kind = StatementKind::Case;
   statement.condition = parse_expression();
   expect_keyword("select", true, "FSIM-VHDL-PARSE-116");
   const auto target = parse_lvalue();
-  expect(
-      TokenKind::LessEqual,
-      "'<=' in selected signal assignment",
-      "FSIM-VHDL-PARSE-117");
+  AssignmentKind assignment_kind{};
+  if (match(TokenKind::LessEqual)) {
+    assignment_kind = concurrent ? AssignmentKind::Continuous
+                                 : AssignmentKind::VhdlSignal;
+  } else if (!concurrent && match(TokenKind::ColonEqual)) {
+    assignment_kind = AssignmentKind::Blocking;
+  } else {
+    error(
+        current(),
+        "FSIM-VHDL-PARSE-117",
+        concurrent
+            ? "expected '<=' in selected signal assignment"
+            : "expected '<=' or ':=' in sequential selected assignment");
+  }
   Statement common_assignment;
-  common_assignment.vhdl_delay_mechanism =
-      VhdlDelayMechanism::ImplicitInertial;
-  parse_vhdl_delay_mechanism(common_assignment);
+  if (assignment_kind != AssignmentKind::Blocking) {
+    common_assignment.vhdl_delay_mechanism =
+        VhdlDelayMechanism::ImplicitInertial;
+    parse_vhdl_delay_mechanism(common_assignment);
+  }
 
   bool saw_others = false;
   do {
@@ -655,13 +706,18 @@ Statement VhdlParser::parse_vhdl_selected_assignment(const Token& start) {
     const auto alternative_start = current();
     Statement assignment;
     assignment.kind = StatementKind::Assignment;
-    assignment.assignment_kind = AssignmentKind::Continuous;
+    assignment.assignment_kind = assignment_kind;
     assignment.target = target;
     assignment.vhdl_delay_mechanism =
         common_assignment.vhdl_delay_mechanism;
     assignment.vhdl_rejection_limit =
         common_assignment.vhdl_rejection_limit;
-    parse_vhdl_waveform(assignment);
+    if (assignment_kind == AssignmentKind::Blocking) {
+      assignment.value = parse_expression();
+      diagnose_misplaced_vhdl_delay_mechanism();
+    } else {
+      parse_vhdl_waveform(assignment);
+    }
     expect_keyword("when", true, "FSIM-VHDL-PARSE-118");
     if (match_keyword("others", true)) {
       alternative.is_default = true;
