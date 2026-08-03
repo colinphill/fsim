@@ -14,6 +14,8 @@ set(FSIM_SYSTEMC_COMPILER_TEST
   "${FSIM_SOURCE_DIR}/tests/systemc/plugin_compiler_test.cpp")
 set(FSIM_APPLICATION_SYSTEMC_SOURCE
   "${FSIM_SOURCE_DIR}/tests/app/application_test_sources_systemc.cpp")
+set(FSIM_APPLICATION_SPECIALIZATION_TEST
+  "${FSIM_SOURCE_DIR}/tests/app/application_test_specialization.cpp")
 set(FSIM_RELEASE_AUDIT
   "${FSIM_SOURCE_DIR}/cmake/CheckV1ReleaseAudit.cmake")
 set(FSIM_RELEASE_CANDIDATE
@@ -28,6 +30,7 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_SYSTEMC_CORE}"
     "${FSIM_SYSTEMC_COMPILER_TEST}"
     "${FSIM_APPLICATION_SYSTEMC_SOURCE}"
+    "${FSIM_APPLICATION_SPECIALIZATION_TEST}"
     "${FSIM_RELEASE_AUDIT}"
     "${FSIM_RELEASE_CANDIDATE}"
     "${FSIM_FRONTEND}"
@@ -46,6 +49,9 @@ file(READ "${FSIM_SYSTEMC_COMPILER_TEST}" FSIM_SYSTEMC_COMPILER_TEST_CONTENTS)
 file(READ
   "${FSIM_APPLICATION_SYSTEMC_SOURCE}"
   FSIM_APPLICATION_SYSTEMC_SOURCE_CONTENTS)
+file(READ
+  "${FSIM_APPLICATION_SPECIALIZATION_TEST}"
+  FSIM_APPLICATION_SPECIALIZATION_TEST_CONTENTS)
 file(READ "${FSIM_RELEASE_AUDIT}" FSIM_RELEASE_AUDIT_CONTENTS)
 file(READ "${FSIM_RELEASE_CANDIDATE}" FSIM_RELEASE_CANDIDATE_CONTENTS)
 file(READ "${FSIM_FRONTEND}" FSIM_FRONTEND_CONTENTS)
@@ -107,6 +113,29 @@ if(FSIM_APPLICATION_SYSTEMC_SOURCE_CHUNK_COUNT LESS 6)
     "generated SystemC application source lost its MSVC-safe literal chunks")
 endif()
 
+foreach(FSIM_SPECIALIZATION_PATH_POLICY IN ITEMS
+    "#include \"path_test_support.hpp\""
+    "same_source_path("
+    "has_source_dependency(")
+  string(FIND
+    "${FSIM_APPLICATION_SPECIALIZATION_TEST_CONTENTS}"
+    "${FSIM_SPECIALIZATION_PATH_POLICY}"
+    FSIM_SPECIALIZATION_PATH_INDEX)
+  if(FSIM_SPECIALIZATION_PATH_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "specialization test lost portable path comparison: "
+      "${FSIM_SPECIALIZATION_PATH_POLICY}")
+  endif()
+endforeach()
+string(FIND
+  "${FSIM_APPLICATION_SPECIALIZATION_TEST_CONTENTS}"
+  "vhdl_generic_entity_source.string()"
+  FSIM_SPECIALIZATION_NATIVE_PATH_INDEX)
+if(NOT FSIM_SPECIALIZATION_NATIVE_PATH_INDEX EQUAL -1)
+  message(FATAL_ERROR
+    "specialization test compares UTF-8 dependencies with a native spelling")
+endif()
+
 foreach(FSIM_RELEASE_CONTENTS IN ITEMS
     FSIM_RELEASE_AUDIT_CONTENTS
     FSIM_RELEASE_CANDIDATE_CONTENTS)
@@ -142,6 +171,8 @@ endforeach()
 foreach(FSIM_TIMEOUT_POLICY IN ITEMS
     "fsim.application.scoped_locals"
     "PROPERTIES TIMEOUT 60"
+    "fsim.application.systemc_matrix"
+    "PROPERTIES TIMEOUT 900"
     "fsim.application.sv_containers"
     "PROPERTIES TIMEOUT 1200"
     "PROPERTIES TIMEOUT 600")

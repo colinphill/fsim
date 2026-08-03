@@ -32,7 +32,7 @@ risky structural transition that needs a durable boundary.
   Batch 128 is complete in its end-of-batch checkpoint; Batch 129 is complete
   in the current end-of-batch checkpoint; Batch 130 Tasks 1 through 9 and the
   Task 10 local release gates are complete. The mandatory Task 10 hosted CI
-  repair cycle is in progress after run `30824506517`; the fifth consolidated
+  repair cycle is in progress after run `30828460860`; the sixth consolidated
   repair checkpoint is the current dirty worktree.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
@@ -5345,7 +5345,7 @@ Task 8 is focused-complete. The new
 `fsim.v1-resource-release` gate compose the complete platform contracts and
 freeze 12 hosted configurations, six four-worker CI build steps, the local
 eight-link pool, compact Debug objects, 8 MiB MSVC-compatible test stacks,
-20/45/70-minute job bounds, 60/120/600/1200-second test classes, scoped/SystemC
+20/45/70-minute job bounds, 60/120/600/900/1200-second test classes, scoped/SystemC
 phase traces, 14 explicit platform files, and 20 portability rows. This was a
 static local inspection only; no GitHub Actions state was queried. The
 eight-worker Debug build required no compilation. Resource/portability owners,
@@ -5445,8 +5445,27 @@ and Release rebuilt warning-clean with eight workers and passed complete
 at 0.85/0.84 seconds. The final clang-cl Release job confirmed the concurrency
 defect by timing out `fsim.systemc.compiler` at its 1,500-second bound, while
 plain MSVC Release failed an assertion inside that same three-caller section;
-the Windows transaction serialization directly owns both outcomes. The fifth
-repair checkpoint and its replacement hosted run are pending.
+the Windows transaction serialization directly owns both outcomes. Fifth
+repair checkpoint `38a0bcd` was pushed; replacement run `30828460860` is the
+current mandatory hosted proof.
+
+Replacement run `30828460860` passed all six Ubuntu jobs, including exact
+LLVM Debug/Release, ASan/UBSan, and fuzz. All six Windows jobs then reached the
+complete test suite and failed the same remaining native-spelling assertion in
+`application_test_specialization.cpp`: specialization dependencies are stored
+as UTF-8 generic paths, but this older fixture still compared them with
+`std::filesystem::path::string()`. Every Windows `fsim.systemc.compiler` test
+passed quickly, from 8.43 to 24.29 seconds, so the prior Release concurrency
+failure and hang are repaired; scoped locals also passed in 0.08 to 1.22
+seconds. Plain MSVC Debug additionally reached the 600-second SystemC
+application-matrix bound, while the five sibling Windows configurations passed
+that matrix in 460.06 to 558.97 seconds. The sixth consolidated repair routes
+all remaining specialization dependency checks through the shared UTF-8/native
+filesystem-identity helper, statically rejects the original comparison, and
+sets a still-bounded 900-second SystemC matrix limit. Exact-LLVM Debug and
+Release rebuilt warning-clean with eight workers; the application and three
+resource/MSVC contracts passed 4/4 in 9.92 and 9.56 seconds. The sixth repair
+checkpoint and replacement hosted run are pending.
 
 Batch 110 has advanced through these validated features:
 

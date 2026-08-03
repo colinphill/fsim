@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
+#include "path_test_support.hpp"
 
 #include "fsim/systemc/hierarchy.hpp"
 
@@ -337,10 +338,10 @@ const auto run_generic_specializations =
                   {"width", "4"},
                   {"value", std::string{narrow_value}},
                   {"last", "3"}}));
-          assert(
-              specialization.source_dependencies
-              == std::vector<std::string>{
-                  vhdl_generic_entity_source.string()});
+          assert(specialization.source_dependencies.size() == 1);
+          assert(same_source_path(
+              specialization.source_dependencies.front(),
+              vhdl_generic_entity_source));
         } else if (
             specialization.instance
             == "vhdl_generic_top.wide_child") {
@@ -351,10 +352,10 @@ const auto run_generic_specializations =
                   {"width", "8"},
                   {"value", "3"},
                   {"last", "7"}}));
-          assert(
-              specialization.source_dependencies
-              == std::vector<std::string>{
-                  vhdl_generic_entity_source.string()});
+          assert(specialization.source_dependencies.size() == 1);
+          assert(same_source_path(
+              specialization.source_dependencies.front(),
+              vhdl_generic_entity_source));
         }
       }
       result.simulation =
@@ -610,36 +611,16 @@ const auto run_package_constants =
           project->design.specializations()
               .front()
               .source_dependencies;
-      assert(
-          std::find(
-              dependencies.begin(),
-              dependencies.end(),
-              package_constant_source.string())
-          != dependencies.end());
-      assert(
-          std::find(
-              dependencies.begin(),
-              dependencies.end(),
-              package_base_constant_source.string())
-          != dependencies.end());
-      assert(
-          std::find(
-              dependencies.begin(),
-              dependencies.end(),
-              package_base_context_source.string())
-          != dependencies.end());
-      assert(
-          std::find(
-              dependencies.begin(),
-              dependencies.end(),
-              package_context_source.string())
-          != dependencies.end());
-      assert(
-          std::find(
-              dependencies.begin(),
-              dependencies.end(),
-              unused_package_source.string())
-          == dependencies.end());
+      assert(has_source_dependency(
+          dependencies, package_constant_source));
+      assert(has_source_dependency(
+          dependencies, package_base_constant_source));
+      assert(has_source_dependency(
+          dependencies, package_base_context_source));
+      assert(has_source_dependency(
+          dependencies, package_context_source));
+      assert(!has_source_dependency(
+          dependencies, unused_package_source));
       auto key = project->specialization_cache_keys.front();
       auto simulation = capture_simulation(
           std::move(*project), engine);
@@ -883,26 +864,18 @@ const auto run_systemverilog_packages =
           project->design.specializations()
               .front()
               .source_dependencies;
-      const auto has_dependency =
-          [&](const std::filesystem::path& expected) {
-            return std::any_of(
-                dependencies.begin(),
-                dependencies.end(),
-                [&](const std::string& dependency) {
-                  std::error_code comparison_error;
-                  return std::filesystem::equivalent(
-                             std::filesystem::path{dependency},
-                             expected,
-                             comparison_error)
-                      && !comparison_error;
-                });
-          };
       assert(
-          has_dependency(systemverilog_base_package_source));
+          has_source_dependency(
+              dependencies,
+              systemverilog_base_package_source));
       assert(
-          has_dependency(systemverilog_derived_package_source));
+          has_source_dependency(
+              dependencies,
+              systemverilog_derived_package_source));
       assert(
-          !has_dependency(systemverilog_unused_package_source));
+          !has_source_dependency(
+              dependencies,
+              systemverilog_unused_package_source));
       auto key = project->specialization_cache_keys.front();
       auto simulation = capture_simulation(
           std::move(*project), engine);
