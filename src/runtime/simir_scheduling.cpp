@@ -873,6 +873,10 @@ void Interpreter::Impl::handle_external_boundary(
       dynamic_fanout[sensitivity.signal].push_back(
           {process.program.id, sensitivity.edge});
     }
+    if (suspension.timeout) {
+      begin_wait_timeout(
+          process, instruction, *suspension.timeout, std::nullopt);
+    }
     break;
   case ExternalSuspendKind::wait_sensitivity:
     if (process.program.static_sensitivity.empty()) {

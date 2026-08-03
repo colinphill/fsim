@@ -339,6 +339,14 @@ typedef struct fsim_sc_host_v1 {
         void* context,
         fsim_sc_handle_v1 channel,
         const char* kind);
+
+    /* Append-only timed event/list wait used by next_trigger and wait. */
+    fsim_sc_status_v1 (*wait_event_timeout)(
+        void* context,
+        uint64_t femtoseconds,
+        const fsim_sc_handle_v1* events,
+        size_t event_count,
+        fsim_sc_event_list_kind_v1 kind);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {

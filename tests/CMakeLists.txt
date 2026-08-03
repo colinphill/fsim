@@ -361,6 +361,7 @@ if(TARGET fsim_application)
         app/application_test_specialization.cpp
         app/application_test_support.cpp
         app/application_test_systemc.cpp
+        app/application_test_systemc_scheduling.cpp
     )
     fsim_add_application_case(
       0 expressions app/expression_application_test.cpp
@@ -1581,6 +1582,7 @@ set_tests_properties(
     app/application_test_specialization.cpp
     app/application_test_support.cpp
     app/application_test_systemc.cpp
+    app/application_test_systemc_scheduling.cpp
   )
   fsim_configure_test(fsim_application_tests)
   if(

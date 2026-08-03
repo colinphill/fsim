@@ -41,6 +41,7 @@ runtime::simir::ProcessResumeResult SystemCProcessExecutor::resume(
   case systemc::MethodSuspendKind::wait_event:
     result.external.kind = runtime::simir::ExternalSuspendKind::wait_on;
     result.external.wait_all = suspension.wait_all;
+    result.external.timeout = suspension.timeout_ticks;
     result.external.sensitivity.reserve(
         suspension.event_signals.size());
     for (const auto event : suspension.event_signals) {

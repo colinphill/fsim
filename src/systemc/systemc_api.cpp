@@ -84,6 +84,27 @@ void detail::set_event_list_trigger(
         operation);
 }
 
+void detail::set_timed_event_wait(
+    const sc_time delay,
+    const std::vector<fsim_sc_handle_v1>& events,
+    const fsim_sc_event_list_kind_v1 kind,
+    const char* operation){
+    if (current_host == nullptr
+        || current_host->wait_event_timeout == nullptr) {
+        throw std::logic_error{
+            std::string{"sc_core::"} + operation
+            + " requires an active fsim SystemC process"};
+    }
+    check_status(
+        current_host->wait_event_timeout(
+            current_host->context,
+            delay.value(),
+            events.data(),
+            events.size(),
+            kind),
+        operation);
+}
+
 void wait(const sc_time delay){
     if (detail::current_host == nullptr || detail::current_host->wait_time == nullptr) {
         throw std::logic_error{"sc_core::wait requires an active fsim SystemC process"};
@@ -111,6 +132,18 @@ void wait(const sc_event& event){
         "wait for event");
 }
 
+void wait(const sc_time delay, const sc_event& event){
+    if (detail::current_process_kind == FSIM_SC_METHOD) {
+        throw std::logic_error{
+            "SC_METHOD cannot call wait; use next_trigger"};
+    }
+    detail::set_timed_event_wait(
+        delay,
+        {event.native_handle()},
+        FSIM_SC_EVENT_OR_LIST,
+        "wait for timed event");
+}
+
 void wait(const sc_event_or_list& events){
     if (detail::current_process_kind == FSIM_SC_METHOD) {
         throw std::logic_error{
@@ -122,6 +155,18 @@ void wait(const sc_event_or_list& events){
         "wait for event OR list");
 }
 
+void wait(const sc_time delay, const sc_event_or_list& events){
+    if (detail::current_process_kind == FSIM_SC_METHOD) {
+        throw std::logic_error{
+            "SC_METHOD cannot call wait; use next_trigger"};
+    }
+    detail::set_timed_event_wait(
+        delay,
+        events.native_handles(),
+        FSIM_SC_EVENT_OR_LIST,
+        "wait for timed event OR list");
+}
+
 void wait(const sc_event_and_list& events){
     if (detail::current_process_kind == FSIM_SC_METHOD) {
         throw std::logic_error{
@@ -131,6 +176,18 @@ void wait(const sc_event_and_list& events){
         events.native_handles(),
         FSIM_SC_EVENT_AND_LIST,
         "wait for event AND list");
+}
+
+void wait(const sc_time delay, const sc_event_and_list& events){
+    if (detail::current_process_kind == FSIM_SC_METHOD) {
+        throw std::logic_error{
+            "SC_METHOD cannot call wait; use next_trigger"};
+    }
+    detail::set_timed_event_wait(
+        delay,
+        events.native_handles(),
+        FSIM_SC_EVENT_AND_LIST,
+        "wait for timed event AND list");
 }
 
 void wait(){
@@ -150,6 +207,10 @@ void wait(){
 }
 
 void next_trigger(const sc_time delay){
+    if (detail::current_process_kind != FSIM_SC_METHOD) {
+        throw std::logic_error{
+            "next_trigger is only valid in SC_METHOD"};
+    }
     if (detail::current_host == nullptr
         || detail::current_host->wait_time == nullptr) {
         throw std::logic_error{
@@ -162,6 +223,10 @@ void next_trigger(const sc_time delay){
 }
 
 void next_trigger(const sc_event& event){
+    if (detail::current_process_kind != FSIM_SC_METHOD) {
+        throw std::logic_error{
+            "next_trigger is only valid in SC_METHOD"};
+    }
     if (detail::current_host == nullptr
         || detail::current_host->wait_event == nullptr) {
         throw std::logic_error{
@@ -173,18 +238,64 @@ void next_trigger(const sc_event& event){
         "set next event trigger");
 }
 
+void next_trigger(const sc_time delay, const sc_event& event){
+    if (detail::current_process_kind != FSIM_SC_METHOD) {
+        throw std::logic_error{
+            "next_trigger is only valid in SC_METHOD"};
+    }
+    detail::set_timed_event_wait(
+        delay,
+        {event.native_handle()},
+        FSIM_SC_EVENT_OR_LIST,
+        "set next timed event trigger");
+}
+
 void next_trigger(const sc_event_or_list& events){
+    if (detail::current_process_kind != FSIM_SC_METHOD) {
+        throw std::logic_error{
+            "next_trigger is only valid in SC_METHOD"};
+    }
     detail::set_event_list_trigger(
         events.native_handles(),
         FSIM_SC_EVENT_OR_LIST,
         "set next event OR trigger");
 }
 
+void next_trigger(
+    const sc_time delay, const sc_event_or_list& events){
+    if (detail::current_process_kind != FSIM_SC_METHOD) {
+        throw std::logic_error{
+            "next_trigger is only valid in SC_METHOD"};
+    }
+    detail::set_timed_event_wait(
+        delay,
+        events.native_handles(),
+        FSIM_SC_EVENT_OR_LIST,
+        "set next timed event OR trigger");
+}
+
 void next_trigger(const sc_event_and_list& events){
+    if (detail::current_process_kind != FSIM_SC_METHOD) {
+        throw std::logic_error{
+            "next_trigger is only valid in SC_METHOD"};
+    }
     detail::set_event_list_trigger(
         events.native_handles(),
         FSIM_SC_EVENT_AND_LIST,
         "set next event AND trigger");
+}
+
+void next_trigger(
+    const sc_time delay, const sc_event_and_list& events){
+    if (detail::current_process_kind != FSIM_SC_METHOD) {
+        throw std::logic_error{
+            "next_trigger is only valid in SC_METHOD"};
+    }
+    detail::set_timed_event_wait(
+        delay,
+        events.native_handles(),
+        FSIM_SC_EVENT_AND_LIST,
+        "set next timed event AND trigger");
 }
 
 const char* sc_gen_unique_name(const char* base){

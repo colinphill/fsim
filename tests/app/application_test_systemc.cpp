@@ -462,8 +462,11 @@ auto lifecycle_reference_project = fsim::app::build_project(
     lifecycle_config, lifecycle_diagnostics);
 auto lifecycle_compiled_project = fsim::app::build_project(
     lifecycle_config, lifecycle_diagnostics);
+auto lifecycle_resumable_project = fsim::app::build_project(
+    lifecycle_config, lifecycle_diagnostics);
 assert(lifecycle_reference_project);
 assert(lifecycle_compiled_project);
+assert(lifecycle_resumable_project);
 assert(lifecycle_reference_project->systemc_roots.size() == 1);
 assert(lifecycle_compiled_project->systemc_roots.size() == 1);
 const auto run_lifecycle =
@@ -498,6 +501,51 @@ assert(
     lifecycle_reference.first.time
     == lifecycle_compiled.first.time);
 assert(lifecycle_reference.second == lifecycle_compiled.second);
+
+const auto lifecycle_resume_ready =
+    lifecycle_resumable_project->design.find_signal("ready");
+assert(lifecycle_resume_ready);
+fsim::app::Simulation lifecycle_resumable_simulation{
+    std::move(*lifecycle_resumable_project),
+    lifecycle_config.run.max_deltas,
+    fsim::app::SimulationEngine::interpreter};
+lifecycle_resumable_simulation.request_stop();
+const auto lifecycle_paused = lifecycle_resumable_simulation.run();
+assert(
+    lifecycle_paused.status == fsim::runtime::RunStatus::stopped
+    && lifecycle_paused.time == 0
+    && !lifecycle_resumable_simulation.finished());
+lifecycle_resumable_simulation.clear_stop();
+const auto lifecycle_resumed = lifecycle_resumable_simulation.run();
+assert(
+    lifecycle_resumed.status == fsim::runtime::RunStatus::stopped
+    && lifecycle_resumed.time == 2
+    && lifecycle_resumable_simulation.finished());
+assert(
+    lifecycle_resumable_simulation
+        .read_signal(*lifecycle_resume_ready)
+        .to_msb_string()
+    == "1");
+
+auto natural_lifecycle_config = lifecycle_config;
+natural_lifecycle_config.project.top =
+    "systemc:models.lifecycle_module";
+natural_lifecycle_config.bindings.clear();
+fsim::diagnostic::Engine natural_lifecycle_diagnostics;
+auto natural_lifecycle_project = fsim::app::build_project(
+    natural_lifecycle_config, natural_lifecycle_diagnostics);
+assert(natural_lifecycle_project);
+fsim::app::Simulation natural_lifecycle_simulation{
+    std::move(*natural_lifecycle_project),
+    natural_lifecycle_config.run.max_deltas,
+    fsim::app::SimulationEngine::interpreter};
+const auto natural_lifecycle_result =
+    natural_lifecycle_simulation.run();
+assert(
+    natural_lifecycle_result.status
+        == fsim::runtime::RunStatus::completed
+    && natural_lifecycle_result.time == 0
+    && natural_lifecycle_simulation.finished());
 
 const auto exercise_native_binding =
     [&](const std::string& top,
@@ -701,14 +749,21 @@ const auto run_custom_failure =
           failure_config.run.max_deltas,
           fsim::app::SimulationEngine::interpreter};
       bool rejected = false;
+      std::string actual_error;
       try {
         (void)failure_simulation.run();
       } catch (const std::runtime_error& error) {
+        actual_error = error.what();
         rejected =
             std::string_view{error.what()}.find(expected)
             != std::string_view::npos;
       }
-      assert(rejected && failure_simulation.poisoned());
+      if (!rejected) {
+        throw std::runtime_error{
+            "unexpected failure for " + std::string{target}
+            + ": " + actual_error};
+      }
+      assert(failure_simulation.poisoned());
     };
 run_custom_failure(
     "systemc:models.custom_update_failure",
@@ -716,6 +771,21 @@ run_custom_failure(
 run_custom_failure(
     "systemc:models.custom_value_failure",
     "custom SystemC interface value access is unsupported");
+run_custom_failure(
+    "systemc:models.event_tick_failure",
+    "SystemC time is not exactly representable");
+run_custom_failure(
+    "systemc:models.delayed_pending_failure",
+    "notify_delayed requires an event with no pending notification");
+run_custom_failure(
+    "systemc:models.channel_update_failure",
+    "intentional channel update failure");
+run_custom_failure(
+    "systemc:models.lifecycle_event_failure",
+    "fsim SystemC host failed to notify event");
+run_custom_failure(
+    "systemc:models.lifecycle_suspend_failure",
+    "next_trigger is only valid in SC_METHOD");
 
 auto named_matrix_config = hdl_systemc_config;
 named_matrix_config.project.top =
@@ -1089,7 +1159,44 @@ const auto thread_timed =
     systemc_thread_project->design.find_signal("timed");
 const auto thread_event_count =
     systemc_thread_project->design.find_signal("event_count");
-assert(thread_count && thread_timed && thread_event_count);
+const auto thread_static_count =
+    systemc_thread_project->design.find_signal("static_count");
+const auto thread_named_count =
+    systemc_thread_project->design.find_signal("named_count");
+const auto thread_timeout_count =
+    systemc_thread_project->design.find_signal("timeout_count");
+assert(
+    thread_count && thread_timed && thread_event_count
+    && thread_static_count && thread_named_count
+    && thread_timeout_count);
+const auto& static_matrix_processes =
+    systemc_thread_project->design.processes();
+const auto static_matrix_process =
+    [&](const std::string_view suffix) -> const fsim::runtime::simir::Process& {
+      const auto found = std::find_if(
+          static_matrix_processes.begin(), static_matrix_processes.end(),
+          [&](const fsim::runtime::simir::Process& process) {
+            return process.name.ends_with(suffix);
+          });
+      assert(found != static_matrix_processes.end());
+      return *found;
+    };
+const auto& clocked_process = static_matrix_process(".clocked_run");
+const auto& named_process = static_matrix_process(".named_run");
+const auto& static_process = static_matrix_process(".static_run");
+assert(
+    clocked_process.static_sensitivity.size() == 1
+    && clocked_process.static_sensitivity.front().edge
+        == fsim::runtime::simir::EdgeKind::posedge);
+assert(
+    named_process.static_sensitivity.size() == 1
+    && named_process.static_sensitivity.front().edge
+        == fsim::runtime::simir::EdgeKind::any);
+assert(
+    static_process.static_sensitivity.size() == 1
+    && static_process.static_sensitivity.front().edge
+        == fsim::runtime::simir::EdgeKind::negedge
+    && !static_process.initialize);
 fsim::app::Simulation systemc_thread_simulation{
     std::move(*systemc_thread_project),
     systemc_thread_config.run.max_deltas,
@@ -1103,7 +1210,7 @@ const auto systemc_thread_result =
 assert(
     systemc_thread_result.status
     == fsim::runtime::RunStatus::stopped);
-assert(systemc_thread_result.time == 4);
+assert(systemc_thread_result.time == 5);
 assert(
     systemc_thread_simulation
         .read_signal(*thread_count)
@@ -1119,6 +1226,74 @@ assert(
         .read_signal(*thread_event_count)
         .to_msb_string()
     == "00000010");
+assert(
+    systemc_thread_simulation
+        .read_signal(*thread_static_count)
+        .to_msb_string()
+    == "00000001");
+assert(
+    systemc_thread_simulation
+        .read_signal(*thread_named_count)
+        .to_msb_string()
+    == "00000010");
+assert(
+    systemc_thread_simulation
+        .read_signal(*thread_timeout_count)
+        .to_msb_string()
+    == "00000100");
+
+auto vhdl_thread_config = systemc_thread_config;
+vhdl_thread_config.project.top =
+    "vhdl:work.systemc_thread_vhdl_host(rtl)";
+vhdl_thread_config.source_sets.front().language =
+    fsim::project::Language::vhdl;
+vhdl_thread_config.source_sets.front().standard = "2008";
+vhdl_thread_config.source_sets.front().files = {
+    systemc_method_vhdl_source};
+vhdl_thread_config.bindings = {
+    {"systemc_thread_vhdl_host.u_threads",
+     "systemc:models.fiber_threads",
+     std::nullopt},
+};
+fsim::diagnostic::Engine vhdl_thread_diagnostics;
+auto vhdl_thread_project = fsim::app::build_project(
+    vhdl_thread_config, vhdl_thread_diagnostics);
+assert(vhdl_thread_project);
+const auto vhdl_thread_count =
+    vhdl_thread_project->design.find_signal("count");
+const auto vhdl_thread_timed =
+    vhdl_thread_project->design.find_signal("timed");
+const auto vhdl_thread_event =
+    vhdl_thread_project->design.find_signal("event_count");
+const auto vhdl_thread_static =
+    vhdl_thread_project->design.find_signal("static_count");
+const auto vhdl_thread_named =
+    vhdl_thread_project->design.find_signal("named_count");
+const auto vhdl_thread_timeout =
+    vhdl_thread_project->design.find_signal("timeout_count");
+assert(
+    vhdl_thread_count && vhdl_thread_timed && vhdl_thread_event
+    && vhdl_thread_static && vhdl_thread_named
+    && vhdl_thread_timeout);
+fsim::app::Simulation vhdl_thread_simulation{
+    std::move(*vhdl_thread_project),
+    vhdl_thread_config.run.max_deltas,
+    fsim::app::SimulationEngine::compiled};
+const auto vhdl_thread_result = vhdl_thread_simulation.run();
+assert(
+    vhdl_thread_result.status == fsim::runtime::RunStatus::completed
+    && vhdl_thread_result.time == 5);
+for (const auto& [signal, expected] : {
+         std::pair{*vhdl_thread_count, "00000010"},
+         std::pair{*vhdl_thread_timed, "00000011"},
+         std::pair{*vhdl_thread_event, "00000010"},
+         std::pair{*vhdl_thread_static, "00000001"},
+         std::pair{*vhdl_thread_named, "00000010"},
+         std::pair{*vhdl_thread_timeout, "00000100"}}) {
+  assert(
+      vhdl_thread_simulation.read_signal(signal).to_msb_string()
+      == expected);
+}
 #endif
 
 auto systemc_method_config = hdl_systemc_config;
@@ -1458,6 +1633,61 @@ assert(
     std::get<2>(event_lists_reference)
     == std::get<2>(event_lists_compiled));
 
+auto timed_method_config = systemc_method_top_config;
+timed_method_config.project.top =
+    "systemc:models.timed_method_triggers";
+fsim::diagnostic::Engine timed_method_diagnostics;
+auto timed_method_reference = fsim::app::build_project(
+    timed_method_config, timed_method_diagnostics);
+auto timed_method_compiled = fsim::app::build_project(
+    timed_method_config, timed_method_diagnostics);
+assert(timed_method_reference && timed_method_compiled);
+const auto run_timed_methods =
+    [&](fsim::app::BuiltProject project,
+        const fsim::app::SimulationEngine engine) {
+      const auto single =
+          project.design.find_signal("timed_method_triggers.single_seen");
+      const auto or_seen =
+          project.design.find_signal("timed_method_triggers.or_seen");
+      const auto and_seen =
+          project.design.find_signal("timed_method_triggers.and_seen");
+      assert(single && or_seen && and_seen);
+      fsim::app::Simulation simulation{
+          std::move(project),
+          timed_method_config.run.max_deltas,
+          engine};
+      const auto result = simulation.run();
+      return std::tuple{
+          result,
+          simulation.read_signal(*single).to_msb_string(),
+          simulation.read_signal(*or_seen).to_msb_string(),
+          simulation.read_signal(*and_seen).to_msb_string()};
+    };
+const auto timed_method_reference_capture = run_timed_methods(
+    std::move(*timed_method_reference),
+    fsim::app::SimulationEngine::interpreter);
+const auto timed_method_compiled_capture = run_timed_methods(
+    std::move(*timed_method_compiled),
+    fsim::app::SimulationEngine::compiled);
+assert(
+    std::get<0>(timed_method_reference_capture).status
+    == fsim::runtime::RunStatus::completed);
+assert(std::get<0>(timed_method_reference_capture).time == 4);
+assert(std::get<1>(timed_method_reference_capture) == "00010111");
+assert(std::get<2>(timed_method_reference_capture) == "00010111");
+assert(std::get<3>(timed_method_reference_capture) == "00011000");
+assert(
+    std::get<0>(timed_method_reference_capture).status
+        == std::get<0>(timed_method_compiled_capture).status
+    && std::get<0>(timed_method_reference_capture).time
+        == std::get<0>(timed_method_compiled_capture).time
+    && std::get<1>(timed_method_reference_capture)
+        == std::get<1>(timed_method_compiled_capture)
+    && std::get<2>(timed_method_reference_capture)
+        == std::get<2>(timed_method_compiled_capture)
+    && std::get<3>(timed_method_reference_capture)
+        == std::get<3>(timed_method_compiled_capture));
+
 auto kernel_channel_config = systemc_method_top_config;
 kernel_channel_config.project.top =
     "systemc:models.kernel_channels";
@@ -1471,7 +1701,7 @@ assert(kernel_channel_compiled);
 assert(
     kernel_channel_reference->design.systemc_instances()
         .front().primitive_channels.size()
-    == 1);
+    == 2);
 const auto run_kernel_channels =
     [&](fsim::app::BuiltProject project,
         const fsim::app::SimulationEngine engine) {
@@ -1482,7 +1712,9 @@ const auto run_kernel_channels =
       const auto event_count =
           project.design.find_signal(
               "kernel_channels.event_count");
-      assert(value && updates && event_count);
+      const auto cross_updates =
+          project.design.find_signal("kernel_channels.cross_updates");
+      assert(value && updates && event_count && cross_updates);
       fsim::app::Simulation simulation{
           std::move(project),
           kernel_channel_config.run.max_deltas,
@@ -1492,7 +1724,8 @@ const auto run_kernel_channels =
           result,
           simulation.read_signal(*value).to_msb_string(),
           simulation.read_signal(*updates).to_msb_string(),
-          simulation.read_signal(*event_count).to_msb_string()};
+          simulation.read_signal(*event_count).to_msb_string(),
+          simulation.read_signal(*cross_updates).to_msb_string()};
     };
 const auto kernel_reference = run_kernel_channels(
     std::move(*kernel_channel_reference),
@@ -1505,8 +1738,9 @@ assert(
     == fsim::runtime::RunStatus::completed);
 assert(std::get<0>(kernel_reference).time == 3);
 assert(std::get<1>(kernel_reference) == "00000100");
-assert(std::get<2>(kernel_reference) == "00000011");
+assert(std::get<2>(kernel_reference) == "00000100");
 assert(std::get<3>(kernel_reference) == "00000001");
+assert(std::get<4>(kernel_reference) == "00000001");
 assert(
     std::get<0>(kernel_reference).status
     == std::get<0>(kernel_compiled).status);
@@ -1522,6 +1756,9 @@ assert(
 assert(
     std::get<3>(kernel_reference)
     == std::get<3>(kernel_compiled));
+assert(
+    std::get<4>(kernel_reference)
+    == std::get<4>(kernel_compiled));
 
 auto internal_signal_config = systemc_method_top_config;
 internal_signal_config.project.top =

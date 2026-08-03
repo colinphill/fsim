@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
 
+#include <cstring>
+
 namespace fsim::tests::elaboration {
 
 void test_mixed_language_and_systemc() {
@@ -1436,6 +1438,61 @@ endmodule
     assert(has_diagnostic(
         systemc_thread, "FSIM-ELAB-BIND-042"));
 #endif
+
+    const auto elaborate_sensitivity =
+        [&](std::vector<fsim::elaboration::ExternalSensitivity>
+                sensitivity) {
+          auto instance = systemc_root;
+          instance.foreign_children.clear();
+          instance.processes = {{
+              151,
+              "sensitivity",
+              FSIM_SC_METHOD,
+              nullptr,
+              nullptr,
+              std::move(sensitivity),
+              false}};
+          return fsim::elaboration::elaborate(
+              parsed_systemc_boundary.design,
+              "systemc:models.bridge",
+              std::span<const fsim::elaboration::Binding>{},
+              std::span{&instance, 1});
+        };
+    const auto deduplicated_sensitivity = elaborate_sensitivity({
+        {101, FSIM_SC_ANY_EDGE},
+        {101, FSIM_SC_ANY_EDGE},
+    });
+    assert(deduplicated_sensitivity.ok());
+    assert(
+        deduplicated_sensitivity.design->processes().back()
+            .static_sensitivity.size()
+        == 1);
+    const auto unknown_sensitivity = elaborate_sensitivity({
+        {9999, FSIM_SC_ANY_EDGE},
+    });
+    assert(
+        !unknown_sensitivity.ok()
+        && has_diagnostic(
+            unknown_sensitivity, "FSIM-ELAB-BIND-043"));
+    fsim_sc_edge_kind_v1 invalid_edge{};
+    const std::uint32_t invalid_edge_bytes = 99;
+    static_assert(sizeof(invalid_edge) == sizeof(invalid_edge_bytes));
+    std::memcpy(
+        &invalid_edge, &invalid_edge_bytes, sizeof(invalid_edge));
+    const auto invalid_edge_sensitivity = elaborate_sensitivity({
+        {101, invalid_edge},
+    });
+    assert(
+        !invalid_edge_sensitivity.ok()
+        && has_diagnostic(
+            invalid_edge_sensitivity, "FSIM-ELAB-BIND-044"));
+    const auto nonscalar_edge_sensitivity = elaborate_sensitivity({
+        {102, FSIM_SC_POSEDGE},
+    });
+    assert(
+        !nonscalar_edge_sensitivity.ok()
+        && has_diagnostic(
+            nonscalar_edge_sensitivity, "FSIM-ELAB-BIND-045"));
 
     constexpr std::string_view systemc_boundary_vhdl = R"(
 entity systemc_vhdl_parent is

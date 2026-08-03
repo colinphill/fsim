@@ -90,6 +90,10 @@ _Static_assert(
         > offsetof(fsim_sc_host_v1, register_metadata_object),
     "SystemC primitive-channel kinds must remain append-only");
 _Static_assert(
+    offsetof(fsim_sc_host_v1, wait_event_timeout)
+        > offsetof(fsim_sc_host_v1, set_primitive_channel_kind),
+    "SystemC timed event waits must remain append-only");
+_Static_assert(
     offsetof(fsim_sc_registrar_v1, register_elaboration_factory)
         > offsetof(fsim_sc_registrar_v1, register_factory),
     "typed factory registration must remain append-only");

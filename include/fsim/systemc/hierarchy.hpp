@@ -161,6 +161,7 @@ struct MethodSuspendResult {
     std::uint64_t delay_ticks{};
     std::vector<std::uint32_t> event_signals;
     bool wait_all{};
+    std::optional<std::uint64_t> timeout_ticks;
 };
 
 /// Owns one loaded SystemC plug-in and every module object constructed from

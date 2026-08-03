@@ -348,6 +348,12 @@ extern "C" fsim_sc_status_v1 registry_wait_event_list(
 
 extern "C" fsim_sc_status_v1 registry_wait_static(
     void* context) noexcept;
+extern "C" fsim_sc_status_v1 registry_wait_event_timeout(
+    void* context,
+    std::uint64_t femtoseconds,
+    const fsim_sc_handle_v1* events,
+    std::size_t event_count,
+    fsim_sc_event_list_kind_v1 kind) noexcept;
 
 extern "C" fsim_sc_status_v1 registry_notify_mode(
     void* context,

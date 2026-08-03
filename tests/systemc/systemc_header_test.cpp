@@ -481,6 +481,28 @@ int main() {
         rejected_and_trigger = true;
     }
     assert(rejected_and_trigger);
+    bool rejected_timed_trigger = false;
+    try {
+        sc_core::next_trigger(
+            sc_core::sc_time{1, sc_core::SC_NS},
+            event | second_event);
+    } catch (const std::logic_error&) {
+        rejected_timed_trigger = true;
+    }
+    assert(rejected_timed_trigger);
+    const auto previous_process_kind =
+        sc_core::detail::current_process_kind;
+    sc_core::detail::current_process_kind = FSIM_SC_THREAD;
+    bool rejected_thread_next_trigger = false;
+    try {
+        sc_core::next_trigger(sc_core::SC_ZERO_TIME);
+    } catch (const std::logic_error& error) {
+        rejected_thread_next_trigger =
+            std::string_view{error.what()}
+            == "next_trigger is only valid in SC_METHOD";
+    }
+    sc_core::detail::current_process_kind = previous_process_kind;
+    assert(rejected_thread_next_trigger);
     TestPrimitiveChannel channel;
     assert(
         std::string_view{channel.name()} == "test_channel"

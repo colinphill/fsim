@@ -215,6 +215,10 @@ void invoke_lifecycle_entry(
             "SystemC " + std::string{phase}
             + " callback escaped with an unknown exception";
     }
+    if (invocation.suspension && invocation.failure.empty()) {
+        invocation.failure =
+            "SystemC lifecycle callbacks cannot suspend";
+    }
     if (!invocation.failure.empty()) {
         throw std::runtime_error{
             "SystemC " + std::string{phase}
@@ -1260,7 +1264,11 @@ extern "C" fsim_sc_status_v1 registry_wait_time(
         }
         active_invocation->suspension =
             MethodSuspendResult{
-                MethodSuspendKind::wait_for, ticks, {}, false};
+                MethodSuspendKind::wait_for,
+                ticks,
+                {},
+                false,
+                std::nullopt};
         return suspend_thread();
     } catch (...) {
         active_invocation->failure =
@@ -1291,7 +1299,8 @@ extern "C" fsim_sc_status_v1 registry_wait_event(
                 MethodSuspendKind::wait_event,
                 0,
                 {binding->second},
-                false};
+                false,
+                std::nullopt};
         return suspend_thread();
     } catch (...) {
         active_invocation->failure =
@@ -1338,11 +1347,66 @@ extern "C" fsim_sc_status_v1 registry_wait_event_list(
                 MethodSuspendKind::wait_event,
                 0,
                 std::move(signals),
-                kind == FSIM_SC_EVENT_AND_LIST};
+                kind == FSIM_SC_EVENT_AND_LIST,
+                std::nullopt};
         return suspend_thread();
     } catch (...) {
         active_invocation->failure =
             "SystemC event-list trigger could not be recorded";
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_wait_event_timeout(
+    void* context,
+    const std::uint64_t femtoseconds,
+    const fsim_sc_handle_v1* events,
+    const std::size_t event_count,
+    const fsim_sc_event_list_kind_v1 kind) noexcept {
+    if (context == nullptr || events == nullptr || event_count == 0
+        || active_invocation == nullptr
+        || active_invocation->registry != context
+        || (kind != FSIM_SC_EVENT_OR_LIST
+            && kind != FSIM_SC_EVENT_AND_LIST)) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        std::uint64_t ticks = 0;
+        const auto status =
+            convert_delay(registry, femtoseconds, ticks);
+        if (status != FSIM_SC_OK) {
+            return status;
+        }
+        std::vector<std::uint32_t> signals;
+        signals.reserve(event_count);
+        for (std::size_t index = 0; index < event_count; ++index) {
+            const auto metadata = registry.events.find(events[index]);
+            const bool signal_event =
+                registry.internal_signals.contains(events[index]);
+            const auto binding =
+                registry.runtime_objects.find(events[index]);
+            if ((metadata == registry.events.end() && !signal_event)
+                || binding == registry.runtime_objects.end()) {
+                return FSIM_SC_INVALID_ARGUMENT;
+            }
+            signals.push_back(binding->second);
+        }
+        std::sort(signals.begin(), signals.end());
+        signals.erase(
+            std::unique(signals.begin(), signals.end()),
+            signals.end());
+        active_invocation->suspension = MethodSuspendResult{
+            MethodSuspendKind::wait_event,
+            0,
+            std::move(signals),
+            kind == FSIM_SC_EVENT_AND_LIST,
+            ticks};
+        return suspend_thread();
+    } catch (...) {
+        active_invocation->failure =
+            "SystemC timed event-list trigger could not be recorded";
         return FSIM_SC_RUNTIME_ERROR;
     }
 }
@@ -1359,7 +1423,8 @@ extern "C" fsim_sc_status_v1 registry_wait_static(
                 MethodSuspendKind::static_sensitivity,
                 0,
                 {},
-                false};
+                false,
+                std::nullopt};
         return suspend_thread();
     } catch (...) {
         active_invocation->failure =
@@ -1375,6 +1440,7 @@ extern "C" fsim_sc_status_v1 registry_notify_mode(
     const fsim_sc_notification_kind_v1 kind) noexcept {
     if (context == nullptr || active_invocation == nullptr
         || active_invocation->registry != context
+        || active_invocation->context == nullptr
         || (kind != FSIM_SC_NOTIFY_IMMEDIATE
             && kind != FSIM_SC_NOTIFY_DELTA
             && kind != FSIM_SC_NOTIFY_TIMED)) {
@@ -1434,7 +1500,8 @@ extern "C" fsim_sc_status_v1 registry_notify_delayed(
     const fsim_sc_handle_v1 event,
     const std::uint64_t femtoseconds) noexcept {
     if (context == nullptr || active_invocation == nullptr
-        || active_invocation->registry != context) {
+        || active_invocation->registry != context
+        || active_invocation->context == nullptr) {
         return FSIM_SC_INVALID_ARGUMENT;
     }
     try {
@@ -1471,7 +1538,8 @@ extern "C" fsim_sc_status_v1 registry_cancel_event(
     void* context,
     const fsim_sc_handle_v1 event) noexcept {
     if (context == nullptr || active_invocation == nullptr
-        || active_invocation->registry != context) {
+        || active_invocation->registry != context
+        || active_invocation->context == nullptr) {
         return FSIM_SC_INVALID_ARGUMENT;
     }
     try {

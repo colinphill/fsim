@@ -1719,6 +1719,7 @@ struct ExternalSuspension {
   SimulationTick delay{};
   std::vector<Sensitivity> sensitivity;
   bool wait_all{};
+  std::optional<SimulationTick> timeout;
 };
 /// Alternate-executor boundary and its exact sequential resume PC.
 struct ProcessResumeResult {

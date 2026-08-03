@@ -8553,6 +8553,243 @@ diagnostics catalog, source-line budget, IEEE inventory, and v1 matrix gates.
 Batch 123 closes as one accumulated commit/push checkpoint and, because it is
 not a tenth-batch boundary, has no GitHub Actions inspection.
 
+### One-hundred-twenty-fourth feature batch — SystemC scheduling and lifecycle — Complete
+
+The current ten implementation tasks are:
+
+1. **Complete.** Audit SC-007, SC-008, and SC-012 through SC-017 across the
+   facade, append-only ABI, hierarchy registry, common scheduler, lifecycle,
+   fibers, and application evidence; define the exact missing sensitivity,
+   timeout, event, update-phase, and failure matrix.
+2. **Complete.** Complete static sensitivity for ports, internal signals, named
+   events, and positive/negative edge finders across methods, threads, and
+   clocked threads, including deterministic deduplication and exact invalid or
+   unbound-object diagnostics.
+3. **Complete.** Complete dynamic `next_trigger` for time, event, OR/AND event
+   lists, and timed event/list timeouts, with one replacement wait per method
+   invocation and deterministic tie handling.
+4. **Complete.** Complete `wait` for time, zero time, event, OR/AND event lists,
+   timed event/list timeouts, and plain static sensitivity across `SC_THREAD`
+   and `SC_CTHREAD`, including repeated suspension and teardown.
+5. **Complete.** Close immediate, delta, timed, delayed, replacement,
+   cancellation, duplicate, and same-timestamp named-event scheduling across
+   method/thread waiters with exact pending-state and tick-conversion failures.
+6. **Complete.** Close primitive-channel update ordering and deduplication,
+   including self/cross-channel requests, port reads/writes, event notification,
+   callback containment, and requests made from process and update phases.
+7. **Complete.** Complete root/native-child lifecycle ordering and isolation for
+   cold/warm builds, natural quiescence, `$finish`, explicit stop/resume,
+   teardown, callback state, and exact structural or scheduling rejections.
+8. **Complete.** Prove deterministic common-kernel phase interactions among
+   nested native methods/threads/channels/events and SystemVerilog/VHDL peers,
+   including stable process/channel order and no recursive native execution.
+9. **Complete.** Prove the combined scheduling/lifecycle matrix in compiled
+   SystemC with interpreter and LLVM O0/O2 HDL peers, cold/warm/edit cache,
+   debugger, VCD, callbacks, teardown, and exact negative diagnostics.
+10. **Complete.** Update matrix/subset/diagnostics/docs, pass sanitizer,
+    source/catalog and full Debug/Release gates, then create and push the single
+    Batch 124 checkpoint. This is not a mandatory CI-inspection boundary.
+
+Batch status is **complete**. The ten tasks used one accumulated worktree and
+one Task 10 sanitizer, full-regression, documentation, commit, and push gate.
+GitHub builds use parallelism four, and Batch 124 does not require a non-
+documentation CI inspection.
+
+Task 1 confirms that the common kernel already executes initialized and
+`dont_initialize()` methods, basic thread/clocked-thread fibers, scalar static
+port/signal/event sensitivity with edge qualifiers, exclusive time/event/
+OR-list/AND-list dynamic waits, immediate/delta/timed/delayed event scheduling
+and cancellation, deduplicated channel updates, module-local signal updates,
+and ordered root/native-child lifecycle callbacks. Static registration already
+deduplicates identical object/edge pairs and rejects cross-module objects or an
+edge-qualified named event. The missing v1 closure is timed event/list timeout
+selection, explicit method-only versus thread-only API checks, expanded static
+method/thread/CTHREAD coverage, complete same-timestamp event/channel phase
+ordering, and lifecycle stop/teardown/rejection evidence. The exact eight-
+worker Debug build required no work; elaboration, facade, strict C ABI, loader,
+compiler, main application, and runtime passed 7/7 focused tests in 30.19
+seconds. Task 2 is current; this starts the intentional accumulated Batch 124
+dirty worktree with no sanitizer, Release, full regression, commit, push, or CI
+inspection at this task boundary.
+
+Task 2 expands the real compiled fiber fixture so a method is statically
+sensitive to one named event registered twice, a clocked thread retains its
+positive-edge finder, and a `dont_initialize()` thread waits on one negative-
+edge finder registered twice. DesignIR canonicalizes each repeated object/edge
+pair to one sensitivity, and the HDL-driven run proves two named-event method
+invocations, two positive-edge CTHREAD resumptions, and one negative-edge
+thread resumption. Manual immutable descriptions separately prove exact
+`FSIM-ELAB-BIND-043`, `-044`, and `-045` rejection for an unknown object, an
+invalid edge encoding, and a nonscalar edge target. Existing internal-signal,
+port, unbound-native-port, and cross-module registry cases remain green. The
+exact eight-worker Debug build succeeded; elaboration, application, facade,
+strict C ABI, loader, diagnostics catalog, and source budget passed 7/7 in
+29.55 seconds. Task 3 is current; no sanitizer, Release, full regression,
+commit, push, or CI inspection ran at this task boundary.
+
+Task 3 appends one `wait_event_timeout` host callback and carries an optional
+timeout through the ABI-neutral SystemC suspension and common alternate-
+executor boundary. Event/list waits register their canonical dynamic fanout
+and reuse the scheduler's generation-checked timeout machinery; an event wake
+invalidates its deadline, a timeout removes its event registrations, and stale
+heap entries remain deterministic no-ops. The facade adds timed single-event,
+OR-list, and AND-list `next_trigger` overloads, restricts every `next_trigger`
+form to `SC_METHOD`, and preserves last-call replacement within one callback.
+A real compiled method matrix proves event wins, timeout wins, a same-timestamp
+tie, duplicate list canonicalization, AND progress, replacement, and
+interpreter/compiled parity at exact observed producer states. The host ABI
+offset assertion remains append-only. The exact eight-worker Debug build
+succeeded; application, runtime, facade, strict C ABI, diagnostics catalog,
+and source budget passed 6/6 in 27.98 seconds. Task 4 is current; no sanitizer,
+Release, full regression, commit, push, or CI inspection ran at this boundary.
+
+Task 4 exposes the same timed event/list host suspension to `SC_THREAD` and
+`SC_CTHREAD` through new time-plus-event, OR-list, and AND-list `wait`
+overloads, while retaining exact rejection from `SC_METHOD`. The compiled fiber
+fixture now interleaves an event-won single wait, a timeout-won single wait, an
+event-won OR wait, and a timeout-won partially satisfied AND wait across four
+ordinary C++ stack resumptions. Existing finite time, zero-time, repeated named
+event, plain positive/negative static sensitivity, and clocked-thread waits
+remain green, and the host stops only after every new suspension has resumed.
+All event fanout and timeout generations are cleared before fiber teardown.
+The exact eight-worker Debug build succeeded; application, runtime, facade,
+strict C ABI, loader, diagnostics catalog, and source budget passed 7/7 in
+28.09 seconds. Task 5 is current; no sanitizer, Release, full regression,
+commit, push, or CI inspection ran at this task boundary.
+
+Task 5 closes named-event scheduling across the existing generation-checked
+runtime replacement/cancellation tests, the dynamic method matrix, and the
+expanded fiber fixture. Immediate notification, next-delta notification,
+earliest timed replacement, later timed no-op, explicit cancellation, strict
+single-pending `notify_delayed`, and stale heap generations now have joint
+method/thread evidence. Stable process IDs make same-timestamp producer,
+method, fiber, and timeout work deterministic without recursive native entry.
+Two compiled negative factories additionally prove the exact unrepresentable-
+project-tick failure and duplicate-pending delayed-notification failure poison
+only their sessions. The exact eight-worker Debug build succeeded;
+application, runtime, facade, strict C ABI, loader, diagnostics catalog, and
+source budget passed 7/7 in 28.63 seconds. Task 6 is current; no sanitizer,
+Release, full regression, commit, push, or CI inspection ran at this boundary.
+
+Task 6 combines the kernel's stable handle-ordered channel test with two real
+compiled primitive channels. Process-phase duplicate requests coalesce; a
+self-request made during `update()` is ignored; a request from the later
+channel to the earlier channel is deferred to the next delta; and port writes
+commit through the shared update phase. The later channel also performs an
+immediate named-event notification during update, deterministically waking a
+method without recursive native entry and canceling the event's earlier timed
+notification. Exact final value/update/event counters agree between the
+interpreter and compiled engine. A separate throwing channel preserves its
+original exception diagnostic, poisons only that simulation, and cannot escape
+the native ABI. The exact eight-worker Debug build succeeded; application,
+runtime, facade, strict C ABI, loader, diagnostics catalog, and source budget
+passed 7/7 in 29.08 seconds. Task 7 is current; no sanitizer, Release, full
+regression, commit, push, or CI inspection ran at this task boundary.
+
+Task 7 retains exact parent-before-child elaboration/start and child-before-
+parent end ordering while extending the real lifecycle fixture to three
+independent cold/warm roots. Interpreter and compiled `$finish` runs agree; a
+pre-requested external stop starts SystemC once without ending it, then clear/
+resume reaches the same terminal state and calls end exactly once; and a
+direct SystemC top reaches natural quiescence at time zero. Destruction still
+ends any started nonterminal root after shutting down fibers. Runtime access
+from lifecycle callbacks is now explicitly context-checked: event notify,
+delayed notify, and cancel cannot dereference a missing process context, and a
+raw lifecycle suspension is rejected. Compiled negative roots prove event
+scheduling and `next_trigger` rejection poison only their simulations, while
+the existing elaboration/end exception cases remain isolated. The exact
+eight-worker Debug build succeeded; application, runtime, facade, strict C
+ABI, loader, diagnostics catalog, and source budget passed 7/7 in 30.15
+seconds. Task 8 is current; no sanitizer, Release, full regression, commit,
+push, or CI inspection ran at this task boundary.
+
+Task 8 drives the same compiled nested method, thread, clocked-thread, named-
+event, timeout, and channel phase interactions from both SystemVerilog and
+VHDL peers. The VHDL host now supplies matching positive and negative clock
+edges through the common scheduler and naturally drains at tick 5; its exact
+static, named-event, event-won, timeout-won, and clocked-thread results match
+the SystemVerilog host. Existing stable handle ordering, deferred cross-channel
+updates, and update-phase event notification prove that neither peer can cause
+recursive native execution. The exact eight-worker Debug build succeeded;
+application, runtime, facade, strict C ABI, loader, diagnostics catalog, and
+source budget passed 7/7 in 31.78 seconds. Task 9 is current; no sanitizer,
+Release, full regression, commit, push, or CI inspection ran at this task
+boundary.
+
+Task 9 adds one combined SystemVerilog and VHDL peer around the fiber-thread,
+primitive-channel, and ordered-lifecycle roots. Interpreter references and
+LLVM O0/O2 cold/warm pairs agree on all eleven observable signals, terminal
+time, status, and callback count. A SystemC comment edit invalidates the
+project/plugin cache while retaining exact native HDL cache hits; the debugger
+and VCD expose the nested thread plus peer-visible channel and lifecycle
+signals. Compiled channel-update, lifecycle-suspension, and terminal-lifecycle
+failures retain their exact messages, poison only their sessions, and a fresh
+post-teardown interpreter run proves isolation. The new 322-line scheduling
+partition leaves the existing integration and generated-source partitions at
+1,844 and 1,619 lines. The exact eight-worker Debug build succeeded;
+application, runtime, facade, strict C ABI, loader, diagnostics catalog, and
+source budget passed 7/7 in 53.28 seconds. Task 10 is current; it owns the
+single accumulated sanitizer, full regression, documentation, commit, and
+push gate, with no CI inspection at this non-boundary batch.
+
+Task 10 is complete. The release authority and SystemC subset now record timed
+event/list waits, method replacement, stable channel phases, lifecycle stop/
+resume and teardown, and the combined SV/VHDL differential. The diagnostics
+catalog covers 1,622 production codes, and all 398 authored sources pass the
+2,000-line gate. The LLVM-disabled ASan/UBSan suite passed 75/75 in 438.21
+seconds with leak detection disabled only for the locally traced run; the main
+application, containers, and scoped locals took 140.54, 219.83, and 0.49
+seconds. The exact LLVM 22.1.8 warnings-as-errors Debug suite passed 78/78 in
+225.27 seconds, with the application at 54.43 seconds, containers at 111.04,
+resolution at 0.54, and scoped locals at 0.84. Release passed 78/78 in 205.80
+seconds, with the application at 52.34 seconds, containers at 94.22,
+resolution at 0.53, and scoped locals at 0.86. Batch 124 closes as one
+accumulated checkpoint and has no GitHub Actions inspection because it is not
+a tenth-batch boundary.
+
+### One-hundred-twenty-fifth feature batch — SystemC compiler, cache, and portability — In progress
+
+The current ten implementation tasks are:
+
+1. **In progress.** Audit the SystemC source compiler, dependency scanner,
+   persistent plug-in cache, loader, registry, native-cache composition, fiber
+   backends, and existing Linux/Windows evidence; define every missing compiler,
+   cache, lifecycle, error, and portability case.
+2. **Pending.** Make plug-in compile fingerprints canonical across ordered
+   sources, content, include directories, definitions, language mode, compiler
+   identity/version/target, options, ABI version, and selected fiber backend.
+3. **Pending.** Complete transitive dependency fingerprints and invalidation for
+   edited, added, removed, generated, missing, and system headers across GNU-
+   style and MSVC dependency discovery, including paths containing spaces.
+4. **Pending.** Make persistent cache lookup/publication transactional and
+   concurrency-safe, with deterministic recovery from missing, truncated,
+   corrupted, stale, or incompatible metadata and shared-library artifacts.
+5. **Pending.** Prove loaded-image, registration, factory, root, fiber, and
+   callback ownership across cold/warm/edit builds, concurrent independent
+   sessions, terminal and nonterminal teardown, rebuild, and unload ordering.
+6. **Pending.** Close exact compile, link, dependency, load, entry-point, ABI,
+   initialization, registration, construction, destruction, and callback error
+   containment without partial registration or stale cache publication.
+7. **Pending.** Compose plug-in/factory/construction/hierarchy identity into
+   interpreter, LLVM O0/O2, and debug native-cache behavior, preserving valid
+   reuse while preventing stale code, objects, callbacks, or native handles.
+8. **Pending.** Harden Windows process invocation, quoting, response paths,
+   DLL/PDB/runtime discovery, compiler diagnostics, PE/MASM fiber selection,
+   and thread teardown while retaining portable Linux behavior.
+9. **Pending.** Add a combined compiler/cache/lifecycle matrix with Linux
+   execution and Windows-targeted Debug/Release/LLVM/thread regression coverage,
+   cold/warm/edit/corruption/concurrency cases, and exact negative diagnostics.
+10. **Pending.** Update matrix/subset/diagnostics/docs, pass sanitizer,
+    source/catalog and full Debug/Release gates, then create and push the single
+    Batch 125 checkpoint. This is not a mandatory CI-inspection boundary.
+
+Batch status is **in progress** with Task 1 current. Keep this exact ten-task
+list current in both the official plan and resume handoff. Tasks 1 through 9
+use one accumulated dirty worktree with focused eight-worker Debug builds and
+tests; Task 10 owns the sanitizer, full regressions, documentation, commit, and
+push gate. GitHub builds use parallelism four, and Batch 125 does not require a
+non-documentation CI inspection.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the

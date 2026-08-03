@@ -313,15 +313,27 @@ void set_event_list_trigger(
     const fsim_sc_event_list_kind_v1 kind,
     const char* operation);
 
+void set_timed_event_wait(
+    sc_time delay,
+    const std::vector<fsim_sc_handle_v1>& events,
+    fsim_sc_event_list_kind_v1 kind,
+    const char* operation);
+
 } // namespace detail
 
 void wait(const sc_time delay);
 
 void wait(const sc_event& event);
 
+void wait(const sc_time delay, const sc_event& event);
+
 void wait(const sc_event_or_list& events);
 
+void wait(const sc_time delay, const sc_event_or_list& events);
+
 void wait(const sc_event_and_list& events);
+
+void wait(const sc_time delay, const sc_event_and_list& events);
 
 void wait();
 
@@ -329,9 +341,17 @@ void next_trigger(const sc_time delay);
 
 void next_trigger(const sc_event& event);
 
+void next_trigger(const sc_time delay, const sc_event& event);
+
 void next_trigger(const sc_event_or_list& events);
 
+void next_trigger(
+    const sc_time delay, const sc_event_or_list& events);
+
 void next_trigger(const sc_event_and_list& events);
+
+void next_trigger(
+    const sc_time delay, const sc_event_and_list& events);
 
 class sc_module_name {
 public:

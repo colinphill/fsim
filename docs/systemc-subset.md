@@ -14,7 +14,7 @@ elaboration. A project build collects the configured SystemC sources into one
 shared library, loads it, constructs the requested factory instances, and
 retains their native objects for the design lifetime. Common-kernel SystemC
 execution now covers statically sensitive `SC_METHOD` callbacks, dynamic
-time/event and OR/AND-list `next_trigger`, named-event
+time/event and OR/AND-list `next_trigger` with timed event/list timeouts, named-event
 notification/replacement/cancellation, strict `notify_delayed`, port updates,
 registered primitive-channel update callbacks, and kernel-backed module-local
 `sc_signal` objects. Typed port-to-signal bindings enter the same DesignIR
@@ -105,9 +105,11 @@ module-local `sc_signal` constructed by a registered factory instead attaches
 typed value metadata to its primitive-channel handle and enters the common
 kernel.
 
-The remaining v1 subset work is the combined closure matrix; arbitrary custom
-value transport, binding, or asynchronous update behavior remains outside this
-subset and is rejected explicitly.
+The supported scheduling and lifecycle surface has a combined SystemVerilog
+and VHDL closure matrix across interpreter and LLVM O0/O2 execution, cache
+reuse/edit provenance, debugger/VCD observation, callback containment, and
+teardown. Arbitrary custom value transport, binding, or asynchronous update
+behavior remains outside this subset and is rejected explicitly.
 
 ## Bidirectional mixed-language hierarchy
 
@@ -277,9 +279,13 @@ factory.
 The current common-kernel path executes `SC_METHOD` callbacks to completion
 with default time-zero initialization or `dont_initialize()`, static
 any-change/scalar-edge sensitivity, and dynamic `next_trigger` selection for
-time, a single event, an OR list, or an AND list. OR waits wake on the first
-listed event; AND waits retain progress until every distinct listed event has
-occurred. Reads observe committed common-runtime values; writes enter the
+time, a single event, an OR list, an AND list, or a time-bounded event/list.
+OR waits wake on the first listed event; AND waits retain progress until every
+distinct listed event has occurred. An event wake invalidates its timeout, a
+timeout removes its event registrations, and a same-timestamp event wins by
+stable scheduled-process order. `next_trigger` is method-only and its final
+call in one invocation replaces any earlier selection. Reads observe committed
+common-runtime values; writes enter the
 common update phase and awaken dependent HDL or SystemC processes in the next
 delta. Callback exceptions are contained at the native boundary and poison
 only the affected simulation session.
@@ -378,11 +384,11 @@ implemented.
 
 `SC_THREAD` and `SC_CTHREAD` callbacks retain their ordinary C++ stacks in
 Boost.Context 1.91.0 fibers. `wait(sc_time)`, zero-delay wait,
-`wait(sc_event)`, OR/AND event-list waits, and plain `wait()` on static
-sensitivity yield to the common scheduler. A fiber is a suspension mechanism
-only: simulation remains single-threaded and deterministic. Suspended stacks
-are explicitly stopped and completed before module destruction or plug-in
-unload.
+`wait(sc_event)`, OR/AND event-list waits, time-bounded event/list waits, and
+plain `wait()` on static sensitivity yield to the common scheduler. A fiber is
+a suspension mechanism only: simulation remains single-threaded and
+deterministic. Suspended stacks are explicitly stopped and completed before
+module destruction or plug-in unload.
 
 CMake accepts `FSIM_SYSTEMC_FIBER_MODE=AUTO`, `ON`, or `OFF`. `AUTO` and `ON`
 use an installed exact Boost.Context 1.91.0 package when present, otherwise

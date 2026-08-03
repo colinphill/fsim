@@ -246,6 +246,7 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     host.register_metadata_object = registry_register_metadata_object;
     host.set_primitive_channel_kind =
         registry_set_primitive_channel_kind;
+    host.wait_event_timeout = registry_wait_event_timeout;
 
     fsim_sc_registrar_v1 registrar{};
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;
@@ -765,7 +766,8 @@ MethodSuspendResult HierarchyRegistry::invoke_process(
                 : MethodSuspendKind::static_sensitivity,
             0,
             {},
-            false};
+            false,
+            std::nullopt};
     }
 
 #if defined(FSIM_HAS_BOOST_CONTEXT)
@@ -779,7 +781,12 @@ MethodSuspendResult HierarchyRegistry::invoke_process(
         state = std::make_unique<ThreadFiberState>();
     }
     if (state->terminated) {
-        return {MethodSuspendKind::halt, 0, {}, false};
+        return {
+            MethodSuspendKind::halt,
+            0,
+            {},
+            false,
+            std::nullopt};
     }
 
     ActiveInvocation invocation{};
@@ -819,7 +826,12 @@ MethodSuspendResult HierarchyRegistry::invoke_process(
         return *invocation.suspension;
     }
     if (state->terminated) {
-        return {MethodSuspendKind::halt, 0, {}, false};
+        return {
+            MethodSuspendKind::halt,
+            0,
+            {},
+            false,
+            std::nullopt};
     }
     throw std::runtime_error{
         "SystemC thread yielded without a wait request"};

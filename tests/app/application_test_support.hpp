@@ -58,6 +58,7 @@ class ApplicationTestFixture {
   ApplicationTestFixture& operator=(const ApplicationTestFixture&) = delete;
 
   void test_systemc_integration();
+  void test_systemc_scheduling_matrix();
   void test_simulation_semantics();
   void test_specialization_and_packages();
   void test_mixed_language_and_generate();

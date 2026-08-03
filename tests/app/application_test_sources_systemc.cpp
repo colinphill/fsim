@@ -182,6 +182,85 @@ SC_MODULE(EventLists) {
   }
 };
 
+SC_MODULE(TimedMethodTriggers) {
+  sc_core::sc_out<sc_dt::sc_uint<8>> single_seen{"single_seen"};
+  sc_core::sc_out<sc_dt::sc_uint<8>> or_seen{"or_seen"};
+  sc_core::sc_out<sc_dt::sc_uint<8>> and_seen{"and_seen"};
+  sc_core::sc_event first{"first"};
+  sc_core::sc_event second{"second"};
+  sc_core::sc_event absent{"absent"};
+  unsigned producer_state{};
+  unsigned single_state{};
+  unsigned or_state{};
+  unsigned and_state{};
+
+  SC_CTOR(TimedMethodTriggers) {
+    SC_METHOD(produce);
+    SC_METHOD(observe_single);
+    SC_METHOD(observe_or);
+    SC_METHOD(observe_and);
+  }
+
+  void produce() {
+    ++producer_state;
+    if (producer_state == 1) {
+      next_trigger(sc_core::sc_time{1, sc_core::SC_NS});
+    } else if (producer_state == 2) {
+      first.notify();
+      next_trigger(sc_core::sc_time{1, sc_core::SC_NS});
+    } else if (producer_state == 3) {
+      second.notify();
+      next_trigger(sc_core::sc_time{1, sc_core::SC_NS});
+    }
+  }
+
+  void observe_single() {
+    if (single_state++ == 0) {
+      next_trigger(sc_core::sc_time{100, sc_core::SC_NS}, absent);
+      next_trigger(sc_core::sc_time{1, sc_core::SC_NS}, first);
+      return;
+    }
+    single_seen.write(sc_dt::sc_uint<8>{
+        single_state == 2 ? 10U + producer_state
+                          : 20U + producer_state});
+    if (single_state == 2) {
+      next_trigger(sc_core::sc_time{1, sc_core::SC_NS}, absent);
+    }
+  }
+
+  void observe_or() {
+    if (or_state++ == 0) {
+      next_trigger(sc_core::sc_time{100, sc_core::SC_NS}, absent);
+      next_trigger(
+          sc_core::sc_time{3, sc_core::SC_NS}, first | second);
+      return;
+    }
+    or_seen.write(sc_dt::sc_uint<8>{
+        or_state == 2 ? 10U + producer_state
+                      : 20U + producer_state});
+    if (or_state == 2) {
+      next_trigger(
+          sc_core::sc_time{1, sc_core::SC_NS}, absent | absent);
+    }
+  }
+
+  void observe_and() {
+    if (and_state++ == 0) {
+      next_trigger(sc_core::sc_time{100, sc_core::SC_NS}, absent);
+      next_trigger(
+          sc_core::sc_time{4, sc_core::SC_NS}, first & second);
+      return;
+    }
+    and_seen.write(sc_dt::sc_uint<8>{
+        and_state == 2 ? 10U + producer_state
+                       : 20U + producer_state});
+    if (and_state == 2) {
+      next_trigger(
+          sc_core::sc_time{1, sc_core::SC_NS}, first & absent);
+    }
+  }
+};
+
 class DeferredChannel final : public sc_core::sc_prim_channel {
  public:
   DeferredChannel(
@@ -212,16 +291,71 @@ class DeferredChannel final : public sc_core::sc_prim_channel {
   unsigned update_count_{};
 };
 
+class CrossChannel final : public sc_core::sc_prim_channel {
+ public:
+  CrossChannel(
+      const char* name,
+      DeferredChannel& target,
+      sc_core::sc_event& event,
+      sc_core::sc_out<sc_dt::sc_uint<8>>& updates)
+      : sc_core::sc_prim_channel(name),
+        target_(target),
+        event_(event),
+        updates_(updates) {}
+
+  void schedule() { request_update(); }
+
+ protected:
+  void update() override {
+    ++update_count_;
+    updates_.write(sc_dt::sc_uint<8>{update_count_});
+    request_update();
+    target_.write(9);
+    event_.notify();
+  }
+
+ private:
+  DeferredChannel& target_;
+  sc_core::sc_event& event_;
+  sc_core::sc_out<sc_dt::sc_uint<8>>& updates_;
+  unsigned update_count_{};
+};
+
+class ThrowingUpdateChannel final : public sc_core::sc_prim_channel {
+ public:
+  explicit ThrowingUpdateChannel(const char* name)
+      : sc_core::sc_prim_channel(name) {}
+
+  void schedule() { request_update(); }
+
+ protected:
+  void update() override {
+    throw std::runtime_error{"intentional channel update failure"};
+  }
+};
+
+SC_MODULE(ChannelUpdateFailure) {
+  ThrowingUpdateChannel channel{"channel"};
+
+  SC_CTOR(ChannelUpdateFailure) { SC_METHOD(run); }
+
+  void run() { channel.schedule(); }
+};
+
 SC_MODULE(KernelChannels) {
   sc_core::sc_out<sc_dt::sc_uint<8>> value{"value"};
   sc_core::sc_out<sc_dt::sc_uint<8>> updates{"updates"};
   sc_core::sc_out<sc_dt::sc_uint<8>> event_count{"event_count"};
+  sc_core::sc_out<sc_dt::sc_uint<8>> cross_updates{"cross_updates"};
   sc_core::sc_event pulse{"pulse"};
   DeferredChannel deferred;
+  CrossChannel cross;
   unsigned producer_state{};
   unsigned observed_events{};
 
-  SC_CTOR(KernelChannels) : deferred{"deferred", value, updates} {
+  SC_CTOR(KernelChannels)
+      : deferred{"deferred", value, updates},
+        cross{"cross", deferred, pulse, cross_updates} {
     SC_METHOD(produce);
     SC_METHOD(consume);
   }
@@ -231,6 +365,7 @@ SC_MODULE(KernelChannels) {
       ++producer_state;
       deferred.write(1);
       deferred.write(2);
+      cross.schedule();
       pulse.notify_delayed(
           sc_core::sc_time{2, sc_core::SC_NS});
       next_trigger(sc_core::sc_time{1, sc_core::SC_NS});
@@ -488,6 +623,25 @@ SC_MODULE(CustomValueFailure) {
   void run() { (void)endpoint->inspect(); }
 };
 
+SC_MODULE(EventTickFailure) {
+  sc_core::sc_event pulse{"pulse"};
+
+  SC_CTOR(EventTickFailure) { SC_METHOD(run); }
+
+  void run() { pulse.notify(sc_core::sc_time{1, sc_core::SC_PS}); }
+};
+
+SC_MODULE(DelayedPendingFailure) {
+  sc_core::sc_event pulse{"pulse"};
+
+  SC_CTOR(DelayedPendingFailure) { SC_METHOD(run); }
+
+  void run() {
+    pulse.notify_delayed(sc_core::sc_time{2, sc_core::SC_NS});
+    pulse.notify_delayed(sc_core::sc_time{1, sc_core::SC_NS});
+  }
+};
+
 SC_MODULE(NamedObjectMatrix) {
   sc_core::sc_in<sc_dt::sc_logic> value{"value"};
   sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
@@ -673,6 +827,24 @@ SC_MODULE(ThrowingEndLifecycle) {
   }
 };
 
+SC_MODULE(LifecycleEventFailure) {
+  sc_core::sc_event pulse{"pulse"};
+
+  SC_CTOR(LifecycleEventFailure) {}
+
+ protected:
+  void start_of_simulation() override { pulse.notify(); }
+};
+
+SC_MODULE(LifecycleSuspendFailure) {
+  SC_CTOR(LifecycleSuspendFailure) {}
+
+ protected:
+  void start_of_simulation() override {
+    next_trigger(sc_core::sc_time{1, sc_core::SC_NS});
+  }
+};
+
 namespace {
 void* create_model(void*, const char*, fsim_sc_handle_v1) {
   return reinterpret_cast<void*>(0x1);
@@ -801,7 +973,11 @@ SC_MODULE(FiberThreads) {
   sc_core::sc_out<sc_dt::sc_lv<8>> count{"count"};
   sc_core::sc_out<sc_dt::sc_lv<8>> timed{"timed"};
   sc_core::sc_out<sc_dt::sc_lv<8>> event_count{"event_count"};
+  sc_core::sc_out<sc_dt::sc_lv<8>> static_count{"static_count"};
+  sc_core::sc_out<sc_dt::sc_lv<8>> named_count{"named_count"};
+  sc_core::sc_out<sc_dt::sc_lv<8>> timeout_count{"timeout_count"};
   sc_core::sc_event pulse{"pulse"};
+  sc_core::sc_event absent{"absent"};
 
   SC_CTOR(FiberThreads) {
     SC_CTHREAD(clocked_run, clock.pos());
@@ -809,7 +985,14 @@ SC_MODULE(FiberThreads) {
     SC_METHOD(notify_run);
     sensitive << clock.pos();
     dont_initialize();
+    SC_METHOD(named_run);
+    sensitive << pulse << pulse;
+    dont_initialize();
+    SC_THREAD(static_run);
+    sensitive << clock.neg() << clock.neg();
+    dont_initialize();
     SC_THREAD(event_run);
+    SC_THREAD(timeout_run);
   }
 
   void clocked_run() {
@@ -836,12 +1019,43 @@ SC_MODULE(FiberThreads) {
     pulse.notify();
   }
 
+  void named_run() {
+    named_value_ = named_value_ + 1;
+    named_count.write(sc_dt::sc_lv<8>{
+        named_value_ == 1 ? "00000001" : "00000010"});
+  }
+
+  void static_run() {
+    unsigned value = 0;
+    while (true) {
+      ++value;
+      static_count.write(sc_dt::sc_lv<8>{"00000001"});
+      sc_core::wait();
+    }
+  }
+
   void event_run() {
     sc_core::wait(pulse);
     event_count.write(sc_dt::sc_lv<8>{"00000001"});
     sc_core::wait(pulse);
     event_count.write(sc_dt::sc_lv<8>{"00000010"});
   }
+
+  void timeout_run() {
+    sc_core::wait(sc_core::sc_time{2, sc_core::SC_NS}, pulse);
+    timeout_count.write(sc_dt::sc_lv<8>{"00000001"});
+    sc_core::wait(sc_core::sc_time{1, sc_core::SC_NS}, absent);
+    timeout_count.write(sc_dt::sc_lv<8>{"00000010"});
+    sc_core::wait(
+        sc_core::sc_time{2, sc_core::SC_NS}, pulse | absent);
+    timeout_count.write(sc_dt::sc_lv<8>{"00000011"});
+    sc_core::wait(
+        sc_core::sc_time{1, sc_core::SC_NS}, pulse & absent);
+    timeout_count.write(sc_dt::sc_lv<8>{"00000100"});
+  }
+
+ private:
+  unsigned named_value_{};
 };
 
 extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
@@ -937,11 +1151,23 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   if (event_list_status != FSIM_SC_OK) {
     return event_list_status;
   }
+  const auto timed_method_status =
+      fsim::systemc::register_module_factory<TimedMethodTriggers>(
+          host, registrar, "timed_method_triggers");
+  if (timed_method_status != FSIM_SC_OK) {
+    return timed_method_status;
+  }
   const auto kernel_channel_status =
       fsim::systemc::register_module_factory<KernelChannels>(
           host, registrar, "kernel_channels");
   if (kernel_channel_status != FSIM_SC_OK) {
     return kernel_channel_status;
+  }
+  const auto channel_failure_status =
+      fsim::systemc::register_module_factory<ChannelUpdateFailure>(
+          host, registrar, "channel_update_failure");
+  if (channel_failure_status != FSIM_SC_OK) {
+    return channel_failure_status;
   }
   const auto internal_signal_status =
       fsim::systemc::register_module_factory<InternalSignals>(
@@ -986,6 +1212,18 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
               host, registrar, "throwing_end_lifecycle");
   if (throwing_end_status != FSIM_SC_OK) {
     return throwing_end_status;
+  }
+  const auto lifecycle_event_status =
+      fsim::systemc::register_module_factory<LifecycleEventFailure>(
+          host, registrar, "lifecycle_event_failure");
+  if (lifecycle_event_status != FSIM_SC_OK) {
+    return lifecycle_event_status;
+  }
+  const auto lifecycle_suspend_status =
+      fsim::systemc::register_module_factory<LifecycleSuspendFailure>(
+          host, registrar, "lifecycle_suspend_failure");
+  if (lifecycle_suspend_status != FSIM_SC_OK) {
+    return lifecycle_suspend_status;
   }
   const auto port_chain_status =
       fsim::systemc::register_module_factory<PortChainHierarchy>(
@@ -1045,6 +1283,18 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
           host, registrar, "custom_value_failure");
   if (custom_value_status != FSIM_SC_OK) {
     return custom_value_status;
+  }
+  const auto tick_failure_status =
+      fsim::systemc::register_module_factory<EventTickFailure>(
+          host, registrar, "event_tick_failure");
+  if (tick_failure_status != FSIM_SC_OK) {
+    return tick_failure_status;
+  }
+  const auto delayed_failure_status =
+      fsim::systemc::register_module_factory<DelayedPendingFailure>(
+          host, registrar, "delayed_pending_failure");
+  if (delayed_failure_status != FSIM_SC_OK) {
+    return delayed_failure_status;
   }
   return fsim::systemc::register_module_factory<NamedObjectMatrix>(
       host, registrar, "named_object_matrix");
@@ -1196,17 +1446,64 @@ module systemc_thread_host;
   logic [7:0] count;
   logic [7:0] timed;
   logic [7:0] event_count;
+  logic [7:0] static_count;
+  logic [7:0] named_count;
+  logic [7:0] timeout_count;
   fiber_threads_placeholder u_threads(
       .clock(clock),
       .count(count),
       .timed(timed),
-      .event_count(event_count));
+      .event_count(event_count),
+      .static_count(static_count),
+      .named_count(named_count),
+      .timeout_count(timeout_count));
   initial begin
     clock = 1'b0;
     #1 clock = 1'b1;
     #1 clock = 1'b0;
     #1 clock = 1'b1;
-    #1 $finish;
+    #2 $finish;
+  end
+endmodule
+
+module systemc_schedule_lifecycle_host;
+  logic clock;
+  logic trigger;
+  logic ready;
+  logic [7:0] count;
+  logic [7:0] timed;
+  logic [7:0] thread_event_count;
+  logic [7:0] static_count;
+  logic [7:0] named_count;
+  logic [7:0] timeout_count;
+  logic [7:0] channel_value;
+  logic [7:0] channel_updates;
+  logic [7:0] channel_event_count;
+  logic [7:0] cross_updates;
+  fiber_threads_placeholder u_threads(
+      .clock(clock),
+      .count(count),
+      .timed(timed),
+      .event_count(thread_event_count),
+      .static_count(static_count),
+      .named_count(named_count),
+      .timeout_count(timeout_count));
+  kernel_channels_placeholder u_channels(
+      .value(channel_value),
+      .updates(channel_updates),
+      .event_count(channel_event_count),
+      .cross_updates(cross_updates));
+  lifecycle_module_placeholder u_lifecycle(
+      .trigger(trigger),
+      .ready(ready));
+  initial begin
+    clock = 1'b0;
+    trigger = 1'b0;
+    #1 clock = 1'b1;
+    trigger = 1'b1;
+    #1 clock = 1'b0;
+    #1 clock = 1'b1;
+    #2 $finish;
   end
 endmodule
 )";
@@ -1227,6 +1524,92 @@ begin
   u_method: method_bridge_placeholder
     generic map (passthrough => true)
     port map (value => value, inverted => inverted);
+end architecture rtl;
+
+entity systemc_thread_vhdl_host is
+end entity systemc_thread_vhdl_host;
+
+architecture rtl of systemc_thread_vhdl_host is
+  signal clock : std_logic;
+  signal count : std_logic_vector(7 downto 0);
+  signal timed : std_logic_vector(7 downto 0);
+  signal event_count : std_logic_vector(7 downto 0);
+  signal static_count : std_logic_vector(7 downto 0);
+  signal named_count : std_logic_vector(7 downto 0);
+  signal timeout_count : std_logic_vector(7 downto 0);
+begin
+  u_threads: fiber_threads_placeholder
+    port map (
+      clock => clock,
+      count => count,
+      timed => timed,
+      event_count => event_count,
+      static_count => static_count,
+      named_count => named_count,
+      timeout_count => timeout_count);
+  drive: process
+  begin
+    clock <= '0';
+    wait for 1 ns;
+    clock <= '1';
+    wait for 1 ns;
+    clock <= '0';
+    wait for 1 ns;
+    clock <= '1';
+    wait for 2 ns;
+    wait;
+  end process drive;
+end architecture rtl;
+
+entity systemc_schedule_lifecycle_vhdl_host is
+end entity systemc_schedule_lifecycle_vhdl_host;
+
+architecture rtl of systemc_schedule_lifecycle_vhdl_host is
+  signal clock : std_logic;
+  signal trigger : std_logic;
+  signal ready : std_logic;
+  signal count : std_logic_vector(7 downto 0);
+  signal timed : std_logic_vector(7 downto 0);
+  signal thread_event_count : std_logic_vector(7 downto 0);
+  signal static_count : std_logic_vector(7 downto 0);
+  signal named_count : std_logic_vector(7 downto 0);
+  signal timeout_count : std_logic_vector(7 downto 0);
+  signal channel_value : std_logic_vector(7 downto 0);
+  signal channel_updates : std_logic_vector(7 downto 0);
+  signal channel_event_count : std_logic_vector(7 downto 0);
+  signal cross_updates : std_logic_vector(7 downto 0);
+begin
+  u_threads: fiber_threads_placeholder
+    port map (
+      clock => clock,
+      count => count,
+      timed => timed,
+      event_count => thread_event_count,
+      static_count => static_count,
+      named_count => named_count,
+      timeout_count => timeout_count);
+  u_channels: kernel_channels_placeholder
+    port map (
+      value => channel_value,
+      updates => channel_updates,
+      event_count => channel_event_count,
+      cross_updates => cross_updates);
+  u_lifecycle: lifecycle_module_placeholder
+    port map (trigger => trigger, ready => ready);
+  drive: process
+  begin
+    clock <= '0';
+    trigger <= '0';
+    wait for 1 ns;
+    clock <= '1';
+    trigger <= '1';
+    wait for 1 ns;
+    clock <= '0';
+    wait for 1 ns;
+    clock <= '1';
+    wait for 2 ns;
+    wait;
+  end process drive;
 end architecture rtl;
 )";
 }

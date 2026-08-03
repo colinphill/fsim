@@ -12,6 +12,8 @@ int main() {
   fsim::test::ApplicationTestFixture fixture;
   checkpoint("systemc integration");
   fixture.test_systemc_integration();
+  checkpoint("systemc scheduling matrix");
+  fixture.test_systemc_scheduling_matrix();
   checkpoint("simulation semantics");
   fixture.test_simulation_semantics();
   checkpoint("specialization and packages");
