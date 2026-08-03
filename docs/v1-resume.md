@@ -5408,7 +5408,15 @@ through the production UTF-8/native environment adapter and makes the MSVC
 contract reject direct `getenv` reintroduction. Exact-LLVM Debug and Release
 rebuilt with eight workers; the plug-in compiler and MSVC contract passed 2/2
 in 2.81 and 2.39 seconds. The third repair checkpoint and replacement hosted
-run are pending.
+run are pending. Checkpoint `501a031` was pushed; replacement run
+`30823335803` passed fuzz and both repaired compile points, then plain MSVC
+Debug and MSVC/exact-LLVM Debug exposed the same C2026 failure in the merged
+application fixture: one generated SystemC translation unit occupied a
+24,844-byte raw string. The follow-up partitions it into six independent
+stream chunks no larger than 12,095 bytes and extends the MSVC contract to pin
+that shape. Exact-LLVM Debug and Release rebuilt with eight workers, and the
+SystemC application matrix plus contract passed 2/2 in 45.09 and 42.04
+seconds. The fourth repair checkpoint and replacement hosted run are pending.
 
 Batch 110 has advanced through these validated features:
 

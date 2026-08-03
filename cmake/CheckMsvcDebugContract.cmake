@@ -12,6 +12,8 @@ set(FSIM_APPLICATION_ANALYSIS
 set(FSIM_SYSTEMC_CORE "${FSIM_SOURCE_DIR}/include/fsim/systemc/core.hpp")
 set(FSIM_SYSTEMC_COMPILER_TEST
   "${FSIM_SOURCE_DIR}/tests/systemc/plugin_compiler_test.cpp")
+set(FSIM_APPLICATION_SYSTEMC_SOURCE
+  "${FSIM_SOURCE_DIR}/tests/app/application_test_sources_systemc.cpp")
 set(FSIM_FRONTEND "${FSIM_SOURCE_DIR}/tests/frontend/frontend_sv_conformance_tests.cpp")
 set(FSIM_ELABORATION "${FSIM_SOURCE_DIR}/tests/elaboration/elaborator_sv_conformance_test.cpp")
 foreach(FSIM_INPUT IN ITEMS
@@ -21,6 +23,7 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_APPLICATION_ANALYSIS}"
     "${FSIM_SYSTEMC_CORE}"
     "${FSIM_SYSTEMC_COMPILER_TEST}"
+    "${FSIM_APPLICATION_SYSTEMC_SOURCE}"
     "${FSIM_FRONTEND}"
     "${FSIM_ELABORATION}")
   if(NOT EXISTS "${FSIM_INPUT}")
@@ -34,6 +37,9 @@ file(READ "${FSIM_WORKFLOW}" FSIM_WORKFLOW_CONTENTS)
 file(READ "${FSIM_APPLICATION_ANALYSIS}" FSIM_APPLICATION_ANALYSIS_CONTENTS)
 file(READ "${FSIM_SYSTEMC_CORE}" FSIM_SYSTEMC_CORE_CONTENTS)
 file(READ "${FSIM_SYSTEMC_COMPILER_TEST}" FSIM_SYSTEMC_COMPILER_TEST_CONTENTS)
+file(READ
+  "${FSIM_APPLICATION_SYSTEMC_SOURCE}"
+  FSIM_APPLICATION_SYSTEMC_SOURCE_CONTENTS)
 file(READ "${FSIM_FRONTEND}" FSIM_FRONTEND_CONTENTS)
 file(READ "${FSIM_ELABORATION}" FSIM_ELABORATION_CONTENTS)
 
@@ -79,6 +85,18 @@ if(FSIM_COMPILER_ENVIRONMENT_INDEX EQUAL -1
     OR NOT FSIM_COMPILER_GETENV_INDEX EQUAL -1)
   message(FATAL_ERROR
     "SystemC compiler test bypasses the MSVC-safe environment helper")
+endif()
+
+string(REGEX MATCHALL
+  "output << R\"\\("
+  FSIM_APPLICATION_SYSTEMC_SOURCE_CHUNKS
+  "${FSIM_APPLICATION_SYSTEMC_SOURCE_CONTENTS}")
+list(LENGTH
+  FSIM_APPLICATION_SYSTEMC_SOURCE_CHUNKS
+  FSIM_APPLICATION_SYSTEMC_SOURCE_CHUNK_COUNT)
+if(FSIM_APPLICATION_SYSTEMC_SOURCE_CHUNK_COUNT LESS 6)
+  message(FATAL_ERROR
+    "generated SystemC application source lost its MSVC-safe literal chunks")
 endif()
 
 foreach(FSIM_C_HOST IN ITEMS
@@ -147,5 +165,6 @@ message(STATUS
   "SystemC enum metadata crosses the integer validation seam explicitly and "
   "interface-kind selection uses an explicit constexpr fallback; "
   "compiler tests use the shared MSVC-safe environment helper; "
+  "generated SystemC source uses bounded literal chunks; "
   "scoped/container/application timeouts and BOM/CRLF span/elaboration "
   "fixtures are present")

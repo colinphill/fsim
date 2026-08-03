@@ -845,6 +845,8 @@ SC_MODULE(LifecycleSuspendFailure) {
   }
 };
 
+)";
+  output << R"(
 namespace {
 void* create_model(void*, const char*, fsim_sc_handle_v1) {
   return reinterpret_cast<void*>(0x1);
@@ -1058,6 +1060,8 @@ SC_MODULE(FiberThreads) {
   unsigned named_value_{};
 };
 
+)";
+  output << R"(
 extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
     const fsim_sc_host_v1* host,
     fsim_sc_registrar_v1* registrar) {
