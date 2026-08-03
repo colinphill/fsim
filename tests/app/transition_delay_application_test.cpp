@@ -102,7 +102,7 @@ Capture run_once(
   capture.compiled_processes = simulation.compiled_process_count();
   capture.native_cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 12> names{
+  constexpr std::array<std::string_view, 13> names{
       "transition_delays.mode_output",
       "transition_delays.vector_output",
       "transition_delays.slice_output",
@@ -110,6 +110,7 @@ Capture run_once(
       "transition_delays.one_output",
       "transition_delays.two_output",
       "transition_delays.gate_output",
+      "transition_delays.gate_triple_output",
       "transition_delays.gate_array_output",
       "transition_delays.tri_output",
       "transition_delays.notif_output",
@@ -256,6 +257,27 @@ void verify_mode(
   assert(
       changes_for(reference, "transition_delays.gate_output")
       == changes_for(reference, "transition_delays.two_output"));
+  const auto mode_offset =
+      static_cast<fsim::runtime::SimulationTick>(mode);
+  const std::vector<std::pair<
+      std::string,
+      fsim::runtime::SimulationTick>> expected_gate_triple{
+          {"0", 4 + mode_offset},
+          {"1", 21 + mode_offset},
+          {"0", 44 + mode_offset},
+          {"Z", 61 + mode_offset},
+          {"X", 81 + mode_offset}};
+  const auto actual_gate_triple = changes_for(
+      reference, "transition_delays.gate_triple_output");
+  if (actual_gate_triple != expected_gate_triple) {
+    std::cerr << "gate triple mode "
+              << static_cast<unsigned>(mode) << ':';
+    for (const auto& [value, time] : actual_gate_triple) {
+      std::cerr << ' ' << value << '@' << time;
+    }
+    std::cerr << '\n';
+  }
+  assert(actual_gate_triple == expected_gate_triple);
   assert((
       changes_for(reference, "transition_delays.gate_array_output")
       == std::vector<std::pair<
@@ -320,11 +342,11 @@ void verify_mode(
     assert(reference.debugger == actual->debugger);
   }
 #if defined(FSIM_HAS_LLVM)
-  assert(cold.compiled_processes == 16);
+  assert(cold.compiled_processes == 17);
   assert(cold.native_cache.hits == 0);
   assert(cold.native_cache.misses == 1);
   assert(cold.native_cache.stores == 1);
-  assert(warm.compiled_processes == 16);
+  assert(warm.compiled_processes == 17);
   assert(warm.native_cache.hits == 1);
   assert(warm.native_cache.misses == 0);
 #else
@@ -646,6 +668,7 @@ module transition_delays;
   wire one_output;
   wire two_output;
   wire gate_output;
+  wire gate_triple_output;
   wire [7:4] gate_array_output;
   wire tri_output;
   wire notif_output;
@@ -662,6 +685,8 @@ module transition_delays;
   assign #4ps one_output = mode_drive;
   assign #(9ps, 3ps) two_output = mode_drive;
   buf #(9ps, 3ps) (gate_output, mode_drive);
+  buf #(1ps:2ps:3ps, 4ps:5ps:6ps) (
+      gate_triple_output, mode_drive);
   and #1ps gate_array[3:0] (
       gate_array_output, gate_array_a, gate_array_b);
   bufif1 #(2ps, 3ps, 4ps) tri_gate(

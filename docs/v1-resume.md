@@ -5203,37 +5203,184 @@ Actions run was inspected at this non-mandatory boundary.
 
 The current ten implementation tasks are:
 
-1. **In progress.** Audit every v1 feature-matrix row against checked-in syntax,
+1. **Complete.** Audit every v1 feature-matrix row against checked-in syntax,
    legality, elaboration, interpreter, LLVM, cache/provenance, debugger/trace,
    and portability evidence; create the exact final closure queue.
-2. **Pending.** Re-audit the complete SystemVerilog v1 subset and repair every
+2. **Complete.** Re-audit the complete SystemVerilog v1 subset and repair every
    remaining positive, negative, diagnostic, elaboration, or execution gap.
-3. **Pending.** Re-audit the complete VHDL v1 subset and repair every remaining
+3. **Complete.** Re-audit the complete VHDL v1 subset and repair every remaining
    positive, negative, diagnostic, elaboration, or execution gap.
-4. **Pending.** Re-audit mixed-language and SystemC boundaries, conversions,
+4. **Complete.** Re-audit mixed-language and SystemC boundaries, conversions,
    scheduling, lifecycle, plug-in, compiler, cache, and strict-C ABI evidence.
-5. **Pending.** Close final interpreter versus LLVM O0/O2, cold/warm/edit,
+5. **Complete.** Close final interpreter versus LLVM O0/O2, cold/warm/edit,
    debugger, VCD, scheduling, and failure differential gaps across the corpus.
-6. **Pending.** Validate installed/public CLI, API, ABI, Tcl, runtime, package,
+6. **Complete.** Validate installed/public CLI, API, ABI, Tcl, runtime, package,
    path, environment, callback, and exit-status release behavior.
-7. **Pending.** Reconcile diagnostics, source-size, license, conformance, and
+7. **Complete.** Reconcile diagnostics, source-size, license, conformance, and
    provenance inventories and eliminate every unowned or stale release gap.
-8. **Pending.** Validate final Linux/Windows Debug/Release build, memory, stack,
+8. **Complete.** Validate final Linux/Windows Debug/Release build, memory, stack,
    timeout, concurrency, and phase-trace contracts for bounded hosted runs.
-9. **Pending.** Freeze the final release-candidate corpus and reclassify every
+9. **Complete.** Freeze the final release-candidate corpus and reclassify every
    completed v1 matrix row with exact owning tests and evidence links.
-10. **Pending.** Update all v1/release records, pass sanitizer, source/catalog,
+10. **In progress — local gates complete; mandatory CI pending.** Update all v1/release records, pass sanitizer, source/catalog,
     and full local Debug/Release gates, create and push the final checkpoint,
     then inspect and repair every non-documentation job at the mandatory Batch
     130 GitHub CI boundary.
 
-Batch status is **in progress** with Task 1 current. Keep this exact ten-task
-list current in both the official plan and this handoff. Tasks 1 through 9 use
-one accumulated dirty worktree with focused eight-worker local builds and
-tests; Task 10 owns the sanitizer, full regressions, documentation, single
-commit/push, and mandatory non-documentation GitHub CI inspection. GitHub
-builds use parallelism four. Stop before CI monitoring until explicitly
-resumed at that boundary.
+Batch status is **in progress at the mandatory CI boundary**. All local Task 10
+gates are complete; this changeset is the single checkpoint intended for the
+pushed branch, and mandatory non-documentation GitHub CI inspection is the
+only pending step. GitHub builds use parallelism four. Stop before CI
+monitoring until explicitly resumed at that boundary.
+
+Task 1 is focused-complete. The new
+[`docs/v1-release-audit.md`](v1-release-audit.md) freezes the 1,080-row matrix
+baseline and its digest across 671 `SV`, 9 `V1-SV`, 252 `VH`, 8 `V1-VH`, 16
+`ML`, 28 `SC`, 86 `CM`, and 10 `V1-CM` rows. Eight exact `B130-T*` queues
+route the complete SystemVerilog, VHDL, mixed/SystemC, differential, public,
+inventory, resource, and final reclassification reviews to Tasks 2 through 9.
+The new `fsim.v1-release-audit` gate composes the diagnostic, source-size,
+legality, conformance, portability, and IEEE-package inventories, independently
+checks every row ID/count and queue, and rejects unreviewed matrix changes. The
+eight-worker Debug build required no compilation; the focused audit and scoped
+local gate passed 9/9 in 1.95 seconds, with the composed release audit in 0.58
+and scoped locals in 0.83 seconds. Task 2 is current; no sanitizer, Release,
+full regression, commit, push, or CI inspection is due at this task boundary.
+
+Task 2 is focused-complete. The new
+[`docs/v1-systemverilog-release-audit.md`](v1-systemverilog-release-audit.md)
+partitions syntax, semantics, execution, native differential, and release
+ownership for all 671 `SV` and 9 `V1-SV` rows. Its strict gate requires
+executable status, complete typed evidence ownership, a test-owned runtime cell,
+and no stale missing-test or implementation-only runtime claim; the current
+matrix names 48 distinct runtime evidence files. The audit exposed and repaired
+stale SV-011/SV-012 expression links, added three-mode built-in gate
+`min:typ:max` execution, added typical-branch nonblocking named-event triple
+execution, and added classic-callable missing/extra/duplicate/delimiter/end-name
+diagnostics. The eight-worker Debug build was warning-clean after adding the
+required algorithm header. Frontend, named-event, transition-delay, legality,
+release/SV audits, and scoped locals passed 7/7 in 3.84 seconds, including
+transition delays in 0.71, named events in 0.86, and scoped locals in 0.80
+seconds. Task 3 is current; no sanitizer, Release, full regression, commit,
+push, or CI inspection is due at this task boundary.
+
+Task 3 is focused-complete. The new
+[`docs/v1-vhdl-release-audit.md`](v1-vhdl-release-audit.md) partitions syntax,
+semantics, packages/provenance, execution, and release ownership for all 252
+`VH` and 8 `V1-VH` rows. Its strict gate composes the final release audit and
+requires executable status, complete evidence ownership, and a test-owned
+runtime cell; all 260 rows pass with 40 distinct runtime evidence files and no
+stale or unowned claim. The eight-worker Debug build required no compilation.
+The complete VHDL-labeled slice passed 30/30 in 16.54 seconds, including typed
+boundaries in 3.80, arrays in 2.03, overloads in 1.85, logic9 in 1.15, and
+components in 0.99 seconds; the separate scoped-local guard passed in 0.80
+seconds. Task 4 is current; no sanitizer, Release, full regression, commit,
+push, or CI inspection is due at this task boundary.
+
+Task 4 is focused-complete. The new
+[`docs/v1-mixed-systemc-release-audit.md`](v1-mixed-systemc-release-audit.md)
+partitions mixed type conversion, boundary scheduling, SystemC facade/ABI,
+lifecycle/compiler/cache, and native differential ownership for all 16 `ML`
+and 28 `SC` rows. Its strict gate composes the final release audit and requires
+executable status, complete evidence ownership, and a test-owned runtime cell;
+all 44 rows pass with 14 distinct runtime evidence files and no stale or
+unowned claim. The eight-worker Debug build required no compilation. The
+complete mixed/SystemC-labeled slice passed 9/9 in 55.20 seconds, including the
+SystemC application matrix in 46.19, typed boundaries in 3.84, datatypes in
+2.54, mixed conversions in 0.77, and resolution in 0.49 seconds; scoped locals
+passed separately in 0.83 seconds. Task 5 is current; no sanitizer, Release,
+full regression, commit, push, or CI inspection is due at this task boundary.
+
+Task 5 is focused-complete. The new
+[`docs/v1-differential-release-audit.md`](v1-differential-release-audit.md)
+composes the final language, conformance, and portability audits and freezes
+94 distinct runtime evidence files plus 36 corpus CTests. Across the 1,080
+matrix rows it records 439 interpreter, 361 LLVM/compiled/native, 244
+cache/reuse/edit, 90 debugger, 116 VCD/trace, 394 scheduling/time/event, and
+89 failure/diagnostic/callback/ABI runtime claims; categories overlap by
+design. The gate also requires interpreter, LLVM O0/O2, cold/warm/edit,
+debugger, VCD, callback, diagnostic, lifecycle, ABI, plug-in, compiler,
+source-map, and portable-path modes in the corpus union. The eight-worker Debug
+build required no compilation. The 19 unique portability owners plus the new
+gate passed 20/20 in 72.37 seconds, including SystemC matrix in 45.20, the
+application in 9.24, typed boundaries in 3.88, LLVM in 2.68, and scoped locals
+in 0.81 seconds. Task 6 is current; no sanitizer, Release, full regression,
+commit, push, or CI inspection is due at this task boundary.
+
+Task 6 is focused-complete. The new
+[`docs/v1-public-release-audit.md`](v1-public-release-audit.md) freezes the
+five installed commands, five public header groups, two libraries, API and
+SystemC ABI version 1, CLI statuses 0/1/2/3, and UTF-8/native path and Windows
+environment seams. `fsim.installed-public-contract` creates a fresh Unicode
+prefix without network access, verifies the exact installed command, library,
+header, documentation, and IEEE-package layout and byte-identical public
+headers, then executes installed version, alias help, and invalid-option
+behavior. The eight-worker Debug build required no compilation. The public
+audit, staged install, CLI, C/C++ API/ABI, Tcl relocation, runtime-file, and
+scoped-local focus passed 11/11 in 14.05 seconds, including the staged install
+in 0.61 and scoped locals in 0.87 seconds. Task 7 is current; no sanitizer,
+Release, full regression, commit, push, or CI inspection is due at this task
+boundary.
+
+Task 7 is focused-complete. The new
+[`docs/v1-inventory-release-audit.md`](v1-inventory-release-audit.md) and
+`fsim.v1-inventory-release` gate compose and freeze 1,624 production
+diagnostics, 423 authored sources under the 2,000-line cap, 499 SPDX-owned
+repository artifacts, the 31-file/26-VHDL checksummed IEEE snapshot, 105
+conformance expectations in 28 fixtures owned by 27 CTests, and 10 reviewed
+plus 6 excluded provenance identities. The audit rejects an unlicensed owned
+artifact, stale diagnostic, source-size exception, unreviewed third-party
+root, changed package byte, or changed expectation/source/owner digest. The
+eight-worker Debug build required no compilation. Inventory owners,
+SystemVerilog conformance runtime, and scoped locals passed 8/8 in 5.70
+seconds, including the composed inventory in 0.35, conformance runtime in
+4.20, and scoped locals in 0.85 seconds. Task 8 is current; no sanitizer,
+Release, full regression, commit, push, or CI inspection is due at this task
+boundary.
+
+Task 8 is focused-complete. The new
+[`docs/v1-resource-release-audit.md`](v1-resource-release-audit.md) and
+`fsim.v1-resource-release` gate compose the complete platform contracts and
+freeze 12 hosted configurations, six four-worker CI build steps, the local
+eight-link pool, compact Debug objects, 8 MiB MSVC-compatible test stacks,
+20/45/70-minute job bounds, 60/120/600/1200-second test classes, scoped/SystemC
+phase traces, 16 explicit platform files, and 20 portability rows. This was a
+static local inspection only; no GitHub Actions state was queried. The
+eight-worker Debug build required no compilation. Resource/portability owners,
+the SystemC matrix, and scoped locals passed 11/11 in 46.30 seconds, including
+SystemC in 45.30, scoped locals in 0.84, and the composed audit in 0.07 seconds.
+Task 9 is current; no sanitizer, Release, full regression, commit, push, or CI
+inspection is due at this task boundary.
+
+Task 9 is focused-complete. The exact
+[`docs/v1-release-candidate-corpus.txt`](v1-release-candidate-corpus.txt) and
+`fsim.v1-release-candidate` gate reclassify all 1,080 required matrix rows as
+`execute`, require links in all 4,320 P+/P-/E/R cells, resolve every link to a
+checked-in owner, and freeze 320 evidence paths: 157 test, 148 production, and
+15 documentation/build/release paths. The corpus also retains 94 distinct
+runtime evidence files and 36 conformance/portability CTests. Both the exact
+matrix bytes and evidence-path set are digest-pinned. The eight-worker Debug
+build required no compilation. The nine final release audits and scoped locals
+passed 10/10 in 12.75 seconds, including the candidate gate in 5.75 and scoped
+locals in 0.85 seconds. Task 10 is current and owns sanitizer, source/catalog,
+full Debug/Release, documentation, the single commit, and push. Stop before
+mandatory CI monitoring afterward.
+
+Task 10 local release work is complete. The LLVM-disabled ASan/UBSan tree was
+built with eight workers and passed 102/102 tests in 553.65 seconds with leak
+detection disabled only for the managed ptrace restriction; SystemC took
+140.41 seconds, containers 269.82, transition delays 4.00, and scoped locals
+0.62. Exact LLVM 22.1.8 warnings-as-errors Debug passed 105/105 in 259.95
+seconds, including SystemC in 45.16, containers in 124.68, transition delays
+in 0.73, and scoped locals in 0.84. Release passed 105/105 in 223.76 seconds,
+including SystemC in 42.05, containers in 95.18, transition delays in 0.64,
+and scoped locals in 0.83. The final gates freeze 1,624 diagnostics, 423
+bounded C/C++ sources, 499 SPDX-owned artifacts, 1,080 execute rows, 4,320
+linked evidence cells, 105 conformance expectations, 20 portability rows, and
+the staged installed public contract. `git diff --check` and the new-document
+relative-link check pass. The single checkpoint commit and push follow this
+record. Stop before querying GitHub Actions; hosted inspection remains the
+only incomplete Batch 130 action.
 
 Batch 110 has advanced through these validated features:
 

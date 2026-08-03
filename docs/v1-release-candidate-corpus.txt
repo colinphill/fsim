@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: Apache-2.0
+# Batch 130 Task 9 final release-candidate corpus.
+# Every required row is classified execute and owns nonempty P+/P-/E/R links.
+# matrix-rows: 1080
+# matrix-sha256: 9fe14444af5348949c1a196ab583b482af8b4e2199e80bfec27afd40df35345a
+# evidence-slots: 4320
+# evidence-paths: 320
+# evidence-sha256: c45d28bb34bcfa346c45ba01895fef4a441f087db8eb1699f9d12e216371c334
+# test-evidence-paths: 157
+# production-evidence-paths: 148
+# release-evidence-paths: 15
+# runtime-evidence-paths: 94
+# corpus-ctests: 36
+# required-status: execute
+#
+# B130-T9-ROWS: all 1080 required IDs are unique and in one of the eight
+# reviewed SV/VHDL/mixed/SystemC/common release surfaces.
+# B130-T9-CLASSIFICATION: no required row remains parse, v1-target, deferred,
+# or an evidence gap; every row is reclassified only through its exact matrix
+# record.
+# B130-T9-EVIDENCE: all 4320 evidence cells contain at least one checked-in
+# link; 320 unique paths divide into 157 test, 148 production, and 15
+# documentation/build/release evidence paths.
+# B130-T9-CORPUS: 94 distinct runtime files and 36 named conformance/
+# portability CTests retain the complete differential execution-mode union.
+# B130-T9-DIGEST: the exact matrix bytes and sorted evidence-path identity are
+# frozen above; any release claim change requires deliberate review.
+#
+# Focused closure: the nine final release audits plus scoped-local guard passed
+# 10/10 in 12.75 seconds; the candidate gate took 5.75 seconds and scoped
+# locals 0.85 seconds. Task 10 subsequently passed sanitizer 102/102 and exact
+# LLVM Debug/Release 105/105; mandatory hosted CI inspection remains pending.

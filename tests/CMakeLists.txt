@@ -141,6 +141,96 @@ add_test(
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1PortabilityCorpus.cmake"
 )
 add_test(
+  NAME fsim.v1-release-audit
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1ReleaseAudit.cmake"
+)
+add_test(
+  NAME fsim.v1-systemverilog-release
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1SystemVerilogRelease.cmake"
+)
+add_test(
+  NAME fsim.v1-vhdl-release
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1VhdlRelease.cmake"
+)
+add_test(
+  NAME fsim.v1-mixed-systemc-release
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1MixedSystemCRelease.cmake"
+)
+add_test(
+  NAME fsim.v1-differential-release
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1DifferentialRelease.cmake"
+)
+add_test(
+  NAME fsim.v1-public-release
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1PublicRelease.cmake"
+)
+add_test(
+  NAME fsim.v1-inventory-release
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1InventoryRelease.cmake"
+)
+add_test(
+  NAME fsim.v1-resource-release
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1ResourceRelease.cmake"
+)
+add_test(
+  NAME fsim.v1-release-candidate
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1ReleaseCandidate.cmake"
+)
+if(WIN32)
+  set(FSIM_INSTALLED_API_LIBRARY_DIR "${CMAKE_INSTALL_BINDIR}")
+else()
+  set(FSIM_INSTALLED_API_LIBRARY_DIR "${CMAKE_INSTALL_LIBDIR}")
+endif()
+add_test(
+  NAME fsim.installed-public-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    "-DFSIM_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/installed-public-contract"
+    "-DFSIM_CONFIG=$<CONFIG>"
+    "-DFSIM_BINDIR=${CMAKE_INSTALL_BINDIR}"
+    "-DFSIM_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+    "-DFSIM_INCLUDEDIR=${CMAKE_INSTALL_INCLUDEDIR}"
+    "-DFSIM_DOCDIR=${CMAKE_INSTALL_DOCDIR}"
+    "-DFSIM_EXECUTABLE_NAME=$<TARGET_FILE_NAME:fsim>"
+    "-DFSIM_VHDL_EXECUTABLE_NAME=$<TARGET_FILE_NAME:fsim-vhdl>"
+    "-DFSIM_SV_EXECUTABLE_NAME=$<TARGET_FILE_NAME:fsim-sv>"
+    "-DFSIM_ELAB_EXECUTABLE_NAME=$<TARGET_FILE_NAME:fsim-elab>"
+    "-DFSIM_RUN_EXECUTABLE_NAME=$<TARGET_FILE_NAME:fsim-run>"
+    "-DFSIM_API_LIBRARY_NAME=$<TARGET_FILE_NAME:fsim_api>"
+    "-DFSIM_SYSTEMC_LIBRARY_NAME=$<TARGET_FILE_NAME:fsim_systemc_support>"
+    "-DFSIM_API_LIBRARY_DIR=${FSIM_INSTALLED_API_LIBRARY_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckInstalledPublicContract.cmake"
+)
+add_test(
   NAME fsim.msvc-debug-contract
   COMMAND
     "${CMAKE_COMMAND}"
@@ -209,6 +299,46 @@ set_tests_properties(
 set_tests_properties(
   fsim.v1-portability-corpus
   PROPERTIES LABELS "fast;portability;windows;linux;matrix;differential;cmake"
+)
+set_tests_properties(
+  fsim.v1-release-audit
+  PROPERTIES LABELS "fast;release;legality;conformance;portability;matrix;cmake"
+)
+set_tests_properties(
+  fsim.v1-systemverilog-release
+  PROPERTIES LABELS "fast;release;systemverilog;legality;matrix;cmake"
+)
+set_tests_properties(
+  fsim.v1-vhdl-release
+  PROPERTIES LABELS "fast;release;vhdl;legality;matrix;cmake"
+)
+set_tests_properties(
+  fsim.v1-mixed-systemc-release
+  PROPERTIES LABELS "fast;release;mixed-language;systemc;abi;matrix;cmake"
+)
+set_tests_properties(
+  fsim.v1-differential-release
+  PROPERTIES LABELS "fast;release;differential;llvm;cache;debugger;vcd;cmake"
+)
+set_tests_properties(
+  fsim.v1-public-release
+  PROPERTIES LABELS "fast;release;api;abi;cli;tcl;files;portability;cmake"
+)
+set_tests_properties(
+  fsim.v1-inventory-release
+  PROPERTIES LABELS "fast;release;diagnostics;source;license;conformance;provenance;cmake"
+)
+set_tests_properties(
+  fsim.v1-resource-release
+  PROPERTIES LABELS "fast;release;portability;windows;linux;resources;cmake"
+)
+set_tests_properties(
+  fsim.v1-release-candidate
+  PROPERTIES LABELS "fast;release;matrix;coverage;evidence;cmake"
+)
+set_tests_properties(
+  fsim.installed-public-contract
+  PROPERTIES LABELS "fast;release;install;api;abi;cli;packages;portability;cmake"
 )
 set_tests_properties(
   fsim.msvc-debug-contract

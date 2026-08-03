@@ -2,6 +2,7 @@
 #include "frontend_test_support.hpp"
 #include "fsim/frontend/frontend.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -90,6 +91,52 @@ endmodule
           && statements[3].task_argument_names
               == std::vector<std::string>{"target"},
       "named callable actuals retain source association order");
+
+  const auto has_code = [](const ParseResult& result, const std::string_view code) {
+    return std::ranges::any_of(
+        result.diagnostics,
+        [code](const Diagnostic& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  const auto missing = parse_text(
+      "classic_missing.sv",
+      "module m; function logic f(a); f = 1'b0; endfunction endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !missing.ok() && has_code(missing, "FSIM-SV-SEM-058"),
+      "classic function header arguments require body declarations");
+  const auto extra = parse_text(
+      "classic_extra.sv",
+      "module m; function logic f(a); input logic a; input logic b; "
+      "f = a; endfunction endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !extra.ok() && has_code(extra, "FSIM-SV-SEM-058"),
+      "classic function body declarations must appear in the header");
+  const auto duplicate = parse_text(
+      "classic_duplicate.sv",
+      "module m; function logic f(a, a); input logic a; "
+      "f = a; endfunction endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !duplicate.ok() && has_code(duplicate, "FSIM-SV-SEM-058"),
+      "classic function header arguments are unique");
+  const auto delimiter = parse_text(
+      "classic_delimiter.sv",
+      "module m; function logic f(a); input logic a f = a; "
+      "endfunction endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !delimiter.ok() && has_code(delimiter, "FSIM-SV-PARSE-197"),
+      "classic function body declarations require delimiters");
+  const auto end_name = parse_text(
+      "classic_end_name.sv",
+      "module m; task t(a); input logic a; endtask : other endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !end_name.ok() && has_code(end_name, "FSIM-SV-SEM-068"),
+      "classic task end names must match");
 }
 
 }  // namespace fsim::tests::frontend

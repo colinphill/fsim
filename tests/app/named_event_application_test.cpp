@@ -46,9 +46,11 @@ struct Capture {
   std::string blocking_caught;
   std::string nba_caught;
   std::string zero_nba_caught;
+  std::string triple_caught;
   std::string vcd;
   std::vector<Change> event_changes;
   std::vector<Change> observed_changes;
+  std::vector<Change> triple_changes;
   std::size_t compiled_processes{};
 };
 
@@ -82,6 +84,8 @@ Capture execute(
       simulation.find_signal("named_event_test.nba_caught");
   const auto zero_nba_caught =
       simulation.find_signal("named_event_test.zero_nba_caught");
+  const auto triple_caught =
+      simulation.find_signal("named_event_test.triple_caught");
   assert(
       event && observed && repeated
       && function_observed && task_observed
@@ -89,7 +93,7 @@ Capture execute(
       && repeat_count_calls);
   assert(
       blocking_missed && blocking_caught
-      && nba_caught && zero_nba_caught);
+      && nba_caught && zero_nba_caught && triple_caught);
 
   Capture capture;
   capture.compiled_processes = simulation.compiled_process_count();
@@ -97,7 +101,7 @@ Capture execute(
   fsim::runtime::VcdWriter vcd{vcd_text, "1ns", 32};
   const std::array signal_ids{
       *event, *observed, *repeated, *expression_observed,
-      *controlled, *body_clock, *repeat_count_calls};
+      *controlled, *body_clock, *repeat_count_calls, *triple_caught};
   const std::array signal_names{
       "named_event_test.fired",
       "named_event_test.observed",
@@ -105,7 +109,8 @@ Capture execute(
       "named_event_test.expression_observed",
       "named_event_test.controlled",
       "named_event_test.body_clock",
-      "named_event_test.repeat_count_calls"};
+      "named_event_test.repeat_count_calls",
+      "named_event_test.triple_caught"};
   std::array<fsim::runtime::VcdSignal, signal_ids.size()> traces{};
   for (std::size_t index = 0; index < traces.size(); ++index) {
     traces[index] = vcd.declare_signal(
@@ -133,7 +138,9 @@ Capture execute(
             ? &capture.event_changes
             : signal == *observed
                 ? &capture.observed_changes
-                : nullptr;
+                : signal == *triple_caught
+                    ? &capture.triple_changes
+                    : nullptr;
         if (changes != nullptr) {
           changes->push_back(
               Capture::Change{
@@ -166,6 +173,8 @@ Capture execute(
       simulation.read_signal(*nba_caught).to_msb_string();
   capture.zero_nba_caught =
       simulation.read_signal(*zero_nba_caught).to_msb_string();
+  capture.triple_caught =
+      simulation.read_signal(*triple_caught).to_msb_string();
   vcd.flush();
   capture.vcd = vcd_text.str();
   return capture;
@@ -232,6 +241,7 @@ void test_named_events(
     assert(capture->blocking_caught == "1");
     assert(capture->nba_caught == "1");
     assert(capture->zero_nba_caught == "1");
+    assert(capture->triple_caught == "1");
     assert(capture->event_changes.size() == 2);
     assert(capture->event_changes[0].time == 1);
     assert(capture->event_changes[0].value == "1");
@@ -250,12 +260,15 @@ void test_named_events(
     assert(
         capture->observed_changes[2].delta
         > capture->event_changes[1].delta);
+    assert(capture->triple_changes.size() == 1);
+    assert(capture->triple_changes[0].time == 2);
+    assert(capture->triple_changes[0].value == "1");
   }
   assert(reference.compiled_processes == 0);
   assert(reference.vcd == compiled.vcd);
   assert(reference.vcd.find("#4") != std::string::npos);
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 16);
+  assert(compiled.compiled_processes == 18);
 #else
   assert(compiled.compiled_processes == 0);
 #endif
@@ -290,10 +303,12 @@ module named_event_test;
   event blocking_race_caught;
   event nba_race;
   event zero_nba_race;
+  event triple_event;
   bit blocking_missed;
   bit blocking_caught;
   bit nba_caught;
   bit zero_nba_caught;
+  bit triple_caught;
   function automatic logic read_a_leaf;
     return source_a;
   endfunction
@@ -336,6 +351,11 @@ module named_event_test;
   initial begin
     @(zero_nba_race);
     zero_nba_caught = 1'b1;
+  end
+  initial ->> #(1:2:3) triple_event;
+  initial begin
+    @(triple_event);
+    triple_caught = 1'b1;
   end
   initial begin
     #1 -> fired;
