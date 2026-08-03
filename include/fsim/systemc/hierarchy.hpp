@@ -44,6 +44,7 @@ struct ForeignChildDescription {
         construction_actuals;
     std::vector<ForeignPortDescription> ports;
     bool module_facade{};
+    std::string implementation;
 };
 
 struct ConstructionParameterDescription {
@@ -190,6 +191,8 @@ public:
     [[nodiscard]] bool has_elaboration_factory(
         std::string_view name) const noexcept;
     [[nodiscard]] std::size_t factory_count() const noexcept;
+    [[nodiscard]] std::vector<std::string> factory_names() const;
+    [[nodiscard]] bool owns_handle(fsim_sc_handle_v1 handle) const noexcept;
 
     /// Return copied, ABI-neutral metadata for one live hierarchy object.
     [[nodiscard]] std::optional<HierarchyObjectInfo> object_info(

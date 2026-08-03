@@ -25,7 +25,8 @@ struct Simulation::Impl {
           return boundary.kind
               == semantic::design::BoundaryKind::systemc_process;
         });
-    if (has_systemc_process && !built.systemc_hierarchy) {
+    if (has_systemc_process && !built.systemc_hierarchy
+        && built.systemc_hierarchies.empty()) {
       throw std::logic_error{
           "SystemC processes require their native hierarchy registry"};
     }
@@ -37,10 +38,18 @@ struct Simulation::Impl {
       }
       const auto process = built.design_ir.processes()[
           boundary.process->value()].runtime_index;
+      auto hierarchy = std::ranges::find_if(
+          built.systemc_hierarchies,
+          [&](const auto& candidate) {
+            return candidate->owns_handle(boundary.native_handle);
+          });
+      auto owner = hierarchy != built.systemc_hierarchies.end()
+          ? *hierarchy
+          : built.systemc_hierarchy;
       interpreter->set_process_executor(
           process,
           std::make_unique<SystemCProcessExecutor>(
-              built.systemc_hierarchy,
+              std::move(owner),
               boundary.native_handle));
     }
 #if defined(FSIM_HAS_LLVM)
@@ -238,33 +247,52 @@ struct Simulation::Impl {
   }
 
   ~Impl() {
-    if (systemc_start_attempted && !systemc_ended
-        && built.systemc_hierarchy) {
+    if (systemc_start_attempted && !systemc_ended) {
       try {
-        built.systemc_hierarchy->end_simulation(
-            built.systemc_roots);
+        end_systemc();
       } catch (...) {
       }
     }
   }
 
   void start_systemc() {
-    if (systemc_start_attempted || !built.systemc_hierarchy) {
+    if (systemc_start_attempted) {
       return;
     }
     systemc_start_attempted = true;
-    built.systemc_hierarchy->start_simulation(
-        built.systemc_roots);
+    for_each_systemc_registry([&](auto& registry, const auto& roots) {
+      registry.start_simulation(roots);
+    });
   }
 
   void end_systemc() {
-    if (!systemc_start_attempted || systemc_ended
-        || !built.systemc_hierarchy) {
+    if (!systemc_start_attempted || systemc_ended) {
       return;
     }
-    built.systemc_hierarchy->end_simulation(
-        built.systemc_roots);
+    for_each_systemc_registry([&](auto& registry, const auto& roots) {
+      registry.end_simulation(roots);
+    });
     systemc_ended = true;
+  }
+
+  template <typename Callback>
+  void for_each_systemc_registry(Callback&& callback) {
+    if (built.systemc_hierarchies.empty()) {
+      if (built.systemc_hierarchy) {
+        callback(*built.systemc_hierarchy, built.systemc_roots);
+      }
+      return;
+    }
+    for (const auto& registry : built.systemc_hierarchies) {
+      std::vector<std::uint64_t> roots;
+      std::ranges::copy_if(
+          built.systemc_roots,
+          std::back_inserter(roots),
+          [&](const auto handle) {
+            return registry->owns_handle(handle);
+          });
+      callback(*registry, roots);
+    }
   }
 
   BuiltProject built;

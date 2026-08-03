@@ -84,6 +84,9 @@ struct BuiltProject {
   bool cache_hit{};
   /// Manifest directory used as the sandbox root for HDL file operations.
   std::filesystem::path file_root;
+  /// Every logical-library-specific SystemC plug-in used by this build.
+  std::vector<std::shared_ptr<systemc::HierarchyRegistry>>
+      systemc_hierarchies;
 };
 
 /// Parse all HDL source files in deterministic manifest order. Independent

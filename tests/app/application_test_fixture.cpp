@@ -43,6 +43,7 @@ config.source_sets.push_back(std::move(sources));
 fsim::project::SourceSet systemc_sources;
 systemc_sources.language = fsim::project::Language::systemc;
 systemc_sources.standard = "2023-subset";
+systemc_sources.library = "models";
 systemc_sources.files.push_back(systemc_source);
 systemc_sources.include_directories.emplace_back(
     std::filesystem::path{FSIM_TEST_SOURCE_DIR} / "include");

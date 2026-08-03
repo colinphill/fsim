@@ -39,25 +39,30 @@ std::optional<BuiltProject> build_project(
   // CheckedProject's parser workspace.
   auto lowering_adapter = std::move(checked->parsed);
   std::vector<std::filesystem::path> systemc_plugins;
+  std::vector<SystemCLibraryRegistry> systemc_registries;
   std::shared_ptr<systemc::HierarchyRegistry> systemc_hierarchy;
   std::string systemc_plugin_key;
-  if (const auto request = systemc_request(config)) {
-    auto compiled = systemc::compile_plugin(*request, diagnostics);
+  for (const auto& entry : systemc_requests(config)) {
+    auto compiled = systemc::compile_plugin(entry.request, diagnostics);
     if (!compiled.success) {
       return std::nullopt;
     }
-    systemc_hierarchy =
+    auto registry =
         load_systemc_plugin(compiled.library_path, diagnostics);
-    if (!systemc_hierarchy) {
+    if (!registry) {
       return std::nullopt;
     }
-    systemc_plugin_key = compiled.cache_key;
+    systemc_plugin_key += entry.library + ":" + compiled.cache_key + ";";
+    systemc_registries.push_back({entry.library, registry});
+    if (!systemc_hierarchy) {
+      systemc_hierarchy = registry;
+    }
     systemc_plugins.push_back(std::move(compiled.library_path));
   }
   select_delay_alternatives(
       lowering_adapter, config.run.delay_mode);
   const auto resolution = effective_resolution(config, lowering_adapter);
-  if (systemc_hierarchy) {
+  if (!systemc_registries.empty()) {
     const auto parsed_resolution = magnitude_and_unit(resolution);
     const auto factor =
         parsed_resolution
@@ -73,8 +78,10 @@ std::optional<BuiltProject> build_project(
               + resolution + "'");
       return std::nullopt;
     }
-    systemc_hierarchy->set_time_resolution(
-        parsed_resolution->magnitude * *factor);
+    for (const auto& entry : systemc_registries) {
+      entry.registry->set_time_resolution(
+          parsed_resolution->magnitude * *factor);
+    }
   }
   if (!validate_declared_time_precisions(
           lowering_adapter, resolution, diagnostics)
@@ -102,12 +109,12 @@ std::optional<BuiltProject> build_project(
   }
   const auto top = selected_top(config, lowering_adapter, diagnostics);
   validate_bindings(
-      config, lowering_adapter, systemc_hierarchy.get(), diagnostics);
+      config, lowering_adapter, systemc_registries, diagnostics);
   if (diagnostics.has_error()) {
     return std::nullopt;
   }
   auto systemc_instances = construct_systemc_instances(
-      top, systemc_hierarchy.get(), diagnostics);
+      top, systemc_registries, diagnostics);
   if (!systemc_instances) {
     return std::nullopt;
   }
@@ -124,10 +131,10 @@ std::optional<BuiltProject> build_project(
   }
   std::unique_ptr<ApplicationSystemCFactoryProvider>
       systemc_provider;
-  if (systemc_hierarchy) {
+  if (!systemc_registries.empty()) {
     systemc_provider =
         std::make_unique<ApplicationSystemCFactoryProvider>(
-            *systemc_hierarchy,
+            systemc_registries,
             *systemc_instances,
             systemc_roots);
   }
@@ -149,26 +156,32 @@ std::optional<BuiltProject> build_project(
     return std::nullopt;
   }
   lowering_adapter = {};
-  if (systemc_hierarchy) {
+  if (!systemc_registries.empty()) {
     try {
+      const auto bind_object =
+          [&](const std::uint64_t handle, const std::uint32_t signal) {
+            const auto registry =
+                systemc_provider->registry_for_handle(handle);
+            if (!registry) {
+              throw std::logic_error{
+                  "SystemC object has no owning logical-library plug-in"};
+            }
+            registry->bind_runtime_object(handle, signal);
+          };
       for (const auto& instance :
            elaborated.design->systemc_instances()) {
         for (const auto& port : instance.ports) {
-          systemc_hierarchy->bind_runtime_object(
-              port.native_handle, port.signal);
+          bind_object(port.native_handle, port.signal);
         }
         for (const auto& event : instance.events) {
-          systemc_hierarchy->bind_runtime_object(
-              event.native_handle, event.signal);
+          bind_object(event.native_handle, event.signal);
         }
         for (const auto& signal : instance.internal_signals) {
-          systemc_hierarchy->bind_runtime_object(
-              signal.native_handle, signal.signal);
+          bind_object(signal.native_handle, signal.signal);
         }
         for (const auto& export_object : instance.exports) {
-          systemc_hierarchy->bind_runtime_object(
-              export_object.native_handle,
-              export_object.signal);
+          bind_object(
+              export_object.native_handle, export_object.signal);
         }
       }
     } catch (const std::exception& error) {
@@ -179,7 +192,16 @@ std::optional<BuiltProject> build_project(
       return std::nullopt;
     }
     try {
-      systemc_hierarchy->complete_elaboration(systemc_roots);
+      for (const auto& entry : systemc_registries) {
+        std::vector<std::uint64_t> roots;
+        std::ranges::copy_if(
+            systemc_roots,
+            std::back_inserter(roots),
+            [&](const auto handle) {
+              return entry.registry->owns_handle(handle);
+            });
+        entry.registry->complete_elaboration(roots);
+      }
     } catch (const std::exception& error) {
       diagnostics.error(
           "FSIM-SC-A008",
@@ -251,6 +273,12 @@ std::optional<BuiltProject> build_project(
       config.project.random_seed
           ? entropy_seed()
           : config.project.seed;
+  std::vector<std::shared_ptr<systemc::HierarchyRegistry>>
+      systemc_hierarchies;
+  systemc_hierarchies.reserve(systemc_registries.size());
+  for (const auto& entry : systemc_registries) {
+    systemc_hierarchies.push_back(entry.registry);
+  }
   return BuiltProject{
       std::move(*elaborated.design),
       std::move(design_ir),
@@ -266,7 +294,8 @@ std::optional<BuiltProject> build_project(
       selected_seed,
       config.project.random_seed,
       hit,
-      config.base_directory};
+      config.base_directory,
+      std::move(systemc_hierarchies)};
 }
 
 

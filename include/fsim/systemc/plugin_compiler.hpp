@@ -20,6 +20,7 @@ enum class HostToolchain : std::uint8_t {
 
 struct PluginCompileRequest {
     std::vector<std::filesystem::path> sources;
+    std::string logical_library;
     project::SystemCSection settings;
     std::filesystem::path working_directory;
     std::filesystem::path cache_directory{".fsim-cache"};

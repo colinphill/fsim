@@ -691,9 +691,22 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group);
 std::optional<systemc::PluginCompileRequest> systemc_request(
     const project::Config& config);
 
+struct SystemCLibraryCompileRequest {
+  std::string library;
+  systemc::PluginCompileRequest request;
+};
+
+std::vector<SystemCLibraryCompileRequest> systemc_requests(
+    const project::Config& config);
+
 std::shared_ptr<systemc::HierarchyRegistry> load_systemc_plugin(
     const std::filesystem::path& path,
     diagnostic::Engine& diagnostics);
+
+struct SystemCLibraryRegistry {
+  std::string library;
+  std::shared_ptr<systemc::HierarchyRegistry> registry;
+};
 
 std::string unit_key(const frontend::DesignUnit& unit);
 
@@ -738,17 +751,23 @@ elaboration::SystemCInstanceDescription systemc_description(
 std::optional<std::vector<elaboration::SystemCInstanceDescription>>
 construct_systemc_instances(
     const std::string_view top,
-    systemc::HierarchyRegistry* registry,
+    std::span<const SystemCLibraryRegistry> registries,
     diagnostic::Engine& diagnostics);
 
 class ApplicationSystemCFactoryProvider final
     : public elaboration::SystemCFactoryProvider {
 public:
   ApplicationSystemCFactoryProvider(
-      systemc::HierarchyRegistry& registry,
+      std::span<const SystemCLibraryRegistry> registries,
       const std::span<
           const elaboration::SystemCInstanceDescription> eager_instances,
       std::vector<std::uint64_t>& lifecycle_roots);
+
+  [[nodiscard]] std::shared_ptr<systemc::HierarchyRegistry>
+  registry_for_handle(std::uint64_t handle) const;
+
+  std::vector<elaboration::SystemCFactoryCandidate>
+  candidates() const override;
 
   std::optional<std::vector<
       elaboration::SystemCConstructionParameter>>
@@ -768,21 +787,28 @@ public:
 private:
   void record_handles(
       const std::string& path,
-      const elaboration::SystemCInstanceDescription& description);
+      const elaboration::SystemCInstanceDescription& description,
+      systemc::HierarchyRegistry* registry);
 
   void record_handles(
       const std::string& path,
-      const systemc::ModuleDescription& description);
+      const systemc::ModuleDescription& description,
+      systemc::HierarchyRegistry* registry);
 
-  systemc::HierarchyRegistry& registry_;
+  struct HandleOwner {
+    fsim_sc_handle_v1 handle{};
+    systemc::HierarchyRegistry* registry{};
+  };
+
+  std::vector<SystemCLibraryRegistry> registries_;
   std::vector<std::uint64_t>& lifecycle_roots_;
-  std::map<std::string, fsim_sc_handle_v1> handles_;
+  std::map<std::string, HandleOwner> handles_;
 };
 
 void validate_bindings(
     const project::Config& config,
     const frontend::ParsedDesign& parsed,
-    const systemc::HierarchyRegistry* systemc_hierarchy,
+    std::span<const SystemCLibraryRegistry> systemc_registries,
     diagnostic::Engine& diagnostics);
 
 std::string target_name();

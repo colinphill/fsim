@@ -7,16 +7,20 @@ therefore defines the following deterministic policy. It is part of fsim's
 observable behavior, not a claim about an IEEE or Accellera mixed-language
 standard.
 
-This is the **v1 semantic contract**. The current vertical slice implements the
-four scheduler phases and stable ordering. It also executes a bounded mixed
-hierarchy made from simple VHDL/SV instances and whole-signal connections. It
-does not yet implement every boundary conversion, driver-resolution rule, or
-language-specific queue described below.
+This is the **v2 semantic contract**. Schema 2 adds deterministic automatic
+target resolution while retaining the v1 scheduler, boundary, and explicit
+override behavior.
 
-## Explicit binding
+## Target resolution and explicit overrides
 
-fsim never guesses a cross-language target by name. Each cross-language
-instance/component must have one manifest entry:
+An unqualified instance name is resolved across VHDL,
+Verilog/SystemVerilog, and exported SystemC factories in the parent logical
+library. VHDL entity matching is case-insensitive; Verilog/SystemVerilog and
+SystemC matching is case-sensitive. Resolution must produce exactly one
+candidate before any interface compatibility checks. Same-language candidates
+receive no preference, and interface shape never breaks a tie.
+
+An explicit binding remains an authoritative override:
 
 ```toml
 [[binding]]
@@ -25,7 +29,6 @@ target = "vhdl:work.counter(rtl)"
 
 [[binding]]
 instance = "tb.u_bus"
-target = "sv:work.bus_target"
 resolver = "sv_wire"
 ```
 
@@ -34,19 +37,21 @@ Target forms are:
 ```text
 vhdl:library.entity(architecture)
 sv:library.module
-systemc:plugin.factory
+systemc:library.factory
 ```
 
-The schema-1 loader validates these prefixes. The current elaborator resolves
-VHDL and SV targets and constructs typed `systemc:` factories, recursively
-building a common hierarchy with named or positional whole-signal port
-connections. SystemC factories may construct `SC_FSIM_HDL_MODULE` proxies,
-bind their ordinary ports, and select the HDL implementation with an explicit
-full-path manifest binding. Thus every VHDL/SV/SystemC
-parent→child language direction is explicit and supported by the same
-elaborator. A binding whose instance path is absent is an error;
-cross-language targets are never inferred from the source unit name.
-Generic/parameter specialization remains forthcoming.
+Schema 2 permits a target, a resolver, or both; an empty binding is invalid.
+A resolver-only entry preserves inferred target selection while choosing
+cross-language `inout` semantics. A VHDL entity with multiple eligible
+architectures is ambiguous unless a configuration or explicit target selects
+one. Missing and ambiguous diagnostics include the instance path, requested
+spelling, logical-library scope, and canonical candidates.
+
+SystemC factories participate under their public `SC_FSIM_EXPORT` or
+`SC_FSIM_EXPORT_AS` names. `SC_FSIM_HDL_MODULE(Type)` records `Type` as the HDL
+implementation spelling, so an HDL-backed child uses the same parent-library
+resolver while retaining ordinary SystemC construction and port binding.
+Legacy `hdl_instance` objects still require explicit full-path bindings.
 
 ## Boundary types
 

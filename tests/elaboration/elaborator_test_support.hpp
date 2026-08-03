@@ -40,6 +40,13 @@ public:
     std::uint64_t next_handle{10'000};
     std::string schema_failure;
     std::string construction_failure;
+    std::vector<fsim::elaboration::SystemCFactoryCandidate>
+        factory_candidates;
+
+    std::vector<fsim::elaboration::SystemCFactoryCandidate>
+    candidates() const override {
+        return factory_candidates;
+    }
 
     std::optional<std::vector<
         fsim::elaboration::SystemCConstructionParameter>>

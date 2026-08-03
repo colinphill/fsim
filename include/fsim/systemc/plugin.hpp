@@ -164,8 +164,11 @@ public:
     /// design unit.
     void set_actual(const char* name, std::int64_t value);
 
+protected:
+    explicit hdl_module(const char* implementation);
+
 private:
-    void mark();
+    void mark(const char* implementation = nullptr);
 
     void before_end_of_elaboration() final {}
     void end_of_elaboration() final {}
@@ -174,6 +177,24 @@ private:
 
     const fsim_sc_host_v1* host_{};
     fsim_sc_handle_v1 handle_{};
+};
+
+template <std::size_t Size>
+struct hdl_implementation_name {
+    char value[Size]{};
+
+    consteval hdl_implementation_name(const char (&name)[Size]) {
+        for (std::size_t index = 0; index < Size; ++index) {
+            value[index] = name[index];
+        }
+    }
+};
+
+template <hdl_implementation_name Implementation>
+class hdl_module_type : public hdl_module {
+public:
+    hdl_module_type()
+        : hdl_module(Implementation.value) {}
 };
 
 struct factory_parameter {
@@ -338,7 +359,8 @@ template <typename Module>
         || host->set_foreign_child_actual == nullptr
         || host->get_construction_value == nullptr
         || host->mark_hdl_module == nullptr
-        || host->set_hdl_module_actual == nullptr) {
+        || host->set_hdl_module_actual == nullptr
+        || host->set_hdl_module_implementation == nullptr) {
         return FSIM_SC_ABI_MISMATCH;
     }
     auto status = registrar->register_elaboration_factory(
@@ -465,7 +487,9 @@ private:
 
 #define SC_MODULE(name) struct name : public ::sc_core::sc_module
 #define SC_FSIM_HDL_MODULE(name) \
-    struct name : public ::fsim::systemc::hdl_module
+    struct name \
+        : public ::fsim::systemc::hdl_module_type< \
+              ::fsim::systemc::hdl_implementation_name{#name}>
 #define SC_CTOR(name) \
     explicit name( \
         [[maybe_unused]] ::sc_core::sc_module_name fsim_module_name)

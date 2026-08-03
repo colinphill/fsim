@@ -53,7 +53,12 @@ hdl_module::hdl_module(const sc_core::sc_module_name name)
     mark();
 }
 
-void hdl_module::mark() {
+hdl_module::hdl_module(const char* implementation)
+    : sc_core::sc_module() {
+    mark(implementation);
+}
+
+void hdl_module::mark(const char* implementation) {
     host_ = sc_core::detail::current_host;
     handle_ = sc_core::detail::current_module;
     if (host_ == nullptr || handle_ == 0
@@ -67,6 +72,16 @@ void hdl_module::mark() {
     sc_core::detail::check_status(
         host_->mark_hdl_module(host_->context, handle_),
         "mark HDL-backed SystemC module");
+    if (implementation != nullptr) {
+        if (host_->set_hdl_module_implementation == nullptr) {
+            throw std::logic_error{
+                "HDL-module type inference requires a compatible fsim host"};
+        }
+        sc_core::detail::check_status(
+            host_->set_hdl_module_implementation(
+                host_->context, handle_, implementation),
+            "set HDL module implementation name");
+    }
 }
 
 void hdl_module::set_actual(

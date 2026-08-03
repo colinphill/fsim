@@ -270,7 +270,7 @@ endmodule
   {
     std::ofstream manifest(manifest_path);
     manifest << R"(
-schema = 1
+schema = 2
 [project]
 name = "api-test"
 top = "sv:work.tb"
@@ -334,7 +334,7 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   {
     std::ofstream manifest(systemc_manifest_path);
     manifest
-        << R"TOML(schema = 1
+        << R"TOML(schema = 2
 [project]
 name = "api-systemc-test"
 top = "systemc:api.named"
@@ -377,7 +377,7 @@ end architecture;
   {
     std::ofstream manifest(assertion_manifest_path);
     manifest << R"TOML(
-schema = 1
+schema = 2
 [project]
 name = "api-assertion-test"
 top = "vhdl:work.assertion_test(rtl)"
@@ -411,7 +411,7 @@ end architecture;
   {
     std::ofstream manifest(logic9_manifest_path);
     manifest << R"TOML(
-schema = 1
+schema = 2
 [project]
 name = "api-logic9-test"
 top = "vhdl:work.api_logic9(rtl)"
@@ -448,7 +448,7 @@ endmodule
   {
     std::ofstream manifest(severity_manifest_path);
     manifest << R"TOML(
-schema = 1
+schema = 2
 [project]
 name = "api-severity-test"
 top = "sv:work.severity_actions"
@@ -480,7 +480,7 @@ endmodule
   {
     std::ofstream manifest(random_manifest_path);
     manifest << R"(
-schema = 1
+schema = 2
 [project]
 name = "api-random-test"
 top = "sv:work.api_random"

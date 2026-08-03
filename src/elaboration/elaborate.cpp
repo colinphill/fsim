@@ -90,7 +90,26 @@ ElaborationResult elaborate(
         }
         builder.build(*root);
     } else {
-        const auto* unit = choose_top_unit(parsed, top);
+        const DesignUnit* unit = nullptr;
+        if (requested_target) {
+            unit = choose_top_unit(parsed, top);
+        } else {
+            const auto candidates = resolve_unit_candidates(
+                parsed, "work", requested, true);
+            if (candidates.size() > 1) {
+                result.diagnostics.push_back({
+                    "FSIM-ELAB-005",
+                    "top-level design unit '" + requested
+                        + "' is ambiguous in logical library 'work'; "
+                          "candidates: "
+                        + format_resolution_candidates(candidates),
+                    {}});
+                return result;
+            }
+            if (!candidates.empty()) {
+                unit = candidates.front().unit;
+            }
+        }
         if (unit == nullptr) {
             result.diagnostics.push_back({
                 "FSIM-ELAB-001",

@@ -299,6 +299,7 @@ fsim::project::Config make_config(
 
   fsim::project::SourceSet systemc_sources;
   systemc_sources.language = fsim::project::Language::systemc;
+  systemc_sources.library = "models";
   systemc_sources.standard = "2023-subset";
   systemc_sources.files.push_back(systemc_source);
   systemc_sources.include_directories.emplace_back(

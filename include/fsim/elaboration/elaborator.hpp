@@ -23,7 +23,7 @@ class HierarchyBuilder;
 
 struct Binding {
     std::string instance;
-    std::string target;
+    std::optional<std::string> target;
     std::optional<std::string> resolver;
 };
 
@@ -52,6 +52,7 @@ struct ForeignChild {
         construction_actuals;
     std::vector<ForeignPort> ports;
     bool module_facade{};
+    std::string implementation;
 };
 
 struct ExternalSensitivity {
@@ -137,12 +138,21 @@ struct SystemCConstructionParameter {
     std::optional<std::int64_t> default_value;
 };
 
+struct SystemCFactoryCandidate {
+    std::string library;
+    std::string name;
+    std::string target;
+};
+
 /// Application-owned bridge used by the authoritative hierarchy walk to
 /// inspect a registered factory schema and construct an HDL-bound SystemC
 /// instance only after source-language actuals have been canonicalized.
 class SystemCFactoryProvider {
 public:
     virtual ~SystemCFactoryProvider() = default;
+
+    [[nodiscard]] virtual std::vector<SystemCFactoryCandidate>
+    candidates() const = 0;
 
     [[nodiscard]] virtual std::optional<
         std::vector<SystemCConstructionParameter>>

@@ -113,6 +113,7 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     key_builder.add("fingerprint-schema", "systemc-compiler-v2");
     key_builder.add("source-language", "c++");
     key_builder.add("source-standard", "c++20");
+    key_builder.add("logical-library", request.logical_library);
     key_builder.add("runtime-abi", std::to_string(runtime_abi_version));
     key_builder.add("systemc-abi", std::to_string(FSIM_SYSTEMC_ABI_VERSION));
     key_builder.add("toolchain", to_string(toolchain));

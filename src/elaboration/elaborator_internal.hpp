@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/elaboration/elaborator.hpp"
+#include "elaboration_targets.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -798,39 +799,6 @@ specialize_systemc_construction(
     const frontend::Language association_language,
     std::vector<Diagnostic>& diagnostics);
 
-const DesignUnit* choose_unit(
-    const frontend::ParsedDesign& parsed, const std::string& requested);
-
-struct TargetSpec {
-    std::string language;
-    std::string library;
-    std::string unit;
-    std::optional<std::string> architecture;
-};
-
-std::optional<TargetSpec> parse_target(const std::string_view spelling);
-
-const DesignUnit* find_vhdl_entity(
-    const frontend::ParsedDesign& parsed, const DesignUnit& architecture);
-
-const std::vector<frontend::SignalDeclaration>* unit_ports(
-    const frontend::ParsedDesign& parsed,
-    const DesignUnit& unit);
-
-const DesignUnit* choose_bound_unit(
-    const frontend::ParsedDesign& parsed,
-    const TargetSpec& target);
-
-const DesignUnit* choose_top_unit(
-    const frontend::ParsedDesign& parsed,
-    const std::string_view spelling);
-
-const DesignUnit* choose_same_language_instance(
-    const frontend::ParsedDesign& parsed,
-    const DesignUnit& parent,
-    const std::string_view name);
-
-std::string unit_identity(const DesignUnit& unit);
 } // namespace elaboration_detail
 
 using frontend::AssignmentKind;
@@ -1587,6 +1555,7 @@ private:
     struct ConfiguredVhdlInstance {
         frontend::Instance instance;
         std::optional<DesignUnit> target;
+        std::optional<std::string> systemc_target;
         const frontend::VhdlComponentConfiguration*
             configuration_rule{};
         const DesignUnit* referenced_configuration{};
@@ -1836,6 +1805,16 @@ private:
 
     const Binding* binding_for(const std::string& path);
 
+    std::vector<UnitResolutionCandidate> resolution_candidates(
+        std::string_view library,
+        std::string_view name) const;
+
+    std::optional<UnitResolutionCandidate> inferred_target(
+        std::string_view library,
+        std::string_view name,
+        const std::string& path,
+        frontend::SourceSpan source);
+
     const DesignUnit* bound_target(
         const frontend::Instance& instance,
         const DesignUnit& parent,
@@ -1915,6 +1894,12 @@ private:
         const std::string& path,
         const ObjectMap& objects);
 
+    const DesignUnit* systemc_foreign_target(
+        const ForeignChild& child,
+        const SystemCInstanceDescription& parent,
+        const std::string& path,
+        const Binding* binding);
+
     const SystemCInstanceDescription* systemc_description(
         const std::string& path,
         const std::string_view target,
@@ -1970,6 +1955,7 @@ private:
     std::deque<SystemCInstanceDescription>
         owned_systemc_instances_;
     SystemCFactoryProvider* systemc_provider_{};
+    const std::vector<SystemCFactoryCandidate> systemc_candidates_;
     std::unordered_set<std::string> used_systemc_instances_;
     std::unordered_set<std::string> instance_paths_;
     // Interface instances are registered by canonical hierarchy path after

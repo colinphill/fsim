@@ -97,10 +97,11 @@ struct HierarchyRegistry::Impl {
     std::unique_ptr<Plugin> plugin;
     std::unordered_map<std::string, Factory> factories;
     std::unordered_map<fsim_sc_handle_v1, ModuleDescription> pending;
-    std::unordered_map<
-        fsim_sc_handle_v1,
-        std::vector<std::pair<std::string, std::int64_t>>>
-        hdl_modules;
+    struct HdlModule {
+        std::string implementation;
+        std::vector<std::pair<std::string, std::int64_t>> actuals;
+    };
+    std::unordered_map<fsim_sc_handle_v1, HdlModule> hdl_modules;
     std::unordered_map<
         fsim_sc_handle_v1, std::vector<fsim_sc_handle_v1>>
         native_children;
@@ -118,7 +119,6 @@ struct HierarchyRegistry::Impl {
         thread_fibers;
 #endif
     std::vector<LiveModule> live;
-    fsim_sc_handle_v1 next_handle{1};
     std::uint64_t femtoseconds_per_tick{1};
     std::string elaboration_failure;
 
@@ -322,6 +322,11 @@ extern "C" fsim_sc_status_v1 registry_set_hdl_module_actual(
     fsim_sc_handle_v1 module,
     const char* name,
     std::int64_t value) noexcept;
+
+extern "C" fsim_sc_status_v1 registry_set_hdl_module_implementation(
+    void* context,
+    fsim_sc_handle_v1 module,
+    const char* implementation) noexcept;
 
 extern "C" fsim_sc_status_v1 registry_register_lifecycle(
     void* context,

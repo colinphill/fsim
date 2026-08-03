@@ -157,7 +157,8 @@ The current tree contains:
   primitives with shared one/two-value transition delays and comma-separated
   instances, lowered through the common continuous-process path;
 - recursive VHDL/SV instance elaboration in both hierarchy directions with
-  explicit cross-language bindings, whole-signal port aliasing, and boundary
+  automatic parent-library cross-language resolution with explicit overrides,
+  whole-signal port aliasing, and boundary
   validation;
 - specialization-time VHDL and SystemVerilog conditional/iterative/selection
   executable generate expansion, unguarded VHDL block statements, and

@@ -305,7 +305,11 @@ add_library(fsim_diagnostic STATIC src/diagnostic/diagnostic.cpp)
 add_library(fsim::diagnostic ALIAS fsim_diagnostic)
 fsim_configure_library(fsim_diagnostic)
 
-add_library(fsim_project STATIC src/project/project.cpp)
+add_library(
+  fsim_project STATIC
+  src/project/project.cpp
+  src/project/project_migration.cpp
+)
 add_library(fsim::project ALIAS fsim_project)
 fsim_configure_library(fsim_project)
 target_link_libraries(fsim_project PUBLIC fsim_diagnostic)
@@ -403,6 +407,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/elaboration_targets.cpp
       src/elaboration/hierarchy_generic_interfaces.cpp
       src/elaboration/hierarchy_packages.cpp
+      src/elaboration/hierarchy_builder.cpp
       src/elaboration/hierarchy_vhdl_protected.cpp
       src/elaboration/hierarchy_ports.cpp
       src/elaboration/hierarchy_sv_package_qualified.cpp

@@ -98,7 +98,7 @@ std::string make_cache_key(
   }
   for (const auto& binding : config.bindings) {
     key.add("binding-instance", binding.instance);
-    key.add("binding-target", binding.target);
+    key.add("binding-target", binding.target.value_or("<inferred>"));
     key.add("binding-resolver", binding.resolver.value_or(""));
   }
   return key.finish();
@@ -217,7 +217,7 @@ make_specialization_cache_keys(
     compiler::CacheKeyBuilder key;
     key.add(
         "specialization-provenance-schema",
-        "fsim-specialization-provenance-v5-designir");
+        "fsim-specialization-provenance-v6-resolved-unit");
     key.add("fsim-version", version);
     key.add("standard-library", standard_library_cache_version);
     key.add("delay-mode", project::to_string(config.run.delay_mode));
@@ -225,6 +225,7 @@ make_specialization_cache_keys(
         "verilog-preprocessor",
         frontend::verilog_preprocessor_cache_version);
     key.add("unit", specialization.name);
+    key.add("selected-unit-identity", specialization.name);
     key.add(
         "source-path",
         fsim::support::path_to_utf8(

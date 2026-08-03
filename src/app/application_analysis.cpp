@@ -7,15 +7,51 @@ namespace fsim::app::application_detail {
 std::atomic_bool interrupt_requested{};
 
 ApplicationSystemCFactoryProvider::ApplicationSystemCFactoryProvider(
-      systemc::HierarchyRegistry& registry,
+      const std::span<const SystemCLibraryRegistry> registries,
       const std::span<
           const elaboration::SystemCInstanceDescription> eager_instances,
       std::vector<std::uint64_t>& lifecycle_roots)
-      : registry_(registry), lifecycle_roots_(lifecycle_roots)  {
+      : registries_(registries.begin(), registries.end()),
+        lifecycle_roots_(lifecycle_roots)  {
     for (const auto& instance : eager_instances) {
-      record_handles(instance.path, instance);
+      const auto parsed = parse_binding_target(instance.target);
+      const auto found = parsed
+          ? std::ranges::find(
+                registries_, parsed->qualifier,
+                &SystemCLibraryRegistry::library)
+          : registries_.end();
+      if (found != registries_.end()) {
+        record_handles(instance.path, instance, found->registry.get());
+      }
     }
   }
+
+std::shared_ptr<systemc::HierarchyRegistry>
+ApplicationSystemCFactoryProvider::registry_for_handle(
+    const std::uint64_t handle) const {
+  const auto found = std::ranges::find_if(
+      registries_, [&](const auto& entry) {
+        return entry.registry->owns_handle(handle);
+      });
+  return found == registries_.end() ? nullptr : found->registry;
+}
+
+std::vector<elaboration::SystemCFactoryCandidate>
+ApplicationSystemCFactoryProvider::candidates() const {
+  std::vector<elaboration::SystemCFactoryCandidate> result;
+  for (const auto& entry : registries_) {
+    for (const auto& name : entry.registry->factory_names()) {
+      if (!entry.registry->has_elaboration_factory(name)) {
+        continue;
+      }
+      result.push_back({
+          entry.library,
+          name,
+          "systemc:" + entry.library + "." + name});
+    }
+  }
+  return result;
+}
 
 std::optional<std::vector<
     elaboration::SystemCConstructionParameter>>
@@ -29,8 +65,16 @@ ApplicationSystemCFactoryProvider::schema(
       error = "target must use systemc:plugin.factory spelling";
       return std::nullopt;
     }
+    const auto registry = std::ranges::find(
+        registries_, parsed->qualifier,
+        &SystemCLibraryRegistry::library);
+    if (registry == registries_.end()) {
+      error = "logical library '" + parsed->qualifier
+          + "' has no compiled SystemC plug-in";
+      return std::nullopt;
+    }
     const auto parameters =
-        registry_.factory_parameters(parsed->unit);
+        registry->registry->factory_parameters(parsed->unit);
     if (!parameters) {
       error = "factory '" + parsed->unit
           + "' was not registered";
@@ -64,16 +108,25 @@ ApplicationSystemCFactoryProvider::instantiate(
       error = "target must use systemc:plugin.factory spelling";
       return std::nullopt;
     }
+    const auto registry = std::ranges::find(
+        registries_, parsed->qualifier,
+        &SystemCLibraryRegistry::library);
+    if (registry == registries_.end()) {
+      error = "logical library '" + parsed->qualifier
+          + "' has no compiled SystemC plug-in";
+      return std::nullopt;
+    }
     fsim_sc_handle_v1 parent = 0;
     if (const auto separator = path.rfind('.');
         separator != std::string_view::npos) {
       const auto found =
           handles_.find(std::string{path.substr(0, separator)});
-      if (found != handles_.end()) {
-        parent = found->second;
+      if (found != handles_.end()
+          && found->second.registry == registry->registry.get()) {
+        parent = found->second.handle;
       }
     }
-    auto module = registry_.instantiate(
+    auto module = registry->registry->instantiate(
         parsed->unit,
         path,
         parent,
@@ -82,26 +135,29 @@ ApplicationSystemCFactoryProvider::instantiate(
     if (!module) {
       return std::nullopt;
     }
-    record_handles(std::string{path}, *module);
+    record_handles(
+        std::string{path}, *module, registry->registry.get());
     lifecycle_roots_.push_back(module->handle);
     return systemc_description(path, target, *module);
   }
 
 void ApplicationSystemCFactoryProvider::record_handles(
       const std::string& path,
-      const elaboration::SystemCInstanceDescription& description)  {
-    handles_.emplace(path, description.handle);
+      const elaboration::SystemCInstanceDescription& description,
+      systemc::HierarchyRegistry* registry)  {
+    handles_.emplace(path, HandleOwner{description.handle, registry});
     for (const auto& child : description.native_children) {
-      record_handles(child.path, child);
+      record_handles(child.path, child, registry);
     }
   }
 
 void ApplicationSystemCFactoryProvider::record_handles(
     const std::string& path,
-    const systemc::ModuleDescription& description)  {
-    handles_.emplace(path, description.handle);
+    const systemc::ModuleDescription& description,
+    systemc::HierarchyRegistry* registry)  {
+    handles_.emplace(path, HandleOwner{description.handle, registry});
     for (const auto& child : description.native_children) {
-      record_handles(path + "." + child.instance, child);
+      record_handles(path + "." + child.instance, child, registry);
     }
   }
 
@@ -366,6 +422,39 @@ std::optional<systemc::PluginCompileRequest> systemc_request(
       : std::optional{std::move(request)};
 }
 
+std::vector<SystemCLibraryCompileRequest> systemc_requests(
+    const project::Config& config) {
+  std::map<std::string, systemc::PluginCompileRequest> grouped;
+  for (const auto& source_set : config.source_sets) {
+    if (source_set.language != project::Language::systemc) {
+      continue;
+    }
+    auto& request = grouped[source_set.library];
+    request.logical_library = source_set.library;
+    request.settings = config.systemc;
+    request.working_directory = config.base_directory;
+    request.cache_directory = config.build.cache_path;
+    request.sources.insert(
+        request.sources.end(),
+        source_set.files.begin(),
+        source_set.files.end());
+    request.settings.include_directories.insert(
+        request.settings.include_directories.end(),
+        source_set.include_directories.begin(),
+        source_set.include_directories.end());
+    request.settings.defines.insert(
+        request.settings.defines.end(),
+        source_set.defines.begin(),
+        source_set.defines.end());
+  }
+  std::vector<SystemCLibraryCompileRequest> result;
+  result.reserve(grouped.size());
+  for (auto& [library, request] : grouped) {
+    result.push_back({std::move(library), std::move(request)});
+  }
+  return result;
+}
+
 std::shared_ptr<systemc::HierarchyRegistry> load_systemc_plugin(
     const std::filesystem::path& path,
     diagnostic::Engine& diagnostics)  {
@@ -591,6 +680,7 @@ elaboration::SystemCInstanceDescription systemc_description(
     converted.construction_actuals =
         child.construction_actuals;
     converted.module_facade = child.module_facade;
+    converted.implementation = child.implementation;
     converted.ports.reserve(child.ports.size());
     for (const auto& port : child.ports) {
       converted.ports.push_back({
@@ -671,7 +761,7 @@ elaboration::SystemCInstanceDescription systemc_description(
 std::optional<std::vector<elaboration::SystemCInstanceDescription>>
 construct_systemc_instances(
     const std::string_view top,
-    systemc::HierarchyRegistry* registry,
+    const std::span<const SystemCLibraryRegistry> registries,
     diagnostic::Engine& diagnostics)  {
   struct Request {
     std::string path;
@@ -724,7 +814,7 @@ construct_systemc_instances(
   if (diagnostics.has_error()) {
     return std::nullopt;
   }
-  if (!unique.empty() && registry == nullptr) {
+  if (!unique.empty() && registries.empty()) {
     diagnostics.error(
         "FSIM-SC-A002",
         "SystemC hierarchy requires a compiled plug-in");
@@ -732,9 +822,22 @@ construct_systemc_instances(
   }
 
   std::vector<elaboration::SystemCInstanceDescription> result;
-  std::map<std::string, fsim_sc_handle_v1> handles;
+  std::map<std::string, std::pair<
+      fsim_sc_handle_v1, systemc::HierarchyRegistry*>> handles;
   result.reserve(unique.size());
   for (const auto& request : unique) {
+    const auto registry_entry = std::ranges::find(
+        registries,
+        request.parsed.qualifier,
+        &SystemCLibraryRegistry::library);
+    if (registry_entry == registries.end()) {
+      diagnostics.error(
+          "FSIM-SC-A002",
+          "logical library '" + request.parsed.qualifier
+              + "' has no compiled SystemC plug-in");
+      continue;
+    }
+    auto* registry = registry_entry->registry.get();
     if (!registry->has_factory(request.parsed.unit)) {
       diagnostics.error(
           "FSIM-SC-A002",
@@ -753,8 +856,8 @@ construct_systemc_instances(
     if (const auto separator = request.path.rfind('.');
         separator != std::string::npos) {
       const auto found = handles.find(request.path.substr(0, separator));
-      if (found != handles.end()) {
-        parent = found->second;
+      if (found != handles.end() && found->second.second == registry) {
+        parent = found->second.first;
       }
     }
     std::string error;
@@ -771,7 +874,8 @@ construct_systemc_instances(
         [&](const auto& self,
             const std::string& path,
             const systemc::ModuleDescription& description) -> void {
-          handles.emplace(path, description.handle);
+          handles.emplace(
+              path, std::pair{description.handle, registry});
           for (const auto& child : description.native_children) {
             self(
                 self,
@@ -792,14 +896,17 @@ construct_systemc_instances(
 void validate_bindings(
     const project::Config& config,
     const frontend::ParsedDesign& parsed,
-    const systemc::HierarchyRegistry* systemc_hierarchy,
+    const std::span<const SystemCLibraryRegistry> systemc_registries,
     diagnostic::Engine& diagnostics)  {
   for (const auto& binding : config.bindings) {
-    const auto target = parse_binding_target(binding.target);
+    if (!binding.target.has_value()) {
+      continue;
+    }
+    const auto target = parse_binding_target(*binding.target);
     if (!target) {
       diagnostics.error(
           "FSIM-ELAB-BIND-0001",
-          "binding target '" + binding.target
+          "binding target '" + *binding.target
               + "' must be language-qualified");
       continue;
     }
@@ -818,14 +925,18 @@ void validate_bindings(
       if (target->qualifier.empty()) {
         diagnostics.error(
             "FSIM-ELAB-BIND-0001",
-            "SystemC target '" + binding.target
+            "SystemC target '" + *binding.target
                 + "' must use systemc:plugin.factory spelling");
         continue;
       }
-      found = systemc_hierarchy != nullptr
-          && systemc_hierarchy->has_factory(target->unit);
+      const auto registry = std::ranges::find(
+          systemc_registries,
+          target->qualifier,
+          &SystemCLibraryRegistry::library);
+      found = registry != systemc_registries.end()
+          && registry->registry->has_factory(target->unit);
       if (found
-          && !systemc_hierarchy->has_elaboration_factory(target->unit)) {
+          && !registry->registry->has_elaboration_factory(target->unit)) {
         diagnostics.error(
             "FSIM-SC-A003",
             "SystemC factory '" + target->unit
@@ -840,7 +951,7 @@ void validate_bindings(
     if (!found) {
       diagnostics.error(
           "FSIM-ELAB-BIND-0003",
-          "binding target unit '" + binding.target + "' was not found");
+          "binding target unit '" + *binding.target + "' was not found");
     }
     if (binding.resolver
         && *binding.resolver != "std_logic"

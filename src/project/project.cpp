@@ -460,7 +460,6 @@ class Parser {
       } else if (normalized == "binding") {
         config_.bindings.emplace_back();
         binding_has_instance_.push_back(false);
-        binding_has_target_.push_back(false);
         context_ = Context::binding;
         context_index_ = config_.bindings.size() - 1;
       } else {
@@ -831,7 +830,6 @@ class Parser {
       binding_has_instance_[context_index_] = true;
     } else if (key == "target") {
       binding.target = value.text;
-      binding_has_target_[context_index_] = true;
     } else {
       binding.resolver = value.text;
     }
@@ -971,12 +969,15 @@ class Parser {
         source_name_, {1, 1, 0}, {1, 1, 0}};
     if (!schema_seen_) {
       diagnostics_.error(
-          std::string(kSchemaCode), "missing required top-level key 'schema = 1'", document_span);
+          std::string(kSchemaCode), "missing required top-level key 'schema = 2'", document_span);
     } else if (config_.schema != kSchemaVersion) {
+      const auto migration = config_.schema == 1
+          ? "; migrate it with 'fsim migrate --to 2 <manifest>'"
+          : "";
       diagnostics_.error(
           std::string(kSchemaCode),
           "unsupported project schema " + std::to_string(config_.schema) +
-              "; this build supports schema 1",
+              "; this build supports schema 2" + migration,
           document_span);
     }
     if (config_.project.top.empty()) {
@@ -1059,15 +1060,16 @@ class Parser {
             "[[binding]] #" + std::to_string(index + 1) + " is missing 'instance'",
             document_span);
       }
-      if (!binding_has_target_[index] || binding.target.empty()) {
-        diagnostics_.error(
-            std::string(kRequiredCode),
-            "[[binding]] #" + std::to_string(index + 1) + " is missing 'target'",
-            document_span);
-      } else if (!has_binding_prefix(binding.target)) {
+      if (binding.target.has_value() && binding.target->empty()) {
         diagnostics_.error(
             std::string(kValueCode),
-            "binding target '" + binding.target +
+            "[[binding]] #" + std::to_string(index + 1) + " has an empty 'target'",
+            document_span);
+      } else if (binding.target.has_value()
+                 && !has_binding_prefix(*binding.target)) {
+        diagnostics_.error(
+            std::string(kValueCode),
+            "binding target '" + *binding.target +
                 "' must start with vhdl:, sv:, or systemc:",
             document_span);
       }
@@ -1076,6 +1078,13 @@ class Parser {
         diagnostics_.error(
             std::string(kValueCode),
             "binding resolver must be 'std_logic' or 'sv_wire'",
+            document_span);
+      }
+      if (!binding.target.has_value() && !binding.resolver.has_value()) {
+        diagnostics_.error(
+            std::string(kRequiredCode),
+            "[[binding]] #" + std::to_string(index + 1)
+                + " must contain 'target', 'resolver', or both",
             document_span);
       }
     }
@@ -1149,7 +1158,6 @@ class Parser {
   std::vector<bool> source_has_language_;
   std::vector<bool> source_has_files_;
   std::vector<bool> binding_has_instance_;
-  std::vector<bool> binding_has_target_;
 };
 
 std::filesystem::path absolute_normalized(

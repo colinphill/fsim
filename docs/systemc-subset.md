@@ -436,9 +436,11 @@ that later processes inspect. Structural registration or binding during these
 callbacks, and callback-originated signal transactions, remain unsupported.
 
 The root factory object owns native C++ child members, so native children are
-not selected by a separate manifest binding. Crossings from either the root
-or a native child into VHDL or Verilog/SystemVerilog continue to require an
-explicit foreign-child binding. Dynamic module creation after construction,
+not selected by a separate manifest binding. An `SC_FSIM_HDL_MODULE(Type)`
+crossing from the root or a native child resolves `Type` across HDL units in
+the parent logical library; an explicit full-path binding overrides it.
+Legacy `hdl_instance` crossings still require explicit selection. Dynamic
+module creation after construction,
 non-parent port chains, and arbitrary custom-interface metadata are not yet
 implemented.
 

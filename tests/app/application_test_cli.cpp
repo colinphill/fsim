@@ -691,7 +691,7 @@ const auto debug_trace = directory / "debug-select.vcd";
 {
   std::ofstream output(manifest);
   output << R"(
-schema = 1
+schema = 2
 
 [project]
 name = "debug-cli-test"
@@ -938,7 +938,7 @@ const auto scaled_trace = directory / "scaled.vcd";
 {
   std::ofstream output(scaled_manifest);
   output << R"(
-schema = 1
+schema = 2
 [project]
 name = "scaled-vcd"
 top = "sv:work.tb"

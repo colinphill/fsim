@@ -12,7 +12,7 @@
 
 namespace fsim::project {
 
-inline constexpr std::uint32_t kSchemaVersion = 1;
+inline constexpr std::uint32_t kSchemaVersion = 2;
 
 enum class Language : std::uint8_t {
   vhdl,
@@ -55,7 +55,7 @@ struct SourceSet {
 
 struct Binding {
   std::string instance;
-  std::string target;
+  std::optional<std::string> target;
   std::optional<std::string> resolver;
 };
 
@@ -101,10 +101,17 @@ struct Config {
 [[nodiscard]] std::optional<DelayMode> parse_delay_mode(
     std::string_view spelling) noexcept;
 
-// Parses, validates, and resolves a schema-1 fsim.toml. Relative paths are
+// Parses, validates, and resolves a schema-2 fsim.toml. Relative paths are
 // resolved against the manifest directory. Source globs are expanded in listed
 // pattern order, with the matches for each pattern sorted lexicographically.
 [[nodiscard]] std::optional<Config> load(
+    const std::filesystem::path& manifest,
+    diagnostic::Engine& diagnostics);
+
+// Produces a schema-2 manifest without modifying the input file. Schema 1 is
+// upgraded by changing only the top-level schema declaration; schema 2 is
+// returned unchanged so migration scripts are idempotent.
+[[nodiscard]] std::optional<std::string> migrate_to_schema_2(
     const std::filesystem::path& manifest,
     diagnostic::Engine& diagnostics);
 

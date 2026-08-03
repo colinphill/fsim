@@ -769,42 +769,9 @@ void adapt_vhdl_array_port_shapes(
                 std::nullopt,
                 {}});
             const auto* binding = binding_for(child_path);
-            if (binding == nullptr) {
-                report(
-                    "FSIM-ELAB-BIND-040",
-                    "SystemC foreign child '" + child_path
-                        + "' requires an explicit VHDL or "
-                          "Verilog/SystemVerilog binding",
-                    {});
-                continue;
-            }
-            const auto target = parse_target(binding->target);
-            if (!target || target->language == "systemc") {
-                report(
-                    "FSIM-ELAB-BIND-041",
-                    "SystemC foreign child '" + child_path
-                        + "' must bind to an HDL target",
-                    {});
-                continue;
-            }
-            if (target->language == "vhdl"
-                && !target->architecture) {
-                report(
-                    "FSIM-ELAB-BIND-016",
-                    "an explicit VHDL binding target must name an "
-                    "architecture, for example "
-                    "vhdl:work.entity(rtl)",
-                    {});
-                continue;
-            }
-            const auto* selected =
-                choose_bound_unit(parsed_, *target);
+            const auto* selected = systemc_foreign_target(
+                child, instance, child_path, binding);
             if (selected == nullptr) {
-                report(
-                    "FSIM-ELAB-BIND-015",
-                    "binding target '" + binding->target
-                        + "' was not found",
-                    {});
                 continue;
             }
             std::vector<frontend::ParameterOverride> actuals;
@@ -1710,32 +1677,37 @@ void adapt_vhdl_array_port_shapes(
         for (const auto& instance : unit.instances) {
             const auto child_path = path + "." + instance.name;
             const auto* binding = binding_for(child_path);
-            if (binding != nullptr) {
-                const auto target = parse_target(binding->target);
+            const auto build_systemc =
+                [&](const frontend::Instance& selected_instance,
+                    const std::string_view selected_target) {
+                  const auto* description =
+                      construct_systemc_description(
+                          selected_instance,
+                          child_path,
+                          selected_target,
+                          parameter_environment,
+                          unit.language);
+                  if (description == nullptr) {
+                      return;
+                  }
+                  auto [child_aliases, child_objects] =
+                      connect_systemc_instance(
+                          selected_instance,
+                          *description,
+                          child_path,
+                          local,
+                          binding);
+                  instantiate_systemc(
+                      *description,
+                      child_path,
+                      std::move(child_aliases),
+                      std::move(child_objects));
+                };
+            if (binding != nullptr && binding->target.has_value()) {
+                const auto target = parse_target(*binding->target);
                 if (target
                     && target->language == "systemc") {
-                    const auto* description =
-                        construct_systemc_description(
-                            instance,
-                            child_path,
-                            binding->target,
-                            parameter_environment,
-                            unit.language);
-                    if (description == nullptr) {
-                        continue;
-                    }
-                    auto [child_aliases, child_objects] =
-                        connect_systemc_instance(
-                            instance,
-                            *description,
-                            child_path,
-                            local,
-                            binding);
-                    instantiate_systemc(
-                        *description,
-                        child_path,
-                        std::move(child_aliases),
-                        std::move(child_objects));
+                    build_systemc(instance, *binding->target);
                     continue;
                 }
             }
@@ -1743,7 +1715,7 @@ void adapt_vhdl_array_port_shapes(
             const frontend::Instance* selected_instance =
                 &instance;
             const DesignUnit* target = nullptr;
-            if (binding == nullptr) {
+            if (binding == nullptr || !binding->target.has_value()) {
                 configured = instance.vhdl_configuration_instance
                     ? bind_vhdl_direct_configuration_instance(
                         unit, instance, child_path)
@@ -1762,6 +1734,12 @@ void adapt_vhdl_array_port_shapes(
                 }
                 if (configured.applied) {
                     selected_instance = &configured.instance;
+                    if (configured.systemc_target.has_value()) {
+                        build_systemc(
+                            *selected_instance,
+                            *configured.systemc_target);
+                        continue;
+                    }
                     target = configured.target
                         ? &*configured.target
                         : nullptr;
@@ -1771,11 +1749,34 @@ void adapt_vhdl_array_port_shapes(
                 }
             }
             if (target == nullptr) {
-                target = bound_target(
-                    *selected_instance,
-                    unit,
-                    child_path,
-                    binding);
+                if ((binding == nullptr
+                     || !binding->target.has_value())
+                    && selected_instance->unit_name.find_first_of(".(")
+                        == std::string::npos) {
+                    const auto library = unit.library.empty()
+                        ? std::string{"work"} : unit.library;
+                    const auto inferred = inferred_target(
+                        library,
+                        selected_instance->unit_name,
+                        child_path,
+                        selected_instance->span);
+                    if (!inferred.has_value()) {
+                        continue;
+                    }
+                    if (inferred->systemc_target.has_value()) {
+                        build_systemc(
+                            *selected_instance,
+                            *inferred->systemc_target);
+                        continue;
+                    }
+                    target = inferred->unit;
+                } else {
+                    target = bound_target(
+                        *selected_instance,
+                        unit,
+                        child_path,
+                        binding);
+                }
             }
             if (target == nullptr) {
                 continue;

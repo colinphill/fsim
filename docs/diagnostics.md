@@ -53,6 +53,8 @@ therefore excluded.
 | `FSIM-PROJ-0007` | error | A manifest value is outside its accepted range or vocabulary. |
 | `FSIM-PROJ-0008` | error | Project-manifest or source-glob I/O failed. |
 | `FSIM-PROJ-0009` | error | A listed source or source-glob root is missing, or a glob matched nothing. |
+| `FSIM-PROJ-0010` | error | A project manifest could not be read or written during schema migration. |
+| `FSIM-PROJ-0011` | error | A project manifest cannot be migrated because its schema declaration is missing or unsupported. |
 
 ## Common frontend and source analysis
 
@@ -961,6 +963,7 @@ therefore excluded.
 | `FSIM-ELAB-002` | error | A VHDL architecture has no matching entity. |
 | `FSIM-ELAB-003` | error | A qualified top-level target is malformed. |
 | `FSIM-ELAB-004` | error | A qualified VHDL top does not name an architecture. |
+| `FSIM-ELAB-005` | error | An unqualified top name is ambiguous in logical library `work`. |
 | `FSIM-ELAB-008` | error | The elaborated design exceeds the dense process-ID space. |
 | `FSIM-ELAB-010` | error | A signal has an invalid packed width. |
 | `FSIM-ELAB-011` | error | The design exceeds the dense 32-bit signal-ID limit. |
@@ -1247,7 +1250,6 @@ therefore excluded.
 | `FSIM-ELAB-VHCOMP-008` | error | A component generic association is unknown, duplicated, out of order, excessive, or omits a required formal. |
 | `FSIM-ELAB-VHCOMP-009` | error | A component port association is unknown, duplicated, out of order, excessive, omits a required formal, or opens a required input without a default. |
 | `FSIM-ELAB-VHCOMP-010` | error | A configuration binding map names an unknown component or entity formal. |
-| `FSIM-ELAB-VHCOMP-011` | error | Default component binding would cross languages and requires an explicit manifest binding. |
 | `FSIM-ELAB-VHCOMP-012` | error | No equally visible component overload matches the instance associations, modes, types, or dependent widths. |
 | `FSIM-ELAB-VHCOMP-013` | error | A selected component input default is dynamic, malformed, or incompatible with the bounded scalar/vector/enumeration/record/array port type. |
 | `FSIM-ELAB-VHCOMP-014` | error | A component generic association selects `<>`, but the selected component formal has no usable default. |
@@ -1617,11 +1619,13 @@ therefore excluded.
 | `FSIM-ELAB-BIND-0004` | error | A manifest binding resolver is neither `std_logic` nor `sv_wire`. |
 | `FSIM-ELAB-BIND-010` | error | More than one binding names the same instance path. |
 | `FSIM-ELAB-BIND-011` | error | A binding path was not found in the elaborated hierarchy. |
-| `FSIM-ELAB-BIND-012` | error | An instance target was not found in the same language and needs an explicit cross-language binding. |
+| `FSIM-ELAB-BIND-012` | error | An unqualified instance spelling has no VHDL, Verilog/SystemVerilog, or SystemC candidate in the parent logical library. |
 | `FSIM-ELAB-BIND-013` | error | An elaboration binding target is malformed. |
 | `FSIM-ELAB-BIND-014` | error | A SystemC binding reached HDL target selection without a matching preconstructed typed factory instance. |
 | `FSIM-ELAB-BIND-015` | error | An explicit binding target was not found. |
 | `FSIM-ELAB-BIND-016` | error | An explicit VHDL binding does not name an architecture. |
+| `FSIM-ELAB-BIND-017` | error | An unqualified instance spelling has multiple canonical candidates in the parent logical library. |
+| `FSIM-ELAB-BIND-018` | error | A logical library exposes the same public SystemC factory name more than once. |
 | `FSIM-ELAB-BIND-019` | error | A boundary port or actual uses an unsupported value domain. |
 | `FSIM-ELAB-BIND-020` | error | Boundary port and actual widths differ. |
 | `FSIM-ELAB-BIND-021` | error | Boundary port and actual signedness differ. |
@@ -1642,7 +1646,7 @@ therefore excluded.
 | `FSIM-ELAB-BIND-037` | error | A SystemC foreign-child port direction differs from its bound HDL target. |
 | `FSIM-ELAB-BIND-038` | error | An HDL-to-SystemC binding has no matching preconstructed factory instance. |
 | `FSIM-ELAB-BIND-039` | error | A preconstructed SystemC instance target differs from its manifest binding. |
-| `FSIM-ELAB-BIND-040` | error | A SystemC HDL proxy or legacy foreign child lacks its required explicit full-path HDL binding. |
+| `FSIM-ELAB-BIND-040` | error | A legacy SystemC `hdl_instance` lacks its required explicit full-path HDL binding. |
 | `FSIM-ELAB-BIND-041` | error | A SystemC HDL proxy or legacy foreign child is bound to a non-HDL target. |
 | `FSIM-ELAB-BIND-042` | error | A registered SystemC thread process requires fiber support, but this build configured `FSIM_SYSTEMC_FIBER_MODE=OFF`. |
 | `FSIM-ELAB-BIND-043` | error | A SystemC process sensitivity references an unknown registered object. |

@@ -81,7 +81,7 @@ int main() {
   {
     std::ofstream file(display_manifest);
     file
-        << "schema = 1\n"
+        << "schema = 2\n"
         << "[project]\n"
         << "name = \"tcl-display\"\n"
         << "top = \"sv:work.display\"\n"
@@ -245,7 +245,7 @@ puts "diagnostics-ok"
   {
     std::ofstream file(manifest);
     file
-        << "schema = 1\n"
+        << "schema = 2\n"
         << "[project]\n"
         << "name = \"tcl-control\"\n"
         << "top = \"sv:work.tb\"\n"
@@ -276,7 +276,7 @@ puts "diagnostics-ok"
   {
     std::ofstream file(assertion_manifest);
     file
-        << "schema = 1\n"
+        << "schema = 2\n"
         << "[project]\n"
         << "name = \"tcl-assertion\"\n"
         << "top = \"sv:work.assertion_tb\"\n"

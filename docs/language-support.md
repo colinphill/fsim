@@ -913,28 +913,28 @@ pointer-based four-plane callbacks and explicit Logic9/Logic4 conversions;
 wide-value runtime kernels remain incomplete.
 
 For the bounded hierarchy slice, child ports alias parent signal IDs after
-width, signedness, and lossy-2-state checks. Same-language lookup and explicit
-VHDL/SV manifest overrides are implemented. Automated runtime evidence covers
-both hierarchy directions: an SV top driving a VHDL counter and an SV child,
-plus a VHDL top driving a bound SV combinational child. Bounded scalar
-generic/parameter actuals cross explicit VHDL/SV bindings in either direction
-before boundary-width checks; positional actuals map by ordinal, and
-VHDL-associated names use case-insensitive target matching with ambiguity
-diagnostics for case-distinct SV declarations. Selected conditional-generate
+unique target resolution and then width, signedness, and lossy-2-state checks.
+Unqualified names search VHDL, Verilog/SystemVerilog, and exported SystemC
+factories in the parent logical library without a same-language preference;
+explicit manifest targets override inference. Automated runtime evidence
+covers both hierarchy directions: an SV top driving a VHDL counter and an SV
+child, plus a VHDL top driving an SV combinational child. Bounded scalar
+generic/parameter actuals cross inferred or explicit VHDL/SV boundaries before
+boundary-width checks; positional actuals map by ordinal, and VHDL-associated
+names use case-insensitive target matching. Selected conditional-generate
 labels are retained in binding paths, so a generated child may cross into
-VHDL, SystemVerilog, or SystemC under the same explicit path rules. This does
-the same for loop-generated children using deterministic, language-neutral
-`label[index]` path components. Case-generated children use their declared
-alternative label. This does not yet establish
-complete VHDL generic or SystemVerilog parameter typing and sizing, SystemC
-construction schemas, general vector-direction conversion,
-aggregates/interfaces, or wired-net resolution beyond `sv_wire`. Exact
-nine-state `std_logic` and four-state `sv_wire` resolution use process-owned
-driver slots across explicit mixed bindings. At a VHDL/SV boundary the owning
-signal domain is retained and the reader/writer view applies the documented
-ordinal per-element conversion in either hierarchy direction. SystemC
-factories already elaborate as peer hierarchy nodes in either direction
-through explicit bindings.
+VHDL, SystemVerilog, or SystemC under the same resolution rules. Loop-generated
+children use deterministic, language-neutral `label[index]` path components;
+case-generated children use their declared alternative label. Complete VHDL
+generic and SystemVerilog parameter typing and sizing, general vector-direction
+conversion, aggregates/interfaces, and wider wired-net behavior remain
+incomplete. Exact nine-state `std_logic` and four-state `sv_wire` resolution
+use process-owned driver slots across mixed boundaries. At a VHDL/SV boundary
+the owning signal domain is retained and the reader/writer view applies the
+documented ordinal per-element conversion in either hierarchy direction.
+SystemC factories elaborate as peer hierarchy nodes under their exported
+public names; `SC_FSIM_HDL_MODULE(Type)` uses the stringized type as its
+inferred HDL name.
 
 Batch 119 frontend closure now retains nested waits rather than rejecting a
 successfully parsed statement tree; general assertion/report and severity

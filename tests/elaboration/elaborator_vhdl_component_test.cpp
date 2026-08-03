@@ -311,6 +311,8 @@ architecture rtl of visible_component_top is
   end component;
   for package_child : package_leaf
     use entity work.package_leaf(rtl);
+  for overload_child : overload_leaf
+    use entity work.overload_leaf(second);
 begin
   package_child: package_leaf port map (value);
   entity_child: entity_leaf port map (value);
@@ -689,6 +691,10 @@ architecture rtl of nonvalue_component_top is
     port map (
       entity_input => component_input,
       entity_output => component_output);
+  for omitted_child : nonvalue_component_leaf
+    use entity work.nonvalue_component_leaf(configured);
+  for explicit_child : nonvalue_component_leaf
+    use entity work.nonvalue_component_leaf(configured);
 begin
   configured_child: nonvalue_component_leaf
     generic map (
@@ -1258,12 +1264,9 @@ begin
 end architecture;
 )",
         "vhdl:work.ambiguous_component_top(rtl)");
-    assert(ambiguous_architecture.ok());
-    assert(
-        specialization(
-            ambiguous_architecture,
-            "ambiguous_component_top.child").unit
-        == "vhdl:work.ambiguous_leaf(second)");
+    assert(!ambiguous_architecture.ok());
+    assert(has_diagnostic(
+        ambiguous_architecture, "FSIM-ELAB-VHCOMP-005"));
 
     const auto ambiguous_entity = elaborate_text(
         "ambiguous_component_entity.vhd",
@@ -1980,9 +1983,11 @@ end architecture;
     const auto cross_language = fsim::elaboration::elaborate(
         foreign.design,
         "vhdl:work.foreign_default_parent(rtl)");
-    assert(!cross_language.ok());
-    assert(has_diagnostic(
-        cross_language, "FSIM-ELAB-VHCOMP-011"));
+    assert(cross_language.ok());
+    assert(
+        specialization(
+            cross_language, "foreign_default_parent.child").unit
+        == "sv:work.foreign_default");
 }
 
 }  // namespace fsim::tests::elaboration

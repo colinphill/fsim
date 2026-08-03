@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -51,6 +52,8 @@ std::string_view command_name(const Command command) {
       return "debug";
     case Command::tcl:
       return "tcl";
+    case Command::migrate:
+      return "migrate";
   }
   return "check";
 }
@@ -70,6 +73,9 @@ std::optional<Command> parse_command(const std::string_view spelling) {
   }
   if (spelling == "tcl") {
     return Command::tcl;
+  }
+  if (spelling == "migrate") {
+    return Command::migrate;
   }
   return std::nullopt;
 }
@@ -329,7 +335,7 @@ void apply_overrides(const Invocation& invocation, project::Config& config) {
 void print_help(std::ostream& output, const std::string_view program) {
   output
       << "Usage: " << program
-      << " <check|build|run|debug|tcl> [options] [files...]\n"
+      << " <check|build|run|debug|tcl|migrate> [options] [files...]\n"
       << "\n"
       << "Commands:\n"
       << "  check   Parse and analyze sources\n"
@@ -337,6 +343,7 @@ void print_help(std::ostream& output, const std::string_view program) {
       << "  run     Build incrementally and simulate in optimized mode\n"
       << "  debug   Build incrementally and enter the interactive debugger\n"
       << "  tcl     Enter Tcl or evaluate a Tcl script/command batch\n"
+      << "  migrate Upgrade a project manifest schema\n"
       << "\n"
       << "Project and source options:\n"
       << "  -p, --project PATH       Project manifest (default: fsim.toml)\n"
@@ -356,6 +363,8 @@ void print_help(std::ostream& output, const std::string_view program) {
       << "      --trace PATH\n"
       << "      --seed COUNT|random\n"
       << "      --diagnostics text|json\n"
+      << "      --to 2               Migration target schema\n"
+      << "      --in-place           Replace the migrated manifest\n"
       << "\n"
       << "Tcl options:\n"
       << "  -c, --command SCRIPT    Evaluate Tcl text (repeatable)\n"
@@ -388,6 +397,8 @@ const Handler* select_handler(const Services& services, const Command command) {
       return &services.debug;
     case Command::tcl:
       return &services.tcl;
+    case Command::migrate:
+      return nullptr;
   }
   return nullptr;
 }
@@ -646,6 +657,18 @@ std::optional<Invocation> parse_arguments(
           return std::nullopt;
         }
         invocation.tcl_commands.emplace_back(*value);
+      } else if (is_option(argument, "", "--to")) {
+        const auto value =
+            take_value(index, argc, argv, argument, "--to", diagnostics);
+        std::uint64_t schema = 0;
+        if (!value.has_value() || !parse_unsigned(*value, schema)
+            || schema > std::numeric_limits<std::uint32_t>::max()) {
+          argument_error(diagnostics, "--to requires a schema version");
+          return std::nullopt;
+        }
+        invocation.migration_schema = static_cast<std::uint32_t>(schema);
+      } else if (argument == "--in-place") {
+        invocation.migration_in_place = true;
       } else {
         argument_error(diagnostics, "unknown option '" + std::string(argument) + "'");
         return std::nullopt;
@@ -659,7 +682,7 @@ std::optional<Invocation> parse_arguments(
         argument_error(
             diagnostics,
             "unknown command '" + std::string(argument) +
-                "'; expected check, build, run, debug, or tcl");
+                "'; expected check, build, run, debug, tcl, or migrate");
         return std::nullopt;
       }
       invocation.command = *command;
@@ -699,6 +722,21 @@ std::optional<Invocation> parse_arguments(
     argument_error(diagnostics, "--project cannot be combined with direct source files");
     return std::nullopt;
   }
+  if (invocation.command == Command::migrate) {
+    if (invocation.files.size() != 1) {
+      argument_error(diagnostics, "migrate requires exactly one manifest path");
+      return std::nullopt;
+    }
+    if (invocation.migration_schema != 2) {
+      argument_error(diagnostics, "migrate currently requires '--to 2'");
+      return std::nullopt;
+    }
+  } else if (invocation.migration_schema.has_value()
+             || invocation.migration_in_place) {
+    argument_error(
+        diagnostics, "--to and --in-place are available only with migrate");
+    return std::nullopt;
+  }
   return invocation;
 }
 
@@ -723,6 +761,31 @@ int run(
     }
     if (invocation->help) {
       print_help(output, invocation->program_name);
+      return kSuccess;
+    }
+    if (invocation->command == Command::migrate) {
+      auto migrated = project::migrate_to_schema_2(
+          invocation->files.front(), diagnostics);
+      if (!migrated.has_value() || diagnostics.has_error()) {
+        print_diagnostics(error, diagnostics, invocation->diagnostic_format);
+        return kUserError;
+      }
+      if (!invocation->migration_in_place) {
+        output << *migrated;
+        return kSuccess;
+      }
+      std::ofstream destination(
+          invocation->files.front(), std::ios::binary | std::ios::trunc);
+      destination.write(
+          migrated->data(), static_cast<std::streamsize>(migrated->size()));
+      if (!destination) {
+        diagnostics.error(
+            "FSIM-PROJ-0010",
+            "cannot write migrated project manifest: "
+                + fsim::support::path_to_utf8(invocation->files.front()));
+        print_diagnostics(error, diagnostics, invocation->diagnostic_format);
+        return kUserError;
+      }
       return kSuccess;
     }
 

@@ -3,9 +3,9 @@ module three_language_tb;
   logic stimulus;
   logic observed;
 
-  // The manifest binds this placeholder to the SystemC factory. That factory
-  // declares the VHDL child below it during recursive elaboration.
-  mixed_bridge_placeholder u_bridge (
+  // The public SystemC factory name resolves automatically in logical
+  // library work. That factory declares the inferred VHDL child below it.
+  mixed_bridge u_bridge (
     .source(stimulus),
     .result(observed)
   );

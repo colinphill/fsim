@@ -5,8 +5,7 @@ module tb;
   logic [7:0] counter_q;
   logic [7:0] child_y;
 
-  // The source instance name is never used to guess across languages. The
-  // schema-1 manifest binds this placeholder explicitly to the VHDL entity.
+  // The VHDL entity resolves uniquely by name in logical library work.
   counter u_counter (
     .clk(clk),
     .reset(reset),

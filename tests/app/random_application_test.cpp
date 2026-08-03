@@ -270,7 +270,7 @@ endmodule
   {
     std::ofstream output(manifest);
     output
-        << "schema = 1\n"
+        << "schema = 2\n"
         << "[project]\n"
         << "name = \"random-test\"\n"
         << "top = \"sv:work.random_test\"\n"

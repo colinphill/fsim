@@ -10382,3 +10382,15 @@ selection and legacy plug-in compatibility:
     enabled. Source, inventory, public-release, release-candidate, SystemC,
     MSVC, and Windows portability contracts pass. Batch 132 is not a scheduled
     non-documentation CI-inspection boundary.
+
+## fsim v2 execution
+
+The authoritative 20-change v2 batch plan and live per-change status are
+maintained in [`implementation_plan_v2.md`](implementation_plan_v2.md).
+`v1.0.0` preserves the v1 release at `6450599`; v2 development proceeds on
+`codex/v2` from post-v1 checkpoint `1462f18`. Batch 133 implements automatic
+cross-language resolution in the parent logical library, Batch 134 adds an
+ordered elaboration library search list, and the remaining priority order is
+multiple roots, out-of-tree libraries, non-project artifact phases,
+incremental SystemC compilation/linking, language/VITAL/UVM/VPI/DPI/VHPI
+closure, older standards, SDF, FST, and v2 release closure.

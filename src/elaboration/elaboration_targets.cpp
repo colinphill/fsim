@@ -1,7 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
 
+#include <algorithm>
+#include <cctype>
+#include <sstream>
+
 namespace fsim::elaboration::elaboration_detail {
+
+namespace {
+
+std::string normalized_library(const DesignUnit& unit) {
+    return unit.library.empty() ? "work" : unit.library;
+}
+
+bool vhdl_name_equal(
+    const std::string_view left, const std::string_view right) {
+    if (left.size() != right.size()) {
+        return false;
+    }
+    return std::equal(
+        left.begin(), left.end(), right.begin(), right.end(),
+        [](const unsigned char lhs, const unsigned char rhs) {
+            return std::tolower(lhs) == std::tolower(rhs);
+        });
+}
+
+} // namespace
 
 
 
@@ -152,6 +176,62 @@ const DesignUnit* choose_top_unit(
 
 
 
+std::vector<UnitResolutionCandidate> resolve_unit_candidates(
+    const frontend::ParsedDesign& parsed,
+    const std::string_view library,
+    const std::string_view name,
+    const bool include_vhdl_configurations) {
+    const auto requested_library =
+        library.empty() ? std::string_view{"work"} : library;
+    std::vector<UnitResolutionCandidate> result;
+    for (const auto& unit : parsed.units) {
+        if (normalized_library(unit) != requested_library) {
+            continue;
+        }
+        const bool verilog_module =
+            unit.kind == frontend::UnitKind::VerilogModule
+            && unit.name == name;
+        const bool systemverilog_interface =
+            unit.kind == frontend::UnitKind::SystemVerilogInterface
+            && unit.name == name;
+        const bool vhdl_architecture =
+            unit.kind == frontend::UnitKind::VhdlArchitecture
+            && vhdl_name_equal(unit.primary_name, name);
+        const bool vhdl_configuration =
+            include_vhdl_configurations
+            && unit.kind == frontend::UnitKind::VhdlConfiguration
+            && vhdl_name_equal(unit.name, name);
+        if (!verilog_module && !systemverilog_interface
+            && !vhdl_architecture
+            && !vhdl_configuration) {
+            continue;
+        }
+        result.push_back({&unit, std::nullopt, unit_identity(unit)});
+    }
+    std::stable_sort(
+        result.begin(), result.end(),
+        [](const auto& left, const auto& right) {
+            return left.identity < right.identity;
+        });
+    return result;
+}
+
+
+
+std::string format_resolution_candidates(
+    const std::span<const UnitResolutionCandidate> candidates) {
+    std::ostringstream output;
+    for (std::size_t index = 0; index < candidates.size(); ++index) {
+        if (index != 0) {
+            output << ", ";
+        }
+        output << candidates[index].identity;
+    }
+    return output.str();
+}
+
+
+
 const DesignUnit* choose_same_language_instance(
     const frontend::ParsedDesign& parsed,
     const DesignUnit& parent,
@@ -214,6 +294,10 @@ std::string unit_identity(const DesignUnit& unit) {
             == frontend::UnitKind::VhdlConfiguration) {
         return "vhdl:" + std::string{library}
             + ".configuration(" + unit.name + ")";
+    }
+    if (unit.kind == frontend::UnitKind::SystemVerilogInterface) {
+        return "sv:" + std::string{library} + ".interface(" + unit.name
+            + ")";
     }
     return "sv:" + std::string{library} + "." + unit.name;
 }

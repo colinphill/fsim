@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-schema = 1
+schema = 2
 
 [project]
 name = "three-language-hierarchy"
@@ -17,6 +17,7 @@ compilation_unit = "source-set"
 [[source_set]]
 language = "systemc"
 standard = "2023-subset"
+library = "work"
 files = ["mixed_bridge.cpp"]
 include_dirs = ["../../include"]
 
@@ -26,15 +27,8 @@ standard = "2008"
 library = "work"
 files = ["logic_stage.vhd"]
 
-# The source names are placeholders. These bindings select the implementation
-# at each language boundary and make the recursive hierarchy deterministic.
-[[binding]]
-instance = "three_language_tb.u_bridge"
-target = "systemc:models.mixed_bridge"
-
-[[binding]]
-instance = "three_language_tb.u_bridge.u_vhdl"
-target = "vhdl:work.logic_stage(rtl)"
+# Both boundaries infer their uniquely named implementation in logical
+# library work. Add an explicit binding only to override that selection.
 
 [build]
 optimization = "O2"

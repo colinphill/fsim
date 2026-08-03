@@ -5,41 +5,6 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
-HierarchyBuilder::HierarchyBuilder(
-        const frontend::ParsedDesign& parsed,
-        ElaboratedDesign& design,
-        std::vector<Diagnostic>& diagnostics,
-        const std::span<const Binding> bindings,
-        const std::span<const SystemCInstanceDescription>
-            systemc_instances,
-        SystemCFactoryProvider* systemc_provider)
-        : parsed_(parsed),
-          design_(design),
-          diagnostics_(diagnostics),
-          systemc_provider_(systemc_provider) {
-        for (const auto& binding : bindings) {
-            if (!bindings_.emplace(binding.instance, &binding).second) {
-                report(
-                    "FSIM-ELAB-BIND-010",
-                    "duplicate binding for instance '" + binding.instance + "'",
-                    {});
-            }
-        }
-        for (const auto& instance : systemc_instances) {
-            if (!systemc_instances_
-                     .emplace(instance.path, &instance)
-                     .second) {
-                report(
-                    "FSIM-ELAB-BIND-032",
-                    "duplicate constructed SystemC instance path '"
-                        + instance.path + "'",
-                    {});
-            }
-        }
-    }
-
-
-
     void HierarchyBuilder::build(const DesignUnit& root) {
         const DesignUnit* selected = &root;
         std::optional<DesignUnit> configured_root;

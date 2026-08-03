@@ -362,6 +362,16 @@ typedef struct fsim_sc_host_v1 {
         fsim_sc_handle_v1 module,
         const char* name,
         int64_t value);
+
+    /*
+     * Append-only inferred implementation name for an HDL-module facade.
+     * New proxy macros record their stringized C++ type name here; legacy
+     * proxies leave it empty and continue to require an explicit binding.
+     */
+    fsim_sc_status_v1 (*set_hdl_module_implementation)(
+        void* context,
+        fsim_sc_handle_v1 module,
+        const char* implementation);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {

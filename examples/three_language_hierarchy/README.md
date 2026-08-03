@@ -2,8 +2,8 @@
 # Three-language hierarchy tutorial
 
 This project is a runnable SystemVerilog, SystemC, and VHDL example. It uses
-explicit bindings at both language boundaries and executes every language in
-one recursively elaborated hierarchy:
+automatic parent-library resolution at both language boundaries and executes
+every language in one recursively elaborated hierarchy:
 
 ```text
 three_language_tb                         SystemVerilog testbench
@@ -41,7 +41,7 @@ fsim executable if you built a different preset.
 build/dev/fsim check -p examples/three_language_hierarchy/fsim.toml
 ```
 
-`build` recursively elaborates both explicit bindings, compiles the SystemC
+`build` recursively resolves both boundaries, compiles the SystemC
 plug-in, and prepares the selected execution engine. `-j 8` keeps the local
 build at eight workers.
 
@@ -64,29 +64,31 @@ Repeating it reuses the checked analysis, SystemC plug-in, and eligible native
 code. Remove only that example-local cache when you intentionally want to
 observe a cold build.
 
-## 3. Understand the bindings
+## 3. Understand target resolution
 
-The SystemVerilog source names `mixed_bridge_placeholder`, but the name does
-not guess a foreign implementation. The first `[[binding]]` in `fsim.toml`
-selects the registered SystemC factory explicitly:
+The SystemVerilog source names `mixed_bridge`, matching the public factory
+alias exported by `SC_FSIM_EXPORT_AS`. Both are in logical library `work`, so
+the instance resolves uniquely:
 
 ```text
-three_language_tb.u_bridge -> systemc:models.mixed_bridge
+three_language_tb.u_bridge -> systemc:work.mixed_bridge
 ```
 
 `LogicStage` is declared with `SC_FSIM_HDL_MODULE`, so `MixedBridge` constructs
 it like another SystemC module and connects `u_vhdl.value(to_vhdl)` and
 `u_vhdl.result(result)` with ordinary port-binding syntax. The
 `SC_FSIM_EXPORT_AS(MixedBridge, "mixed_bridge")` declaration publishes the
-parent factory. The second manifest binding then selects the VHDL
-implementation at the complete child path:
+parent factory. `SC_FSIM_HDL_MODULE(LogicStage)` records `LogicStage` as the
+child implementation spelling; VHDL matching is case-insensitive, and the
+unique entity in `work` supplies its `rtl` architecture:
 
 ```text
-three_language_tb.u_bridge.u_vhdl -> vhdl:work.logic_stage(rtl)
+three_language_tb.u_bridge.u_vhdl -> vhdl:work.LogicStage(rtl)
 ```
 
-Changing a source placeholder does not silently change either target; update
-the matching full instance path in the manifest as well.
+An explicit full-path `[[binding]]` can still override either inferred target.
+If a name is missing or ambiguous, elaboration stops before comparing ports or
+construction actuals.
 
 ## 4. Record and inspect a VCD
 

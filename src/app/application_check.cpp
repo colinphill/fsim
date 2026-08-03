@@ -85,8 +85,8 @@ std::optional<CheckedProject> check_project(
       && !diagnostics.has_error()) {
     diagnostics.error("FSIM-FE-0001", "the project contains no HDL source files");
   }
-  if (const auto request = systemc_request(config)) {
-    (void)systemc::plan_plugin_compile(*request, diagnostics);
+  for (const auto& entry : systemc_requests(config)) {
+    (void)systemc::plan_plugin_compile(entry.request, diagnostics);
   }
   if (diagnostics.has_error()) {
     return std::nullopt;

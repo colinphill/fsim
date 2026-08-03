@@ -58,6 +58,20 @@ auto second = fsim::app::build_project(config, diagnostics);
 assert(second);
 assert(second->cache_hit);
 assert(first->systemc_hierarchy == second->systemc_hierarchy);
+auto multi_library_config = config;
+auto alternate_systemc = multi_library_config.source_sets.back();
+alternate_systemc.library = "alternate";
+multi_library_config.source_sets.push_back(
+    std::move(alternate_systemc));
+fsim::diagnostic::Engine multi_library_diagnostics;
+auto multi_library = fsim::app::build_project(
+    multi_library_config, multi_library_diagnostics);
+assert(multi_library);
+assert(multi_library->systemc_plugins.size() == 2);
+assert(multi_library->systemc_hierarchies.size() == 2);
+assert(
+    multi_library->systemc_hierarchies[0]
+    != multi_library->systemc_hierarchies[1]);
 const auto child_q = first->design.find_signal("tb.u_child.value");
 assert(child_q);
 const auto paths = first->design.signal_paths();

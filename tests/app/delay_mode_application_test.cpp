@@ -208,7 +208,7 @@ void verify_cli_override(
   {
     std::ofstream output(manifest, std::ios::binary);
     output
-        << "schema = 1\n"
+        << "schema = 2\n"
         << "[project]\n"
         << "top = \"sv:work.delay_modes\"\n"
         << "[[source_set]]\n"

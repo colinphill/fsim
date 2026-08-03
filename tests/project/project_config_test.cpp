@@ -46,7 +46,7 @@ void test_complete_manifest_and_glob_order() {
   write_file(workspace / "vhdl" / "counter.vhd", "entity counter is end;\n");
 
   const std::string manifest = R"toml(
-schema = 1
+schema = 2
 
 [project]
 name = "mixed"
@@ -73,6 +73,10 @@ files = ["vhdl/counter.vhd"]
 instance = "tb.dut"
 target = "vhdl:work.counter(rtl)"
 resolver = "std_logic"
+
+[[binding]]
+instance = "tb.bus"
+resolver = "sv_wire"
 
 [build]
 optimization = "O3"
@@ -104,7 +108,7 @@ libraries = ["m"]
   check(config.has_value(), "complete manifest parses");
   check(!diagnostics.has_error(), "complete manifest has no diagnostics");
   if (config.has_value()) {
-    check(config->schema == 1, "schema is retained");
+    check(config->schema == 2, "schema is retained");
     check(config->project.name == "mixed", "project name is retained");
     check(config->project.top == "tb", "top is retained");
     check(config->project.seed == 42, "seed is retained");
@@ -123,6 +127,12 @@ libraries = ["m"]
     check(
         config->source_sets[1].standard == "2008",
         "language-specific default standard is applied");
+    check(
+        config->bindings.size() == 2
+            && !config->bindings[1].target.has_value()
+            && config->bindings[1].resolver
+                == std::optional<std::string>{"sv_wire"},
+        "schema 2 retains a resolver-only inferred binding");
     check(
         config->build.optimization == fsim::project::Optimization::o3,
         "optimization is parsed");
@@ -145,7 +155,7 @@ libraries = ["m"]
 
 void test_schema_and_unknown_key_errors() {
   const std::string manifest = R"(
-schema = 2
+schema = 1
 [project]
 top = "top"
 mystery = true
@@ -164,6 +174,40 @@ mystery = true
   }
   check(saw_schema, "unsupported schema has a stable diagnostic code");
   check(saw_unknown, "unknown key has a stable diagnostic code");
+  check(
+      std::ranges::any_of(
+          diagnostics.diagnostics(),
+          [](const fsim::diagnostic::Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-PROJ-0005"
+                && diagnostic.message.find("fsim migrate --to 2")
+                    != std::string::npos;
+          }),
+      "schema 1 rejection names the migration command");
+}
+
+void test_schema_migration() {
+  const auto workspace = make_workspace();
+  const auto manifest = workspace / "fsim.toml";
+  write_file(
+      manifest,
+      "# retained comment\n  schema = 1 # version\n[project]\n"
+      "top = \"top\"\n");
+  fsim::diagnostic::Engine diagnostics;
+  const auto migrated =
+      fsim::project::migrate_to_schema_2(manifest, diagnostics);
+  check(migrated.has_value(), "schema 1 migration succeeds");
+  check(!diagnostics.has_error(), "schema migration has no diagnostics");
+  if (migrated.has_value()) {
+    check(
+        migrated->find("  schema = 2 # version")
+            != std::string::npos,
+        "migration changes only the schema value");
+    check(
+        migrated->find("# retained comment") == 0,
+        "migration retains surrounding text");
+  }
+  std::error_code ignored;
+  std::filesystem::remove_all(workspace, ignored);
 }
 
 void test_json_diagnostics_are_escaped() {
@@ -186,7 +230,7 @@ void test_zero_time_resolution_is_rejected() {
   const auto workspace = make_workspace();
   write_file(workspace / "top.sv", "module top; endmodule\n");
   const std::string manifest = R"(
-schema = 1
+schema = 2
 [project]
 top = "top"
 time_resolution = "0ns"
@@ -238,7 +282,7 @@ void test_delay_mode_values() {
 
   fsim::diagnostic::Engine diagnostics;
   const auto config = fsim::project::parse(
-      R"(schema = 1
+      R"(schema = 2
 [project]
 top = "top"
 [run]
@@ -266,6 +310,7 @@ int main() {
   // FSIM-CONFORMANCE CF-COMMON-DIAGNOSTIC-N01 source=SRC-FSIM expectation=reject
   test_complete_manifest_and_glob_order();
   test_schema_and_unknown_key_errors();
+  test_schema_migration();
   test_json_diagnostics_are_escaped();
   test_zero_time_resolution_is_rejected();
   test_delay_mode_values();

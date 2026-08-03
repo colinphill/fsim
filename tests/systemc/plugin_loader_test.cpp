@@ -270,6 +270,7 @@ int main(int argc, char** argv) {
     const auto& proxy = proxy_root->foreign_children.front();
     assert(proxy.module_facade);
     assert(proxy.name == "proxy");
+    assert(proxy.implementation == "TypedProxy");
     assert(proxy.ports.size() == 3);
     assert(proxy.construction_actuals.size() == 1);
     assert(proxy.construction_actuals.front().first == "WIDTH");

@@ -727,30 +727,90 @@ using namespace elaboration_detail;
         used_bindings_.insert(path);
         return found->second;
     }
+
+    std::vector<UnitResolutionCandidate>
+    HierarchyBuilder::resolution_candidates(
+        const std::string_view library,
+        const std::string_view name) const {
+        auto result = resolve_unit_candidates(parsed_, library, name);
+        for (const auto& factory : systemc_candidates_) {
+            if (factory.library == library && factory.name == name) {
+                result.push_back({
+                    nullptr,
+                    factory.target,
+                    "systemc:" + factory.library + "." + factory.name});
+            }
+        }
+        std::stable_sort(
+            result.begin(), result.end(),
+            [](const auto& left, const auto& right) {
+                return left.identity < right.identity;
+            });
+        return result;
+    }
+
+    std::optional<UnitResolutionCandidate>
+    HierarchyBuilder::inferred_target(
+        const std::string_view library,
+        const std::string_view name,
+        const std::string& path,
+        const frontend::SourceSpan source) {
+        const auto candidates = resolution_candidates(library, name);
+        if (candidates.empty()) {
+            report(
+                "FSIM-ELAB-BIND-012",
+                "instance '" + path + "' names unit '" + std::string{name}
+                    + "', which was not found across VHDL, Verilog, "
+                      "SystemVerilog, or SystemC in logical library '"
+                    + std::string{library} + "'",
+                source);
+            return std::nullopt;
+        }
+        if (candidates.size() != 1) {
+            report(
+                "FSIM-ELAB-BIND-017",
+                "instance '" + path + "' names ambiguous unit '"
+                    + std::string{name} + "' in logical library '"
+                    + std::string{library} + "'; candidates: "
+                    + format_resolution_candidates(candidates),
+                source);
+            return std::nullopt;
+        }
+        return candidates.front();
+    }
+
     const DesignUnit* HierarchyBuilder::bound_target(
         const frontend::Instance& instance,
         const DesignUnit& parent,
         const std::string& path,
         const Binding* binding) {
-        if (binding == nullptr) {
-            const auto* target = choose_same_language_instance(
-                parsed_, parent, instance.unit_name);
-            if (target == nullptr) {
-                report(
-                    "FSIM-ELAB-BIND-012",
-                    "instance '" + path + "' names unit '"
-                        + instance.unit_name
-                        + "', which was not found in the same language; "
-                          "an explicit cross-language binding is required",
-                    instance.span);
+        if (binding == nullptr || !binding->target.has_value()) {
+            if (instance.unit_name.find_first_of(".(")
+                != std::string::npos) {
+                const auto* target = choose_same_language_instance(
+                    parsed_, parent, instance.unit_name);
+                if (target == nullptr) {
+                    report(
+                        "FSIM-ELAB-BIND-012",
+                        "instance '" + path + "' names explicit unit '"
+                            + instance.unit_name
+                            + "', which was not found",
+                        instance.span);
+                }
+                return target;
             }
-            return target;
+            const auto library =
+                parent.library.empty() ? std::string{"work"}
+                                       : parent.library;
+            const auto selected = inferred_target(
+                library, instance.unit_name, path, instance.span);
+            return selected ? selected->unit : nullptr;
         }
-        const auto target = parse_target(binding->target);
+        const auto target = parse_target(*binding->target);
         if (!target) {
             report(
                 "FSIM-ELAB-BIND-013",
-                "malformed binding target '" + binding->target + "'",
+                "malformed binding target '" + *binding->target + "'",
                 instance.span);
             return nullptr;
         }
@@ -773,7 +833,7 @@ using namespace elaboration_detail;
         if (selected == nullptr) {
             report(
                 "FSIM-ELAB-BIND-015",
-                "binding target '" + binding->target + "' was not found",
+                "binding target '" + *binding->target + "' was not found",
                 instance.span);
         }
         return selected;

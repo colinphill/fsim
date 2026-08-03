@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-schema = 1
+schema = 2
 
 [project]
 name = "vertical-slice"
@@ -24,15 +24,7 @@ library = "work"
 files = ["counter.vhd"]
 compilation_unit = "source-set"
 
-# Cross-language binding is explicit; these paths are recursively elaborated
-# and share their connected boundary signals in the executable slice.
-[[binding]]
-instance = "tb.u_counter"
-target = "vhdl:work.counter(rtl)"
-
-[[binding]]
-instance = "tb.u_child"
-target = "sv:work.sv_child"
+# Unique child names resolve across languages in logical library work.
 
 [build]
 optimization = "O2"

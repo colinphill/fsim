@@ -111,6 +111,26 @@ end architecture rtl;
     for (auto& unit : parsed_mixed_vhdl.design.units) {
         parsed_mixed_sv.design.units.push_back(std::move(unit));
     }
+    const auto inferred_mixed = fsim::elaboration::elaborate(
+        parsed_mixed_sv.design, "sv:work.tb");
+    if (!inferred_mixed.ok()) {
+        for (const auto& diagnostic : inferred_mixed.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(inferred_mixed.ok());
+    const auto& inferred_specializations =
+        inferred_mixed.design->specializations();
+    assert(inferred_specializations.size() == 3);
+    assert(
+        inferred_specializations[1].instance == "tb.u_counter"
+        && inferred_specializations[1].unit
+        == "vhdl:work.counter(rtl)");
+    assert(
+        inferred_specializations[2].instance == "tb.u_child"
+        && inferred_specializations[2].unit
+        == "sv:work.child");
     const std::vector<fsim::elaboration::Binding> mixed_bindings{
         {"tb.u_counter", "vhdl:work.counter(rtl)", std::nullopt},
         {"tb.u_child", "sv:work.child", std::nullopt},
@@ -705,6 +725,12 @@ end architecture;
 entity width_inout is
 end entity;
 architecture rtl of width_inout is
+  component width_inout_child is
+    port (
+      value : inout std_logic_vector(3 downto 0);
+      signed_value : inout std_logic_vector(7 downto 0)
+    );
+  end component;
   signal bus_value : std_logic_vector(7 downto 0);
   signal signed_value : std_logic_vector(7 downto 0);
 begin
@@ -733,7 +759,7 @@ endmodule
         width_inout_sv.design.units.end());
     const std::vector<fsim::elaboration::Binding> width_inout_bindings{{
         "width_inout.child",
-        "sv:work.width_inout_child",
+        std::nullopt,
         std::string{"std_logic"}}};
     const auto rejected_width_inout = fsim::elaboration::elaborate(
         width_inout_design,
@@ -742,6 +768,7 @@ endmodule
     assert(!rejected_width_inout.ok());
     assert(has_diagnostic(rejected_width_inout, "FSIM-ELAB-BIND-020"));
     assert(has_diagnostic(rejected_width_inout, "FSIM-ELAB-BIND-021"));
+    assert(!has_diagnostic(rejected_width_inout, "FSIM-ELAB-BIND-030"));
 
     const auto integer_boundary_vhdl =
         fsim::frontend::parse_text(
@@ -1172,6 +1199,39 @@ endmodule
             .width
         == 4);
 
+    auto inferred_systemc_provider = parameter_provider;
+    inferred_systemc_provider.factory_candidates = {
+        {"work",
+         "bridge_placeholder",
+         "systemc:work.bridge_placeholder"},
+    };
+    const auto inferred_systemc = fsim::elaboration::elaborate(
+        parsed_systemc_parameters.design,
+        "sv:work.systemc_parameter_host",
+        std::span<const fsim::elaboration::Binding>{},
+        std::span<const
+            fsim::elaboration::SystemCInstanceDescription>{},
+        &inferred_systemc_provider);
+    assert(inferred_systemc.ok());
+    assert(inferred_systemc.design->systemc_instances().size() == 1);
+    assert(
+        inferred_systemc.design->systemc_instances().front().target
+        == "systemc:work.bridge_placeholder");
+    auto duplicate_systemc_provider = inferred_systemc_provider;
+    duplicate_systemc_provider.factory_candidates.push_back(
+        duplicate_systemc_provider.factory_candidates.front());
+    const auto duplicate_systemc_factory =
+        fsim::elaboration::elaborate(
+            parsed_systemc_parameters.design,
+            "sv:work.systemc_parameter_host",
+            std::span<const fsim::elaboration::Binding>{},
+            std::span<const
+                fsim::elaboration::SystemCInstanceDescription>{},
+            &duplicate_systemc_provider);
+    assert(!duplicate_systemc_factory.ok());
+    assert(has_diagnostic(
+        duplicate_systemc_factory, "FSIM-ELAB-BIND-018"));
+
     const auto reject_systemc_parameter =
         [&](const std::string_view top,
             const std::string_view instance,
@@ -1236,7 +1296,7 @@ endmodule
     const fsim::elaboration::SystemCInstanceDescription
         nested_systemc{
             "systemc_parent.u_bridge",
-            "systemc:models.bridge",
+            "systemc:work.bridge",
             100,
             0,
             {},
@@ -1255,7 +1315,9 @@ endmodule
                       fsim::frontend::PortDirection::Input, 101},
                      {"value", systemc_unsigned,
                       fsim::frontend::PortDirection::Output, 102},
-                 }},
+                 },
+                 true,
+                 "systemc_hdl_child"},
             },
             {},
             {},
@@ -1268,10 +1330,7 @@ endmodule
     const std::vector<fsim::elaboration::Binding>
         hdl_to_systemc_bindings{
             {"systemc_parent.u_bridge",
-             "systemc:models.bridge",
-             std::nullopt},
-            {"systemc_parent.u_bridge.u_hdl",
-             "sv:work.systemc_hdl_child",
+             "systemc:work.bridge",
              std::nullopt},
         };
     const std::array hdl_to_systemc_instances{nested_systemc};
@@ -1319,6 +1378,7 @@ endmodule
 
     auto systemc_root = nested_systemc;
     systemc_root.path = "bridge";
+    systemc_root.target = "systemc:models.bridge";
     const std::vector<fsim::elaboration::Binding>
         systemc_to_hdl_bindings{
             {"bridge.u_hdl",
@@ -1401,12 +1461,16 @@ endmodule
 
     const std::vector<fsim::elaboration::Binding>
         missing_systemc_child_binding;
+    auto legacy_systemc_root = systemc_root;
+    legacy_systemc_root.foreign_children.front().module_facade = false;
+    legacy_systemc_root.foreign_children.front().implementation.clear();
+    const std::array legacy_systemc_root_instances{legacy_systemc_root};
     const auto missing_systemc_child =
         fsim::elaboration::elaborate(
             parsed_systemc_boundary.design,
             "systemc:models.bridge",
             missing_systemc_child_binding,
-            systemc_root_instances);
+            legacy_systemc_root_instances);
     assert(!missing_systemc_child.ok());
     assert(has_diagnostic(
         missing_systemc_child, "FSIM-ELAB-BIND-040"));
@@ -1492,6 +1556,12 @@ entity systemc_vhdl_parent is
 end entity systemc_vhdl_parent;
 
 architecture rtl of systemc_vhdl_parent is
+  component bridge_placeholder is
+    port (
+      value : in std_logic;
+      inverted : out std_logic
+    );
+  end component;
   signal value : std_logic;
   signal inverted : std_logic;
 begin
@@ -1528,7 +1598,7 @@ end architecture rtl;
     const fsim::elaboration::SystemCInstanceDescription
         vhdl_nested_systemc{
             "systemc_vhdl_parent.u_bridge",
-            "systemc:models.bridge",
+            "systemc:work.bridge",
             200,
             0,
             {},
@@ -1547,7 +1617,9 @@ end architecture rtl;
                       fsim::frontend::PortDirection::Input, 201},
                      {"inverted", systemc_logic,
                       fsim::frontend::PortDirection::Output, 202},
-                 }},
+                 },
+                 true,
+                 "systemc_vhdl_child"},
             },
             {},
             {},
@@ -1560,10 +1632,7 @@ end architecture rtl;
     const std::vector<fsim::elaboration::Binding>
         vhdl_systemc_bindings{
             {"systemc_vhdl_parent.u_bridge",
-             "systemc:models.bridge",
-             std::nullopt},
-            {"systemc_vhdl_parent.u_bridge.u_hdl",
-             "vhdl:work.systemc_vhdl_child(rtl)",
+             "systemc:work.bridge",
              std::nullopt},
         };
     const std::array vhdl_systemc_instances{
@@ -1619,6 +1688,29 @@ end architecture rtl;
             ->signal_value(*vhdl_systemc_inverted)
             .to_msb_string()
         == "0");
+
+    TestSystemCFactoryProvider inferred_vhdl_systemc_provider;
+    inferred_vhdl_systemc_provider.prototype = vhdl_nested_systemc;
+    inferred_vhdl_systemc_provider.factory_candidates = {
+        {"work",
+         "bridge_placeholder",
+         "systemc:work.bridge_placeholder"},
+    };
+    const auto inferred_vhdl_systemc =
+        fsim::elaboration::elaborate(
+            parsed_systemc_vhdl.design,
+            "vhdl:work.systemc_vhdl_parent(rtl)",
+            std::span<const fsim::elaboration::Binding>{},
+            std::span<const
+                fsim::elaboration::SystemCInstanceDescription>{},
+            &inferred_vhdl_systemc_provider);
+    assert(inferred_vhdl_systemc.ok());
+    assert(
+        inferred_vhdl_systemc.design->systemc_instances().size()
+        == 1);
+    assert(
+        inferred_vhdl_systemc.design->systemc_instances().front().target
+        == "systemc:work.bridge_placeholder");
 
     auto colliding_sv = fsim::frontend::parse_text(
         "duplicate.sv",
@@ -1783,6 +1875,83 @@ endmodule
     assert(!rejected_native_hierarchy.ok());
     assert(has_diagnostic(
         rejected_native_hierarchy, "FSIM-ELAB-BIND-047"));
+
+    auto ambiguous_names = fsim::frontend::parse_text(
+        "ambiguous-names.sv",
+        "module Shared; endmodule\n"
+        "module ambiguous_parent; Shared child(); endmodule\n",
+        fsim::frontend::Language::SystemVerilog2017);
+    auto ambiguous_vhdl = fsim::frontend::parse_text(
+        "ambiguous-names.vhd",
+        "entity shared is end entity; architecture rtl of shared is begin "
+        "end architecture;",
+        fsim::frontend::Language::Vhdl2008);
+    assert(ambiguous_names.ok() && ambiguous_vhdl.ok());
+    for (auto& unit : ambiguous_vhdl.design.units) {
+        ambiguous_names.design.units.push_back(std::move(unit));
+    }
+    const auto ambiguous_result = fsim::elaboration::elaborate(
+        ambiguous_names.design, "sv:work.ambiguous_parent");
+    assert(!ambiguous_result.ok());
+    assert(has_diagnostic(ambiguous_result, "FSIM-ELAB-BIND-017"));
+
+    auto duplicate_identity_parent = fsim::frontend::parse_text(
+        "duplicate-parent.sv",
+        "module duplicate_parent; repeated child(); endmodule",
+        fsim::frontend::Language::SystemVerilog2017);
+    auto duplicate_identity_a = fsim::frontend::parse_text(
+        "duplicate-a.sv",
+        "module repeated; endmodule",
+        fsim::frontend::Language::SystemVerilog2017);
+    auto duplicate_identity_b = fsim::frontend::parse_text(
+        "duplicate-b.sv",
+        "module repeated; endmodule",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(
+        duplicate_identity_parent.ok() && duplicate_identity_a.ok()
+        && duplicate_identity_b.ok());
+    duplicate_identity_parent.design.units.push_back(
+        std::move(duplicate_identity_a.design.units.front()));
+    duplicate_identity_parent.design.units.push_back(
+        std::move(duplicate_identity_b.design.units.front()));
+    const auto duplicate_identity = fsim::elaboration::elaborate(
+        duplicate_identity_parent.design,
+        "sv:work.duplicate_parent");
+    assert(!duplicate_identity.ok());
+    assert(has_diagnostic(
+        duplicate_identity, "FSIM-ELAB-BIND-017"));
+
+    auto target_case = fsim::frontend::parse_text(
+        "target-case.sv",
+        "module ExactCase; endmodule\n"
+        "module case_parent; exactcase missing(); mixed folded(); endmodule\n",
+        fsim::frontend::Language::SystemVerilog2017);
+    auto folded_vhdl = fsim::frontend::parse_text(
+        "target-case.vhd",
+        "entity MiXeD is end entity; architecture rtl of MiXeD is begin "
+        "end architecture;",
+        fsim::frontend::Language::Vhdl2008);
+    assert(target_case.ok() && folded_vhdl.ok());
+    for (auto& unit : folded_vhdl.design.units) {
+        target_case.design.units.push_back(std::move(unit));
+    }
+    const auto target_case_result = fsim::elaboration::elaborate(
+        target_case.design, "sv:work.case_parent");
+    assert(!target_case_result.ok());
+    assert(has_diagnostic(target_case_result, "FSIM-ELAB-BIND-012"));
+    auto folded_only = fsim::frontend::parse_text(
+        "folded-parent.sv",
+        "module folded_parent; mixed child(); endmodule",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(folded_only.ok());
+    for (const auto& unit : target_case.design.units) {
+        if (unit.language == fsim::frontend::Language::Vhdl2008) {
+            folded_only.design.units.push_back(unit);
+        }
+    }
+    const auto folded_result = fsim::elaboration::elaborate(
+        folded_only.design, "sv:work.folded_parent");
+    assert(folded_result.ok());
 }
 
 } // namespace fsim::tests::elaboration

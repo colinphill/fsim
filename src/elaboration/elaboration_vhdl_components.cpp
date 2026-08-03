@@ -1242,73 +1242,46 @@ HierarchyBuilder::bind_vhdl_component_instance(
 
     if (!result.applied) {
         const auto library = normalized_library(unit);
-        const DesignUnit* entity = nullptr;
-        std::size_t entities = 0;
-        for (const auto& candidate : parsed_.units) {
-            if (candidate.kind == frontend::UnitKind::VhdlEntity
-                && candidate.name == component.name
-                && normalized_library(candidate) == library) {
-                entity = &candidate;
-                ++entities;
-            }
-        }
-        if (entities == 0) {
-            const bool other_language =
-                std::ranges::any_of(
-                    parsed_.units,
-                    [&](const auto& candidate) {
-                      return candidate.language
-                                 != frontend::Language::Vhdl2008
-                          && candidate.name == component.name;
-                    });
-            report(
-                other_language
-                    ? "FSIM-ELAB-VHCOMP-011"
-                    : "FSIM-ELAB-VHCOMP-003",
-                other_language
-                    ? "component '" + component.name
-                        + "' on '" + path
-                        + "' requires an explicit cross-language binding"
-                    : "component '" + component.name
-                        + "' on '" + path
-                        + "' has no same-library default entity",
-                component.span);
-            result.valid = false;
-            return result;
-        }
-        if (entities != 1) {
-            report(
-                "FSIM-ELAB-VHCOMP-005",
-                "component '" + component.name
-                    + "' has an ambiguous same-library entity",
-                component.span);
-            result.valid = false;
-            return result;
-        }
-        const DesignUnit* architecture = nullptr;
-        for (const auto& candidate : parsed_.units) {
-            if (candidate.kind
-                    == frontend::UnitKind::VhdlArchitecture
-                && candidate.primary_name == entity->name
-                && normalized_library(candidate) == library) {
-                architecture = &candidate;
-            }
-        }
-        if (architecture == nullptr) {
+        const auto candidates = resolution_candidates(
+            library, component.name);
+        if (candidates.empty()) {
             report(
                 "FSIM-ELAB-VHCOMP-003",
-                "component '" + component.name
-                    + "' has no same-library default architecture",
+                "component '" + component.name + "' on '" + path
+                    + "' was not found across VHDL, Verilog, or "
+                      "SystemVerilog in logical library '"
+                    + library + "'",
                 component.span);
             result.valid = false;
             return result;
         }
-        result.target = *architecture;
+        if (candidates.size() != 1) {
+            report(
+                "FSIM-ELAB-VHCOMP-005",
+                "component '" + component.name + "' on '" + path
+                    + "' is ambiguous in logical library '" + library
+                    + "'; candidates: "
+                    + format_resolution_candidates(candidates),
+                component.span);
+            result.valid = false;
+            return result;
+        }
+        if (candidates.front().systemc_target.has_value()) {
+            result.systemc_target =
+                *candidates.front().systemc_target;
+            result.applied = true;
+            return result;
+        }
+        result.target = *candidates.front().unit;
         result.applied = true;
     }
 
     if (!result.target) {
         result.valid = false;
+        return result;
+    }
+    if (result.target->language
+        != frontend::Language::Vhdl2008) {
         return result;
     }
     const auto target_library =

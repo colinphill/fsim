@@ -431,7 +431,7 @@ extern "C" fsim_sc_status_v1 registry_register_foreign_child(
         }
         const auto index = found->second.foreign_children.size();
         found->second.foreign_children.push_back(
-            {*handle, name, {}, {}, false});
+            {*handle, name, {}, {}, false, {}});
         registry.children.emplace(
             *handle,
             HierarchyRegistry::Impl::Child{module, index});
@@ -1081,13 +1081,37 @@ extern "C" fsim_sc_status_v1 registry_set_hdl_module_actual(
         const auto found = registry.hdl_modules.find(module);
         if (found == registry.hdl_modules.end()
             || std::any_of(
-                found->second.begin(), found->second.end(),
+                found->second.actuals.begin(),
+                found->second.actuals.end(),
                 [&](const auto& actual) {
                     return actual.first == name;
                 })) {
             return FSIM_SC_INVALID_ARGUMENT;
         }
-        found->second.emplace_back(name, value);
+        found->second.actuals.emplace_back(name, value);
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_set_hdl_module_implementation(
+    void* context,
+    const fsim_sc_handle_v1 module,
+    const char* implementation) noexcept {
+    if (context == nullptr || module == 0 || implementation == nullptr
+        || *implementation == '\0') {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto found = registry.hdl_modules.find(module);
+        if (found == registry.hdl_modules.end()
+            || !found->second.implementation.empty()) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        found->second.implementation = implementation;
         return FSIM_SC_OK;
     } catch (...) {
         return FSIM_SC_RUNTIME_ERROR;

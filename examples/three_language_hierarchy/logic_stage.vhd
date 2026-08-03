@@ -2,14 +2,14 @@
 library ieee;
 use ieee.std_logic_1164.all;
 
-entity logic_stage is
+entity LogicStage is
   port (
     value  : in  std_logic;
     result : out std_logic
   );
-end entity logic_stage;
+end entity LogicStage;
 
-architecture rtl of logic_stage is
+architecture rtl of LogicStage is
 begin
   -- SystemC inverts the SV stimulus once; VHDL inverts it again. The value
   -- observed by the SV top should therefore equal the original stimulus.

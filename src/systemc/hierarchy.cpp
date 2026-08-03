@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_internal.hpp"
 
+#include <atomic>
+
 namespace fsim::systemc {
 using namespace hierarchy_detail;
 
@@ -133,12 +135,13 @@ void collect_object_info(
 } // namespace
 
 [[nodiscard]] std::optional<fsim_sc_handle_v1> HierarchyRegistry::Impl::allocate_handle()  {
-        if (next_handle == 0
-            || next_handle
-                == std::numeric_limits<fsim_sc_handle_v1>::max()) {
+        static std::atomic<fsim_sc_handle_v1> next_handle{1};
+        const auto handle = next_handle.fetch_add(1, std::memory_order_relaxed);
+        if (handle == 0
+            || handle == std::numeric_limits<fsim_sc_handle_v1>::max()) {
             return std::nullopt;
         }
-        return next_handle++;
+        return handle;
     }
 
 void HierarchyRegistry::Impl::rollback(const fsim_sc_handle_v1 module) noexcept  {
@@ -205,8 +208,11 @@ void HierarchyRegistry::Impl::rollback(const fsim_sc_handle_v1 module) noexcept 
                 ForeignChildDescription proxy;
                 proxy.handle = child;
                 proxy.name = child_found->second.instance;
-                proxy.construction_actuals = std::move(marked->second);
+                proxy.construction_actuals =
+                    std::move(marked->second.actuals);
                 proxy.module_facade = true;
+                proxy.implementation =
+                    std::move(marked->second.implementation);
                 proxy.ports.reserve(child_found->second.ports.size());
                 for (const auto& port : child_found->second.ports) {
                     proxy.ports.push_back(
@@ -235,8 +241,8 @@ void HierarchyRegistry::Impl::rollback(const fsim_sc_handle_v1 module) noexcept 
 [[nodiscard]] bool HierarchyRegistry::Impl::validate_hdl_modules(
     const fsim_sc_handle_v1 root,
     std::string& error) const {
-    for (const auto& [handle, actuals] : hdl_modules) {
-        (void)actuals;
+    for (const auto& [handle, metadata] : hdl_modules) {
+        (void)metadata;
         const auto found = pending.find(handle);
         if (found == pending.end()) {
             error = "marked HDL module has no pending hierarchy record";
@@ -387,6 +393,8 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     host.wait_event_timeout = registry_wait_event_timeout;
     host.mark_hdl_module = registry_mark_hdl_module;
     host.set_hdl_module_actual = registry_set_hdl_module_actual;
+    host.set_hdl_module_implementation =
+        registry_set_hdl_module_implementation;
 
     Impl staged_registrations;
     fsim_sc_registrar_v1 registrar{};
@@ -427,6 +435,39 @@ bool HierarchyRegistry::has_elaboration_factory(
 
 std::size_t HierarchyRegistry::factory_count() const noexcept {
     return impl_ == nullptr ? 0 : impl_->factories.size();
+}
+
+std::vector<std::string> HierarchyRegistry::factory_names() const {
+    std::vector<std::string> result;
+    if (impl_ == nullptr) {
+        return result;
+    }
+    result.reserve(impl_->factories.size());
+    for (const auto& [name, factory] : impl_->factories) {
+        (void)factory;
+        result.push_back(name);
+    }
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+bool HierarchyRegistry::owns_handle(
+    const fsim_sc_handle_v1 handle) const noexcept {
+    if (impl_ == nullptr || handle == 0) {
+        return false;
+    }
+    return impl_->objects.contains(handle)
+        || impl_->children.contains(handle)
+        || impl_->processes.contains(handle)
+        || impl_->events.contains(handle)
+        || impl_->primitive_channels.contains(handle)
+        || impl_->pending.contains(handle)
+        || impl_->hdl_modules.contains(handle)
+        || std::ranges::any_of(
+            impl_->live,
+            [&](const auto& module) {
+              return module.description.handle == handle;
+            });
 }
 
 std::optional<HierarchyObjectInfo> HierarchyRegistry::object_info(

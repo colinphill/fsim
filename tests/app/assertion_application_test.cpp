@@ -420,7 +420,7 @@ endmodule
   {
     std::ofstream output(manifest);
     output
-        << "schema = 1\n"
+        << "schema = 2\n"
         << "[project]\n"
         << "name = \"assertion-actions\"\n"
         << "top = \"sv:work.assertion_actions\"\n"
