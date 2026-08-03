@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc/plugin_compiler.hpp"
+#include "fsim/support/environment.hpp"
 
 #include <algorithm>
 #include <array>
@@ -287,9 +288,9 @@ class ScopedEnvironment final {
 public:
     ScopedEnvironment(std::string name, const std::string& value)
         : name_(std::move(name)) {
-        if (const char* previous = std::getenv(name_.c_str());
-            previous != nullptr) {
-            previous_ = previous;
+        if (auto previous =
+                fsim::support::environment_variable(name_)) {
+            previous_ = std::move(*previous);
         }
 #if defined(_WIN32)
         assert(::_putenv_s(name_.c_str(), value.c_str()) == 0);
@@ -384,8 +385,10 @@ int main(const int argc, char** argv) {
 #if defined(_WIN32)
     request.settings.compiler = "cl.exe";
 #else
-    if (const char* compiler = std::getenv("CXX"); compiler != nullptr && *compiler != '\0') {
-        request.settings.compiler = compiler;
+    if (const auto compiler =
+            fsim::support::environment_variable("CXX");
+        compiler && !compiler->empty()) {
+        request.settings.compiler = *compiler;
     } else {
         request.settings.compiler = "c++";
     }
@@ -768,10 +771,11 @@ int main(const int argc, char** argv) {
     compiler_implicit_request.settings.include_directories.clear();
     compiler_implicit_request.settings.defines.clear();
     std::string compiler_path = compiler_implicit_root.string();
-    if (const char* previous = std::getenv("CPATH");
-        previous != nullptr && *previous != '\0') {
+    if (const auto previous =
+            fsim::support::environment_variable("CPATH");
+        previous && !previous->empty()) {
         compiler_path += ":";
-        compiler_path += previous;
+        compiler_path += *previous;
     }
     const ScopedEnvironment implicit_path{"CPATH", compiler_path};
     fsim::diagnostic::Engine compiler_implicit_diagnostics;

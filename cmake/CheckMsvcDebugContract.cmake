@@ -10,6 +10,8 @@ set(FSIM_WORKFLOW "${FSIM_SOURCE_DIR}/.github/workflows/ci.yml")
 set(FSIM_APPLICATION_ANALYSIS
   "${FSIM_SOURCE_DIR}/src/app/application_analysis.cpp")
 set(FSIM_SYSTEMC_CORE "${FSIM_SOURCE_DIR}/include/fsim/systemc/core.hpp")
+set(FSIM_SYSTEMC_COMPILER_TEST
+  "${FSIM_SOURCE_DIR}/tests/systemc/plugin_compiler_test.cpp")
 set(FSIM_FRONTEND "${FSIM_SOURCE_DIR}/tests/frontend/frontend_sv_conformance_tests.cpp")
 set(FSIM_ELABORATION "${FSIM_SOURCE_DIR}/tests/elaboration/elaborator_sv_conformance_test.cpp")
 foreach(FSIM_INPUT IN ITEMS
@@ -18,6 +20,7 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_WORKFLOW}"
     "${FSIM_APPLICATION_ANALYSIS}"
     "${FSIM_SYSTEMC_CORE}"
+    "${FSIM_SYSTEMC_COMPILER_TEST}"
     "${FSIM_FRONTEND}"
     "${FSIM_ELABORATION}")
   if(NOT EXISTS "${FSIM_INPUT}")
@@ -30,6 +33,7 @@ file(READ "${FSIM_TEST_CMAKE}" FSIM_TEST_CONTENTS)
 file(READ "${FSIM_WORKFLOW}" FSIM_WORKFLOW_CONTENTS)
 file(READ "${FSIM_APPLICATION_ANALYSIS}" FSIM_APPLICATION_ANALYSIS_CONTENTS)
 file(READ "${FSIM_SYSTEMC_CORE}" FSIM_SYSTEMC_CORE_CONTENTS)
+file(READ "${FSIM_SYSTEMC_COMPILER_TEST}" FSIM_SYSTEMC_COMPILER_TEST_CONTENTS)
 file(READ "${FSIM_FRONTEND}" FSIM_FRONTEND_CONTENTS)
 file(READ "${FSIM_ELABORATION}" FSIM_ELABORATION_CONTENTS)
 
@@ -61,6 +65,20 @@ string(FIND
 if(FSIM_INTERFACE_KIND_ELSE_INDEX EQUAL -1)
   message(FATAL_ERROR
     "SystemC interface-kind fallback lost its MSVC-safe constexpr else")
+endif()
+
+string(FIND
+  "${FSIM_SYSTEMC_COMPILER_TEST_CONTENTS}"
+  "fsim::support::environment_variable(name_)"
+  FSIM_COMPILER_ENVIRONMENT_INDEX)
+string(FIND
+  "${FSIM_SYSTEMC_COMPILER_TEST_CONTENTS}"
+  "std::getenv("
+  FSIM_COMPILER_GETENV_INDEX)
+if(FSIM_COMPILER_ENVIRONMENT_INDEX EQUAL -1
+    OR NOT FSIM_COMPILER_GETENV_INDEX EQUAL -1)
+  message(FATAL_ERROR
+    "SystemC compiler test bypasses the MSVC-safe environment helper")
 endif()
 
 foreach(FSIM_C_HOST IN ITEMS
@@ -128,5 +146,6 @@ message(STATUS
   "MSVC Debug contract: common 8 MiB stack policy covers C/C++ test hosts; "
   "SystemC enum metadata crosses the integer validation seam explicitly and "
   "interface-kind selection uses an explicit constexpr fallback; "
+  "compiler tests use the shared MSVC-safe environment helper; "
   "scoped/container/application timeouts and BOM/CRLF span/elaboration "
   "fixtures are present")

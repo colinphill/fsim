@@ -10092,7 +10092,15 @@ custom kind. The follow-up expresses the fallback as the `else` arm of the
 `if constexpr` and extends the MSVC contract to pin that warning-clean shape.
 Exact-LLVM Debug and Release rebuilt with eight workers, and the standalone
 SystemC header plus MSVC contract passed 2/2 in each tree. The second repair
-checkpoint and its replacement hosted run are pending.
+checkpoint `35faf4a` was pushed. Replacement run `30822527888` passed fuzz and
+compiled the repaired header, then exposed C4996 in the SystemC plug-in
+compiler test because its environment save/restore helper called deprecated
+`std::getenv` directly. The follow-up routes all three test environment reads
+through the production UTF-8/native environment adapter and makes the MSVC
+contract reject direct `getenv` reintroduction. Exact-LLVM Debug and Release
+rebuilt with eight workers; the plug-in compiler and MSVC contract passed 2/2
+in 2.81 and 2.39 seconds. The third repair checkpoint and replacement hosted
+run are pending.
 
 ## Forward language-closure feature batches
 
