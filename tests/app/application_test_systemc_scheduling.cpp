@@ -210,15 +210,22 @@ void ApplicationTestFixture::test_systemc_scheduling_matrix() {
   auto debug_project = fsim::app::build_project(
       debug_config, debug_diagnostics);
   assert(debug_project);
+  auto debug_warm_project = fsim::app::build_project(
+      debug_config, debug_diagnostics);
+  assert(debug_warm_project);
   std::ostringstream debug_output;
   std::ostringstream debug_error;
   const auto thread_prefix =
       std::string{"systemc_schedule_lifecycle_host.u_threads"};
+  fsim::app::NativeCacheStatistics debug_cold_cache;
+  std::size_t debug_cold_processes = 0;
   {
     fsim::app::Simulation simulation{
         std::move(*debug_project),
         debug_config.run.max_deltas,
         fsim::app::SimulationEngine::debug};
+    debug_cold_cache = simulation.native_cache_statistics();
+    debug_cold_processes = simulation.compiled_process_count();
     fsim::app::DebuggerControl debugger{
         simulation,
         debug_output,
@@ -230,6 +237,30 @@ void ApplicationTestFixture::test_systemc_scheduling_matrix() {
     debugger.execute({"signals", thread_prefix});
     debugger.execute({"run"});
   }
+  fsim::app::Simulation debug_warm_simulation{
+      std::move(*debug_warm_project),
+      debug_config.run.max_deltas,
+      fsim::app::SimulationEngine::debug};
+  const auto debug_warm_cache =
+      debug_warm_simulation.native_cache_statistics();
+  const auto debug_warm_processes =
+      debug_warm_simulation.compiled_process_count();
+  const auto debug_warm_result = debug_warm_simulation.run();
+  assert(debug_warm_result.status == sv_reference.result.status);
+#if defined(FSIM_HAS_LLVM)
+  assert(debug_cold_processes > 0);
+  assert(debug_cold_cache.hits == 0);
+  assert(debug_cold_cache.misses > 0);
+  assert(debug_cold_cache.stores > 0);
+  assert(debug_warm_processes == debug_cold_processes);
+  assert(debug_warm_cache.hits > 0);
+  assert(debug_warm_cache.misses == 0);
+#else
+  (void)debug_cold_cache;
+  (void)debug_warm_cache;
+  assert(debug_cold_processes == 0);
+  assert(debug_warm_processes == 0);
+#endif
   assert(!debug_diagnostics.has_error());
   assert(debug_error.str().empty());
   assert(debug_output.str().find(thread_prefix) != std::string::npos);
@@ -299,8 +330,9 @@ void ApplicationTestFixture::test_systemc_scheduling_matrix() {
       fsim::app::SimulationEngine::compiled);
   require_equivalent(edited_capture, sv_reference);
 #if defined(FSIM_HAS_LLVM)
-  assert(edited_capture.native_cache.hits > 0);
-  assert(edited_capture.native_cache.misses == 0);
+  assert(edited_capture.native_cache.hits == 0);
+  assert(edited_capture.native_cache.misses > 0);
+  assert(edited_capture.native_cache.stores > 0);
 #endif
 
   const auto teardown_config = make_config(

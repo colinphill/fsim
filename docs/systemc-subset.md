@@ -191,43 +191,56 @@ link_options = []
 libraries = []
 ```
 
-The current driver invokes the selected GCC, Clang, or MSVC executable directly
-with an argument vector. It does not concatenate a shell command and does not
-perform shell expansion. Source content, compiler arguments and identity,
-target/toolchain, ABI version, resolved dependencies, and path-addressed linked
-inputs participate in the plug-in cache key. On GCC-like toolchains fsim asks
-the compiler to emit each source's complete dependency closure, including
-headers found through implicit system include paths, and content-hashes that
-closure.
+The current driver invokes the selected GCC, Clang, MSVC, or clang-cl
+executable directly with an argument vector. It does not concatenate a shell
+command and does not perform shell expansion. The versioned fingerprint
+records ordered source paths/content, include paths, definitions, raw options,
+libraries, the resolved compiler path and binary, relevant compiler/toolset
+environment, host target and shared-library format, runtime and SystemC ABI,
+C++20 source contract, CRT mode, and selected fiber backend. Path-addressed
+linked libraries are content-hashed. GCC-like toolchains emit makefile
+dependencies; MSVC-compatible toolchains emit `/sourceDependencies` JSON.
+Both paths content-hash the complete readable source/include/system-header
+closure. MSVC module IFCs, PCH images, and imported header units are included,
+and malformed or unavailable JSON falls back to a conservative manifest scan.
 
 On native MSVC and clang-cl builds, generated plug-ins use the same static or
 dynamic, Debug or Release CRT model as `fsim_systemc_support`. The selected
 `/MT`, `/MTd`, `/MD`, or `/MDd` option is present in every compile and link
-command and participates explicitly in cache identity. Manifest options may
-not override the CRT model because doing so would make the plug-in DLL
-incompatible with its required support archive.
+command and participates explicitly in cache identity. Compile inputs use
+UTF-8 C++20 mode and unique object/source-PDB paths. The nonincremental x86-64
+DLL link names its DLL, link PDB, import library, and export artifact
+explicitly. Manifest options may not override the CRT, output, machine, or
+incremental-link contract.
 
-The cache uses process-aware per-key locks, checksum sidecars, atomic
-publication, corruption rejection, and stale-lock recovery. If fsim cannot
-prove the dependency closure—for example, because an option uses a response
-file, an MSVC-only implicit include cannot be resolved conservatively, or a
-library is specified only by linker name—the build remains valid but is
-deliberately non-cacheable. Changes to a tracked transitive header or linked
-file produce a different cache key. Exact uses of the volatile predefined
-macros `__DATE__`, `__TIME__`, and `__TIMESTAMP__` in tracked GCC-like inputs
-also disable reuse. After a successful compilation, fsim recomputes the plan
-and key before publishing the library; if a tracked input changed during the
-build, that output is discarded instead of entering the cache.
+The cache uses process-aware per-key locks and a versioned commit record holding
+the exact key, DLL/shared-object size, and SHA-256. The library is installed
+atomically before the metadata rename becomes the commit point. Missing,
+truncated, corrupt, stale, or incompatible pairs are misses; one locked writer
+cleans abandoned build/object/PDB/metadata state and repairs the pair while
+waiters consume only the complete committed result. If fsim cannot prove the
+dependency closure—for example, because a raw option can name an external
+response file or a library is specified only by linker name—the build remains
+valid but is deliberately non-cacheable. Changes to a tracked transitive
+header, IFC/PCH, compiler environment, or linked file produce a different key.
+Exact uses of `__DATE__`, `__TIME__`, and `__TIMESTAMP__` in tracked text inputs
+also disable reuse. After compilation, fsim recomputes the plan before
+publication and discards output if any tracked input changed during the build.
 
-The current compiler identity covers the resolved driver executable, but does
-not yet fingerprint every compiler helper, specifications file, or
-environment-injected code-generation setting. The MSVC fallback does not yet
-consume compiler-emitted `/sourceDependencies`; its manifest-root scanner
-therefore cannot prove compiler-specific include behavior such as
-`#pragma include_alias`. Projects relying on those inputs should not treat a
-warm MSVC plug-in result as a reproducible cache artifact in this slice.
-Non-cacheable plug-in artifact directories are unique and are not yet covered
-by automatic eviction.
+The driver executable and all modeled environment inputs are exact, but fsim
+does not separately hash every helper executable that the selected driver may
+spawn. Raw compile/link options remain deliberately non-cacheable because they
+can name unmodeled plug-ins, profiles, sysroots, response files, or forced
+inputs. Non-cacheable plug-in artifact directories are unique and are not yet
+covered by automatic eviction.
+
+Windows launch converts every UTF-8 argument to UTF-16, passes only stdin and
+the merged diagnostic pipe to the child, and uses a temporary UTF-16 response
+file before the `CreateProcessW` command-line limit. Launch, output-read, wait,
+and exit-status failures remain distinct compiler diagnostics. Loading resolves
+the absolute cached image and searches its directory plus Windows' safe default
+DLL locations, so dependency lookup does not depend on the caller's current
+directory.
 
 ## Native ABI
 
@@ -266,13 +279,24 @@ Packed ABI values are byte-addressed with least-significant bits first.
 plane followed by an equal-size `bval` plane, preserving `0`, `1`, `X`, and
 `Z` without exposing a C++ datatype.
 
-The loader rejects a missing entry point, host/registrar ABI mismatch, or failed
-initialization. Factory registrations are buffered until initialization
-succeeds, preventing a throwing or failed initializer from partially
-registering a plug-in. C++ exceptions are caught at the initialization boundary
-and translated into an error; they do not unwind into fsim. The application
-build additionally rejects a compiled library that registers no valid module
-factory.
+The loader rejects a missing image or entry point, host/registrar ABI mismatch,
+failed initialization, invalid or duplicate factory/schema registration, and
+an image that registers no valid module factory. Registration is buffered,
+validated, and replayed into a staging hierarchy before its factory table and
+image become visible. Failed replay leaves no partial registration. Exceptions
+from initialization, construction, process/channel callbacks, lifecycle, or
+destruction are contained at the native boundary and cannot unwind into fsim.
+If an arbitrary external registrar has already accepted callbacks before a
+later rejection, the loader conservatively quarantines the image rather than
+leaving dangling executable pointers.
+
+Each built project retains its hierarchy registry and loaded image. Every
+fresh interpreter binds current native handles and callbacks; they are never
+serialized into persistent native objects. LLVM specialization provenance
+instead combines the plug-in compile key with stable selected-factory, typed
+construction, hierarchy path, object, signal, export, and process mappings.
+Warm O0/O2/debug reuse is valid only when that complete common-runtime identity
+is unchanged.
 
 ## Process execution
 
@@ -387,8 +411,9 @@ Boost.Context 1.91.0 fibers. `wait(sc_time)`, zero-delay wait,
 `wait(sc_event)`, OR/AND event-list waits, time-bounded event/list waits, and
 plain `wait()` on static sensitivity yield to the common scheduler. A fiber is
 a suspension mechanism only: simulation remains single-threaded and
-deterministic. Suspended stacks are explicitly stopped and completed before
-module destruction or plug-in unload.
+deterministic. Suspended stacks receive bounded repeated stop resumes so even a
+callback that performs more than one final yield is drained before reverse-
+order module destruction or plug-in unload.
 
 CMake accepts `FSIM_SYSTEMC_FIBER_MODE=AUTO`, `ON`, or `OFF`. `AUTO` and `ON`
 use an installed exact Boost.Context 1.91.0 package when present, otherwise

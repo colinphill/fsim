@@ -59,6 +59,7 @@ struct ProcessResult {
     int exit_code{-1};
     std::string output;
     std::string start_error;
+    std::string execution_error;
 };
 
 [[nodiscard]] diagnostic::SourceSpan path_span(const std::filesystem::path& path);
@@ -108,10 +109,14 @@ void add_paths_to_key(
     const std::string_view label,
     const std::vector<std::filesystem::path>& values);
 
-void add_compiler_identity(
+[[nodiscard]] bool add_compiler_identity(
     compiler::CacheKeyBuilder& builder,
     const std::string& compiler_name,
     const std::filesystem::path& resolved_compiler);
+
+void add_compiler_environment_to_key(
+    compiler::CacheKeyBuilder& builder,
+    HostToolchain toolchain);
 
 struct IncludeDirective {
     std::string name;
@@ -213,8 +218,12 @@ struct IncludeScan {
     std::error_code& error);
 
 [[nodiscard]] bool valid_cached_artifact(
-    const std::filesystem::path& library,
+    const PluginCompilePlan& plan,
     std::error_code& error);
+
+[[nodiscard]] bool prepare_artifact_build(
+    const PluginCompilePlan& plan,
+    diagnostic::Engine& diagnostics);
 
 [[nodiscard]] bool publish_artifact(
     const PluginCompilePlan& plan,
@@ -302,7 +311,22 @@ find_volatile_macro_input(
 [[nodiscard]] std::optional<std::vector<std::string>>
 parse_makefile_dependencies(const std::string_view contents);
 
+[[nodiscard]] std::optional<std::vector<std::filesystem::path>>
+parse_msvc_source_dependencies(const std::string_view contents);
+
 [[nodiscard]] bool add_gcc_like_dependencies_to_key(
+    compiler::CacheKeyBuilder& builder,
+    const std::string& compiler_name,
+    const std::filesystem::path& resolved_compiler,
+    const std::vector<std::filesystem::path>& sources,
+    const std::vector<std::filesystem::path>& includes,
+    const project::SystemCSection& settings,
+    const std::filesystem::path& working_directory,
+    const std::filesystem::path& cache_directory,
+    bool& cacheable,
+    diagnostic::Engine& diagnostics);
+
+[[nodiscard]] bool add_msvc_dependencies_to_key(
     compiler::CacheKeyBuilder& builder,
     const std::string& compiler_name,
     const std::filesystem::path& resolved_compiler,

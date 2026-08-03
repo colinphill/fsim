@@ -2,11 +2,13 @@
 #include "fsim/systemc/plugin_compiler.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <iterator>
 #include <optional>
@@ -156,6 +158,61 @@ void write_text(const std::filesystem::path& path, const std::string& text) {
     return result;
 }
 
+[[nodiscard]] std::string make_json_escape(const std::string_view value) {
+    std::string result;
+    for (const unsigned char character : value) {
+        switch (character) {
+        case '"': result += "\\\""; break;
+        case '\\': result += "\\\\"; break;
+        case '\b': result += "\\b"; break;
+        case '\f': result += "\\f"; break;
+        case '\n': result += "\\n"; break;
+        case '\r': result += "\\r"; break;
+        case '\t': result += "\\t"; break;
+        default:
+            assert(character >= 0x20U);
+            result.push_back(static_cast<char>(character));
+            break;
+        }
+    }
+    return result;
+}
+
+int run_msvc_dependency_fake_compiler(
+    const int argc,
+    char* const* argv) {
+    const auto source = source_argument(argc, argv);
+    const auto dependency_file =
+        argument_after(argc, argv, "/sourceDependencies");
+    if (!source || !dependency_file) {
+        return 81;
+    }
+    if (has_raw_argument(argc, argv, "/DFSIM_TEST_MSVC_MALFORMED=1")) {
+        write_text(*dependency_file, "{ malformed dependency json\n");
+        return 0;
+    }
+
+    const auto header = source->parent_path() / "msvc generated header.hpp";
+    const auto module = source->parent_path() / "msvc module.ifc";
+    std::ofstream output(
+        *dependency_file,
+        std::ios::binary | std::ios::trunc);
+    output
+        << "\xef\xbb\xbf"
+        << "{\n  \"Version\": \"1.2\",\n  \"Data\": {\n"
+        << "    \"Source\": \""
+        << make_json_escape(source->generic_string()) << "\",\n"
+        << "    \"Includes\": [\""
+        << make_json_escape(header.generic_string()) << "\"],\n"
+        << "    \"ImportedModules\": [{\"Name\": \"fixture\", \"BMI\": \""
+        << make_json_escape(module.generic_string()) << "\"}],\n"
+        << "    \"ImportedHeaderUnits\": [{\"Header\": \""
+        << make_json_escape(header.generic_string()) << "\", \"BMI\": \""
+        << make_json_escape(module.generic_string()) << "\"}]\n"
+        << "  }\n}\n";
+    return output ? 0 : 82;
+}
+
 int run_mutating_fake_compiler(
     const int argc,
     char* const* argv) {
@@ -216,7 +273,6 @@ int run_mutating_fake_compiler(
     return input && output ? 0 : 96;
 }
 
-#if !defined(_WIN32)
 class ScopedEnvironment final {
 public:
     ScopedEnvironment(std::string name, const std::string& value)
@@ -225,7 +281,11 @@ public:
             previous != nullptr) {
             previous_ = previous;
         }
+#if defined(_WIN32)
+        assert(::_putenv_s(name_.c_str(), value.c_str()) == 0);
+#else
         assert(::setenv(name_.c_str(), value.c_str(), 1) == 0);
+#endif
     }
 
     ScopedEnvironment(const ScopedEnvironment&) = delete;
@@ -233,9 +293,17 @@ public:
 
     ~ScopedEnvironment() {
         if (previous_) {
+#if defined(_WIN32)
+            (void)::_putenv_s(name_.c_str(), previous_->c_str());
+#else
             (void)::setenv(name_.c_str(), previous_->c_str(), 1);
+#endif
         } else {
+#if defined(_WIN32)
+            (void)::_putenv_s(name_.c_str(), "");
+#else
             (void)::unsetenv(name_.c_str());
+#endif
         }
     }
 
@@ -243,11 +311,14 @@ private:
     std::string name_;
     std::optional<std::string> previous_;
 };
-#endif
 
 } // namespace
 
 int main(const int argc, char** argv) {
+    if (has_raw_argument(
+            argc, argv, "/DFSIM_TEST_MSVC_DEPENDENCY_COMPILER=1")) {
+        return run_msvc_dependency_fake_compiler(argc, argv);
+    }
     if (has_raw_argument(
             argc, argv, "-DFSIM_TEST_MUTATING_COMPILER=1")) {
         return run_mutating_fake_compiler(argc, argv);
@@ -323,6 +394,9 @@ int main(const int argc, char** argv) {
 #if defined(_WIN32)
     assert(has_argument(*first_plan, "/DFSIM_PLUGIN_TEST=1"));
     assert(has_argument(*first_plan, "/I" + include.string()));
+    assert(has_argument(*first_plan, "/utf-8"));
+    assert(has_argument(*first_plan, "/Zc:__cplusplus"));
+    assert(has_argument(*first_plan, "/FC"));
     assert(first_plan->commands.size() == request.sources.size() + 1);
 #else
     assert(has_argument(*first_plan, "-DFSIM_PLUGIN_TEST=1"));
@@ -334,6 +408,48 @@ int main(const int argc, char** argv) {
         fsim::systemc::format_compiler_command(first_plan->commands.front());
     assert(display.find("source with spaces.cpp") != std::string::npos);
     assert(has_argument(*first_plan, second_source.string()));
+
+    auto reversed_sources = request;
+    std::reverse(
+        reversed_sources.sources.begin(),
+        reversed_sources.sources.end());
+    fsim::diagnostic::Engine reversed_diagnostics;
+    const auto reversed_plan = fsim::systemc::plan_plugin_compile(
+        reversed_sources, reversed_diagnostics);
+    assert(reversed_plan && reversed_plan->cacheable);
+    assert(reversed_plan->cache_key != first_plan->cache_key);
+
+    auto changed_define = request;
+    changed_define.settings.defines = {"FSIM_PLUGIN_TEST=2"};
+    fsim::diagnostic::Engine define_diagnostics;
+    const auto define_plan = fsim::systemc::plan_plugin_compile(
+        changed_define, define_diagnostics);
+    assert(define_plan && define_plan->cacheable);
+    assert(define_plan->cache_key != first_plan->cache_key);
+
+    const auto environment_name =
+#if defined(_WIN32)
+        std::string{"LIB"};
+#else
+        std::string{"LIBRARY_PATH"};
+#endif
+    {
+        const ScopedEnvironment changed_environment{
+            environment_name,
+            (root / "alternate toolchain environment").string()};
+        fsim::diagnostic::Engine environment_diagnostics;
+        const auto environment_plan =
+            fsim::systemc::plan_plugin_compile(
+                request, environment_diagnostics);
+        assert(environment_plan && environment_plan->cacheable);
+        assert(environment_plan->cache_key != first_plan->cache_key);
+    }
+    fsim::diagnostic::Engine restored_environment_diagnostics;
+    const auto restored_environment_plan =
+        fsim::systemc::plan_plugin_compile(
+            request, restored_environment_diagnostics);
+    assert(restored_environment_plan);
+    assert(restored_environment_plan->cache_key == first_plan->cache_key);
 
     auto literal_arguments = request;
     literal_arguments.settings.defines = {"FSIM_LITERAL_ARGUMENT=hello world;$HOME*"};
@@ -373,6 +489,125 @@ int main(const int argc, char** argv) {
     assert(second.cache_hit);
     assert(second.library_path == first.library_path);
     assert(second.cache_key == first.cache_key);
+
+#if defined(_WIN32)
+    // Force both dependency discovery and the real cl/clang-cl build through
+    // a UTF-16 response file in a working directory containing spaces. The
+    // compiler must receive every literal argument and no temporary response
+    // file may remain after either the cold or warm invocation.
+    auto long_response_request = request;
+    for (std::size_t index = 0; index < 512; ++index) {
+        long_response_request.settings.defines.push_back(
+            "FSIM_LONG_RESPONSE_" + std::string(64, 'A')
+            + std::to_string(index) + "=1");
+    }
+    fsim::diagnostic::Engine long_response_diagnostics;
+    const auto long_response_cold = fsim::systemc::compile_plugin(
+        long_response_request, long_response_diagnostics);
+    const auto long_response_warm = fsim::systemc::compile_plugin(
+        long_response_request, long_response_diagnostics);
+    assert(long_response_cold.success && !long_response_cold.cache_hit);
+    assert(long_response_warm.success && long_response_warm.cache_hit);
+    assert(!long_response_diagnostics.has_error());
+    for (const auto& entry : filesystem::directory_iterator{working}) {
+        assert(!entry.path().filename().string().starts_with(
+            ".fsim-compiler-arguments-"));
+    }
+#endif
+
+    const auto artifact_metadata =
+        filesystem::path{first.library_path.string() + ".metadata"};
+    assert(filesystem::is_regular_file(artifact_metadata));
+
+    // Missing, truncated, corrupt, and incompatible committed pairs are
+    // deterministic misses. The per-key writer repairs each one and the next
+    // lookup must be a checksum-validated hit.
+    write_text(first.library_path, "truncated shared library\n");
+    const auto repaired_library =
+        fsim::systemc::compile_plugin(request, diagnostics);
+    assert(repaired_library.success && !repaired_library.cache_hit);
+    const auto repaired_library_warm =
+        fsim::systemc::compile_plugin(request, diagnostics);
+    assert(repaired_library_warm.success && repaired_library_warm.cache_hit);
+
+    assert(filesystem::remove(artifact_metadata, error));
+    assert(!error);
+    const auto repaired_missing_metadata =
+        fsim::systemc::compile_plugin(request, diagnostics);
+    assert(repaired_missing_metadata.success);
+    assert(!repaired_missing_metadata.cache_hit);
+
+    write_text(artifact_metadata, "fsim-systemc-artifact-v1\ntruncated\n");
+    const auto repaired_truncated_metadata =
+        fsim::systemc::compile_plugin(request, diagnostics);
+    assert(repaired_truncated_metadata.success);
+    assert(!repaired_truncated_metadata.cache_hit);
+
+    write_text(
+        artifact_metadata,
+        "fsim-systemc-artifact-v999\n"
+        + first.cache_key + "\n1\n"
+        + std::string(64, '0') + "\n");
+    const auto repaired_incompatible_metadata =
+        fsim::systemc::compile_plugin(request, diagnostics);
+    assert(repaired_incompatible_metadata.success);
+    assert(!repaired_incompatible_metadata.cache_hit);
+
+    assert(filesystem::remove(first.library_path, error));
+    assert(!error);
+    const auto repaired_missing_library =
+        fsim::systemc::compile_plugin(request, diagnostics);
+    assert(repaired_missing_library.success);
+    assert(!repaired_missing_library.cache_hit);
+
+    const auto stale_metadata_temporary = filesystem::path{
+        artifact_metadata.string() + ".tmp.abandoned"};
+    const auto legacy_checksum =
+        filesystem::path{first.library_path.string() + ".sha256"};
+    const auto stale_legacy_temporary = filesystem::path{
+        legacy_checksum.string() + ".tmp.abandoned"};
+    write_text(first_plan->build_path, "stale compiler output\n");
+    write_text(stale_metadata_temporary, "stale metadata\n");
+    write_text(legacy_checksum, std::string(64, '0') + "\n");
+    write_text(stale_legacy_temporary, "stale checksum\n");
+    write_text(artifact_metadata, "corrupt metadata\n");
+    const auto recovered_staging =
+        fsim::systemc::compile_plugin(request, diagnostics);
+    assert(recovered_staging.success && !recovered_staging.cache_hit);
+    assert(!filesystem::exists(first_plan->build_path));
+    assert(!filesystem::exists(stale_metadata_temporary));
+    assert(!filesystem::exists(legacy_checksum));
+    assert(!filesystem::exists(stale_legacy_temporary));
+
+    // Concurrent callers may all fingerprint independently, but exactly one
+    // writer publishes the missing key and every waiter consumes that complete
+    // committed pair.
+    assert(filesystem::remove(first.library_path, error));
+    assert(!error);
+    assert(filesystem::remove(artifact_metadata, error));
+    assert(!error);
+    std::array<std::future<fsim::systemc::PluginCompileResult>, 3>
+        concurrent_compiles;
+    for (auto& future : concurrent_compiles) {
+        future = std::async(std::launch::async, [&request]() {
+            fsim::diagnostic::Engine concurrent_diagnostics;
+            auto result = fsim::systemc::compile_plugin(
+                request, concurrent_diagnostics);
+            assert(!concurrent_diagnostics.has_error());
+            return result;
+        });
+    }
+    std::size_t concurrent_hits = 0;
+    for (auto& future : concurrent_compiles) {
+        const auto concurrent = future.get();
+        assert(concurrent.success);
+        assert(concurrent.cache_key == first.cache_key);
+        concurrent_hits += concurrent.cache_hit ? 1U : 0U;
+    }
+    assert(concurrent_hits == concurrent_compiles.size() - 1);
+    const auto concurrent_warm =
+        fsim::systemc::compile_plugin(request, diagnostics);
+    assert(concurrent_warm.success && concurrent_warm.cache_hit);
 
     write_text(transitive_dependency, "#define FSIM_PLUGIN_NUMBER 11\n");
     const auto header_changed_plan =
@@ -423,7 +658,6 @@ int main(const int argc, char** argv) {
     assert(!response_plan->cacheable);
     assert(response_plan->cache_key != second_response_plan->cache_key);
 
-#if !defined(_WIN32)
     const auto volatile_source = working / "volatile-builtin.cpp";
     write_source(
         volatile_source,
@@ -467,8 +701,6 @@ int main(const int argc, char** argv) {
     assert(!volatile_header_plan->cacheable);
     assert(has_diagnostic_code(
         volatile_header_diagnostics, "FSIM-SC-C012"));
-#endif
-
     const auto implicit_source = working / "implicit-header.cpp";
     write_source(
         implicit_source,
@@ -484,8 +716,8 @@ int main(const int argc, char** argv) {
         fsim::systemc::plan_plugin_compile(implicit_request, implicit_diagnostics);
     assert(implicit_plan);
 #if defined(_WIN32)
-    assert(!implicit_plan->cacheable);
-    assert(has_diagnostic_code(implicit_diagnostics, "FSIM-SC-C012"));
+    assert(implicit_plan->cacheable);
+    assert(!implicit_diagnostics.has_error());
 #else
     assert(implicit_plan->cacheable);
     assert(!implicit_diagnostics.has_error());
@@ -597,8 +829,8 @@ int main(const int argc, char** argv) {
     assert(escaped_changed_plan->cacheable);
     assert(escaped_changed_plan->cache_key != escaped_plan->cache_key);
 
-    // Until compiler-emitted MSVC JSON dependency parsing is implemented,
-    // implicit include roots fail safe instead of reusing an unsound artifact.
+    // A missing modeled cl.exe cannot establish compiler identity, so command
+    // planning stays noncacheable even though its argv remains inspectable.
     auto msvc_implicit_request = implicit_request;
     msvc_implicit_request.settings.compiler = "cl.exe";
     fsim::diagnostic::Engine msvc_implicit_diagnostics;
@@ -608,6 +840,93 @@ int main(const int argc, char** argv) {
     assert(msvc_implicit_plan);
     assert(!msvc_implicit_plan->cacheable);
     assert(has_diagnostic_code(msvc_implicit_diagnostics, "FSIM-SC-C012"));
+
+    // Model cl.exe on a non-Windows host so compiler-emitted JSON dependency
+    // closure, paths with spaces, BMI identity, removal, and fallback all run
+    // in every ordinary build rather than relying only on Windows CI.
+    const auto fake_msvc = working / "cl.exe";
+    filesystem::copy_file(
+        filesystem::absolute(filesystem::path{argv[0]}, error),
+        fake_msvc,
+        filesystem::copy_options::overwrite_existing,
+        error);
+    assert(!error);
+    filesystem::permissions(
+        fake_msvc,
+        filesystem::perms::owner_exec
+            | filesystem::perms::group_exec
+            | filesystem::perms::others_exec,
+        filesystem::perm_options::add,
+        error);
+    assert(!error);
+    const auto msvc_dependency_source =
+        working / "msvc dependency source.cpp";
+    const auto msvc_dependency_header =
+        working / "msvc generated header.hpp";
+    const auto msvc_dependency_module = working / "msvc module.ifc";
+    write_text(
+        msvc_dependency_header,
+        "#define FSIM_MSVC_DEPENDENCY_VALUE 41\n");
+    write_text(msvc_dependency_module, "first bmi image\n");
+    write_source(
+        msvc_dependency_source,
+        "fsim_msvc_dependency",
+        "FSIM_MSVC_DEPENDENCY_VALUE",
+        "\"msvc generated header.hpp\"");
+    auto emitted_msvc_request = request;
+    emitted_msvc_request.sources = {msvc_dependency_source};
+    emitted_msvc_request.settings.compiler = fake_msvc.string();
+    emitted_msvc_request.settings.include_directories = {working};
+    emitted_msvc_request.settings.defines = {
+        "FSIM_TEST_MSVC_DEPENDENCY_COMPILER=1"};
+    fsim::diagnostic::Engine emitted_msvc_diagnostics;
+    const auto emitted_msvc_plan = fsim::systemc::plan_plugin_compile(
+        emitted_msvc_request, emitted_msvc_diagnostics);
+    assert(emitted_msvc_plan && emitted_msvc_plan->cacheable);
+    assert(!emitted_msvc_diagnostics.has_error());
+
+    write_text(
+        msvc_dependency_header,
+        "#define FSIM_MSVC_DEPENDENCY_VALUE 43\n");
+    const auto edited_msvc_header_plan =
+        fsim::systemc::plan_plugin_compile(
+            emitted_msvc_request, emitted_msvc_diagnostics);
+    assert(edited_msvc_header_plan && edited_msvc_header_plan->cacheable);
+    assert(
+        edited_msvc_header_plan->cache_key
+        != emitted_msvc_plan->cache_key);
+
+    write_text(msvc_dependency_module, "second bmi image\n");
+    const auto edited_msvc_bmi_plan =
+        fsim::systemc::plan_plugin_compile(
+            emitted_msvc_request, emitted_msvc_diagnostics);
+    assert(edited_msvc_bmi_plan && edited_msvc_bmi_plan->cacheable);
+    assert(
+        edited_msvc_bmi_plan->cache_key
+        != edited_msvc_header_plan->cache_key);
+
+    filesystem::remove(msvc_dependency_header, error);
+    assert(!error);
+    fsim::diagnostic::Engine missing_msvc_dependency_diagnostics;
+    const auto missing_msvc_dependency_plan =
+        fsim::systemc::plan_plugin_compile(
+            emitted_msvc_request, missing_msvc_dependency_diagnostics);
+    assert(missing_msvc_dependency_plan);
+    assert(!missing_msvc_dependency_plan->cacheable);
+    assert(has_diagnostic_code(
+        missing_msvc_dependency_diagnostics, "FSIM-SC-C012"));
+
+    write_text(
+        msvc_dependency_header,
+        "#define FSIM_MSVC_DEPENDENCY_VALUE 47\n");
+    auto fallback_msvc_request = emitted_msvc_request;
+    fallback_msvc_request.settings.defines.push_back(
+        "FSIM_TEST_MSVC_MALFORMED=1");
+    fsim::diagnostic::Engine fallback_msvc_diagnostics;
+    const auto fallback_msvc_plan = fsim::systemc::plan_plugin_compile(
+        fallback_msvc_request, fallback_msvc_diagnostics);
+    assert(fallback_msvc_plan && fallback_msvc_plan->cacheable);
+    assert(!fallback_msvc_diagnostics.has_error());
 #endif
 
     // A sibling source directory is not an include search root. Finding this
@@ -649,6 +968,16 @@ int main(const int argc, char** argv) {
     assert(bare_library_plan);
     assert(!bare_library_plan->cacheable);
 
+    auto missing_link_request = request;
+    missing_link_request.settings.libraries = {
+        "fsim_systemc_library_that_does_not_exist"};
+    fsim::diagnostic::Engine missing_link_diagnostics;
+    const auto missing_link = fsim::systemc::compile_plugin(
+        missing_link_request, missing_link_diagnostics);
+    assert(!missing_link.success);
+    assert(missing_link.compiler_exit_code != 0);
+    assert(has_diagnostic_code(missing_link_diagnostics, "FSIM-SC-C007"));
+
     // cl/clang-cl must use unique object outputs even when sources from
     // different directories share a basename.
     const auto first_duplicate = working / "first" / "duplicate.cpp";
@@ -666,12 +995,21 @@ int main(const int argc, char** argv) {
     assert(msvc_plan);
     assert(msvc_plan->toolchain == fsim::systemc::HostToolchain::msvc);
     assert(msvc_plan->commands.size() == 3);
-    assert(msvc_plan->intermediate_paths.size() == 4);
+    assert(msvc_plan->intermediate_paths.size() == 7);
     assert(msvc_plan->intermediate_paths[0] != msvc_plan->intermediate_paths[2]);
     assert(has_argument(
         *msvc_plan, "/Fo" + msvc_plan->intermediate_paths[0].string()));
     assert(has_argument(
         *msvc_plan, "/Fo" + msvc_plan->intermediate_paths[2].string()));
+    assert(has_argument(*msvc_plan, "/INCREMENTAL:NO"));
+    assert(has_argument(*msvc_plan, "/MACHINE:X64"));
+    assert(has_argument(
+        *msvc_plan,
+        "/PDB:" + msvc_plan->intermediate_paths[4].string()));
+    assert(has_argument(
+        *msvc_plan,
+        "/IMPLIB:" + msvc_plan->intermediate_paths[5].string()));
+    assert(msvc_plan->intermediate_paths[6].extension() == ".exp");
     for (const auto& command : msvc_plan->commands) {
         const auto runtime_arguments = std::count_if(
             command.argv.begin(),
@@ -717,12 +1055,47 @@ int main(const int argc, char** argv) {
     assert(runtime_link_diagnostics.has_error());
     assert(runtime_link_diagnostics.diagnostics().front().code == "FSIM-SC-C004");
 
+    for (const auto output_option : {
+             "/PDB:other.pdb",
+             "/IMPLIB:other.lib",
+             "/MACHINE:ARM64",
+             "/INCREMENTAL"}) {
+        auto output_override = msvc_request;
+        output_override.settings.link_options = {output_option};
+        fsim::diagnostic::Engine output_diagnostics;
+        assert(!fsim::systemc::plan_plugin_compile(
+            output_override, output_diagnostics));
+        assert(output_diagnostics.has_error());
+        assert(
+            output_diagnostics.diagnostics().front().code
+            == "FSIM-SC-C004");
+    }
+
     PluginCompileRequest missing = request;
     missing.sources = {working / "missing.cpp"};
     fsim::diagnostic::Engine missing_diagnostics;
     assert(!fsim::systemc::plan_plugin_compile(missing, missing_diagnostics));
     assert(missing_diagnostics.has_error());
     assert(missing_diagnostics.diagnostics().front().code == "FSIM-SC-C003");
+
+    const auto invalid_compile_source = working / "invalid-compile.cpp";
+    write_text(
+        invalid_compile_source,
+        "#error FSIM_INTENTIONAL_SYSTEMC_COMPILE_FAILURE\n");
+    auto invalid_compile_request = request;
+    invalid_compile_request.sources = {invalid_compile_source};
+    invalid_compile_request.settings.defines.clear();
+    fsim::diagnostic::Engine invalid_compile_diagnostics;
+    const auto invalid_compile = fsim::systemc::compile_plugin(
+        invalid_compile_request, invalid_compile_diagnostics);
+    assert(!invalid_compile.success);
+    assert(invalid_compile.compiler_exit_code != 0);
+    assert(has_diagnostic_code(
+        invalid_compile_diagnostics, "FSIM-SC-C007"));
+    assert(
+        invalid_compile.compiler_output.find(
+            "FSIM_INTENTIONAL_SYSTEMC_COMPILE_FAILURE")
+        != std::string::npos);
 
     PluginCompileRequest missing_compiler = request;
     missing_compiler.settings.compiler =

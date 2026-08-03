@@ -59,6 +59,21 @@ function(fsim_add_fetched_boost_context source_directory)
   else()
     set(context_sources "${context_source}/fcontext.cpp")
     if(WIN32)
+      if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+        message(
+          FATAL_ERROR
+          "fsim's fetched Windows Boost.Context backend requires a 64-bit target"
+        )
+      endif()
+      if(
+        CMAKE_CXX_COMPILER_ARCHITECTURE_ID
+        AND NOT CMAKE_CXX_COMPILER_ARCHITECTURE_ID MATCHES "^(x64|X64|AMD64|amd64)$"
+      )
+        message(
+          FATAL_ERROR
+          "fsim's fetched Windows Boost.Context backend requires x86-64, not '${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}'"
+        )
+      endif()
       list(
         APPEND context_sources
         "${context_source}/asm/make_x86_64_ms_pe_masm.asm"

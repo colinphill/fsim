@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc/plugin_loader.hpp"
 #include "fsim/systemc/hierarchy.hpp"
+#include "fsim/runtime/simir.hpp"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +14,7 @@ namespace {
 
 bool factory_registered = false;
 bool elaboration_factory_registered = false;
+bool fiber_factory_registered = false;
 bool factory_parameter_registered = false;
 
 fsim_sc_status_v1 register_factory(
@@ -32,12 +34,14 @@ fsim_sc_status_v1 register_elaboration_factory(
     fsim_sc_module_elaborate_v1 factory,
     fsim_sc_module_destroy_v1 destroy,
     void*) {
+    const auto owned_name = std::string{name};
+    const bool valid = factory != nullptr && destroy != nullptr
+        && (owned_name == "bridge" || owned_name == "fiber_bridge");
     elaboration_factory_registered =
-        std::string{name} == "bridge"
-        && factory != nullptr && destroy != nullptr;
-    return elaboration_factory_registered
-        ? FSIM_SC_OK
-        : FSIM_SC_INVALID_ARGUMENT;
+        elaboration_factory_registered || (valid && owned_name == "bridge");
+    fiber_factory_registered =
+        fiber_factory_registered || (valid && owned_name == "fiber_bridge");
+    return valid ? FSIM_SC_OK : FSIM_SC_INVALID_ARGUMENT;
 }
 
 fsim_sc_status_v1 register_factory_parameter(
@@ -58,10 +62,75 @@ fsim_sc_status_v1 register_factory_parameter(
         : FSIM_SC_INVALID_ARGUMENT;
 }
 
+class TestExecutionContext final
+    : public fsim::runtime::simir::ProcessExecutionContext {
+public:
+    [[nodiscard]] fsim::runtime::PackedLogic4 read_signal(
+        fsim::runtime::simir::SignalId) const override {
+        return fsim::runtime::PackedLogic4{};
+    }
+
+    void write_blocking(
+        fsim::runtime::simir::SignalId,
+        fsim::runtime::PackedLogic4) override {}
+
+    void write_blocking_slice(
+        fsim::runtime::simir::SignalId,
+        fsim::runtime::PackedLogic4,
+        std::size_t) override {}
+
+    void write_update(
+        fsim::runtime::simir::SignalId,
+        fsim::runtime::PackedLogic4) override {}
+
+    void write_update_slice(
+        fsim::runtime::simir::SignalId,
+        fsim::runtime::PackedLogic4,
+        std::size_t) override {}
+
+    void write_after(
+        fsim::runtime::simir::SignalId,
+        fsim::runtime::PackedLogic4,
+        fsim::runtime::SimulationTick) override {}
+
+    void write_after_slice(
+        fsim::runtime::simir::SignalId,
+        fsim::runtime::PackedLogic4,
+        std::size_t,
+        fsim::runtime::SimulationTick) override {}
+
+    void write_inertial(
+        fsim::runtime::simir::SignalId,
+        fsim::runtime::PackedLogic4,
+        const fsim::runtime::simir::TransitionDelays&) override {}
+
+    void write_inertial_slice(
+        fsim::runtime::simir::SignalId,
+        fsim::runtime::PackedLogic4,
+        std::size_t,
+        const fsim::runtime::simir::TransitionDelays&) override {}
+};
+
+enum LifecycleEvent : std::uint32_t {
+    constructed = 1,
+    before_elaboration = 2,
+    elaborated = 3,
+    started = 4,
+    fiber_entered = 5,
+    fiber_stopped = 6,
+    ended = 7,
+    destroyed = 8,
+};
+
 } // namespace
 
 int main(int argc, char** argv) {
-    assert(argc == 3);
+    assert(argc == 5);
+    const auto plugin_path = std::filesystem::path{argv[1]};
+    const auto throwing_plugin_path = std::filesystem::path{argv[2]};
+    const auto error_plugin_path = std::filesystem::path{argv[3]};
+    const auto empty_plugin_path = std::filesystem::path{argv[4]};
+    assert(!fsim::platform::DynamicLibrary::is_loaded(plugin_path));
 
     fsim_sc_host_v1 host{};
     host.abi_version = FSIM_SYSTEMC_ABI_VERSION;
@@ -82,17 +151,102 @@ int main(int argc, char** argv) {
         register_factory_parameter;
 
     std::string error;
-    const auto plugin =
-        fsim::systemc::Plugin::load(std::filesystem::path{argv[1]}, host, registrar, error);
-    assert(plugin != nullptr);
-    assert(error.empty());
-    assert(factory_registered);
-    assert(elaboration_factory_registered);
-    assert(factory_parameter_registered);
+    {
+        const auto plugin = fsim::systemc::Plugin::load(
+            plugin_path, host, registrar, error);
+        assert(plugin != nullptr);
+        assert(error.empty());
+        assert(factory_registered);
+        assert(elaboration_factory_registered);
+        assert(fiber_factory_registered);
+        assert(factory_parameter_registered);
+        assert(fsim::platform::DynamicLibrary::is_loaded(plugin_path));
+    }
+    assert(!fsim::platform::DynamicLibrary::is_loaded(plugin_path));
+
+    auto incompatible_host = host;
+    incompatible_host.abi_version = FSIM_SYSTEMC_ABI_VERSION + 1;
+    error.clear();
+    assert(!fsim::systemc::Plugin::load(
+        plugin_path, incompatible_host, registrar, error));
+    assert(error == "SystemC host/registrar ABI mismatch");
+    assert(!fsim::platform::DynamicLibrary::is_loaded(plugin_path));
+
+    error.clear();
+    assert(!fsim::systemc::Plugin::load(
+        empty_plugin_path, host, registrar, error));
+    assert(
+        error.find("does not export fsim_plugin_init_v1")
+        != std::string::npos);
+    assert(!fsim::platform::DynamicLibrary::is_loaded(empty_plugin_path));
+
+    error.clear();
+    assert(!fsim::systemc::Plugin::load(
+        plugin_path.parent_path() / "missing-plugin-image",
+        host,
+        registrar,
+        error));
+    assert(!error.empty());
+
+    auto probe = fsim::platform::DynamicLibrary::open(plugin_path, error);
+    assert(probe && error.empty());
+    using ResetLifecycle = void (*)();
+    using LifecycleCount = std::size_t (*)();
+    using LifecycleEventAt = std::uint32_t (*)(std::size_t);
+    using IgnoreDuplicateRegistration = void (*)(std::uint8_t);
+    const auto reset_lifecycle = reinterpret_cast<ResetLifecycle>(
+        probe->symbol("fsim_test_reset_lifecycle_v1", error));
+    assert(reset_lifecycle != nullptr && error.empty());
+    const auto lifecycle_count = reinterpret_cast<LifecycleCount>(
+        probe->symbol("fsim_test_lifecycle_count_v1", error));
+    assert(lifecycle_count != nullptr && error.empty());
+    const auto lifecycle_event = reinterpret_cast<LifecycleEventAt>(
+        probe->symbol("fsim_test_lifecycle_event_v1", error));
+    assert(lifecycle_event != nullptr && error.empty());
+    const auto ignore_duplicate_registration =
+        reinterpret_cast<IgnoreDuplicateRegistration>(probe->symbol(
+            "fsim_test_ignore_duplicate_registration_v1", error));
+    assert(ignore_duplicate_registration != nullptr && error.empty());
+    const auto lifecycle_events = [&]() {
+        std::vector<std::uint32_t> result;
+        result.reserve(lifecycle_count());
+        for (std::size_t index = 0; index < lifecycle_count(); ++index) {
+            result.push_back(lifecycle_event(index));
+        }
+        return result;
+    };
+    reset_lifecycle();
+
+    // A plug-in cannot hide a rejected callback by returning success. The
+    // buffered transaction rejects the entire set before any caller registrar
+    // callback is replayed, and hierarchy staging remains externally empty.
+    factory_registered = false;
+    elaboration_factory_registered = false;
+    fiber_factory_registered = false;
+    factory_parameter_registered = false;
+    ignore_duplicate_registration(1);
+    const auto ignored_duplicate = fsim::systemc::Plugin::load(
+        plugin_path, host, registrar, error);
+    assert(!ignored_duplicate);
+    assert(
+        error == "SystemC plug-in initialization ignored an invalid or "
+                 "duplicate factory registration");
+    assert(!factory_registered);
+    assert(!elaboration_factory_registered);
+    assert(!fiber_factory_registered);
+    assert(!factory_parameter_registered);
+    error.clear();
+    const auto rejected_hierarchy =
+        fsim::systemc::HierarchyRegistry::load(plugin_path, error);
+    assert(!rejected_hierarchy);
+    assert(
+        error == "SystemC plug-in initialization ignored an invalid or "
+                 "duplicate factory registration");
+    ignore_duplicate_registration(0);
 
     error.clear();
     auto hierarchy = fsim::systemc::HierarchyRegistry::load(
-        std::filesystem::path{argv[1]}, error);
+        plugin_path, error);
     assert(hierarchy != nullptr);
     assert(error.empty());
     assert(hierarchy->has_factory("sample"));
@@ -245,12 +399,152 @@ int main(int argc, char** argv) {
     assert(!duplicate_actual);
     assert(error.find("more than one actual") != std::string::npos);
 
+    const std::array<fsim_sc_handle_v1, 2> terminal_roots{
+        bridge->handle, nested_bridge->handle};
+    hierarchy->complete_elaboration(terminal_roots);
+    hierarchy->start_simulation(terminal_roots);
+    hierarchy->end_simulation(terminal_roots);
+    hierarchy.reset();
+    assert((lifecycle_events() == std::vector<std::uint32_t>{
+        constructed,
+        constructed,
+        before_elaboration,
+        before_elaboration,
+        elaborated,
+        elaborated,
+        started,
+        started,
+        ended,
+        ended,
+        destroyed,
+        destroyed,
+    }));
+
+    // Two registries retain independent host/root/fiber state while sharing
+    // one loaded image. Move-assignment must fully tear down the destination
+    // before taking ownership of the source, including a suspended stack and
+    // an implicit terminal callback.
+    reset_lifecycle();
+    auto first_registry =
+        fsim::systemc::HierarchyRegistry::load(plugin_path, error);
+    assert(first_registry && error.empty());
+    auto second_registry =
+        fsim::systemc::HierarchyRegistry::load(plugin_path, error);
+    assert(second_registry && error.empty());
+    const auto first_fiber = first_registry->instantiate(
+        "fiber_bridge", "first", 0, error);
+    assert(first_fiber && error.empty());
+    const auto second_fiber = second_registry->instantiate(
+        "fiber_bridge", "second", 0, error);
+    assert(second_fiber && error.empty());
+    const std::array first_root{first_fiber->handle};
+    const std::array second_root{second_fiber->handle};
+    first_registry->complete_elaboration(first_root);
+    first_registry->start_simulation(first_root);
+    second_registry->complete_elaboration(second_root);
+    second_registry->start_simulation(second_root);
+#if defined(FSIM_HAS_BOOST_CONTEXT)
+    TestExecutionContext execution_context;
+    const auto suspended = first_registry->invoke_process(
+        first_fiber->processes.front().handle, execution_context);
+    assert(suspended.kind == fsim::systemc::MethodSuspendKind::wait_for);
+    assert(suspended.delay_ticks == 5);
+#endif
+    *first_registry = std::move(*second_registry);
+    assert(!second_registry->has_factory("fiber_bridge"));
+    first_registry.reset();
+    second_registry.reset();
+#if defined(FSIM_HAS_BOOST_CONTEXT)
+    assert((lifecycle_events() == std::vector<std::uint32_t>{
+        constructed,
+        constructed,
+        before_elaboration,
+        elaborated,
+        started,
+        before_elaboration,
+        elaborated,
+        started,
+        fiber_entered,
+        fiber_stopped,
+        ended,
+        destroyed,
+        ended,
+        destroyed,
+    }));
+#else
+    assert((lifecycle_events() == std::vector<std::uint32_t>{
+        constructed,
+        constructed,
+        before_elaboration,
+        elaborated,
+        started,
+        before_elaboration,
+        elaborated,
+        started,
+        ended,
+        destroyed,
+        ended,
+        destroyed,
+    }));
+#endif
+    assert(fsim::platform::DynamicLibrary::is_loaded(plugin_path));
+    probe.reset();
+    assert(!fsim::platform::DynamicLibrary::is_loaded(plugin_path));
+
+    // Construction status/null/exception failures roll back every pending
+    // handle. Escaped process and destructor exceptions are contained while
+    // the error-image remains live, and teardown still unloads it.
+    error.clear();
+    auto error_registry =
+        fsim::systemc::HierarchyRegistry::load(error_plugin_path, error);
+    assert(error_registry && error.empty());
+    const auto status_failure = error_registry->instantiate(
+        "status_failure", "status", 0, error);
+    assert(!status_failure);
+    assert(error.find("failed with status") != std::string::npos);
+    assert(!error_registry->object_info(1));
+    error.clear();
+    const auto null_failure = error_registry->instantiate(
+        "null_failure", "null", 0, error);
+    assert(!null_failure);
+    assert(error.find("returned a null module object") != std::string::npos);
+    error.clear();
+    const auto throw_failure = error_registry->instantiate(
+        "throw_failure", "throw", 0, error);
+    assert(!throw_failure);
+    assert(
+        error.find("intentional construction exception")
+        != std::string::npos);
+    error.clear();
+    const auto destroy_failure = error_registry->instantiate(
+        "destroy_throw", "destroy", 0, error);
+    assert(destroy_failure && error.empty());
+    const auto process_failure = error_registry->instantiate(
+        "process_throw", "process", 0, error);
+    assert(process_failure && error.empty());
+    TestExecutionContext error_context;
+    bool contained_process_exception = false;
+    try {
+        (void)error_registry->invoke_process(
+            process_failure->processes.front().handle,
+            error_context);
+    } catch (const std::runtime_error& exception) {
+        contained_process_exception =
+            std::string_view{exception.what()}.find(
+                "intentional process exception")
+            != std::string_view::npos;
+    }
+    assert(contained_process_exception);
+    error_registry.reset();
+    assert(!fsim::platform::DynamicLibrary::is_loaded(error_plugin_path));
+
     factory_registered = false;
     elaboration_factory_registered = false;
+    fiber_factory_registered = false;
     error.clear();
     const auto throwing_plugin =
         fsim::systemc::Plugin::load(
-            std::filesystem::path{argv[2]}, host, registrar, error);
+            throwing_plugin_path, host, registrar, error);
     assert(throwing_plugin == nullptr);
     assert(
         error
@@ -258,5 +552,7 @@ int main(int argc, char** argv) {
            "intentional plug-in failure");
     assert(!factory_registered);
     assert(!elaboration_factory_registered);
+    assert(!fiber_factory_registered);
+    assert(!fsim::platform::DynamicLibrary::is_loaded(throwing_plugin_path));
     std::cout << "SystemC plug-in loader tests passed\n";
 }

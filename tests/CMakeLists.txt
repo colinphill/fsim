@@ -224,6 +224,44 @@ add_library(
   MODULE
   systemc/throwing_plugin.cpp
 )
+
+add_library(
+  fsim_test_error_systemc_plugin
+  MODULE
+  systemc/error_plugin.cpp
+)
+target_compile_features(fsim_test_error_systemc_plugin PRIVATE cxx_std_20)
+target_include_directories(
+  fsim_test_error_systemc_plugin
+  PRIVATE "${PROJECT_SOURCE_DIR}/include"
+)
+fsim_enable_warnings(fsim_test_error_systemc_plugin)
+set_target_properties(
+  fsim_test_error_systemc_plugin
+  PROPERTIES
+    PREFIX ""
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
+)
+
+add_library(
+  fsim_test_empty_systemc_plugin
+  MODULE
+  systemc/empty_plugin.cpp
+)
+target_compile_features(fsim_test_empty_systemc_plugin PRIVATE cxx_std_20)
+target_include_directories(
+  fsim_test_empty_systemc_plugin
+  PRIVATE "${PROJECT_SOURCE_DIR}/include"
+)
+fsim_enable_warnings(fsim_test_empty_systemc_plugin)
+set_target_properties(
+  fsim_test_empty_systemc_plugin
+  PROPERTIES
+    PREFIX ""
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
+)
 target_compile_features(fsim_test_throwing_systemc_plugin PRIVATE cxx_std_20)
 target_include_directories(
   fsim_test_throwing_systemc_plugin
@@ -247,6 +285,8 @@ add_test(
     fsim_systemc_plugin_tests
     "$<TARGET_FILE:fsim_test_systemc_plugin>"
     "$<TARGET_FILE:fsim_test_throwing_systemc_plugin>"
+    "$<TARGET_FILE:fsim_test_error_systemc_plugin>"
+    "$<TARGET_FILE:fsim_test_empty_systemc_plugin>"
 )
 
 add_executable(
@@ -256,6 +296,24 @@ add_executable(
 fsim_configure_test(fsim_systemc_compiler_tests)
 target_link_libraries(fsim_systemc_compiler_tests PRIVATE fsim_systemc)
 add_test(NAME fsim.systemc.compiler COMMAND fsim_systemc_compiler_tests)
+
+add_executable(
+  fsim_systemc_matrix_tests
+  systemc/plugin_matrix_test.cpp
+)
+fsim_configure_test(fsim_systemc_matrix_tests)
+target_compile_definitions(
+  fsim_systemc_matrix_tests
+  PRIVATE
+    FSIM_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+    FSIM_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
+)
+target_link_libraries(fsim_systemc_matrix_tests PRIVATE fsim_systemc)
+add_test(NAME fsim.systemc.matrix COMMAND fsim_systemc_matrix_tests)
+set_tests_properties(
+  fsim.systemc.matrix
+  PROPERTIES LABELS "systemc;compiler;cache;lifecycle;threads;portability"
+)
 
 if(FSIM_WITH_LLVM)
   add_executable(fsim_llvm_tests compiler/llvm_jit_test.cpp)
@@ -308,6 +366,7 @@ if(TARGET fsim_application)
         PRIVATE
           FSIM_APPLICATION_SHARD=${application_shard}
           FSIM_APPLICATION_WITH_TCL=$<BOOL:${FSIM_WITH_TCL}>
+          FSIM_MERGED_APPLICATION_TESTS=1
           FSIM_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
       )
       target_link_libraries(
@@ -347,6 +406,10 @@ if(TARGET fsim_application)
 
     fsim_add_application_case(
       0 core app/application_test.cpp fsim.application)
+    fsim_add_application_case(
+      0 systemc_matrix app/application_systemc_matrix_test.cpp
+      fsim.application.systemc_matrix
+      systemc compiler cache lifecycle threads llvm debug portability)
     target_sources(
       fsim_application_tests
       PRIVATE

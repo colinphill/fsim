@@ -10,10 +10,12 @@ int main() {
         std::cerr << "application: " << phase << '\n';
       };
   fsim::test::ApplicationTestFixture fixture;
+#if !defined(FSIM_MERGED_APPLICATION_TESTS)
   checkpoint("systemc integration");
   fixture.test_systemc_integration();
   checkpoint("systemc scheduling matrix");
   fixture.test_systemc_scheduling_matrix();
+#endif
   checkpoint("simulation semantics");
   fixture.test_simulation_semantics();
   checkpoint("specialization and packages");

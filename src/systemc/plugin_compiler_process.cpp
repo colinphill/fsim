@@ -231,7 +231,20 @@ bool TemporaryResponseFile::write(
     }
 
     SIZE_T attribute_bytes = 0;
-    (void)InitializeProcThreadAttributeList(nullptr, 1, 0, &attribute_bytes);
+    SetLastError(ERROR_SUCCESS);
+    const auto sized_attributes =
+        InitializeProcThreadAttributeList(
+            nullptr, 1, 0, &attribute_bytes);
+    if (sized_attributes != FALSE || attribute_bytes == 0
+        || GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+        result.start_error =
+            "cannot size inherited-handle list (error "
+            + std::to_string(GetLastError()) + ")";
+        CloseHandle(child_input);
+        CloseHandle(read_pipe);
+        CloseHandle(write_pipe);
+        return result;
+    }
     std::vector<std::byte> attribute_storage(attribute_bytes);
     auto* attributes = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(
         attribute_storage.data());
@@ -297,18 +310,46 @@ bool TemporaryResponseFile::write(
     result.started = true;
 
     std::array<char, 4096> buffer{};
-    DWORD count = 0;
-    while (ReadFile(read_pipe, buffer.data(), static_cast<DWORD>(buffer.size()), &count, nullptr)
-           && count != 0) {
+    while (true) {
+        DWORD count = 0;
+        if (!ReadFile(
+                read_pipe,
+                buffer.data(),
+                static_cast<DWORD>(buffer.size()),
+                &count,
+                nullptr)) {
+            const auto read_error = GetLastError();
+            if (read_error != ERROR_BROKEN_PIPE) {
+                result.execution_error =
+                    "cannot read compiler output (error "
+                    + std::to_string(read_error) + ")";
+            }
+            break;
+        }
+        if (count == 0) {
+            break;
+        }
         if (result.output.size() < kMaximumCompilerOutput) {
             const auto remaining = kMaximumCompilerOutput - result.output.size();
             result.output.append(buffer.data(), std::min<std::size_t>(remaining, count));
         }
     }
-    WaitForSingleObject(process.hProcess, INFINITE);
+    const auto wait_result = WaitForSingleObject(process.hProcess, INFINITE);
     DWORD exit_code = 1;
-    if (GetExitCodeProcess(process.hProcess, &exit_code)) {
+    if (wait_result == WAIT_FAILED) {
+        result.execution_error =
+            "cannot wait for compiler process (error "
+            + std::to_string(GetLastError()) + ")";
+    } else if (wait_result != WAIT_OBJECT_0) {
+        result.execution_error =
+            "compiler process wait returned "
+            + std::to_string(wait_result);
+    } else if (GetExitCodeProcess(process.hProcess, &exit_code)) {
         result.exit_code = static_cast<int>(exit_code);
+    } else {
+        result.execution_error =
+            "cannot read compiler exit status (error "
+            + std::to_string(GetLastError()) + ")";
     }
     CloseHandle(read_pipe);
     CloseHandle(process.hThread);
@@ -408,6 +449,11 @@ bool TemporaryResponseFile::write(
         if (count < 0 && errno == EINTR) {
             continue;
         }
+        if (count < 0) {
+            result.execution_error =
+                "cannot read compiler output: "
+                + std::string{std::strerror(errno)};
+        }
         break;
     }
     ::close(pipe_descriptors[0]);
@@ -419,6 +465,9 @@ bool TemporaryResponseFile::write(
     } while (waited < 0 && errno == EINTR);
     if (waited < 0) {
         result.exit_code = -1;
+        result.execution_error =
+            "cannot wait for compiler process: "
+            + std::string{std::strerror(errno)};
         return result;
     }
     if (WIFEXITED(status)) {

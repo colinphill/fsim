@@ -32,7 +32,32 @@ struct PendingParameter {
 struct RegistrationBuffer {
     std::vector<PendingFactory> factories;
     std::vector<PendingParameter> parameters;
+    bool rejected{};
 };
+
+[[nodiscard]] fsim_sc_status_v1 reject_registration(void* context) noexcept {
+    if (context != nullptr) {
+        static_cast<RegistrationBuffer*>(context)->rejected = true;
+    }
+    return FSIM_SC_INVALID_ARGUMENT;
+}
+
+[[nodiscard]] bool valid_construction_default(
+    const fsim_sc_construction_type_v1 type,
+    const std::uint8_t has_default,
+    const std::int64_t value) noexcept {
+    if (has_default == 0) {
+        return true;
+    }
+    switch (type) {
+    case FSIM_SC_CONSTRUCTION_INTEGER: return true;
+    case FSIM_SC_CONSTRUCTION_POSITIVE: return value > 0;
+    case FSIM_SC_CONSTRUCTION_NATURAL: return value >= 0;
+    case FSIM_SC_CONSTRUCTION_BOOLEAN:
+    case FSIM_SC_CONSTRUCTION_BIT: return value == 0 || value == 1;
+    }
+    return false;
+}
 
 extern "C" fsim_sc_status_v1 buffer_factory(
     void* context,
@@ -42,13 +67,23 @@ extern "C" fsim_sc_status_v1 buffer_factory(
     void* user) noexcept {
     if (context == nullptr || name == nullptr || *name == '\0'
         || factory == nullptr || destroy == nullptr) {
-        return FSIM_SC_INVALID_ARGUMENT;
+        return reject_registration(context);
     }
     try {
-        static_cast<RegistrationBuffer*>(context)->factories.push_back(
+        auto& registrations = *static_cast<RegistrationBuffer*>(context);
+        if (std::any_of(
+                registrations.factories.begin(),
+                registrations.factories.end(),
+                [&](const auto& candidate) {
+                    return candidate.name == name;
+                })) {
+            return reject_registration(context);
+        }
+        registrations.factories.push_back(
             PendingFactory{name, factory, nullptr, destroy, user});
         return FSIM_SC_OK;
     } catch (...) {
+        static_cast<RegistrationBuffer*>(context)->rejected = true;
         return FSIM_SC_RUNTIME_ERROR;
     }
 }
@@ -64,8 +99,9 @@ extern "C" fsim_sc_status_v1 buffer_factory_parameter(
         || name == nullptr || *name == '\0'
         || type < FSIM_SC_CONSTRUCTION_INTEGER
         || type > FSIM_SC_CONSTRUCTION_BIT
-        || has_default > 1) {
-        return FSIM_SC_INVALID_ARGUMENT;
+        || has_default > 1
+        || !valid_construction_default(type, has_default, default_value)) {
+        return reject_registration(context);
     }
     try {
         auto& registrations =
@@ -84,7 +120,7 @@ extern "C" fsim_sc_status_v1 buffer_factory_parameter(
                     && candidate.name == name;
             });
         if (!factory_exists || duplicate) {
-            return FSIM_SC_INVALID_ARGUMENT;
+            return reject_registration(context);
         }
         registrations.parameters.push_back({
             factory,
@@ -95,6 +131,7 @@ extern "C" fsim_sc_status_v1 buffer_factory_parameter(
         });
         return FSIM_SC_OK;
     } catch (...) {
+        static_cast<RegistrationBuffer*>(context)->rejected = true;
         return FSIM_SC_RUNTIME_ERROR;
     }
 }
@@ -107,13 +144,23 @@ extern "C" fsim_sc_status_v1 buffer_elaboration_factory(
     void* user) noexcept {
     if (context == nullptr || name == nullptr || *name == '\0'
         || factory == nullptr || destroy == nullptr) {
-        return FSIM_SC_INVALID_ARGUMENT;
+        return reject_registration(context);
     }
     try {
-        static_cast<RegistrationBuffer*>(context)->factories.push_back(
+        auto& registrations = *static_cast<RegistrationBuffer*>(context);
+        if (std::any_of(
+                registrations.factories.begin(),
+                registrations.factories.end(),
+                [&](const auto& candidate) {
+                    return candidate.name == name;
+                })) {
+            return reject_registration(context);
+        }
+        registrations.factories.push_back(
             PendingFactory{name, nullptr, factory, destroy, user});
         return FSIM_SC_OK;
     } catch (...) {
+        static_cast<RegistrationBuffer*>(context)->rejected = true;
         return FSIM_SC_RUNTIME_ERROR;
     }
 }
@@ -145,6 +192,15 @@ std::unique_ptr<Plugin> Plugin::load(
     const fsim_sc_host_v1& host,
     fsim_sc_registrar_v1& registrar,
     std::string& error) {
+    return load(path, host, registrar, error, false);
+}
+
+std::unique_ptr<Plugin> Plugin::load(
+    const std::filesystem::path& path,
+    const fsim_sc_host_v1& host,
+    fsim_sc_registrar_v1& registrar,
+    std::string& error,
+    const bool discard_registrar_state_on_failure) {
     error.clear();
     if (host.abi_version != FSIM_SYSTEMC_ABI_VERSION
         || host.struct_size < sizeof(fsim_sc_host_v1)
@@ -197,8 +253,16 @@ std::unique_ptr<Plugin> Plugin::load(
         return nullptr;
     }
     if (status != FSIM_SC_OK) {
-        error = "SystemC plug-in initialization failed with status "
-            + std::to_string(static_cast<std::uint32_t>(status));
+        error = registrations.rejected
+            ? "SystemC plug-in initialization attempted an invalid or "
+              "duplicate factory registration"
+            : "SystemC plug-in initialization failed with status "
+                  + std::to_string(static_cast<std::uint32_t>(status));
+        return nullptr;
+    }
+    if (registrations.rejected) {
+        error = "SystemC plug-in initialization ignored an invalid or "
+                "duplicate factory registration";
         return nullptr;
     }
     for (const auto& factory : registrations.factories) {
@@ -221,18 +285,24 @@ std::unique_ptr<Plugin> Plugin::load(
             error =
                 "SystemC factory registration threw an exception: "
                 + std::string{exception.what()};
-            quarantine(std::move(plugin));
+            if (!discard_registrar_state_on_failure) {
+                quarantine(std::move(plugin));
+            }
             return nullptr;
         } catch (...) {
             error = "SystemC factory registration threw an unknown exception";
-            quarantine(std::move(plugin));
+            if (!discard_registrar_state_on_failure) {
+                quarantine(std::move(plugin));
+            }
             return nullptr;
         }
         if (status != FSIM_SC_OK) {
             error =
                 "SystemC factory registration failed with status "
                 + std::to_string(static_cast<std::uint32_t>(status));
-            quarantine(std::move(plugin));
+            if (!discard_registrar_state_on_failure) {
+                quarantine(std::move(plugin));
+            }
             return nullptr;
         }
     }
@@ -250,19 +320,25 @@ std::unique_ptr<Plugin> Plugin::load(
                 "SystemC factory-parameter registration threw an "
                 "exception: "
                 + std::string{exception.what()};
-            quarantine(std::move(plugin));
+            if (!discard_registrar_state_on_failure) {
+                quarantine(std::move(plugin));
+            }
             return nullptr;
         } catch (...) {
             error = "SystemC factory-parameter registration threw an "
                     "unknown exception";
-            quarantine(std::move(plugin));
+            if (!discard_registrar_state_on_failure) {
+                quarantine(std::move(plugin));
+            }
             return nullptr;
         }
         if (status != FSIM_SC_OK) {
             error =
                 "SystemC factory-parameter registration failed with status "
                 + std::to_string(static_cast<std::uint32_t>(status));
-            quarantine(std::move(plugin));
+            if (!discard_registrar_state_on_failure) {
+                quarantine(std::move(plugin));
+            }
             return nullptr;
         }
     }

@@ -35,9 +35,10 @@ struct PluginCompilePlan {
     HostToolchain toolchain{HostToolchain::gcc_like};
     // False when the selected compiler inputs cannot be exhaustively
     // discovered. GCC-like compilers are queried for their complete dependency
-    // closure, including implicit system headers. The MSVC fallback is
-    // conservative and disables persistent reuse when an include cannot be
-    // resolved from manifest roots. Raw response/options also disable reuse.
+    // closure, including implicit system headers. MSVC uses compiler-emitted
+    // source-dependency JSON and falls back to a conservative scanner that
+    // disables reuse when an include cannot be resolved from manifest roots.
+    // Raw response/options also disable reuse.
     // Non-cacheable plans use a unique key and are always rebuilt.
     bool cacheable{true};
     std::string cache_key;
@@ -60,8 +61,8 @@ struct PluginCompileResult {
 };
 
 // Constructs the compiler invocation without invoking a command shell. For a
-// cacheable GCC/Clang plan, this may directly invoke the selected compiler in
-// dependency-only mode to fingerprint the complete transitive include closure.
+// cacheable plan, this may directly invoke the selected compiler to fingerprint
+// the complete GNU-style or MSVC transitive dependency closure.
 // Relative source/include/cache paths are interpreted from working_directory
 // (or the process working directory when it is empty).
 [[nodiscard]] std::optional<PluginCompilePlan> plan_plugin_compile(
@@ -70,7 +71,8 @@ struct PluginCompileResult {
 
 // Compiles all sources into one cached host shared library. Concurrent
 // processes compiling the same key synchronize through a per-key directory
-// lock. A checksum sidecar prevents reuse of incomplete or corrupt artifacts.
+// lock. A versioned key/size/checksum commit record prevents reuse of missing,
+// incomplete, incompatible, or corrupt artifacts.
 [[nodiscard]] PluginCompileResult compile_plugin(
     const PluginCompileRequest& request,
     diagnostic::Engine& diagnostics);

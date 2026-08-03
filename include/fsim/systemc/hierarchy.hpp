@@ -258,6 +258,7 @@ public:
 
 private:
     explicit HierarchyRegistry(std::unique_ptr<Impl> impl) noexcept;
+    void reset() noexcept;
     std::unique_ptr<Impl> impl_;
 };
 

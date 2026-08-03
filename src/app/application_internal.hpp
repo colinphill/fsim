@@ -761,6 +761,7 @@ make_specialization_cache_keys(
     const project::Config& config,
     const CheckedProject& checked,
     const elaboration::ElaboratedDesign& design,
+    std::string_view systemc_plugin_key,
     diagnostic::Engine& diagnostics);
 
 bool wildcard_match(std::string_view pattern, std::string_view text);

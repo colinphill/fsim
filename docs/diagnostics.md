@@ -1692,14 +1692,14 @@ therefore excluded.
 | `FSIM-SC-C002` | error | A SystemC source set contains no C++ sources. |
 | `FSIM-SC-C003` | error | A SystemC source or dependency is missing, unreadable, invalid, or cannot be hashed/scanned. |
 | `FSIM-SC-C004` | error | A compiler option conflicts with fsim's shared-library build contract. |
-| `FSIM-SC-C005` | error | A SystemC plug-in cache or lock directory cannot be created. |
+| `FSIM-SC-C005` | error | A SystemC plug-in cache/lock/staging directory cannot be created, inspected, or cleaned safely. |
 | `FSIM-SC-C006` | error | The per-key SystemC plug-in cache lock cannot be acquired. |
-| `FSIM-SC-C007` | error | The host compiler is unavailable, failed to start, failed, or produced no shared library. |
-| `FSIM-SC-C008` | error | A compiled plug-in or checksum cannot be hashed, written, or atomically published. |
-| `FSIM-SC-C009` | error | A compiled SystemC plug-in failed ABI or entry-point validation. |
+| `FSIM-SC-C007` | error | The host compiler is unavailable, failed to start or complete, exited unsuccessfully, or produced no shared library. |
+| `FSIM-SC-C008` | error | A compiled plug-in or its versioned key/size/checksum commit record cannot be hashed, written, or atomically published. |
+| `FSIM-SC-C009` | error | A compiled SystemC plug-in failed image load, entry-point, ABI, initialization, or transactional registration validation. |
 | `FSIM-SC-C010` | error | An explicit linked library is missing or cannot be content-hashed. |
 | `FSIM-SC-C011` | error | A raw compiler option hides inputs from the persistent cache dependency model. |
-| `FSIM-SC-C012` | warning | Dependency closure or a volatile predefined macro prevents safe persistent plug-in cache reuse. |
+| `FSIM-SC-C012` | warning | Compiler identity, dependency closure, a raw external input, or a volatile predefined macro prevents safe persistent plug-in cache reuse. |
 | `FSIM-SC-C013` | error | A tracked plug-in input or compiler identity changed during compilation; the unpublished output was discarded. |
 
 ## Consistency check

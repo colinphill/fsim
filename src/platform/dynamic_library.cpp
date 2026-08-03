@@ -68,7 +68,23 @@ std::unique_ptr<DynamicLibrary> DynamicLibrary::open(
     const std::filesystem::path& path, std::string& error) {
     error.clear();
 #if defined(_WIN32)
-    const auto handle = LoadLibraryW(path.c_str());
+    std::error_code path_error;
+    const auto resolved = path.is_absolute()
+        ? path.lexically_normal()
+        : std::filesystem::absolute(path, path_error).lexically_normal();
+    if (path_error) {
+        error = "cannot resolve Windows library path: "
+            + path_error.message();
+        return nullptr;
+    }
+    // Resolve dependent DLLs from the loaded image's directory and the
+    // process' safe default locations. This makes a cached plug-in independent
+    // of the caller's current directory and avoids legacy search-path capture.
+    const auto handle = LoadLibraryExW(
+        resolved.c_str(),
+        nullptr,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
+            | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     if (handle == nullptr) {
         error = windows_error(GetLastError());
         return nullptr;
@@ -84,6 +100,43 @@ std::unique_ptr<DynamicLibrary> DynamicLibrary::open(
         return nullptr;
     }
     return std::unique_ptr<DynamicLibrary>{new DynamicLibrary{handle}};
+#endif
+}
+
+bool DynamicLibrary::is_loaded(
+    const std::filesystem::path& path) noexcept {
+    if (path.empty()) {
+        return false;
+    }
+#if defined(_WIN32)
+    std::error_code path_error;
+    const auto resolved = path.is_absolute()
+        ? path.lexically_normal()
+        : std::filesystem::absolute(path, path_error).lexically_normal();
+    if (path_error) {
+        return false;
+    }
+    HMODULE module = nullptr;
+    if (GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            resolved.c_str(),
+            &module)) {
+        return true;
+    }
+    return GetModuleHandleExW(
+        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        path.filename().c_str(),
+        &module) != 0;
+#elif defined(RTLD_NOLOAD)
+    const auto handle = dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD);
+    if (handle == nullptr) {
+        return false;
+    }
+    dlclose(handle);
+    return true;
+#else
+    (void)path;
+    return false;
 #endif
 }
 

@@ -33,6 +33,7 @@ InvocationScope::~InvocationScope()  { active_invocation = nullptr; }
 
 void shutdown_threads(HierarchyRegistry::Impl& registry) noexcept {
 #if defined(FSIM_HAS_BOOST_CONTEXT)
+    constexpr std::size_t maximum_shutdown_resumes = 1024;
     for (auto& [handle, state] : registry.thread_fibers) {
         (void)handle;
         if (!state || !state->started || state->terminated
@@ -45,7 +46,11 @@ void shutdown_threads(HierarchyRegistry::Impl& registry) noexcept {
         InvocationScope scope{invocation};
         state->stopping = true;
         try {
-            state->process = std::move(state->process).resume();
+            std::size_t resumes = 0;
+            while (!state->terminated && state->process
+                   && resumes++ < maximum_shutdown_resumes) {
+                state->process = std::move(state->process).resume();
+            }
         } catch (...) {
             // The process facade contains callback exceptions. Reaching this
             // catch indicates a broken plug-in boundary; retain no further

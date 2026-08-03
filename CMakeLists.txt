@@ -505,11 +505,26 @@ add_library(
 )
 add_library(fsim::systemc ALIAS fsim_systemc)
 fsim_configure_library(fsim_systemc)
+set(FSIM_SYSTEMC_FIBER_IDENTITY "disabled")
+if(FSIM_WITH_SYSTEMC_FIBERS)
+  if(DEFINED FSIM_BOOST_CONTEXT_IMPLEMENTATION)
+    set(
+      FSIM_SYSTEMC_FIBER_IDENTITY
+      "boost-${FSIM_BOOST_VERSION}-${FSIM_BOOST_CONTEXT_IMPLEMENTATION}"
+    )
+  else()
+    set(
+      FSIM_SYSTEMC_FIBER_IDENTITY
+      "boost-${FSIM_BOOST_VERSION}-installed"
+    )
+  endif()
+endif()
 target_compile_definitions(
   fsim_systemc
   PRIVATE
     FSIM_SYSTEMC_SUPPORT_LIBRARY_PATH="$<TARGET_FILE:fsim_systemc_support>"
     FSIM_SYSTEMC_INSTALLED_SUPPORT_LIBRARY_PATH="${CMAKE_INSTALL_FULL_LIBDIR}/${CMAKE_STATIC_LIBRARY_PREFIX}fsim_systemc_support${CMAKE_STATIC_LIBRARY_SUFFIX}"
+    FSIM_SYSTEMC_FIBER_IDENTITY="${FSIM_SYSTEMC_FIBER_IDENTITY}"
 )
 target_link_libraries(
   fsim_systemc

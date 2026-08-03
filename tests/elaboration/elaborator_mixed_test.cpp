@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
 
-#include <cstring>
-
 namespace fsim::tests::elaboration {
 
 void test_mixed_language_and_systemc() {
@@ -1474,13 +1472,8 @@ endmodule
         !unknown_sensitivity.ok()
         && has_diagnostic(
             unknown_sensitivity, "FSIM-ELAB-BIND-043"));
-    fsim_sc_edge_kind_v1 invalid_edge{};
-    const std::uint32_t invalid_edge_bytes = 99;
-    static_assert(sizeof(invalid_edge) == sizeof(invalid_edge_bytes));
-    std::memcpy(
-        &invalid_edge, &invalid_edge_bytes, sizeof(invalid_edge));
     const auto invalid_edge_sensitivity = elaborate_sensitivity({
-        {101, invalid_edge},
+        {101, 99},
     });
     assert(
         !invalid_edge_sensitivity.ok()

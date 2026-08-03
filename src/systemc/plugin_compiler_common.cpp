@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "plugin_compiler_internal.hpp"
 
+#include <charconv>
+
 namespace fsim::systemc::plugin_detail {
 
 std::atomic_uint64_t checksum_temporary_counter{};
@@ -194,21 +196,23 @@ void add_paths_to_key(
     }
 }
 
-void add_compiler_identity(
+[[nodiscard]] bool add_compiler_identity(
     compiler::CacheKeyBuilder& builder,
     const std::string& compiler_name,
     const std::filesystem::path& resolved_compiler) {
     builder.add("compiler.requested", compiler_name);
     if (resolved_compiler.empty()) {
         builder.add("compiler.resolved", "<unresolved>");
-        return;
+        builder.add("compiler.binary", "<unavailable>");
+        return false;
     }
 
     builder.add("compiler.resolved", resolved_compiler.generic_string());
     std::error_code error;
     if (builder.add_file("compiler.binary", resolved_compiler, error)) {
-        return;
+        return true;
     }
+    builder.add("compiler.binary", "<unavailable>");
     error.clear();
     const auto size = std::filesystem::file_size(resolved_compiler, error);
     if (!error) {
@@ -218,6 +222,57 @@ void add_compiler_identity(
     const auto stamp = std::filesystem::last_write_time(resolved_compiler, error);
     if (!error) {
         builder.add("compiler.mtime", std::to_string(stamp.time_since_epoch().count()));
+    }
+    return false;
+}
+
+void add_compiler_environment_to_key(
+    compiler::CacheKeyBuilder& builder,
+    const HostToolchain toolchain) {
+    constexpr std::array gcc_environment{
+        "PATH",
+        "CPATH",
+        "CPLUS_INCLUDE_PATH",
+        "C_INCLUDE_PATH",
+        "OBJC_INCLUDE_PATH",
+        "LIBRARY_PATH",
+        "COMPILER_PATH",
+        "GCC_EXEC_PREFIX",
+        "SOURCE_DATE_EPOCH"};
+    constexpr std::array msvc_environment{
+        "PATH",
+        "INCLUDE",
+        "LIB",
+        "LIBPATH",
+        "CL",
+        "_CL_",
+        "VCToolsInstallDir",
+        "VCINSTALLDIR",
+        "WindowsSdkDir",
+        "WindowsSDKVersion",
+        "UniversalCRTSdkDir",
+        "UCRTVersion",
+        "Platform",
+        "PreferredToolArchitecture",
+        "SOURCE_DATE_EPOCH"};
+    const auto add = [&](const auto& names) {
+        builder.add(
+            "compiler.environment.count",
+            std::to_string(names.size()));
+        for (std::size_t index = 0; index < names.size(); ++index) {
+            const auto value = support::environment_variable(names[index]);
+            builder.add(
+                "compiler.environment." + std::to_string(index) + ".name",
+                names[index]);
+            builder.add(
+                "compiler.environment." + std::to_string(index) + ".value",
+                value ? *value : std::string{"<unset>"});
+        }
+    };
+    if (toolchain == HostToolchain::msvc) {
+        add(msvc_environment);
+    } else {
+        add(gcc_environment);
     }
 }
 
@@ -745,6 +800,10 @@ void add_compiler_identity(
         return folded == "/c" || folded == "/e" || folded == "/ep" || folded == "/p"
             || folded == "/link" || folded == "/md" || folded == "/mdd"
             || folded == "/mt" || folded == "/mtd"
+            || folded == "/dll" || folded.rfind("/pdb:", 0) == 0
+            || folded.rfind("/implib:", 0) == 0
+            || folded.rfind("/machine:", 0) == 0
+            || folded.rfind("/incremental", 0) == 0
             || folded.rfind("/fe", 0) == 0 || folded.rfind("/fo", 0) == 0
             || folded.rfind("/fd", 0) == 0 || folded.rfind("/fa", 0) == 0
             || folded.rfind("/fr", 0) == 0 || folded.rfind("/out:", 0) == 0;
@@ -858,6 +917,14 @@ void add_compiler_identity(
 #endif
 }
 
+[[nodiscard]] constexpr bool msvc_debug_mode() noexcept {
+#if defined(_DEBUG)
+    return true;
+#else
+    return false;
+#endif
+}
+
 [[nodiscard]] std::vector<std::string> common_compile_argv(
     const HostToolchain toolchain,
     const std::string& compiler_name,
@@ -873,7 +940,16 @@ void add_compiler_identity(
         argv.emplace_back("/nologo");
         argv.emplace_back("/std:c++20");
         argv.emplace_back("/EHsc");
+        argv.emplace_back("/utf-8");
+        argv.emplace_back("/Zc:__cplusplus");
+        argv.emplace_back("/FC");
         argv.emplace_back(msvc_runtime_option());
+        if (msvc_debug_mode()) {
+            argv.emplace_back("/Od");
+            argv.emplace_back("/Z7");
+        } else {
+            argv.emplace_back("/O2");
+        }
         for (const auto& include : includes) {
             argv.push_back("/I" + path_argument(include));
         }
@@ -929,6 +1005,13 @@ void add_compiler_identity(
         }
 
         std::vector<std::string> link_argv;
+        const auto link_stem = output.parent_path() / output.stem();
+        auto link_program_database = link_stem;
+        link_program_database += ".pdb";
+        auto import_library = link_stem;
+        import_library += ".lib";
+        auto export_file = link_stem;
+        export_file += ".exp";
         link_argv.push_back(path_argument(
             resolved_compiler.empty() ? std::filesystem::path{compiler_name}
                                       : resolved_compiler));
@@ -941,6 +1024,15 @@ void add_compiler_identity(
         }
         link_argv.push_back("/Fe" + path_argument(output));
         link_argv.emplace_back("/link");
+        link_argv.emplace_back("/INCREMENTAL:NO");
+        link_argv.emplace_back("/MACHINE:X64");
+        link_argv.push_back(
+            "/PDB:" + path_argument(link_program_database));
+        link_argv.push_back(
+            "/IMPLIB:" + path_argument(import_library));
+        if (msvc_debug_mode()) {
+            link_argv.emplace_back("/DEBUG:FULL");
+        }
         link_argv.insert(
             link_argv.end(), settings.link_options.begin(), settings.link_options.end());
         for (const auto& library : settings.libraries) {
@@ -954,6 +1046,9 @@ void add_compiler_identity(
                 link_argv.push_back(library + ".lib");
             }
         }
+        intermediate_paths.push_back(std::move(link_program_database));
+        intermediate_paths.push_back(std::move(import_library));
+        intermediate_paths.push_back(std::move(export_file));
         commands.push_back({std::move(link_argv), working_directory, toolchain});
         return commands;
     }
@@ -1009,36 +1104,151 @@ void add_compiler_identity(
     return true;
 }
 
+namespace {
+
+constexpr std::string_view kArtifactMetadataMagic =
+    "fsim-systemc-artifact-v1";
+
+[[nodiscard]] std::filesystem::path artifact_metadata_path(
+    const std::filesystem::path& library) {
+    return library.string() + ".metadata";
+}
+
+[[nodiscard]] bool lowercase_sha256(const std::string_view value) noexcept {
+    return value.size() == 64
+        && std::all_of(value.begin(), value.end(), [](const char character) {
+               return (character >= '0' && character <= '9')
+                   || (character >= 'a' && character <= 'f');
+           });
+}
+
+[[nodiscard]] bool remove_stale_file(
+    const std::filesystem::path& path,
+    diagnostic::Engine& diagnostics) {
+    std::error_code error;
+    const bool exists = std::filesystem::exists(path, error);
+    if (!error && (!exists || std::filesystem::remove(path, error))) {
+        return true;
+    }
+    report_error(
+        diagnostics,
+        "FSIM-SC-C005",
+        "cannot remove stale SystemC plug-in build input: " + error.message(),
+        path);
+    return false;
+}
+
+} // namespace
+
 [[nodiscard]] bool valid_cached_artifact(
-    const std::filesystem::path& library,
+    const PluginCompilePlan& plan,
     std::error_code& error) {
     error.clear();
-    const auto checksum_path = library.string() + ".sha256";
-    if (!std::filesystem::is_regular_file(library, error)) {
+    if (!std::filesystem::is_regular_file(plan.library_path, error)) {
         error.clear();
         return false;
     }
-    const auto size = std::filesystem::file_size(library, error);
+    const auto size = std::filesystem::file_size(plan.library_path, error);
     if (error || size == 0) {
         error.clear();
         return false;
     }
 
-    std::ifstream checksum_stream(checksum_path, std::ios::binary);
-    if (!checksum_stream) {
+    std::ifstream metadata_stream(
+        artifact_metadata_path(plan.library_path), std::ios::binary);
+    if (!metadata_stream) {
         error.clear();
         return false;
     }
-    std::string expected;
-    std::getline(checksum_stream, expected);
-    if (expected.size() != 64) {
+    std::string magic;
+    std::string key;
+    std::string encoded_size;
+    std::string expected_checksum;
+    std::string trailing;
+    if (!std::getline(metadata_stream, magic)
+        || !std::getline(metadata_stream, key)
+        || !std::getline(metadata_stream, encoded_size)
+        || !std::getline(metadata_stream, expected_checksum)
+        || std::getline(metadata_stream, trailing)
+        || magic != kArtifactMetadataMagic
+        || key != plan.cache_key
+        || !lowercase_sha256(expected_checksum)) {
+        error.clear();
         return false;
     }
+
+    std::uintmax_t expected_size{};
+    const auto parsed = std::from_chars(
+        encoded_size.data(),
+        encoded_size.data() + encoded_size.size(),
+        expected_size);
+    if (parsed.ec != std::errc{}
+        || parsed.ptr != encoded_size.data() + encoded_size.size()
+        || expected_size == 0 || expected_size != size) {
+        error.clear();
+        return false;
+    }
+
     std::string actual;
-    if (!hash_file(library, actual, error)) {
+    if (!hash_file(plan.library_path, actual, error)) {
         return false;
     }
-    return actual == expected;
+    return actual == expected_checksum;
+}
+
+[[nodiscard]] bool prepare_artifact_build(
+    const PluginCompilePlan& plan,
+    diagnostic::Engine& diagnostics) {
+    if (!remove_stale_file(plan.build_path, diagnostics)) {
+        return false;
+    }
+    for (const auto& intermediate : plan.intermediate_paths) {
+        if (!remove_stale_file(intermediate, diagnostics)) {
+            return false;
+        }
+    }
+
+    std::error_code error;
+    const auto directory = plan.library_path.parent_path();
+    std::filesystem::directory_iterator iterator{
+        directory,
+        std::filesystem::directory_options::skip_permission_denied,
+        error};
+    if (error) {
+        report_error(
+            diagnostics,
+            "FSIM-SC-C005",
+            "cannot inspect SystemC plug-in staging directory: " + error.message(),
+            directory);
+        return false;
+    }
+    const auto metadata_prefix =
+        artifact_metadata_path(plan.library_path).filename().string() + ".tmp.";
+    const auto legacy_prefix =
+        plan.library_path.filename().string() + ".sha256.tmp.";
+    const std::filesystem::directory_iterator end;
+    for (; iterator != end; iterator.increment(error)) {
+        if (error) {
+            break;
+        }
+        const auto filename = iterator->path().filename().string();
+        if (!filename.starts_with(metadata_prefix)
+            && !filename.starts_with(legacy_prefix)) {
+            continue;
+        }
+        if (!remove_stale_file(iterator->path(), diagnostics)) {
+            return false;
+        }
+    }
+    if (error) {
+        report_error(
+            diagnostics,
+            "FSIM-SC-C005",
+            "cannot inspect SystemC plug-in staging directory: " + error.message(),
+            directory);
+        return false;
+    }
+    return true;
 }
 
 [[nodiscard]] bool publish_artifact(
@@ -1055,22 +1265,38 @@ void add_compiler_identity(
         return false;
     }
 
-    const auto checksum_path = std::filesystem::path{plan.library_path.string() + ".sha256"};
+    const auto artifact_size = std::filesystem::file_size(plan.build_path, error);
+    if (error || artifact_size == 0) {
+        report_error(
+            diagnostics,
+            "FSIM-SC-C008",
+            "cannot size compiled SystemC plug-in: " + error.message(),
+            plan.build_path);
+        return false;
+    }
+
+    const auto metadata_path = artifact_metadata_path(plan.library_path);
     const auto suffix =
         checksum_temporary_counter.fetch_add(1, std::memory_order_relaxed);
-    const auto temporary_checksum =
-        std::filesystem::path{checksum_path.string() + ".tmp." + std::to_string(suffix)};
+    const auto temporary_metadata = std::filesystem::path{
+        metadata_path.string() + ".tmp."
+        + std::to_string(dependency_process_id()) + "-"
+        + std::to_string(suffix)};
     {
-        std::ofstream stream(temporary_checksum, std::ios::binary | std::ios::trunc);
-        stream << checksum << '\n';
+        std::ofstream stream(
+            temporary_metadata, std::ios::binary | std::ios::trunc);
+        stream << kArtifactMetadataMagic << '\n'
+               << plan.cache_key << '\n'
+               << artifact_size << '\n'
+               << checksum << '\n';
         stream.flush();
         if (!stream) {
             report_error(
                 diagnostics,
                 "FSIM-SC-C008",
-                "cannot write SystemC plug-in checksum",
-                temporary_checksum);
-            std::filesystem::remove(temporary_checksum, error);
+                "cannot write SystemC plug-in metadata",
+                temporary_metadata);
+            std::filesystem::remove(temporary_metadata, error);
             return false;
         }
     }
@@ -1082,21 +1308,23 @@ void add_compiler_identity(
             "FSIM-SC-C008",
             "cannot publish compiled SystemC plug-in: " + error.message(),
             plan.library_path);
-        std::filesystem::remove(temporary_checksum, error);
+        std::filesystem::remove(temporary_metadata, error);
         return false;
     }
 
     if (!compiler::detail::atomic_replace_file(
-            temporary_checksum, checksum_path, error)) {
+            temporary_metadata, metadata_path, error)) {
         report_error(
             diagnostics,
             "FSIM-SC-C008",
-            "cannot publish SystemC plug-in checksum: " + error.message(),
-            checksum_path);
+            "cannot commit SystemC plug-in metadata: " + error.message(),
+            metadata_path);
         std::error_code ignored;
-        std::filesystem::remove(temporary_checksum, ignored);
+        std::filesystem::remove(temporary_metadata, ignored);
+        std::filesystem::remove(plan.library_path, ignored);
         return false;
     }
+    std::filesystem::remove(plan.library_path.string() + ".sha256", error);
     return true;
 }
 

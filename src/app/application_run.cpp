@@ -104,6 +104,7 @@ make_specialization_cache_keys(
     const project::Config& config,
     const CheckedProject& checked,
     const elaboration::ElaboratedDesign& design,
+    const std::string_view systemc_plugin_key,
     diagnostic::Engine& diagnostics)  {
   struct SourceSettings {
     const project::SourceSet* source_set{};
@@ -197,7 +198,7 @@ make_specialization_cache_keys(
     compiler::CacheKeyBuilder key;
     key.add(
         "specialization-provenance-schema",
-        "fsim-specialization-provenance-v3");
+        "fsim-specialization-provenance-v4");
     key.add("fsim-version", version);
     key.add("standard-library", standard_library_cache_version);
     key.add("delay-mode", project::to_string(config.run.delay_mode));
@@ -304,6 +305,98 @@ make_specialization_cache_keys(
     for (const auto& [name, value] : parameter_identity) {
       key.add("parameter-name", name);
       key.add("parameter-value", value);
+    }
+    // Native HDL objects address the common runtime by dense signal/process
+    // IDs. A SystemC image or hierarchy edit can therefore change the
+    // meaning of otherwise identical HDL SimIR. Keep transient plug-in
+    // pointers and native handles out of the key (they are rebound into each
+    // fresh interpreter), but compose every stable runtime mapping into the
+    // specialization provenance used by LLVM's persistent object cache.
+    key.add("systemc-runtime-schema", "fsim-systemc-runtime-v1");
+    key.add("systemc-plugin", systemc_plugin_key);
+    key.add(
+        "systemc-instance-count",
+        std::to_string(design.systemc_instances().size()));
+    for (const auto& instance : design.systemc_instances()) {
+      key.add("systemc-instance-id", std::to_string(instance.id));
+      key.add("systemc-factory-target", instance.target);
+      key.add("systemc-instance-path", instance.instance);
+      key.add(
+          "systemc-construction-count",
+          std::to_string(
+              instance.construction_identity_values.empty()
+                  ? instance.construction_values.size()
+                  : instance.construction_identity_values.size()));
+      if (instance.construction_identity_values.empty()) {
+        for (const auto& [name, value] : instance.construction_values) {
+          key.add("systemc-construction-name", name);
+          key.add("systemc-construction-value", std::to_string(value));
+        }
+      } else {
+        for (const auto& [name, value] :
+             instance.construction_identity_values) {
+          key.add("systemc-construction-name", name);
+          key.add("systemc-construction-value", value);
+        }
+      }
+      key.add("systemc-port-count", std::to_string(instance.ports.size()));
+      for (const auto& port : instance.ports) {
+        key.add("systemc-port-name", port.name);
+        key.add("systemc-port-signal", std::to_string(port.signal));
+      }
+      key.add("systemc-event-count", std::to_string(instance.events.size()));
+      for (const auto& event : instance.events) {
+        key.add("systemc-event-name", event.name);
+        key.add("systemc-event-signal", std::to_string(event.signal));
+      }
+      key.add(
+          "systemc-channel-count",
+          std::to_string(instance.primitive_channels.size()));
+      for (const auto& channel : instance.primitive_channels) {
+        key.add("systemc-channel-name", channel.name);
+      }
+      key.add(
+          "systemc-signal-count",
+          std::to_string(instance.internal_signals.size()));
+      for (const auto& signal : instance.internal_signals) {
+        key.add("systemc-signal-name", signal.name);
+        key.add("systemc-signal-id", std::to_string(signal.signal));
+      }
+      key.add(
+          "systemc-export-count",
+          std::to_string(instance.exports.size()));
+      for (const auto& export_object : instance.exports) {
+        key.add("systemc-export-name", export_object.name);
+        key.add(
+            "systemc-export-signal",
+            std::to_string(export_object.signal));
+        key.add(
+            "systemc-export-writable",
+            export_object.writable ? "true" : "false");
+      }
+    }
+    key.add(
+        "systemc-process-count",
+        std::to_string(design.systemc_processes().size()));
+    for (const auto& process : design.systemc_processes()) {
+      key.add("systemc-process-id", std::to_string(process.process));
+    }
+    key.add(
+        "systemc-object-count",
+        std::to_string(design.systemc_objects().size()));
+    for (const auto& object : design.systemc_objects()) {
+      key.add(
+          "systemc-object-kind",
+          std::to_string(static_cast<unsigned>(object.kind)));
+      key.add("systemc-object-name", object.name);
+      key.add("systemc-object-parent", object.parent);
+      key.add("systemc-object-type", object.type_name);
+      key.add(
+          "systemc-object-signal",
+          object.signal ? std::to_string(*object.signal) : "none");
+      key.add(
+          "systemc-object-process",
+          object.process ? std::to_string(*object.process) : "none");
     }
     result.push_back(key.finish());
   }

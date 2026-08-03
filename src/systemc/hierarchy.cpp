@@ -176,9 +176,19 @@ HierarchyRegistry::HierarchyRegistry(
 
 HierarchyRegistry::HierarchyRegistry(HierarchyRegistry&&) noexcept = default;
 HierarchyRegistry& HierarchyRegistry::operator=(
-    HierarchyRegistry&&) noexcept = default;
+    HierarchyRegistry&& other) noexcept {
+    if (this != &other) {
+        reset();
+        impl_ = std::move(other.impl_);
+    }
+    return *this;
+}
 
 HierarchyRegistry::~HierarchyRegistry() {
+    reset();
+}
+
+void HierarchyRegistry::reset() noexcept {
     if (!impl_) {
         return;
     }
@@ -186,6 +196,29 @@ HierarchyRegistry::~HierarchyRegistry() {
     // references, so release them before destroying modules or unloading the
     // dynamic library.
     shutdown_threads(*impl_);
+    // A caller may abandon a simulation after start without explicitly
+    // entering its terminal phase. Give every still-started root exactly one
+    // best-effort end_of_simulation callback while the image and host table
+    // remain live. Explicitly ended and poisoned roots are never repeated.
+    for (auto instance = impl_->live.rbegin();
+         instance != impl_->live.rend(); ++instance) {
+        if (instance->lifecycle
+            != Impl::LiveModule::LifecycleState::started) {
+            continue;
+        }
+        try {
+            invoke_lifecycle_entry(
+                *impl_,
+                instance->description.lifecycle.end_of_simulation,
+                instance->description.lifecycle.user,
+                "end_of_simulation");
+            instance->lifecycle =
+                Impl::LiveModule::LifecycleState::ended;
+        } catch (...) {
+            instance->lifecycle =
+                Impl::LiveModule::LifecycleState::poisoned;
+        }
+    }
     for (auto instance = impl_->live.rbegin();
          instance != impl_->live.rend(); ++instance) {
         try {
@@ -197,6 +230,7 @@ HierarchyRegistry::~HierarchyRegistry() {
     }
     impl_->live.clear();
     impl_->plugin.reset();
+    impl_.reset();
 }
 
 std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
@@ -248,20 +282,23 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
         registry_set_primitive_channel_kind;
     host.wait_event_timeout = registry_wait_event_timeout;
 
+    Impl staged_registrations;
     fsim_sc_registrar_v1 registrar{};
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;
     registrar.struct_size = sizeof(registrar);
-    registrar.context = impl.get();
+    registrar.context = &staged_registrations;
     registrar.register_factory = registry_register_factory;
     registrar.register_elaboration_factory =
         registry_register_elaboration_factory;
     registrar.register_factory_parameter =
         registry_register_factory_parameter;
 
-    impl->plugin = Plugin::load(path, host, registrar, error);
-    if (!impl->plugin) {
+    auto plugin = Plugin::load(path, host, registrar, error, true);
+    if (!plugin) {
         return nullptr;
     }
+    impl->factories.swap(staged_registrations.factories);
+    impl->plugin = std::move(plugin);
     return std::unique_ptr<HierarchyRegistry>{
         new HierarchyRegistry{std::move(impl)}};
 }

@@ -54,7 +54,9 @@ struct ForeignChild {
 
 struct ExternalSensitivity {
     std::uint64_t object{};
-    fsim_sc_edge_kind_v1 edge{FSIM_SC_ANY_EDGE};
+    // Store untrusted ABI metadata as an integer so validation can inspect an
+    // out-of-range value without first performing an undefined C++ enum load.
+    std::uint32_t edge{FSIM_SC_ANY_EDGE};
 };
 
 struct ExternalProcess {

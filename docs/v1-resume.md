@@ -28,10 +28,10 @@ risky structural transition that needs a durable boundary.
   commit `4ad6153`; mandatory non-documentation GitHub Actions run
   `30765734570` passed all 12 jobs. Batch 121 is complete in the current HEAD,
   Batch 122 through Batch 124 are complete in the current pushed checkpoint;
-  Batch 125 is current with Task 1 in progress.
+  Batch 125 is complete; Batch 126 is current with Task 1 in progress.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 398 authored C/C++ source, header,
+- The source-size refactor is complete: all 402 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 116-alternative
@@ -4052,47 +4052,316 @@ resolution at 0.53, and scoped locals at 0.86. Batch 124 closes as one
 accumulated checkpoint and has no GitHub Actions inspection because it is not
 a tenth-batch boundary.
 
-### Batch 125 — SystemC compiler, cache, and portability — In progress
+### Batch 125 — SystemC compiler, cache, and portability — Complete
 
 The current ten implementation tasks are:
 
-1. **In progress.** Audit the SystemC source compiler, dependency scanner,
+1. **Complete.** Audit the SystemC source compiler, dependency scanner,
    persistent plug-in cache, loader, registry, native-cache composition, fiber
    backends, and existing Linux/Windows evidence; define every missing compiler,
    cache, lifecycle, error, and portability case.
-2. **Pending.** Make plug-in compile fingerprints canonical across ordered
+2. **Complete.** Make plug-in compile fingerprints canonical across ordered
    sources, content, include directories, definitions, language mode, compiler
    identity/version/target, options, ABI version, and selected fiber backend.
-3. **Pending.** Complete transitive dependency fingerprints and invalidation for
+3. **Complete.** Complete transitive dependency fingerprints and invalidation for
    edited, added, removed, generated, missing, and system headers across GNU-
    style and MSVC dependency discovery, including paths containing spaces.
-4. **Pending.** Make persistent cache lookup/publication transactional and
+4. **Complete.** Make persistent cache lookup/publication transactional and
    concurrency-safe, with deterministic recovery from missing, truncated,
    corrupted, stale, or incompatible metadata and shared-library artifacts.
-5. **Pending.** Prove loaded-image, registration, factory, root, fiber, and
+5. **Complete.** Prove loaded-image, registration, factory, root, fiber, and
    callback ownership across cold/warm/edit builds, concurrent independent
    sessions, terminal and nonterminal teardown, rebuild, and unload ordering.
-6. **Pending.** Close exact compile, link, dependency, load, entry-point, ABI,
+6. **Complete.** Close exact compile, link, dependency, load, entry-point, ABI,
    initialization, registration, construction, destruction, and callback error
    containment without partial registration or stale cache publication.
-7. **Pending.** Compose plug-in/factory/construction/hierarchy identity into
+7. **Complete.** Compose plug-in/factory/construction/hierarchy identity into
    interpreter, LLVM O0/O2, and debug native-cache behavior, preserving valid
    reuse while preventing stale code, objects, callbacks, or native handles.
-8. **Pending.** Harden Windows process invocation, quoting, response paths,
+8. **Complete.** Harden Windows process invocation, quoting, response paths,
    DLL/PDB/runtime discovery, compiler diagnostics, PE/MASM fiber selection,
    and thread teardown while retaining portable Linux behavior.
-9. **Pending.** Add a combined compiler/cache/lifecycle matrix with Linux
+9. **Complete.** Add a combined compiler/cache/lifecycle matrix with Linux
    execution and Windows-targeted Debug/Release/LLVM/thread regression coverage,
    cold/warm/edit/corruption/concurrency cases, and exact negative diagnostics.
-10. **Pending.** Update matrix/subset/diagnostics/docs, pass sanitizer,
+10. **Complete.** Update matrix/subset/diagnostics/docs, pass sanitizer,
     source/catalog and full Debug/Release gates, then create and push the single
     Batch 125 checkpoint. This is not a mandatory CI-inspection boundary.
+
+Batch status is **complete**. This exact ten-task list remains the durable
+Batch 125 record in both the official plan and this handoff. Tasks 1 through 9
+used one accumulated dirty worktree with focused eight-worker Debug builds and
+tests; Task 10 owns the sanitizer, full regressions, documentation, commit, and
+push gate. GitHub builds use parallelism four, and Batch 125 does not require a
+non-documentation CI inspection.
+
+Task 1 confirms that the current compiler already hashes ordered source
+contents, explicit include/define sequences, ABI/host format, compiler binary,
+explicit linked libraries, and GCC-emitted transitive dependency closures. It
+uses per-key locks, checksum-validated atomic artifacts, post-compile identity
+verification, unique MSVC object/PDB paths and response files, buffered plug-in
+initialization, and fiber-before-module-before-library teardown. Existing tests
+cover spaces and literal arguments, stale locks, header/source/library edits,
+volatile macros, implicit GCC roots, malformed options, missing compilers,
+changed-during-compile rejection, initialization exceptions, PE/MASM source
+selection, and the four Windows LLVM/MSVC build shapes. The remaining closure
+is compiler/frontend/linker plus environment identity, compiler-emitted MSVC
+dependency closure, corruption/concurrent publication, transactional registrar
+rollback, complete load/factory/destructor errors, native-cache coupling, and
+executable Windows lifecycle/thread evidence. The exact eight-worker Debug
+build required no work; facade, loader, compiler, application, diagnostics
+catalog, and source budget passed 6/6 in 55.95 seconds. Task 2 is current; this
+starts the accumulated Batch 125 dirty worktree with no sanitizer, Release,
+full regression, commit, push, or CI inspection at this task boundary.
+
+Task 2 versions the compile fingerprint as `systemc-compiler-v2` and records
+the fixed C++20 source contract, runtime/SystemC ABI, host toolchain/format,
+MSVC CRT choice, and exact configured Boost.Context backend. Persistent reuse
+now requires hashing the resolved compiler executable rather than falling back
+to size/mtime alone. Ordered compiler-relevant environment values cover PATH,
+GCC include/library/program roots and reproducible-time input on GCC-like
+hosts, plus MSVC include/library/toolset/SDK/CL state on Windows. Existing
+ordered include, definition, raw-option, explicit-library, and source content
+sequences remain part of the key; raw options remain deliberately
+noncacheable. Tests prove stable repeats plus source-order, definition, and
+toolchain-environment divergence, including restoration to the original key.
+The exact eight-worker Debug builds succeeded; compiler, application,
+diagnostics catalog, and source budget passed 4/4 in 54.51 seconds, with the
+application at 52.72 seconds. The compiler implementation and test remain at
+393 and 860 lines. Task 3 is current; no sanitizer, Release, full regression,
+commit, push, or CI inspection ran at this task boundary.
+
+Task 3 adds compiler-emitted MSVC dependency closure through
+`/sourceDependencies` JSON while retaining the conservative manifest scanner
+when the selected compiler lacks the option, compilation cannot produce a
+report, or the report is malformed. The bounded parser accepts UTF-8 BOMs,
+JSON escapes, absolute paths containing spaces, and the documented `Source`,
+`Includes`, PCH, imported-module BMI, and imported-header-unit Header/BMI
+inputs. Every readable dependency is normalized, sorted, deduplicated, and
+content-hashed; source files are excluded from the duplicate dependency list,
+and binary IFC/PCH images are hashed without loading them into the volatile
+predefined-macro scanner. The shared GNU/MSVC finalizer now applies the same
+volatile-macro and deterministic ordering rules to both compiler-emitted
+formats. A portable fake `cl.exe` fixture proves escaped/BOM JSON, header and
+BMI edits, paths with spaces, a removed dependency, and malformed-report
+fallback on Linux, while native Windows plans now require system-header
+closure to remain cacheable. The exact eight-worker Debug build succeeded;
+compiler, application, diagnostics catalog, and source budget passed 4/4 in
+55.86 seconds, with the compiler at 1.61 seconds and application at 54.05
+seconds. The dependency implementation and compiler test remain at 848 and
+1,003 lines. Task 4 is current; no sanitizer, Release, full regression,
+commit, push, or CI inspection ran at this task boundary.
+
+Task 4 replaces the loose checksum sidecar with a versioned SystemC artifact
+commit record containing the exact cache key, shared-library size, and SHA-256.
+The library is atomically installed first and the metadata rename is the final
+commit marker, so readers accept only one complete matching pair; a failed
+metadata commit removes the uncommitted library. Under the existing process-
+aware per-key lock, rebuild preparation removes abandoned build outputs,
+objects/PDBs, metadata temporaries, and legacy checksum temporaries, while a
+successful publication retires the legacy checksum. Missing libraries or
+metadata, zero/truncated libraries, truncated/corrupt/incompatible metadata,
+size or checksum mismatches, and stale staging are deterministic misses and
+self-repair through one writer. The compiler fixture forces every recovery
+shape and launches three simultaneous callers after deleting the committed
+pair; exactly one reports a cold build, both waiters report validated hits,
+and the following lookup remains warm. The exact eight-worker Debug build
+succeeded; compiler, application, diagnostics catalog, and source budget
+passed 4/4 in 56.24 seconds, with the compiler at 2.42 seconds and application
+at 53.61 seconds. The compiler facade, cache implementation, dependency
+implementation, and compiler test remain at 390, 1,293, 848, and 1,099 lines.
+Task 5 is current; no sanitizer, Release, full regression, commit, push, or CI
+inspection ran at this task boundary.
+
+Task 5 closes loaded-image and executable-state ownership. Live-registry
+move-assignment no longer lets `unique_ptr` destroy an old implementation
+without its lifecycle protocol: the shared reset path first resumes and stops
+suspended fibers, gives each still-started root one reverse-order best-effort
+`end_of_simulation`, destroys module objects in reverse construction order,
+then unloads the plug-in before releasing its host context and registry state.
+Explicitly ended and poisoned roots are not repeated. `Plugin` itself is now
+nonmovable so default member assignment cannot discard its retained host table
+before unloading the old image. A read-only platform query provides executable
+proof of image residency without changing its loader reference count.
+
+The sample plug-in now exports a bounded lifecycle event probe and a minimal
+suspending thread factory. The loader test proves explicit terminal ordering
+for parent/nested roots, two simultaneously live independent registries, a
+suspended fiber stopped before implicit terminal/destruction during move-
+assignment, safe adoption and teardown of the second registry, and image
+residency until the final owner is released followed by actual unload. The
+existing application matrix continues to cover cold/warm native reuse and an
+edited SystemC source image. The exact eight-worker Debug build succeeded;
+loader, compiler, application, diagnostics catalog, and source budget passed
+5/5 in 56.27 seconds, with the loader at 0.00, compiler at 2.25, and application
+at 53.82 seconds. The dynamic-loader, hierarchy, plug-in loader test, and
+sample plug-in remain at 162, 938, 453, and 321 lines. Task 6 is current; no
+sanitizer, Release, full regression, commit, push, or CI inspection ran at
+this task boundary.
+
+Task 6 makes registration replay transactional for the fsim hierarchy. Buffer
+callbacks validate unique factory names, factory-before-parameter order,
+parameter uniqueness, construction types, and default ranges, and remember
+every rejected callback. A plug-in that ignores rejection and returns success
+is rejected before any caller registrar callback runs. Hierarchy loading now
+replays into a separate staging implementation, swaps the factory table only
+after complete success, and explicitly permits the image to unload when that
+discardable staging transaction fails. Arbitrary external registrars retain
+the conservative image quarantine when their accepted callbacks cannot be
+rolled back, preventing stale code pointers.
+
+Dedicated negative images and tests cover missing images and entry points,
+host/registrar ABI mismatch, initialization exceptions, ignored duplicate
+registration, construction status/null/exception failures with pending-handle
+rollback, escaped process callbacks, throwing destructors, and image unload
+after containment. The compiler fixture now executes portable preprocessing/
+compile and link failures and requires exact `FSIM-SC-C007` diagnostics and
+captured compiler output; existing missing compiler, option, dependency,
+publication, and changed-during-compile cases remain intact. The exact eight-
+worker Debug build succeeded; loader, compiler, application, diagnostics
+catalog, and source budget passed 5/5 in 56.05 seconds, with the loader at
+0.00, compiler at 2.42, and application at 53.41 seconds. The plug-in loader,
+hierarchy, loader test, negative image, empty image, and compiler test remain
+at 352, 941, 558, 149, 6, and 1,128 lines. Task 7 is current; no sanitizer,
+Release, full regression, commit, push, or CI inspection ran at this task
+boundary.
+
+Task 7 versions specialization provenance as
+`fsim-specialization-provenance-v4` and composes the exact SystemC plug-in
+compile key with every stable factory, typed construction, instance-path,
+port/event/channel/signal/export, process, and debugger-visible object mapping.
+Transient image addresses, callback pointers, and native handles stay out of
+persistent objects: each fresh interpreter binds those values through its
+owned hierarchy registry, while LLVM O0/O2 and debug modules reuse native code
+only when the stable common-runtime mapping is unchanged. Identical builds
+retain the same specialization keys; selecting a compatible alternative
+factory or a native-child hierarchy changes them.
+
+The SystemC scheduling matrix proves interpreter semantics, cold/warm LLVM O0
+and O2 reuse, and cold/warm debug O0 reuse. Editing the loaded plug-in source
+now produces native-cache misses and stores rather than the formerly accepted
+hits, preventing reuse across changed callbacks or hierarchy construction. The
+exact eight-worker Debug build succeeded; the application passed in 54.39
+seconds, and plug-in, compiler, diagnostics catalog, and source budget passed
+4/4 in 2.48 seconds. The identity implementation, SystemC integration test,
+and scheduling matrix remain at 828, 1,886, and 352 lines. Task 8 is current;
+no sanitizer, Release, full regression, commit, push, or CI inspection ran at
+this task boundary.
+
+Task 8 hardens the MSVC-compatible source-compiler contract without changing
+the portable direct-argv path. Compile commands select UTF-8 C++20 diagnostics,
+the host's exact CRT and Debug/Release optimization/debug mode, unique object
+and source-PDB paths, and full paths in captured diagnostics. The x86-64 DLL
+link uses explicit nonincremental PE output, link-PDB, import-library, and
+export paths; raw options cannot override those outputs, machine type, or
+incremental policy. The fetched Windows Boost.Context path now rejects
+non-64-bit or known non-x86-64 targets before selecting its three PE/MASM
+fcontext sources.
+
+Windows process launch validates inherited-handle-list sizing, passes only
+stdin and the merged diagnostic pipe, quotes a resolved executable separately
+from its mutable command line, uses a UTF-16 response file before the process
+limit, and distinguishes launch, pipe-read, wait, and exit-status failures.
+Windows-only execution forces a greater-than-command-line-limit argument set
+through dependency and real compilation in a path containing spaces, then
+requires cold/warm success and response-file cleanup. DLL loading now resolves
+the absolute image and searches its directory plus safe system defaults,
+independent of the caller's current directory. Suspended SystemC threads are
+drained through bounded repeated stop resumes before callbacks or images can
+be destroyed; the sample thread deliberately yields three times to prove that
+ordering on every fiber-enabled host.
+
+The exact eight-worker Debug build succeeded; plug-in, compiler, application,
+diagnostics catalog, and source budget passed 5/5 in 56.47 seconds, with the
+application at 53.84 and compiler at 2.43 seconds. The process, compiler-plan,
+thread-callback, dynamic-loader, compiler-test, and sample-plug-in sources
+remain at 510, 1,333, 1,730, 185, 1,181, and 348 lines. Task 9 is current; no
+sanitizer, Release, full regression, commit, push, or CI inspection ran at this
+task boundary.
+
+Task 9 adds a dedicated 231-line `fsim.systemc.matrix` that compiles a copied
+real plug-in through the public source compiler, proves cold/warm publication,
+loads factories and roots, suspends a thread where the fiber backend is
+available, edits the still-loaded image's source into a distinct artifact,
+repairs a corrupt DLL/shared object, races three concurrent rebuild callers,
+proves old/new image residency and unload, and requires exact compile-failure
+diagnostics. It runs in every configured Linux and Windows Debug/Release job.
+
+The merged application host now exposes the existing integration/scheduling
+coverage as `fsim.application.systemc_matrix`, labelled for SystemC, compiler,
+cache, lifecycle, threads, LLVM, debug, and portability. This retains one
+physical test executable while giving Windows MSVC and MSVC/clang-cl LLVM O0,
+O2, debug, interpreter, edit, trace, and thread coverage an independently
+selectable process. Nonmerged builds retain the original core invocation. The
+named application matrix passed in 44.67 seconds; the compact matrix passed in
+0.70 seconds; diagnostics catalog, source budget, and the newly shortened core
+application passed 4/4 in 10.06 seconds with core at 9.15 seconds. The new
+matrix and selector remain at 231 and 15 lines, and `tests/CMakeLists.txt`
+remains at 1,765 lines. Task 10 is current; no sanitizer, Release, full
+regression, commit, push, or CI inspection ran at this task boundary.
+
+Task 10 closes the compiler/cache/portability batch. The release authority,
+SystemC subset, and diagnostics reference now describe canonical compiler and
+dependency fingerprints, transactional artifact publication, transactional
+registration, retained executable ownership, specialization provenance, exact
+failure containment, and the Windows compiler/process/DLL/fiber contract. The
+diagnostics catalog covers all 1,622 production codes, and all 402 authored
+C/C++ sources pass the 2,000-line gate. The LLVM-disabled ASan/UBSan suite
+passed 77/77 in 437.42 seconds with leak detection disabled only because the
+local sandbox denies LeakSanitizer's ptrace operation; strict ASan string
+checks and halt-on-error UBSan remained enabled. The named SystemC matrix,
+containers, and scoped locals took 131.90, 212.10, and 0.51 seconds.
+
+The exact LLVM 22.1.8 warnings-as-errors Debug suite passed 80/80 in 230.94
+seconds, with the named SystemC matrix at 45.81 seconds, containers at 111.06,
+and scoped locals at 0.83. Release passed 80/80 in 206.43 seconds, with the
+named SystemC matrix at 43.36 seconds, containers at 92.83, and scoped locals
+at 0.83. Batch 125 closes as one accumulated checkpoint and has no GitHub
+Actions inspection because it is not a tenth-batch boundary.
+
+### Batch 126 — Typed HIR and DesignIR boundaries — In progress
+
+The current ten implementation tasks are:
+
+1. **In progress.** Audit every VHDL and SystemVerilog parse-tree dependency in
+   analysis, elaboration, specialization, execution, diagnostics, cache, and
+   debugger paths; define the exact typed-HIR and elaborated-DesignIR boundary
+   gaps, identity requirements, and migration order.
+2. **Pending.** Introduce shared stable semantic identities, owning source-file
+   and expansion provenance, exact source spans, type/value references, and
+   deterministic traversal contracts without retaining parser-owned storage.
+3. **Pending.** Complete typed VHDL HIR for design units, declarations, scopes,
+   names, overload sets, subtypes, constraints, aliases, attributes, generics,
+   ports, components, packages, configurations, and generated declarations.
+4. **Pending.** Complete typed VHDL HIR for expressions, aggregates, sequential
+   and concurrent statements, call associations, waits, assertions, files,
+   protected/access operations, and waveform transactions.
+5. **Pending.** Complete typed SystemVerilog HIR for compilation units, modules,
+   packages, interfaces, declarations, scopes, nets/variables, parameters,
+   types, ports/modports, callables, classes permitted by v1, and generates.
+6. **Pending.** Complete typed SystemVerilog HIR for expressions, selections,
+   assignment patterns, statements, processes, timing/event controls, forks,
+   assertions, system tasks, strings, files, and containers.
+7. **Pending.** Complete elaborated DesignIR for hierarchy, specializations,
+   objects, drivers, ports/exports, callables, processes, conversions,
+   sensitivities, transactions, and mixed-language/SystemC boundaries using
+   stable semantic identities only.
+8. **Pending.** Migrate lowering, interpreter, LLVM, cache/provenance,
+   diagnostics, debugger, VCD, and API consumers to the explicit boundaries;
+   prove no downstream consumer depends on parse-tree addresses or lifetimes.
+9. **Pending.** Add a combined VHDL/SystemVerilog/mixed/SystemC boundary matrix
+   covering positive and negative legality, stable identities, source and
+   macro provenance, cold/warm/edit cache behavior, interpreter/O0/O2/debug
+   agreement, serialization-order independence, and Windows portability.
+10. **Pending.** Update matrix/architecture/diagnostics/docs, pass sanitizer,
+    source/catalog and full Debug/Release gates, then create and push the single
+    Batch 126 checkpoint. This is not a mandatory CI-inspection boundary.
 
 Batch status is **in progress** with Task 1 current. Keep this exact ten-task
 list current in both the official plan and this handoff. Tasks 1 through 9 use
 one accumulated dirty worktree with focused eight-worker Debug builds and
 tests; Task 10 owns the sanitizer, full regressions, documentation, commit, and
-push gate. GitHub builds use parallelism four, and Batch 125 does not require a
+push gate. GitHub builds use parallelism four, and Batch 126 does not require a
 non-documentation CI inspection.
 
 Batch 110 has advanced through these validated features:

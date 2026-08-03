@@ -140,7 +140,11 @@ std::optional<BuiltProject> build_project(
 
   auto specialization_cache_keys =
       make_specialization_cache_keys(
-          config, *checked, *elaborated.design, diagnostics);
+          config,
+          *checked,
+          *elaborated.design,
+          systemc_plugin_key,
+          diagnostics);
   if (!specialization_cache_keys) {
     return std::nullopt;
   }

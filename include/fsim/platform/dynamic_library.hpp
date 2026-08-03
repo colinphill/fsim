@@ -19,6 +19,8 @@ public:
 
     [[nodiscard]] static std::unique_ptr<DynamicLibrary> open(
         const std::filesystem::path& path, std::string& error);
+    [[nodiscard]] static bool is_loaded(
+        const std::filesystem::path& path) noexcept;
 
     [[nodiscard]] void* symbol(std::string_view name, std::string& error) const;
     [[nodiscard]] bool valid() const noexcept;

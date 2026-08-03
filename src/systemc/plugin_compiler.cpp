@@ -96,9 +96,13 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
 
     compiler::CacheKeyBuilder key_builder;
     key_builder.add("kind", "fsim-systemc-shared-library-v1");
+    key_builder.add("fingerprint-schema", "systemc-compiler-v2");
+    key_builder.add("source-language", "c++");
+    key_builder.add("source-standard", "c++20");
     key_builder.add("runtime-abi", std::to_string(runtime_abi_version));
     key_builder.add("systemc-abi", std::to_string(FSIM_SYSTEMC_ABI_VERSION));
     key_builder.add("toolchain", to_string(toolchain));
+    key_builder.add("fiber-backend", FSIM_SYSTEMC_FIBER_IDENTITY);
     if (toolchain == HostToolchain::msvc) {
         key_builder.add("msvc-runtime", msvc_runtime_option());
     }
@@ -107,7 +111,18 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
 #else
     key_builder.add("host-format", "linux-elf-x86-64");
 #endif
-    add_compiler_identity(key_builder, compiler_name, resolved_compiler);
+    const bool compiler_identity_complete =
+        add_compiler_identity(
+            key_builder, compiler_name, resolved_compiler);
+    add_compiler_environment_to_key(key_builder, toolchain);
+    if (!compiler_identity_complete) {
+        report_dependency_cache_disabled(
+            diagnostics,
+            "the selected compiler executable identity could not be hashed",
+            resolved_compiler.empty()
+                ? std::filesystem::path{compiler_name}
+                : resolved_compiler);
+    }
     add_paths_to_key(key_builder, "include", includes);
     add_sequence_to_key(key_builder, "define", effective_settings.defines);
     add_sequence_to_key(
@@ -120,8 +135,8 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     // toolchain-specific spelling. Keep supporting the literal argv contract,
     // but never claim a persistent hit unless all inputs came through the
     // structured manifest fields.
-    bool cacheable =
-        effective_settings.compile_options.empty()
+    bool cacheable = compiler_identity_complete
+        && effective_settings.compile_options.empty()
         && effective_settings.link_options.empty();
     key_builder.add("source.count", std::to_string(sources.size()));
     for (std::size_t index = 0; index < sources.size(); ++index) {
@@ -204,7 +219,7 @@ PluginCompileResult compile_plugin(
     result.library_path = plan->library_path;
 
     std::error_code error;
-    if (plan->cacheable && valid_cached_artifact(plan->library_path, error)) {
+    if (plan->cacheable && valid_cached_artifact(*plan, error)) {
         result.success = true;
         result.cache_hit = true;
         result.compiler_exit_code = 0;
@@ -234,7 +249,7 @@ PluginCompileResult compile_plugin(
         return result;
     }
 
-    if (plan->cacheable && valid_cached_artifact(plan->library_path, error)) {
+    if (plan->cacheable && valid_cached_artifact(*plan, error)) {
         result.success = true;
         result.cache_hit = true;
         result.compiler_exit_code = 0;
@@ -250,11 +265,8 @@ PluginCompileResult compile_plugin(
             plan->library_path.parent_path());
         return result;
     }
-    std::filesystem::remove(plan->build_path, error);
-    error.clear();
-    for (const auto& intermediate : plan->intermediate_paths) {
-        std::filesystem::remove(intermediate, error);
-        error.clear();
+    if (!prepare_artifact_build(*plan, diagnostics)) {
+        return result;
     }
 
     if (plan->commands.empty() || plan->commands.front().argv.empty()
@@ -288,6 +300,15 @@ PluginCompileResult compile_plugin(
                 "FSIM-SC-C007",
                 "cannot start SystemC compiler '" + command.argv.front()
                     + "': " + process.start_error);
+            return result;
+        }
+        if (!process.execution_error.empty()) {
+            report_error(
+                diagnostics,
+                "FSIM-SC-C007",
+                "SystemC compiler process failed after launch: "
+                    + process.execution_error);
+            std::filesystem::remove(plan->build_path, error);
             return result;
         }
         if (process.exit_code == 0) {

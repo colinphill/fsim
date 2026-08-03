@@ -1311,6 +1311,48 @@ auto systemc_method_compiled = fsim::app::build_project(
     systemc_method_config, systemc_method_diagnostics);
 assert(systemc_method_reference);
 assert(systemc_method_compiled);
+assert(systemc_method_reference->specialization_cache_keys.size() == 1);
+assert(
+    systemc_method_compiled->specialization_cache_keys
+    == systemc_method_reference->specialization_cache_keys);
+const auto method_runtime_identity =
+    systemc_method_reference->specialization_cache_keys.front();
+
+// Keep the HDL source and specialization unchanged while selecting a
+// different compatible factory, then a factory with a nested native child.
+// Native specialization provenance must follow the selected factory schema,
+// typed construction tuple, and stable hierarchy rather than transient image
+// addresses or handles.
+auto alternate_factory_config = systemc_method_config;
+alternate_factory_config.bindings.front().target =
+    "systemc:models.bound_ports";
+fsim::diagnostic::Engine alternate_factory_diagnostics;
+auto alternate_factory_project = fsim::app::build_project(
+    alternate_factory_config, alternate_factory_diagnostics);
+assert(alternate_factory_project);
+assert(alternate_factory_project->specialization_cache_keys.size() == 1);
+assert(
+    alternate_factory_project->specialization_cache_keys.front()
+    != method_runtime_identity);
+assert(
+    alternate_factory_project->design.systemc_instances().front().target
+    == "systemc:models.bound_ports");
+
+auto alternate_hierarchy_config = systemc_method_config;
+alternate_hierarchy_config.bindings.front().target =
+    "systemc:models.native_hierarchy";
+fsim::diagnostic::Engine alternate_hierarchy_diagnostics;
+auto alternate_hierarchy_project = fsim::app::build_project(
+    alternate_hierarchy_config, alternate_hierarchy_diagnostics);
+assert(alternate_hierarchy_project);
+assert(alternate_hierarchy_project->specialization_cache_keys.size() == 1);
+assert(
+    alternate_hierarchy_project->specialization_cache_keys.front()
+    != method_runtime_identity);
+assert(
+    alternate_hierarchy_project->specialization_cache_keys.front()
+    != alternate_factory_project->specialization_cache_keys.front());
+assert(alternate_hierarchy_project->design.systemc_instances().size() == 2);
 assert(
     systemc_method_reference->design.systemc_processes().size()
     == 1);

@@ -10,10 +10,12 @@
 
 namespace fsim::systemc {
 
+class HierarchyRegistry;
+
 class Plugin final {
 public:
-    Plugin(Plugin&&) noexcept = default;
-    Plugin& operator=(Plugin&&) noexcept = default;
+    Plugin(Plugin&&) = delete;
+    Plugin& operator=(Plugin&&) = delete;
     Plugin(const Plugin&) = delete;
     Plugin& operator=(const Plugin&) = delete;
     ~Plugin() = default;
@@ -27,6 +29,15 @@ public:
     [[nodiscard]] const std::filesystem::path& path() const noexcept;
 
 private:
+    friend class HierarchyRegistry;
+
+    [[nodiscard]] static std::unique_ptr<Plugin> load(
+        const std::filesystem::path& path,
+        const fsim_sc_host_v1& host,
+        fsim_sc_registrar_v1& registrar,
+        std::string& error,
+        bool discard_registrar_state_on_failure);
+
     Plugin(
         std::filesystem::path path,
         const fsim_sc_host_v1& host,
