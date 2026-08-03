@@ -9885,7 +9885,7 @@ seconds. Exact LLVM 22.1.8 warnings-as-errors Debug passed 95/95 in 249.39
 seconds, including SystemC matrix in 45.31, containers in 125.84, and scoped
 locals in 0.89 seconds. Release passed 95/95 in 210.55 seconds, including
 SystemC matrix in 41.59, containers in 95.41, and scoped locals in 0.82
-seconds. Final gates cover 1,624 production diagnostics, 423 authored sources
+seconds. Final gates cover 1,624 production diagnostics, 424 authored sources
 within the 2,000-line limit, 1,080 required release rows with no explicit
 evidence gaps, 105 conformance expectations in 28 fixtures owned by 27 CTests,
 and 20 exact portability rows. All ten Batch 129 tasks are complete; no GitHub
@@ -10017,7 +10017,7 @@ boundary.
 Task 7 is focused-complete. The new
 [`docs/v1-inventory-release-audit.md`](v1-inventory-release-audit.md) and
 `fsim.v1-inventory-release` gate compose and freeze 1,624 production
-diagnostics, 423 authored sources under the 2,000-line cap, 499 SPDX-owned
+diagnostics, 424 authored sources under the 2,000-line cap, 500 SPDX-owned
 repository artifacts, the 31-file/26-VHDL checksummed IEEE snapshot, 105
 conformance expectations in 28 fixtures owned by 27 CTests, and 10 reviewed
 plus 6 excluded provenance identities. The audit rejects an unlicensed owned
@@ -10036,7 +10036,7 @@ Task 8 is focused-complete. The new
 freeze 12 hosted configurations, six four-worker CI build steps, the local
 eight-link pool, compact Debug objects, 8 MiB MSVC-compatible test stacks,
 20/45/70-minute job bounds, 60/120/600/1200-second test classes, scoped/SystemC
-phase traces, 16 explicit platform files, and 20 portability rows. This was a
+phase traces, 14 explicit platform files, and 20 portability rows. This was a
 static local inspection only; no GitHub Actions state was queried. The
 eight-worker Debug build required no compilation. Resource/portability owners,
 the SystemC matrix, and scoped locals passed 11/11 in 46.30 seconds, including
@@ -10066,8 +10066,8 @@ detection disabled only for the managed ptrace restriction; SystemC took
 seconds, including SystemC in 45.16, containers in 124.68, transition delays
 in 0.73, and scoped locals in 0.84. Release passed 105/105 in 223.76 seconds,
 including SystemC in 42.05, containers in 95.18, transition delays in 0.64,
-and scoped locals in 0.83. The final gates freeze 1,624 diagnostics, 423
-bounded C/C++ sources, 499 SPDX-owned artifacts, 1,080 execute rows, 4,320
+and scoped locals in 0.83. The final gates freeze 1,624 diagnostics, 424
+bounded C/C++ sources, 500 SPDX-owned artifacts, 1,080 execute rows, 4,320
 linked evidence cells, 105 conformance expectations, 20 portability rows, and
 the staged installed public contract. `git diff --check` and the new-document
 relative-link check pass. The single checkpoint commit and push follow this
@@ -10109,6 +10109,34 @@ stream chunks no larger than 12,095 bytes and extends the MSVC contract to pin
 that shape. Exact-LLVM Debug and Release rebuilt with eight workers, and the
 SystemC application matrix plus contract passed 2/2 in 45.09 and 42.04
 seconds. The fourth repair checkpoint and replacement hosted run are pending.
+
+The fourth repair checkpoint `8876a8c` was pushed, and replacement run
+`30824506517` compiled every job successfully. All six Ubuntu jobs passed:
+GCC Debug/Release, exact-LLVM Debug/Release, ASan/UBSan, and the Clang fuzz
+lane. All six Windows jobs then exposed one shared test-portability
+cluster: checkout-native CRLF changed the pinned feature-matrix byte digest;
+UTF-8 generic source names were compared with native path spellings; the
+Windows loaded-module probe fell back to a colliding plug-in filename; two
+fixtures retained obsolete no-cache expectations after complete MSVC
+dependency discovery became cacheable; and the Unicode C API fixture reached
+an incomplete UTF-8-to-native conversion in preprocessing. Plain MSVC Release
+also exposed one intermittent concurrent `cl.exe` dependency-scan/cache-
+publication failure. The follow-up normalizes matrix line endings before
+hashing, completes native/UTF-8 conversions at project, preprocessor,
+analysis, cache, debugger, and Tcl seams, compares existing test paths by
+filesystem identity, requires exact-path Windows module lookup, shares the
+cache-hit expectations across hosts, and serializes the complete Windows
+plug-in compile transaction in-process while retaining the per-key
+cross-process lock. The source and license inventories advance to 424 and
+500, and the explicit-platform inventory contracts to 14 because the two
+application fixtures no longer need native-only branches. Exact-LLVM Debug
+and Release rebuilt warning-clean with eight workers and passed complete
+105/105 regressions in 261.01 and 227.84 seconds; scoped locals remained quick
+at 0.85/0.84 seconds. The final clang-cl Release job confirmed the concurrency
+defect by timing out `fsim.systemc.compiler` at its 1,500-second bound, while
+plain MSVC Release failed an assertion inside that same three-caller section;
+the Windows transaction serialization directly owns both outcomes. The fifth
+repair checkpoint and its replacement hosted run are pending.
 
 ## Forward language-closure feature batches
 

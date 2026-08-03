@@ -14,6 +14,10 @@ set(FSIM_SYSTEMC_COMPILER_TEST
   "${FSIM_SOURCE_DIR}/tests/systemc/plugin_compiler_test.cpp")
 set(FSIM_APPLICATION_SYSTEMC_SOURCE
   "${FSIM_SOURCE_DIR}/tests/app/application_test_sources_systemc.cpp")
+set(FSIM_RELEASE_AUDIT
+  "${FSIM_SOURCE_DIR}/cmake/CheckV1ReleaseAudit.cmake")
+set(FSIM_RELEASE_CANDIDATE
+  "${FSIM_SOURCE_DIR}/cmake/CheckV1ReleaseCandidate.cmake")
 set(FSIM_FRONTEND "${FSIM_SOURCE_DIR}/tests/frontend/frontend_sv_conformance_tests.cpp")
 set(FSIM_ELABORATION "${FSIM_SOURCE_DIR}/tests/elaboration/elaborator_sv_conformance_test.cpp")
 foreach(FSIM_INPUT IN ITEMS
@@ -24,6 +28,8 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_SYSTEMC_CORE}"
     "${FSIM_SYSTEMC_COMPILER_TEST}"
     "${FSIM_APPLICATION_SYSTEMC_SOURCE}"
+    "${FSIM_RELEASE_AUDIT}"
+    "${FSIM_RELEASE_CANDIDATE}"
     "${FSIM_FRONTEND}"
     "${FSIM_ELABORATION}")
   if(NOT EXISTS "${FSIM_INPUT}")
@@ -40,6 +46,8 @@ file(READ "${FSIM_SYSTEMC_COMPILER_TEST}" FSIM_SYSTEMC_COMPILER_TEST_CONTENTS)
 file(READ
   "${FSIM_APPLICATION_SYSTEMC_SOURCE}"
   FSIM_APPLICATION_SYSTEMC_SOURCE_CONTENTS)
+file(READ "${FSIM_RELEASE_AUDIT}" FSIM_RELEASE_AUDIT_CONTENTS)
+file(READ "${FSIM_RELEASE_CANDIDATE}" FSIM_RELEASE_CANDIDATE_CONTENTS)
 file(READ "${FSIM_FRONTEND}" FSIM_FRONTEND_CONTENTS)
 file(READ "${FSIM_ELABORATION}" FSIM_ELABORATION_CONTENTS)
 
@@ -98,6 +106,24 @@ if(FSIM_APPLICATION_SYSTEMC_SOURCE_CHUNK_COUNT LESS 6)
   message(FATAL_ERROR
     "generated SystemC application source lost its MSVC-safe literal chunks")
 endif()
+
+foreach(FSIM_RELEASE_CONTENTS IN ITEMS
+    FSIM_RELEASE_AUDIT_CONTENTS
+    FSIM_RELEASE_CANDIDATE_CONTENTS)
+  string(FIND
+    "${${FSIM_RELEASE_CONTENTS}}"
+    "string(REPLACE \"\\r\\n\" \"\\n\" FSIM_MATRIX_CONTENTS"
+    FSIM_MATRIX_NORMALIZATION_INDEX)
+  string(FIND
+    "${${FSIM_RELEASE_CONTENTS}}"
+    "string(SHA256 FSIM_MATRIX_DIGEST \"\${FSIM_MATRIX_CONTENTS}\")"
+    FSIM_MATRIX_HASH_INDEX)
+  if(FSIM_MATRIX_NORMALIZATION_INDEX EQUAL -1
+      OR FSIM_MATRIX_HASH_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "release matrix hashing lost CRLF-independent MSVC policy")
+  endif()
+endforeach()
 
 foreach(FSIM_C_HOST IN ITEMS
     fsim_jit_runtime_c_tests

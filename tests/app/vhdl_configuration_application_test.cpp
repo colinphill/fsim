@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "path_test_support.hpp"
 
 #include <algorithm>
 #include <array>
@@ -152,39 +153,30 @@ Capture run_once(
                    "vhdl-configuration-v2")
                 != std::string::npos;
       }));
-  assert(std::ranges::find(
+  assert(fsim::test::has_source_dependency(
       root.source_dependencies,
-      config.source_sets.front().files[4].string())
-      != root.source_dependencies.end());
+      config.source_sets.front().files[4]));
   for (const auto path : {
            "runtime_configuration.configured_child",
            "runtime_configuration.remaining_child"}) {
-    assert(std::ranges::find(
+    assert(fsim::test::has_source_dependency(
         specialization(*project, path).source_dependencies,
-        config.source_sets.front().files[4].string())
-        != specialization(*project, path)
-               .source_dependencies.end());
+        config.source_sets.front().files[4]));
   }
-  assert(std::ranges::find(
+  assert(!fsim::test::has_source_dependency(
       specialization(
           *project,
           "runtime_configuration.direct_child")
           .source_dependencies,
-      config.source_sets.front().files[4].string())
-      == specialization(
-             *project,
-             "runtime_configuration.direct_child")
-             .source_dependencies.end());
+      config.source_sets.front().files[4]));
   for (const auto path : {
            "runtime_configuration.wrapper_child",
            "runtime_configuration.wrapper_child.nested",
            "runtime_configuration.direct_configuration_child",
            "runtime_configuration.direct_configuration_child.nested"}) {
-    assert(std::ranges::find(
+    assert(fsim::test::has_source_dependency(
         specialization(*project, path).source_dependencies,
-        config.source_sets.front().files[2].string())
-        != specialization(*project, path)
-               .source_dependencies.end());
+        config.source_sets.front().files[2]));
   }
 
   Capture capture;

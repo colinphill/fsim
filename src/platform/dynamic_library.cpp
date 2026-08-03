@@ -123,10 +123,7 @@ bool DynamicLibrary::is_loaded(
             &module)) {
         return true;
     }
-    return GetModuleHandleExW(
-        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        path.filename().c_str(),
-        &module) != 0;
+    return false;
 #elif defined(RTLD_NOLOAD)
     const auto handle = dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD);
     if (handle == nullptr) {

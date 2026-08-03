@@ -56,18 +56,8 @@ assert(first->systemc_plugins.size() == 1);
 assert(!first->cache_hit);
 auto second = fsim::app::build_project(config, diagnostics);
 assert(second);
-#if defined(_WIN32)
-// The conservative MSVC dependency scanner intentionally disables
-// persistent caching when the plug-in reaches implicit SDK headers.
-assert(!second->cache_hit);
-#else
 assert(second->cache_hit);
-#endif
-#if defined(_WIN32)
-assert(first->systemc_hierarchy != second->systemc_hierarchy);
-#else
 assert(first->systemc_hierarchy == second->systemc_hierarchy);
-#endif
 const auto child_q = first->design.find_signal("tb.u_child.value");
 assert(child_q);
 const auto paths = first->design.signal_paths();

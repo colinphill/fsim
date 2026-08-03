@@ -77,6 +77,8 @@ endforeach()
 foreach(FSIM_COMPILER_POLICY IN ITEMS
     "systemc-compiler-v2"
     "host-format"
+    "windows_compile_mutex"
+    "const std::lock_guard compile_guard"
     "add_compiler_identity"
     "add_compiler_environment_to_key"
     "add_compiler_dependencies_to_key"

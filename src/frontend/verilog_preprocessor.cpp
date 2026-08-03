@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/preprocessor.hpp"
+#include "fsim/support/path.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -273,14 +274,15 @@ class VerilogPreprocessor {
         roots.empty()
             ? std::filesystem::path{"<empty>.sv"}
             : roots.back();
-    if (!valid_language(fallback.string())) {
+    if (!valid_language(fsim::support::path_to_utf8(fallback))) {
       return finish_compilation_unit(fallback);
     }
     if (roots.empty()) {
       diagnose(
           "FSIM-SV-PP-031",
           "a Verilog compilation unit requires at least one root file",
-          {fallback.string(), {}, {}, fallback.string(), {}});
+          {fsim::support::path_to_utf8(fallback), {}, {},
+           fsim::support::path_to_utf8(fallback), {}});
       return finish_compilation_unit(fallback);
     }
     define_command_line_macros();
@@ -295,13 +297,13 @@ class VerilogPreprocessor {
     const auto root = normalized_path(
         source.name.empty()
             ? std::filesystem::path{"<memory>.sv"}
-            : std::filesystem::path{source.name});
+            : fsim::support::path_from_utf8(source.name));
     if (!valid_language(source.name)) {
       return single_result(
           finish_compilation_unit(root));
     }
     define_command_line_macros();
-    const auto name = root.generic_string();
+    const auto name = fsim::support::path_to_utf8(root);
     source_snapshots_.emplace(name, std::move(source.text));
     inputs_.push_back(
         {root, source_snapshots_.find(name)->second});
@@ -341,7 +343,7 @@ class VerilogPreprocessor {
     current_dependencies_.clear();
     process_file(root, 0);
     const auto found =
-        source_snapshots_.find(root.generic_string());
+        source_snapshots_.find(fsim::support::path_to_utf8(root));
     roots_.push_back({
         root,
         found == source_snapshots_.end()
@@ -356,7 +358,8 @@ class VerilogPreprocessor {
 
   PreprocessCompilationUnitResult finish_compilation_unit(
       const std::filesystem::path& root) {
-    const auto root_name = normalized_path(root).generic_string();
+    const auto root_name =
+        fsim::support::path_to_utf8(normalized_path(root));
     SourceSpan eof_span{root_name, {}, {}, root_name, {}};
     if (root_eof_) {
       eof_span = root_eof_->span;
@@ -451,7 +454,7 @@ class VerilogPreprocessor {
       const std::filesystem::path& path,
       const std::size_t depth) {
     const auto normalized = normalized_path(path);
-    const auto name = normalized.generic_string();
+    const auto name = fsim::support::path_to_utf8(normalized);
     if (depth > options_.maximum_include_depth) {
       diagnose(
           "FSIM-SV-PP-004",
@@ -1108,7 +1111,7 @@ class VerilogPreprocessor {
     if (quoted && !include_stack_.empty()) {
       const auto local = normalized_path(
           include_stack_.back().parent_path()
-          / std::filesystem::path{requested});
+          / fsim::support::path_from_utf8(requested));
       if (std::filesystem::is_regular_file(local, error) && !error) {
         return local;
       }
@@ -1116,7 +1119,8 @@ class VerilogPreprocessor {
     }
     for (const auto& directory : include_directories_) {
       const auto candidate =
-          normalized_path(directory / std::filesystem::path{requested});
+          normalized_path(
+              directory / fsim::support::path_from_utf8(requested));
       if (std::filesystem::is_regular_file(candidate, error) && !error) {
         return candidate;
       }
@@ -1186,7 +1190,7 @@ class VerilogPreprocessor {
     const auto previous_invocation = include_invocation_;
     include_invocation_ = directive.span;
     include_ancestry_.push_back(
-        "included '" + resolved->generic_string() + "' from "
+        "included '" + fsim::support::path_to_utf8(*resolved) + "' from "
         + location_text(directive.span));
     process_file(*resolved, include_depth + 1);
     include_ancestry_.pop_back();

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "path_test_support.hpp"
+
 #include "fsim/app/application.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "path_test_support.hpp"
 
 #include <algorithm>
 #include <array>
@@ -86,9 +87,9 @@ Capture run_once(
     const auto signal = project->design.find_signal(path);
     assert(signal);
     const auto& info = project->design.signals().at(*signal);
-    assert(
-        fsim::frontend::physical_source(info.declaration_span)
-        == config.source_sets.front().files.front().string());
+    assert(fsim::test::same_source_path(
+        fsim::frontend::physical_source(info.declaration_span),
+        config.source_sets.front().files.front()));
   }
 
   Capture capture;

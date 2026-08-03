@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "path_test_support.hpp"
 
 #include <algorithm>
 #include <array>
@@ -96,16 +97,12 @@ Capture run_once(
   assert(
       package_specialization
       != project->design.specializations().end());
-  assert(
-      std::ranges::find(
-          package_specialization->source_dependencies,
-          config.source_sets.front().files[2].string())
-      != package_specialization->source_dependencies.end());
-  assert(
-      std::ranges::find(
-          package_specialization->source_dependencies,
-          config.source_sets.front().files[0].string())
-      != package_specialization->source_dependencies.end());
+  assert(fsim::test::has_source_dependency(
+      package_specialization->source_dependencies,
+      config.source_sets.front().files[2]));
+  assert(fsim::test::has_source_dependency(
+      package_specialization->source_dependencies,
+      config.source_sets.front().files[0]));
 
   Capture capture;
   for (std::size_t index = 0;

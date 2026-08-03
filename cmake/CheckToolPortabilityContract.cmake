@@ -9,6 +9,13 @@ set(FSIM_PATH "${FSIM_SOURCE_DIR}/include/fsim/support/path.hpp")
 set(FSIM_MAIN "${FSIM_SOURCE_DIR}/src/main.cpp")
 set(FSIM_CLI "${FSIM_SOURCE_DIR}/src/cli/driver.cpp")
 set(FSIM_API "${FSIM_SOURCE_DIR}/src/api/api.cpp")
+set(FSIM_PROJECT "${FSIM_SOURCE_DIR}/src/project/project.cpp")
+set(FSIM_PREPROCESSOR
+  "${FSIM_SOURCE_DIR}/src/frontend/verilog_preprocessor.cpp")
+set(FSIM_APPLICATION_ANALYSIS
+  "${FSIM_SOURCE_DIR}/src/app/application_analysis.cpp")
+set(FSIM_APPLICATION_RUN
+  "${FSIM_SOURCE_DIR}/src/app/application_run.cpp")
 set(FSIM_ENV "${FSIM_SOURCE_DIR}/src/support/environment.cpp")
 set(FSIM_FILES "${FSIM_SOURCE_DIR}/src/runtime/simir_files.cpp")
 set(FSIM_TCL "${FSIM_SOURCE_DIR}/src/app/tcl.cpp")
@@ -20,6 +27,10 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_MAIN}"
     "${FSIM_CLI}"
     "${FSIM_API}"
+    "${FSIM_PROJECT}"
+    "${FSIM_PREPROCESSOR}"
+    "${FSIM_APPLICATION_ANALYSIS}"
+    "${FSIM_APPLICATION_RUN}"
     "${FSIM_ENV}"
     "${FSIM_FILES}"
     "${FSIM_TCL}"
@@ -35,6 +46,12 @@ file(READ "${FSIM_PATH}" FSIM_PATH_CONTENTS)
 file(READ "${FSIM_MAIN}" FSIM_MAIN_CONTENTS)
 file(READ "${FSIM_CLI}" FSIM_CLI_CONTENTS)
 file(READ "${FSIM_API}" FSIM_API_CONTENTS)
+file(READ "${FSIM_PROJECT}" FSIM_PROJECT_CONTENTS)
+file(READ "${FSIM_PREPROCESSOR}" FSIM_PREPROCESSOR_CONTENTS)
+file(READ
+  "${FSIM_APPLICATION_ANALYSIS}"
+  FSIM_APPLICATION_ANALYSIS_CONTENTS)
+file(READ "${FSIM_APPLICATION_RUN}" FSIM_APPLICATION_RUN_CONTENTS)
 file(READ "${FSIM_ENV}" FSIM_ENV_CONTENTS)
 file(READ "${FSIM_FILES}" FSIM_FILE_CONTENTS)
 file(READ "${FSIM_TCL}" FSIM_TCL_CONTENTS)
@@ -82,6 +99,46 @@ string(FIND
   FSIM_INDEX)
 if(FSIM_INDEX EQUAL -1)
   message(FATAL_ERROR "public C API lost UTF-8 manifest path conversion")
+endif()
+foreach(FSIM_PROJECT_POLICY IN ITEMS
+    "path_from_utf8(item)"
+    "path_from_utf8(value.text)"
+    "path_from_utf8(source_name)")
+  string(FIND
+    "${FSIM_PROJECT_CONTENTS}"
+    "${FSIM_PROJECT_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "project parser lost UTF-8 path policy: ${FSIM_PROJECT_POLICY}")
+  endif()
+endforeach()
+foreach(FSIM_SOURCE_POLICY IN ITEMS
+    "path_from_utf8(source.name)"
+    "path_from_utf8(requested)"
+    "path_to_utf8(normalized)")
+  string(FIND
+    "${FSIM_PREPROCESSOR_CONTENTS}"
+    "${FSIM_SOURCE_POLICY}"
+    FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "preprocessor lost UTF-8 path policy: ${FSIM_SOURCE_POLICY}")
+  endif()
+endforeach()
+string(FIND
+  "${FSIM_APPLICATION_ANALYSIS_CONTENTS}"
+  "path_from_utf8(physical_source(unit.span))"
+  FSIM_INDEX)
+if(FSIM_INDEX EQUAL -1)
+  message(FATAL_ERROR "analysis lost UTF-8 physical-source conversion")
+endif()
+string(FIND
+  "${FSIM_APPLICATION_RUN_CONTENTS}"
+  "path_from_utf8(source)"
+  FSIM_INDEX)
+if(FSIM_INDEX EQUAL -1)
+  message(FATAL_ERROR "application cache lost UTF-8 source conversion")
 endif()
 foreach(FSIM_ENV_POLICY IN ITEMS
     "GetEnvironmentVariableW("

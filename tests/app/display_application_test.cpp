@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "path_test_support.hpp"
 
 #include <cassert>
 #include <chrono>
@@ -355,7 +356,8 @@ void test_vhdl_report(
   assert(
       reference.reports[0].severity
       == fsim::runtime::simir::AssertionSeverity::note);
-  assert(reference.reports[0].source.path == source.string());
+  assert(fsim::test::same_source_path(
+      reference.reports[0].source.path, source));
   assert(reference.reports[0].source.line == 10);
   assert(reference.reports[0].time == 0);
   assert(reference.reports[0].delta == 0);
@@ -370,19 +372,22 @@ void test_vhdl_report(
   assert(
       reference.reports[3].severity
       == fsim::runtime::simir::AssertionSeverity::warning);
-  assert(reference.reports[3].source.path == source.string());
+  assert(fsim::test::same_source_path(
+      reference.reports[3].source.path, source));
   assert(reference.reports[3].source.line == 13);
   assert(reference.reports[4].message == "dynamic assertion");
   assert(
       reference.reports[4].severity
       == fsim::runtime::simir::AssertionSeverity::warning);
-  assert(reference.reports[4].source.path == source.string());
+  assert(fsim::test::same_source_path(
+      reference.reports[4].source.path, source));
   assert(reference.reports[4].source.line == 14);
   assert(reference.reports[5].message == "dynamic error");
   assert(
       reference.reports[5].severity
       == fsim::runtime::simir::AssertionSeverity::error);
-  assert(reference.reports[5].source.path == source.string());
+  assert(fsim::test::same_source_path(
+      reference.reports[5].source.path, source));
   assert(reference.reports[5].source.line == 16);
   assert(reference.compiled_processes == 0);
 #if defined(FSIM_HAS_LLVM)
@@ -445,7 +450,7 @@ void test_vhdl_failure_report(
       reference.severity
       == fsim::runtime::simir::AssertionSeverity::failure);
   assert(reference.source == compiled.source);
-  assert(reference.source.path == source.string());
+  assert(fsim::test::same_source_path(reference.source.path, source));
   assert(reference.message == compiled.message);
   assert(reference.compiled_processes == 0);
 #if defined(FSIM_HAS_LLVM)

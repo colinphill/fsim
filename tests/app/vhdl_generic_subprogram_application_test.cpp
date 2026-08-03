@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "path_test_support.hpp"
 
 #include <algorithm>
 #include <array>
@@ -151,10 +152,9 @@ Capture run_once(
                    "vhdl-generic-subprogram-v1")
                 != std::string::npos;
       }));
-  assert(std::ranges::find(
+  assert(fsim::test::has_source_dependency(
       package->source_dependencies,
-      config.source_sets.front().files[1].string())
-      != package->source_dependencies.end());
+      config.source_sets.front().files[1]));
 
   std::size_t procedure_debug_locals = 0;
   for (const auto& process : project->design.processes()) {

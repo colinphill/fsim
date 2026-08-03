@@ -1,8 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "plugin_compiler_internal.hpp"
 
+#include <mutex>
+
 namespace fsim::systemc {
 using namespace plugin_detail;
+
+namespace {
+
+#if defined(_WIN32)
+// Concurrent cl.exe dependency scans and cache publication have exhibited
+// intermittent process failures on hosted Windows. Serialize the complete
+// plan/build/verify transaction in-process; the per-key directory lock still
+// provides cross-process publication safety.
+std::mutex windows_compile_mutex;
+#endif
+
+} // namespace
 
 std::string_view to_string(const HostToolchain toolchain) noexcept {
     switch (toolchain) {
@@ -210,6 +224,9 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
 PluginCompileResult compile_plugin(
     const PluginCompileRequest& request,
     diagnostic::Engine& diagnostics) {
+#if defined(_WIN32)
+    const std::lock_guard compile_guard{windows_compile_mutex};
+#endif
     PluginCompileResult result;
     const auto plan = plan_plugin_compile(request, diagnostics);
     if (!plan) {

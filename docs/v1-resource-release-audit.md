@@ -12,7 +12,7 @@ ownership; it does not query or claim a current GitHub Actions result.
 | `B130-T8-MEMORY` | Compact non-MSVC Debug objects and an 8 MiB MSVC-compatible test stack | GCC Debug uses `-Og` and compressed debug information; every configured C/C++ test host receives the common stack policy |
 | `B130-T8-TESTS` | 60/120/600/1200-second bounded test classes | Scoped locals, API, SystemC/aggregate Windows tests, and the container differential retain explicit diagnostic timeouts; hosted jobs retain 20/45/70-minute bounds |
 | `B130-T8-TRACE` | Scoped-local and SystemC phase traces | A future timeout identifies build, parse, interpreter, compiled, warm-cache, integration, or scheduling phase rather than appearing as an opaque hang |
-| `B130-T8-PLATFORM` | 16 explicit platform boundary files and 20 exact portability rows | UTF-8/native paths, compiler/runtime ABI, DLL/cache behavior, API/ABI, Debug/Release, LLVM/cache/debug/VCD, and bounded resources retain checked owners |
+| `B130-T8-PLATFORM` | 14 explicit platform boundary files and 20 exact portability rows | UTF-8/native paths, compiler/runtime ABI, DLL/cache behavior, API/ABI, Debug/Release, LLVM/cache/debug/VCD, and bounded resources retain checked owners |
 
 ## Closure evidence
 

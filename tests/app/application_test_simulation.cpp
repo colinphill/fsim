@@ -151,7 +151,8 @@ const auto compare_assertion =
 assert(
     assertion_reference.severity
     == fsim::runtime::simir::AssertionSeverity::failure);
-assert(assertion_reference.source.path == assertion_source.string());
+assert(same_source_path(
+    assertion_reference.source.path, assertion_source));
 assert(assertion_reference.source.line == 9);
 assert(assertion_reference.source.column == 5);
 assert(

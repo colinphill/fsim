@@ -41,7 +41,7 @@ foreach(FSIM_GATE IN ITEMS
 endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
-    "v1 portability audit: 12 hosted configurations, 6 four-worker build steps, 16 explicit platform files, 8 repair queues"
+    "v1 portability audit: 12 hosted configurations, 6 four-worker build steps, 14 explicit platform files, 8 repair queues"
     "six four-worker hosted builds, eight-link pool, compact Debug objects, 8 MiB Windows stacks"
     "MSVC Debug contract: common 8 MiB stack policy covers C/C++ test hosts"
     "MSVC Release contract: assertions stay live"

@@ -129,7 +129,7 @@ make_specialization_cache_keys(
           const bool require_specialization_library)
           -> std::optional<SourceSettings> {
         const auto source_path =
-            std::filesystem::path{source}
+            fsim::support::path_from_utf8(source)
                 .lexically_normal();
         const CheckedSource* checked_source = nullptr;
         for (const auto& candidate : checked.hdl_sources) {

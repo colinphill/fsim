@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
+#include "path_test_support.hpp"
 
 #include <algorithm>
 #include <array>
@@ -131,10 +132,9 @@ Capture run_once(
     assert(
         selected.unit
         == "vhdl:work.component_runtime_leaf(rtl)");
-    assert(std::ranges::find(
-               selected.source_dependencies,
-               config.source_sets.front().files[0].string())
-           != selected.source_dependencies.end());
+    assert(fsim::test::has_source_dependency(
+        selected.source_dependencies,
+        config.source_sets.front().files[0]));
     assert(std::ranges::any_of(
         selected.parameter_identity_values,
         [](const auto& item) {
@@ -155,28 +155,22 @@ Capture run_once(
           *project,
           "component_runtime_top.direct_child").unit
       == "vhdl:work.component_runtime_stable(rtl)");
-  assert(std::ranges::find(
-             specialization(
-                 *project,
-                 "component_runtime_top.direct_child")
-                 .source_dependencies,
-             config.source_sets.front().files[0].string())
-         == specialization(
-                *project,
-                "component_runtime_top.direct_child")
-                .source_dependencies.end());
+  assert(!fsim::test::has_source_dependency(
+      specialization(
+          *project,
+          "component_runtime_top.direct_child")
+          .source_dependencies,
+      config.source_sets.front().files[0]));
   const auto& nonvalue = specialization(
       *project, "component_runtime_top.nonvalue_child");
   assert(
       nonvalue.unit
       == "vhdl:work.component_runtime_nonvalue(rtl)");
   for (const auto& dependency :
-       {config.source_sets.front().files[0].string(),
-        config.source_sets.front().files[3].string()}) {
-    assert(std::ranges::find(
-               nonvalue.source_dependencies,
-               dependency)
-           != nonvalue.source_dependencies.end());
+       {config.source_sets.front().files[0],
+        config.source_sets.front().files[3]}) {
+    assert(fsim::test::has_source_dependency(
+        nonvalue.source_dependencies, dependency));
   }
   assert(std::ranges::any_of(
       nonvalue.parameter_identity_values,
@@ -202,10 +196,9 @@ Capture run_once(
   assert(
       defaulted.unit
       == "vhdl:work.component_runtime_defaulted(rtl)");
-  assert(std::ranges::find(
-             defaulted.source_dependencies,
-             config.source_sets.front().files[2].string())
-         != defaulted.source_dependencies.end());
+  assert(fsim::test::has_source_dependency(
+      defaulted.source_dependencies,
+      config.source_sets.front().files[2]));
   assert(std::ranges::any_of(
       defaulted.parameter_identity_values,
       [](const auto& item) {

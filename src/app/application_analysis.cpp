@@ -254,7 +254,7 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
         group.language == frontend::Language::SystemVerilog2017);
     for (auto& unit : snapshot.result.design.units) {
       const auto unit_source =
-          std::filesystem::path{physical_source(unit.span)};
+          fsim::support::path_from_utf8(physical_source(unit.span));
       auto source_order =
           group.inputs.empty()
               ? std::size_t{}

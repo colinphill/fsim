@@ -35,7 +35,7 @@ hosts retain explicit longer bounds.
 
 ## Platform boundary inventory
 
-Only the following 16 authored C/C++ source, header, and test files contain an
+Only the following 14 authored C/C++ source, header, and test files contain an
 explicit `_WIN32`, `_MSC_VER`, or MSVC-compatible implementation branch. Every
 other authored language implementation file is expected to remain portable
 C++20 and to reach platform services through these bounded seams.
@@ -46,7 +46,7 @@ C++20 and to reach platform services through these bounded seams.
 | Application/support | `src/app/application_analysis.cpp`, `src/app/tcl.cpp`, `src/support/environment.cpp` | Target triples, console interrupts, environment access, Tcl paths, and error transport use native host APIs behind common results |
 | Dynamic loading/cache | `src/platform/dynamic_library.cpp`, `src/compiler/object_cache.cpp` | `LoadLibraryW`/`GetProcAddress` and POSIX `dlopen` share lifetime/error policy; cache locking and atomic replacement use native primitives |
 | SystemC compiler | `src/systemc/plugin_compiler.cpp`, `src/systemc/plugin_compiler_common.cpp`, `src/systemc/plugin_compiler_dependencies.cpp`, `src/systemc/plugin_compiler_internal.hpp`, `src/systemc/plugin_compiler_process.cpp` | GNU and MSVC command plans, quoting, response files, dependency closure, PE/shared-library output, CRT selection, and process status remain explicit |
-| Platform fixtures | `tests/app/application_test_systemc.cpp`, `tests/app/typed_boundary_application_test.cpp`, `tests/systemc/plugin_compiler_test.cpp`, `tests/systemc/plugin_matrix_test.cpp` | Native-only expectations are isolated while shared semantic assertions remain identical |
+| Platform fixtures | `tests/systemc/plugin_compiler_test.cpp`, `tests/systemc/plugin_matrix_test.cpp` | Native compiler selection is isolated while shared cache, lifecycle, and semantic assertions remain identical |
 
 Build-system platform selection is concentrated in `CMakeLists.txt`,
 `CMakePresets.json`, `cmake/FsimBoostContext.cmake`, `cmake/FsimTcl.cmake`,
@@ -98,7 +98,7 @@ implementation repair needed by that evidence.
 Task 10 completed the accumulated sanitizer, source/catalog, and full local
 Debug and Release regressions. ASan/UBSan passed 92/92 in 545.85 seconds;
 exact LLVM Debug and Release passed 95/95 in 249.39 and 210.55 seconds. The
-final gates cover 1,624 diagnostics, 423 authored sources, 1,080 required
+final gates cover 1,624 diagnostics, 424 authored sources, 1,080 required
 release rows with no explicit evidence gaps, 105 conformance expectations, and
 20 portability rows. Batch 129 was not a mandatory CI-inspection boundary.
 Hosted proof remains assigned to Batch 130.

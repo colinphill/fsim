@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "path_test_support.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -324,7 +325,7 @@ fsim::app::NativeCacheStatistics verify_vhdl_file_objects(
   assert(std::ranges::any_of(
       points,
       [&](const auto& point) {
-        return point.source.path == source.string()
+        return fsim::test::same_source_path(point.source.path, source)
             && point.scope.find("vhdl_file_top") != std::string::npos;
       }));
 #if defined(FSIM_HAS_LLVM)

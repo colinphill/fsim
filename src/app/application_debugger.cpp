@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/support/path.hpp"
 
 namespace fsim::app::application_detail {
 
@@ -972,8 +973,8 @@ void DebuggerSession::delete_breakpoint(const std::string_view id_text)  {
     if (requested.empty() || requested == actual) {
       return true;
     }
-    return std::filesystem::path{actual}.filename()
-        == std::filesystem::path{requested}.filename();
+    return support::path_from_utf8(actual).filename()
+        == support::path_from_utf8(requested).filename();
   }
 
 [[nodiscard]] bool DebuggerSession::is_statement_point(

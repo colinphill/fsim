@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
+#include "path_test_support.hpp"
 
 #include <algorithm>
 #include <array>
@@ -148,12 +149,9 @@ Capture run_once(
   assert(logic9_driver_processes.size() == 2);
   assert(composite_driver_processes.size() == 2);
   assert(package_driver_processes.size() == 2);
-  assert(
-      std::ranges::find(
-          project->design.specializations().front().source_dependencies,
-          config.source_sets.front().files[1].string())
-      != project->design.specializations().front()
-             .source_dependencies.end());
+  assert(fsim::test::has_source_dependency(
+      project->design.specializations().front().source_dependencies,
+      config.source_sets.front().files[1]));
 
   Capture capture;
   capture.keys = project->specialization_cache_keys;

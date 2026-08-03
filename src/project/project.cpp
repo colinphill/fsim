@@ -796,7 +796,8 @@ class Parser {
       if (key == "files") {
         source_set.file_patterns.reserve(values->size());
         for (const auto& item : *values) {
-          source_set.file_patterns.emplace_back(item);
+          source_set.file_patterns.push_back(
+              fsim::support::path_from_utf8(item));
         }
         source_has_files_[context_index_] = true;
       } else if (key == "defines") {
@@ -804,7 +805,8 @@ class Parser {
       } else {
         source_set.include_directories.reserve(values->size());
         for (const auto& item : *values) {
-          source_set.include_directories.emplace_back(item);
+          source_set.include_directories.push_back(
+              fsim::support::path_from_utf8(item));
         }
       }
       return;
@@ -873,7 +875,8 @@ class Parser {
     }
     if (key == "cache" || key == "cache_path") {
       if (require_kind(value, Value::Kind::string, key, "a string")) {
-        config_.build.cache_path = value.text;
+        config_.build.cache_path =
+            fsim::support::path_from_utf8(value.text);
       }
       return;
     }
@@ -912,7 +915,8 @@ class Parser {
     }
     if (key == "trace_file") {
       if (require_kind(value, Value::Kind::string, key, "a string")) {
-        config_.run.trace_file = std::filesystem::path(value.text);
+        config_.run.trace_file =
+            fsim::support::path_from_utf8(value.text);
       }
       return;
     }
@@ -945,7 +949,8 @@ class Parser {
       if (key == "include_dirs" || key == "include_directories" || key == "includes") {
         config_.systemc.include_directories.reserve(values->size());
         for (const auto& item : *values) {
-          config_.systemc.include_directories.emplace_back(item);
+          config_.systemc.include_directories.push_back(
+              fsim::support::path_from_utf8(item));
         }
       } else if (key == "defines") {
         config_.systemc.defines = *values;
@@ -980,7 +985,7 @@ class Parser {
     }
     if (config_.project.name.empty()) {
       config_.project.name = fsim::support::path_to_utf8(
-          std::filesystem::path(source_name_).stem());
+          fsim::support::path_from_utf8(source_name_).stem());
       if (config_.project.name.empty()) {
         config_.project.name = "fsim-project";
       }
@@ -1412,7 +1417,8 @@ std::optional<Config> parse(
   if (!config.has_value()) {
     return std::nullopt;
   }
-  config->manifest_path = absolute_normalized(source_name, base_directory);
+  config->manifest_path = absolute_normalized(
+      fsim::support::path_from_utf8(source_name), base_directory);
   resolve_paths(*config, diagnostics);
   if (diagnostics.has_error()) {
     return std::nullopt;

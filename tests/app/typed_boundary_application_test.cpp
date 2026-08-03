@@ -510,12 +510,8 @@ int main() {
     assert(reference.result.status == fsim::runtime::RunStatus::stopped);
     assert(reference.result.time == 1);
     assert(reference.vcd.find("$enddefinitions $end") != std::string::npos);
-#if defined(_WIN32)
-    assert(!warm.project_cache_hit);
-#else
     assert(cold.project_cache_hit);
     assert(warm.project_cache_hit);
-#endif
 #if defined(FSIM_HAS_LLVM)
     assert(cold.compiled_processes > 0);
     assert(cold.compiled_modules > 0);

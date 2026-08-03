@@ -119,8 +119,6 @@ set(FSIM_PLATFORM_FILES
   src/systemc/plugin_compiler_dependencies.cpp
   src/systemc/plugin_compiler_internal.hpp
   src/systemc/plugin_compiler_process.cpp
-  tests/app/application_test_systemc.cpp
-  tests/app/typed_boundary_application_test.cpp
   tests/systemc/plugin_compiler_test.cpp
   tests/systemc/plugin_matrix_test.cpp
 )

@@ -714,7 +714,7 @@ int project_command(
       && std::string_view{Tcl_GetString(arguments[1])} == "load") {
     diagnostic::Engine load_diagnostics;
     auto loaded = project::load(
-        std::filesystem::path{Tcl_GetString(arguments[2])},
+        fsim::support::path_from_utf8(Tcl_GetString(arguments[2])),
         load_diagnostics);
     if (!loaded) {
       context.diagnostics.clear();

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "path_test_support.hpp"
 
 #include <algorithm>
 #include <bitset>
@@ -103,14 +104,12 @@ Capture run_once(
             && value.second.find("work.service_template")
                 != std::string::npos;
       }));
-  assert(std::ranges::find(
+  assert(fsim::test::has_source_dependency(
       direct->source_dependencies,
-      config.source_sets.front().files[1].string())
-      != direct->source_dependencies.end());
-  assert(std::ranges::find(
+      config.source_sets.front().files[1]));
+  assert(fsim::test::has_source_dependency(
       nested->source_dependencies,
-      config.source_sets.front().files[1].string())
-      != nested->source_dependencies.end());
+      config.source_sets.front().files[1]));
 
   std::size_t package_procedure_formals = 0;
   for (const auto& process : project->design.processes()) {

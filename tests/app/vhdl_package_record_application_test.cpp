@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "path_test_support.hpp"
 
 #include "fsim/runtime/vcd_writer.hpp"
 
@@ -87,11 +88,8 @@ Capture run_once(
   assert(project->design.specializations().size() == 2);
   for (const auto& specialization :
        project->design.specializations()) {
-    assert(std::find(
-               specialization.source_dependencies.begin(),
-               specialization.source_dependencies.end(),
-               package_source.string())
-           != specialization.source_dependencies.end());
+    assert(fsim::test::has_source_dependency(
+        specialization.source_dependencies, package_source));
   }
 
   std::optional<std::pair<
