@@ -9,6 +9,8 @@ set(FSIM_ROOT_CMAKE "${FSIM_SOURCE_DIR}/CMakeLists.txt")
 set(FSIM_TEST_CMAKE "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
 set(FSIM_API_HEADER "${FSIM_SOURCE_DIR}/include/fsim/api.h")
 set(FSIM_SYSTEMC_HEADER "${FSIM_SOURCE_DIR}/include/fsim/systemc_abi.h")
+set(FSIM_SYSTEMC_PLUGIN_HEADER
+  "${FSIM_SOURCE_DIR}/include/fsim/systemc/plugin.hpp")
 set(FSIM_MAIN "${FSIM_SOURCE_DIR}/src/main.cpp")
 set(FSIM_CLI "${FSIM_SOURCE_DIR}/src/cli/driver.cpp")
 set(FSIM_PATH_HEADER "${FSIM_SOURCE_DIR}/include/fsim/support/path.hpp")
@@ -19,6 +21,7 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_TEST_CMAKE}"
     "${FSIM_API_HEADER}"
     "${FSIM_SYSTEMC_HEADER}"
+    "${FSIM_SYSTEMC_PLUGIN_HEADER}"
     "${FSIM_MAIN}"
     "${FSIM_CLI}"
     "${FSIM_PATH_HEADER}"
@@ -53,6 +56,7 @@ file(READ "${FSIM_ROOT_CMAKE}" FSIM_ROOT_CMAKE_CONTENTS)
 file(READ "${FSIM_TEST_CMAKE}" FSIM_TEST_CMAKE_CONTENTS)
 file(READ "${FSIM_API_HEADER}" FSIM_API_CONTENTS)
 file(READ "${FSIM_SYSTEMC_HEADER}" FSIM_SYSTEMC_CONTENTS)
+file(READ "${FSIM_SYSTEMC_PLUGIN_HEADER}" FSIM_SYSTEMC_PLUGIN_CONTENTS)
 file(READ "${FSIM_MAIN}" FSIM_MAIN_CONTENTS)
 file(READ "${FSIM_CLI}" FSIM_CLI_CONTENTS)
 file(READ "${FSIM_PATH_HEADER}" FSIM_PATH_CONTENTS)
@@ -62,6 +66,20 @@ foreach(FSIM_TARGET IN ITEMS fsim fsim-vhdl fsim-sv fsim-elab fsim-run)
   string(FIND "${FSIM_ROOT_CMAKE_CONTENTS}" "${FSIM_TARGET}" FSIM_TARGET_INDEX)
   if(FSIM_TARGET_INDEX EQUAL -1)
     message(FATAL_ERROR "install contract omits command target ${FSIM_TARGET}")
+  endif()
+endforeach()
+foreach(FSIM_SYSTEMC_FACADE IN ITEMS
+    "class hdl_module"
+    "SC_FSIM_HDL_MODULE"
+    "SC_FSIM_EXPORT_AS"
+    "make_factory_parameters")
+  string(FIND
+    "${FSIM_SYSTEMC_PLUGIN_CONTENTS}"
+    "${FSIM_SYSTEMC_FACADE}"
+    FSIM_SYSTEMC_FACADE_INDEX)
+  if(FSIM_SYSTEMC_FACADE_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "public SystemC facade lost ${FSIM_SYSTEMC_FACADE}")
   endif()
 endforeach()
 foreach(FSIM_HEADER IN ITEMS

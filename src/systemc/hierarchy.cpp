@@ -30,7 +30,13 @@ void collect_object_info(
         }
     };
     append(module.ports, HierarchyObjectKind::port);
-    append(module.foreign_children, HierarchyObjectKind::foreign_child);
+    for (const auto& child : module.foreign_children) {
+        direct.push_back(
+            {child.handle, module.handle, child.name,
+             path + "." + child.name,
+             child.module_facade ? HierarchyObjectKind::module
+                                 : HierarchyObjectKind::foreign_child});
+    }
     append(module.processes, HierarchyObjectKind::process);
     append(module.events, HierarchyObjectKind::event);
     const auto is_signal = [&](const fsim_sc_handle_v1 handle) {
@@ -84,6 +90,29 @@ void collect_object_info(
             });
         if (child != module.native_children.end()) {
             collect_object_info(*child, object.path, module.handle, result);
+            continue;
+        }
+        const auto proxy = std::find_if(
+            module.foreign_children.begin(),
+            module.foreign_children.end(),
+            [&](const ForeignChildDescription& candidate) {
+                return candidate.module_facade
+                    && candidate.handle == object.handle;
+            });
+        if (proxy != module.foreign_children.end()) {
+            result.push_back(object);
+            auto ports = proxy->ports;
+            std::sort(
+                ports.begin(), ports.end(),
+                [](const auto& left, const auto& right) {
+                    return left.handle < right.handle;
+                });
+            for (const auto& port : ports) {
+                result.push_back(
+                    {port.handle, proxy->handle, port.name,
+                     object.path + "." + port.name,
+                     HierarchyObjectKind::port});
+            }
         }
     }
 }
@@ -121,6 +150,7 @@ void HierarchyRegistry::Impl::rollback(const fsim_sc_handle_v1 module) noexcept 
             native_children.erase(descendants);
         }
         const auto found = pending.find(module);
+        hdl_modules.erase(module);
         if (found == pending.end()) {
             return;
         }
@@ -161,14 +191,88 @@ void HierarchyRegistry::Impl::rollback(const fsim_sc_handle_v1 module) noexcept 
         pending.erase(found);
         const auto descendants = native_children.find(module);
         if (descendants != native_children.end()) {
-            result.native_children.reserve(descendants->second.size());
             for (const auto child : descendants->second) {
-                result.native_children.push_back(collect(child));
+                const auto marked = hdl_modules.find(child);
+                if (marked == hdl_modules.end()) {
+                    result.native_children.push_back(collect(child));
+                    continue;
+                }
+                auto child_found = pending.find(child);
+                if (child_found == pending.end()) {
+                    throw std::logic_error{
+                        "missing pending HDL-backed SystemC module"};
+                }
+                ForeignChildDescription proxy;
+                proxy.handle = child;
+                proxy.name = child_found->second.instance;
+                proxy.construction_actuals = std::move(marked->second);
+                proxy.module_facade = true;
+                proxy.ports.reserve(child_found->second.ports.size());
+                for (const auto& port : child_found->second.ports) {
+                    proxy.ports.push_back(
+                        {port.name,
+                         port.direction,
+                         port.encoding,
+                         port.width,
+                         port.bound_object,
+                         port.handle});
+                }
+                result.foreign_children.push_back(std::move(proxy));
+                pending.erase(child_found);
+                hdl_modules.erase(marked);
             }
             native_children.erase(descendants);
         }
+        std::sort(
+            result.foreign_children.begin(),
+            result.foreign_children.end(),
+            [](const auto& left, const auto& right) {
+                return left.handle < right.handle;
+            });
         return result;
     }
+
+[[nodiscard]] bool HierarchyRegistry::Impl::validate_hdl_modules(
+    const fsim_sc_handle_v1 root,
+    std::string& error) const {
+    for (const auto& [handle, actuals] : hdl_modules) {
+        (void)actuals;
+        const auto found = pending.find(handle);
+        if (found == pending.end()) {
+            error = "marked HDL module has no pending hierarchy record";
+            return false;
+        }
+        const auto& module = found->second;
+        if (handle == root || module.parent == 0) {
+            error = "an HDL module proxy cannot be a factory root";
+            return false;
+        }
+        const auto descendants = native_children.find(handle);
+        if ((descendants != native_children.end()
+             && !descendants->second.empty())
+            || !module.foreign_children.empty()
+            || !module.processes.empty() || !module.events.empty()
+            || !module.primitive_channels.empty()
+            || !module.internal_signals.empty()
+            || !module.exports.empty()
+            || !module.metadata_objects.empty()) {
+            error = "HDL module proxy '" + module.instance
+                + "' may contain only ports and construction actuals";
+            return false;
+        }
+        const auto unbound = std::find_if(
+            module.ports.begin(), module.ports.end(),
+            [](const PortDescription& port) {
+                return port.bound_object == 0;
+            });
+        if (unbound != module.ports.end()) {
+            error = "HDL module proxy '" + module.instance
+                + "' has unbound port '" + unbound->name + "'";
+            return false;
+        }
+    }
+    return true;
+}
 
 HierarchyRegistry::HierarchyRegistry(
     std::unique_ptr<Impl> impl) noexcept
@@ -281,6 +385,8 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     host.set_primitive_channel_kind =
         registry_set_primitive_channel_kind;
     host.wait_event_timeout = registry_wait_event_timeout;
+    host.mark_hdl_module = registry_mark_hdl_module;
+    host.set_hdl_module_actual = registry_set_hdl_module_actual;
 
     Impl staged_registrations;
     fsim_sc_registrar_v1 registrar{};
@@ -548,6 +654,11 @@ std::optional<ModuleDescription> HierarchyRegistry::instantiate(
     if (error.empty() && object == nullptr) {
         error = "SystemC factory '" + std::string{factory}
             + "' returned a null module object";
+    }
+    if (error.empty()
+        && !impl_->validate_hdl_modules(*handle, error)) {
+        error = "SystemC factory '" + std::string{factory}
+            + "' failed during elaboration: " + error;
     }
     if (!error.empty() || constructed == impl_->pending.end()) {
         if (object != nullptr) {

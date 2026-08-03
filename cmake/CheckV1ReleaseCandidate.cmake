@@ -127,8 +127,8 @@ string(SHA256 FSIM_EVIDENCE_DIGEST "${FSIM_EVIDENCE_CANONICAL}\n")
 set(FSIM_EXPECTED_VALUES
   FSIM_ROW_COUNT 1080
   FSIM_EVIDENCE_SLOT_COUNT 4320
-  FSIM_EVIDENCE_PATH_COUNT 320
-  FSIM_TEST_EVIDENCE_COUNT 157
+  FSIM_EVIDENCE_PATH_COUNT 321
+  FSIM_TEST_EVIDENCE_COUNT 158
   FSIM_PRODUCTION_EVIDENCE_COUNT 148
   FSIM_RELEASE_EVIDENCE_COUNT 15)
 while(FSIM_EXPECTED_VALUES)
@@ -141,9 +141,9 @@ while(FSIM_EXPECTED_VALUES)
 endwhile()
 
 set(FSIM_EXPECTED_MATRIX_DIGEST
-  "94f79cae36314860badc218fe7078cdf6e8431158f6a8d7004c44aa9717900d8")
+  "81d1dd67a42c50c2921b94b22cadf0d5d09e8548dc8a57a822f9247e1b870c52")
 set(FSIM_EXPECTED_EVIDENCE_DIGEST
-  "c45d28bb34bcfa346c45ba01895fef4a441f087db8eb1699f9d12e216371c334")
+  "9fdb780a0883d790ab5db34c250bf1e85adbef6ca957d51c26d2dd89237be069")
 if(NOT FSIM_MATRIX_DIGEST STREQUAL FSIM_EXPECTED_MATRIX_DIGEST
     OR NOT FSIM_EVIDENCE_DIGEST STREQUAL FSIM_EXPECTED_EVIDENCE_DIGEST)
   message(FATAL_ERROR
@@ -155,9 +155,9 @@ foreach(FSIM_TOKEN IN ITEMS
     "matrix-rows: 1080"
     "matrix-sha256: ${FSIM_MATRIX_DIGEST}"
     "evidence-slots: 4320"
-    "evidence-paths: 320"
+    "evidence-paths: 321"
     "evidence-sha256: ${FSIM_EVIDENCE_DIGEST}"
-    "test-evidence-paths: 157"
+    "test-evidence-paths: 158"
     "production-evidence-paths: 148"
     "release-evidence-paths: 15"
     "runtime-evidence-paths: 94"
@@ -183,5 +183,5 @@ endif()
 
 message(STATUS
   "final release candidate: 1080 execute rows, 4320 linked evidence cells, "
-  "320 exact paths (157 test, 148 production, 15 release), 94 runtime files, "
+  "321 exact paths (158 test, 148 production, 15 release), 94 runtime files, "
   "and 36 corpus CTests")

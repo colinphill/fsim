@@ -74,9 +74,12 @@ selects the registered SystemC factory explicitly:
 three_language_tb.u_bridge -> systemc:models.mixed_bridge
 ```
 
-During factory construction, `MixedBridge` registers `u_vhdl` with
-`fsim::systemc::hdl_instance` and connects its ports. The second binding then
-selects the VHDL implementation at the complete child path:
+`LogicStage` is declared with `SC_FSIM_HDL_MODULE`, so `MixedBridge` constructs
+it like another SystemC module and connects `u_vhdl.value(to_vhdl)` and
+`u_vhdl.result(result)` with ordinary port-binding syntax. The
+`SC_FSIM_EXPORT_AS(MixedBridge, "mixed_bridge")` declaration publishes the
+parent factory. The second manifest binding then selects the VHDL
+implementation at the complete child path:
 
 ```text
 three_language_tb.u_bridge.u_vhdl -> vhdl:work.logic_stage(rtl)

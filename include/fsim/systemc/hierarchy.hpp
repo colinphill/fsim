@@ -34,6 +34,7 @@ struct ForeignPortDescription {
     fsim_sc_value_encoding_v1 encoding{FSIM_SC_BIT2};
     std::uint32_t width{};
     fsim_sc_handle_v1 object{};
+    fsim_sc_handle_v1 handle{};
 };
 
 struct ForeignChildDescription {
@@ -42,6 +43,7 @@ struct ForeignChildDescription {
     std::vector<std::pair<std::string, std::int64_t>>
         construction_actuals;
     std::vector<ForeignPortDescription> ports;
+    bool module_facade{};
 };
 
 struct ConstructionParameterDescription {

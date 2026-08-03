@@ -347,6 +347,21 @@ typedef struct fsim_sc_host_v1 {
         const fsim_sc_handle_v1* events,
         size_t event_count,
         fsim_sc_event_list_kind_v1 kind);
+
+    /*
+     * Append-only HDL-module facade. A native module marked through this
+     * callback contributes its normally declared and bound ports as one
+     * manifest-selected HDL instance at the module's existing hierarchy
+     * path. Construction actuals are immutable named scalar constants.
+     */
+    fsim_sc_status_v1 (*mark_hdl_module)(
+        void* context,
+        fsim_sc_handle_v1 module);
+    fsim_sc_status_v1 (*set_hdl_module_actual)(
+        void* context,
+        fsim_sc_handle_v1 module,
+        const char* name,
+        int64_t value);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {

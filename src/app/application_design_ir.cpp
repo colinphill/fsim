@@ -927,13 +927,19 @@ class DesignIrBuilder final {
       }
     }
     for (const auto& input : elaborated_.systemc_objects()) {
-      if (input.kind == elaboration::SystemCNamedObjectKind::process
-          || object_by_path_.contains(input.name)) {
+      if (input.kind == elaboration::SystemCNamedObjectKind::process) {
+        continue;
+      }
+      const auto expected_kind = systemc_object_kind(input.kind);
+      if (const auto existing = object_by_path_.find(input.name);
+          existing != object_by_path_.end()
+          && result_.objects()[existing->second.value()].kind
+              == expected_kind) {
         continue;
       }
       const auto specialization = specialization_for_path(input.name);
       static_cast<void>(add_systemc_object(
-          systemc_object_kind(input.kind),
+          expected_kind,
           std::string{leaf_name(input.name)},
           input.name,
           specialization,

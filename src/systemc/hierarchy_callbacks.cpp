@@ -431,7 +431,7 @@ extern "C" fsim_sc_status_v1 registry_register_foreign_child(
         }
         const auto index = found->second.foreign_children.size();
         found->second.foreign_children.push_back(
-            {*handle, name, {}, {}});
+            {*handle, name, {}, {}, false});
         registry.children.emplace(
             *handle,
             HierarchyRegistry::Impl::Child{module, index});
@@ -558,7 +558,7 @@ extern "C" fsim_sc_status_v1 registry_connect_foreign_port(
             return FSIM_SC_INVALID_ARGUMENT;
         }
         ports.push_back(
-            {name, direction, encoding, width, object});
+            {name, direction, encoding, width, object, 0});
         return FSIM_SC_OK;
     } catch (...) {
         return FSIM_SC_RUNTIME_ERROR;
@@ -1038,6 +1038,56 @@ extern "C" fsim_sc_status_v1 registry_register_native_module(
         registry.pending.emplace(*handle, std::move(child));
         registry.native_children[parent].push_back(*handle);
         *result = *handle;
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_mark_hdl_module(
+    void* context,
+    const fsim_sc_handle_v1 module) noexcept {
+    if (context == nullptr || module == 0) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        if (!registry.pending.contains(module)) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto [found, inserted] =
+            registry.hdl_modules.emplace(module, decltype(
+                HierarchyRegistry::Impl::hdl_modules)::mapped_type{});
+        (void)found;
+        return inserted ? FSIM_SC_OK : FSIM_SC_INVALID_ARGUMENT;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_set_hdl_module_actual(
+    void* context,
+    const fsim_sc_handle_v1 module,
+    const char* name,
+    const std::int64_t value) noexcept {
+    if (context == nullptr || module == 0 || name == nullptr
+        || *name == '\0') {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto found = registry.hdl_modules.find(module);
+        if (found == registry.hdl_modules.end()
+            || std::any_of(
+                found->second.begin(), found->second.end(),
+                [&](const auto& actual) {
+                    return actual.first == name;
+                })) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        found->second.emplace_back(name, value);
         return FSIM_SC_OK;
     } catch (...) {
         return FSIM_SC_RUNTIME_ERROR;

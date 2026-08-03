@@ -91,6 +91,25 @@ SC_MODULE(DuplicateSibling) {
     SC_CTOR(DuplicateSibling) {}
 };
 
+SC_FSIM_HDL_MODULE(HeaderHdlProxy) {
+    sc_core::sc_in<sc_dt::sc_logic> scalar{"scalar"};
+    sc_core::sc_out<sc_dt::sc_uint<16>> vector{"vector"};
+    sc_core::sc_inout<sc_dt::sc_bv<4>> bidirectional{
+        "bidirectional"};
+
+    SC_CTOR(HeaderHdlProxy) {}
+};
+
+static_assert(std::is_base_of_v<
+              fsim::systemc::hdl_module,
+              HeaderHdlProxy>);
+inline constexpr auto header_factory_parameters =
+    fsim::systemc::make_factory_parameters(
+        fsim::systemc::factory_parameter{
+            "COUNT", FSIM_SC_CONSTRUCTION_NATURAL, true, 4});
+static_assert(header_factory_parameters.size() == 1);
+static_assert(header_factory_parameters.front().default_value == 4);
+
 int main() {
     // FSIM-CONFORMANCE CF-SC-DATATYPE-001 source=SRC-SYSTEMC expectation=execute
     const sc_core::sc_time period{10, sc_core::SC_NS};

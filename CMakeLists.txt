@@ -493,6 +493,7 @@ add_library(
   STATIC
     src/systemc/systemc_api.cpp
     src/systemc/systemc_core.cpp
+    src/systemc/systemc_exports.cpp
     src/systemc/systemc_foreign.cpp
 )
 add_library(fsim::systemc_support ALIAS fsim_systemc_support)

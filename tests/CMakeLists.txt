@@ -504,6 +504,41 @@ set_target_properties(
     VISIBILITY_INLINES_HIDDEN YES
 )
 
+function(fsim_configure_macro_systemc_plugin target)
+  target_compile_features(${target} PRIVATE cxx_std_20)
+  target_link_libraries(${target} PRIVATE fsim_systemc_support)
+  fsim_enable_warnings(${target})
+  set_target_properties(
+    ${target}
+    PROPERTIES
+      PREFIX ""
+      CXX_VISIBILITY_PRESET hidden
+      VISIBILITY_INLINES_HIDDEN YES
+  )
+endfunction()
+
+add_library(
+  fsim_test_macro_systemc_plugin
+  MODULE
+    systemc/macro_plugin.cpp
+    systemc/macro_plugin_extra.cpp
+)
+fsim_configure_macro_systemc_plugin(
+  fsim_test_macro_systemc_plugin)
+
+add_library(
+  fsim_test_duplicate_macro_systemc_plugin
+  MODULE
+    systemc/macro_plugin.cpp
+    systemc/macro_plugin_extra.cpp
+)
+target_compile_definitions(
+  fsim_test_duplicate_macro_systemc_plugin
+  PRIVATE FSIM_TEST_DUPLICATE_EXPORT=1
+)
+fsim_configure_macro_systemc_plugin(
+  fsim_test_duplicate_macro_systemc_plugin)
+
 add_library(
   fsim_test_throwing_systemc_plugin
   MODULE
@@ -533,6 +568,26 @@ add_library(
   fsim_test_empty_systemc_plugin
   MODULE
   systemc/empty_plugin.cpp
+)
+
+add_library(
+  fsim_test_no_factory_systemc_plugin
+  MODULE
+  systemc/no_factory_plugin.cpp
+)
+target_compile_features(
+  fsim_test_no_factory_systemc_plugin PRIVATE cxx_std_20)
+target_include_directories(
+  fsim_test_no_factory_systemc_plugin
+  PRIVATE "${PROJECT_SOURCE_DIR}/include"
+)
+fsim_enable_warnings(fsim_test_no_factory_systemc_plugin)
+set_target_properties(
+  fsim_test_no_factory_systemc_plugin
+  PROPERTIES
+    PREFIX ""
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
 )
 target_compile_features(fsim_test_empty_systemc_plugin PRIVATE cxx_std_20)
 target_include_directories(
@@ -572,6 +627,9 @@ add_test(
     "$<TARGET_FILE:fsim_test_throwing_systemc_plugin>"
     "$<TARGET_FILE:fsim_test_error_systemc_plugin>"
     "$<TARGET_FILE:fsim_test_empty_systemc_plugin>"
+    "$<TARGET_FILE:fsim_test_macro_systemc_plugin>"
+    "$<TARGET_FILE:fsim_test_duplicate_macro_systemc_plugin>"
+    "$<TARGET_FILE:fsim_test_no_factory_systemc_plugin>"
 )
 
 add_executable(

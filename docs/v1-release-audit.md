@@ -25,19 +25,22 @@ runtime evidence, and names evidence paths that exist in the checkout.
 | Common release contract | `V1-CM` | 10 | Tasks 5 through 9 |
 
 The Task 1 baseline matrix digest is
-`94f79cae36314860badc218fe7078cdf6e8431158f6a8d7004c44aa9717900d8`.
+`81d1dd67a42c50c2921b94b22cadf0d5d09e8548dc8a57a822f9247e1b870c52`.
 Changing any row requires an intentional audit update and the owning focused
 gate; the digest is evidence of review, not a substitute for semantic tests.
 Corrective Batch 131 re-reviewed the affected container rows after replacing
 the accidental 4,096-element cap with a representation-derived owning-storage
 budget; required-row counts and evidence ownership remain unchanged.
+Corrective Batch 132 re-reviewed the SystemC export, proxy hierarchy,
+construction-actual, named-object, and recursive mixed-language rows; row
+counts remain unchanged.
 
 ## Existing release evidence
 
 The composed local gates currently establish:
 
 - 1,624 production diagnostics are cataloged;
-- 424 authored C/C++ sources remain within the 2,000-line limit;
+- 428 authored C/C++ sources remain within the 2,000-line limit;
 - all 1,080 required matrix rows are executable with no explicit evidence gap;
 - 105 independently authored conformance expectations in 28 fixtures are
   owned by 27 CTests;
@@ -61,9 +64,9 @@ release gates and hosted proof.
 | `B130-T4-MIXED-SYSTEMC` | 4 | **Closed.** 16 `ML` plus 28 `SC` rows | All 44 rows pass the strict owner audit with 14 distinct runtime evidence files; the complete mixed/SystemC focused slice passes across facade, compiler/cache, lifecycle, scheduling, datatypes, conversions, and typed boundaries |
 | `B130-T5-DIFFERENTIAL` | 5 | **Closed.** Interpreter, LLVM, cache, debugger, VCD, scheduling, and failures | The composed audit freezes 94 runtime evidence files, 36 corpus CTests, all required differential modes, and exact overlapping claim counts; the 19 unique portability owners plus the new gate pass locally |
 | `B130-T6-PUBLIC` | 6 | **Closed.** CLI, C/C++ API, ABI, Tcl, runtime, installed/package use | The static public audit and fresh Unicode-prefix staged install protect all five commands, five header groups, two libraries, exact API/ABI version 1, CLI status 0/1/2/3, native path/environment seams, and installed command behavior; all 11 focused owners pass locally |
-| `B130-T7-INVENTORIES` | 7 | **Closed.** Diagnostics, source size, licenses, conformance, and provenance | The composed gate freezes 1,624 diagnostics, 424 bounded sources, 506 SPDX-owned artifacts, the 31-file/26-VHDL IEEE snapshot, 105 conformance expectations in 28 fixtures owned by 27 CTests, and 10 reviewed plus 6 excluded provenance identities |
+| `B130-T7-INVENTORIES` | 7 | **Closed.** Diagnostics, source size, licenses, conformance, and provenance | The composed gate freezes 1,624 diagnostics, 428 bounded sources, 510 SPDX-owned artifacts, the 31-file/26-VHDL IEEE snapshot, 105 conformance expectations in 28 fixtures owned by 27 CTests, and 10 reviewed plus 6 excluded provenance identities; Corrective Batch 132 owns the four-file increase |
 | `B130-T8-RESOURCES` | 8 | **Closed.** Linux/Windows Debug/Release build and test bounds | The composed static audit freezes 12 hosted configurations, six four-worker CI build steps, an eight-link local pool, compact Debug objects, 8 MiB stacks, bounded job/test timeouts, phase traces, 14 platform files, and 20 portability rows; all 11 focused owners pass locally |
-| `B130-T9-RECLASSIFICATION` | 9 | **Closed.** Final feature matrix and release corpus | All 1,080 required rows are `execute`; all 4,320 P+/P-/E/R cells link to checked-in owners; the 320-path evidence identity (157 test, 148 production, 15 release/build paths), 94 runtime files, and 36 corpus CTests are exact and digest-pinned |
+| `B130-T9-RECLASSIFICATION` | 9 | **Closed.** Final feature matrix and release corpus | All 1,080 required rows are `execute`; all 4,320 P+/P-/E/R cells link to checked-in owners; the 321-path evidence identity (158 test, 148 production, 15 release/build paths), 94 runtime files, and 36 corpus CTests are exact and digest-pinned |
 
 No queue is evidence of a confirmed defect. A queue closes only after its
 complete bounded surface has been inspected and its focused local gate passes.

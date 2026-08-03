@@ -563,6 +563,12 @@ sc_module::sc_module()
 
 
 
+    void sc_module::fsim_mark_hdl_proxy() noexcept {
+        hdl_proxy_ = true;
+    }
+
+
+
     [[nodiscard]] fsim_sc_status_v1 sc_module::fsim_elaborate(
         const fsim_sc_host_v1* host,
         const fsim_sc_handle_v1 module) {
@@ -572,6 +578,19 @@ sc_module::sc_module()
         }
         if (handle_ != 0 && handle_ != module) {
             return FSIM_SC_INVALID_ARGUMENT;
+        }
+        if (hdl_proxy_) {
+            if (children_.empty() && processes_.empty()) {
+                return FSIM_SC_OK;
+            }
+            if (host->report != nullptr) {
+                host->report(
+                    host->context,
+                    3,
+                    "HDL module proxies cannot contain processes or "
+                    "nested modules");
+            }
+            return FSIM_SC_NOT_SUPPORTED;
         }
         for (auto* child : children_) {
             if (child == nullptr || child->handle_ == 0) {
@@ -664,7 +683,9 @@ void sc_module::before_end_of_elaboration() {}
         if (phase == LifecyclePhase::end_of_simulation) {
             for (auto child = children_.rbegin();
                  child != children_.rend(); ++child) {
-                (*child)->fsim_invoke_lifecycle(phase);
+                if (!(*child)->hdl_proxy_) {
+                    (*child)->fsim_invoke_lifecycle(phase);
+                }
             }
             end_of_simulation();
             return;
@@ -683,7 +704,9 @@ void sc_module::before_end_of_elaboration() {}
             break;
         }
         for (auto* child : children_) {
-            child->fsim_invoke_lifecycle(phase);
+            if (!child->hdl_proxy_) {
+                child->fsim_invoke_lifecycle(phase);
+            }
         }
     }
 

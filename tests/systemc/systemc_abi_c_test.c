@@ -95,6 +95,14 @@ _Static_assert(
         > offsetof(fsim_sc_host_v1, set_primitive_channel_kind),
     "SystemC timed event waits must remain append-only");
 _Static_assert(
+    offsetof(fsim_sc_host_v1, mark_hdl_module)
+        > offsetof(fsim_sc_host_v1, wait_event_timeout),
+    "SystemC HDL module markers must remain append-only");
+_Static_assert(
+    offsetof(fsim_sc_host_v1, set_hdl_module_actual)
+        > offsetof(fsim_sc_host_v1, mark_hdl_module),
+    "SystemC HDL module actuals must remain append-only");
+_Static_assert(
     offsetof(fsim_sc_registrar_v1, register_elaboration_factory)
         > offsetof(fsim_sc_registrar_v1, register_factory),
     "typed factory registration must remain append-only");

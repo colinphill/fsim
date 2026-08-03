@@ -116,31 +116,44 @@ behavior remains outside this subset and is rejected explicitly.
 SystemC is not a leaf-only integration. A VHDL component/direct instance or a
 Verilog/SystemVerilog module instance may bind explicitly to
 `systemc:PLUGIN.FACTORY`. In the reverse direction, a SystemC module factory may
-register a named foreign-child placeholder and its typed ports during
+construct an HDL-backed module facade and bind its typed ports during
 elaboration; an `fsim.toml` binding for that full instance path then selects a
 `vhdl:LIBRARY.ENTITY(ARCHITECTURE)` or `sv:LIBRARY.MODULE` target.
 
-Facade-based modules declare the reverse direction with the fsim extension
-`fsim::systemc::hdl_instance`:
+Facade-based modules declare the reverse direction with
+`SC_FSIM_HDL_MODULE` and use ordinary SystemC construction and binding syntax:
 
 ```cpp
+SC_FSIM_HDL_MODULE(LogicStage) {
+    sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+    sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+
+    SC_CTOR(LogicStage) {}
+};
+
 SC_MODULE(Bridge) {
     sc_core::sc_in<sc_dt::sc_logic> value{"value"};
     sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
-    fsim::systemc::hdl_instance u_hdl{"u_hdl"};
+    LogicStage u_hdl{"u_hdl"};
 
     SC_CTOR(Bridge) {
-        u_hdl.bind_input("value", value);
-        u_hdl.bind_output("inverted", inverted);
+        u_hdl.value(value);
+        u_hdl.inverted(inverted);
     }
 };
+
+SC_FSIM_EXPORT_AS(Bridge, "bridge");
 ```
 
 For a SystemC instance named `top.u_bridge`, the child above has hierarchy path
 `top.u_bridge.u_hdl`. A manifest binding for that exact path chooses its VHDL
-or Verilog/SystemVerilog implementation. `bind_input`, `bind_output`, and
-`bind_inout` infer encoding and width from supported SystemC signals, ports, or
-signal-interface exports. The direction is the HDL child's port direction.
+or Verilog/SystemVerilog implementation. The proxy's `sc_in`, `sc_out`, and
+`sc_inout` members infer encoding, width, and direction normally and may bind
+to a parent port, supported signal, or signal-interface export. The proxy is
+visible as a module with those ports at the selected HDL path; there is no
+hidden child level. Processes, lifecycle overrides, events, channels, exports,
+nested modules, and internal signals are invalid inside an HDL proxy. The
+legacy `hdl_instance::bind_*` surface remains available but is deprecated.
 
 Both directions are now elaborated recursively into the same `DesignIR`. The
 common elaborator assigns hierarchy/object/process IDs, checks every port and
@@ -157,9 +170,8 @@ transactionally. The common hierarchy walk now evaluates an HDL parameter
 override or VHDL generic map in its parent specialization, applies the
 parent-language association/name rules, validates the selected schema, and
 only then constructs the SystemC module and checks its resulting ports.
-Conversely,
-`hdl_instance::set_actual(name,
-value)` now supplies immutable signed scalar actuals for its manifest-selected
+Conversely, `hdl_module::set_actual(name, value)` supplies immutable signed
+scalar actuals for its manifest-selected
 HDL target. The append-only native ABI carries those values into ordinary
 VHDL-generic or Verilog/SystemVerilog-parameter specialization and cache
 identity, with duplicate/unknown actual diagnostics. Both boundary directions
@@ -170,8 +182,8 @@ the ordinary VHDL↔SV directions; SystemC is a peer hierarchy language rather
 than a leaf-only foreign model.
 
 The SystemC-facing ABI exposes this through an elaboration factory plus
-append-only host callbacks for registered ports and typed foreign-child
-placeholders. Factory, module, port, and foreign-child identities are opaque
+append-only host callbacks for registered ports, HDL-module markers, and
+construction actuals. Factory, module, port, and foreign-child identities are opaque
 64-bit handles; no C++ or internal IR layout crosses the boundary. It does not
 permit arbitrary HDL creation after simulation starts. Cross-language binding
 is never inferred from a C++ type or unqualified name.
@@ -244,7 +256,7 @@ directory.
 
 ## Native ABI
 
-A plug-in exports exactly one initialization symbol:
+A plug-in image contains exactly one initialization symbol:
 
 ```c
 fsim_sc_status_v1 fsim_plugin_init_v1(
@@ -266,8 +278,31 @@ and symmetric with HDL-to-SystemC binding without exposing frontend or
 remains loadable for compatibility but cannot satisfy an integrated hierarchy
 binding.
 
-Facade modules register without handwritten factory thunks through
-`fsim::systemc::register_module_factory<Module>(host, registrar, name)`.
+Facade modules normally export factories declaratively:
+
+```cpp
+SC_FSIM_EXPORT(ModuleType);
+SC_FSIM_EXPORT_AS(AnotherType, "stable_alias");
+```
+
+Any number of export macros may appear in one or several translation units.
+Descriptors are sorted by public name before the support library's single
+`fsim_plugin_init_v1` registers them, so initialization order is not
+observable. Duplicate public names reject the complete transaction; different
+aliases of the same type are valid. A type may expose an automatically
+discovered schema:
+
+```cpp
+inline static constexpr auto fsim_factory_parameters =
+    fsim::systemc::make_factory_parameters(
+        fsim::systemc::factory_parameter{
+            "WIDTH", FSIM_SC_CONSTRUCTION_POSITIVE, true, 8});
+```
+
+Macro exporting and a handwritten entry point are mutually exclusive within
+one image. The handwritten `fsim_plugin_init_v1` and
+`register_module_factory<Module>` paths remain compatible but are deprecated
+for new source. Existing binary plug-ins retain the append-only ABI prefix.
 During construction, named `sc_in`, `sc_out`, and `sc_inout` members register
 their typed port handles. After construction, the helper publishes recorded
 processes, static sensitivities, edge qualifiers, and `dont_initialize()`
@@ -280,8 +315,9 @@ plane followed by an equal-size `bval` plane, preserving `0`, `1`, `X`, and
 `Z` without exposing a C++ datatype.
 
 The loader rejects a missing image or entry point, host/registrar ABI mismatch,
-failed initialization, invalid or duplicate factory/schema registration, and
-an image that registers no valid module factory. Registration is buffered,
+failed initialization, and invalid or duplicate factory/schema registration.
+An image which intentionally registers no factories remains loadable; an
+application requiring a named factory diagnoses its absence. Registration is buffered,
 validated, and replayed into a staging hierarchy before its factory table and
 image become visible. Failed replay leaves no partial registration. Exceptions
 from initialization, construction, process/channel callbacks, lifecycle, or

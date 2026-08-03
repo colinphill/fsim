@@ -691,6 +691,8 @@ public:
     sc_sensitive sensitive;
 
 protected:
+    void fsim_mark_hdl_proxy() noexcept;
+
     virtual void before_end_of_elaboration();
     virtual void end_of_elaboration();
     virtual void start_of_simulation();
@@ -755,6 +757,7 @@ private:
         unique_name_counters_;
     std::deque<std::string> unique_names_;
     const fsim_sc_host_v1* lifecycle_host_{};
+    bool hdl_proxy_{};
 
     friend class sc_object;
     friend const char* sc_gen_unique_name(const char* base);

@@ -758,11 +758,13 @@ void adapt_vhdl_array_port_shapes(
         for (const auto& child : instance.foreign_children) {
             const auto child_path = path + "." + child.name;
             design_.systemc_objects_.push_back({
-                SystemCNamedObjectKind::foreign_child,
+                child.module_facade
+                    ? SystemCNamedObjectKind::module
+                    : SystemCNamedObjectKind::foreign_child,
                 child.handle,
                 child_path,
                 path,
-                "hdl_instance",
+                child.module_facade ? "hdl_module" : "hdl_instance",
                 std::nullopt,
                 std::nullopt,
                 {}});
@@ -832,6 +834,37 @@ void adapt_vhdl_array_port_shapes(
                     selected->language);
             auto child_aliases = connect_foreign_child(
                 child, specialized.unit, child_path, objects);
+            if (child.module_facade) {
+                for (const auto& port : child.ports) {
+                    const auto signal = child_aliases.find(port.name);
+                    if (signal == child_aliases.end()) {
+                        continue;
+                    }
+                    std::string_view kind = "sc_port";
+                    switch (port.direction) {
+                    case frontend::PortDirection::Input:
+                        kind = "sc_in";
+                        break;
+                    case frontend::PortDirection::Output:
+                        kind = "sc_out";
+                        break;
+                    case frontend::PortDirection::Inout:
+                        kind = "sc_inout";
+                        break;
+                    default:
+                        break;
+                    }
+                    design_.systemc_objects_.push_back({
+                        SystemCNamedObjectKind::port,
+                        port.handle,
+                        child_path + "." + port.name,
+                        child_path,
+                        std::string{kind},
+                        signal->second,
+                        std::nullopt,
+                        {}});
+                }
+            }
             instantiate(
                 specialized.unit,
                 child_path,

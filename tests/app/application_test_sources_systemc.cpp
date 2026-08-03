@@ -956,17 +956,24 @@ void destroy_port_direction_probe(void*, void* object) {
 }
 }
 
+SC_FSIM_HDL_MODULE(HdlBridgeChild) {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+
+  SC_CTOR(HdlBridgeChild) {}
+};
+
 SC_MODULE(HdlBridge) {
   sc_core::sc_in<sc_dt::sc_logic> value{"value"};
   sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
-  fsim::systemc::hdl_instance u_hdl{"u_hdl"};
+  HdlBridgeChild u_hdl{"u_hdl"};
 
   SC_CTOR(HdlBridge) {
     u_hdl.set_actual(
         "INVERT",
         fsim::systemc::construction_value<int>("CHILD_INVERT"));
-    u_hdl.bind_input("value", value);
-    u_hdl.bind_output("inverted", inverted);
+    u_hdl.value(value);
+    u_hdl.inverted(inverted);
   }
 };
 

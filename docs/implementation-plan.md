@@ -10349,3 +10349,36 @@ execution including callbacks, final values, and normalized VCD. The focused
 Debug/Release tests pass in 10.98/10.42 seconds. The six new authored artifacts
 advance the reviewed SPDX inventory from 500 to 506; the composed inventory
 and release-candidate gates pass with generated cache/VCD outputs absent.
+
+### Corrective Batch 132 — SystemC HDL proxy and exports — Complete
+
+This additive post-v1 refactor makes HDL-backed children construct and bind
+like ordinary SystemC modules while retaining explicit manifest target
+selection and legacy plug-in compatibility:
+
+1. **Complete:** add `hdl_module` and `SC_FSIM_HDL_MODULE` with ordinary
+   `sc_in`, `sc_out`, and `sc_inout` binding syntax.
+2. **Complete:** append host-ABI callbacks for marking an existing native module
+   as HDL-backed and recording immutable scalar construction actuals.
+3. **Complete:** lower marked modules to same-path foreign HDL implementations
+   using their recorded port declarations and bindings.
+4. **Complete:** expose module-like hierarchy identity without a synthetic
+   `hdl_instance` child and reject executable SystemC contents in proxies.
+5. **Complete:** add a deterministic plug-in-local multi-export registry and one
+   support-library initialization entry point.
+6. **Complete:** add type-name/alias export macros, parameter-schema discovery,
+   duplicate rejection, and legacy compatibility.
+7. **Complete:** migrate the three-language example and representative typed
+   plug-in fixtures while retaining dedicated legacy coverage.
+8. **Complete:** add positive, negative, ABI, loader, cache, debugger, VCD, and
+   interpreter/LLVM application evidence.
+9. **Complete:** advance the SystemC runtime cache schema and update public,
+   architecture, feature-matrix, diagnostic, inventory, and restart records.
+10. **Complete:** the eight-worker exact-LLVM Debug and Release builds and full
+    regressions pass 106/106 tests in 133.42/102.58 seconds. The eight-worker
+    LLVM-disabled ASan/UBSan build and full regression pass 103/103 tests in
+    277.35 seconds with LeakSanitizer detection disabled because the execution
+    runner uses `ptrace`; AddressSanitizer and UndefinedBehaviorSanitizer remain
+    enabled. Source, inventory, public-release, release-candidate, SystemC,
+    MSVC, and Windows portability contracts pass. Batch 132 is not a scheduled
+    non-documentation CI-inspection boundary.

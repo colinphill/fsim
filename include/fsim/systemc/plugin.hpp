@@ -5,6 +5,8 @@
 
 #include "fsim/systemc/marshalling.hpp"
 
+#include <concepts>
+
 namespace fsim::systemc {
 
 /// An elaboration-time placeholder for a VHDL or Verilog/SystemVerilog child.
@@ -12,6 +14,7 @@ namespace fsim::systemc {
 /// Construct this as a member of an sc_module, connect its typed ports to
 /// objects registered on that module, and select the actual HDL design unit
 /// with an explicit binding for the resulting hierarchy path in fsim.toml.
+/// @deprecated Use SC_FSIM_HDL_MODULE and ordinary SystemC port binding.
 class hdl_instance final {
 public:
     explicit hdl_instance(const char* name);
@@ -144,6 +147,35 @@ private:
     fsim_sc_handle_v1 handle_{};
 };
 
+/// A module-shaped elaboration proxy whose implementation is selected by an
+/// explicit full-instance-path HDL binding in the fsim manifest.
+///
+/// Declare only sc_in, sc_out, and sc_inout members in a derived proxy. Bind
+/// those ports with ordinary SystemC syntax from the containing module.
+class hdl_module : public sc_core::sc_module {
+public:
+    hdl_module();
+    explicit hdl_module(sc_core::sc_module_name name);
+
+    hdl_module(const hdl_module&) = delete;
+    hdl_module& operator=(const hdl_module&) = delete;
+
+    /// Supply one named immutable scalar actual to the manifest-selected HDL
+    /// design unit.
+    void set_actual(const char* name, std::int64_t value);
+
+private:
+    void mark();
+
+    void before_end_of_elaboration() final {}
+    void end_of_elaboration() final {}
+    void start_of_simulation() final {}
+    void end_of_simulation() final {}
+
+    const fsim_sc_host_v1* host_{};
+    fsim_sc_handle_v1 handle_{};
+};
+
 struct factory_parameter {
     const char* name{};
     fsim_sc_construction_type_v1 type{
@@ -151,6 +183,16 @@ struct factory_parameter {
     bool has_default{};
     std::int64_t default_value{};
 };
+
+template <typename... Parameters>
+    requires (
+        std::same_as<std::remove_cvref_t<Parameters>,
+                     factory_parameter> && ...)
+[[nodiscard]] constexpr auto make_factory_parameters(
+    Parameters&&... parameters) {
+    return std::array<factory_parameter, sizeof...(Parameters)>{
+        std::forward<Parameters>(parameters)...};
+}
 
 /// Read a canonical value declared by the active factory's construction
 /// schema. This is valid only while an fsim module constructor is running.
@@ -255,6 +297,7 @@ struct module_factory_state {
 };
 
 template <typename Module>
+/// @deprecated New plug-ins should use SC_FSIM_EXPORT or SC_FSIM_EXPORT_AS.
 [[nodiscard]] fsim_sc_status_v1 register_module_factory(
     const fsim_sc_host_v1* host,
     fsim_sc_registrar_v1* registrar,
@@ -293,7 +336,9 @@ template <typename Module>
         || host->connect_foreign_port == nullptr
         || host->wait_static == nullptr
         || host->set_foreign_child_actual == nullptr
-        || host->get_construction_value == nullptr) {
+        || host->get_construction_value == nullptr
+        || host->mark_hdl_module == nullptr
+        || host->set_hdl_module_actual == nullptr) {
         return FSIM_SC_ABI_MISMATCH;
     }
     auto status = registrar->register_elaboration_factory(
@@ -321,6 +366,7 @@ template <typename Module>
 }
 
 template <typename Module>
+/// @deprecated New plug-ins should use SC_FSIM_EXPORT or SC_FSIM_EXPORT_AS.
 [[nodiscard]] fsim_sc_status_v1 register_module_factory(
     const fsim_sc_host_v1* host,
     fsim_sc_registrar_v1* registrar,
@@ -329,9 +375,97 @@ template <typename Module>
         host, registrar, name, {});
 }
 
+namespace detail {
+
+template <typename Module>
+[[nodiscard]] fsim_sc_status_v1 register_exported_factory(
+    const fsim_sc_host_v1* host,
+    fsim_sc_registrar_v1* registrar,
+    const char* name,
+    const std::span<const factory_parameter> parameters) noexcept {
+    if (host == nullptr || registrar == nullptr || name == nullptr
+        || *name == '\0'
+        || host->abi_version != FSIM_SYSTEMC_ABI_VERSION
+        || registrar->abi_version != FSIM_SYSTEMC_ABI_VERSION
+        || host->struct_size < sizeof(fsim_sc_host_v1)
+        || registrar->struct_size < sizeof(fsim_sc_registrar_v1)
+        || registrar->register_elaboration_factory == nullptr
+        || registrar->register_factory_parameter == nullptr) {
+        return FSIM_SC_ABI_MISMATCH;
+    }
+    auto status = registrar->register_elaboration_factory(
+        registrar->context,
+        name,
+        module_factory_state<Module>::elaborate,
+        module_factory_state<Module>::destroy,
+        const_cast<fsim_sc_host_v1*>(host));
+    for (const auto& parameter : parameters) {
+        if (status != FSIM_SC_OK) {
+            break;
+        }
+        status = registrar->register_factory_parameter(
+            registrar->context,
+            name,
+            parameter.name,
+            parameter.type,
+            parameter.has_default ? 1 : 0,
+            parameter.default_value);
+    }
+    return status;
+}
+
+struct export_descriptor {
+    const char* public_name{};
+    fsim_sc_status_v1 (*register_factory)(
+        const fsim_sc_host_v1*,
+        fsim_sc_registrar_v1*,
+        const char*) noexcept {};
+    export_descriptor* next{};
+};
+
+void add_export_descriptor(export_descriptor* descriptor) noexcept;
+
+template <typename Module>
+struct export_registration final {
+    explicit export_registration(const char* public_name) noexcept
+        : descriptor_{
+              public_name,
+              register_export,
+              nullptr} {
+        add_export_descriptor(&descriptor_);
+    }
+
+private:
+    static fsim_sc_status_v1 register_export(
+        const fsim_sc_host_v1* host,
+        fsim_sc_registrar_v1* registrar,
+        const char* public_name) noexcept {
+        if constexpr (requires {
+                          Module::fsim_factory_parameters;
+                      }) {
+            const auto& parameters =
+                Module::fsim_factory_parameters;
+            return register_exported_factory<Module>(
+                host,
+                registrar,
+                public_name,
+                std::span<const factory_parameter>{parameters});
+        } else {
+            return register_exported_factory<Module>(
+                host, registrar, public_name, {});
+        }
+    }
+
+    export_descriptor descriptor_;
+};
+
+} // namespace detail
+
 } // namespace fsim::systemc
 
 #define SC_MODULE(name) struct name : public ::sc_core::sc_module
+#define SC_FSIM_HDL_MODULE(name) \
+    struct name : public ::fsim::systemc::hdl_module
 #define SC_CTOR(name) \
     explicit name( \
         [[maybe_unused]] ::sc_core::sc_module_name fsim_module_name)
@@ -348,3 +482,17 @@ template <typename Module>
             #function_name, FSIM_SC_CTHREAD, [this]() { this->function_name(); }); \
         this->sensitive << (edge_expression); \
     } while (false)
+
+#define FSIM_SC_DETAIL_CONCAT_INNER(left, right) left##right
+#define FSIM_SC_DETAIL_CONCAT(left, right) \
+    FSIM_SC_DETAIL_CONCAT_INNER(left, right)
+#define FSIM_SC_DETAIL_EXPORT(type, public_name, identifier) \
+    namespace { \
+    [[maybe_unused]] const \
+        ::fsim::systemc::detail::export_registration<type> \
+        FSIM_SC_DETAIL_CONCAT( \
+            fsim_sc_export_registration_, identifier){public_name}; \
+    }
+#define SC_FSIM_EXPORT_AS(type, public_name) \
+    FSIM_SC_DETAIL_EXPORT(type, public_name, __LINE__)
+#define SC_FSIM_EXPORT(type) SC_FSIM_EXPORT_AS(type, #type)

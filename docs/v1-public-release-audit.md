@@ -23,7 +23,7 @@ The installed v1 surface is:
 | `B130-T6-INSTALL` | Staged install layout and relocation | A Unicode-prefix install contains every command/header/library/document/package artifact and installed public headers are byte-identical to their reviewed sources |
 | `B130-T6-CLI` | Commands, aliases, direct sources, project mode, diagnostics, paths, and exit status | Installed version/help behavior is exact; success, user error, invalid arguments, and internal containment retain statuses 0/1/2/3 |
 | `B130-T6-API` | C session/handle/object/value/callback/debug lifecycle | API version/layout, misuse, Unicode project paths, callback re-entry/exception containment, stepping, forcing, files, and diagnostics remain executable |
-| `B130-T6-SYSTEMC` | Strict-C ABI and public C++ facade | Installed headers retain ABI version/layout, compile ownership, datatype/port/export/interface behavior, and no C++ exception crosses the C boundary |
+| `B130-T6-SYSTEMC` | Strict-C ABI and public C++ facade | Installed headers retain ABI version/layout, append-only HDL-proxy callbacks, ordinary proxy ports, deterministic multi-export macros, automatic factory schemas, compile ownership, datatype/port/export/interface behavior, and no C++ exception crosses the C boundary |
 | `B130-T6-TCL-RUNTIME` | Tcl commands/scripts/results, bundled relocation, runtime file I/O, environment, debugger, and VCD | UTF-8/native paths, unset-versus-empty environment values, binary modes, relocatable Tcl scripts, and callback/error lifetimes remain test-owned |
 
 The staged-install test performs no network access. It uses the already built

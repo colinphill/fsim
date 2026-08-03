@@ -16,6 +16,7 @@ bool factory_registered = false;
 bool elaboration_factory_registered = false;
 bool fiber_factory_registered = false;
 bool factory_parameter_registered = false;
+std::vector<std::string> macro_registration_order;
 
 fsim_sc_status_v1 register_factory(
     void*,
@@ -60,6 +61,29 @@ fsim_sc_status_v1 register_factory_parameter(
     return factory_parameter_registered
         ? FSIM_SC_OK
         : FSIM_SC_INVALID_ARGUMENT;
+}
+
+fsim_sc_status_v1 record_macro_factory(
+    void*,
+    const char* name,
+    fsim_sc_module_elaborate_v1 factory,
+    fsim_sc_module_destroy_v1 destroy,
+    void*) {
+    if (name == nullptr || factory == nullptr || destroy == nullptr) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    macro_registration_order.emplace_back(name);
+    return FSIM_SC_OK;
+}
+
+fsim_sc_status_v1 accept_macro_parameter(
+    void*,
+    const char*,
+    const char*,
+    fsim_sc_construction_type_v1,
+    std::uint8_t,
+    std::int64_t) {
+    return FSIM_SC_OK;
 }
 
 class TestExecutionContext final
@@ -127,11 +151,16 @@ enum LifecycleEvent : std::uint32_t {
 int main(int argc, char** argv) {
     // FSIM-CONFORMANCE CF-SC-PLUGIN-001 source=SRC-SYSTEMC expectation=execute
     // FSIM-CONFORMANCE CF-SC-LIFECYCLE-001 source=SRC-SYSTEMC expectation=execute
-    assert(argc == 5);
+    assert(argc == 8);
     const auto plugin_path = std::filesystem::path{argv[1]};
     const auto throwing_plugin_path = std::filesystem::path{argv[2]};
     const auto error_plugin_path = std::filesystem::path{argv[3]};
     const auto empty_plugin_path = std::filesystem::path{argv[4]};
+    const auto macro_plugin_path = std::filesystem::path{argv[5]};
+    const auto duplicate_macro_plugin_path =
+        std::filesystem::path{argv[6]};
+    const auto no_factory_plugin_path =
+        std::filesystem::path{argv[7]};
     assert(!fsim::platform::DynamicLibrary::is_loaded(plugin_path));
 
     fsim_sc_host_v1 host{};
@@ -181,6 +210,110 @@ int main(int argc, char** argv) {
         error.find("does not export fsim_plugin_init_v1")
         != std::string::npos);
     assert(!fsim::platform::DynamicLibrary::is_loaded(empty_plugin_path));
+
+    auto macro_registrar = registrar;
+    macro_registrar.register_elaboration_factory =
+        record_macro_factory;
+    macro_registrar.register_factory_parameter =
+        accept_macro_parameter;
+    macro_registration_order.clear();
+    error.clear();
+    {
+        const auto macro_plugin = fsim::systemc::Plugin::load(
+            macro_plugin_path, host, macro_registrar, error);
+        assert(macro_plugin != nullptr);
+        assert(error.empty());
+        assert((macro_registration_order
+                == std::vector<std::string>{
+                    "PlainModule",
+                    "a_parameterized",
+                    "content_proxy_root",
+                    "m_alias_one",
+                    "m_alias_two",
+                    "process_proxy_root",
+                    "proxy_root",
+                    "unbound_proxy_root"}));
+    }
+
+    macro_registration_order.clear();
+    error.clear();
+    assert(!fsim::systemc::Plugin::load(
+        duplicate_macro_plugin_path,
+        host,
+        macro_registrar,
+        error));
+    assert(
+        error == "SystemC plug-in initialization failed with status 1");
+    assert(macro_registration_order.empty());
+
+    error.clear();
+    const auto macro_hierarchy =
+        fsim::systemc::HierarchyRegistry::load(
+            macro_plugin_path, error);
+    assert(macro_hierarchy != nullptr);
+    assert(error.empty());
+    assert(macro_hierarchy->factory_count() == 8);
+    assert(macro_hierarchy->has_factory("PlainModule"));
+    assert(macro_hierarchy->has_factory("m_alias_one"));
+    assert(macro_hierarchy->has_factory("m_alias_two"));
+    const auto macro_parameters =
+        macro_hierarchy->factory_parameters("a_parameterized");
+    assert(macro_parameters && macro_parameters->size() == 1);
+    assert(macro_parameters->front().name == "WIDTH");
+    assert(macro_parameters->front().default_value == 12);
+    const auto proxy_root = macro_hierarchy->instantiate(
+        "proxy_root", "top", 0, error);
+    assert(proxy_root);
+    assert(error.empty());
+    assert(proxy_root->native_children.empty());
+    assert(proxy_root->foreign_children.size() == 1);
+    const auto& proxy = proxy_root->foreign_children.front();
+    assert(proxy.module_facade);
+    assert(proxy.name == "proxy");
+    assert(proxy.ports.size() == 3);
+    assert(proxy.construction_actuals.size() == 1);
+    assert(proxy.construction_actuals.front().first == "WIDTH");
+    assert(proxy.construction_actuals.front().second == 8);
+    const auto proxy_info =
+        macro_hierarchy->find_object(proxy_root->handle, "top.proxy");
+    assert(proxy_info);
+    assert(proxy_info->kind
+           == fsim::systemc::HierarchyObjectKind::module);
+    const auto proxy_children =
+        macro_hierarchy->child_objects(proxy.handle);
+    assert(proxy_children.size() == 3);
+    assert(std::ranges::all_of(
+        proxy_children,
+        [](const auto& child) {
+            return child.kind
+                == fsim::systemc::HierarchyObjectKind::port;
+        }));
+
+    error.clear();
+    const auto unbound = macro_hierarchy->instantiate(
+        "unbound_proxy_root", "bad", 0, error);
+    assert(!unbound);
+    assert(error.find("has unbound port") != std::string::npos);
+
+    error.clear();
+    const auto invalid_content = macro_hierarchy->instantiate(
+        "content_proxy_root", "bad_content", 0, error);
+    assert(!invalid_content);
+    assert(error.find("may contain only ports") != std::string::npos);
+
+    error.clear();
+    const auto invalid_process = macro_hierarchy->instantiate(
+        "process_proxy_root", "bad_process", 0, error);
+    assert(!invalid_process);
+    assert(error.find("cannot contain processes") != std::string::npos);
+
+    error.clear();
+    const auto no_factory_hierarchy =
+        fsim::systemc::HierarchyRegistry::load(
+            no_factory_plugin_path, error);
+    assert(no_factory_hierarchy != nullptr);
+    assert(error.empty());
+    assert(no_factory_hierarchy->factory_count() == 0);
 
     error.clear();
     assert(!fsim::systemc::Plugin::load(

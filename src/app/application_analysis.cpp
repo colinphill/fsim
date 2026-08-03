@@ -590,6 +590,7 @@ elaboration::SystemCInstanceDescription systemc_description(
     converted.name = child.name;
     converted.construction_actuals =
         child.construction_actuals;
+    converted.module_facade = child.module_facade;
     converted.ports.reserve(child.ports.size());
     for (const auto& port : child.ports) {
       converted.ports.push_back({
@@ -597,6 +598,7 @@ elaboration::SystemCInstanceDescription systemc_description(
           systemc_type(port.encoding, port.width),
           systemc_direction(port.direction),
           port.object,
+          port.handle,
       });
     }
     result.foreign_children.push_back(std::move(converted));

@@ -98,6 +98,10 @@ struct HierarchyRegistry::Impl {
     std::unordered_map<std::string, Factory> factories;
     std::unordered_map<fsim_sc_handle_v1, ModuleDescription> pending;
     std::unordered_map<
+        fsim_sc_handle_v1,
+        std::vector<std::pair<std::string, std::int64_t>>>
+        hdl_modules;
+    std::unordered_map<
         fsim_sc_handle_v1, std::vector<fsim_sc_handle_v1>>
         native_children;
     std::unordered_map<fsim_sc_handle_v1, Object> objects;
@@ -124,6 +128,10 @@ struct HierarchyRegistry::Impl {
 
     [[nodiscard]] ModuleDescription collect(
         const fsim_sc_handle_v1 module);
+
+    [[nodiscard]] bool validate_hdl_modules(
+        const fsim_sc_handle_v1 root,
+        std::string& error) const;
 };
 
 namespace hierarchy_detail {
@@ -304,6 +312,16 @@ extern "C" fsim_sc_status_v1 registry_register_native_module(
     const fsim_sc_handle_v1 parent,
     const char* name,
     fsim_sc_handle_v1* result) noexcept;
+
+extern "C" fsim_sc_status_v1 registry_mark_hdl_module(
+    void* context,
+    fsim_sc_handle_v1 module) noexcept;
+
+extern "C" fsim_sc_status_v1 registry_set_hdl_module_actual(
+    void* context,
+    fsim_sc_handle_v1 module,
+    const char* name,
+    std::int64_t value) noexcept;
 
 extern "C" fsim_sc_status_v1 registry_register_lifecycle(
     void* context,

@@ -42,6 +42,7 @@ struct ForeignPort {
     frontend::PortDirection direction{
         frontend::PortDirection::Unknown};
     std::uint64_t object{};
+    std::uint64_t handle{};
 };
 
 struct ForeignChild {
@@ -50,6 +51,7 @@ struct ForeignChild {
     std::vector<std::pair<std::string, std::int64_t>>
         construction_actuals;
     std::vector<ForeignPort> ports;
+    bool module_facade{};
 };
 
 struct ExternalSensitivity {

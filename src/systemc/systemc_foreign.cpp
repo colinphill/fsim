@@ -43,4 +43,42 @@ fsim_sc_handle_v1 hdl_instance::native_handle() const noexcept {
     return handle_;
 }
 
+hdl_module::hdl_module()
+    : sc_core::sc_module() {
+    mark();
+}
+
+hdl_module::hdl_module(const sc_core::sc_module_name name)
+    : sc_core::sc_module(name) {
+    mark();
+}
+
+void hdl_module::mark() {
+    host_ = sc_core::detail::current_host;
+    handle_ = sc_core::detail::current_module;
+    if (host_ == nullptr || handle_ == 0
+        || host_->mark_hdl_module == nullptr
+        || host_->set_hdl_module_actual == nullptr) {
+        throw std::logic_error{
+            "hdl_module construction requires an fsim host with the "
+            "HDL-module facade extension"};
+    }
+    fsim_mark_hdl_proxy();
+    sc_core::detail::check_status(
+        host_->mark_hdl_module(host_->context, handle_),
+        "mark HDL-backed SystemC module");
+}
+
+void hdl_module::set_actual(
+    const char* name, const std::int64_t value) {
+    if (name == nullptr || *name == '\0') {
+        throw std::invalid_argument{
+            "HDL module construction actual name must be valid"};
+    }
+    sc_core::detail::check_status(
+        host_->set_hdl_module_actual(
+            host_->context, handle_, name, value),
+        "set HDL module construction actual");
+}
+
 } // namespace fsim::systemc

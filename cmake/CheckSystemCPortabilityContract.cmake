@@ -12,6 +12,7 @@ set(FSIM_COMMON "${FSIM_SOURCE_DIR}/src/systemc/plugin_compiler_common.cpp")
 set(FSIM_PROCESS "${FSIM_SOURCE_DIR}/src/systemc/plugin_compiler_process.cpp")
 set(FSIM_LOADER "${FSIM_SOURCE_DIR}/src/systemc/plugin_loader.cpp")
 set(FSIM_CALLBACKS "${FSIM_SOURCE_DIR}/src/systemc/hierarchy_callbacks.cpp")
+set(FSIM_EXPORTS "${FSIM_SOURCE_DIR}/src/systemc/systemc_exports.cpp")
 set(FSIM_ABI_TEST "${FSIM_SOURCE_DIR}/tests/systemc/systemc_abi_c_test.c")
 foreach(FSIM_INPUT IN ITEMS
     "${FSIM_TEST_CMAKE}"
@@ -22,6 +23,7 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_PROCESS}"
     "${FSIM_LOADER}"
     "${FSIM_CALLBACKS}"
+    "${FSIM_EXPORTS}"
     "${FSIM_ABI_TEST}")
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR "SystemC portability input is missing: ${FSIM_INPUT}")
@@ -36,6 +38,7 @@ file(READ "${FSIM_COMMON}" FSIM_COMMON_CONTENTS)
 file(READ "${FSIM_PROCESS}" FSIM_PROCESS_CONTENTS)
 file(READ "${FSIM_LOADER}" FSIM_LOADER_CONTENTS)
 file(READ "${FSIM_CALLBACKS}" FSIM_CALLBACK_CONTENTS)
+file(READ "${FSIM_EXPORTS}" FSIM_EXPORT_CONTENTS)
 file(READ "${FSIM_ABI_TEST}" FSIM_ABI_TEST_CONTENTS)
 
 foreach(FSIM_PARENT_POLICY IN ITEMS
@@ -49,6 +52,17 @@ foreach(FSIM_PARENT_POLICY IN ITEMS
   if(FSIM_INDEX EQUAL -1)
     message(FATAL_ERROR
       "SystemC matrix lost parent-toolchain policy: ${FSIM_PARENT_POLICY}")
+  endif()
+endforeach()
+foreach(FSIM_EXPORT_POLICY IN ITEMS
+    "std::sort("
+    "std::adjacent_find("
+    "FSIM_SC_RUNTIME_ERROR"
+    "fsim_plugin_init_v1")
+  string(FIND "${FSIM_EXPORT_CONTENTS}" "${FSIM_EXPORT_POLICY}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "SystemC macro export registry lost policy: ${FSIM_EXPORT_POLICY}")
   endif()
 endforeach()
 foreach(FSIM_WRAPPER_POLICY IN ITEMS
@@ -127,6 +141,8 @@ if(FSIM_INDEX EQUAL -1)
 endif()
 foreach(FSIM_C_EVIDENCE IN ITEMS
     "FSIM_SYSTEMC_ABI_VERSION == 1u"
+    "offsetof(fsim_sc_host_v1, mark_hdl_module)"
+    "offsetof(fsim_sc_host_v1, set_hdl_module_actual)"
     "host.struct_size = (uint32_t)sizeof(host)"
     "registrar.struct_size = (uint32_t)sizeof(registrar)")
   string(FIND "${FSIM_ABI_TEST_CONTENTS}" "${FSIM_C_EVIDENCE}" FSIM_INDEX)

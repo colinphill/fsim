@@ -418,6 +418,22 @@ assert(
     three_language_reference_project->design.systemc_instances()
         .size()
     == 1);
+assert(std::ranges::any_of(
+    three_language_reference_project->design_ir.objects(),
+    [](const auto& object) {
+      return object.kind
+              == fsim::semantic::design::ObjectKind::systemc_module
+          && object.path
+              == "three_language_tb.u_bridge.u_vhdl";
+    }));
+assert(std::ranges::any_of(
+    three_language_reference_project->design_ir.objects(),
+    [](const auto& object) {
+      return object.kind
+              == fsim::semantic::design::ObjectKind::systemc_port
+          && object.path
+              == "three_language_tb.u_bridge.u_vhdl.value";
+    }));
 const auto three_language_reference = capture_simulation(
     std::move(*three_language_reference_project),
     fsim::app::SimulationEngine::interpreter);

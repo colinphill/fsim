@@ -1636,14 +1636,14 @@ therefore excluded.
 | `FSIM-ELAB-BIND-031` | error | Same-language VHDL packed-array boundary bounds or direction differ. |
 | `FSIM-ELAB-BIND-032` | error | More than one preconstructed SystemC description names the same instance path. |
 | `FSIM-ELAB-BIND-033` | error | A preconstructed SystemC instance was not reached from the selected top. |
-| `FSIM-ELAB-BIND-034` | error | A SystemC foreign child declares a port absent from its bound HDL target. |
+| `FSIM-ELAB-BIND-034` | error | A SystemC HDL proxy or legacy foreign child declares a port absent from its bound HDL target. |
 | `FSIM-ELAB-BIND-035` | error | A SystemC foreign-child port is connected more than once. |
 | `FSIM-ELAB-BIND-036` | error | A SystemC foreign-child port references an unknown registered object. |
 | `FSIM-ELAB-BIND-037` | error | A SystemC foreign-child port direction differs from its bound HDL target. |
 | `FSIM-ELAB-BIND-038` | error | An HDL-to-SystemC binding has no matching preconstructed factory instance. |
 | `FSIM-ELAB-BIND-039` | error | A preconstructed SystemC instance target differs from its manifest binding. |
-| `FSIM-ELAB-BIND-040` | error | A SystemC foreign child lacks its required explicit HDL binding. |
-| `FSIM-ELAB-BIND-041` | error | A SystemC foreign child is bound to a non-HDL target. |
+| `FSIM-ELAB-BIND-040` | error | A SystemC HDL proxy or legacy foreign child lacks its required explicit full-path HDL binding. |
+| `FSIM-ELAB-BIND-041` | error | A SystemC HDL proxy or legacy foreign child is bound to a non-HDL target. |
 | `FSIM-ELAB-BIND-042` | error | A registered SystemC thread process requires fiber support, but this build configured `FSIM_SYSTEMC_FIBER_MODE=OFF`. |
 | `FSIM-ELAB-BIND-043` | error | A SystemC process sensitivity references an unknown registered object. |
 | `FSIM-ELAB-BIND-044` | error | A SystemC process registered an invalid sensitivity edge. |
@@ -1690,7 +1690,7 @@ therefore excluded.
 | `FSIM-SC-A001` | error | A validated SystemC plug-in registered no module factory. |
 | `FSIM-SC-A002` | error | A requested SystemC hierarchy has no compiled plug-in or registered factory. |
 | `FSIM-SC-A003` | error | A requested SystemC factory uses the legacy untyped construction ABI. |
-| `FSIM-SC-A004` | error | A typed SystemC factory failed during module construction. |
+| `FSIM-SC-A004` | error | A typed SystemC factory failed during module construction or declared invalid HDL-proxy contents, bindings, or construction actuals. |
 | `FSIM-SC-A005` | error | One SystemC instance path has conflicting factory targets. |
 | `FSIM-SC-A006` | error | A registered SystemC object could not be bound to its common-runtime signal. |
 | `FSIM-SC-A007` | error | The selected project time resolution cannot configure the SystemC runtime. |

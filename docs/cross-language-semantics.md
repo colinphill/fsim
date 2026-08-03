@@ -40,8 +40,9 @@ systemc:plugin.factory
 The schema-1 loader validates these prefixes. The current elaborator resolves
 VHDL and SV targets and constructs typed `systemc:` factories, recursively
 building a common hierarchy with named or positional whole-signal port
-connections. SystemC factories may declare typed foreign-child placeholders
-whose full paths bind back to VHDL or SV. Thus every VHDL/SV/SystemC
+connections. SystemC factories may construct `SC_FSIM_HDL_MODULE` proxies,
+bind their ordinary ports, and select the HDL implementation with an explicit
+full-path manifest binding. Thus every VHDL/SV/SystemC
 parent→child language direction is explicit and supported by the same
 elaborator. A binding whose instance path is absent is an error;
 cross-language targets are never inferred from the source unit name.

@@ -332,7 +332,7 @@ make_specialization_cache_keys(
     // pointers and native handles out of the key (they are rebound into each
     // fresh interpreter), but compose every stable runtime mapping into the
     // specialization provenance used by LLVM's persistent object cache.
-    key.add("systemc-runtime-schema", "fsim-systemc-runtime-v1");
+    key.add("systemc-runtime-schema", "fsim-systemc-runtime-v2");
     key.add("systemc-plugin", systemc_plugin_key);
     key.add(
         "systemc-instance-count",

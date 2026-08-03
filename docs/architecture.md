@@ -504,14 +504,20 @@ capability-gated interpreter fallback.
 
 The v1 hierarchy is deliberately bidirectional for SystemC. An HDL instance
 path may bind to a registered SystemC factory. During its elaboration, a
-SystemC factory may register a named, typed foreign-child placeholder; the
+SystemC factory may mark a normally constructed child module as an HDL proxy;
+the
 manifest binding at that full path resolves the placeholder to a VHDL
 architecture or SV module. The common elaborator remains authoritative in
 both directions and supports recursive alternation between languages while
 retaining one stable-ID namespace, one port-conversion policy, and recursion
-detection. Facade modules create these placeholders with
-`fsim::systemc::hdl_instance`; the native ABI remains its implementation
-mechanism rather than the user-facing construction interface. Foreign
+detection. Facade modules declare these proxies with `SC_FSIM_HDL_MODULE` and
+bind ordinary `sc_in`, `sc_out`, and `sc_inout` ports to signals or parent
+ports. The hierarchy registry converts the marked native child into a
+same-path HDL implementation descriptor while retaining module-and-port
+identity; it does not add an `hdl_instance` level. Processes, lifecycle hooks,
+events, channels, exports, signals, and nested modules are rejected within the
+proxy. The older `fsim::systemc::hdl_instance` facade remains deprecated but
+compatible, and the native ABI remains the implementation mechanism. Foreign
 children can be created only during elaboration, never
 dynamically after simulation starts. Native SystemC child modules are captured
 recursively by the same factory root, and child ports may alias a direct
@@ -523,13 +529,22 @@ state: the two elaboration callbacks run after common-object binding, the
 start callback runs before the first kernel start, and the end callback runs
 at terminal completion or session teardown.
 
-`hdl_instance::set_actual` records named signed scalar construction values on
+`hdl_module::set_actual` records named signed scalar construction values on
 the foreign-child descriptor through an append-only host callback. The common
 elaborator applies them to the explicitly selected HDL unit using that target
 language's name and subtype rules before port checks. They therefore flow into
 the same canonical specialization and native-cache identity as source-written
 generic/parameter actuals. The reverse HDL-to-SystemC direction now uses
 factory-declared typed schemas and construction-value delivery.
+
+Source factories are normally published with `SC_FSIM_EXPORT` or
+`SC_FSIM_EXPORT_AS`. Each macro contributes a plug-in-local descriptor; the
+support library owns the one initialization entry point, sorts descriptors by
+public name, rejects duplicates before registration, and publishes an optional
+`fsim_factory_parameters` schema discovered on the exported type. Multiple
+translation units and multiple aliases of one type are supported. A
+handwritten entry point remains the append-only compatibility path and cannot
+be combined with macro exports in the same image.
 
 The reverse-path ABI spine now exists: a factory registers ordered scalar
 parameter declarations after its typed factory registration, the transactional
