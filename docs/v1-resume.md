@@ -5201,7 +5201,7 @@ evidence gaps, 105 conformance expectations in 28 fixtures owned by 27 CTests,
 and 20 exact portability rows. All ten Batch 129 tasks are complete; no GitHub
 Actions run was inspected at this non-mandatory boundary.
 
-### Batch 130 — Final v1 release audit — In progress
+### Batch 130 — Final v1 release audit — Complete
 
 The current ten implementation tasks are:
 
@@ -5224,16 +5224,14 @@ The current ten implementation tasks are:
    timeout, concurrency, and phase-trace contracts for bounded hosted runs.
 9. **Complete.** Freeze the final release-candidate corpus and reclassify every
    completed v1 matrix row with exact owning tests and evidence links.
-10. **In progress — local gates complete; mandatory CI pending.** Update all v1/release records, pass sanitizer, source/catalog,
-    and full local Debug/Release gates, create and push the final checkpoint,
-    then inspect and repair every non-documentation job at the mandatory Batch
-    130 GitHub CI boundary.
+10. **Complete.** Update all v1/release records, pass sanitizer,
+    source/catalog and full local Debug/Release gates, create and push the
+    final checkpoint, then inspect and repair every non-documentation job at
+    the mandatory Batch 130 GitHub CI boundary.
 
-Batch status is **in progress at the mandatory CI boundary**. All local Task 10
-gates are complete; this changeset is the single checkpoint intended for the
-pushed branch, and mandatory non-documentation GitHub CI inspection is the
-only pending step. GitHub builds use parallelism four. Stop before CI
-monitoring until explicitly resumed at that boundary.
+Batch status is **complete**. All local Task 10 gates and all 12 mandatory
+non-documentation GitHub configurations pass. GitHub builds use parallelism
+four.
 
 Task 1 is focused-complete. The new
 [`docs/v1-release-audit.md`](v1-release-audit.md) freezes the 1,080-row matrix
@@ -5505,8 +5503,21 @@ minutes; per-test bounds and four-worker hosted builds remain unchanged.
 Exact-LLVM Debug and Release rebuilt warning-clean with eight workers; typed
 boundaries plus the three Windows/resource contracts passed 4/4 in 3.99 and
 3.54 seconds. The seven final source, inventory, release, and portability
-gates passed in 6.34 seconds. The eighth repair checkpoint and replacement
-hosted run are pending.
+gates passed in 6.34 seconds. Eighth repair checkpoint `4565ad8` was pushed;
+replacement run `30839583995` is the current mandatory hosted proof.
+
+Replacement run `30839583995` passed all 12 mandatory configurations.
+Ubuntu timings were fuzz 1m47s, GCC Debug 12m49s, ASan/UBSan 39m07s,
+exact-LLVM Release 13m02s, GCC Release 13m43s, and exact-LLVM Debug 20m46s.
+Windows timings were MSVC Debug 30m14s, clang-cl/LLVM Debug 37m36s, MSVC
+Release 30m58s, MSVC/LLVM Debug 37m25s, MSVC/LLVM Release 37m41s, and
+clang-cl/LLVM Release 26m39s. Across the six Windows jobs, the SystemC
+application matrix passed in 457.74 to 635.14 seconds, scoped locals remained
+quick at 0.18 to 1.41 seconds, and the container differential passed in 44.78
+to 702.26 seconds. Batch 130 Task 10 and all ten Batch 130 tasks are complete;
+this successful run is the mandatory hosted v1 release proof.
+The final documentation/source, inventory, release-candidate, MSVC, Windows
+LLVM, and resource-portability closure gates passed 7/7 in 6.31 seconds.
 
 Batch 110 has advanced through these validated features:
 
