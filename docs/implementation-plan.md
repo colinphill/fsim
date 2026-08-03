@@ -10074,6 +10074,18 @@ relative-link check pass. The single checkpoint commit and push follow this
 record. Stop before querying GitHub Actions; hosted inspection remains the
 only incomplete Batch 130 action.
 
+The first mandatory hosted run, GitHub Actions `30820714702` for checkpoint
+`286ba18`, accepted all 12 configurations and passed the frontend fuzz lane.
+Windows MSVC Debug then failed during compilation before tests with C2397 at
+`src/app/application_analysis.cpp`: list initialization implicitly narrowed
+the SystemC C-ABI `fsim_sc_edge_kind_v1` to the validation model's
+`std::uint32_t`. The repair makes that width conversion explicit at the
+untrusted ABI metadata seam and extends `fsim.msvc-debug-contract` to reject a
+regression. Exact-LLVM Debug and Release rebuilt warning-clean with eight
+workers; the core application, SystemC compiler/matrix/application, mixed and
+typed boundaries, Windows contracts, and scoped locals passed 10/10 in 63.34
+seconds. The repair checkpoint and replacement hosted run are pending.
+
 ## Forward language-closure feature batches
 
 The following sequence is the authoritative planning baseline for closing the

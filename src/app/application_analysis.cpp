@@ -613,7 +613,8 @@ elaboration::SystemCInstanceDescription systemc_description(
     converted.sensitivity.reserve(process.sensitivity.size());
     for (const auto& sensitivity : process.sensitivity) {
       converted.sensitivity.push_back(
-          {sensitivity.object, sensitivity.edge});
+          {sensitivity.object,
+           static_cast<std::uint32_t>(sensitivity.edge)});
     }
     result.processes.push_back(std::move(converted));
   }
