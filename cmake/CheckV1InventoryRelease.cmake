@@ -73,9 +73,9 @@ list(APPEND FSIM_AUTHORED_FILES
 list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX "/tests/fuzz/corpus/")
 list(REMOVE_DUPLICATES FSIM_AUTHORED_FILES)
 list(LENGTH FSIM_AUTHORED_FILES FSIM_AUTHORED_COUNT)
-if(NOT FSIM_AUTHORED_COUNT EQUAL 500)
+if(NOT FSIM_AUTHORED_COUNT EQUAL 506)
   message(FATAL_ERROR
-    "authored license inventory changed: expected 500 files, "
+    "authored license inventory changed: expected 506 files, "
     "found ${FSIM_AUTHORED_COUNT}")
 endif()
 foreach(FSIM_FILE IN LISTS FSIM_AUTHORED_FILES)
@@ -121,4 +121,4 @@ endforeach()
 
 message(STATUS
   "final inventory audit: 1624 diagnostics, 424 bounded sources, "
-  "500 SPDX-owned files, 31 reviewed IEEE files, and 105 conformance expectations")
+  "506 SPDX-owned files, 31 reviewed IEEE files, and 105 conformance expectations")

@@ -24,16 +24,12 @@ risky structural transition that needs a durable boundary.
 
 - Recorded: 2026-08-03.
 - Branch: `codex/resumable-jit`.
-- Implementation baseline: all ten Batch 120 tasks are complete through repair
-  commit `4ad6153`; mandatory non-documentation GitHub Actions run
-  `30765734570` passed all 12 jobs. Batch 121 is complete in the current HEAD,
-  Batch 122 through Batch 124 are complete in the current pushed checkpoint;
-  Batch 125 through Batch 127 are complete in the current pushed checkpoint;
-  Batch 128 is complete in its end-of-batch checkpoint; Batch 129 is complete
-  in the current end-of-batch checkpoint; Batch 130 Tasks 1 through 9 and the
-  Task 10 local release gates are complete. The mandatory Task 10 hosted CI
-  repair cycle is in progress after run `30828460860`; the sixth consolidated
-  repair checkpoint is the current dirty worktree.
+- Implementation baseline: Batch 130 is complete and mandatory
+  non-documentation GitHub Actions run `30839583995` passed all 12 jobs.
+  Corrective Batch 131 is complete at pushed commit `5e5da76`. The current
+  working tree adds the post-release three-language hierarchy example and its
+  automated application regression; its focused Debug and release-inventory
+  gates pass.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
 - The source-size refactor is complete: all 424 authored C/C++ source, header,
@@ -5838,6 +5834,29 @@ The ten-task batch record is:
     run under the execution environment's tracing layer. Source, diagnostics,
     resource, SystemVerilog-release, release-audit, and release-candidate
     gates pass. The accumulated commit and push follow this record.
+
+## Post-v1 three-language hierarchy example — Complete
+
+- `examples/three_language_hierarchy` is a self-contained project with a
+  SystemVerilog testbench top, an explicitly bound SystemC factory and method,
+  and an explicitly bound VHDL child.
+- The executable path drives SV `stimulus`, inverts it into a SystemC internal
+  signal, inverts it again in VHDL, and checks the returned SV value across
+  three transitions before printing `PASS` at tick 3.
+- The tutorial covers eight-worker local build, check/build/run, explicit
+  recursive bindings, cold/warm cache behavior, VCD paths, hierarchy traversal,
+  signal breakpoints, live trace selection, mutation commands, and extension
+  experiments.
+- `debug-session.sh` replays the documented hierarchy walk and stops on
+  `three_language_tb.observed == 1` at time 1, delta 2.
+- `fsim.application` builds the checked-in manifest through interpreter and
+  compiled engines, compares callbacks/final values/normalized VCD, and asserts
+  the SystemC and nested VHDL hierarchy objects. The focused test passes in
+  10.98/10.42 seconds in exact-LLVM Debug/Release.
+- The license inventory intentionally advances from 500 to 506 SPDX-owned
+  artifacts. Project, source-line, release-audit, inventory, and
+  release-candidate gates pass; generated example cache/VCD outputs are not
+  source artifacts.
 
 ## Working cadence
 

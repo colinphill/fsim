@@ -10331,3 +10331,21 @@ semantic cap without removing host resource protection:
     the execution environment's tracing layer. Source, catalog, resource,
     SystemVerilog-release, release-audit, and release-candidate gates pass.
     The accumulated commit and push follow this record.
+
+### Post-v1 three-language hierarchy example — Complete
+
+The new `examples/three_language_hierarchy` project provides an executable
+SystemVerilog-top to SystemC-factory to VHDL-child hierarchy. Each boundary is
+selected by a full-path manifest binding; SystemC contributes a live method and
+internal signal, VHDL contributes the child transformation, and the SV top
+self-checks the round trip. Its tutorial documents eight-worker build and run
+commands, cache reuse, VCD inspection, hierarchy navigation, breakpoints,
+trace selection, and debugger mutation. A replayable debugger script stops on
+the cross-language output at time 1, delta 2.
+
+The compact `fsim.application` owner loads this checked-in example, verifies
+the SystemC and nested VHDL hierarchy paths, and compares interpreter and LLVM
+execution including callbacks, final values, and normalized VCD. The focused
+Debug/Release tests pass in 10.98/10.42 seconds. The six new authored artifacts
+advance the reviewed SPDX inventory from 500 to 506; the composed inventory
+and release-candidate gates pass with generated cache/VCD outputs absent.

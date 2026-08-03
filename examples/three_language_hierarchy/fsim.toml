@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: Apache-2.0
+schema = 1
+
+[project]
+name = "three-language-hierarchy"
+top = "sv:work.three_language_tb"
+time_resolution = "1ns"
+seed = 1
+
+[[source_set]]
+language = "systemverilog"
+standard = "2017"
+library = "work"
+files = ["three_language_tb.sv"]
+compilation_unit = "source-set"
+
+[[source_set]]
+language = "systemc"
+standard = "2023-subset"
+files = ["mixed_bridge.cpp"]
+include_dirs = ["../../include"]
+
+[[source_set]]
+language = "vhdl"
+standard = "2008"
+library = "work"
+files = ["logic_stage.vhd"]
+
+# The source names are placeholders. These bindings select the implementation
+# at each language boundary and make the recursive hierarchy deterministic.
+[[binding]]
+instance = "three_language_tb.u_bridge"
+target = "systemc:models.mixed_bridge"
+
+[[binding]]
+instance = "three_language_tb.u_bridge.u_vhdl"
+target = "vhdl:work.logic_stage(rtl)"
+
+[build]
+optimization = "O2"
+jobs = 0
+cache_path = ".fsim-cache"
+
+[run]
+duration = "10ns"
+max_deltas = 100000
+delay_mode = "typ"
+trace_file = "three_language.vcd"
+trace_filters = ["three_language_tb.*"]

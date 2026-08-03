@@ -390,6 +390,50 @@ assert(
     == fsim::runtime::RunStatus::stopped);
 assert(mixed_hybrid.result.time == 6);
 
+fsim::diagnostic::Engine three_language_diagnostics;
+const auto three_language_manifest =
+    std::filesystem::path{FSIM_TEST_SOURCE_DIR}
+    / "examples/three_language_hierarchy/fsim.toml";
+auto three_language_config = fsim::project::load(
+    three_language_manifest, three_language_diagnostics);
+assert(three_language_config);
+three_language_config->build.cache_path =
+    directory / "three-language-cache";
+three_language_config->run.trace_file.reset();
+auto three_language_reference_project =
+    fsim::app::build_project(
+        *three_language_config, three_language_diagnostics);
+auto three_language_hybrid_project =
+    fsim::app::build_project(
+        *three_language_config, three_language_diagnostics);
+assert(three_language_reference_project);
+assert(three_language_hybrid_project);
+assert(
+    three_language_reference_project->design.find_signal(
+        "three_language_tb.u_bridge.to_vhdl"));
+assert(
+    three_language_reference_project->design.find_signal(
+        "three_language_tb.u_bridge.u_vhdl.value"));
+assert(
+    three_language_reference_project->design.systemc_instances()
+        .size()
+    == 1);
+const auto three_language_reference = capture_simulation(
+    std::move(*three_language_reference_project),
+    fsim::app::SimulationEngine::interpreter);
+const auto three_language_hybrid = capture_simulation(
+    std::move(*three_language_hybrid_project),
+    fsim::app::SimulationEngine::compiled);
+compare_captures(
+    three_language_reference, three_language_hybrid);
+assert(
+    three_language_hybrid.result.status
+    == fsim::runtime::RunStatus::stopped);
+assert(three_language_hybrid.result.time == 3);
+assert((
+    three_language_hybrid.final_values
+    == std::vector<std::string>{"0", "0", "1"}));
+
 fsim::app::Simulation simulation(std::move(*first), config.run.max_deltas);
 const auto q = simulation.find_signal("q");
 const auto two_state = simulation.find_signal("two_state");

@@ -702,6 +702,11 @@ VCD comparison, and bidirectional bounded VHDL/SystemVerilog
 construction-actual/cache tests are also automated. Exhaustive semantic
 fixtures and Windows execution evidence remain open.
 
+The [three-language hierarchy tutorial](examples/three_language_hierarchy/README.md)
+builds on that slice with a SystemVerilog top, a SystemC factory and method,
+and a VHDL child in one recursive hierarchy. It includes executable check,
+build, run, VCD, hierarchy-navigation, breakpoint, and trace-selection steps.
+
 ## Design documents
 
 - [Architecture](docs/architecture.md)
