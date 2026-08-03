@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
 
+#include "path_test_support.hpp"
+
 #include "fsim/runtime/vcd_writer.hpp"
 
 #include <algorithm>
@@ -365,13 +367,14 @@ void verify_boundaries(
     assert(source.physical_name.find('\\') == std::string::npos);
   }
   for (const auto& expected : sources) {
-    const auto normalized = expected.lexically_normal().generic_string();
     const auto present = std::ranges::any_of(
         project.semantics.source_files(), [&](const auto& source) {
-          return source.physical_name == normalized;
+          return fsim::test::same_source_path(
+              source.physical_name, expected);
         });
     if (!present) {
-      std::cerr << "typed boundaries: missing source " << normalized << '\n';
+      std::cerr << "typed boundaries: missing source "
+                << fsim::support::path_to_utf8(expected) << '\n';
       for (const auto& source : project.semantics.source_files()) {
         std::cerr << "typed boundaries: semantic source "
                   << source.physical_name << '\n';

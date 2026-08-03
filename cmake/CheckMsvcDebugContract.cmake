@@ -20,6 +20,8 @@ set(FSIM_APPLICATION_SPECIALIZATION_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test_specialization.cpp")
 set(FSIM_APPLICATION_CLI_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test_cli.cpp")
+set(FSIM_TYPED_BOUNDARY_TEST
+  "${FSIM_SOURCE_DIR}/tests/app/typed_boundary_application_test.cpp")
 set(FSIM_RELEASE_AUDIT
   "${FSIM_SOURCE_DIR}/cmake/CheckV1ReleaseAudit.cmake")
 set(FSIM_RELEASE_CANDIDATE
@@ -37,6 +39,7 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_APPLICATION_SYSTEMC_SOURCE}"
     "${FSIM_APPLICATION_SPECIALIZATION_TEST}"
     "${FSIM_APPLICATION_CLI_TEST}"
+    "${FSIM_TYPED_BOUNDARY_TEST}"
     "${FSIM_RELEASE_AUDIT}"
     "${FSIM_RELEASE_CANDIDATE}"
     "${FSIM_FRONTEND}"
@@ -60,6 +63,7 @@ file(READ
   "${FSIM_APPLICATION_SPECIALIZATION_TEST}"
   FSIM_APPLICATION_SPECIALIZATION_TEST_CONTENTS)
 file(READ "${FSIM_APPLICATION_CLI_TEST}" FSIM_APPLICATION_CLI_TEST_CONTENTS)
+file(READ "${FSIM_TYPED_BOUNDARY_TEST}" FSIM_TYPED_BOUNDARY_TEST_CONTENTS)
 file(READ "${FSIM_RELEASE_AUDIT}" FSIM_RELEASE_AUDIT_CONTENTS)
 file(READ "${FSIM_RELEASE_CANDIDATE}" FSIM_RELEASE_CANDIDATE_CONTENTS)
 file(READ "${FSIM_FRONTEND}" FSIM_FRONTEND_CONTENTS)
@@ -130,6 +134,20 @@ if(FSIM_SHARED_SOURCE_COUNT_INDEX EQUAL -1)
   message(FATAL_ERROR
     "shared compilation-unit test lost semantic source de-duplication proof")
 endif()
+foreach(FSIM_TYPED_BOUNDARY_PATH_POLICY IN ITEMS
+    "#include \"path_test_support.hpp\""
+    "fsim::test::same_source_path("
+    "fsim::support::path_to_utf8(expected)")
+  string(FIND
+    "${FSIM_TYPED_BOUNDARY_TEST_CONTENTS}"
+    "${FSIM_TYPED_BOUNDARY_PATH_POLICY}"
+    FSIM_TYPED_BOUNDARY_PATH_INDEX)
+  if(FSIM_TYPED_BOUNDARY_PATH_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "typed-boundary provenance lost portable path identity: "
+      "${FSIM_TYPED_BOUNDARY_PATH_POLICY}")
+  endif()
+endforeach()
 
 string(REGEX MATCHALL
   "output << R\"\\("

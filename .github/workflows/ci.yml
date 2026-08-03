@@ -176,7 +176,9 @@ jobs:
     # LLVM's official 22.1.8 Windows archive was packaged against the
     # Visual Studio 2022 DIA SDK and retains that SDK path in its CMake targets.
     runs-on: windows-2022
-    timeout-minutes: 45
+    # Debug plus the bounded 900-second SystemC matrix and 1,200-second
+    # container differential can exceed the general 45-minute job ceiling.
+    timeout-minutes: 70
     # The official archive uses the release MSVC STL ABI. CL augments every
     # compiler invocation without replacing CMake's /EHsc and configuration
     # flags, including plug-ins compiled by the SystemC source-compiler tests.

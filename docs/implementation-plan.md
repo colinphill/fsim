@@ -10172,9 +10172,31 @@ both semantic source registration and parsed spans, and extends the MSVC
 contract to pin that canonicalization and the two-source proof. Exact-LLVM
 Debug and Release rebuilt warning-clean with eight workers; the application,
 release-candidate, resource-release, MSVC, and resource-portability gates
-passed 5/5 in 15.73 and 15.23 seconds. The seventh repair checkpoint and
-replacement hosted run are pending. The final source, inventory, resource,
+passed 5/5 in 15.73 and 15.23 seconds. Seventh repair checkpoint `b0c7391`
+was pushed; replacement run `30835947147` is the current mandatory hosted
+proof. The final source, inventory, resource,
 release-candidate, MSVC, and portability gates passed 6/6 in 6.25 seconds.
+
+Replacement run `30835947147` passed all six Ubuntu jobs: exact-LLVM Debug
+in 19m36s, GCC Release in 10m17s, ASan/UBSan in 39m34s, GCC Debug in 12m39s,
+fuzz in 2m24s, and exact-LLVM Release in 17m54s. Five Windows jobs passed the
+repaired shared-compilation-unit assertion and every other test, then failed
+one downstream typed-boundary fixture assertion: semantic source ownership
+now correctly stores the canonical `runneradmin` path, while the test searched
+for the equivalent `RUNNER~1` temporary-directory alias by string equality.
+Their elapsed times were 38m40s for MSVC/LLVM Release, 38m16s for clang-cl/LLVM
+Debug, 31m09s for MSVC Release, 31m48s for MSVC Debug, and 25m20s for
+clang-cl/LLVM Release. MSVC/LLVM Debug passed the 900-second SystemC matrix in
+715.87 seconds and scoped locals in 1.72 seconds, then the 45-minute job ceiling
+cancelled it during the independently bounded 1,200-second container test.
+The eighth consolidated repair compares typed-boundary provenance by shared
+filesystem identity and raises only the Windows LLVM hosted job ceiling to 70
+minutes; per-test bounds and four-worker hosted builds remain unchanged.
+Exact-LLVM Debug and Release rebuilt warning-clean with eight workers; typed
+boundaries plus the three Windows/resource contracts passed 4/4 in 3.99 and
+3.54 seconds. The seven final source, inventory, release, and portability
+gates passed in 6.34 seconds. The eighth repair checkpoint and replacement
+hosted run are pending.
 
 ## Forward language-closure feature batches
 
