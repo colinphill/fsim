@@ -1853,8 +1853,7 @@ private:
         const SignalId signal,
         const Binding* binding,
         const std::string& path,
-        const frontend::SourceSpan& source,
-        const bool cross_language);
+        const frontend::SourceSpan& source);
 
     void validate_vhdl_generic_type(
         const frontend::ParameterDeclaration& generic);
@@ -1985,7 +1984,6 @@ private:
     std::vector<std::string> stack_;
     std::unordered_map<SignalId, std::vector<std::string>>
         boundary_driver_paths_;
-    std::unordered_set<SignalId> cross_language_boundary_signals_;
     std::unordered_map<SignalId, std::string> resolver_by_signal_;
     std::unordered_map<std::string, ResolutionKind>
         vhdl_resolution_kinds_;

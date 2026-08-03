@@ -984,8 +984,7 @@ using namespace elaboration_detail;
                             signal->second,
                             binding,
                             qualified_name,
-                            connection.span,
-                            false);
+                            connection.span);
                       }
                     };
                 const auto connect_callable =
@@ -1549,6 +1548,9 @@ using namespace elaboration_detail;
             aliases.emplace(path + "." + port.name, formal_signal);
             design_.signal_by_name_.emplace(
                 path + "." + port.name, formal_signal);
+            if (port.direction == frontend::PortDirection::Input) {
+                result.read_only_signals.insert(formal_signal);
+            }
             if (port.direction == frontend::PortDirection::Output
                 || port.direction == frontend::PortDirection::Inout
                 || port.direction == frontend::PortDirection::Buffer) {
@@ -1556,8 +1558,7 @@ using namespace elaboration_detail;
                     actual->second,
                     binding,
                     path,
-                    connection.span,
-                    cross_language);
+                    connection.span);
             }
         }
         if (instance.unconnected_drive

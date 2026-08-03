@@ -837,7 +837,7 @@ therefore excluded.
 | `FSIM-SV-SEM-126` | error | A bounded static unpacked array declares more than four dimensions. |
 | `FSIM-SV-SEM-127` | error | A bounded SystemVerilog string method has the wrong number of arguments. |
 | `FSIM-SV-SEM-128` | error | A dynamic-array `new[size](initializer)` expression has other than one initializer. |
-| `FSIM-ELAB-SVIFACE-006` | error | A process writes through a read-only modport input member. |
+| `FSIM-ELAB-SVIFACE-006` | error | A process writes through a read-only input port or modport input member. |
 | `FSIM-ELAB-SVIFACE-007` | error | A retained interface callable cannot be materialized at its same-language module boundary. |
 | `FSIM-ELAB-SVIFACE-008` | error | An interface callable is visible more than once through the same module port. |
 | `FSIM-ELAB-SVIFACE-009` | error | A modport export has no matching callable implementation in the connected module. |
@@ -1032,7 +1032,6 @@ therefore excluded.
 | `FSIM-ELAB-107` | error | A bounded fork appears inside a callable whose shared call frame cannot safely outlive the caller. |
 | `FSIM-ELAB-108` | error | A postponed `$strobe` operand is not yet a direct packed-signal reference. |
 | `FSIM-ELAB-DRV-001` | error | An unresolved variable has multiple process drivers. |
-| `FSIM-ELAB-DRV-002` | error | A wired-AND or wired-OR net requires an unsupported resolution policy. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |
 | `FSIM-ELAB-INTEGER-001` | error | A specialization-dependent VHDL integer subtype constraint cannot be evaluated. |
@@ -1531,7 +1530,6 @@ therefore excluded.
 | `FSIM-ELAB-SVSTRING-001` | error | A SystemVerilog string parameter/localparam default is not a supported immutable constant-string expression. |
 | `FSIM-ELAB-SVSTRING-002` | error | A SystemVerilog parameter actual crosses the bounded integral/string type boundary or is not a supported constant string. |
 | `FSIM-ELAB-SVSTRING-003` | error | A bounded output/report message position contains a string expression that is not constant after specialization. |
-| `FSIM-ELAB-SVSTRING-004` | error | A SystemVerilog string parameter was associated across a mixed-language boundary instead of through a same-language wrapper. |
 | `FSIM-ELAB-SVSTRING-005` | error | A runtime string variable is duplicated in one automatic scope. |
 | `FSIM-ELAB-SVSTRING-006` | error | A runtime string literal has no retained decoded byte value. |
 | `FSIM-ELAB-SVSTRING-007` | error | A runtime string literal, initializer, object, or concatenation exceeds the 4,096-byte v1 limit. |

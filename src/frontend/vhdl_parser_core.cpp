@@ -691,17 +691,28 @@ void VhdlParser::parse_vhdl_generics(
           "a VHDL value generic must have input mode");
     }
     const auto type = parse_vhdl_type(true);
+    const bool supported_packed =
+        type.packed_range
+        && type.packed_members.empty()
+        && type.width().value_or(0) <= 64
+        && (type.domain == ValueDomain::Bit2
+            || type.domain == ValueDomain::Logic4
+            || type.domain == ValueDomain::Logic9);
     if (type.named_type.empty()
         && type.nominal_type != "@builtin:time"
         && (type.packed_range
-            || (type.domain != ValueDomain::Integer
+                ? !supported_packed
+                : (type.domain != ValueDomain::Integer
                 && type.domain != ValueDomain::Boolean
-                && type.domain != ValueDomain::Bit2))) {
+                && type.domain != ValueDomain::Bit2
+                && type.domain != ValueDomain::Logic4
+                && type.domain != ValueDomain::Logic9))) {
       error(
           names.front(),
           "FSIM-VHDL-UNSUPPORTED-018",
           "this generic type is outside the bounded scalar integer, "
-          "Boolean, bit, and physical-time subset");
+          "Boolean, bit, up-to-64-bit packed logic, and physical-time "
+          "subset");
     }
     Expression default_value;
     if (match(TokenKind::ColonEqual)) {

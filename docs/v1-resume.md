@@ -27,7 +27,8 @@ risky structural transition that needs a durable boundary.
 - Implementation baseline: all ten Batch 120 tasks are complete through repair
   commit `4ad6153`; mandatory non-documentation GitHub Actions run
   `30765734570` passed all 12 jobs. Batch 121 is complete in the current HEAD,
-  and Batch 122 is the current in-progress batch with Task 1 current.
+  Batch 122 is complete in the current accumulated checkpoint, and Batch 123
+  is the current in-progress batch with Task 1 current.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
 - The source-size refactor is complete: all 393 authored C/C++ source, header,
@@ -3408,48 +3409,275 @@ VHDL inventory, and both v1 matrix gates. Batch 121 is the single accumulated
 commit/push checkpoint and, because it is not a tenth-batch boundary, requires
 no GitHub Actions inspection.
 
-### Batch 122 — mixed-language construction, drivers, and phase semantics — In progress
+### Batch 122 — mixed-language construction, drivers, and phase semantics — Complete
 
 The current ten implementation tasks are:
 
-1. **In progress.** Audit VHDL/SystemVerilog/SystemC construction actuals,
+1. **Complete.** Audit VHDL/SystemVerilog/SystemC construction actuals,
    cross-language driver ownership and resolution, delay propagation,
    scheduler phases, diagnostics, and ML-007/ML-008/ML-010 evidence; define the
    bounded positive and failure matrix.
-2. **Pending.** Complete SystemVerilog parameter overrides transferred into
+2. **Complete.** Complete SystemVerilog parameter overrides transferred into
    VHDL value generics, including named/ordered association, type conversion,
    defaults, dependent port shapes, and specialization identity.
-3. **Pending.** Complete VHDL generic maps transferred into SystemVerilog value
+3. **Complete.** Complete VHDL generic maps transferred into SystemVerilog value
    parameters, including case rules, explicit/named values, defaults, width and
    signedness semantics, dependent generates, and specialization identity.
-4. **Pending.** Complete supported Boolean, integer, packed logic, string, and
+4. **Complete.** Complete supported Boolean, integer, packed logic, string, and
    SystemC construction-actual transfer in every hierarchy direction with
    canonical typed provenance and cold/warm/edit cache behavior.
-5. **Pending.** Make cross-language input/output/buffer/inout driver ownership
+5. **Complete.** Make cross-language input/output/buffer/inout driver ownership
    explicit through recursive aliases and adapters, admitting one logical
    forwarded writer while rejecting sibling, overlapping, and read-only writes.
-6. **Pending.** Complete mixed VHDL resolved-signal and SystemVerilog wired-net
+6. **Complete.** Complete mixed VHDL resolved-signal and SystemVerilog wired-net
    multiple-driver behavior, including Logic9/Logic4 collapse, high impedance,
    update fanout, resolver selection, and deterministic conflict diagnostics.
-7. **Pending.** Preserve zero and positive boundary delays plus VHDL
+7. **Complete.** Preserve zero and positive boundary delays plus VHDL
    inertial/transport/reject and SystemVerilog transition-delay behavior across
    adapters without duplicate, lost, or prematurely visible transactions.
-8. **Pending.** Complete the cross-language active, inactive, NBA/update, and
+8. **Complete.** Complete the cross-language active, inactive, NBA/update, and
    postponed phase lattice, including recursive feedback, same-slot races,
    stable source order, debugger stops, callbacks, and VCD observation.
-9. **Pending.** Prove the combined construction/driver/timing matrix through
+9. **Complete.** Prove the combined construction/driver/timing matrix through
    recursive mixed hierarchy, interpreter, LLVM O0/O2, cold/warm/edit cache,
    debugger, VCD, provenance, and exact positive/negative diagnostics; close
    ML-008 and ML-010 in the feature matrix.
-10. **Pending.** Update matrix/diagnostics/docs, pass sanitizer, source/catalog,
+10. **Complete.** Update matrix/diagnostics/docs, pass sanitizer, source/catalog,
     and full Debug/Release gates, then create and push the single Batch 122
     checkpoint. This is not a mandatory CI-inspection boundary.
+
+Batch status is **complete**. Keep this exact ten-task
+list current in both the official plan and this handoff. Tasks 1 through 9 use
+one accumulated dirty worktree with focused eight-worker Debug builds and
+tests; Task 10 owns the sanitizer, full regressions, documentation, commit, and
+push gate. GitHub builds use parallelism four, and Batch 122 does not require a
+non-documentation CI inspection.
+
+Task 1 confirms that the shared specialization path already transfers bounded
+scalar integer construction actuals before port-shape checks in both HDL
+directions. Existing applications prove SystemVerilog parameters into VHDL
+generics and VHDL generic maps into SystemVerilog parameters, including mixed
+named/positional language rules, defaults and derived widths, specialization
+values, interpreter/O2 behavior, and cold/warm native keys. The append-only
+SystemC schema likewise supports signed 64-bit integer, natural, positive,
+Boolean, and bit construction values in both hierarchy directions. The
+remaining construction gaps are complete target-typed Boolean/integer/packed
+logic handling, cross-language string transfer, typed provenance, exact
+edit-cache matrices, and unified failures; non-value VHDL interface generics
+and SystemVerilog type parameters intentionally remain same-language.
+
+Driver validation currently groups per-process whole/slice regions by final
+scheduler signal. Native `std_logic`/`std_logic_vector`, `wire`/`tri`, explicit
+resolver selection, and four-state resolution execute, but conversion adapters
+own separate formal signals and processes without a retained logical-driver
+chain. Recursive converted writers, read-only aliases, resolved adapters, and
+cross-language inout ownership therefore lack one proof, while `wand`/`wor`
+families still end in `FSIM-ELAB-DRV-002`. The runtime has stable active,
+inactive, update, and postponed phases, and zero/positive delayed writes use
+the common update scheduler; however ML-008 lacks an atomic recursive boundary
+matrix combining delayed VHDL transactions, SystemVerilog NBA/update work,
+adapter deltas, feedback, debugger stops, callbacks, and VCD observation.
+Exact LLVM Debug elaboration, the main application, resolution, mixed
+conversions, and runtime passed 5/5 focused tests in 16.89 seconds (0.17,
+15.86, 0.09, 0.76, and 0.01 seconds). Task 2 is current; this begins the
+intentional accumulated Batch 122 dirty worktree, with no sanitizer, Release,
+full regression, commit, push, or CI inspection at this task boundary.
+
+Task 2 confirms and locks the shared target-specialization path for
+SystemVerilog-parent/VHDL-child construction rather than adding a parallel
+foreign-parameter mechanism. A dedicated 176-line elaboration matrix proves
+case-insensitive named overrides, ordered positional overrides, omitted
+defaults, SystemVerilog one-bit values converted to VHDL Boolean, signed values
+checked against a VHDL integer subtype, a dependent `Last := Width - 1` generic
+and port shape, canonical specialization values/identities, and exact runtime
+outputs for three independently specialized children. A noncanonical Boolean
+actual is rejected by `FSIM-ELAB-GENERIC-008`. The existing mixed application
+continues to prove interpreter/O2 execution, dependent port width, and cold/
+warm native specialization keys. Direct packed VHDL value-generic syntax
+remains deliberately in Task 4's typed construction slice. The exact
+eight-worker LLVM Debug build succeeded; diagnostics catalog, source-line
+budget, elaboration, and the main application passed 4/4 tests in 15.95 seconds
+(0.08, 0.13, 0.17, and 15.57 seconds). Task 3 is current; no sanitizer,
+Release, full regression, commit, push, or CI inspection ran at this task
+boundary.
+
+Task 3 locks the reverse VHDL-parent/SystemVerilog-child path in the same
+dedicated construction matrix. Named and positional VHDL generic maps now have
+evidence against target-typed SystemVerilog `int`, one-bit `bit`, unsigned
+four-bit, and signed eight-bit parameters. The target conversion truncates 18
+to four-bit 2, preserves signed -3, applies omitted defaults, derives
+`LAST = WIDTH - 1`, selects the matching generate branch, materializes the
+dependent output shape, and retains distinct canonical `svconst-v1` identities
+for all value and local parameters. Three child specializations execute exact
+bit-vector and generated outputs. A VHDL name that case-insensitively matches
+both `WIDTH` and `width` on a foreign SystemVerilog target is rejected by
+`FSIM-ELAB-PARAM-009`. The combined construction test remains 357 lines. The
+exact eight-worker LLVM Debug build succeeded; diagnostics catalog,
+source-line budget, elaboration, and the main interpreter/O2 construction
+application passed 4/4 tests in 16.01 seconds (0.08, 0.12, 0.17, and 15.64
+seconds). Task 4 is current; no sanitizer, Release, full regression, commit,
+push, or CI inspection ran at this task boundary.
+
+Task 4 completes the bounded typed-construction slice without changing the
+public SystemC C ABI. Direct VHDL `bit_vector`, `std_logic_vector`, and
+`std_ulogic_vector` value generics up to 64 known bits now pass the frontend's
+existing specialization path; wider, composite, or unknown/high-impedance
+construction values remain checked failures. A VHDL string literal may now
+target a SystemVerilog string parameter and retains its existing
+`svstring-v1` byte identity, while VHDL-target Boolean, integer, and packed
+values receive cross-language-only `vhdlconst-v1` identities carrying domain,
+width, signedness, nominal type, declared range, and value. This avoids
+perturbing same-language non-value generic identities. SystemC construction
+continues to use its append-only signed-64-bit schema for integer, natural,
+positive, Boolean, and bit values; HDL-parent construction in both languages
+now retains `systemcconst-v1` type/value identities beside the ABI-neutral
+integer values. The 446-line construction test proves packed values, strings,
+all five SystemC scalar kinds, subtype failures, dependent shapes, generated
+behavior, and runtime results in both HDL directions. The exact eight-worker
+LLVM Debug build succeeded; frontend, diagnostics catalog, source-line budget,
+elaboration, the main mixed/SystemC construction application, and the string
+parameter application passed 6/6 tests in 15.83 seconds (0.02, 0.08, 0.12,
+0.17, 15.30, and 0.14 seconds). Task 5 is current; no sanitizer, Release, full
+regression, commit, push, or CI inspection ran at this task boundary.
+
+Task 5 makes connected scalar/vector input ports read-only inside the child
+specialization while leaving boundary adapter processes as the only legal
+writers of their owned formal signals. A dedicated mixed-driver elaboration
+matrix proves one recursive SystemVerilog-to-VHDL-to-SystemVerilog writer
+through two narrowing adapters, exact interpreter propagation from two to four
+to eight bits, and one conversion process per boundary. Two sibling VHDL
+writers converted into the same SystemVerilog actual are rejected by the
+existing logical-driver validation, and a VHDL child assignment through an
+input port is rejected by `FSIM-ELAB-SVIFACE-006`; its catalog text now covers
+both input ports and modport input members. The exact eight-worker LLVM Debug
+build succeeded; diagnostics catalog, source-line budget, and elaboration
+passed 3/3 tests in 0.37 seconds (0.08, 0.12, and 0.17 seconds). Task 6 is
+current; no sanitizer, Release, full regression, commit, push, or CI inspection
+ran at this task boundary.
+
+Task 6 adds native `wand`/`triand` and `wor`/`trior` resolver kinds to SimIR
+and admits the complete SystemVerilog net-type family at declaration parsing.
+Wired resolution retains `Z` when every process releases a bit, otherwise
+treats `Z` as the AND/OR identity and applies four-state logical dominance per
+bit. Native resolver selection now admits multiple mixed-language boundary
+drivers without requiring a redundant binding resolver, while unresolved
+variables continue to receive the existing deterministic multiple-driver
+diagnostics. The mixed-driver matrix proves VHDL Logic9 `0`, `1`, and `Z`
+drivers collapsing into six SystemVerilog wired nets with conflict, release,
+and all-high-impedance outcomes; the reverse VHDL `std_logic` matrix proves
+SystemVerilog Logic4 conflict/release resolution and concurrent output fanout.
+The obsolete `FSIM-ELAB-DRV-002` unsupported-policy diagnostic was removed.
+The exact eight-worker LLVM Debug build succeeded; frontend, diagnostics
+catalog, source-line budget, elaboration, the existing compiled resolution
+application, and runtime passed 6/6 tests in 0.48 seconds (0.02, 0.08, 0.11,
+0.16, 0.09, and 0.01 seconds). Task 7 is current; no sanitizer, Release, full
+regression, commit, push, or CI inspection ran at this task boundary.
+
+Task 7 extends the mixed resolution application with a recursive
+SystemVerilog/VHDL/SystemVerilog timing hierarchy and six width-conversion
+adapters. Zero-delay VHDL transport reaches the eight-bit SystemVerilog actual
+in the same timestamp without duplicate publication. Positive VHDL default
+inertial, explicit `reject 2 ps inertial`, and transport transactions preserve
+their exact 5/15/16/25 ps cancellation or pulse histories through the outer
+adapter. A nested SystemVerilog transition-delay leaf preserves its 3 ps fall,
+12 ps rise, and 24 ps turnoff publications through one-to-four and four-to-eight
+mixed adapters, including final high impedance. The application locks the
+initial partial-domain publications as well as the absence of premature pulse
+visibility. The exact eight-worker LLVM Debug build succeeded; diagnostics
+catalog, source-line budget, elaboration, resolution application, and runtime
+passed 5/5 tests in 0.45 seconds (0.08, 0.11, 0.16, 0.09, and 0.01 seconds).
+Task 8 is current; no sanitizer, Release, full regression, commit, push, or CI
+inspection ran at this task boundary.
+
+Task 8 extends that hierarchy with a SystemVerilog active blocking write,
+inactive `#0` write, and two same-slot NBA writes whose later source-order value
+wins in the update phase. Exact callback histories prove `00`, `01`, then `11`
+on the leaf in delta zero, one-to-four and four-to-eight adapter publications in
+deltas one and two, and a VHDL zero-delay transport fanout in delta three.
+`$strobe` observes the NBA winner once in the postponed phase. A second
+two-adapter SystemVerilog/VHDL feedback loop deterministically advances from
+unknown through 0, 1, 2, and 3 and quiesces at delta 16. Independent signal
+observers agree exactly, VCD records all external and internal boundary nodes,
+and `$stop` pauses at 1 ps for debugger inspection before a successful resume
+to the 30 ps design finish. The exact eight-worker LLVM Debug build succeeded;
+diagnostics catalog, source-line budget, elaboration, resolution application,
+and runtime passed 5/5 tests in 0.48 seconds (0.08, 0.12, 0.17, 0.10, and 0.01
+seconds). Task 9 is current; no sanitizer, Release, full regression, commit,
+push, or CI inspection ran at this task boundary.
+
+Task 9 combines an explicit SystemVerilog Boolean construction override with
+the complete driver/timing hierarchy and verifies its canonical Boolean
+`vhdlconst-v1` identity. The application now captures the entire phase,
+feedback, delay, postponed-output, debugger, independent-callback, final-value,
+VCD, specialization-key, and boundary-conversion state under the interpreter
+and LLVM O0/O2. Each optimization proves a cold native-cache fill and exact
+warm hits, then edits the VHDL source, observes the changed zero-delay result,
+and requires a changed specialization-key set plus at least one native miss
+while retaining construction identity and boundary topology. The feature
+matrix now marks ML-008 and ML-010 executable and expands ML-007 for native
+wired-AND/OR resolution; the language-support inventory no longer lists wired
+resolution as a gap. The exact seven-test focused gate passed in 1.59 seconds:
+diagnostics catalog 0.08, source-line budget 0.11, mixed matrix 0.01,
+elaboration 0.17, resolution 0.45, mixed conversions 0.75, and runtime 0.01
+seconds. Task 10 is current; no sanitizer, Release, full regression, commit,
+push, or CI inspection ran at this task boundary.
+
+Task 10 is complete. The LLVM-disabled ASan/UBSan regression passed all 75
+tests in 329.57 seconds with no sanitizer findings; leak detection alone was
+disabled for the locally traced run because LeakSanitizer cannot operate under
+the workspace tracer, while the CI preset retains leak detection. The exact
+LLVM 22.1.8 warnings-as-errors Debug regression passed all 78 tests, including
+`fsim.application.scoped_locals` in 0.81 seconds and the expanded resolution
+application in 0.45 seconds. The corresponding Release build and 78-test
+regression passed in 168.86 seconds, with scoped locals in 0.81 seconds and
+resolution in 0.53 seconds. Both full suites include the diagnostics catalog,
+source-line budget, IEEE inventory, and v1 matrix gates. Batch 122 closes as
+one accumulated commit/push checkpoint and, because it is not a tenth-batch
+boundary, has no GitHub Actions inspection.
+
+### Batch 123 — SystemC named hierarchy and interfaces — In progress
+
+The current ten implementation tasks are:
+
+1. **In progress.** Audit SC-001 through SC-022 and the SystemC facade/ABI,
+   hierarchy registry, DesignIR, debugger/API, and application evidence for
+   named-object hierarchy, ports, exports, standard interfaces, and bounded
+   custom metadata; define the exact positive and failure matrix.
+2. **Pending.** Add bounded `sc_object` identity and introspection for modules,
+   ports, exports, signals, primitive channels, events, and processes,
+   including stable `name`, `basename`, `kind`, and parent ownership.
+3. **Pending.** Preserve deterministic fully qualified names and construction
+   order across native children, foreign HDL placeholders, factory roots, and
+   repeated `sc_gen_unique_name` use, rejecting duplicate or invalid sibling
+   names transactionally.
+4. **Pending.** Complete parent/child object traversal and lookup through the
+   append-only plug-in ABI and common hierarchy, with stable handles and no
+   cross-build or destroyed-object leakage.
+5. **Pending.** Complete typed `sc_in`, `sc_out`, and `sc_inout` binding policies
+   across direct interfaces, signals, parent/child port chains, and HDL aliases,
+   including direction, cardinality, cycle, skipped-parent, and unbound checks.
+6. **Pending.** Complete `sc_export` binding and transitive resolution for the
+   supported standard signal interfaces, including export-to-interface,
+   export-to-export, port-to-export, read/write capability, and exact failures.
+7. **Pending.** Materialize every supported SystemC named object in common
+   DesignIR/API/debugger/VCD hierarchy with consistent source, kind, parent,
+   signal identity, and lookup behavior across mixed-language boundaries.
+8. **Pending.** Add metadata-only registration for bounded custom interface and
+   primitive-channel kinds permitted by v1, preserving names and hierarchy
+   while rejecting unsupported custom binding, value, or asynchronous-update
+   behavior explicitly.
+9. **Pending.** Prove the combined named hierarchy/port/export/interface matrix
+   in compiled SystemC with interpreter and LLVM O0/O2 HDL peers, cold/warm/edit
+   cache, lifecycle, callbacks, debugger, VCD, and exact negative diagnostics.
+10. **Pending.** Update matrix/subset/diagnostics/docs, pass sanitizer,
+    source/catalog and full Debug/Release gates, then create and push the single
+    Batch 123 checkpoint. This is not a mandatory CI-inspection boundary.
 
 Batch status is **in progress** with Task 1 current. Keep this exact ten-task
 list current in both the official plan and this handoff. Tasks 1 through 9 use
 one accumulated dirty worktree with focused eight-worker Debug builds and
 tests; Task 10 owns the sanitizer, full regressions, documentation, commit, and
-push gate. GitHub builds use parallelism four, and Batch 122 does not require a
+push gate. GitHub builds use parallelism four, and Batch 123 does not require a
 non-documentation CI inspection.
 
 Batch 110 has advanced through these validated features:

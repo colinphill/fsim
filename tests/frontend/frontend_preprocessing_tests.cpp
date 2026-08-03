@@ -1017,7 +1017,7 @@ entity invalid_generic is
     type Defaulted := integer;
     Clash : integer := 1;
     Clash : integer := 2;
-    Vector_Value : bit_vector(1 downto 0) := "00";
+    Vector_Value : bit_vector(64 downto 0) := "00";
     variable Bad_Class : integer;
     Bad_Mode : out integer
   );

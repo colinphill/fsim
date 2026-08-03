@@ -1183,6 +1183,8 @@ enum class ResolutionKind : std::uint8_t {
   std_logic,
   vhdl_user_or,
   vhdl_user_and,
+  sv_wand,
+  sv_wor,
 };
 
 enum class ValueKind : std::uint8_t {

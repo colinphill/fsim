@@ -108,6 +108,11 @@ struct SystemCInstanceDescription {
     std::vector<ExternalInternalSignal> internal_signals;
     std::vector<ExternalExport> exports;
     std::vector<SystemCInstanceDescription> native_children;
+    // Canonical typed construction values supplied by the authoritative HDL
+    // specialization path. Kept trailing for source compatibility with
+    // aggregate descriptions produced by existing plug-in bridges.
+    std::vector<std::pair<std::string, std::string>>
+        construction_identity_values;
 };
 
 struct SystemCConstructionParameter {
@@ -335,6 +340,8 @@ struct SystemCInstanceInfo {
     std::uint64_t native_handle{};
     std::vector<std::pair<std::string, std::int64_t>>
         construction_values;
+    std::vector<std::pair<std::string, std::string>>
+        construction_identity_values;
     std::vector<SystemCPortInfo> ports;
     std::vector<SystemCEventInfo> events;
     std::vector<SystemCPrimitiveChannelInfo> primitive_channels;

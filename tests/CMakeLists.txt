@@ -123,6 +123,8 @@ add_executable(
   elaboration/elaborator_generate_test.cpp
   elaboration/elaborator_mixed_test.cpp
   elaboration/elaborator_mixed_conversion_test.cpp
+  elaboration/elaborator_mixed_construction_test.cpp
+  elaboration/elaborator_mixed_driver_test.cpp
   elaboration/elaborator_process_test.cpp
   elaboration/elaborator_fork_test.cpp
   elaboration/elaborator_function_test.cpp

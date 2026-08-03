@@ -1261,6 +1261,7 @@ endmodule
             {},
             {},
             {},
+            {},
             {}};
     const std::vector<fsim::elaboration::Binding>
         hdl_to_systemc_bindings{
@@ -1500,6 +1501,7 @@ end architecture rtl;
             {},
             {},
             {},
+            {},
             {}};
     const std::vector<fsim::elaboration::Binding>
         vhdl_systemc_bindings{
@@ -1685,6 +1687,7 @@ endmodule
               "shared",
               systemc_logic,
               fsim::runtime::PackedLogic4::from_msb_string("0")}},
+            {},
             {},
             {}};
     const std::vector<fsim::elaboration::Binding>

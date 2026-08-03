@@ -41,6 +41,14 @@ ResolutionKind HierarchyBuilder::native_resolution(
         || signal.type_name == "tri") {
         return ResolutionKind::sv_wire;
     }
+    if (signal.type_name == "wand"
+        || signal.type_name == "triand") {
+        return ResolutionKind::sv_wand;
+    }
+    if (signal.type_name == "wor"
+        || signal.type_name == "trior") {
+        return ResolutionKind::sv_wor;
+    }
     return ResolutionKind::none;
 }
 
@@ -221,17 +229,6 @@ void HierarchyBuilder::validate_process_drivers() {
         }
         const auto& info = design_.signal_info_.at(signal);
         if (!overlap && info.vhdl_array) {
-            continue;
-        }
-        if (info.type_name == "wand"
-            || info.type_name == "triand"
-            || info.type_name == "wor"
-            || info.type_name == "trior") {
-            report(
-                "FSIM-ELAB-DRV-002",
-                "wired-AND/OR resolution for signal '"
-                    + info.name + "' is not implemented",
-                {});
             continue;
         }
         report(

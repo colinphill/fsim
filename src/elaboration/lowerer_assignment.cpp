@@ -13,7 +13,7 @@ void Lowerer::validate_read_only_signal_writes(
         && reported.insert(signal).second) {
       report(
           "FSIM-ELAB-SVIFACE-006",
-          "a modport input member is read-only within process '"
+          "an input signal is read-only within process '"
               + process_.name + "'",
           source);
     }

@@ -174,6 +174,17 @@ void adapt_vhdl_array_port_shapes(
                 instance.span);
             return nullptr;
         }
+        constructed->construction_identity_values.clear();
+        constructed->construction_identity_values.reserve(values->size());
+        for (std::size_t index = 0; index < values->size(); ++index) {
+            constructed->construction_identity_values.emplace_back(
+                values->at(index).first,
+                "systemcconst-v1:type="
+                    + std::to_string(
+                        static_cast<unsigned>(schema->at(index).type))
+                    + ";value="
+                    + std::to_string(values->at(index).second));
+        }
         owned_systemc_instances_.push_back(
             std::move(*constructed));
         const auto* description =
@@ -454,6 +465,8 @@ void adapt_vhdl_array_port_shapes(
         info.native_handle = instance.handle;
         info.construction_values =
             instance.construction_values;
+        info.construction_identity_values =
+            instance.construction_identity_values;
         for (const auto& port : instance.ports) {
             if (const auto signal = aliases.find(port.name);
                 signal != aliases.end()) {

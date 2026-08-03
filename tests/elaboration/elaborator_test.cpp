@@ -12,6 +12,8 @@ int main() {
   test_generate_elaboration();
   test_mixed_language_and_systemc();
   test_mixed_language_conversions();
+  test_mixed_language_construction();
+  test_mixed_language_driver_ownership();
   test_process_and_wait_lowering();
   test_systemverilog_fork_lowering();
   test_systemverilog_function_lowering();

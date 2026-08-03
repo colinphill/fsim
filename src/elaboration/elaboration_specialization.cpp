@@ -117,6 +117,35 @@ std::optional<std::int64_t> packed_vhdl_static_value(
     return static_cast<std::int64_t>(word.aval);
 }
 
+std::string vhdl_value_identity(
+    const frontend::Type& type,
+    const std::int64_t value) {
+    std::string result = "vhdlconst-v1;domain="
+        + std::to_string(static_cast<unsigned>(type.domain))
+        + ";width=" + std::to_string(type.width().value_or(0))
+        + ";signed=" + (type.is_signed ? "1" : "0")
+        + ";type=" + type.spelling
+        + ";nominal=" + type.nominal_type;
+    if (type.packed_range) {
+        result += ";packed="
+            + std::to_string(type.packed_range->left) + ":"
+            + std::to_string(type.packed_range->right) + ":"
+            + (type.packed_range->descending ? "down" : "up");
+    }
+    if (type.integer_range) {
+        result += ";integer="
+            + std::to_string(type.integer_range->left) + ":"
+            + std::to_string(type.integer_range->right);
+    }
+    if (type.enumeration_range) {
+        result += ";enumeration="
+            + std::to_string(type.enumeration_range->left) + ":"
+            + std::to_string(type.enumeration_range->right);
+    }
+    result += ";value=" + std::to_string(value);
+    return result;
+}
+
 std::array<std::uint64_t, 3> transition_delays(
     const frontend::Delay& delay) {
     const auto rise = delay.magnitude;
@@ -376,16 +405,6 @@ SpecializedUnit specialize_unit(
             if (is_verilog) {
                 if (overridable[*actual_index]->type.spelling
                     == "string") {
-                    if (association_language
-                        != frontend::Language::
-                            SystemVerilog2017) {
-                        diagnostics.push_back({
-                            "FSIM-ELAB-SVSTRING-004",
-                            "string parameter actuals require a "
-                            "same-language SystemVerilog association",
-                            override.span});
-                        continue;
-                    }
                     const auto value =
                         evaluate_systemverilog_string_expression(
                             actual_expression,
@@ -943,8 +962,7 @@ SpecializedUnit specialize_unit(
             is_vhdl
                 && !parameter_type.enumeration_literals.empty(),
             parameter_type.nominal_type};
-        result.values.emplace_back(
-            parameter.name,
+        const auto display_value =
             is_vhdl
                     && parameter_type.domain
                         == frontend::ValueDomain::Boolean
@@ -958,7 +976,15 @@ SpecializedUnit specialize_unit(
                                   .enumeration_literals.size()
                     ? parameter_type.enumeration_literals[
                           static_cast<std::size_t>(*value)]
-                : std::to_string(*value));
+                : std::to_string(*value);
+        result.values.emplace_back(parameter.name, display_value);
+        if (is_vhdl
+            && association_language
+                != frontend::Language::Vhdl2008) {
+            result.identity_values.emplace_back(
+                parameter.name,
+                vhdl_value_identity(parameter_type, *value));
+        }
     }
 
     if (is_verilog) {

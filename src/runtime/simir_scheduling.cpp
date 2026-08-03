@@ -97,6 +97,8 @@ void Interpreter::Impl::release_slice(
     }
     const auto initial =
         signal.resolution == ResolutionKind::sv_wire
+                || signal.resolution == ResolutionKind::sv_wand
+                || signal.resolution == ResolutionKind::sv_wor
             ? Logic4::z
             : signal.resolution == ResolutionKind::vhdl_user_or
                 ? Logic4::zero
@@ -137,9 +139,33 @@ PackedLogic4& Interpreter::Impl::driver_slot(
       drivers.push_back(
           *external_driver_values.at(signal_id));
     }
-    if (get_signal(signal_id).resolution
+    const auto resolution = get_signal(signal_id).resolution;
+    if (resolution == ResolutionKind::sv_wand
+        || resolution == ResolutionKind::sv_wor) {
+      const auto& signal = get_signal(signal_id);
+      const bool bitwise_and = resolution == ResolutionKind::sv_wand;
+      auto result = PackedLogic4{
+          signal.initial_value.width(), Logic4::z};
+      for (std::size_t bit = 0; bit < result.width(); ++bit) {
+        auto value = bitwise_and ? Logic4::one : Logic4::zero;
+        bool driven = false;
+        for (const auto& driver : drivers) {
+          const auto candidate = driver.get(bit);
+          if (candidate == Logic4::z) {
+            continue;
+          }
+          driven = true;
+          value = bitwise_and
+              ? runtime::logic_and(value, candidate)
+              : runtime::logic_or(value, candidate);
+        }
+        result.set(bit, driven ? value : Logic4::z);
+      }
+      return result;
+    }
+    if (resolution
             != ResolutionKind::vhdl_user_or
-        && get_signal(signal_id).resolution
+        && resolution
             != ResolutionKind::vhdl_user_and) {
       return runtime::resolve(
           std::span<const PackedLogic4>{drivers});

@@ -321,7 +321,7 @@ architecture rtl of string_boundary_top is
   signal value : bit;
 begin
   child: foreign_string_child
-    generic map (LABEL => 1)
+    generic map (LABEL => "mixed")
     port map (value => value);
 end architecture;
 )",
@@ -350,10 +350,20 @@ endmodule
         boundary_vhdl.design,
         "vhdl:work.string_boundary_top(rtl)",
         bindings);
+    assert(boundary.ok());
+    const auto child = std::ranges::find_if(
+        boundary.design->specializations(),
+        [](const auto& specialization) {
+          return specialization.instance
+              == "string_boundary_top.child";
+        });
+    assert(child != boundary.design->specializations().end());
+    assert((child->parameter_values
+        == std::vector<std::pair<std::string, std::string>>{
+            {"LABEL", "\"mixed\""}}));
     assert(
-        !boundary.ok()
-        && has_diagnostic(
-            boundary, "FSIM-ELAB-SVSTRING-004"));
+        child->parameter_identity_values.front().second
+            .starts_with("svstring-v1;"));
 }
 
 } // namespace fsim::tests::elaboration

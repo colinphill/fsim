@@ -434,8 +434,9 @@ void VerilogParser::require_default_port_net_type(
 
 [[nodiscard]] bool VerilogParser::is_net_type_keyword() const  {
   return any_keyword({
-      "wire", "reg", "logic", "bit", "byte", "shortint",
-      "int", "longint", "integer", "time"});
+      "wire", "tri", "tri0", "tri1", "wand", "triand", "wor",
+      "trior", "trireg", "uwire", "reg", "logic", "bit", "byte",
+      "shortint", "int", "longint", "integer", "time"});
 }
 
 [[nodiscard]] bool VerilogParser::is_named_type_reference_start(

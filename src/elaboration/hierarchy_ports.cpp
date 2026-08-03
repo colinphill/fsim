@@ -9,8 +9,7 @@ void HierarchyBuilder::note_boundary_driver(
     const SignalId signal,
     const Binding* binding,
     const std::string& path,
-    const frontend::SourceSpan& source,
-    const bool cross_language) {
+    const frontend::SourceSpan& source) {
     auto& paths = boundary_driver_paths_[signal];
     const auto nested_with = [](const std::string_view left,
                                 const std::string_view right) {
@@ -25,9 +24,6 @@ void HierarchyBuilder::note_boundary_driver(
           return !nested_with(path, existing);
         });
     paths.push_back(path);
-    if (cross_language) {
-        cross_language_boundary_signals_.insert(signal);
-    }
     if (binding != nullptr && binding->resolver) {
         const auto [found, inserted] =
             resolver_by_signal_.emplace(signal, *binding->resolver);
@@ -40,9 +36,8 @@ void HierarchyBuilder::note_boundary_driver(
     }
     if (conflicting
         && !resolver_by_signal_.contains(signal)
-        && (cross_language_boundary_signals_.contains(signal)
-            || native_resolution(design_.signal_info_.at(signal))
-                == ResolutionKind::none)) {
+        && native_resolution(design_.signal_info_.at(signal))
+            == ResolutionKind::none) {
         report(
             "FSIM-ELAB-BIND-024",
             "multiple boundary drivers on '" + path
