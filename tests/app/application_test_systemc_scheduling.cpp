@@ -16,6 +16,10 @@ namespace fsim::test {
 
 void ApplicationTestFixture::test_systemc_scheduling_matrix() {
 #if defined(FSIM_HAS_BOOST_CONTEXT)
+  // FSIM-CONFORMANCE CF-SC-THREAD-001 source=SRC-SYSTEMC expectation=execute
+  // FSIM-CONFORMANCE CF-SC-EVENT-001 source=SRC-SYSTEMC expectation=execute
+  // FSIM-CONFORMANCE CF-SC-SIGNAL-001 source=SRC-SYSTEMC expectation=execute
+  // FSIM-CONFORMANCE CF-SC-UPDATE-001 source=SRC-SYSTEMC expectation=execute
   constexpr std::array<std::string_view, 11> signal_names{
       "count",
       "timed",

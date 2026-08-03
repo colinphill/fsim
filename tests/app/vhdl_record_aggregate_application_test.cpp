@@ -263,6 +263,10 @@ end package;
       };
   write_package("revision one");
   {
+    // FSIM-CONFORMANCE CF-VHDL-EXPR-001 source=SRC-IEEE-P1076 expectation=execute
+    // FSIM-CONFORMANCE CF-VHDL-AGGREGATE-001 source=SRC-UVVM expectation=execute
+    // FSIM-CONFORMANCE CF-VHDL-SEQUENTIAL-001 source=SRC-IEEE-P1076 expectation=execute
+    // FSIM-CONFORMANCE CF-VHDL-CONCURRENT-001 source=SRC-IEEE-P1076 expectation=execute
     std::ofstream output{top_source};
     output << R"(
 use work.packet_types.packet_t;

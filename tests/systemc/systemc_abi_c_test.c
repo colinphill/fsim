@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// FSIM-CONFORMANCE CF-SC-ABI-001 source=SRC-SYSTEMC expectation=accept
 _Static_assert(FSIM_SYSTEMC_ABI_VERSION == 1u, "unexpected SystemC ABI");
 _Static_assert(
     offsetof(fsim_sc_host_v1, set_process_initialize)

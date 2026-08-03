@@ -54,6 +54,7 @@ constexpr std::array<std::string_view, 7> signal_names{
 void write_leaf(
     const std::filesystem::path& source,
     const bool edited) {
+  // FSIM-CONFORMANCE CF-MIX-CONVERSION-001 source=SRC-FSIM expectation=execute
   std::ofstream output{source};
   output << R"(
 module mixed_conversion_sv_leaf(

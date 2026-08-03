@@ -227,6 +227,7 @@ int main() {
   const auto entity = directory.path / "01_entity.vhd";
   const auto architecture = directory.path / "02_architecture.vhd";
   {
+    // FSIM-CONFORMANCE CF-VHDL-PACKAGE-001 source=SRC-IEEE-P1076 expectation=execute
     std::ofstream output{context};
     output << R"(
 context ieee_all is

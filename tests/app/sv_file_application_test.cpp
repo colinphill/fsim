@@ -361,6 +361,8 @@ endmodule
 )");
   write_text(
       vhdl_source,
+      // FSIM-CONFORMANCE CF-VHDL-FILE-001 source=SRC-IEEE-P1076 expectation=execute
+      // FSIM-CONFORMANCE CF-VHDL-TEXTIO-001 source=SRC-UVVM expectation=execute
       R"(
 entity vhdl_file_top is end entity;
 architecture rtl of vhdl_file_top is
@@ -442,6 +444,7 @@ begin
   end process;
 end architecture;
 )");
+  // FSIM-CONFORMANCE CF-VHDL-TEXTIO-N01 source=SRC-UVVM expectation=runtime-failure
   write_text(directory.path / "vhdl-input.txt", "17");
   write_text(directory.path / "vhdl-empty.txt", "");
   write_text(

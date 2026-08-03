@@ -518,6 +518,7 @@ endmodule
 
   const auto report_source = directory.path / "report.vhd";
   {
+    // FSIM-CONFORMANCE CF-VHDL-REPORT-001 source=SRC-UVVM expectation=execute
     std::ofstream output(report_source);
     output << R"(
 entity reporter is
@@ -545,6 +546,7 @@ end architecture;
   const auto failure_report_source =
       directory.path / "failure_report.vhd";
   {
+    // FSIM-CONFORMANCE CF-VHDL-REPORT-N01 source=SRC-UVVM expectation=runtime-failure
     std::ofstream output(failure_report_source);
     output << R"(
 entity failure_reporter is

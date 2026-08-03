@@ -21,6 +21,9 @@
 namespace fsim::test {
 
 void ApplicationTestFixture::test_preprocessing_debug_and_cli() {
+  // FSIM-CONFORMANCE CF-COMMON-DEBUGGER-001 source=SRC-FSIM expectation=execute
+  // FSIM-CONFORMANCE CF-COMMON-CLI-001 source=SRC-FSIM expectation=execute
+  // FSIM-CONFORMANCE CF-COMMON-TRACE-001 source=SRC-COCOTB expectation=execute
   auto config = base_config();
   fsim::diagnostic::Engine diagnostics;
   auto first = fsim::app::build_project(config, diagnostics);

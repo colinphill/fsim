@@ -838,6 +838,7 @@ therefore excluded.
 | `FSIM-SV-SEM-126` | error | A bounded static unpacked array declares more than four dimensions. |
 | `FSIM-SV-SEM-127` | error | A bounded SystemVerilog string method has the wrong number of arguments. |
 | `FSIM-SV-SEM-128` | error | A dynamic-array `new[size](initializer)` expression has other than one initializer. |
+| `FSIM-SV-SEM-129` | error | A module or interface declaration end name does not match its opening name. |
 | `FSIM-ELAB-SVIFACE-006` | error | A process writes through a read-only input port or modport input member. |
 | `FSIM-ELAB-SVIFACE-007` | error | A retained interface callable cannot be materialized at its same-language module boundary. |
 | `FSIM-ELAB-SVIFACE-008` | error | An interface callable is visible more than once through the same module port. |

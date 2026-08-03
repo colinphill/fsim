@@ -22,6 +22,8 @@
 
 namespace {
 
+// FSIM-CONFORMANCE CF-SC-COMPILER-001 source=SRC-SYSTEMC expectation=execute
+// FSIM-CONFORMANCE CF-SC-CACHE-001 source=SRC-SYSTEMC expectation=execute
 void write_source(
     const std::filesystem::path& path,
     const std::string& symbol,

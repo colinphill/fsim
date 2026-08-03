@@ -47,6 +47,9 @@ struct Capture {
 void write_source(
     const std::filesystem::path& source,
     const std::uint32_t increment) {
+  // FSIM-CONFORMANCE CF-VHDL-ACCESS-001 source=SRC-IEEE-P1076 expectation=execute
+  // FSIM-CONFORMANCE CF-VHDL-PROTECTED-001 source=SRC-UVVM expectation=execute
+  // FSIM-CONFORMANCE CF-VHDL-PHYSICAL-001 source=SRC-IEEE-P1076 expectation=execute
   std::ofstream output{source};
   output << R"(
 package Counter_Types is

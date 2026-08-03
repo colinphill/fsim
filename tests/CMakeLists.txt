@@ -36,6 +36,7 @@ add_executable(
   fsim_frontend_tests
   frontend/frontend_tests.cpp
   frontend/frontend_preprocessing_tests.cpp
+  frontend/frontend_sv_conformance_tests.cpp
   frontend/frontend_vhdl_type_tests.cpp
   frontend/frontend_vhdl_statement_tests.cpp
   frontend/frontend_vhdl_time_file_tests.cpp
@@ -111,6 +112,20 @@ add_test(
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1LegalityAudit.cmake"
 )
+add_test(
+  NAME fsim.v1-conformance-audit
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1ConformanceAudit.cmake"
+)
+add_test(
+  NAME fsim.v1-conformance-corpus
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1ConformanceCorpus.cmake"
+)
 set_tests_properties(
   fsim.v1-vhdl-matrix
   PROPERTIES LABELS "fast;vhdl;matrix;cmake"
@@ -122,6 +137,14 @@ set_tests_properties(
 set_tests_properties(
   fsim.v1-legality-audit
   PROPERTIES LABELS "fast;legality;matrix;cmake"
+)
+set_tests_properties(
+  fsim.v1-conformance-audit
+  PROPERTIES LABELS "fast;conformance;license;provenance;cmake"
+)
+set_tests_properties(
+  fsim.v1-conformance-corpus
+  PROPERTIES LABELS "fast;conformance;coverage;provenance;cmake"
 )
 set_tests_properties(
   fsim.ieee-package-inventory
@@ -203,6 +226,7 @@ add_executable(
   elaboration/elaborator_sv_slice_order_test.cpp
   elaboration/elaborator_sv_slice_port_test.cpp
   elaboration/elaborator_sv_interface_test.cpp
+  elaboration/elaborator_sv_conformance_test.cpp
 )
 fsim_configure_test(fsim_elaboration_tests)
 target_link_libraries(fsim_elaboration_tests PRIVATE fsim_elaboration)
@@ -559,6 +583,12 @@ if(TARGET fsim_application)
       app/sv_aggregate_multidimensional_application_test.cpp
       fsim.application.sv_aggregate_multidimensional
       fast aggregates containers systemverilog cache debugger)
+    fsim_add_application_case(
+      1 sv_conformance app/sv_conformance_application_test.cpp
+      fsim.application.sv_conformance
+      fast conformance systemverilog expressions statements processes
+      functions tasks timing assertions strings files containers memories
+      cache llvm)
 
     fsim_add_application_case(
       2 vhdl_type_generics app/vhdl_type_generic_application_test.cpp

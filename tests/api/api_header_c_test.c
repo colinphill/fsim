@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// FSIM-CONFORMANCE CF-COMMON-CABI-001 source=SRC-COCOTB expectation=accept
 _Static_assert(FSIM_STRUCT_HEADER_SIZE == 8, "C ABI header changed");
 _Static_assert(
     FSIM_OBJECT_INFO_V1_SIZE

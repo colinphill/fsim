@@ -203,6 +203,9 @@ fsim_string_view_t text(const char* value) {
 }  // namespace
 
 int main() {
+  // FSIM-CONFORMANCE CF-COMMON-CAPI-001 source=SRC-COCOTB expectation=execute
+  // FSIM-CONFORMANCE CF-COMMON-CALLBACK-001 source=SRC-COCOTB expectation=execute
+  // FSIM-CONFORMANCE CF-COMMON-HANDLE-001 source=SRC-COCOTB expectation=execute
   static_assert(FSIM_STRUCT_HEADER_SIZE == 8);
   static_assert(
       FSIM_OBJECT_INFO_V1_SIZE

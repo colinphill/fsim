@@ -34,6 +34,8 @@ int run_cli(
 }  // namespace
 
 int main() {
+  // FSIM-CONFORMANCE CF-COMMON-TCL-001 source=SRC-TCL expectation=execute
+  // FSIM-CONFORMANCE CF-COMMON-TCL-N01 source=SRC-TCL expectation=reject
   {
     std::istringstream input;
     std::ostringstream output;

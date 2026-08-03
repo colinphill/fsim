@@ -61,6 +61,7 @@ int main() {
     test_vhdl_sequential_for_loops();
     test_systemverilog_vertical_slice();
     test_systemverilog_preprocessor();
+    test_systemverilog_public_conformance_frontend();
     test_systemverilog_line_directive();
     test_non_ansi_verilog_ports();
     test_diagnostics_and_spans();

@@ -18,7 +18,9 @@ ParseResult VerilogParser::run() {
     if (time_declaration_start()) {
       const auto declaration = advance();
       parse_time_declaration(nullptr, declaration);
-    } else if (match_keyword("module")) {
+    } else if (
+        match_keyword("module")
+        || match_keyword("macromodule")) {
       compilation_unit_has_design_item_ = true;
       design.units.push_back(parse_module(previous()));
     } else if (match_keyword("interface")) {
@@ -1009,10 +1011,17 @@ DesignUnit VerilogParser::parse_module(
   }
   expect_keyword(terminator, false, "FSIM-SV-PARSE-004");
   if (match(TokenKind::Colon)) {
-    expect_identifier(
+    const auto end_name = expect_identifier(
         interface_unit
             ? "interface name after endinterface"
             : "module name after endmodule");
+    if (end_name.text != unit.name) {
+      error(
+          end_name,
+          "FSIM-SV-SEM-129",
+          std::string{interface_unit ? "interface" : "module"}
+              + " end name does not match '" + unit.name + "'");
+    }
   }
   for (const auto& use : external_genvar_uses_) {
     if (!declared_genvars_.contains(use.text)) {

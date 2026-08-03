@@ -8,6 +8,8 @@
 #include <string_view>
 #include <type_traits>
 
+// FSIM-CONFORMANCE CF-SC-FACADE-001 source=SRC-SYSTEMC expectation=accept
+// FSIM-CONFORMANCE CF-SC-PROCESS-001 source=SRC-SYSTEMC expectation=accept
 SC_MODULE(Counter) {
     sc_core::sc_in<bool> clock{"clock"};
     sc_core::sc_out<sc_dt::sc_uint<8>> value{"value"};
@@ -58,6 +60,7 @@ struct ValueImplementation final : ValueInterface {
     [[nodiscard]] unsigned value() const override { return 42; }
 };
 
+// FSIM-CONFORMANCE CF-SC-CHANNEL-001 source=SRC-SYSTEMC expectation=accept
 struct TestPrimitiveChannel final : sc_core::sc_prim_channel {
     TestPrimitiveChannel() : sc_core::sc_prim_channel("test_channel") {}
     void update() override {}
@@ -69,6 +72,7 @@ struct MetadataPrimitiveChannel final : sc_core::sc_prim_channel {
               "metadata_channel", "test.metadata_channel") {}
 };
 
+// FSIM-CONFORMANCE CF-SC-HIERARCHY-001 source=SRC-SYSTEMC expectation=accept
 SC_MODULE(NamedHierarchy) {
     sc_core::sc_signal<bool> explicit_name{"object_0"};
     std::string first_unique;
@@ -88,12 +92,14 @@ SC_MODULE(DuplicateSibling) {
 };
 
 int main() {
+    // FSIM-CONFORMANCE CF-SC-DATATYPE-001 source=SRC-SYSTEMC expectation=execute
     const sc_core::sc_time period{10, sc_core::SC_NS};
     assert(period.value() == 10'000'000);
     assert((sc_core::sc_time{0.1, sc_core::SC_NS}.value() == 100'000));
     assert((sc_core::sc_time{1.1, sc_core::SC_NS}.value() == 1'100'000));
     const sc_core::sc_time large{1.0e19, sc_core::SC_FS};
     assert(large.value() == UINT64_C(10000000000000000000));
+    // FSIM-CONFORMANCE CF-SC-UNSUPPORTED-N01 source=SRC-SYSTEMC expectation=reject
     bool rejected_fraction = false;
     try {
         (void)sc_core::sc_time{0.5, sc_core::SC_FS};

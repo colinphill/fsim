@@ -306,6 +306,7 @@ struct BoundaryCapture {
 void verify_boundary_delays(
     const std::filesystem::path& directory,
     const fsim::project::Optimization optimization) {
+  // FSIM-CONFORMANCE CF-MIX-TIMING-001 source=SRC-FSIM expectation=execute
   const auto sv_source = directory / "mixed_timing_top.sv";
   {
     std::ofstream output(sv_source, std::ios::binary);
@@ -757,6 +758,8 @@ int main() {
 
   const auto sv_source = directory.path / "resolved_top.sv";
   {
+    // FSIM-CONFORMANCE CF-MIX-RESOLUTION-001 source=SRC-FSIM expectation=execute
+    // FSIM-CONFORMANCE CF-MIX-OWNERSHIP-001 source=SRC-FSIM expectation=execute
     std::ofstream output(sv_source, std::ios::binary);
     output << R"(timeunit 1ns / 1ps;
 module sv_driver(output logic value);

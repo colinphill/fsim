@@ -8,6 +8,10 @@
 int main() {
   using namespace fsim::tests::runtime;
   try {
+    // FSIM-CONFORMANCE CF-COMMON-SCHEDULER-001 source=SRC-COCOTB expectation=execute
+    // FSIM-CONFORMANCE CF-COMMON-SIMIR-001 source=SRC-FSIM expectation=execute
+    // FSIM-CONFORMANCE CF-COMMON-FAILURE-001 source=SRC-COCOTB expectation=contain
+    // FSIM-CONFORMANCE CF-COMMON-VCD-001 source=SRC-COCOTB expectation=execute
     test_logic();
     test_packed_values();
     test_scheduler_phase_order();

@@ -333,6 +333,7 @@ bool has_macro_provenance(const fsim::semantic::Model& semantics) {
 void verify_boundaries(
     const fsim::app::BuiltProject& project,
     const std::array<std::filesystem::path, 3>& sources) {
+  // FSIM-CONFORMANCE CF-MIX-PROVENANCE-001 source=SRC-FSIM expectation=execute
   assert(project.design_ir.valid());
   assert(project.design_ir.valid(project.semantics));
   assert(project.design_ir.specializations().size() >= 3);
@@ -454,6 +455,7 @@ void compare_capture(const Capture& reference, const Capture& actual) {
 }
 
 void verify_negative(const fsim::project::Config& config) {
+  // FSIM-CONFORMANCE CF-MIX-FAIL-N01 source=SRC-FSIM expectation=FSIM-SC-A003-or-FSIM-ELAB-BIND-0003
   auto invalid = config;
   invalid.bindings.back().target = "systemc:models.missing_boundary_native";
   fsim::diagnostic::Engine diagnostics;

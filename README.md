@@ -711,6 +711,7 @@ fixtures and Windows execution evidence remain open.
 - [Diagnostic code catalog](docs/diagnostics.md)
 - [Language support and feature status](docs/language-support.md)
 - [Feature matrix and test evidence](docs/feature-matrix.md)
+- [v1 conformance provenance audit](docs/v1-conformance-audit.md)
 - [SystemC subset and plug-in model](docs/systemc-subset.md)
 
 ## Licensing
@@ -722,4 +723,7 @@ and must pass license review before they are bundled. The official IEEE-P1076
 `1076-2019` VHDL package source snapshot is bundled byte-for-byte under its
 Apache-2.0 license with pinned provenance and checksums; the
 [feature matrix](docs/feature-matrix.md) identifies which reviewed package
-profiles are currently executable.
+profiles are currently executable. The
+[v1 conformance audit](docs/v1-conformance-audit.md) pins every public
+behavioral reference, records excluded license classes, and explicitly forbids
+unreviewed test-text imports.

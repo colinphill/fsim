@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: Apache-2.0
+# Batch 128 exact conformance corpus.
+# marker-count: 105
+# marker-sha256: 49f5754862e3785fa964621b770f202d1d1ad5fb21bd4144b016b7ceb47dd5dd
+# Format: fixture|ctest|comma-separated evidence modes
+tests/frontend/frontend_sv_conformance_tests.cpp|fsim.frontend|frontend,source-map,portable-path,diagnostic
+tests/elaboration/elaborator_sv_conformance_test.cpp|fsim.elaboration|elaboration,source-map,portable-path,diagnostic
+tests/app/sv_conformance_application_test.cpp|fsim.application.sv_conformance|interpreter,llvm-o0,llvm-o2,cache-cold,cache-warm,source-map,portable-path
+tests/app/vhdl_analysis_order_application_test.cpp|fsim.application.vhdl_analysis_order|frontend,elaboration,source-map,portable-path,diagnostic
+tests/app/vhdl_record_aggregate_application_test.cpp|fsim.application.vhdl_record_aggregates|interpreter,llvm-o0,llvm-o2,cache-cold,cache-warm,cache-edit,debugger,vcd-normalized,source-map,portable-path
+tests/app/vhdl_procedure_wait_application_test.cpp|fsim.application.vhdl_procedure_waits|interpreter,llvm-o0,llvm-o2,cache-cold,cache-warm,source-map,portable-path,diagnostic
+tests/app/display_application_test.cpp|fsim.application.display|interpreter,llvm-o0,llvm-o2,cache-cold,cache-warm,callbacks,source-map,portable-path,diagnostic
+tests/app/sv_file_application_test.cpp|fsim.application.sv_files|interpreter,llvm-o0,llvm-o2,cache-cold,cache-warm,cache-edit,debugger,source-map,portable-path,diagnostic
+tests/app/vhdl_advanced_type_application_test.cpp|fsim.application.vhdl_advanced_types|interpreter,llvm-o0,llvm-o2,cache-cold,cache-warm,cache-edit,debugger,vcd-normalized,source-map,portable-path
+tests/app/vhdl_projected_application_test.cpp|fsim.application.vhdl_projected|interpreter,llvm-o0,llvm-o2,cache-cold,cache-warm,vcd-normalized,source-map,portable-path,diagnostic
+tests/app/vhdl_ieee_integration_application_test.cpp|fsim.application.vhdl_ieee_integration|interpreter,llvm-o0,llvm-o2,cache-cold,cache-warm,cache-edit,debugger,vcd-normalized,source-map,portable-path
+tests/app/application_test_mixed.cpp|fsim.application|interpreter,llvm-o2,cache-cold,cache-warm,source-map,portable-path
+tests/app/mixed_conversion_application_test.cpp|fsim.application.mixed_conversions|interpreter,llvm-o0,llvm-o2,cache-cold,cache-warm,cache-edit,debugger,vcd-normalized,source-map,portable-path
+tests/app/resolution_application_test.cpp|fsim.application.resolution|interpreter,llvm-o0,llvm-o2,cache-cold,cache-warm,cache-edit,callbacks,vcd-normalized,source-map,portable-path
+tests/app/typed_boundary_application_test.cpp|fsim.application.typed_boundaries|interpreter,llvm-o0,llvm-o2,cache-cold,cache-warm,cache-edit,debugger,vcd-normalized,source-map,portable-path,diagnostic
+tests/systemc/systemc_header_test.cpp|fsim.systemc.header|compile,source-map,portable-path,diagnostic
+tests/systemc/systemc_abi_c_test.c|fsim.systemc.abi-c|c-abi,source-map,portable-path
+tests/systemc/plugin_loader_test.cpp|fsim.systemc.plugin|plugin,lifecycle,callbacks,source-map,portable-path,diagnostic
+tests/systemc/plugin_compiler_test.cpp|fsim.systemc.compiler|compiler,cache-cold,cache-warm,cache-edit,source-map,portable-path,diagnostic
+tests/app/application_test_systemc_scheduling.cpp|fsim.application.systemc_matrix|interpreter,llvm-o0,llvm-o2,cache-cold,cache-warm,debugger,callbacks,vcd-normalized,source-map,portable-path,lifecycle
+tests/runtime/runtime_tests.cpp|fsim.runtime|interpreter,callbacks,vcd-normalized,source-map,portable-path,diagnostic
+tests/compiler/llvm_jit_test.cpp|fsim.llvm|llvm-o0,llvm-o2,cache-cold,cache-warm,cache-edit,debugger,compiler,source-map,portable-path,diagnostic
+tests/api/api_header_c_test.c|fsim.api.c_header|c-abi,source-map,portable-path
+tests/api/api_test.cpp|fsim.api|c-api,interpreter,callbacks,debugger,source-map,portable-path,diagnostic
+tests/app/application_test_cli.cpp|fsim.application|interpreter,llvm-o0,cache-cold,cache-warm,debugger,cli,vcd-normalized,source-map,portable-path,diagnostic
+tests/app/line_directive_application_test.cpp|fsim.application.line_directives|interpreter,llvm-o0,llvm-o2,cache-cold,cache-warm,cache-edit,callbacks,source-map,portable-path
+tests/project/project_config_test.cpp|fsim.project|project,source-map,portable-path,diagnostic
+tests/app/tcl_application_test.cpp|fsim.application.tcl|tcl,cli,source-map,portable-path,diagnostic

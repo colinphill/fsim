@@ -26,6 +26,7 @@ void ApplicationTestFixture::test_mixed_language_and_generate() {
 // parent syntax into the selected foreign unit before boundary widths are
 // checked. Exercise both hierarchy directions through the interpreter and
 // the native specialization cache.
+// FSIM-CONFORMANCE CF-MIX-CONSTRUCT-SV-VHDL-001 source=SRC-FSIM expectation=execute
 auto sv_to_vhdl_actual_config = config;
 sv_to_vhdl_actual_config.project.name =
     "sv-to-vhdl-construction-actual-test";
@@ -146,6 +147,7 @@ assert(
     == 0);
 #endif
 
+// FSIM-CONFORMANCE CF-MIX-CONSTRUCT-VHDL-SV-001 source=SRC-FSIM expectation=execute
 auto vhdl_to_sv_actual_config = config;
 vhdl_to_sv_actual_config.project.name =
     "vhdl-to-sv-construction-actual-test";
@@ -267,6 +269,7 @@ assert(
 // A selected generate branch contributes its label to the stable hierarchy
 // path. Explicit bindings therefore address generated foreign instances
 // without making language-dependent guesses.
+// FSIM-CONFORMANCE CF-MIX-HIERARCHY-001 source=SRC-FSIM expectation=execute
 auto generated_mixed_config = config;
 generated_mixed_config.project.name =
     "generated-mixed-hierarchy-test";

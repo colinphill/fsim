@@ -415,6 +415,7 @@ int main() {
   std::filesystem::create_directories(directory.path);
   const auto source = directory.path / "vhdl_projected.vhd";
   {
+    // FSIM-CONFORMANCE CF-VHDL-TRANSACTION-001 source=SRC-IEEE-P1076 expectation=execute
     std::ofstream output(source, std::ios::binary);
     output << R"(
 entity vhdl_projected is

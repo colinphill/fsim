@@ -59,6 +59,7 @@ int fsim_application_case_sv_containers();
 int fsim_application_case_sv_files();
 int fsim_application_case_sv_preprocessor_generate();
 int fsim_application_case_sv_aggregate_multidimensional();
+int fsim_application_case_sv_conformance();
 
 constexpr NamedApplicationCase application_cases[] = {
     {"sv_parameter_sizing", fsim_application_case_sv_parameter_sizing},
@@ -75,6 +76,7 @@ constexpr NamedApplicationCase application_cases[] = {
     {"sv_preprocessor_generate", fsim_application_case_sv_preprocessor_generate},
     {"sv_aggregate_multidimensional",
      fsim_application_case_sv_aggregate_multidimensional},
+    {"sv_conformance", fsim_application_case_sv_conformance},
 };
 #elif FSIM_APPLICATION_SHARD == 2
 int fsim_application_case_vhdl_type_generics();

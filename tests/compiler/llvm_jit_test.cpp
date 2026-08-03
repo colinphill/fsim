@@ -3,6 +3,9 @@
 
 int main() {
   using namespace fsim::tests::compiler;
+  // FSIM-CONFORMANCE CF-COMMON-LLVM-001 source=SRC-LLVM expectation=execute
+  // FSIM-CONFORMANCE CF-COMMON-CACHE-001 source=SRC-LLVM expectation=execute
+  // FSIM-CONFORMANCE CF-COMMON-LLVM-N01 source=SRC-LLVM expectation=reject
   assert(!LlvmJit::llvm_version().empty());
   run_at_level(JitOptimizationLevel::o0, "arithmetic_o0");
   run_at_level(JitOptimizationLevel::o2, "arithmetic_o2");

@@ -190,6 +190,7 @@ void verify_mode(
 }  // namespace
 
 int main() {
+  // FSIM-CONFORMANCE CF-COMMON-SOURCE-001 source=SRC-COCOTB expectation=execute
   const auto nonce =
       std::chrono::steady_clock::now().time_since_epoch().count();
   TemporaryDirectory directory{

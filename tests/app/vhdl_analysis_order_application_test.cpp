@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/frontend.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -89,6 +91,9 @@ void expect_code(
 }
 
 const Source package_declaration{
+    // FSIM-CONFORMANCE CF-VHDL-LIB-001 source=SRC-IEEE-P1076 expectation=accept
+    // FSIM-CONFORMANCE CF-VHDL-DECL-001 source=SRC-IEEE-P1076 expectation=accept
+    // FSIM-CONFORMANCE CF-VHDL-TYPE-001 source=SRC-UVVM expectation=accept
     "package.vhd", "liba", R"(
 package values is
   constant amount : integer := 7;
@@ -102,6 +107,7 @@ end package body;
 )"};
 
 const Source context_declaration{
+    // FSIM-CONFORMANCE CF-VHDL-CONTEXT-001 source=SRC-IEEE-P1076 expectation=accept
     "context.vhd", "libb", R"(
 library liba;
 use liba.values.all;
@@ -112,6 +118,7 @@ end context;
 )"};
 
 const Source entity_declaration{
+    // FSIM-CONFORMANCE CF-VHDL-GENERIC-001 source=SRC-UVVM expectation=accept
     "entity.vhd", "libb", R"(
 context work.shared;
 entity leaf is
@@ -126,12 +133,101 @@ end architecture;
 )"};
 
 const Source configuration_declaration{
+    // FSIM-CONFORMANCE CF-VHDL-CONFIG-001 source=SRC-IEEE-P1076 expectation=accept
     "configuration.vhd", "libb", R"(
 configuration leaf_configuration of leaf is
   for rtl
   end for;
 end configuration;
 )"};
+
+void test_structural_conformance() {
+  // This compact fixture is independently authored from the bounded
+  // structural expectations identified by SRC-IEEE-P1076 and SRC-UVVM.
+  // FSIM-CONFORMANCE CF-VHDL-COMPONENT-001 source=SRC-UVVM expectation=accept
+  // FSIM-CONFORMANCE CF-VHDL-GENERATE-001 source=SRC-IEEE-P1076 expectation=accept
+  const auto parsed = fsim::frontend::parse_text(
+      "structural-conformance.vhd",
+      R"(package structural_types is
+  subtype element_t is integer range 0 to 15;
+  constant lane_count : integer := 2;
+end package structural_types;
+
+context structural_context is
+  library work;
+  use work.structural_types.all;
+end context structural_context;
+
+context work.structural_context;
+entity structural_leaf is
+  generic (offset : element_t := 1);
+  port (
+    value : in integer;
+    observed : out integer);
+end entity structural_leaf;
+
+context work.structural_context;
+architecture rtl of structural_leaf is
+begin
+  observed <= value + offset;
+end architecture rtl;
+
+context work.structural_context;
+entity structural_top is
+  generic (lanes : integer := lane_count);
+end entity structural_top;
+
+context work.structural_context;
+architecture structure of structural_top is
+  component structural_leaf is
+    generic (offset : element_t := 1);
+    port (
+      value : in integer;
+      observed : out integer);
+  end component structural_leaf;
+  for all : structural_leaf
+    use entity work.structural_leaf(rtl);
+begin
+  generated: for lane in 0 to lanes - 1 generate
+    signal observed : integer;
+  begin
+    child: structural_leaf
+      generic map (offset => lane + 1)
+      port map (value => lane, observed => observed);
+  end generate generated;
+end architecture structure;
+
+configuration structural_selected of structural_top is
+  for structure
+    for generated(0)
+      for all : structural_leaf
+        use entity work.structural_leaf(rtl);
+      end for;
+    end for;
+  end for;
+end configuration structural_selected;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(parsed.ok());
+  assert(parsed.design.units.size() == 7);
+  assert(parsed.design.find(
+      fsim::frontend::UnitKind::VhdlPackage,
+      "structural_types"));
+  assert(parsed.design.find(
+      fsim::frontend::UnitKind::VhdlContext,
+      "structural_context"));
+  assert(parsed.design.find(
+      fsim::frontend::UnitKind::VhdlConfiguration,
+      "structural_selected"));
+
+  const auto elaborated = fsim::elaboration::elaborate(
+      parsed.design, "vhdl:work.structural_top(structure)");
+  assert(elaborated.ok());
+  assert(elaborated.design->find_signal(
+      "structural_top.generated[0].observed"));
+  assert(elaborated.design->find_signal(
+      "structural_top.generated[1].observed"));
+}
 
 }  // namespace
 
@@ -151,6 +247,7 @@ int main() {
       architecture_declaration,
       configuration_declaration,
   };
+  // FSIM-CONFORMANCE CF-VHDL-ORDER-P01 source=SRC-IEEE-P1076 expectation=accept
   const auto accepted = check(directory.path, "valid", valid);
   assert(accepted.accepted);
   assert(accepted.codes.empty());
@@ -158,32 +255,38 @@ int main() {
       "liba:values", "liba:values", "libb:shared",
       "libb:leaf", "libb:rtl", "libb:leaf_configuration"}));
 
+  // FSIM-CONFORMANCE CF-VHDL-ORDER-N01 source=SRC-IEEE-P1076 expectation=FSIM-FE-VHORDER-001
   expect_code(
       directory.path,
       "architecture-before-entity",
       {architecture_declaration, entity_declaration},
       "FSIM-FE-VHORDER-001");
+  // FSIM-CONFORMANCE CF-VHDL-ORDER-N02 source=SRC-IEEE-P1076 expectation=FSIM-FE-VHORDER-002
   expect_code(
       directory.path,
       "body-before-package",
       {package_body, package_declaration},
       "FSIM-FE-VHORDER-002");
+  // FSIM-CONFORMANCE CF-VHDL-ORDER-N03 source=SRC-IEEE-P1076 expectation=FSIM-FE-VHORDER-003
   expect_code(
       directory.path,
       "reference-before-context",
       {entity_declaration, context_declaration, package_declaration},
       "FSIM-FE-VHORDER-003");
+  // FSIM-CONFORMANCE CF-VHDL-ORDER-N04 source=SRC-UVVM expectation=FSIM-FE-VHORDER-004
   expect_code(
       directory.path,
       "use-before-package",
       {context_declaration, package_declaration},
       "FSIM-FE-VHORDER-004");
+  // FSIM-CONFORMANCE CF-VHDL-ORDER-N05 source=SRC-IEEE-P1076 expectation=FSIM-FE-VHORDER-005
   expect_code(
       directory.path,
       "configuration-before-entity",
       {configuration_declaration, entity_declaration,
        architecture_declaration},
       "FSIM-FE-VHORDER-005");
+  // FSIM-CONFORMANCE CF-VHDL-ORDER-N06 source=SRC-IEEE-P1076 expectation=FSIM-FE-VHORDER-006
   expect_code(
       directory.path,
       "configuration-before-architecture",
@@ -203,6 +306,7 @@ architecture rtl of host is
 begin
 end architecture;
 )"};
+  // FSIM-CONFORMANCE CF-VHDL-ORDER-N07 source=SRC-UVVM expectation=FSIM-FE-VHORDER-007
   expect_code(
       directory.path,
       "binding-before-entity",
@@ -221,6 +325,7 @@ architecture rtl of host is
 begin
 end architecture;
 )"};
+  // FSIM-CONFORMANCE CF-VHDL-ORDER-N08 source=SRC-UVVM expectation=FSIM-FE-VHORDER-008
   expect_code(
       directory.path,
       "binding-before-configuration",
@@ -245,6 +350,8 @@ end architecture;
        entity_declaration, architecture_declaration,
        context_declaration, package_declaration},
       "FSIM-FE-VHORDER-008");
+
+  test_structural_conformance();
 
   return 0;
 }

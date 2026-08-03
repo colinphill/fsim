@@ -9472,48 +9472,268 @@ codes, all 419 authored sources pass the 2,000-line gate, and `git diff
 --check` is clean. This is the single accumulated Batch 127 commit/push
 checkpoint; no CI inspection is due at this non-boundary batch.
 
-### One-hundred-twenty-eighth feature batch — License-reviewed conformance differentials — In progress
+### One-hundred-twenty-eighth feature batch — License-reviewed conformance differentials — Complete
 
 The current ten implementation tasks are:
 
-1. **In progress.** Inventory the checked-in language, runtime, API, debugger,
+1. **Complete.** Inventory the checked-in language, runtime, API, debugger,
    and tool tests against public Apache-2.0-compatible conformance sources;
    record license, provenance, bounded expectation, and uncovered semantic
    families without importing incompatible test text.
-2. **Pending.** Add license-reviewed Verilog/SystemVerilog preprocessing,
+2. **Complete.** Add license-reviewed Verilog/SystemVerilog preprocessing,
    declaration, type, parameter, package/interface, and generate conformance
    cases with exact positive and negative frontend/elaboration evidence.
-3. **Pending.** Add license-reviewed Verilog/SystemVerilog expression,
+3. **Complete.** Add license-reviewed Verilog/SystemVerilog expression,
    statement, process, callable, timing, assertion, file/string/container, and
    memory conformance cases with direct runtime evidence.
-4. **Pending.** Add license-reviewed VHDL library/unit, context, declaration,
+4. **Complete.** Add license-reviewed VHDL library/unit, context, declaration,
    type, generic, component, configuration, generate, and analysis-order
    conformance cases.
-5. **Pending.** Add license-reviewed VHDL expression, aggregate, callable,
+5. **Complete.** Add license-reviewed VHDL expression, aggregate, callable,
    sequential/concurrent, wait/report, file, access/protected/physical,
    transaction, and reviewed-package conformance cases.
-6. **Pending.** Add bidirectional mixed-language construction, conversion,
+6. **Complete.** Add bidirectional mixed-language construction, conversion,
    ownership, resolution, timing, hierarchy, and failure conformance cases.
-7. **Pending.** Add SystemC facade, ABI, hierarchy, datatype, process/event/
+7. **Complete.** Add SystemC facade, ABI, hierarchy, datatype, process/event/
    channel, lifecycle/thread, plug-in/compiler/cache, and unsupported-subset
    conformance cases.
-8. **Pending.** Add common scheduler/SimIR/LLVM/cache, C API, debugger, VCD,
+8. **Complete.** Add common scheduler/SimIR/LLVM/cache, C API, debugger, VCD,
    project/CLI, Tcl, diagnostics, source/provenance, and failure-containment
    conformance cases.
-9. **Pending.** Prove the complete conformance corpus through interpreter, LLVM
+9. **Complete.** Prove the complete conformance corpus through interpreter, LLVM
    O0/O2, cold/warm/edit cache, debugger, callbacks, normalized VCD, source
    mapping, and portable-path differentials with an exact coverage gate.
-10. **Pending.** Update license inventories, matrix/architecture/diagnostics/
+10. **Complete.** Update license inventories, matrix/architecture/diagnostics/
     docs, pass sanitizer, source/catalog and full Debug/Release gates, then
     create and push the single Batch 128 checkpoint. This is not a mandatory
     CI-inspection boundary.
 
+Batch status is **complete**. This exact ten-task list remains the retained
+Batch 128 record in both the official plan and resume handoff. Tasks 1 through
+9 used one accumulated dirty worktree with focused eight-worker Debug builds
+and tests; Task 10 owned the sanitizer, full regressions, documentation,
+commit, and push gate. GitHub builds use parallelism four, and Batch 128 did
+not require a non-documentation CI inspection.
+
+Task 1 is focused-complete. The new
+[`docs/v1-conformance-audit.md`](v1-conformance-audit.md) records 184 tracked
+test-tree files, including 179 Apache-2.0-authored C/C++/CMake test and control
+files, 84 named Debug CTests, all 1,080 executable release-matrix rows, and the
+sole reviewed third-party IEEE 1076-2019 package tree. It pins ten original or
+permissively licensed public-source identities, explicitly excludes six
+copyleft, ambiguous, proprietary, or unlicensed source classes from direct
+test-text import, and routes eight exact semantic/provenance queues to Tasks 2
+through 9. No upstream test text was imported. The new
+`fsim.v1-conformance-audit` gate requires every authored test/control file to
+retain an Apache-2.0 SPDX notice, protects every reviewed/excluded source and
+queue ID plus pinned commit identity, and rejects any unreviewed third-party
+root. The exact eight-worker Debug tree reconfigured and required no
+compilation; the conformance, legality, IEEE-package, source, catalog, and
+scoped-locals focus passed 6/6 in 0.83 seconds, with scoped locals in 0.83.
+Task 2 is current; no sanitizer, Release, full regression, commit, push, or CI
+inspection is due at this task boundary.
+
+Task 2 is focused-complete. Two independently authored suites add 17 stable
+`CF-SV-*` expectation markers cross-referenced to the pinned permissive
+sv-tests, Surelog, and slang sources without copying upstream test text. The
+frontend pairs cover defaulted/token-pasted macros, `macromodule`, escaped
+keyword identifiers, typed package enums and aliases, value/type parameters,
+parameterized interfaces/modports, static generate HIR, macro arity, reserved
+names, and matching module/interface closing labels. The elaboration pairs
+prove parameterized macro-module instances, package/interface binding, exact
+generated paths and widths, plus nonstatic-generate, required-type-parameter,
+ambiguous-package-type, and wrong-interface-type diagnostics. This exposed and
+fixed two real gaps: `macromodule` now enters the ordinary module semantic
+path, and mismatched module/interface end names fail with cataloged
+`FSIM-SV-SEM-129`. The complete Debug tree rebuilt with eight workers. The
+frontend, elaboration, SystemVerilog HIR, parameter, type-parameter,
+interface, preprocessor/generate, aggregate, conformance/legality,
+catalog/source, and scoped-locals focus passed 13/13 in 2.29 seconds; scoped
+locals took 0.91 seconds. Task 3 is current; no sanitizer, Release, full
+regression, commit, push, or CI inspection is due at this task boundary.
+
+Task 3 is focused-complete. The independently authored merged SystemVerilog
+runtime application adds 11 stable `CF-SV-*` expectation markers
+cross-referenced to the pinned permissive sv-tests, Surelog, and slang sources
+without copying upstream test text. One compact vertical slice proves
+short-circuit and wildcard expressions, loop control, automatic function/task
+copy and suspension behavior, named-event and nonblocking timing, immediate
+assertions, mutable string formatting, exact text-file I/O, read/write memory,
+and dynamic/queue/associative container execution. It compares interpreter
+with LLVM O0/O2 cold and warm runs through exact terminal time, signal values,
+output bytes, memory bytes, specialization identity, compilation counts, and
+cache telemetry. The complete Debug tree rebuilt with eight workers. The
+frontend/elaboration, audit, catalog/source, runtime, expressions, event/fork,
+assertion, time, callable, string, file, container, scoped-local, and new
+conformance focus passed 20/20 in 155.07 seconds; the new case took 4.10
+seconds, the heavyweight container regression 124.33 seconds, and scoped
+locals 0.86 seconds. Task 4 is current; no sanitizer, Release, full regression,
+commit, push, or CI inspection is due at this task boundary.
+
+Task 4 is focused-complete. The compact VHDL structural and analysis-order
+application now carries 17 stable `CF-VHDL-*` expectation markers
+cross-referenced to the pinned Apache-2.0 IEEE package source and UVVM without
+copying upstream test text. It proves package, context, declaration, subtype,
+generic, component, configuration, and generate acceptance plus generated
+component elaboration, deterministic valid source-unit order, and all eight
+exact package-body, context/use, architecture/configuration, entity binding,
+configuration binding, and direct-configuration order failures. The complete
+Debug tree required no additional compilation after the eight-worker focused
+target build. Frontend/elaboration, audit, catalog/source, scoped locals, type
+and package generics, overloads, generic subprograms, configurations, analysis
+order, and components passed 14/14 in 5.43 seconds; the updated case took 0.02
+seconds and scoped locals 0.86 seconds. Task 5 is current; no sanitizer,
+Release, full regression, commit, push, or CI inspection is due at this task
+boundary.
+
+Task 5 is focused-complete. Sixteen stable `CF-VHDL-*` expectation markers now
+cross-reference the pinned Apache-2.0 IEEE package source or UVVM across the
+existing compact merged runtime applications, without importing upstream test
+text. The mapped cases cover expression and aggregate typing, sequential and
+concurrent execution, suspending callables and waits, reports/assertions,
+direct files and TextIO, access ownership, protected state, physical values,
+projected transactions, and the complete reviewed IEEE package integration;
+the report and TextIO mappings include exact runtime-failure expectations.
+Their retained gates already compare interpreter with LLVM O0/O2 cold/warm or
+edit runs through exact values, time, report metadata, file bytes, VCD,
+debugger state, specialization/cache identity, and failure policy. The complete
+Debug tree rebuilt all seven touched application sources with eight workers.
+The audit/catalog/source, scoped-local, report, file/TextIO, procedure/wait,
+IEEE integration, record aggregate, advanced type, and projected-transaction
+focus passed 12/12 in 4.29 seconds; scoped locals took 0.87 seconds. Task 6 is
+current; no sanitizer, Release, full regression, commit, push, or CI inspection
+is due at this task boundary.
+
+Task 6 is focused-complete. Nine stable `CF-MIX-*` expectation markers map
+fsim's original Apache-2.0 mixed-language contract to `SRC-FSIM`; no external
+suite is treated as owning that binding behavior. The retained cases prove
+SystemVerilog-to-VHDL and VHDL-to-SystemVerilog construction actuals,
+generated hierarchy paths, the full width/signedness/Boolean/integer/two- and
+four-state conversion matrix, resolved driver ownership, zero/inertial/
+transport/reject/transition/region/postponed boundary timing, canonical source
+and DesignIR identity, and exact missing-boundary failure diagnostics. They
+retain interpreter/LLVM O0/O2/debug, VCD, callback, cold/warm, and edit
+differentials. The complete Debug tree rebuilt the four touched mixed suites
+with eight workers. The audit/catalog/source/mixed-matrix, full application,
+scoped-local, resolution, conversion, and typed-boundary focus passed 10/10 in
+15.65 seconds; scoped locals took 0.81 seconds. Task 7 is current; no sanitizer,
+Release, full regression, commit, push, or CI inspection is due at this task
+boundary.
+
+Task 7 is focused-complete. Sixteen stable `CF-SC-*` expectation markers
+cross-reference fsim's independently authored facade, strict-C ABI, plug-in,
+compiler/cache, and application scheduling cases to the pinned Apache-2.0
+SystemC source without importing upstream test text. They cover module/process
+facade construction, named hierarchy, datatypes, primitive channels, signals,
+method/thread/event/update scheduling, lifecycle, append-only ABI layout,
+transactional plug-in registration, dependency-aware compiler caching, and
+exact unsupported/failure containment. The retained dual SystemVerilog/VHDL
+host matrix proves interpreter/LLVM O0/O2, debugger/VCD, callback ordering,
+cold/warm cache, and portable plug-in behavior. The complete Debug tree rebuilt
+all five touched compilation units with eight workers. Audit/catalog/source,
+facade, strict-C ABI, loader, compiler, plug-in matrix, application matrix,
+datatypes, and scoped locals passed 12/12 in 52.46 seconds; the application
+matrix took 45.49 seconds and scoped locals 0.85 seconds. Task 8 is current; no
+sanitizer, Release, full regression, commit, push, or CI inspection is due at
+this task boundary.
+
+Task 8 is focused-complete. Nineteen stable `CF-COMMON-*` expectation markers
+cross-reference fsim's independently authored common runtime and tool contract
+to the pinned cocotb, LLVM, and Tcl behavioral references or to `SRC-FSIM`
+where the API is fsim-specific, without importing upstream test text. They
+cover scheduler/SimIR ordering and containment, VCD, LLVM O0/O2 validation and
+cache rejection, strict C/public API layout, callback and handle lifecycle,
+debugger/CLI/trace behavior, logical source provenance, project diagnostics,
+and Tcl success/failure semantics. The retained tests exercise exact values,
+phases, source points, callback order, stale/reentrant handles, cold/warm cache,
+debugger transcripts, trace bytes, and contained failures. The complete Debug
+tree rebuilt eight touched compilation units with eight workers. Project,
+audit/catalog/source, Tcl selection/application, LLVM, full application,
+scoped locals, line directives, C/C++ API, and runtime passed 14/14 in 16.11
+seconds; scoped locals took 0.94 seconds. Task 9 is current; no sanitizer,
+Release, full regression, commit, push, or CI inspection is due at this task
+boundary.
+
+Task 9 is focused-complete. The new exact
+[`tests/feature_matrix/v1_conformance_corpus.txt`](../tests/feature_matrix/v1_conformance_corpus.txt)
+maps 105 unique adjacent expectation markers in 28 fixtures to 27 registered
+CTest owners and their exact evidence modes. The new
+`fsim.v1-conformance-corpus` gate derives the ID/source/expectation/file set
+from source, pins its sorted SHA-256 as
+`49f5754862e3785fa964621b770f202d1d1ad5fb21bd4144b016b7ceb47dd5dd`,
+and rejects malformed/duplicate IDs, unsupported provenance, missing fixture
+or CTest ownership, invalid expectation-specific modes, missing source-map or
+portable-path evidence, count/digest drift, and any absent required frontend,
+elaboration, interpreter, LLVM O0/O2, cold/warm/edit cache, debugger, callback,
+normalized-VCD, ABI/API, plug-in/compiler, Tcl/CLI, lifecycle, project, or
+compile mode. The complete Debug tree reconfigured with eight workers and
+required no compilation. Every mapped owner plus the audit/catalog/source,
+legality, corpus, and scoped-local gates passed 33/33 in 75.06 seconds; the
+SystemC application matrix took 45.39 seconds, the corpus gate 0.07, and scoped
+locals 0.82 seconds. Task 10 is current and now owns sanitizer, full Debug and
+Release regressions, final documentation/license validation, commit, and push;
+no CI inspection is due for Batch 128.
+
+Task 10 is complete. The Apache-2.0 conformance audit, corpus manifest,
+architecture, diagnostics, README, and release records now describe one
+independently authored and provenance-pinned v1 differential suite. The final
+gates catalog all 1,624 production diagnostics, keep all 422 authored sources
+within the 2,000-line limit, close all 1,080 required release rows, and protect
+105 exact conformance expectations in 28 fixtures owned by 27 CTests with
+digest `49f5754862e3785fa964621b770f202d1d1ad5fb21bd4144b016b7ceb47dd5dd`.
+The LLVM-disabled ASan/UBSan regression passed all 84 tests in 603.91 seconds
+with leak detection disabled only for the managed ptrace restriction. Exact
+LLVM 22.1.8 warnings-as-errors Debug passed 87/87 in 262.92 seconds, including
+scoped locals in 0.88 seconds; Release passed 87/87 in 217.47 seconds,
+including SystemC matrix in 42.31 seconds, containers in 97.84 seconds, the
+new conformance application in 4.29 seconds, and scoped locals in 0.82
+seconds. All ten Batch 128 tasks are complete. Batch 128 is not a mandatory CI
+inspection boundary, so no GitHub Actions run was inspected.
+
+### One-hundred-twenty-ninth feature batch — Linux and Windows language portability — In progress
+
+The current ten implementation tasks are:
+
+1. **In progress.** Audit the complete v1 implementation and test corpus for
+   compiler, standard-library, ABI, endianness, path, newline, process,
+   filesystem, timing, stack, and resource assumptions; create an exact
+   Linux/Windows Debug/Release portability inventory and repair queue.
+2. **Pending.** Close GCC and Clang Debug/Release warning, diagnostic,
+   sanitizer, optimization, and language-behavior differences across the
+   frontend, elaborator, interpreter, runtime, API, tools, and tests.
+3. **Pending.** Close MSVC Debug frontend/elaboration portability, including
+   recursive-frame size, exception behavior, source encoding, filesystem/path,
+   newline, temporary-file, and deterministic diagnostic differences.
+4. **Pending.** Close MSVC Release optimization and runtime portability,
+   including lifetime, initialization, aliasing, integer conversion, iterator,
+   concurrency, and deterministic scheduling behavior.
+5. **Pending.** Close Windows LLVM O0/O2 JIT and debugger portability,
+   including object format, symbols, calling convention, stack/unwind,
+   dynamic-library, cache, and source-map behavior.
+6. **Pending.** Close SystemC facade, strict-C ABI, plug-in/compiler/cache,
+   thread, lifecycle, dependency discovery, command-line, and dynamic-library
+   portability on Linux and Windows.
+7. **Pending.** Close C/C++ API, CLI, Tcl, debugger, VCD, file/memory I/O,
+   Unicode/path, environment, callback, failure-containment, and exit-status
+   portability on Linux and Windows.
+8. **Pending.** Harden build/test infrastructure for bounded four-worker CI,
+   eight-worker local builds, executable stack/heap/link limits, test timeouts,
+   deterministic fixtures, and actionable phase-level failure evidence.
+9. **Pending.** Prove the complete portability corpus with exact Debug/Release,
+   interpreter/LLVM O0/O2, cold/warm/edit, API/ABI, plug-in, debugger/VCD, and
+   normalized path/newline differentials in the checked-in test matrix.
+10. **Pending.** Update matrix/diagnostics/architecture/portability/release
+    docs, pass sanitizer, source/catalog and full local Debug/Release gates,
+    then create and push the single Batch 129 checkpoint. Hosted Linux/Windows
+    release-candidate evidence remains assigned to the mandatory Batch 130 CI
+    boundary.
+
 Batch status is **in progress** with Task 1 current. Keep this exact ten-task
 list current in both the official plan and resume handoff. Tasks 1 through 9
-use one accumulated dirty worktree with focused eight-worker Debug builds and
+use one accumulated dirty worktree with focused eight-worker local builds and
 tests; Task 10 owns the sanitizer, full regressions, documentation, commit, and
-push gate. GitHub builds use parallelism four, and Batch 128 does not require a
-non-documentation CI inspection.
+push gate. GitHub builds use parallelism four. Batch 129 is not a mandatory
+non-documentation CI-inspection boundary.
 
 ## Forward language-closure feature batches
 

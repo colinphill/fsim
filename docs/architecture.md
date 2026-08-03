@@ -18,6 +18,29 @@ The architectural invariants are:
 - the SimIR interpreter is the semantic reference for differential tests; and
 - source spans and stable identifiers survive every lowering stage.
 
+## Conformance evidence and provenance
+
+The v1 conformance corpus is original fsim test code with explicit behavioral
+cross-references; permissively licensed public suites are references, not
+implicit source imports. Reviewed source identities, pinned commits, license
+decisions, excluded source classes, and the no-import boundary are recorded in
+[`v1-conformance-audit.md`](v1-conformance-audit.md). Exact upstream bytes may
+enter the repository only through a separately reviewed third-party inventory;
+the IEEE-P1076 package snapshot remains the sole such tree.
+
+Each independently authored expectation has a unique adjacent
+`FSIM-CONFORMANCE` marker naming its reviewed source ID and bounded expected
+outcome. The machine-readable
+[`v1_conformance_corpus.txt`](../tests/feature_matrix/v1_conformance_corpus.txt)
+maps every marker-bearing fixture to one registered CTest and its evidence
+modes. `fsim.v1-conformance-corpus` derives the exact marker set from source,
+checks its pinned digest, provenance and ownership, then requires the complete
+frontend/elaboration, interpreter/LLVM O0/O2, cache, debugger, callback,
+normalized-VCD, source-map, portable-path, ABI/API, plug-in, and tool evidence
+union. The SimIR interpreter remains the runtime oracle; compiled, debug, cache,
+callback, and trace results are differentials against that reference rather
+than independent semantic definitions.
+
 ## Compilation pipeline
 
 | Stage | Responsibility | Vertical-slice status |

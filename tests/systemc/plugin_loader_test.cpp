@@ -125,6 +125,8 @@ enum LifecycleEvent : std::uint32_t {
 } // namespace
 
 int main(int argc, char** argv) {
+    // FSIM-CONFORMANCE CF-SC-PLUGIN-001 source=SRC-SYSTEMC expectation=execute
+    // FSIM-CONFORMANCE CF-SC-LIFECYCLE-001 source=SRC-SYSTEMC expectation=execute
     assert(argc == 5);
     const auto plugin_path = std::filesystem::path{argv[1]};
     const auto throwing_plugin_path = std::filesystem::path{argv[2]};
@@ -217,6 +219,7 @@ int main(int argc, char** argv) {
     };
     reset_lifecycle();
 
+    // FSIM-CONFORMANCE CF-SC-FAIL-N01 source=SRC-SYSTEMC expectation=reject
     // A plug-in cannot hide a rejected callback by returning success. The
     // buffered transaction rejects the entire set before any caller registrar
     // callback is replayed, and hierarchy staging remains externally empty.

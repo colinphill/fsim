@@ -191,6 +191,8 @@ int main() {
   std::filesystem::create_directories(directory.path);
   const auto source = directory.path / "procedure_waits.vhd";
   {
+    // FSIM-CONFORMANCE CF-VHDL-CALLABLE-001 source=SRC-UVVM expectation=execute
+    // FSIM-CONFORMANCE CF-VHDL-WAIT-001 source=SRC-IEEE-P1076 expectation=execute
     std::ofstream output(source);
     output << R"(
 entity wait_child is

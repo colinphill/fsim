@@ -262,6 +262,8 @@ delay_mode = "slow"
 }  // namespace
 
 int main() {
+  // FSIM-CONFORMANCE CF-COMMON-PROJECT-001 source=SRC-FSIM expectation=accept
+  // FSIM-CONFORMANCE CF-COMMON-DIAGNOSTIC-N01 source=SRC-FSIM expectation=reject
   test_complete_manifest_and_glob_order();
   test_schema_and_unknown_key_errors();
   test_json_diagnostics_are_escaped();
