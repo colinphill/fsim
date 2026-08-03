@@ -8,6 +8,11 @@ source locations, messages, and notes provide the instance-specific detail.
 Code spellings are the stable, machine-readable part of the current
 diagnostic interface; message wording may evolve.
 
+Source and manifest paths carried by text or JSON diagnostics are normalized
+UTF-8 generic paths on Linux and Windows. A leading UTF-8 BOM is transport
+metadata rather than a token; CRLF and CR line endings retain the same logical
+line accounting as LF while physical byte offsets remain source-accurate.
+
 The severity column is the severity assigned by the current emitter. All
 entries are errors unless explicitly marked as warnings. The three strings
 `FSIM-OBJECT-CACHE-V1`, `FSIM-CACHE-LOCK-V1`, and

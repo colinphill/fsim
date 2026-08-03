@@ -5,6 +5,7 @@ namespace fsim::tests::frontend {
 
 void test_systemverilog_preprocessor();
 void test_systemverilog_public_conformance_frontend();
+void test_msvc_debug_frontend_portability();
 void test_systemverilog_line_directive();
 void test_vhdl_vertical_slice();
 void test_vhdl_falling_edge_guard();

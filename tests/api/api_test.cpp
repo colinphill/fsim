@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/api.h"
+#include "fsim/support/path.hpp"
 
 #include <algorithm>
 #include <array>
@@ -214,7 +215,8 @@ int main() {
   const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
   const auto directory =
       std::filesystem::temp_directory_path()
-      / ("fsim-api-test-" + std::to_string(suffix));
+      / fsim::support::path_from_utf8(
+          "fsim-api-test-\xC3\xA9-" + std::to_string(suffix));
   std::filesystem::create_directories(directory);
   {
     std::ofstream source(directory / "tb.sv");
@@ -532,7 +534,7 @@ max_deltas = 1000
       fsim_session_create(&options, &legacy_callback_session)
       == FSIM_STATUS_OK);
   CallbackCounts legacy_counts;
-  legacy_counts.manifest = manifest_path.string();
+  legacy_counts.manifest = fsim::support::path_to_utf8(manifest_path);
   fsim_callbacks_t legacy_callbacks{};
   legacy_callbacks.struct_size = FSIM_CALLBACKS_V1_SIZE;
   legacy_callbacks.api_version = FSIM_API_VERSION;
@@ -546,7 +548,7 @@ max_deltas = 1000
   assert(
       fsim_session_load_project(
           legacy_callback_session,
-          manifest_path.string().c_str())
+          fsim::support::path_to_utf8(manifest_path).c_str())
       == FSIM_STATUS_OK);
   assert(fsim_session_check(legacy_callback_session) == FSIM_STATUS_OK);
   assert(fsim_session_build(legacy_callback_session) == FSIM_STATUS_OK);
@@ -564,7 +566,7 @@ max_deltas = 1000
   assert(session != FSIM_INVALID_SESSION);
 
   CallbackCounts counts;
-  counts.manifest = manifest_path.string();
+  counts.manifest = fsim::support::path_to_utf8(manifest_path);
   fsim_callbacks_t callbacks{};
   callbacks.struct_size = sizeof(callbacks);
   callbacks.api_version = FSIM_API_VERSION;
@@ -583,12 +585,14 @@ max_deltas = 1000
       fsim_session_set_callbacks(session, &prefix_callbacks)
       == FSIM_STATUS_OK);
   assert(
-      fsim_session_load_project(session, manifest_path.string().c_str())
+      fsim_session_load_project(
+          session, fsim::support::path_to_utf8(manifest_path).c_str())
       == FSIM_STATUS_OK);
   assert(counts.lifecycle == 0);
   assert(fsim_session_set_callbacks(session, &callbacks) == FSIM_STATUS_OK);
   assert(
-      fsim_session_load_project(session, manifest_path.string().c_str())
+      fsim_session_load_project(
+          session, fsim::support::path_to_utf8(manifest_path).c_str())
       == FSIM_STATUS_OK);
   assert(fsim_session_check(session) == FSIM_STATUS_OK);
   assert(fsim_session_build(session) == FSIM_STATUS_OK);
@@ -1616,10 +1620,11 @@ max_deltas = 1000
       == FSIM_STATUS_OK);
   assert(std::string(value) == "1");
 
-  counts.manifest = assertion_manifest_path.string();
+  counts.manifest = fsim::support::path_to_utf8(assertion_manifest_path);
   assert(
       fsim_session_load_project(
-          session, assertion_manifest_path.string().c_str())
+          session,
+          fsim::support::path_to_utf8(assertion_manifest_path).c_str())
       == FSIM_STATUS_OK);
   assert(fsim_session_check(session) == FSIM_STATUS_OK);
   assert(fsim_session_build(session) == FSIM_STATUS_OK);
@@ -1633,7 +1638,9 @@ max_deltas = 1000
   assert(
       counts.assertion_message.find("api mismatch")
       != std::string::npos);
-  assert(counts.assertion_path == (directory / "assertion.vhd").string());
+  assert(
+      counts.assertion_path
+      == fsim::support::path_to_utf8(directory / "assertion.vhd"));
   assert(counts.assertion_line == 10);
   assert(counts.assertion_column == 5);
   assert(counts.assertion_safe_points > 0);
@@ -1672,7 +1679,7 @@ max_deltas = 1000
   assert(
       fsim_session_load_project(
           logic9_session,
-          logic9_manifest_path.string().c_str())
+          fsim::support::path_to_utf8(logic9_manifest_path).c_str())
       == FSIM_STATUS_OK);
   assert(fsim_session_check(logic9_session) == FSIM_STATUS_OK);
   assert(fsim_session_build(logic9_session) == FSIM_STATUS_OK);
@@ -1740,7 +1747,8 @@ max_deltas = 1000
       == FSIM_STATUS_OK);
 
   CallbackCounts severity_counts;
-  severity_counts.manifest = severity_manifest_path.string();
+  severity_counts.manifest =
+      fsim::support::path_to_utf8(severity_manifest_path);
   fsim_session_options_t severity_options{};
   severity_options.struct_size = sizeof(severity_options);
   severity_options.api_version = FSIM_API_VERSION;
@@ -1759,7 +1767,7 @@ max_deltas = 1000
   assert(
       fsim_session_load_project(
           severity_session,
-          severity_manifest_path.string().c_str())
+          fsim::support::path_to_utf8(severity_manifest_path).c_str())
       == FSIM_STATUS_OK);
   assert(
       fsim_session_check(severity_session)
@@ -1816,7 +1824,7 @@ max_deltas = 1000
         assert(
             fsim_session_load_project(
                 random_session,
-                random_manifest_path.string().c_str())
+                fsim::support::path_to_utf8(random_manifest_path).c_str())
             == FSIM_STATUS_OK);
         assert(
             fsim_session_check(random_session)
@@ -1861,7 +1869,7 @@ max_deltas = 1000
   assert(
       fsim_session_load_project(
           systemc_session,
-          systemc_manifest_path.string().c_str())
+          fsim::support::path_to_utf8(systemc_manifest_path).c_str())
       == FSIM_STATUS_OK);
   assert(fsim_session_check(systemc_session) == FSIM_STATUS_OK);
   assert(fsim_session_build(systemc_session) == FSIM_STATUS_OK);

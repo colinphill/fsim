@@ -270,26 +270,26 @@ endmodule
   std::size_t waits = 0;
   for (const auto& process :
        elaborated_suspending.design->processes()) {
-    calls += std::ranges::count_if(
+    calls += static_cast<std::size_t>(std::ranges::count_if(
         process.operations,
         [](const auto& operation) {
           return fsim::runtime::simir::operation_holds<
               fsim::runtime::simir::Call>(operation);
-        });
-    returns += std::ranges::count_if(
+        }));
+    returns += static_cast<std::size_t>(std::ranges::count_if(
         process.operations,
         [](const auto& operation) {
           return fsim::runtime::simir::operation_holds<
               fsim::runtime::simir::Return>(operation);
-        });
-    waits += std::ranges::count_if(
+        }));
+    waits += static_cast<std::size_t>(std::ranges::count_if(
         process.operations,
         [](const auto& operation) {
           return fsim::runtime::simir::operation_holds<
                      fsim::runtime::simir::WaitFor>(operation)
               || fsim::runtime::simir::operation_holds<
                      fsim::runtime::simir::WaitOn>(operation);
-        });
+        }));
   }
   assert(calls >= 2 && returns >= 2 && waits >= 5);
   auto suspending_interpreter =

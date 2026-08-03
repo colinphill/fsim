@@ -695,7 +695,7 @@ public:
     }
 
     [[nodiscard]] constexpr bool xor_reduce() const noexcept {
-        return std::popcount(value_) % 2U != 0;
+        return std::popcount(value_) % 2 != 0;
     }
 
     [[nodiscard]] friend constexpr sc_uint operator+(
@@ -1206,7 +1206,7 @@ public:
     }
 
     [[nodiscard]] constexpr bool xor_reduce() const noexcept {
-        return std::popcount(bits_) % 2U != 0;
+        return std::popcount(bits_) % 2 != 0;
     }
 
     [[nodiscard]] friend constexpr sc_int operator+(
@@ -1504,4 +1504,3 @@ private:
 };
 
 } // namespace sc_dt
-

@@ -2,6 +2,7 @@
 #include "simir_internal.hpp"
 #include "fsim/runtime/file_binary.hpp"
 #include "fsim/runtime/file_scanning.hpp"
+#include "fsim/support/path.hpp"
 
 #include <algorithm>
 #include <system_error>
@@ -9,17 +10,6 @@
 namespace fsim::runtime::simir {
 
 namespace {
-
-[[nodiscard]] std::filesystem::path utf8_path(
-    const std::string_view value) {
-  std::u8string encoded;
-  encoded.reserve(value.size());
-  for (const auto byte : value) {
-    encoded.push_back(static_cast<char8_t>(
-        static_cast<unsigned char>(byte)));
-  }
-  return std::filesystem::path{encoded};
-}
 
 [[nodiscard]] bool below_root(
     const std::filesystem::path& root,
@@ -121,7 +111,7 @@ FileHandle Interpreter::Impl::open_file(
   }
   std::filesystem::path relative;
   try {
-    relative = utf8_path(path_text).lexically_normal();
+    relative = fsim::support::path_from_utf8(path_text).lexically_normal();
   } catch (const std::exception&) {
     throw std::runtime_error{
         "SystemVerilog filename is not a valid UTF-8 path"};

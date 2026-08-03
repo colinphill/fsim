@@ -175,11 +175,11 @@ Capture run_once(
 
   const auto& conversions = project->design.boundary_conversions();
   capture.conversion_count = conversions.size();
-  capture.adapter_count = std::ranges::count_if(
+  capture.adapter_count = static_cast<std::size_t>(std::ranges::count_if(
       conversions,
       [](const auto& conversion) {
         return conversion.process.has_value();
-      });
+      }));
   assert(capture.conversion_count == 28);
   assert(capture.adapter_count == 11);
   for (const auto& conversion : conversions) {

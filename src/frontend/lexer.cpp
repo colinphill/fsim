@@ -14,6 +14,7 @@ class Lexer {
       : source_(std::move(source)), language_(language) {}
 
   LexResult run() {
+    skip_utf8_bom();
     while (!at_end()) {
       skip_trivia();
       if (at_end()) {
@@ -28,6 +29,18 @@ class Lexer {
   }
 
  private:
+  void skip_utf8_bom() noexcept {
+    if (source_.text.size() < 3U) {
+      return;
+    }
+    const auto first = static_cast<unsigned char>(source_.text[0]);
+    const auto second = static_cast<unsigned char>(source_.text[1]);
+    const auto third = static_cast<unsigned char>(source_.text[2]);
+    if (first == 0xefU && second == 0xbbU && third == 0xbfU) {
+      index_ = 3U;
+    }
+  }
+
   [[nodiscard]] bool is_vhdl() const noexcept {
     return language_ == Language::Vhdl2008;
   }

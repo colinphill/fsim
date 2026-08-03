@@ -1,0 +1,105 @@
+# SPDX-License-Identifier: Apache-2.0
+
+if(NOT DEFINED FSIM_SOURCE_DIR)
+  message(FATAL_ERROR "FSIM_SOURCE_DIR is required")
+endif()
+
+set(FSIM_ROOT_CMAKE "${FSIM_SOURCE_DIR}/CMakeLists.txt")
+set(FSIM_TEST_CMAKE "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
+set(FSIM_WORKFLOW "${FSIM_SOURCE_DIR}/.github/workflows/ci.yml")
+set(FSIM_FRONTEND "${FSIM_SOURCE_DIR}/tests/frontend/frontend_sv_conformance_tests.cpp")
+set(FSIM_ELABORATION "${FSIM_SOURCE_DIR}/tests/elaboration/elaborator_sv_conformance_test.cpp")
+foreach(FSIM_INPUT IN ITEMS
+    "${FSIM_ROOT_CMAKE}"
+    "${FSIM_TEST_CMAKE}"
+    "${FSIM_WORKFLOW}"
+    "${FSIM_FRONTEND}"
+    "${FSIM_ELABORATION}")
+  if(NOT EXISTS "${FSIM_INPUT}")
+    message(FATAL_ERROR "MSVC Debug contract input is missing: ${FSIM_INPUT}")
+  endif()
+endforeach()
+
+file(READ "${FSIM_ROOT_CMAKE}" FSIM_ROOT_CONTENTS)
+file(READ "${FSIM_TEST_CMAKE}" FSIM_TEST_CONTENTS)
+file(READ "${FSIM_WORKFLOW}" FSIM_WORKFLOW_CONTENTS)
+file(READ "${FSIM_FRONTEND}" FSIM_FRONTEND_CONTENTS)
+file(READ "${FSIM_ELABORATION}" FSIM_ELABORATION_CONTENTS)
+
+foreach(FSIM_ROOT_POLICY IN ITEMS
+    "function(fsim_configure_test_platform target)"
+    "CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL \"MSVC\""
+    "target_link_options(\${target} PRIVATE /STACK:8388608)"
+    "fsim_configure_test_platform(\${target})")
+  string(FIND "${FSIM_ROOT_CONTENTS}" "${FSIM_ROOT_POLICY}" FSIM_POLICY_INDEX)
+  if(FSIM_POLICY_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "root build lost MSVC Debug test policy: ${FSIM_ROOT_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_C_HOST IN ITEMS
+    fsim_jit_runtime_c_tests
+    fsim_systemc_abi_c_tests
+    fsim_api_header_c_test)
+  string(FIND
+    "${FSIM_TEST_CONTENTS}"
+    "fsim_configure_test_platform(${FSIM_C_HOST})"
+    FSIM_C_HOST_INDEX)
+  if(FSIM_C_HOST_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "C test host lacks common MSVC stack policy: ${FSIM_C_HOST}")
+  endif()
+endforeach()
+
+foreach(FSIM_TIMEOUT_POLICY IN ITEMS
+    "fsim.application.scoped_locals"
+    "PROPERTIES TIMEOUT 60"
+    "fsim.application.sv_containers"
+    "PROPERTIES TIMEOUT 1200"
+    "PROPERTIES TIMEOUT 600")
+  string(FIND
+    "${FSIM_TEST_CONTENTS}" "${FSIM_TIMEOUT_POLICY}" FSIM_TIMEOUT_INDEX)
+  if(FSIM_TIMEOUT_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "test inventory lost MSVC timeout policy: ${FSIM_TIMEOUT_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_JOB_POLICY IN ITEMS
+    "windows-msvc:"
+    "preset: ci-windows"
+    "preset: ci-windows-release"
+    "--parallel 4")
+  string(FIND
+    "${FSIM_WORKFLOW_CONTENTS}" "${FSIM_JOB_POLICY}" FSIM_JOB_INDEX)
+  if(FSIM_JOB_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "workflow lost MSVC Debug contract: ${FSIM_JOB_POLICY}")
+  endif()
+endforeach()
+
+foreach(FSIM_SOURCE_POLICY IN ITEMS
+    "UTF-8 BOM is transparent"
+    "BOM and CRLF SystemVerilog input parses identically"
+    "CRLF diagnostics retain exact Windows logical/physical path and line"
+    "BOM and CRLF VHDL input parses identically")
+  string(FIND
+    "${FSIM_FRONTEND_CONTENTS}" "${FSIM_SOURCE_POLICY}" FSIM_SOURCE_INDEX)
+  if(FSIM_SOURCE_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "frontend lost MSVC source policy: ${FSIM_SOURCE_POLICY}")
+  endif()
+endforeach()
+string(FIND
+  "${FSIM_ELABORATION_CONTENTS}"
+  "MSVC Debug source portability"
+  FSIM_ELABORATION_INDEX)
+if(FSIM_ELABORATION_INDEX EQUAL -1)
+  message(FATAL_ERROR "elaboration lost MSVC Debug portability fixture")
+endif()
+
+message(STATUS
+  "MSVC Debug contract: common 8 MiB stack policy covers C/C++ test hosts; "
+  "scoped/container/application timeouts and BOM/CRLF span/elaboration "
+  "fixtures are present")

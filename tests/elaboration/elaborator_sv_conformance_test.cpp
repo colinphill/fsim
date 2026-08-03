@@ -194,4 +194,24 @@ endmodule
               wrong_interface_result, "FSIM-ELAB-SVIFACE-003"));
 }
 
+void test_msvc_debug_elaboration_portability() {
+  const std::string bom{"\xef\xbb\xbf"};
+  const auto parsed = fsim::frontend::parse(
+      fsim::frontend::SourceText{
+          R"(C:\work tree\utf8-source\portable-elaboration.sv)",
+          bom
+              + "module portable_elaboration(output logic [3:0] value);\r\n"
+                "  initial value = 4'h9;\r\n"
+                "endmodule : portable_elaboration\r\n"},
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(parsed.ok());
+  const auto elaborated = fsim::elaboration::elaborate(
+      parsed.design, "sv:work.portable_elaboration");
+  require_elaboration(elaborated, "MSVC Debug source portability");
+  const auto value =
+      elaborated.design->find_signal("portable_elaboration.value");
+  assert(value && elaborated.design->signals().at(*value).width == 4U);
+  assert(elaborated.design->processes().size() == 1U);
+}
+
 }  // namespace fsim::tests::elaboration

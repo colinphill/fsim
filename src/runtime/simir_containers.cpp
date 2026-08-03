@@ -8,6 +8,14 @@ namespace fsim::runtime::simir {
 
 namespace {
 
+template <typename Container>
+[[nodiscard]] auto iterator_at(
+    Container& container,
+    const std::size_t offset) {
+  using Difference = typename Container::difference_type;
+  return container.begin() + static_cast<Difference>(offset);
+}
+
 [[nodiscard]] std::size_t fixed_element_count(
     const ContainerType& type) {
   if (!type.dimensions.empty()) {
@@ -1304,8 +1312,9 @@ void Interpreter::Impl::execute_container(
       : PackedLogic4{target.type.element_width, Logic4::x};
   target.elements.assign(
       size, initial);
-  std::ranges::copy_n(
-      preserved.begin(), std::min(size, preserved.size()),
+  const auto preserved_count = std::min(size, preserved.size());
+  std::ranges::copy(
+      preserved.begin(), iterator_at(preserved, preserved_count),
       target.elements.begin());
   ++process.pc;
 }
@@ -1516,8 +1525,8 @@ void Interpreter::Impl::execute_container(
             process.program.id, process.pc,
             "associative array exceeds the 4096-entry limit");
       }
-      target.keys.insert(target.keys.begin() + at, key);
-      target.elements.insert(target.elements.begin() + at, source);
+      target.keys.insert(iterator_at(target.keys, at), key);
+      target.elements.insert(iterator_at(target.elements, at), source);
     }
     ++process.pc;
     return;
@@ -1572,7 +1581,7 @@ void Interpreter::Impl::execute_container(
             process.program.id, process.pc,
             "queue delete index is out of range");
       }
-      target.elements.erase(target.elements.begin() + at);
+      target.elements.erase(iterator_at(target.elements, at));
     } else {
       require_associative(
           process.program.id, process.pc, target, "delete(index)");
@@ -1582,8 +1591,8 @@ void Interpreter::Impl::execute_container(
       const auto at = lower_key(target, key);
       if (at < target.keys.size()
           && key_equal(target.keys[at], key)) {
-        target.keys.erase(target.keys.begin() + at);
-        target.elements.erase(target.elements.begin() + at);
+        target.keys.erase(iterator_at(target.keys, at));
+        target.elements.erase(iterator_at(target.elements, at));
       }
     }
   } else {
@@ -1766,7 +1775,7 @@ void Interpreter::Impl::execute_container(
           process.program.id, process.pc,
           "queue insert index is out of range");
     }
-    target.elements.insert(target.elements.begin() + at, source);
+    target.elements.insert(iterator_at(target.elements, at), source);
   } else if (operation.front) {
     target.elements.insert(target.elements.begin(), source);
   } else {

@@ -90,11 +90,6 @@ bool struct_contains(
   return offset <= struct_size && field_size <= struct_size - offset;
 }
 
-#define FSIM_STRUCT_CONTAINS(struct_size, type, member) \
-  struct_contains(                                      \
-      (struct_size), offsetof(type, member),            \
-      sizeof(((type*)nullptr)->member))
-
 fsim_status_t with_session(
     const fsim_session_t handle,
     const std::function<fsim_status_t(Session&)>& function) noexcept {

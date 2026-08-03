@@ -10,7 +10,8 @@ namespace {
 
 void print_json_string(std::ostream& output, const std::string_view value) {
   output.put('"');
-  for (const unsigned char character : value) {
+  for (const char raw_character : value) {
+    const auto character = static_cast<unsigned char>(raw_character);
     switch (character) {
       case '"':
         output << "\\\"";

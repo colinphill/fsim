@@ -1475,16 +1475,23 @@ opt-out.
 
 ## Platform boundary
 
-The supported release targets are Linux x86-64 with GCC and Windows x86-64 with
-MSVC. Filesystem, dynamic-library loading, process invocation, Unicode path
-handling, and signal/console interruption stay behind platform-specific
-boundaries. SystemC source compilation passes argument arrays directly to the
-selected GCC-like or MSVC toolchain and never invokes a shell. The current
+The supported release targets are Linux x86-64 with GCC or Clang and Windows
+x86-64 with MSVC or clang-cl. Filesystem, dynamic-library loading, process
+invocation, Unicode path handling, and signal/console interruption stay behind
+platform-specific boundaries. Public C, CLI, Tcl, project/cache, diagnostics,
+and language-file paths use UTF-8; one conversion seam creates native
+`std::filesystem::path` values, while Windows command-line and environment
+inputs enter through UTF-16 APIs. SystemC source compilation passes argument
+arrays directly to the selected GCC-like or MSVC-compatible toolchain and
+never invokes a shell. A fingerprinted test launcher preserves any required
+parent compiler discovery arguments without making the manifest cache-unsafe.
+The current
 compiler component produces checksummed, content-keyed shared libraries with
 per-key locking, and project builds invoke it for SystemC source sets.
 GCC-like builds use compiler-emitted dependency files and content-hash the
-complete reported closure, including implicit system headers. MSVC uses a
-conservative manifest-root scan in this slice. Source content and path-addressed
+complete reported closure, including implicit system headers. MSVC and
+clang-cl use `/sourceDependencies` JSON plus conservative roots for
+unresolved constructs. Source content and path-addressed
 linked inputs also participate in the key; options or inputs whose dependency
 closure cannot be proved make a build non-cacheable. GCC-like tracked inputs
 using `__DATE__`, `__TIME__`, or `__TIMESTAMP__` are likewise non-cacheable.
@@ -1515,7 +1522,16 @@ common-kernel representation, VCD path, and interpreter/LLVM-hybrid scheduling
 semantics as HDL-produced values. No C++ datatype object crosses the native
 plug-in ABI.
 
-This cache boundary does not yet fingerprint every helper behind the selected
-compiler driver or every environment-injected code-generation setting. The
-MSVC fallback also does not consume `/sourceDependencies`, so extensions such
-as `#pragma include_alias` are outside its proven dependency model.
+This cache boundary does not fingerprint every helper behind the selected
+compiler driver or every environment-injected code-generation setting.
+Options whose dependency closure cannot be proven therefore remain explicitly
+non-cacheable; extensions such as `#pragma include_alias` are outside the
+proven dependency model.
+
+The checked portability inventory and 20-row differential corpus live in
+[`v1-portability-audit.md`](v1-portability-audit.md) and
+[`v1-portability-corpus.txt`](v1-portability-corpus.txt). Local builds use at
+least eight workers and an eight-job Ninja link/archive pool. Hosted builds use
+four workers; every MSVC-compatible test executable reserves an 8 MiB stack,
+and separately named large tests retain explicit timeout and phase-trace
+contracts. Batch 130 owns fresh hosted Linux/Windows execution.

@@ -106,12 +106,12 @@ Capture run_once(
   Capture capture;
   capture.keys = project->specialization_cache_keys;
   assert(project->design.processes().size() == 1);
-  capture.call_operations = std::ranges::count_if(
+  capture.call_operations = static_cast<std::size_t>(std::ranges::count_if(
       project->design.processes().front().operations,
       [](const auto& operation) {
         return fsim::runtime::simir::operation_holds<
             fsim::runtime::simir::Call>(operation);
-      });
+      }));
   for (const auto& local :
        project->design.processes().front().debug_locals) {
     capture.locals.push_back(local.name);

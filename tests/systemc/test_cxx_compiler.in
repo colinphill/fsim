@@ -1,0 +1,3 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+exec "@FSIM_TEST_CXX_WRAPPER_COMMAND@"@FSIM_TEST_CXX_WRAPPER_ARGUMENTS@ "$@"

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/support/path.hpp"
 
 namespace fsim::app::application_detail {
 namespace {
@@ -120,7 +121,7 @@ std::optional<std::string> checked_source_text(
     diagnostics.error(
         "FSIM-FE-VHSTD-001",
         "bundled IEEE 1076-2019 source is unavailable: "
-            + path.generic_string());
+            + fsim::support::path_to_utf8(path));
     return std::nullopt;
   }
   std::string text{
@@ -130,7 +131,7 @@ std::optional<std::string> checked_source_text(
     diagnostics.error(
         "FSIM-FE-VHSTD-001",
         "bundled IEEE 1076-2019 source could not be read: "
-            + path.generic_string());
+            + fsim::support::path_to_utf8(path));
     return std::nullopt;
   }
   const auto digest = support::Sha256::hex(
@@ -139,7 +140,7 @@ std::optional<std::string> checked_source_text(
     diagnostics.error(
         "FSIM-FE-VHSTD-002",
         "bundled IEEE 1076-2019 source failed its pinned checksum: "
-            + path.generic_string());
+            + fsim::support::path_to_utf8(path));
     return std::nullopt;
   }
   return text;
@@ -156,7 +157,9 @@ CheckedSource checked_source(
   key.add(
       "compilation-unit-snapshot-schema",
       "fsim-hdl-compilation-unit-v1");
-  key.add("input-path", path.lexically_normal().generic_string());
+  key.add(
+      "input-path",
+      fsim::support::path_to_utf8(path.lexically_normal()));
   key.add("input-content", source.content_digest);
   source.compilation_unit_digest = key.finish();
   return source;
@@ -199,14 +202,15 @@ std::optional<std::vector<frontend::DesignUnit>> projected_units(
   }
   for (const auto& [path, projection] : sources) {
     auto parsed = frontend::parse(
-        frontend::SourceText{path.generic_string(), std::string{projection}},
+        frontend::SourceText{
+            fsim::support::path_to_utf8(path), std::string{projection}},
         frontend::Language::Vhdl2008);
     if (!parsed.diagnostics.empty() || parsed.design.units.size() != 1) {
       diagnostics.error(
           "FSIM-FE-VHSTD-003",
           "internal ieee." + std::string{package}
               + " intrinsic projection is invalid",
-          {path.generic_string(), {}, {}});
+          {fsim::support::path_to_utf8(path), {}, {}});
       return std::nullopt;
     }
     auto unit = std::move(parsed.design.units.front());

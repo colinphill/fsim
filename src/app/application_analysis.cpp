@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/support/path.hpp"
 
 namespace fsim::app::application_detail {
 
@@ -195,12 +196,12 @@ std::string compilation_unit_digest(
   for (const auto& root : roots) {
     key.add(
         "root-path",
-        root.path.lexically_normal().generic_string());
+        fsim::support::path_to_utf8(root.path.lexically_normal()));
   }
   for (const auto& input : inputs) {
     key.add(
         "input-path",
-        input.path.lexically_normal().generic_string());
+        fsim::support::path_to_utf8(input.path.lexically_normal()));
     key.add(
         "input-content",
         support::Sha256::hex(
@@ -294,7 +295,8 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
         frontend::DiagnosticSeverity::Error,
         "FSIM-FE-IO-001",
         "unable to open source file",
-        {input.path.string(), {}, {}, input.path.string(), {}},
+        {fsim::support::path_to_utf8(input.path), {}, {},
+         fsim::support::path_to_utf8(input.path), {}},
         {},
     });
     return snapshot;
@@ -307,7 +309,8 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
         frontend::DiagnosticSeverity::Error,
         "FSIM-FE-IO-002",
         "failed while reading source file",
-        {input.path.string(), {}, {}, input.path.string(), {}},
+        {fsim::support::path_to_utf8(input.path), {}, {},
+         fsim::support::path_to_utf8(input.path), {}},
         {},
     });
     return snapshot;
@@ -318,11 +321,14 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
   key.add(
       "compilation-unit-snapshot-schema",
       "fsim-hdl-compilation-unit-v1");
-  key.add("input-path", input.path.lexically_normal().generic_string());
+  key.add(
+      "input-path",
+      fsim::support::path_to_utf8(input.path.lexically_normal()));
   key.add("input-content", source.content_digest);
   source.compilation_unit_digest = key.finish();
   snapshot.result = frontend::parse(
-      frontend::SourceText{input.path.string(), std::move(text)},
+      frontend::SourceText{
+          fsim::support::path_to_utf8(input.path), std::move(text)},
       input.language);
   for (auto& unit : snapshot.result.design.units) {
     unit.library = input.library;
@@ -845,9 +851,12 @@ void validate_bindings(
 
 std::string target_name()  {
 #if defined(_WIN32)
-  return "x86_64-pc-windows";
+  // The cache identity includes the ABI environment, not only the object
+  // format. Windows JIT code and native plug-ins use the MSVC x64 ABI even
+  // when clang-cl is the C++ frontend.
+  return "x86_64-pc-windows-msvc";
 #elif defined(__linux__)
-  return "x86_64-unknown-linux";
+  return "x86_64-unknown-linux-gnu";
 #else
   return "x86_64-unknown";
 #endif

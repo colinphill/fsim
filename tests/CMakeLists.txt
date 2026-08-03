@@ -126,6 +126,62 @@ add_test(
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1ConformanceCorpus.cmake"
 )
+add_test(
+  NAME fsim.v1-portability-audit
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1PortabilityAudit.cmake"
+)
+add_test(
+  NAME fsim.v1-portability-corpus
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1PortabilityCorpus.cmake"
+)
+add_test(
+  NAME fsim.msvc-debug-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckMsvcDebugContract.cmake"
+)
+add_test(
+  NAME fsim.msvc-release-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckMsvcReleaseContract.cmake"
+)
+add_test(
+  NAME fsim.windows-llvm-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckWindowsLlvmContract.cmake"
+)
+add_test(
+  NAME fsim.systemc-portability-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckSystemCPortabilityContract.cmake"
+)
+add_test(
+  NAME fsim.tool-portability-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckToolPortabilityContract.cmake"
+)
+add_test(
+  NAME fsim.resource-portability-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckResourcePortabilityContract.cmake"
+)
 set_tests_properties(
   fsim.v1-vhdl-matrix
   PROPERTIES LABELS "fast;vhdl;matrix;cmake"
@@ -145,6 +201,38 @@ set_tests_properties(
 set_tests_properties(
   fsim.v1-conformance-corpus
   PROPERTIES LABELS "fast;conformance;coverage;provenance;cmake"
+)
+set_tests_properties(
+  fsim.v1-portability-audit
+  PROPERTIES LABELS "fast;portability;windows;linux;cmake"
+)
+set_tests_properties(
+  fsim.v1-portability-corpus
+  PROPERTIES LABELS "fast;portability;windows;linux;matrix;differential;cmake"
+)
+set_tests_properties(
+  fsim.msvc-debug-contract
+  PROPERTIES LABELS "fast;portability;windows;msvc;debug;cmake"
+)
+set_tests_properties(
+  fsim.msvc-release-contract
+  PROPERTIES LABELS "fast;portability;windows;msvc;release;cmake"
+)
+set_tests_properties(
+  fsim.windows-llvm-contract
+  PROPERTIES LABELS "fast;portability;windows;llvm;jit;cache;debugger;cmake"
+)
+set_tests_properties(
+  fsim.systemc-portability-contract
+  PROPERTIES LABELS "fast;portability;windows;linux;systemc;abi;compiler;cache;cmake"
+)
+set_tests_properties(
+  fsim.tool-portability-contract
+  PROPERTIES LABELS "fast;portability;windows;linux;api;cli;tcl;debugger;vcd;files;cmake"
+)
+set_tests_properties(
+  fsim.resource-portability-contract
+  PROPERTIES LABELS "fast;portability;windows;linux;resources;memory;timeouts;cmake"
 )
 set_tests_properties(
   fsim.ieee-package-inventory
@@ -175,6 +263,7 @@ target_include_directories(
   PRIVATE "${PROJECT_SOURCE_DIR}/include"
 )
 fsim_enable_warnings(fsim_jit_runtime_c_tests)
+fsim_configure_test_platform(fsim_jit_runtime_c_tests)
 add_test(NAME fsim.jit-runtime-c COMMAND fsim_jit_runtime_c_tests)
 
 add_executable(
@@ -267,6 +356,7 @@ target_include_directories(
   PRIVATE "${PROJECT_SOURCE_DIR}/include"
 )
 fsim_enable_warnings(fsim_systemc_abi_c_tests)
+fsim_configure_test_platform(fsim_systemc_abi_c_tests)
 add_test(NAME fsim.systemc.abi-c COMMAND fsim_systemc_abi_c_tests)
 
 add_library(fsim_test_systemc_plugin MODULE systemc/sample_plugin.cpp)
@@ -367,11 +457,60 @@ add_executable(
   systemc/plugin_matrix_test.cpp
 )
 fsim_configure_test(fsim_systemc_matrix_tests)
+set(FSIM_TEST_CXX_OPTIONS "")
+if(CMAKE_CXX_COMPILER_ARG1)
+  separate_arguments(
+    FSIM_TEST_CXX_COMPILER_ARG1_OPTIONS
+    NATIVE_COMMAND "${CMAKE_CXX_COMPILER_ARG1}"
+  )
+  list(APPEND
+    FSIM_TEST_CXX_OPTIONS
+    ${FSIM_TEST_CXX_COMPILER_ARG1_OPTIONS}
+  )
+endif()
+if(CMAKE_CXX_FLAGS)
+  separate_arguments(
+    FSIM_TEST_CXX_GLOBAL_OPTIONS
+    NATIVE_COMMAND "${CMAKE_CXX_FLAGS}"
+  )
+  list(APPEND FSIM_TEST_CXX_OPTIONS ${FSIM_TEST_CXX_GLOBAL_OPTIONS})
+endif()
+set(FSIM_TEST_CXX_COMPILER_PATH "${CMAKE_CXX_COMPILER}")
+if(NOT WIN32 AND FSIM_TEST_CXX_OPTIONS)
+  set(FSIM_TEST_CXX_WRAPPER_COMMAND "${CMAKE_CXX_COMPILER}")
+  set(FSIM_TEST_CXX_WRAPPER_ARGUMENTS "")
+  foreach(FSIM_TEST_CXX_OPTION IN LISTS FSIM_TEST_CXX_OPTIONS)
+    string(REPLACE "\\" "\\\\" FSIM_TEST_CXX_OPTION_ESCAPED "${FSIM_TEST_CXX_OPTION}")
+    string(REPLACE "\"" "\\\"" FSIM_TEST_CXX_OPTION_ESCAPED "${FSIM_TEST_CXX_OPTION_ESCAPED}")
+    string(REPLACE "$" "\\$" FSIM_TEST_CXX_OPTION_ESCAPED "${FSIM_TEST_CXX_OPTION_ESCAPED}")
+    string(REPLACE "`" "\\`" FSIM_TEST_CXX_OPTION_ESCAPED "${FSIM_TEST_CXX_OPTION_ESCAPED}")
+    string(APPEND
+      FSIM_TEST_CXX_WRAPPER_ARGUMENTS
+      " \"${FSIM_TEST_CXX_OPTION_ESCAPED}\""
+    )
+  endforeach()
+  set(
+    FSIM_TEST_CXX_COMPILER_PATH
+    "${CMAKE_CURRENT_BINARY_DIR}/fsim-test-cxx-compiler"
+  )
+  configure_file(
+    "${PROJECT_SOURCE_DIR}/tests/systemc/test_cxx_compiler.in"
+    "${FSIM_TEST_CXX_COMPILER_PATH}"
+    @ONLY
+  )
+  file(
+    CHMOD "${FSIM_TEST_CXX_COMPILER_PATH}"
+    PERMISSIONS
+      OWNER_READ OWNER_WRITE OWNER_EXECUTE
+      GROUP_READ GROUP_EXECUTE
+      WORLD_READ WORLD_EXECUTE
+  )
+endif()
 target_compile_definitions(
   fsim_systemc_matrix_tests
   PRIVATE
     FSIM_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
-    FSIM_TEST_CXX_COMPILER="${CMAKE_CXX_COMPILER}"
+    FSIM_TEST_CXX_COMPILER="${FSIM_TEST_CXX_COMPILER_PATH}"
 )
 target_link_libraries(fsim_systemc_matrix_tests PRIVATE fsim_systemc)
 add_test(NAME fsim.systemc.matrix COMMAND fsim_systemc_matrix_tests)
@@ -705,6 +844,10 @@ if(TARGET fsim_application)
     set_tests_properties(
       fsim.application.scoped_locals
       PROPERTIES TIMEOUT 60
+    )
+    set_tests_properties(
+      fsim.application.systemc_matrix
+      PROPERTIES TIMEOUT 600
     )
     set_tests_properties(
       fsim.application.sv_containers
@@ -1770,7 +1913,13 @@ set_tests_properties(
   )
   target_link_libraries(fsim_application_tests PRIVATE fsim_application)
   add_test(NAME fsim.application COMMAND fsim_application_tests)
-  if(MSVC AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+  if(
+    WIN32
+    AND (
+      MSVC
+      OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+    )
+  )
     set_tests_properties(
       fsim.application
       PROPERTIES TIMEOUT 600
@@ -1850,6 +1999,7 @@ set_tests_properties(
     fsim_api_header_c_test
     PROPERTIES LINKER_LANGUAGE CXX
   )
+  fsim_configure_test_platform(fsim_api_header_c_test)
   add_test(NAME fsim.api.c_header COMMAND fsim_api_header_c_test)
   if(WIN32)
     add_custom_command(

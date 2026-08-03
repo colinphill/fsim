@@ -270,15 +270,7 @@ function(fsim_configure_executable target)
   fsim_configure_debug_footprint(${target})
 endfunction()
 
-function(fsim_configure_test target)
-  fsim_configure_executable(${target})
-  # Several small, dependency-free tests intentionally use assert(). Keep
-  # those assertions live in multi-config and Release test builds.
-  if(MSVC)
-    target_compile_options(${target} PRIVATE /UNDEBUG)
-  else()
-    target_compile_options(${target} PRIVATE -UNDEBUG)
-  endif()
+function(fsim_configure_test_platform target)
   if(
     WIN32
     AND (
@@ -292,6 +284,21 @@ function(fsim_configure_test target)
     # not silently lose the protection carried by an older executable.
     target_link_options(${target} PRIVATE /STACK:8388608)
   endif()
+endfunction()
+
+function(fsim_configure_test target)
+  fsim_configure_executable(${target})
+  # Several small, dependency-free tests intentionally use assert(). Keep
+  # those assertions live in multi-config and Release test builds.
+  if(
+    MSVC
+    OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+  )
+    target_compile_options(${target} PRIVATE /UNDEBUG)
+  else()
+    target_compile_options(${target} PRIVATE -UNDEBUG)
+  endif()
+  fsim_configure_test_platform(${target})
 endfunction()
 
 add_library(fsim_diagnostic STATIC src/diagnostic/diagnostic.cpp)

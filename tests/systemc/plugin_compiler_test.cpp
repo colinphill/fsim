@@ -67,6 +67,13 @@ void write_text(const std::filesystem::path& path, const std::string& text) {
         });
 }
 
+[[nodiscard]] bool command_has_argument(
+    const fsim::systemc::CompilerCommand& command,
+    const std::string_view argument) {
+    return std::find(command.argv.begin(), command.argv.end(), argument)
+        != command.argv.end();
+}
+
 [[nodiscard]] std::string_view expected_msvc_runtime_option() noexcept {
 #if defined(_MSC_VER)
 #  if defined(_DLL)
@@ -162,7 +169,8 @@ void write_text(const std::filesystem::path& path, const std::string& text) {
 
 [[nodiscard]] std::string make_json_escape(const std::string_view value) {
     std::string result;
-    for (const unsigned char character : value) {
+    for (const char raw_character : value) {
+        const auto character = static_cast<unsigned char>(raw_character);
         switch (character) {
         case '"': result += "\\\""; break;
         case '\\': result += "\\\\"; break;
@@ -1012,6 +1020,22 @@ int main(const int argc, char** argv) {
         *msvc_plan,
         "/IMPLIB:" + msvc_plan->intermediate_paths[5].string()));
     assert(msvc_plan->intermediate_paths[6].extension() == ".exp");
+    for (std::size_t index = 0; index < msvc_request.sources.size(); ++index) {
+#if defined(_DEBUG)
+        assert(command_has_argument(msvc_plan->commands[index], "/Od"));
+        assert(command_has_argument(msvc_plan->commands[index], "/Z7"));
+        assert(!command_has_argument(msvc_plan->commands[index], "/O2"));
+#else
+        assert(command_has_argument(msvc_plan->commands[index], "/O2"));
+        assert(!command_has_argument(msvc_plan->commands[index], "/Od"));
+        assert(!command_has_argument(msvc_plan->commands[index], "/Z7"));
+#endif
+    }
+#if defined(_DEBUG)
+    assert(command_has_argument(msvc_plan->commands.back(), "/DEBUG:FULL"));
+#else
+    assert(!command_has_argument(msvc_plan->commands.back(), "/DEBUG:FULL"));
+#endif
     for (const auto& command : msvc_plan->commands) {
         const auto runtime_arguments = std::count_if(
             command.argv.begin(),

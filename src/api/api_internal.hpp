@@ -146,7 +146,7 @@ bool struct_contains(
 #define FSIM_STRUCT_CONTAINS(struct_size, type, member) \
   struct_contains(                                      \
       (struct_size), offsetof(type, member),            \
-      sizeof(((type*)nullptr)->member))
+      sizeof((static_cast<type*>(nullptr))->member))
 
 fsim_status_t with_session(
     const fsim_session_t handle,

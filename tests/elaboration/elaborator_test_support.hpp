@@ -113,6 +113,7 @@ void test_systemverilog_static_slice_ordering();
 void test_systemverilog_static_slice_ports();
 void test_systemverilog_interfaces();
 void test_systemverilog_public_conformance_elaboration();
+void test_msvc_debug_elaboration_portability();
 void test_case_and_expression_lowering();
 void test_systemverilog_case_qualifiers();
 void test_systemverilog_case_matches();

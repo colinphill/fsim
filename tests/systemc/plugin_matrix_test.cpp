@@ -121,7 +121,6 @@ int main() {
 #else
     request.settings.compiler = "c++";
 #endif
-
     fsim::diagnostic::Engine diagnostics;
     const auto cold = fsim::systemc::compile_plugin(request, diagnostics);
     const auto warm = fsim::systemc::compile_plugin(request, diagnostics);

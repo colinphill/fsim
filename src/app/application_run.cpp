@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/support/path.hpp"
 
 namespace fsim::app::application_detail {
 
@@ -33,16 +34,19 @@ std::string make_cache_key(
       key.add("define", define);
     }
     for (const auto& include : set.include_directories) {
-      key.add("include", include.generic_string());
+      key.add("include", fsim::support::path_to_utf8(include));
     }
     for (const auto& file : set.files) {
-      key.add("source-path", file.lexically_normal().generic_string());
+      key.add(
+          "source-path",
+          fsim::support::path_to_utf8(file.lexically_normal()));
       if (set.language == project::Language::systemc) {
         std::error_code error;
         if (!key.add_file("source-content", file, error)) {
           diagnostics.error(
               "FSIM-CACHE-0001",
-              "cannot hash source file '" + file.generic_string()
+              "cannot hash source file '"
+                  + fsim::support::path_to_utf8(file)
                   + "': " + error.message());
           return {};
         }
@@ -54,7 +58,7 @@ std::string make_cache_key(
         diagnostics.error(
             "FSIM-CACHE-0001",
             "parsed source identity is inconsistent for '"
-                + file.generic_string() + "'");
+                + fsim::support::path_to_utf8(file) + "'");
         return {};
       }
       key.add(
@@ -68,7 +72,8 @@ std::string make_cache_key(
            checked.hdl_sources[hdl_source_index].dependencies) {
         key.add(
             "dependency-path",
-            dependency.path.lexically_normal().generic_string());
+            fsim::support::path_to_utf8(
+                dependency.path.lexically_normal()));
         key.add(
             "dependency-content",
             dependency.content_digest);
@@ -85,7 +90,7 @@ std::string make_cache_key(
   for (const auto& source : checked.standard_sources) {
     key.add(
         "standard-source-path",
-        source.path.lexically_normal().generic_string());
+        fsim::support::path_to_utf8(source.path.lexically_normal()));
     key.add("standard-source-content", source.content_digest);
     key.add(
         "standard-source-compilation-unit",
@@ -222,7 +227,8 @@ make_specialization_cache_keys(
     key.add("unit", specialization.name);
     key.add(
         "source-path",
-        settings->checked_source->path.lexically_normal().generic_string());
+        fsim::support::path_to_utf8(
+            settings->checked_source->path.lexically_normal()));
     key.add(
         "source-content",
         settings->checked_source->content_digest);
@@ -233,7 +239,8 @@ make_specialization_cache_keys(
          settings->checked_source->dependencies) {
       key.add(
           "dependency-path",
-          dependency.path.lexically_normal().generic_string());
+          fsim::support::path_to_utf8(
+              dependency.path.lexically_normal()));
       key.add(
           "dependency-content",
           dependency.content_digest);
@@ -253,9 +260,9 @@ make_specialization_cache_keys(
       }
       key.add(
           "semantic-dependency-source-path",
-          dependency_settings->checked_source->path
-              .lexically_normal()
-              .generic_string());
+          fsim::support::path_to_utf8(
+              dependency_settings->checked_source->path
+                  .lexically_normal()));
       key.add(
           "semantic-dependency-source-content",
           dependency_settings->checked_source->content_digest);
@@ -285,13 +292,14 @@ make_specialization_cache_keys(
                ->include_directories) {
         key.add(
             "semantic-dependency-include",
-            include.lexically_normal().generic_string());
+            fsim::support::path_to_utf8(include.lexically_normal()));
       }
       for (const auto& dependency :
            dependency_settings->checked_source->dependencies) {
         key.add(
             "semantic-dependency-transitive-path",
-            dependency.path.lexically_normal().generic_string());
+            fsim::support::path_to_utf8(
+                dependency.path.lexically_normal()));
         key.add(
             "semantic-dependency-transitive-content",
             dependency.content_digest);
@@ -310,7 +318,9 @@ make_specialization_cache_keys(
     }
     for (const auto& include :
          settings->source_set->include_directories) {
-      key.add("include", include.lexically_normal().generic_string());
+      key.add(
+          "include",
+          fsim::support::path_to_utf8(include.lexically_normal()));
     }
     for (const auto& parameter : specialization.parameters) {
       key.add("parameter-name", parameter.name);
@@ -495,7 +505,8 @@ std::unique_ptr<TraceState> attach_trace(
   if (!trace->stream) {
     diagnostics.error(
         "FSIM-VCD-0002",
-        "cannot open trace file '" + config.run.trace_file->generic_string()
+        "cannot open trace file '"
+            + fsim::support::path_to_utf8(*config.run.trace_file)
             + "'");
     return nullptr;
   }

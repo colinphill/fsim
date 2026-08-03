@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# id|surface|required modes|owning CTest|evidence file|required marker
+PORT-001|frontend transport|Debug+Release+path+newline|fsim.frontend|tests/frontend/frontend_sv_conformance_tests.cpp|BOM and CRLF SystemVerilog input parses identically
+PORT-002|runtime scheduling|Debug+Release+interpreter|fsim.runtime|tests/runtime/runtime_value_tests.cpp|scheduler phase ordering
+PORT-003|LLVM optimization|LLVM-O0+LLVM-O2|fsim.llvm|tests/compiler/llvm_jit_cache_test.cpp|test_optimization_cache_invalidation
+PORT-004|native object cache|cold+warm+edit|fsim.llvm|tests/compiler/llvm_jit_cache_test.cpp|cached_object_paths(cache_directory).size()
+PORT-005|scoped locals|interpreter+LLVM-O0+LLVM-O2+cold+warm+debugger|fsim.application.scoped_locals|tests/app/scoped_local_application_test.cpp|running warm compiled engine
+PORT-006|SystemVerilog preprocessing|interpreter+LLVM-O0+LLVM-O2+cold+warm+edit+vcd|fsim.application.sv_preprocessor_generate|tests/app/sv_preprocessor_generate_application_test.cpp|cold.vcd == warm.vcd
+PORT-007|VHDL composite values|interpreter+LLVM-O0+LLVM-O2+cold+warm+debugger+vcd|fsim.application.vhdl_arrays|tests/app/vhdl_array_application_test.cpp|cold.debugger_output == warm.debugger_output
+PORT-008|mixed typed boundary|interpreter+LLVM-O0+LLVM-O2+cold+warm+edit+debugger+vcd|fsim.application.typed_boundaries|tests/app/typed_boundary_application_test.cpp|warm.native_cache.hits == warm.compiled_modules
+PORT-009|SystemC compiler cache|plugin+cold+warm+edit+abi|fsim.systemc.compiler|tests/systemc/plugin_compiler_test.cpp|concurrent.cache_key == first.cache_key
+PORT-010|SystemC lifecycle|plugin+interpreter+LLVM-O0+LLVM-O2+cold+warm+debugger|fsim.application.systemc_matrix|tests/app/application_test_systemc_scheduling.cpp|require_equivalent(warm, cold)
+PORT-011|JIT strict C ABI|abi+Debug+Release|fsim.jit-runtime-c|tests/compiler/jit_runtime_c_test.c|sizeof(fsim_jit_resume_result_v1) == 24
+PORT-012|SystemC strict C ABI|plugin+abi+Debug+Release|fsim.systemc.abi-c|tests/systemc/systemc_abi_c_test.c|FSIM_SYSTEMC_ABI_VERSION == 1u
+PORT-013|public C API|api+abi+callback+path|fsim.api|tests/api/api_test.cpp|fsim-api-test-\xC3\xA9-
+PORT-014|CLI Tcl debugger VCD|api+path+debugger+vcd+files|fsim.application|tests/app/application_test_cli.cpp|unicode_invocation->files
+PORT-015|language file I/O|interpreter+LLVM-O0+LLVM-O2+cold+warm+edit+files|fsim.application.sv_files|tests/app/sv_file_application_test.cpp|cold.binary_word == warm.binary_word
+PORT-016|MSVC Debug host|Debug+path+newline+resources|fsim.msvc-debug-contract|cmake/CheckMsvcDebugContract.cmake|MSVC Debug contract
+PORT-017|MSVC Release host|Release+abi+resources|fsim.msvc-release-contract|cmake/CheckMsvcReleaseContract.cmake|MSVC Release contract
+PORT-018|Windows LLVM host|Debug+Release+LLVM-O0+LLVM-O2+cold+warm+edit+debugger+abi|fsim.windows-llvm-contract|cmake/CheckWindowsLlvmContract.cmake|Windows LLVM contract
+PORT-019|SystemC host portability|Debug+Release+plugin+abi+cold+warm+edit|fsim.systemc-portability-contract|cmake/CheckSystemCPortabilityContract.cmake|SystemC portability contract
+PORT-020|host resources|Debug+Release+resources|fsim.resource-portability-contract|cmake/CheckResourcePortabilityContract.cmake|resource portability contract

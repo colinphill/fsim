@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/support/path.hpp"
 
 namespace fsim::app {
 using namespace application_detail;
@@ -138,7 +139,7 @@ std::optional<CheckedProject> check_project(
         diagnostics.error(
             "FSIM-FE-IO-001",
             "unable to open SystemC source file",
-            {source.path.generic_string(), {}, {}});
+            {fsim::support::path_to_utf8(source.path), {}, {}});
         continue;
       }
       const std::string contents{
@@ -148,7 +149,7 @@ std::optional<CheckedProject> check_project(
         diagnostics.error(
             "FSIM-FE-IO-002",
             "failed while reading SystemC source file",
-            {source.path.generic_string(), {}, {}});
+            {fsim::support::path_to_utf8(source.path), {}, {}});
         continue;
       }
       source.content_digest = support::Sha256::hex(
@@ -157,7 +158,7 @@ std::optional<CheckedProject> check_project(
       key.add(
           "compilation-unit-snapshot-schema",
           "fsim-systemc-compilation-unit-v1");
-      key.add("input-path", source.path.generic_string());
+      key.add("input-path", fsim::support::path_to_utf8(source.path));
       key.add("input-content", source.content_digest);
       source.compilation_unit_digest = key.finish();
       checked.systemc_sources.push_back(std::move(source));
@@ -186,12 +187,12 @@ std::optional<CheckedProject> check_project(
         diagnostics.error(
             "FSIM-FE-0003",
             "source analysis failed: " + std::string{error.what()},
-            {path.generic_string(), {}, {}});
+            {fsim::support::path_to_utf8(path), {}, {}});
       } catch (...) {
         diagnostics.error(
             "FSIM-FE-0003",
             "source analysis failed with an unknown exception",
-            {path.generic_string(), {}, {}});
+            {fsim::support::path_to_utf8(path), {}, {}});
       }
       continue;
     }
@@ -203,7 +204,7 @@ std::optional<CheckedProject> check_project(
       diagnostics.error(
           "FSIM-FE-0003",
           "source analysis produced no result",
-          {path.generic_string(), {}, {}});
+          {fsim::support::path_to_utf8(path), {}, {}});
       continue;
     }
     auto snapshot = std::move(*parsed_inputs[input_index]);

@@ -62,6 +62,7 @@ int main() {
     test_systemverilog_vertical_slice();
     test_systemverilog_preprocessor();
     test_systemverilog_public_conformance_frontend();
+    test_msvc_debug_frontend_portability();
     test_systemverilog_line_directive();
     test_non_ansi_verilog_ports();
     test_diagnostics_and_spans();

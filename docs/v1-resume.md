@@ -29,11 +29,12 @@ risky structural transition that needs a durable boundary.
   `30765734570` passed all 12 jobs. Batch 121 is complete in the current HEAD,
   Batch 122 through Batch 124 are complete in the current pushed checkpoint;
   Batch 125 through Batch 127 are complete in the current pushed checkpoint;
-  Batch 128 is complete in the current end-of-batch checkpoint; Batch 129 is
-  current with Task 1 in progress.
+  Batch 128 is complete in its end-of-batch checkpoint; Batch 129 is complete
+  in the current end-of-batch checkpoint; Batch 130 is current with Task 1 in
+  progress.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 419 authored C/C++ source, header,
+- The source-size refactor is complete: all 423 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 116-alternative
@@ -64,7 +65,7 @@ risky structural transition that needs a durable boundary.
   seconds, files in 2.11/0.68 seconds, containers in 375.83/99.00 seconds, and
   the monolithic application in 40.66/14.10 seconds. Debug aggregate/
   multidimensional execution completed in 2.03 seconds.
-- The diagnostic catalog covers all 1,622 production codes.
+- The diagnostic catalog covers all 1,624 production codes.
 - Batch 111 requires deterministic VHDL semantic analysis in manifest order
   after parallel parsing. Architectures, package bodies, use/context clauses,
   configuration declarations, and explicit entity/configuration bindings now
@@ -4997,50 +4998,242 @@ new conformance application in 4.29 seconds, and scoped locals in 0.82
 seconds. All ten Batch 128 tasks are complete. Batch 128 is not a mandatory CI
 inspection boundary, so no GitHub Actions run was inspected.
 
-### Batch 129 — Linux and Windows language portability — In progress
+### Batch 129 — Linux and Windows language portability — Complete
 
 The current ten implementation tasks are:
 
-1. **In progress.** Audit the complete v1 implementation and test corpus for
+1. **Complete.** Audit the complete v1 implementation and test corpus for
    compiler, standard-library, ABI, endianness, path, newline, process,
    filesystem, timing, stack, and resource assumptions; create an exact
    Linux/Windows Debug/Release portability inventory and repair queue.
-2. **Pending.** Close GCC and Clang Debug/Release warning, diagnostic,
+2. **Complete.** Close GCC and Clang Debug/Release warning, diagnostic,
    sanitizer, optimization, and language-behavior differences across the
    frontend, elaborator, interpreter, runtime, API, tools, and tests.
-3. **Pending.** Close MSVC Debug frontend/elaboration portability, including
+3. **Complete.** Close MSVC Debug frontend/elaboration portability, including
    recursive-frame size, exception behavior, source encoding, filesystem/path,
    newline, temporary-file, and deterministic diagnostic differences.
-4. **Pending.** Close MSVC Release optimization and runtime portability,
+4. **Complete.** Close MSVC Release optimization and runtime portability,
    including lifetime, initialization, aliasing, integer conversion, iterator,
    concurrency, and deterministic scheduling behavior.
-5. **Pending.** Close Windows LLVM O0/O2 JIT and debugger portability,
+5. **Complete.** Close Windows LLVM O0/O2 JIT and debugger portability,
    including object format, symbols, calling convention, stack/unwind,
    dynamic-library, cache, and source-map behavior.
-6. **Pending.** Close SystemC facade, strict-C ABI, plug-in/compiler/cache,
+6. **Complete.** Close SystemC facade, strict-C ABI, plug-in/compiler/cache,
    thread, lifecycle, dependency discovery, command-line, and dynamic-library
    portability on Linux and Windows.
-7. **Pending.** Close C/C++ API, CLI, Tcl, debugger, VCD, file/memory I/O,
+7. **Complete.** Close C/C++ API, CLI, Tcl, debugger, VCD, file/memory I/O,
    Unicode/path, environment, callback, failure-containment, and exit-status
    portability on Linux and Windows.
-8. **Pending.** Harden build/test infrastructure for bounded four-worker CI,
+8. **Complete.** Harden build/test infrastructure for bounded four-worker CI,
    eight-worker local builds, executable stack/heap/link limits, test timeouts,
    deterministic fixtures, and actionable phase-level failure evidence.
-9. **Pending.** Prove the complete portability corpus with exact Debug/Release,
+9. **Complete.** Prove the complete portability corpus with exact Debug/Release,
    interpreter/LLVM O0/O2, cold/warm/edit, API/ABI, plug-in, debugger/VCD, and
    normalized path/newline differentials in the checked-in test matrix.
-10. **Pending.** Update matrix/diagnostics/architecture/portability/release
+10. **Complete.** Update matrix/diagnostics/architecture/portability/release
     docs, pass sanitizer, source/catalog and full local Debug/Release gates,
     then create and push the single Batch 129 checkpoint. Hosted Linux/Windows
     release-candidate evidence remains assigned to the mandatory Batch 130 CI
     boundary.
 
+Batch status is **complete**. This exact ten-task list remains the official
+Batch 129 record in both the plan and this handoff. Tasks 1 through 9 used one
+accumulated dirty worktree with focused eight-worker local builds and tests;
+Task 10 owned the sanitizer, full regressions, documentation, commit, and push
+gate. GitHub builds use parallelism four. Batch 129 was not a mandatory
+non-documentation CI-inspection boundary.
+
+Task 1 is focused-complete. The new
+[`docs/v1-portability-audit.md`](v1-portability-audit.md) freezes the supported
+64-bit x86-64 Linux/Windows host contract, twelve hosted configuration jobs,
+six exact four-worker CI build steps, eight-worker local/link concurrency,
+stack and timeout bounds, cross-platform normalization rules, and the sixteen
+authored C/C++ source, header, and test files with explicit Windows/compiler
+branches. Eight stable `B129-T*` queues route GNU/Clang, MSVC Debug, MSVC
+Release, Windows LLVM, SystemC, tools/API, resources, and complete differential
+closure to Tasks 2 through 9. The new `fsim.v1-portability-audit` gate protects
+the workflow jobs and parallelism, presets, OS/architecture contract, exact
+platform-file inventory, invariants, and queue IDs. It performs no network or
+hosted-CI access. The Debug tree reconfigured and required no compilation in
+an eight-worker build; portability/conformance/catalog/source/scoped-local
+gates passed 6/6 in 1.15 seconds, with scoped locals in 0.84 seconds. Task 2 is
+current; no sanitizer, Release, full regression, commit, push, or CI inspection
+is due at this task boundary.
+
+Task 2 is focused-complete. A complete LLVM/Tcl-disabled Clang 22.1.8 Debug
+tree now compiles with eight workers and warnings as errors against the
+installed GCC 13 C++ runtime. The compile exposed and repaired explicit
+portability gaps in JSON/string byte signedness, bounded container iterator
+distances, `countl_zero`/`popcount` result types, ranges count accumulation,
+the public API member-size macro's C-style cast, and Tcl-disabled return-code
+constants. The API macro also no longer has a redundant implementation-file
+definition. The Clang focused frontend/elaboration/runtime/API/application and
+ABI gate passed 17/17 in 7.56 seconds. Its standalone SystemC compiler test
+passed, while the full plug-in matrix is routed to Task 6 because this local
+Clang installation requires an explicit GCC-runtime discovery flag for spawned
+compiler invocations. The corresponding GCC+LLVM Debug focus passed 18/18 in
+14.42 seconds, including the SystemC matrix in 0.70, conformance in 4.21,
+typed boundaries in 3.88, and scoped locals in 0.80 seconds. Full sanitizer
+and Debug/Release regressions remain owned by Task 10. Task 3 is current; no
+commit, push, or CI inspection is due at this task boundary.
+
+Task 3 is focused-complete. The common lexer now treats one leading UTF-8 BOM
+as transport metadata for both SystemVerilog and VHDL while retaining physical
+byte offsets; CRLF/CR/LF line accounting is unchanged. New frontend evidence
+parses BOM+CRLF SystemVerilog directly and through preprocessing, parses VHDL,
+and retains exact Windows-style logical/physical paths and the line-two span
+for a negative diagnostic. The matching elaboration fixture retains a four-bit
+signal and initial process from the same transport form. The MSVC-compatible
+8 MiB stack reserve is centralized in `fsim_configure_test_platform` and now
+covers the three C test executables as well as every C++ test host. The new
+`fsim.msvc-debug-contract` gate protects that coverage, Windows Debug/Release
+workflow presets and four-worker builds, and the scoped/container/application
+timeout bounds. The eight-worker GCC+LLVM Debug focus passed 9/9 in 1.55
+seconds, with scoped locals in 0.92; the incremental Clang tree compiled
+warning-clean and its matching five-test focus passed in 0.18 seconds. Task 4
+is current; no sanitizer, Release, full regression, commit, push, or CI
+inspection is due at this task boundary.
+
+Task 4 is focused-complete. MSVC-compatible C++ test hosts now select
+`/UNDEBUG` explicitly for both MSVC and clang-cl frontends, keeping fixture
+assertions live in optimized builds. The new `fsim.msvc-release-contract`
+gate protects the native and LLVM Windows Release matrices, CRT and iterator
+ABI selections, four-worker hosted builds, and the SystemC plug-in compiler's
+exact `/O2` versus `/Od /Z7` policy. Executable command-plan assertions also
+retain one matching CRT option per compile/link command, unique objects, and
+deterministic PDB/import-library outputs without incremental linking. The
+eight-worker GCC+LLVM Debug build was warning-clean and the focused runtime,
+API, SystemC, application, portability, and MSVC contract gate passed 11/11 in
+13.32 seconds, including scoped locals in 0.84 seconds. Full local Release
+equivalence remains owned by Task 10. Task 5 is current; no sanitizer, full
+regression, commit, push, or CI inspection is due at this task boundary.
+
+Task 5 is focused-complete. The application cache target now includes the
+complete `x86_64-pc-windows-msvc` or `x86_64-unknown-linux-gnu` ABI
+environment, preventing native artifacts from sharing an incomplete target
+identity. The strict C test now freezes the 24-byte resume-result layout and
+its status, instruction, and delay offsets. The new
+`fsim.windows-llvm-contract` gate protects x64-only support, LLVM's detected
+triple/data layout/CPU/sorted features, O0/O2 cache separation, source/debug
+provenance, symbol conversion, Windows atomic replacement, safe DLL search and
+ownership, and all four MSVC/clang-cl Debug/Release hosted combinations. The
+eight-worker GCC+LLVM Debug build was warning-clean and the focused cache, JIT,
+C ABI, application, API, SystemC, and portability gate passed 10/10 in 13.63
+seconds, including the complete LLVM unit in 2.75 and scoped locals in 0.84.
+Hosted PE/COFF execution remains assigned to Batch 130. Task 6 is current; no
+sanitizer, Release, full regression, commit, push, or CI inspection is due at
+this task boundary.
+
+Task 6 is focused-complete. The SystemC application matrix now inherits any
+required `CMAKE_CXX_COMPILER_ARG1` and global compiler-discovery options through
+a generated executable launcher. The launcher and its reported compiler
+identity are hashed as the selected compiler, so an installed Clang requiring
+`--gcc-install-dir` can reproduce the parent toolchain without turning the
+manifest into an unsafe raw-option plan or weakening cold/warm reuse,
+corruption recovery, edit invalidation, and concurrent publication checks. The
+new `fsim.systemc-portability-contract` gate protects that path along with
+GNU/MSVC commands, Windows response/process policy, strict C ABI negotiation,
+exception containment, loader ownership, threads, and lifecycle. The complete
+Clang SystemC focus passed 4/4 in 3.39 seconds; the eight-worker GCC+LLVM build
+was warning-clean and its focused gate passed 9/9 in 52.59 seconds, including
+the application matrix in 45.98 and scoped locals in 0.84. Task 7 is current;
+no sanitizer, Release, full regression, commit, push, or CI inspection is due
+at this task boundary.
+
+Task 7 is focused-complete. New shared `path_from_utf8` and `path_to_utf8`
+helpers establish UTF-8 as the public/tool representation while preserving
+native `std::filesystem::path` operations. The CLI, C API, project loader,
+source/cache identities, diagnostics, Tcl, and runtime file paths now use that
+seam. Windows command entry uses `wmain` plus strict UTF-16-to-UTF-8 conversion,
+and environment lookup uses the wide Win32 API while retaining unset versus
+empty values. The C API test now runs its full project matrix beneath a Unicode
+directory; the CLI fixture parses and executes a Unicode direct source,
+include, and VCD path. The new `fsim.tool-portability-contract` gate protects
+those conversions plus binary file mode and exact 0/1/2/3 CLI statuses. The
+eight-worker GCC+LLVM focused API/CLI/Tcl/debugger/VCD/file gate passed 8/8 in
+12.58 seconds; the warning-clean Clang build and matching focus passed 6/6 in
+4.24 seconds, with scoped locals in 0.02. Task 8 is current; no sanitizer,
+Release, full regression, commit, push, or CI inspection is due at this task
+boundary.
+
+Task 8 is focused-complete. The new `fsim.resource-portability-contract` gate
+counts exactly six `--parallel 4` hosted build steps and protects the default
+eight-job Ninja link/archive pool, compact `-Og`/compressed Debug information,
+common 8 MiB MSVC-compatible test stack, and exact 60-second scoped-local,
+120-second API, 600-second SystemC/aggregate Windows, and 1200-second container
+bounds. The separately named SystemC matrix now has its own 600-second bound,
+and the aggregate Windows condition covers clang-cl as well as MSVC in every
+configuration. Scoped-local O0/O2/warm and SystemC integration/scheduling phase
+traces remain machine-checked. The eight-worker build required no compilation;
+the new contract and scoped-local test passed 2/2 in 0.85 seconds, while the
+same accumulated tree's SystemC phase matrix had already passed in 45.98
+seconds. Task 9 is current; no sanitizer, Release, full regression, commit,
+push, or CI inspection is due at this task boundary.
+
+Task 9 is focused-complete. The new
+[`docs/v1-portability-corpus.txt`](v1-portability-corpus.txt) contains 20 exact
+rows naming the portability ID, surface, required modes, owning CTest, evidence
+file, and required source marker. `fsim.v1-portability-corpus` rejects malformed
+or duplicate rows, missing `PORT-001` through `PORT-020`, absent registrations,
+evidence files or markers, and incomplete Debug/Release, interpreter, LLVM
+O0/O2, cold/warm/edit, API/ABI, plug-in, callback, debugger/VCD, file,
+path/newline, and resource coverage. The eight-worker build required no
+compilation. All 20 unique corpus/gate owners passed in 71.55 seconds, including
+SystemC integration/scheduling in 45.86, typed boundaries in 4.09, LLVM in
+2.60, Unicode API in 1.22, and scoped locals in 0.83. Task 10 is current and
+now owns the accumulated sanitizer, source/catalog, full Debug/Release,
+documentation, single commit, and push. CI inspection remains deferred to the
+mandatory Batch 130 boundary.
+
+Task 10 is complete. The LLVM-disabled ASan/UBSan regression passed all 92
+tests in 545.85 seconds with leak detection disabled only for the managed
+ptrace restriction; the SystemC application matrix passed in 141.70 seconds,
+the container application in 274.03 seconds, and scoped locals in 0.61
+seconds. Exact LLVM 22.1.8 warnings-as-errors Debug passed 95/95 in 249.39
+seconds, including SystemC matrix in 45.31, containers in 125.84, and scoped
+locals in 0.89 seconds. Release passed 95/95 in 210.55 seconds, including
+SystemC matrix in 41.59, containers in 95.41, and scoped locals in 0.82
+seconds. Final gates cover 1,624 production diagnostics, 423 authored sources
+within the 2,000-line limit, 1,080 required release rows with no explicit
+evidence gaps, 105 conformance expectations in 28 fixtures owned by 27 CTests,
+and 20 exact portability rows. All ten Batch 129 tasks are complete; no GitHub
+Actions run was inspected at this non-mandatory boundary.
+
+### Batch 130 — Final v1 release audit — In progress
+
+The current ten implementation tasks are:
+
+1. **In progress.** Audit every v1 feature-matrix row against checked-in syntax,
+   legality, elaboration, interpreter, LLVM, cache/provenance, debugger/trace,
+   and portability evidence; create the exact final closure queue.
+2. **Pending.** Re-audit the complete SystemVerilog v1 subset and repair every
+   remaining positive, negative, diagnostic, elaboration, or execution gap.
+3. **Pending.** Re-audit the complete VHDL v1 subset and repair every remaining
+   positive, negative, diagnostic, elaboration, or execution gap.
+4. **Pending.** Re-audit mixed-language and SystemC boundaries, conversions,
+   scheduling, lifecycle, plug-in, compiler, cache, and strict-C ABI evidence.
+5. **Pending.** Close final interpreter versus LLVM O0/O2, cold/warm/edit,
+   debugger, VCD, scheduling, and failure differential gaps across the corpus.
+6. **Pending.** Validate installed/public CLI, API, ABI, Tcl, runtime, package,
+   path, environment, callback, and exit-status release behavior.
+7. **Pending.** Reconcile diagnostics, source-size, license, conformance, and
+   provenance inventories and eliminate every unowned or stale release gap.
+8. **Pending.** Validate final Linux/Windows Debug/Release build, memory, stack,
+   timeout, concurrency, and phase-trace contracts for bounded hosted runs.
+9. **Pending.** Freeze the final release-candidate corpus and reclassify every
+   completed v1 matrix row with exact owning tests and evidence links.
+10. **Pending.** Update all v1/release records, pass sanitizer, source/catalog,
+    and full local Debug/Release gates, create and push the final checkpoint,
+    then inspect and repair every non-documentation job at the mandatory Batch
+    130 GitHub CI boundary.
+
 Batch status is **in progress** with Task 1 current. Keep this exact ten-task
 list current in both the official plan and this handoff. Tasks 1 through 9 use
 one accumulated dirty worktree with focused eight-worker local builds and
-tests; Task 10 owns the sanitizer, full regressions, documentation, commit, and
-push gate. GitHub builds use parallelism four. Batch 129 is not a mandatory
-non-documentation CI-inspection boundary.
+tests; Task 10 owns the sanitizer, full regressions, documentation, single
+commit/push, and mandatory non-documentation GitHub CI inspection. GitHub
+builds use parallelism four. Stop before CI monitoring until explicitly
+resumed at that boundary.
 
 Batch 110 has advanced through these validated features:
 

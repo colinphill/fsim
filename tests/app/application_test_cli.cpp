@@ -2,6 +2,7 @@
 #include "application_test_support.hpp"
 
 #include "fsim/systemc/hierarchy.hpp"
+#include "fsim/support/path.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -787,6 +788,51 @@ assert(
     == 0);
 assert(
     direct_output.str().find("simulation completed at tick 0")
+    != std::string::npos);
+
+const auto unicode_directory =
+    directory / fsim::support::path_from_utf8("tool-path-\xC3\xA9");
+std::filesystem::create_directories(unicode_directory);
+const auto unicode_source =
+    unicode_directory / fsim::support::path_from_utf8("source-\xCE\xBB.sv");
+{
+  std::ofstream output(unicode_source, std::ios::binary);
+  output << "module unicode_top; endmodule\n";
+}
+const auto unicode_text = fsim::support::path_to_utf8(unicode_source);
+const auto unicode_include = fsim::support::path_to_utf8(unicode_directory);
+const auto unicode_trace = fsim::support::path_to_utf8(
+    unicode_directory / fsim::support::path_from_utf8("trace-\xCE\xBB.vcd"));
+const std::vector<const char*> unicode_arguments{
+    "fsim", "run", "--include", unicode_include.c_str(),
+    "--trace", unicode_trace.c_str(), unicode_text.c_str()};
+fsim::diagnostic::Engine unicode_diagnostics;
+const auto unicode_invocation = fsim::cli::parse_arguments(
+    static_cast<int>(unicode_arguments.size()),
+    unicode_arguments.data(),
+    unicode_diagnostics);
+assert(unicode_invocation && !unicode_diagnostics.has_error());
+assert(unicode_invocation->files == std::vector{unicode_source});
+assert(
+    unicode_invocation->include_directories
+    == std::vector{unicode_directory});
+assert(
+    unicode_invocation->trace_file
+    == unicode_directory
+        / fsim::support::path_from_utf8("trace-\xCE\xBB.vcd"));
+std::ostringstream unicode_output;
+std::ostringstream unicode_error;
+assert(
+    fsim::cli::run(
+        static_cast<int>(unicode_arguments.size()),
+        unicode_arguments.data(),
+        services,
+        unicode_output,
+        unicode_error)
+    == 0);
+assert(unicode_error.str().empty());
+assert(
+    unicode_output.str().find("simulation completed at tick 0")
     != std::string::npos);
 
 std::ostringstream json_output;

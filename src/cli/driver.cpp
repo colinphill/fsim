@@ -2,6 +2,7 @@
 #include "fsim/cli/driver.hpp"
 
 #include "fsim/api.h"
+#include "fsim/support/path.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -223,14 +224,18 @@ std::optional<project::Config> make_direct_config(
     if (!language.has_value()) {
       argument_error(
           diagnostics,
-          "cannot infer the language for '" + input.generic_string() +
+          "cannot infer the language for '"
+              + fsim::support::path_to_utf8(input) +
               "'; pass --lang");
       continue;
     }
     const auto path = absolute_normalized(input);
     std::error_code file_error;
     if (!std::filesystem::is_regular_file(path, file_error)) {
-      argument_error(diagnostics, "source file does not exist: " + path.generic_string());
+      argument_error(
+          diagnostics,
+          "source file does not exist: "
+              + fsim::support::path_to_utf8(path));
       continue;
     }
 
@@ -430,7 +435,7 @@ std::optional<Invocation> parse_arguments(
   }
 
   Invocation invocation;
-  invocation.program_path = argv[0];
+  invocation.program_path = fsim::support::path_from_utf8(argv[0]);
   invocation.program_name = basename(argv[0]);
   bool command_selected = false;
   const auto executable = lowercase(invocation.program_name);
@@ -476,7 +481,7 @@ std::optional<Invocation> parse_arguments(
         if (!value.has_value()) {
           return std::nullopt;
         }
-        invocation.manifest = std::string(*value);
+        invocation.manifest = fsim::support::path_from_utf8(*value);
         invocation.manifest_explicit = true;
       } else if (is_option(argument, "", "--top")) {
         const auto value = take_value(index, argc, argv, argument, "--top", diagnostics);
@@ -520,7 +525,8 @@ std::optional<Invocation> parse_arguments(
         if (!value.has_value()) {
           return std::nullopt;
         }
-        invocation.include_directories.emplace_back(std::string(*value));
+        invocation.include_directories.emplace_back(
+            fsim::support::path_from_utf8(*value));
       } else if (
           argument == "-D" || is_option(argument, "", "--define") ||
           (argument.size() > 2 && argument.starts_with("-D"))) {
@@ -601,7 +607,7 @@ std::optional<Invocation> parse_arguments(
         if (!value.has_value()) {
           return std::nullopt;
         }
-        invocation.trace_file = std::string(*value);
+        invocation.trace_file = fsim::support::path_from_utf8(*value);
       } else if (is_option(argument, "", "--seed")) {
         const auto value = take_value(index, argc, argv, argument, "--seed", diagnostics);
         if (!value.has_value()) {
@@ -660,13 +666,12 @@ std::optional<Invocation> parse_arguments(
       command_selected = true;
     } else if (invocation.command == Command::tcl) {
       if (!invocation.tcl_script.has_value()) {
-        invocation.tcl_script =
-            std::filesystem::path{std::string(argument)};
+        invocation.tcl_script = fsim::support::path_from_utf8(argument);
       } else {
         invocation.tcl_arguments.emplace_back(argument);
       }
     } else {
-      invocation.files.emplace_back(std::string(argument));
+      invocation.files.emplace_back(fsim::support::path_from_utf8(argument));
     }
   }
 

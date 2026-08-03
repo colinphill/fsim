@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/project/project.hpp"
+#include "fsim/support/path.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -978,7 +979,8 @@ class Parser {
           std::string(kRequiredCode), "[project].top must name the design top", document_span);
     }
     if (config_.project.name.empty()) {
-      config_.project.name = std::filesystem::path(source_name_).stem().string();
+      config_.project.name = fsim::support::path_to_utf8(
+          std::filesystem::path(source_name_).stem());
       if (config_.project.name.empty()) {
         config_.project.name = "fsim-project";
       }
@@ -1220,7 +1222,7 @@ bool glob_match(const std::string_view pattern, const std::string_view path) {
 std::filesystem::path glob_root(const std::filesystem::path& pattern) {
   std::filesystem::path root;
   for (const auto& component : pattern) {
-    const auto spelling = component.generic_string();
+    const auto spelling = fsim::support::path_to_utf8(component);
     if (has_glob(spelling)) {
       break;
     }
@@ -1237,13 +1239,14 @@ std::vector<std::filesystem::path> expand_pattern(
     diagnostic::Engine& diagnostics,
     const std::string& source_name) {
   std::vector<std::filesystem::path> result;
-  const auto pattern_text = pattern.generic_string();
+  const auto pattern_text = fsim::support::path_to_utf8(pattern);
   if (!has_glob(pattern_text)) {
     std::error_code error;
     if (!std::filesystem::is_regular_file(pattern, error)) {
       diagnostics.error(
           std::string(kSourceCode),
-          "source file does not exist: " + pattern.generic_string(),
+          "source file does not exist: "
+              + fsim::support::path_to_utf8(pattern),
           {source_name, {1, 1, 0}, {1, 1, 0}});
       return result;
     }
@@ -1256,7 +1259,8 @@ std::vector<std::filesystem::path> expand_pattern(
   if (!std::filesystem::is_directory(root, error)) {
     diagnostics.error(
         std::string(kSourceCode),
-        "source glob root does not exist: " + root.generic_string(),
+        "source glob root does not exist: "
+            + fsim::support::path_to_utf8(root),
         {source_name, {1, 1, 0}, {1, 1, 0}});
     return result;
   }
@@ -1266,7 +1270,10 @@ std::vector<std::filesystem::path> expand_pattern(
   const std::filesystem::recursive_directory_iterator end;
   while (!error && iterator != end) {
     if (iterator->is_regular_file(error) &&
-        glob_match(pattern_text, iterator->path().lexically_normal().generic_string())) {
+        glob_match(
+            pattern_text,
+            fsim::support::path_to_utf8(
+                iterator->path().lexically_normal()))) {
       result.push_back(iterator->path().lexically_normal());
     }
     iterator.increment(error);
@@ -1279,7 +1286,8 @@ std::vector<std::filesystem::path> expand_pattern(
     return {};
   }
   std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) {
-    return left.generic_string() < right.generic_string();
+    return fsim::support::path_to_utf8(left)
+        < fsim::support::path_to_utf8(right);
   });
   if (result.empty()) {
     diagnostics.error(
@@ -1299,7 +1307,10 @@ void resolve_paths(Config& config, diagnostic::Engine& diagnostics) {
     for (auto& pattern : source_set.file_patterns) {
       pattern = absolute_normalized(pattern, base);
       auto expanded =
-          expand_pattern(pattern, diagnostics, config.manifest_path.generic_string());
+          expand_pattern(
+              pattern,
+              diagnostics,
+              fsim::support::path_to_utf8(config.manifest_path));
       source_set.files.insert(
           source_set.files.end(),
           std::make_move_iterator(expanded.begin()),
@@ -1416,8 +1427,9 @@ std::optional<Config> load(
   if (!stream) {
     diagnostics.error(
         std::string(kIoCode),
-        "unable to open project manifest: " + manifest.generic_string(),
-        {manifest.generic_string(), {1, 1, 0}, {1, 1, 0}});
+        "unable to open project manifest: "
+            + fsim::support::path_to_utf8(manifest),
+        {fsim::support::path_to_utf8(manifest), {1, 1, 0}, {1, 1, 0}});
     return std::nullopt;
   }
   std::ostringstream contents;
@@ -1425,8 +1437,9 @@ std::optional<Config> load(
   if (stream.bad()) {
     diagnostics.error(
         std::string(kIoCode),
-        "failed while reading project manifest: " + manifest.generic_string(),
-        {manifest.generic_string(), {1, 1, 0}, {1, 1, 0}});
+        "failed while reading project manifest: "
+            + fsim::support::path_to_utf8(manifest),
+        {fsim::support::path_to_utf8(manifest), {1, 1, 0}, {1, 1, 0}});
     return std::nullopt;
   }
   std::error_code error;
@@ -1437,7 +1450,7 @@ std::optional<Config> load(
   absolute_manifest = absolute_manifest.lexically_normal();
   return parse(
       contents.str(),
-      absolute_manifest.generic_string(),
+      fsim::support::path_to_utf8(absolute_manifest),
       absolute_manifest.parent_path(),
       diagnostics);
 }

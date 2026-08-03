@@ -191,6 +191,14 @@ _Static_assert(offsetof(fsim_jit_frame_v1, register_logic9_plane3) == 72,
                "exact frame plane three was not appended");
 _Static_assert(sizeof(fsim_jit_frame_v1) == 80,
                "unexpected exact frame ABI size");
+_Static_assert(sizeof(fsim_jit_resume_result_v1) == 24,
+               "unexpected resume-result ABI size");
+_Static_assert(offsetof(fsim_jit_resume_result_v1, status) == 8,
+               "resume-result status offset changed");
+_Static_assert(offsetof(fsim_jit_resume_result_v1, instruction) == 12,
+               "resume-result instruction offset changed");
+_Static_assert(offsetof(fsim_jit_resume_result_v1, delay) == 16,
+               "resume-result delay offset changed");
 _Static_assert(FSIM_JIT_PROJECTED_TRANSPORT == UINT32_C(0),
                "projected transport mode changed");
 _Static_assert(FSIM_JIT_PROJECTED_INERTIAL == UINT32_C(1),

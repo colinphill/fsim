@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "api_internal.hpp"
+#include "fsim/support/path.hpp"
 
 
 using namespace fsim::api::detail;
@@ -139,7 +140,7 @@ fsim_status_t fsim_session_load_project(
     value.finished = false;
     value.current_execution_process.reset();
     auto loaded = fsim::project::load(
-        std::filesystem::path(manifest_path), value.diagnostics);
+        fsim::support::path_from_utf8(manifest_path), value.diagnostics);
     if (!loaded) {
       return FSIM_STATUS_COMPILE_ERROR;
     }

@@ -210,4 +210,85 @@ endmodule : \module
       "CF-SV-DECL-N02 unescaped reserved identifier is rejected");
 }
 
+void test_msvc_debug_frontend_portability() {
+  const std::string bom{"\xef\xbb\xbf"};
+  const std::string windows_sv_path{
+      R"(C:\work tree\utf8-source\portable.sv)"};
+  const auto sv_source = bom
+      + "module portable(output logic [3:0] value);\r\n"
+        "  assign value = 4'h9;\r\n"
+        "endmodule : portable\r\n";
+  const auto lexed = lex(
+      SourceText{windows_sv_path, sv_source},
+      Language::SystemVerilog2017);
+  require(
+      lexed.ok() && !lexed.tokens.empty()
+          && lexed.tokens.front().text == "module"
+          && lexed.tokens.front().span.begin.offset == 3U
+          && lexed.tokens.front().span.begin.line == 1U
+          && lexed.tokens.front().span.begin.column == 1U
+          && lexed.tokens.front().span.source_name == windows_sv_path
+          && lexed.tokens.front().span.physical_source_name == windows_sv_path,
+      "UTF-8 BOM is transparent while retaining byte offsets and Windows spans");
+
+  const auto parsed_sv = parse(
+      SourceText{windows_sv_path, sv_source},
+      Language::SystemVerilog2017);
+  require(
+      parsed_sv.ok() && parsed_sv.design.units.size() == 1U
+          && parsed_sv.design.units.front().name == "portable",
+      "BOM and CRLF SystemVerilog input parses identically");
+
+  auto preprocessed = preprocess_verilog(
+      SourceText{
+          "portable-preprocessed.sv",
+          bom
+              + "`define PORTABLE_VALUE 4'h9\r\n"
+                "module portable_preprocessed(output logic [3:0] value);\r\n"
+                "  assign value = `PORTABLE_VALUE;\r\n"
+                "endmodule\r\n"},
+      Language::SystemVerilog2017);
+  auto parsed_preprocessed =
+      parse_verilog(std::move(preprocessed.lexed), true);
+  require(
+      parsed_preprocessed.ok()
+          && parsed_preprocessed.design.units.size() == 1U,
+      "BOM and CRLF remain transparent through preprocessing");
+
+  const auto mismatch = parse(
+      SourceText{
+          windows_sv_path,
+          bom
+              + "module opening;\r\n"
+                "endmodule : closing\r\n"},
+      Language::SystemVerilog2017);
+  const auto mismatch_diagnostic = std::ranges::find_if(
+      mismatch.diagnostics,
+      [](const Diagnostic& diagnostic) {
+        return diagnostic.code == "FSIM-SV-SEM-129";
+      });
+  require(
+      !mismatch.ok() && mismatch_diagnostic != mismatch.diagnostics.end()
+          && mismatch_diagnostic->span.source_name == windows_sv_path
+          && mismatch_diagnostic->span.physical_source_name == windows_sv_path
+          && mismatch_diagnostic->span.begin.line == 2U,
+      "CRLF diagnostics retain exact Windows logical/physical path and line");
+
+  const std::string windows_vhdl_path{
+      R"(C:\work tree\utf8-source\portable.vhd)"};
+  const auto parsed_vhdl = parse(
+      SourceText{
+          windows_vhdl_path,
+          bom
+              + "entity portable_vhdl is\r\n"
+                "end entity portable_vhdl;\r\n"
+                "architecture rtl of portable_vhdl is\r\n"
+                "begin\r\n"
+                "end architecture rtl;\r\n"},
+      Language::Vhdl2008);
+  require(
+      parsed_vhdl.ok() && parsed_vhdl.design.units.size() == 2U,
+      "BOM and CRLF VHDL input parses identically");
+}
+
 }  // namespace fsim::tests::frontend

@@ -4,6 +4,7 @@
 #include "fsim/api.h"
 #include "fsim/app/application.hpp"
 #include "fsim/support/environment.hpp"
+#include "fsim/support/path.hpp"
 
 #include <algorithm>
 #include <array>
@@ -31,11 +32,12 @@
 namespace fsim::app {
 namespace {
 
-constexpr int kSuccess = 0;
-constexpr int kUserError = 1;
 constexpr int kUnavailable = 3;
 
 #if defined(FSIM_HAS_TCL)
+
+constexpr int kSuccess = 0;
+constexpr int kUserError = 1;
 
 static_assert(
     TCL_MAJOR_VERSION == 9 && TCL_MINOR_VERSION == 0,
@@ -292,17 +294,6 @@ class TclStreamChannels final {
   bool valid_{};
 };
 
-std::string path_utf8(const std::filesystem::path& path) {
-#if defined(_WIN32)
-  const auto encoded = path.generic_u8string();
-  return {
-      reinterpret_cast<const char*>(encoded.data()),
-      encoded.size()};
-#else
-  return path.generic_string();
-#endif
-}
-
 void configure_tcl_library(Tcl_Interp* interpreter) {
   const auto override_path =
       fsim::support::environment_variable("FSIM_TCL_LIBRARY");
@@ -336,7 +327,7 @@ void configure_tcl_library(Tcl_Interp* interpreter) {
           candidate / "init.tcl", error)) {
     return;
   }
-  const auto encoded = path_utf8(candidate);
+  const auto encoded = fsim::support::path_to_utf8(candidate);
   (void)Tcl_SetVar(
       interpreter,
       "tcl_library",
@@ -755,7 +746,7 @@ int project_command(
       interpreter,
       result,
       "manifest",
-      string_object(path_utf8(context.config.manifest_path)));
+      string_object(fsim::support::path_to_utf8(context.config.manifest_path)));
   dict_put(
       interpreter,
       result,
@@ -1404,7 +1395,7 @@ int trace_command(
     }
     return set_result(
         interpreter,
-        path_utf8(*context.config.run.trace_file));
+        fsim::support::path_to_utf8(*context.config.run.trace_file));
   }
   if (operation == "disable" && argument_count == 2) {
     if (context.simulation) {
@@ -1424,7 +1415,7 @@ int trace_command(
         "file",
         string_object(
             context.config.run.trace_file
-                ? path_utf8(*context.config.run.trace_file)
+                ? fsim::support::path_to_utf8(*context.config.run.trace_file)
                 : std::string{}));
     Tcl_Obj* filters = Tcl_NewListObj(0, nullptr);
     for (const auto& filter : context.config.run.trace_filters) {
@@ -1626,7 +1617,7 @@ bool initialize_arguments(
           "argv0",
           Tcl_NewStringObj(
               invocation.tcl_script
-                  ? path_utf8(*invocation.tcl_script).c_str()
+                  ? fsim::support::path_to_utf8(*invocation.tcl_script).c_str()
                   : invocation.program_name.c_str(),
               -1))
       && set_global(interpreter, "argv", arguments)
@@ -1676,7 +1667,8 @@ int evaluate_batch(
     TclContext& context,
     diagnostic::Engine& diagnostics) {
   if (context.invocation.tcl_script) {
-    const auto script = path_utf8(*context.invocation.tcl_script);
+    const auto script =
+        fsim::support::path_to_utf8(*context.invocation.tcl_script);
     const int result = Tcl_EvalFile(interpreter, script.c_str());
     if (context.exit_requested) {
       return context.exit_code;
@@ -1788,7 +1780,7 @@ int handle_tcl(
       "-DFSIM_TCL_MODE=ON to discover or download Tcl");
   return kUnavailable;
 #else
-  const auto executable = path_utf8(invocation.program_path);
+  const auto executable = fsim::support::path_to_utf8(invocation.program_path);
   Tcl_FindExecutable(executable.c_str());
   TclInterpreter interpreter{Tcl_CreateInterp()};
   if (!interpreter) {

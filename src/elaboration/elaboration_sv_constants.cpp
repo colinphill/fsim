@@ -104,7 +104,7 @@ void append_packed(Value& destination, const Value& operand) noexcept {
     const std::uint64_t value) noexcept {
     return value == 0
         ? 1U
-        : static_cast<std::uint32_t>(64U - std::countl_zero(value));
+        : static_cast<std::uint32_t>(64 - std::countl_zero(value));
 }
 
 [[nodiscard]] std::optional<Value> parse_based_literal(
@@ -792,7 +792,7 @@ enum class Truth { False, True, Unknown };
                 reduced = Truth::Unknown;
             } else {
                 reduced =
-                    (std::popcount(operand->bits & operand->mask()) & 1U) != 0
+                    (std::popcount(operand->bits & operand->mask()) & 1) != 0
                         ? Truth::True
                         : Truth::False;
             }
@@ -1052,7 +1052,7 @@ enum class Truth { False, True, Unknown };
             magnitude <= 1U
                 ? 0U
                 : static_cast<std::uint64_t>(
-                      64U - std::countl_zero(magnitude - 1U));
+                      64 - std::countl_zero(magnitude - 1U));
         return make_known(
             result, 32, true, false, expression.span);
     }

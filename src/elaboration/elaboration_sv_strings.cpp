@@ -9,7 +9,8 @@ namespace {
 
 std::string source_spelling(const std::string_view bytes) {
     std::string result{"\""};
-    for (const unsigned char byte : bytes) {
+    for (const char raw_byte : bytes) {
+        const auto byte = static_cast<unsigned char>(raw_byte);
         switch (byte) {
         case '\n':
             result += "\\n";
@@ -367,7 +368,8 @@ std::string SystemVerilogStringValue::canonical() const {
     std::ostringstream output;
     output << "svstring-v1;bytes=" << bytes.size() << ";hex=";
     output << std::hex << std::setfill('0');
-    for (const unsigned char byte : bytes) {
+    for (const char raw_byte : bytes) {
+        const auto byte = static_cast<unsigned char>(raw_byte);
         output << std::setw(2) << static_cast<unsigned>(byte);
     }
     return output.str();
