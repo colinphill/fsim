@@ -10,6 +10,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <exception>
 #include <iterator>
 #include <limits>
@@ -51,6 +52,8 @@ struct HierarchyRegistry::Impl {
         fsim_sc_value_encoding_v1 encoding{FSIM_SC_BIT2};
         std::uint32_t width{};
         Kind kind{Kind::port};
+        fsim_sc_port_direction_v1 direction{FSIM_SC_INOUT};
+        bool writable{true};
     };
 
     struct Child {
@@ -113,6 +116,7 @@ struct HierarchyRegistry::Impl {
     std::vector<LiveModule> live;
     fsim_sc_handle_v1 next_handle{1};
     std::uint64_t femtoseconds_per_tick{1};
+    std::string elaboration_failure;
 
     [[nodiscard]] std::optional<fsim_sc_handle_v1> allocate_handle();
 
@@ -276,6 +280,24 @@ extern "C" fsim_sc_status_v1 registry_bind_export(
     void* context,
     const fsim_sc_handle_v1 export_handle,
     const fsim_sc_handle_v1 target) noexcept;
+
+extern "C" fsim_sc_status_v1 registry_set_export_writable(
+    void* context,
+    fsim_sc_handle_v1 export_handle,
+    std::uint8_t writable) noexcept;
+
+extern "C" fsim_sc_status_v1 registry_register_metadata_object(
+    void* context,
+    fsim_sc_handle_v1 module,
+    const char* name,
+    fsim_sc_metadata_category_v1 category,
+    const char* kind,
+    fsim_sc_handle_v1* result) noexcept;
+
+extern "C" fsim_sc_status_v1 registry_set_primitive_channel_kind(
+    void* context,
+    fsim_sc_handle_v1 channel,
+    const char* kind) noexcept;
 
 extern "C" fsim_sc_status_v1 registry_register_native_module(
     void* context,

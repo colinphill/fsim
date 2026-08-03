@@ -1247,7 +1247,8 @@ endmodule
                  fsim::frontend::PortDirection::Output, 0},
             },
             {
-                {"u_hdl",
+                {103,
+                 "u_hdl",
                  {{"VALUE", 0x3c}},
                  {
                      {"clock", systemc_bit,
@@ -1256,6 +1257,7 @@ endmodule
                       fsim::frontend::PortDirection::Output, 102},
                  }},
             },
+            {},
             {},
             {},
             {},
@@ -1487,7 +1489,8 @@ end architecture rtl;
                  fsim::frontend::PortDirection::Output, 0},
             },
             {
-                {"u_hdl",
+                {203,
+                 "u_hdl",
                  {{"CHOOSE", 0}},
                  {
                      {"value", systemc_logic,
@@ -1496,6 +1499,7 @@ end architecture rtl;
                       fsim::frontend::PortDirection::Output, 202},
                  }},
             },
+            {},
             {},
             {},
             {},
@@ -1687,6 +1691,7 @@ endmodule
               "shared",
               systemc_logic,
               fsim::runtime::PackedLogic4::from_msb_string("0")}},
+            {},
             {},
             {},
             {}};

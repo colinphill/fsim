@@ -4,6 +4,7 @@
 #include <cassert>
 #include <iostream>
 #include <limits>
+#include <string>
 #include <string_view>
 #include <type_traits>
 
@@ -22,6 +23,17 @@ SC_MODULE(Counter) {
         value.write(count);
     }
 
+    void check_process_identity() const {
+        const auto& process = fsim_processes().front();
+        assert(
+            std::string_view{process.object->name()}
+                == "counter.tick"
+            && std::string_view{process.object->basename()} == "tick"
+            && std::string_view{process.object->kind()}
+                == "sc_method_process"
+            && process.object->get_parent_object() == this);
+    }
+
     sc_dt::sc_uint<8> count{};
 };
 
@@ -36,6 +48,9 @@ SC_MODULE(ClockedThread) {
 };
 
 struct ValueInterface : sc_core::sc_interface {
+    [[nodiscard]] static const char* fsim_kind() noexcept {
+        return "test.value_interface";
+    }
     [[nodiscard]] virtual unsigned value() const = 0;
 };
 
@@ -46,6 +61,30 @@ struct ValueImplementation final : ValueInterface {
 struct TestPrimitiveChannel final : sc_core::sc_prim_channel {
     TestPrimitiveChannel() : sc_core::sc_prim_channel("test_channel") {}
     void update() override {}
+};
+
+struct MetadataPrimitiveChannel final : sc_core::sc_prim_channel {
+    MetadataPrimitiveChannel()
+        : sc_core::sc_prim_channel(
+              "metadata_channel", "test.metadata_channel") {}
+};
+
+SC_MODULE(NamedHierarchy) {
+    sc_core::sc_signal<bool> explicit_name{"object_0"};
+    std::string first_unique;
+    std::string second_unique;
+
+    SC_CTOR(NamedHierarchy) {
+        first_unique = sc_core::sc_gen_unique_name("object");
+        second_unique = sc_core::sc_gen_unique_name("object");
+    }
+};
+
+SC_MODULE(DuplicateSibling) {
+    sc_core::sc_signal<bool> signal{"same"};
+    sc_core::sc_event event{"same"};
+
+    SC_CTOR(DuplicateSibling) {}
 };
 
 int main() {
@@ -313,6 +352,10 @@ int main() {
             sc_core::sc_signal<bool>>);
     static_assert(
         std::is_base_of_v<
+            sc_core::sc_object,
+            sc_core::sc_signal<bool>>);
+    static_assert(
+        std::is_base_of_v<
             sc_core::sc_signal_in_if<bool>,
             sc_core::sc_signal<bool>>);
     static_assert(
@@ -330,11 +373,65 @@ int main() {
         initialized.value_changed_event().native_handle()
         == initialized.native_handle());
     Counter counter{"counter"};
+    assert(
+        std::string_view{counter.name()} == "counter"
+        && std::string_view{counter.basename()} == "counter"
+        && std::string_view{counter.kind()} == "sc_module"
+        && counter.get_parent_object() == nullptr);
+    assert(
+        std::string_view{counter.clock.name()} == "counter.clock"
+        && std::string_view{counter.clock.basename()} == "clock"
+        && std::string_view{counter.clock.kind()} == "sc_in"
+        && counter.clock.get_parent_object() == &counter);
+    assert(
+        std::string_view{counter.value.name()} == "counter.value"
+        && std::string_view{counter.value.basename()} == "value"
+        && std::string_view{counter.value.kind()} == "sc_out"
+        && counter.value.get_parent_object() == &counter);
+    counter.check_process_identity();
+    assert(
+        counter.get_child_objects().size() == 3
+        && counter.get_child_objects()[0] == &counter.clock
+        && counter.get_child_objects()[1] == &counter.value
+        && sc_core::sc_find_object("counter") == &counter
+        && sc_core::sc_find_object("counter.clock") == &counter.clock
+        && sc_core::sc_find_object("counter.tick")
+            == counter.get_child_objects()[2]);
+    assert(std::find(
+               sc_core::sc_get_top_level_objects().begin(),
+               sc_core::sc_get_top_level_objects().end(),
+               &counter)
+           != sc_core::sc_get_top_level_objects().end());
+    {
+        Counter transient{"transient"};
+        assert(sc_core::sc_find_object("transient.value") == &transient.value);
+    }
+    assert(sc_core::sc_find_object("transient") == nullptr);
+    assert(
+        std::string_view{initialized.name()} == "initialized"
+        && std::string_view{initialized.basename()} == "initialized"
+        && std::string_view{initialized.kind()} == "sc_signal"
+        && initialized.get_parent_object() == nullptr);
     counter.clock(clock);
     counter.value(value);
     assert(value.read().to_uint64() == 0);
 
     ClockedThread thread{"thread"};
+    NamedHierarchy named_hierarchy{"named_hierarchy"};
+    assert(
+        named_hierarchy.first_unique == "object_1"
+        && named_hierarchy.second_unique == "object_2");
+    NamedHierarchy second_hierarchy{"second_hierarchy"};
+    assert(
+        second_hierarchy.first_unique == "object_1"
+        && second_hierarchy.second_unique == "object_2");
+    bool rejected_duplicate_sibling = false;
+    try {
+        (void)DuplicateSibling{"duplicate_sibling"};
+    } catch (const std::invalid_argument&) {
+        rejected_duplicate_sibling = true;
+    }
+    assert(rejected_duplicate_sibling);
     thread.clock(clock);
     sc_core::sc_inout<bool> bidirectional{"bidirectional"};
     bidirectional(clock);
@@ -342,6 +439,12 @@ int main() {
         bidirectional.pos().edge_kind() == FSIM_SC_POSEDGE
         && bidirectional.neg().edge_kind() == FSIM_SC_NEGEDGE);
     sc_core::sc_event event;
+    sc_core::sc_event named_event{"named_event"};
+    assert(
+        std::string_view{named_event.name()} == "named_event"
+        && std::string_view{named_event.basename()} == "named_event"
+        && std::string_view{named_event.kind()} == "sc_event"
+        && named_event.get_parent_object() == nullptr);
     bool rejected_notify = false;
     try {
         event.notify();
@@ -379,6 +482,11 @@ int main() {
     }
     assert(rejected_and_trigger);
     TestPrimitiveChannel channel;
+    assert(
+        std::string_view{channel.name()} == "test_channel"
+        && std::string_view{channel.basename()} == "test_channel"
+        && std::string_view{channel.kind()} == "sc_prim_channel"
+        && channel.get_parent_object() == nullptr);
     assert(!channel.update_requested());
     bool rejected_channel_update = false;
     try {
@@ -389,7 +497,17 @@ int main() {
     assert(rejected_channel_update);
 
     ValueImplementation implementation;
+    sc_core::sc_port<ValueInterface> custom_port{"custom_port"};
+    custom_port.bind(implementation);
+    assert(
+        std::string_view{custom_port.kind()} == "sc_port"
+        && custom_port->value() == 42);
     sc_core::sc_export<ValueInterface> exported{"exported"};
+    assert(
+        std::string_view{exported.name()} == "exported"
+        && std::string_view{exported.basename()} == "exported"
+        && std::string_view{exported.kind()} == "sc_export"
+        && exported.get_parent_object() == nullptr);
     bool rejected_unbound_export = false;
     try {
         (void)sc_core::sc_export<ValueInterface>{}.get_interface();
@@ -410,6 +528,18 @@ int main() {
         rejected_export_cycle = true;
     }
     assert(rejected_export_cycle);
+
+    MetadataPrimitiveChannel metadata_channel;
+    assert(
+        std::string_view{metadata_channel.kind()}
+        == "test.metadata_channel");
+    bool rejected_metadata_update = false;
+    try {
+        metadata_channel.request_update();
+    } catch (const std::logic_error&) {
+        rejected_metadata_update = true;
+    }
+    assert(rejected_metadata_update);
 
     sc_core::sc_export<
         sc_core::sc_signal_in_if<bool>> signal_export{
@@ -446,6 +576,20 @@ int main() {
         rejected_null_name = true;
     }
     assert(rejected_null_name);
+    bool rejected_empty_unique_base = false;
+    try {
+        (void)sc_core::sc_gen_unique_name("");
+    } catch (const std::invalid_argument&) {
+        rejected_empty_unique_base = true;
+    }
+    assert(rejected_empty_unique_base);
+    bool rejected_hierarchical_basename = false;
+    try {
+        (void)sc_core::sc_event{"invalid.name"};
+    } catch (const std::invalid_argument&) {
+        rejected_hierarchical_basename = true;
+    }
+    assert(rejected_hierarchical_basename);
     bool rejected_null_module_name = false;
     try {
         (void)Counter{sc_core::sc_module_name{nullptr}};

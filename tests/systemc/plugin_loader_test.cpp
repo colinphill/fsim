@@ -2,6 +2,7 @@
 #include "fsim/systemc/plugin_loader.hpp"
 #include "fsim/systemc/hierarchy.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <filesystem>
@@ -153,6 +154,34 @@ int main(int argc, char** argv) {
     assert(
         bridge->foreign_children[0].ports[1].object
         == bridge->ports[1].handle);
+    const auto bridge_info = hierarchy->object_info(bridge->handle);
+    assert(
+        bridge_info
+        && bridge_info->parent == 0
+        && bridge_info->name == "top.u_bridge"
+        && bridge_info->path == "top.u_bridge"
+        && bridge_info->kind
+            == fsim::systemc::HierarchyObjectKind::module);
+    const auto bridge_children =
+        hierarchy->child_objects(bridge->handle);
+    assert(bridge_children.size() == 4);
+    assert(std::is_sorted(
+        bridge_children.begin(), bridge_children.end(),
+        [](const auto& left, const auto& right) {
+            return left.handle < right.handle;
+        }));
+    assert(
+        bridge_children[0].name == "clock"
+        && bridge_children[0].kind
+            == fsim::systemc::HierarchyObjectKind::port);
+    assert(
+        hierarchy->find_object(bridge->handle, "value")->handle
+        == bridge->ports[1].handle);
+    assert(
+        hierarchy->find_object(
+            bridge->handle, "top.u_bridge.evaluate")->handle
+        == bridge->processes[0].handle);
+    assert(!hierarchy->find_object(bridge->handle, "missing"));
     const auto nested_bridge = hierarchy->instantiate(
         "bridge",
         "top.u_bridge.u_nested",
@@ -168,6 +197,20 @@ int main(int argc, char** argv) {
         nested_bridge->construction_values
         == std::vector<std::pair<std::string, std::int64_t>>{
             {"WIDTH", 4}}));
+    const auto nested_info =
+        hierarchy->object_info(nested_bridge->handle);
+    assert(nested_info && nested_info->parent == bridge->handle);
+    const auto updated_bridge_children =
+        hierarchy->child_objects(bridge->handle);
+    assert(updated_bridge_children.size() == 5);
+    assert(
+        hierarchy->find_object(
+            nested_bridge->handle, "value")->handle
+        == nested_bridge->ports[1].handle);
+    assert(
+        hierarchy->find_object(
+            bridge->handle, "top.u_bridge.u_nested.value")->handle
+        == nested_bridge->ports[1].handle);
 
     error.clear();
     const auto invalid_width = hierarchy->instantiate(

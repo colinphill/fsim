@@ -236,6 +236,19 @@ void adapt_vhdl_array_port_shapes(
         stack_.push_back(stack_identity);
         used_systemc_instances_.insert(path);
 
+        const auto parent_separator = path.rfind('.');
+        design_.systemc_objects_.push_back({
+            SystemCNamedObjectKind::module,
+            instance.handle,
+            path,
+            path == design_.top_ || parent_separator == std::string::npos
+                ? std::string{}
+                : path.substr(0, parent_separator),
+            instance.target,
+            std::nullopt,
+            std::nullopt,
+            {}});
+
         std::unordered_set<std::uint64_t> connected_ports;
         for (const auto& port : instance.ports) {
             if (objects.contains(port.handle)) {
@@ -457,6 +470,23 @@ void adapt_vhdl_array_port_shapes(
             }
         }
 
+        const auto append_value_object =
+            [&](const SystemCNamedObjectKind kind,
+                const std::uint64_t native_handle,
+                const std::string_view local_name,
+                const std::string_view type_name,
+                const SignalId signal) {
+              design_.systemc_objects_.push_back({
+                  kind,
+                  native_handle,
+                  path + "." + std::string{local_name},
+                  path,
+                  std::string{type_name},
+                  signal,
+                  std::nullopt,
+                  {}});
+            };
+
         SystemCInstanceInfo info;
         info.id = static_cast<std::uint32_t>(
             design_.systemc_instances_.size());
@@ -472,6 +502,26 @@ void adapt_vhdl_array_port_shapes(
                 signal != aliases.end()) {
                 info.ports.push_back(
                     {port.name, port.handle, signal->second});
+                std::string_view type_name = "sc_port";
+                switch (port.direction) {
+                case frontend::PortDirection::Input:
+                    type_name = "sc_in";
+                    break;
+                case frontend::PortDirection::Output:
+                    type_name = "sc_out";
+                    break;
+                case frontend::PortDirection::Inout:
+                    type_name = "sc_inout";
+                    break;
+                default:
+                    break;
+                }
+                append_value_object(
+                    SystemCNamedObjectKind::port,
+                    port.handle,
+                    port.name,
+                    type_name,
+                    signal->second);
             }
         }
         for (const auto& event : instance.events) {
@@ -479,11 +529,47 @@ void adapt_vhdl_array_port_shapes(
                 signal != objects.end()) {
                 info.events.push_back(
                     {event.name, event.handle, signal->second});
+                append_value_object(
+                    SystemCNamedObjectKind::event,
+                    event.handle,
+                    event.name,
+                    "sc_event",
+                    signal->second);
             }
         }
         for (const auto& channel : instance.primitive_channels) {
             info.primitive_channels.push_back(
                 {channel.name, channel.handle});
+            const auto promoted = std::any_of(
+                instance.internal_signals.begin(),
+                instance.internal_signals.end(),
+                [&](const ExternalInternalSignal& signal) {
+                  return signal.handle == channel.handle;
+                });
+            if (!promoted) {
+                design_.systemc_objects_.push_back({
+                    SystemCNamedObjectKind::primitive_channel,
+                    channel.handle,
+                    path + "." + channel.name,
+                    path,
+                    channel.kind,
+                    std::nullopt,
+                    std::nullopt,
+                    {}});
+            }
+        }
+        for (const auto& object : instance.metadata_objects) {
+            design_.systemc_objects_.push_back({
+                object.category == FSIM_SC_METADATA_PORT
+                    ? SystemCNamedObjectKind::port
+                    : SystemCNamedObjectKind::export_object,
+                object.handle,
+                path + "." + object.name,
+                path,
+                object.kind,
+                std::nullopt,
+                std::nullopt,
+                {}});
         }
         for (const auto& signal : instance.internal_signals) {
             if (const auto runtime_signal =
@@ -493,6 +579,12 @@ void adapt_vhdl_array_port_shapes(
                     {signal.name,
                      signal.handle,
                      runtime_signal->second});
+                append_value_object(
+                    SystemCNamedObjectKind::signal,
+                    signal.handle,
+                    signal.name,
+                    "sc_signal",
+                    runtime_signal->second);
             }
         }
         for (const auto& export_object : instance.exports) {
@@ -502,7 +594,14 @@ void adapt_vhdl_array_port_shapes(
                 info.exports.push_back(
                     {export_object.name,
                      export_object.handle,
-                     runtime_signal->second});
+                     runtime_signal->second,
+                     export_object.writable});
+                append_value_object(
+                    SystemCNamedObjectKind::export_object,
+                    export_object.handle,
+                    export_object.name,
+                    "sc_export",
+                    runtime_signal->second);
             }
         }
         design_.systemc_instances_.push_back(std::move(info));
@@ -597,6 +696,21 @@ void adapt_vhdl_array_port_shapes(
                           runtime::simir::WaitSensitivity{}});
             design_.systemc_processes_.push_back(
                 {process.id, external.handle});
+            std::string_view process_type = "sc_method_process";
+            if (external.kind == FSIM_SC_THREAD) {
+                process_type = "sc_thread_process";
+            } else if (external.kind == FSIM_SC_CTHREAD) {
+                process_type = "sc_cthread_process";
+            }
+            design_.systemc_objects_.push_back({
+                SystemCNamedObjectKind::process,
+                external.handle,
+                process.name,
+                path,
+                std::string{process_type},
+                std::nullopt,
+                process.id,
+                {}});
             design_.processes_.push_back(std::move(process));
         }
 
@@ -618,6 +732,11 @@ void adapt_vhdl_array_port_shapes(
             ObjectMap child_objects = objects;
             for (const auto& port : child.ports) {
                 if (port.bound_object == 0) {
+                    report(
+                        "FSIM-ELAB-BIND-058",
+                        "native SystemC child port '" + child.path + "."
+                            + port.name + "' is unbound",
+                        {});
                     continue;
                 }
                 const auto signal = objects.find(port.bound_object);
@@ -637,6 +756,15 @@ void adapt_vhdl_array_port_shapes(
 
         for (const auto& child : instance.foreign_children) {
             const auto child_path = path + "." + child.name;
+            design_.systemc_objects_.push_back({
+                SystemCNamedObjectKind::foreign_child,
+                child.handle,
+                child_path,
+                path,
+                "hdl_instance",
+                std::nullopt,
+                std::nullopt,
+                {}});
             const auto* binding = binding_for(child_path);
             if (binding == nullptr) {
                 report(

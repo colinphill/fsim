@@ -9,6 +9,13 @@ using namespace elaboration_detail;
 
 void HierarchyBuilder::finish() {
     validate_process_drivers();
+    std::stable_sort(
+        design_.systemc_objects_.begin(),
+        design_.systemc_objects_.end(),
+        [](const SystemCNamedObjectInfo& left,
+           const SystemCNamedObjectInfo& right) {
+            return left.native_handle < right.native_handle;
+        });
     for (const auto& [path, binding] : bindings_) {
         (void)binding;
         if (!used_bindings_.contains(path)) {

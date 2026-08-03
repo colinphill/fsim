@@ -71,6 +71,11 @@ typedef enum fsim_sc_event_list_kind_v1 {
     FSIM_SC_EVENT_AND_LIST = 1
 } fsim_sc_event_list_kind_v1;
 
+typedef enum fsim_sc_metadata_category_v1 {
+    FSIM_SC_METADATA_PORT = 0,
+    FSIM_SC_METADATA_EXPORT = 1
+} fsim_sc_metadata_category_v1;
+
 typedef struct fsim_sc_value_view_v1 {
     /*
      * Packed planes are byte-addressed, least-significant bit first.
@@ -304,6 +309,36 @@ typedef struct fsim_sc_host_v1 {
         fsim_sc_handle_v1 module,
         const char* name,
         int64_t* result);
+
+    /*
+     * Append-only export capability metadata. Legacy plug-ins which omit this
+     * callback retain the original read/write-capable behavior. New facade
+     * code sets zero for read-only signal interfaces and one for inout
+     * interfaces before binding the export.
+     */
+    fsim_sc_status_v1 (*set_export_writable)(
+        void* context,
+        fsim_sc_handle_v1 export_handle,
+        uint8_t writable);
+
+    /*
+     * Append-only metadata-only custom-interface objects. These records have
+     * hierarchy identity but deliberately have no common-kernel value or
+     * binding behavior.
+     */
+    fsim_sc_status_v1 (*register_metadata_object)(
+        void* context,
+        fsim_sc_handle_v1 module,
+        const char* name,
+        fsim_sc_metadata_category_v1 category,
+        const char* kind,
+        fsim_sc_handle_v1* result);
+
+    /* Append-only custom kind label for a metadata-only primitive channel. */
+    fsim_sc_status_v1 (*set_primitive_channel_kind)(
+        void* context,
+        fsim_sc_handle_v1 channel,
+        const char* kind);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {

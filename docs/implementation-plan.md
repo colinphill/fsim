@@ -8330,50 +8330,228 @@ source-line budget, IEEE inventory, and v1 matrix gates. Batch 122 closes as
 one accumulated commit/push checkpoint and, because it is not a tenth-batch
 boundary, has no GitHub Actions inspection.
 
-### One-hundred-twenty-third feature batch — SystemC named hierarchy and interfaces — In progress
+### One-hundred-twenty-third feature batch — SystemC named hierarchy and interfaces — Complete
 
 The current ten implementation tasks are:
 
-1. **In progress.** Audit SC-001 through SC-022 and the SystemC facade/ABI,
+1. **Complete.** Audit SC-001 through SC-022 and the SystemC facade/ABI,
    hierarchy registry, DesignIR, debugger/API, and application evidence for
    named-object hierarchy, ports, exports, standard interfaces, and bounded
    custom metadata; define the exact positive and failure matrix.
-2. **Pending.** Add bounded `sc_object` identity and introspection for modules,
+2. **Complete.** Add bounded `sc_object` identity and introspection for modules,
    ports, exports, signals, primitive channels, events, and processes,
    including stable `name`, `basename`, `kind`, and parent ownership.
-3. **Pending.** Preserve deterministic fully qualified names and construction
+3. **Complete.** Preserve deterministic fully qualified names and construction
    order across native children, foreign HDL placeholders, factory roots, and
    repeated `sc_gen_unique_name` use, rejecting duplicate or invalid sibling
    names transactionally.
-4. **Pending.** Complete parent/child object traversal and lookup through the
+4. **Complete.** Complete parent/child object traversal and lookup through the
    append-only plug-in ABI and common hierarchy, with stable handles and no
    cross-build or destroyed-object leakage.
-5. **Pending.** Complete typed `sc_in`, `sc_out`, and `sc_inout` binding policies
+5. **Complete.** Complete typed `sc_in`, `sc_out`, and `sc_inout` binding policies
    across direct interfaces, signals, parent/child port chains, and HDL aliases,
    including direction, cardinality, cycle, skipped-parent, and unbound checks.
-6. **Pending.** Complete `sc_export` binding and transitive resolution for the
+6. **Complete.** Complete `sc_export` binding and transitive resolution for the
    supported standard signal interfaces, including export-to-interface,
    export-to-export, port-to-export, read/write capability, and exact failures.
-7. **Pending.** Materialize every supported SystemC named object in common
+7. **Complete.** Materialize every supported SystemC named object in common
    DesignIR/API/debugger/VCD hierarchy with consistent source, kind, parent,
    signal identity, and lookup behavior across mixed-language boundaries.
-8. **Pending.** Add metadata-only registration for bounded custom interface and
+8. **Complete.** Add metadata-only registration for bounded custom interface and
    primitive-channel kinds permitted by v1, preserving names and hierarchy
    while rejecting unsupported custom binding, value, or asynchronous-update
    behavior explicitly.
-9. **Pending.** Prove the combined named hierarchy/port/export/interface matrix
+9. **Complete.** Prove the combined named hierarchy/port/export/interface matrix
    in compiled SystemC with interpreter and LLVM O0/O2 HDL peers, cold/warm/edit
    cache, lifecycle, callbacks, debugger, VCD, and exact negative diagnostics.
-10. **Pending.** Update matrix/subset/diagnostics/docs, pass sanitizer,
+10. **Complete.** Update matrix/subset/diagnostics/docs, pass sanitizer,
     source/catalog and full Debug/Release gates, then create and push the single
     Batch 123 checkpoint. This is not a mandatory CI-inspection boundary.
 
-Batch status is **in progress** with Task 1 current. Keep this exact ten-task
+Batch status is **complete**. Keep this exact ten-task
 list current in both the official plan and resume handoff. Tasks 1 through 9
 use one accumulated dirty worktree with focused eight-worker Debug builds and
 tests; Task 10 owns the sanitizer, full regressions, documentation, commit, and
 push gate. GitHub builds use parallelism four, and Batch 123 does not require a
 non-documentation CI inspection.
+
+Task 1 confirms that SC-001 through SC-022 already execute the bounded source
+facade, typed factories, native and foreign child modules, per-category object
+registration, standard signal interfaces, direct-parent port chains, typed
+export chains, common signal aliases, lifecycle, process/event/channel
+scheduling, and construction actuals. Registry descriptions retain stable
+handles, local names, module parents, and declaration order, but the facade
+exposes a name only for `sc_module`; there is no common `sc_object`, basename,
+kind, parent, child traversal, or lookup surface. Duplicate detection is
+category-local rather than one sibling object namespace, and
+`sc_gen_unique_name` is a process-thread counter rather than a hierarchy-scoped
+collision-aware allocator. DesignIR retains SystemC instance, port, event,
+primitive-channel, signal, export, and process records, but only modules,
+processes, and signal aliases reach the common API/debug/VCD object model.
+Standard `sc_signal_in_if`/`sc_signal_inout_if` bindings are typed and
+executable; arbitrary custom-interface calls and values remain outside v1, so
+the bounded closure is metadata-only registration with exact rejection of
+unsupported behavior. The exact eight-worker Debug build required no work;
+elaboration, facade header, strict C ABI, plug-in loader, plug-in compiler,
+main application, and SystemC datatype application passed 7/7 focused tests
+in 20.17 seconds. Task 2 is current; this starts the intentional accumulated
+Batch 123 dirty worktree with no sanitizer, Release, full regression, commit,
+push, or CI inspection at this task boundary.
+
+Task 2 adds a common facade `sc_object` base with stable `name()`, `basename()`,
+`kind()`, and `get_parent_object()` identity. `sc_module`, `sc_in`, `sc_out`,
+`sc_inout`, `sc_export`, `sc_signal`/`sc_prim_channel`, and `sc_event` now carry
+that identity, and process registration retains a stable owned object with the
+exact method/thread/cthread kind. Member ports and registered processes receive
+fully qualified module-relative names and the module parent; standalone named
+objects retain null parents. The append-only native ABI is unchanged. Header
+tests prove the base relationships and exact module, port, signal, event,
+channel, export, and method-process identities. The exact eight-worker Debug
+build succeeded; facade header, strict C ABI, plug-in loader, main application,
+diagnostics catalog, and source-line budget passed 6/6 focused tests in 16.42
+seconds. Task 3 is current; no sanitizer, Release, full regression, commit,
+push, or CI inspection ran at this task boundary.
+
+Task 3 makes `sc_gen_unique_name` deterministic per module and base, skips
+explicit sibling collisions, and preserves independent counters for separate
+module instances. Facade construction now rejects invalid child basenames and
+cross-kind duplicate sibling objects before registration. The native host
+independently enforces the same one-namespace rule across ports, foreign/native
+children, processes, events, primitive channels/signals, and exports, while
+recognizing a typed `sc_signal` as the metadata promotion of its existing
+primitive-channel handle. Qualified mixed-language root paths retain their
+full `name()` and expose only the last component as `basename()`; native child
+names remain local inputs and receive exactly one parent-qualified path.
+Header tests cover explicit-name skipping, per-instance counters, invalid
+names, and cross-kind duplicates, while the application retains its native
+duplicate-child failure and compiled mixed hierarchy. The exact eight-worker
+Debug build succeeded; elaboration, facade header, strict C ABI, plug-in loader,
+and main application passed 5/5 focused tests in 16.20 seconds, followed by a
+2/2 diagnostics/source gate in 0.20 seconds. Task 4 is current; no sanitizer,
+Release, full regression, commit, push, or CI inspection ran at this task
+boundary.
+
+Task 4 adds declaration-ordered `sc_object::get_child_objects()`, domain-scoped
+`sc_find_object()` and top-level enumeration, and destructor removal so facade
+lookups never retain destroyed pointers. Hierarchy domains use the active host
+context, isolating simultaneously loaded build roots while keeping standalone
+facade objects usable. The common `HierarchyRegistry` now returns copied,
+ABI-neutral object metadata by stable handle, direct children in monotonically
+allocated registration order, and absolute or root-relative path lookup whose
+parent chain must reach the requested root. Modules, ports, foreign children,
+processes, events, standalone primitive channels, promoted signals, exports,
+and native modules are classified; signal promotion retains one handle rather
+than duplicating its primitive channel. Header tests prove child order, lookup,
+top-level membership, process discovery, and destruction cleanup. Loader tests
+prove root/port/process/foreign-child metadata, nested roots, child ordering,
+relative/absolute lookup, missing paths, and stable parent handles. The exact
+eight-worker Debug build succeeded; facade header, strict C ABI, plug-in loader,
+and main application passed 4/4 focused tests in 16.04 seconds, followed by a
+2/2 diagnostics/source gate in 0.21 seconds. Task 5 is current; no sanitizer,
+Release, full regression, commit, push, or CI inspection ran at this task
+boundary.
+
+Task 5 completes the typed port policy independently in the facade and native
+host. Existing templates retain exact interface value types and prevent
+cross-direction chains at compile time; host object metadata now also retains
+port direction and rejects a child input→parent output, child output→parent
+input, or any inout→non-inout chain even for a raw ABI plug-in. Encoding and
+width equality, same/direct-parent signal scope, direct-parent port/export
+scope, one-target cardinality, idempotent rebinding, and structural cycle/
+skipped-parent rejection remain enforced. Common elaboration now emits
+`FSIM-ELAB-BIND-058` for every unbound native-child port while leaving selected
+root factory ports and HDL-connected ports as external aliases. A raw compiled
+plug-in probe must observe rejection of an output→input bind before accepted
+input→input and output→output binds can build two SystemC levels. A separate
+native fixture requires exactly two unbound-port diagnostics; existing direct
+port, signal, export, HDL alias, conflicting-target, cycle, and deep-parent
+cases remain green. The exact eight-worker Debug build succeeded, and the
+expanded main application passed in 16.57 seconds after the preceding 7/7
+SystemC/elaboration/catalog/source focused gate passed in 16.64 seconds. Task 6
+is current; no sanitizer, Release, full regression, commit, push, or CI
+inspection ran at this task boundary.
+
+Task 6 appends an optional `set_export_writable` host callback without changing
+the v1 ABI prefix. Current facade exports set read-only capability for
+`sc_signal_in_if<T>` and writable capability for `sc_signal_inout_if<T>` before
+binding; legacy plug-ins retain the former writable default. Registry binding
+now rejects a writable export targeting a read-only export and an output/inout
+port targeting a read-only export, while permitting read-only narrowing onto a
+writable signal/export. Existing exact encoding/width, same/direct-parent,
+one-target, cycle, unknown-handle, and unbound checks remain active. Capability
+travels through immutable factory descriptions and elaborated DesignIR export
+records. The raw compiled probe requires writable→read-only export and
+output→read-only-export rejection before read-only/writable signal bindings and
+an input→read-only-export alias can build successfully. The real four-export
+hierarchy proves two read-only and two writable records plus unchanged common
+signal identity and execution. The exact eight-worker Debug builds succeeded;
+diagnostics, source budget, elaboration, facade, strict C ABI, loader, and main
+application passed 7/7 focused tests in 16.60 seconds. Task 7 is current; no
+sanitizer, Release, full regression, commit, push, or CI inspection ran at this
+task boundary.
+
+Task 7 materializes modules, foreign HDL children, ports, processes, events,
+primitive channels, signals, and exports as immutable named DesignIR objects.
+Each record retains its stable native handle, exact common path and parent,
+SystemC kind/type, optional process, and optional dense signal identity. The C
+API appends event, channel, and export kinds, preserves distinct alias handles
+while reading and writing their shared signal, and enumerates native SystemC
+modules in the same scope tree as HDL instances. Debugger scope discovery now
+retains value-less native hierarchy, while common signal lookup and production
+VCD declarations include every value-bearing SystemC alias, including native
+child ports. A compiled API factory proves exact root/child traversal and
+lookup for all supported object categories; the mixed application proves
+DesignIR identity, debugger navigation, VCD scopes, and nested alias values.
+The exact eight-worker Debug build succeeded, and the main application plus C
+API tests passed 2/2 in 18.82 seconds. Task 8 is current; no sanitizer,
+Release, full regression, commit, push, or CI inspection ran at this task
+boundary.
+
+Task 8 appends metadata-object registration and primitive-channel kind labeling
+to the v1 host ABI while preserving its complete prefix. The facade adds a
+metadata-only generic `sc_port<IF>`, records unsupported-interface
+`sc_export<IF>` objects, and permits derived primitive channels to supply a
+bounded explicit kind. Custom interfaces may expose a stable kind through
+`IF::fsim_kind()`; otherwise they use `sc_interface`. These objects retain
+stable native handles, exact names/parents, port/export/channel categories,
+and custom type names through the registry, immutable factory description,
+DesignIR, and C API, but intentionally have no dense signal. A compiled
+factory proves positive custom port/export/channel metadata and exact
+`FSIM-SC-A004` construction failure for custom binding. Runtime attempts at
+custom value access or asynchronous primitive-channel update throw exact
+unsupported errors and poison the simulation rather than silently executing.
+The exact eight-worker Debug build succeeded; facade, strict C ABI, loader,
+main application, C API, diagnostics catalog, and source budget passed 7/7
+focused tests in 18.92 seconds. Task 9 is current; no sanitizer, Release, full
+regression, commit, push, or CI inspection ran at this task boundary.
+
+Task 9 adds one compiled mixed-language matrix that combines root and native-
+child ports, standard read-only and writable exports, promoted signals, a
+named event and method process, metadata-only custom port/export/channel
+objects, and ordered lifecycle callbacks. The same fixture now proves
+interpreter reference behavior, LLVM O0/O2 cold and warm native-cache parity,
+source-edit invalidation, debugger traversal, and production VCD aliases while
+retaining the exact custom binding, value-access, and asynchronous-update
+failures from Task 8. The exact eight-worker Debug build succeeded; the main
+application passed in 28.10 seconds, and the expanded application, C API,
+C-header, facade, strict C ABI, loader, diagnostics-catalog, and source-budget
+gate passed 8/8 in 29.61 seconds. Task 10 is current; no sanitizer, Release,
+full regression, commit, push, or CI inspection has run yet.
+
+Task 10 is complete. The LLVM-disabled ASan/UBSan regression passed all 75
+tests in 375.25 seconds with no sanitizer findings; leak detection alone was
+disabled for the locally traced run because LeakSanitizer cannot operate under
+the workspace tracer, while the CI preset retains leak detection. Its initial
+warnings-as-errors build exposed and repaired three stale aggregate fixtures
+that omitted the newly retained foreign-child handles and trailing identity
+field. The exact LLVM 22.1.8 warnings-as-errors Debug regression then passed
+all 78 tests in 200.08 seconds, including `fsim.application.scoped_locals` in
+0.82 seconds and resolution in 0.47 seconds. The corresponding Release build
+and 78-test regression passed in 177.78 seconds, with scoped locals in 0.84
+seconds and resolution in 0.44 seconds. Both full suites include the
+diagnostics catalog, source-line budget, IEEE inventory, and v1 matrix gates.
+Batch 123 closes as one accumulated commit/push checkpoint and, because it is
+not a tenth-batch boundary, has no GitHub Actions inspection.
 
 ## Forward language-closure feature batches
 

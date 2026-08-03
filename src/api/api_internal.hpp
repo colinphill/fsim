@@ -29,7 +29,9 @@ namespace fsim::api::detail {
 
 constexpr std::uint32_t kRootPayload = 1;
 constexpr std::uint32_t kScopePayloadBase = 2;
-constexpr std::uint32_t kScopeIndexMask = UINT32_C(0x1fffffff);
+constexpr std::uint32_t kScopeIndexMask = UINT32_C(0x0fffffff);
+constexpr std::uint32_t kSystemCObjectPayload = UINT32_C(0x10000000);
+constexpr std::uint32_t kSystemCObjectIndexMask = UINT32_C(0x0fffffff);
 constexpr std::uint32_t kDriverPayload = UINT32_C(0x20000000);
 constexpr std::uint32_t kDriverIndexMask = UINT32_C(0x1fffffff);
 constexpr std::uint32_t kSignalPayload = UINT32_C(0x40000000);
@@ -63,6 +65,7 @@ struct ScopeObject {
   std::string full_name;
   std::string type_name;
   fsim::runtime::simir::SourceLocation source;
+  std::optional<std::size_t> systemc_object;
 };
 
 struct Session {
@@ -89,6 +92,8 @@ struct Session {
   std::vector<std::string> process_names;
   std::vector<VariableObject> variables;
   std::vector<DriverObject> drivers;
+  std::vector<std::optional<std::size_t>> systemc_scope_by_object;
+  std::vector<std::optional<std::size_t>> systemc_object_by_process;
   bool finished{};
 };
 
@@ -154,6 +159,15 @@ bool current_object(
     const fsim_object_t object) noexcept;
 
 std::uint32_t object_payload(const fsim_object_t object) noexcept;
+
+fsim_object_t systemc_object_handle(
+    const Session& session, std::size_t object);
+
+std::optional<std::size_t> object_systemc(
+    const Session& session, fsim_object_t object);
+
+fsim_object_t debug_systemc_object_handle(
+    const Session& session, std::size_t object);
 
 fsim_object_t root_handle(const Session& session) noexcept;
 

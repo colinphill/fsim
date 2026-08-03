@@ -434,12 +434,117 @@ SC_MODULE(ExportHierarchy) {
   }
 };
 
+struct MetadataInterface : sc_core::sc_interface {
+  static const char* fsim_kind() noexcept {
+    return "models.metadata_interface";
+  }
+  virtual unsigned inspect() const = 0;
+};
+
+struct MetadataChannel final
+    : sc_core::sc_prim_channel,
+      MetadataInterface {
+  explicit MetadataChannel(const char* name)
+      : sc_core::sc_prim_channel(
+            name, "models.metadata_channel") {}
+
+  unsigned inspect() const override { return 7; }
+};
+
+SC_MODULE(CustomMetadata) {
+  sc_core::sc_port<MetadataInterface> endpoint{"endpoint"};
+  sc_core::sc_export<MetadataInterface> exposed{"exposed"};
+  MetadataChannel channel{"channel"};
+
+  SC_CTOR(CustomMetadata) {}
+};
+
+SC_MODULE(CustomBindingFailure) {
+  sc_core::sc_port<MetadataInterface> endpoint{"endpoint"};
+  MetadataChannel channel{"channel"};
+
+  SC_CTOR(CustomBindingFailure) {
+    endpoint.bind(channel);
+  }
+};
+
+SC_MODULE(CustomUpdateFailure) {
+  MetadataChannel channel{"channel"};
+
+  SC_CTOR(CustomUpdateFailure) {
+    SC_METHOD(run);
+  }
+
+  void run() { channel.request_update(); }
+};
+
+SC_MODULE(CustomValueFailure) {
+  sc_core::sc_port<MetadataInterface> endpoint{"endpoint"};
+
+  SC_CTOR(CustomValueFailure) {
+    SC_METHOD(run);
+  }
+
+  void run() { (void)endpoint->inspect(); }
+};
+
+SC_MODULE(NamedObjectMatrix) {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+  sc_core::sc_signal<sc_dt::sc_logic> value_channel{
+      "value_channel", sc_dt::sc_logic{'0'}};
+  sc_core::sc_signal<sc_dt::sc_logic> inverted_channel{
+      "inverted_channel", sc_dt::sc_logic{'1'}};
+  sc_core::sc_export<sc_core::sc_signal_in_if<sc_dt::sc_logic>>
+      value_endpoint{"value_endpoint"};
+  sc_core::sc_export<sc_core::sc_signal_inout_if<sc_dt::sc_logic>>
+      inverted_endpoint{"inverted_endpoint"};
+  sc_core::sc_port<MetadataInterface> custom_port{"custom_port"};
+  sc_core::sc_export<MetadataInterface> custom_export{"custom_export"};
+  MetadataChannel custom_channel{"custom_channel"};
+  sc_core::sc_event pulse{"pulse"};
+  NativeLeaf leaf;
+  bool elaborated{};
+  bool started{};
+
+  SC_CTOR(NamedObjectMatrix)
+      : leaf{"leaf"} {
+    value(value_channel);
+    inverted(inverted_channel);
+    value_endpoint(value_channel);
+    inverted_endpoint(inverted_channel);
+    leaf.value(value_endpoint);
+    leaf.inverted(inverted_endpoint);
+  }
+
+ protected:
+  void end_of_elaboration() override { elaborated = true; }
+  void start_of_simulation() override {
+    if (!elaborated) {
+      throw std::runtime_error{"named matrix lifecycle order mismatch"};
+    }
+    started = true;
+  }
+  void end_of_simulation() override {
+    if (!started) {
+      throw std::runtime_error{"named matrix lifecycle did not start"};
+    }
+  }
+};
+
 SC_MODULE(UnboundExport) {
   sc_core::sc_export<
       sc_core::sc_signal_in_if<sc_dt::sc_logic>> dangling{
           "dangling"};
 
   SC_CTOR(UnboundExport) {}
+};
+
+SC_MODULE(UnboundNativeHierarchy) {
+  NativeLeaf leaf;
+
+  SC_CTOR(UnboundNativeHierarchy)
+      : leaf{"leaf"} {}
 };
 
 SC_MODULE(DeepMiddle) {
@@ -573,6 +678,108 @@ void* create_model(void*, const char*, fsim_sc_handle_v1) {
   return reinterpret_cast<void*>(0x1);
 }
 void destroy_model(void*, void*) {}
+void probe_update(void*) {}
+
+fsim_sc_status_v1 elaborate_port_direction_probe(
+    void* user,
+    const char*,
+    fsim_sc_handle_v1 module,
+    fsim_sc_handle_v1,
+    void** result) {
+  const auto* host = static_cast<const fsim_sc_host_v1*>(user);
+  if (host == nullptr || result == nullptr
+      || host->register_port == nullptr
+      || host->register_native_module == nullptr
+      || host->bind_port == nullptr
+      || host->register_primitive_channel == nullptr
+      || host->register_signal == nullptr
+      || host->register_export == nullptr
+      || host->set_export_writable == nullptr
+      || host->bind_export == nullptr) {
+    return FSIM_SC_ABI_MISMATCH;
+  }
+  fsim_sc_handle_v1 parent_input = 0;
+  fsim_sc_handle_v1 parent_output = 0;
+  fsim_sc_handle_v1 child = 0;
+  fsim_sc_handle_v1 child_input = 0;
+  fsim_sc_handle_v1 child_output = 0;
+  fsim_sc_handle_v1 export_input = 0;
+  fsim_sc_handle_v1 channel = 0;
+  fsim_sc_handle_v1 read_export = 0;
+  fsim_sc_handle_v1 write_export = 0;
+  static int channel_state = 0;
+  const std::array<std::uint8_t, 2> initial{{0, 0}};
+  const fsim_sc_value_view_v1 initial_view{
+      sizeof(fsim_sc_value_view_v1),
+      FSIM_SC_LOGIC4,
+      1,
+      initial.data(),
+      initial.size()};
+  if (host->register_port(
+          host->context, module, "sink", FSIM_SC_INPUT,
+          FSIM_SC_LOGIC4, 1, &parent_input) != FSIM_SC_OK
+      || host->register_port(
+          host->context, module, "source", FSIM_SC_OUTPUT,
+          FSIM_SC_LOGIC4, 1, &parent_output) != FSIM_SC_OK
+      || host->register_native_module(
+          host->context, module, "child", &child) != FSIM_SC_OK
+      || host->register_port(
+          host->context, child, "sink", FSIM_SC_INPUT,
+          FSIM_SC_LOGIC4, 1, &child_input) != FSIM_SC_OK
+      || host->register_port(
+          host->context, child, "source", FSIM_SC_OUTPUT,
+          FSIM_SC_LOGIC4, 1, &child_output) != FSIM_SC_OK
+      || host->register_port(
+          host->context, child, "export_sink", FSIM_SC_INPUT,
+          FSIM_SC_LOGIC4, 1, &export_input) != FSIM_SC_OK
+      || host->register_primitive_channel(
+          host->context, module, "channel", probe_update,
+          &channel_state, &channel) != FSIM_SC_OK
+      || host->register_signal(
+          host->context, module, channel, "channel",
+          FSIM_SC_LOGIC4, 1, &initial_view) != FSIM_SC_OK
+      || host->register_export(
+          host->context, module, "read_export", FSIM_SC_LOGIC4,
+          1, &read_export) != FSIM_SC_OK
+      || host->set_export_writable(
+          host->context, read_export, 0) != FSIM_SC_OK
+      || host->register_export(
+          host->context, module, "write_export", FSIM_SC_LOGIC4,
+          1, &write_export) != FSIM_SC_OK
+      || host->set_export_writable(
+          host->context, write_export, 1) != FSIM_SC_OK) {
+    return FSIM_SC_RUNTIME_ERROR;
+  }
+  if (host->bind_port(
+          host->context, child_output, parent_input)
+          != FSIM_SC_INVALID_ARGUMENT
+      || host->bind_export(
+          host->context, write_export, read_export)
+          != FSIM_SC_INVALID_ARGUMENT
+      || host->bind_port(
+          host->context, child_output, read_export)
+          != FSIM_SC_INVALID_ARGUMENT) {
+    return FSIM_SC_RUNTIME_ERROR;
+  }
+  if (host->bind_port(
+          host->context, child_input, parent_input) != FSIM_SC_OK
+      || host->bind_port(
+          host->context, child_output, parent_output) != FSIM_SC_OK
+      || host->bind_export(
+          host->context, read_export, channel) != FSIM_SC_OK
+      || host->bind_export(
+          host->context, write_export, channel) != FSIM_SC_OK
+      || host->bind_port(
+          host->context, export_input, read_export) != FSIM_SC_OK) {
+    return FSIM_SC_RUNTIME_ERROR;
+  }
+  *result = new int{1};
+  return FSIM_SC_OK;
+}
+
+void destroy_port_direction_probe(void*, void* object) {
+  delete static_cast<int*>(object);
+}
 }
 
 SC_MODULE(HdlBridge) {
@@ -657,6 +864,16 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
       nullptr);
   if (status != FSIM_SC_OK) {
     return status;
+  }
+  const auto direction_status =
+      registrar->register_elaboration_factory(
+          registrar->context,
+          "port_direction_probe",
+          elaborate_port_direction_probe,
+          destroy_port_direction_probe,
+          const_cast<fsim_sc_host_v1*>(host));
+  if (direction_status != FSIM_SC_OK) {
+    return direction_status;
   }
   constexpr std::array<fsim::systemc::factory_parameter, 1>
       bridge_parameters{{
@@ -788,9 +1005,49 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   if (unbound_export_status != FSIM_SC_OK) {
     return unbound_export_status;
   }
-  return fsim::systemc::register_module_factory<
+  const auto unbound_native_status =
+      fsim::systemc::register_module_factory<
+          UnboundNativeHierarchy>(
+              host, registrar, "unbound_native_hierarchy");
+  if (unbound_native_status != FSIM_SC_OK) {
+    return unbound_native_status;
+  }
+  const auto invalid_deep_status =
+      fsim::systemc::register_module_factory<
       InvalidDeepBinding>(
           host, registrar, "invalid_deep_binding");
+  if (invalid_deep_status != FSIM_SC_OK) {
+    return invalid_deep_status;
+  }
+  const auto metadata_status =
+      fsim::systemc::register_module_factory<CustomMetadata>(
+          host, registrar, "custom_metadata");
+  if (metadata_status != FSIM_SC_OK) {
+    return metadata_status;
+  }
+  const auto custom_binding_status =
+      fsim::systemc::register_module_factory<
+          CustomBindingFailure>(
+              host, registrar, "custom_binding_failure");
+  if (custom_binding_status != FSIM_SC_OK) {
+    return custom_binding_status;
+  }
+  const auto custom_update_status =
+      fsim::systemc::register_module_factory<
+      CustomUpdateFailure>(
+          host, registrar, "custom_update_failure");
+  if (custom_update_status != FSIM_SC_OK) {
+    return custom_update_status;
+  }
+  const auto custom_value_status =
+      fsim::systemc::register_module_factory<
+      CustomValueFailure>(
+          host, registrar, "custom_value_failure");
+  if (custom_value_status != FSIM_SC_OK) {
+    return custom_value_status;
+  }
+  return fsim::systemc::register_module_factory<NamedObjectMatrix>(
+      host, registrar, "named_object_matrix");
 }
 )";
 }
@@ -912,6 +1169,19 @@ module systemc_export_host;
   logic value;
   logic inverted;
   export_hierarchy_placeholder u_export(
+      .value(value),
+      .inverted(inverted));
+  initial begin
+    value = 1'b0;
+    #1 value = 1'b1;
+    #1 $finish;
+  end
+endmodule
+
+module systemc_named_object_matrix_host;
+  logic value;
+  logic inverted;
+  named_object_matrix_placeholder u_matrix(
       .value(value),
       .inverted(inverted));
   initial begin

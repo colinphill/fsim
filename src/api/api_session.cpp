@@ -214,6 +214,54 @@ std::uint32_t object_payload(const fsim_object_t object) noexcept {
   return static_cast<std::uint32_t>(object & UINT32_MAX);
 }
 
+fsim_object_t systemc_object_handle(
+    const Session& session, const std::size_t object) {
+  if (object > kSystemCObjectIndexMask) {
+    return FSIM_INVALID_OBJECT;
+  }
+  return object_handle(
+      session,
+      kSystemCObjectPayload | static_cast<std::uint32_t>(object));
+}
+
+std::optional<std::size_t> object_systemc(
+    const Session& session, const fsim_object_t object) {
+  if (!session.simulation || !current_object(session, object)) {
+    return std::nullopt;
+  }
+  const auto payload = object_payload(object);
+  if ((payload & ~kSystemCObjectIndexMask) != kSystemCObjectPayload) {
+    return std::nullopt;
+  }
+  const auto index =
+      static_cast<std::size_t>(payload & kSystemCObjectIndexMask);
+  if (index >= session.simulation->design().systemc_objects().size()) {
+    return std::nullopt;
+  }
+  return index;
+}
+
+fsim_object_t debug_systemc_object_handle(
+    const Session& session, const std::size_t object) {
+  const auto& objects = session.simulation->design().systemc_objects();
+  if (object >= objects.size()) {
+    return FSIM_INVALID_OBJECT;
+  }
+  using Kind = fsim::elaboration::SystemCNamedObjectKind;
+  const auto& info = objects[object];
+  if (info.kind == Kind::module || info.kind == Kind::foreign_child) {
+    if (info.name == session.simulation->design().top()) {
+      return root_handle(session);
+    }
+    if (object < session.systemc_scope_by_object.size()
+        && session.systemc_scope_by_object[object]) {
+      return scope_handle(
+          session, *session.systemc_scope_by_object[object]);
+    }
+  }
+  return systemc_object_handle(session, object);
+}
+
 fsim_object_t root_handle(const Session& session) noexcept {
   return object_handle(session, kRootPayload);
 }
@@ -233,6 +281,9 @@ std::optional<fsim::runtime::simir::SignalId> object_signal(
   if (!session.simulation || !current_object(session, object)) {
     return std::nullopt;
   }
+  if (const auto systemc = object_systemc(session, object)) {
+    return session.simulation->design().systemc_objects()[*systemc].signal;
+  }
   const auto payload = object_payload(object);
   if ((payload & ~kObjectIndexMask) != kSignalPayload) {
     return std::nullopt;
@@ -246,6 +297,11 @@ std::optional<fsim::runtime::simir::SignalId> object_signal(
 }
 
 fsim_object_t process_handle(const Session& session, const std::size_t process) {
+  if (process < session.systemc_object_by_process.size()
+      && session.systemc_object_by_process[process]) {
+    return systemc_object_handle(
+        session, *session.systemc_object_by_process[process]);
+  }
   if (process > kObjectIndexMask) {
     return FSIM_INVALID_OBJECT;
   }
@@ -261,6 +317,14 @@ std::optional<std::size_t> object_process(
   }
   if (!current_object(session, object)) {
     return std::nullopt;
+  }
+  if (const auto systemc = object_systemc(session, object)) {
+    const auto process =
+        session.simulation->design().systemc_objects()[*systemc].process;
+    if (!process) {
+      return std::nullopt;
+    }
+    return static_cast<std::size_t>(*process);
   }
   const auto payload = object_payload(object);
   if ((payload & ~kObjectIndexMask) != kProcessPayload) {
@@ -383,7 +447,8 @@ std::optional<std::size_t> ensure_scope(
           parent_scope,
           full_name,
           "scope",
-          source});
+          source,
+          std::nullopt});
   return session.scopes.size() - 1;
 }
 
@@ -420,9 +485,16 @@ std::optional<std::size_t> append_design_scope(
     std::string type_name,
     const std::string& source) {
   for (std::size_t index = 0; index < session.scopes.size(); ++index) {
-    const auto& scope = session.scopes[index];
+    auto& scope = session.scopes[index];
     if (scope.kind != ScopeObjectKind::lexical
         && scope.full_name == full_name) {
+      if (!source.empty()) {
+        scope.source =
+            fsim::runtime::simir::SourceLocation{source, 1, 1};
+      }
+      if (!type_name.empty() && type_name != "hdl_instance") {
+        scope.type_name = std::move(type_name);
+      }
       return index;
     }
   }
@@ -436,7 +508,8 @@ std::optional<std::size_t> append_design_scope(
       parent_scope,
       std::move(full_name),
       std::move(type_name),
-      fsim::runtime::simir::SourceLocation{source, 1, 1}});
+      fsim::runtime::simir::SourceLocation{source, 1, 1},
+      std::nullopt});
   return session.scopes.size() - 1;
 }
 
@@ -445,10 +518,69 @@ bool rebuild_debug_objects(Session& session) {
   session.process_names.clear();
   session.variables.clear();
   session.drivers.clear();
+  session.systemc_scope_by_object.clear();
+  session.systemc_object_by_process.clear();
   if (!session.simulation) {
     return true;
   }
   const auto& design = session.simulation->design();
+  const auto& systemc_objects = design.systemc_objects();
+  if (systemc_objects.size() > kSystemCObjectIndexMask) {
+    return false;
+  }
+  session.systemc_scope_by_object.resize(systemc_objects.size());
+  session.systemc_object_by_process.resize(design.processes().size());
+
+  using SystemCKind = fsim::elaboration::SystemCNamedObjectKind;
+  std::vector<std::size_t> systemc_scopes;
+  for (std::size_t index = 0; index < systemc_objects.size(); ++index) {
+    const auto kind = systemc_objects[index].kind;
+    if (kind == SystemCKind::module
+        || kind == SystemCKind::foreign_child) {
+      systemc_scopes.push_back(index);
+    }
+    if (systemc_objects[index].process) {
+      const auto process = static_cast<std::size_t>(
+          *systemc_objects[index].process);
+      if (process >= session.systemc_object_by_process.size()) {
+        return false;
+      }
+      session.systemc_object_by_process[process] = index;
+    }
+  }
+  std::stable_sort(
+      systemc_scopes.begin(), systemc_scopes.end(),
+      [&](const std::size_t left, const std::size_t right) {
+        const auto left_depth = static_cast<std::size_t>(std::count(
+            systemc_objects[left].name.begin(),
+            systemc_objects[left].name.end(), '.'));
+        const auto right_depth = static_cast<std::size_t>(std::count(
+            systemc_objects[right].name.begin(),
+            systemc_objects[right].name.end(), '.'));
+        return left_depth < right_depth;
+      });
+  for (const auto index : systemc_scopes) {
+    const auto& object = systemc_objects[index];
+    if (object.name == design.top()) {
+      continue;
+    }
+    const auto parent_scope = owning_design_scope(session, object.parent);
+    const auto scope = append_design_scope(
+        session,
+        ScopeObjectKind::instance,
+        parent_scope,
+        object.name,
+        object.type_name,
+        object.source.path);
+    if (!scope) {
+      session.scopes.clear();
+      return false;
+    }
+    session.scopes[*scope].source = object.source;
+    session.scopes[*scope].systemc_object = index;
+    session.systemc_scope_by_object[index] = *scope;
+  }
+
   for (const auto& specialization : design.specializations()) {
     if (specialization.instance == design.top()) {
       continue;

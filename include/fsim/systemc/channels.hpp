@@ -26,6 +26,7 @@ public:
     sc_signal()
         : sc_prim_channel(),
           value_changed_event_(native_handle()) {
+        fsim_set_kind("sc_signal");
         detail::register_signal<T>(
             native_handle(), nullptr, value_);
     }
@@ -33,6 +34,7 @@ public:
     explicit sc_signal(const char* name)
         : sc_prim_channel(name),
           value_changed_event_(native_handle()) {
+        fsim_set_kind("sc_signal");
         detail::register_signal<T>(
             native_handle(), name, value_);
     }
@@ -42,6 +44,7 @@ public:
           value_(initial_value),
           pending_(initial_value),
           value_changed_event_(native_handle()) {
+        fsim_set_kind("sc_signal");
         detail::register_signal<T>(
             native_handle(), name, value_);
     }
@@ -105,13 +108,14 @@ private:
 };
 
 template <typename T>
-class sc_in {
+class sc_in : public sc_object {
 public:
     using value_type = T;
 
-    sc_in() = default;
+    sc_in() : sc_object(nullptr, "sc_in") {}
     explicit sc_in(const char* name)
-        : handle_(
+        : sc_object(name, "sc_in"),
+          handle_(
               detail::register_port<T>(name, FSIM_SC_INPUT)) {}
 
     void bind(const sc_signal_in_if<T>& interface) {
@@ -184,19 +188,21 @@ private:
 };
 
 template <typename T>
-class sc_out {
+class sc_out : public sc_object {
 public:
     using value_type = T;
 
-    sc_out() = default;
+    sc_out() : sc_object(nullptr, "sc_out") {}
     explicit sc_out(const char* name)
-        : sc_out(name, FSIM_SC_OUTPUT) {}
+        : sc_out(name, FSIM_SC_OUTPUT, "sc_out") {}
 
 protected:
     sc_out(
         const char* name,
-        const fsim_sc_port_direction_v1 direction)
-        : handle_(
+        const fsim_sc_port_direction_v1 direction,
+        const char* kind)
+        : sc_object(name, kind),
+          handle_(
               detail::register_port<T>(name, direction)) {}
 
 public:
@@ -270,9 +276,9 @@ private:
 template <typename T>
 class sc_inout : public sc_out<T> {
 public:
-    sc_inout() = default;
+    sc_inout() : sc_out<T>(nullptr, FSIM_SC_INOUT, "sc_inout") {}
     explicit sc_inout(const char* name)
-        : sc_out<T>(name, FSIM_SC_INOUT) {}
+        : sc_out<T>(name, FSIM_SC_INOUT, "sc_inout") {}
 
     void bind(sc_signal_inout_if<T>& interface) {
         sc_out<T>::bind(interface);
@@ -328,4 +334,3 @@ private:
 const char* sc_gen_unique_name(const char* base);
 
 } // namespace sc_core
-

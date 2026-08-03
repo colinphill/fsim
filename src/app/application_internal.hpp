@@ -781,7 +781,7 @@ std::optional<VcdScale> vcd_scale(
 struct TraceState {
   std::ofstream stream;
   std::unique_ptr<runtime::VcdWriter> writer;
-  std::vector<std::optional<runtime::VcdSignal>> handles;
+  std::vector<std::vector<runtime::VcdSignal>> handles;
   std::vector<bool> enabled;
   SimulationTick tick_multiplier{1};
 };

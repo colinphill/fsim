@@ -86,6 +86,13 @@ hdl_systemc_config.bindings = {
 fsim::diagnostic::Engine hdl_systemc_diagnostics;
 auto hdl_systemc_project = fsim::app::build_project(
     hdl_systemc_config, hdl_systemc_diagnostics);
+if (!hdl_systemc_project) {
+  for (const auto& diagnostic :
+       hdl_systemc_diagnostics.diagnostics()) {
+    std::cerr << diagnostic.code << ": "
+              << diagnostic.message << '\n';
+  }
+}
 assert(hdl_systemc_project);
 assert(hdl_systemc_project->systemc_hierarchy);
 assert(
@@ -323,6 +330,90 @@ assert(std::any_of(
       return process.name
           == "systemc_native_hierarchy_host.u_native.leaf.evaluate";
     }));
+using SystemCObjectKind =
+    fsim::elaboration::SystemCNamedObjectKind;
+const auto& native_objects =
+    native_hierarchy_reference->design.systemc_objects();
+const auto find_native_object =
+    [&](const std::string_view name,
+        const SystemCObjectKind kind) {
+      return std::find_if(
+          native_objects.begin(), native_objects.end(),
+          [&](const fsim::elaboration::SystemCNamedObjectInfo& object) {
+            return object.name == name && object.kind == kind;
+          });
+    };
+const auto native_module = find_native_object(
+    "systemc_native_hierarchy_host.u_native",
+    SystemCObjectKind::module);
+const auto native_leaf_module = find_native_object(
+    "systemc_native_hierarchy_host.u_native.leaf",
+    SystemCObjectKind::module);
+const auto native_value_channel = find_native_object(
+    "systemc_native_hierarchy_host.u_native.value_channel",
+    SystemCObjectKind::signal);
+const auto native_leaf_value = find_native_object(
+    "systemc_native_hierarchy_host.u_native.leaf.value",
+    SystemCObjectKind::port);
+const auto native_evaluate = find_native_object(
+    "systemc_native_hierarchy_host.u_native.leaf.evaluate",
+    SystemCObjectKind::process);
+assert(native_module != native_objects.end());
+assert(native_module->parent == "systemc_native_hierarchy_host");
+assert(native_leaf_module != native_objects.end());
+assert(
+    native_leaf_module->parent
+    == "systemc_native_hierarchy_host.u_native");
+assert(native_value_channel != native_objects.end());
+assert(native_leaf_value != native_objects.end());
+assert(native_value_channel->signal == native_leaf_value->signal);
+assert(native_evaluate != native_objects.end());
+assert(native_evaluate->process);
+
+auto native_hierarchy_debug = fsim::app::build_project(
+    native_hierarchy_config, native_hierarchy_diagnostics);
+assert(native_hierarchy_debug);
+const auto named_trace = directory / "systemc-named.vcd";
+auto native_debug_config = native_hierarchy_config;
+native_debug_config.run.trace_file = named_trace;
+std::ostringstream native_debug_output;
+std::ostringstream native_debug_error;
+{
+  fsim::app::Simulation native_debug_simulation{
+      std::move(*native_hierarchy_debug),
+      native_debug_config.run.max_deltas,
+      fsim::app::SimulationEngine::debug};
+  fsim::diagnostic::Engine native_debug_diagnostics;
+  fsim::app::DebuggerControl debugger{
+      native_debug_simulation,
+      native_debug_output,
+      native_debug_error,
+      native_debug_config,
+      native_debug_diagnostics};
+  debugger.execute({
+      "scope", "systemc_native_hierarchy_host.u_native"});
+  debugger.execute({"scopes"});
+  debugger.execute({
+      "signals",
+      "systemc_native_hierarchy_host.u_native.leaf"});
+  debugger.execute({"run"});
+  assert(!native_debug_diagnostics.has_error());
+}
+assert(native_debug_error.str().empty());
+assert(
+    native_debug_output.str().find(
+        "systemc_native_hierarchy_host.u_native.leaf")
+    != std::string::npos);
+std::ifstream named_trace_input(named_trace, std::ios::binary);
+const std::string named_trace_text{
+    std::istreambuf_iterator<char>{named_trace_input},
+    std::istreambuf_iterator<char>{}};
+assert(named_trace_text.find("$scope module u_native $end")
+       != std::string::npos);
+assert(named_trace_text.find("$scope module leaf $end")
+       != std::string::npos);
+assert(named_trace_text.find(" value $end")
+       != std::string::npos);
 const auto run_native_hierarchy =
     [&](fsim::app::BuiltProject project,
         const fsim::app::SimulationEngine engine) {
@@ -447,6 +538,11 @@ const auto exercise_native_binding =
         assert(parent->internal_signals.size() == 2);
         assert(parent->exports.size() == 4);
         assert(
+            !parent->exports[0].writable
+            && !parent->exports[1].writable
+            && parent->exports[2].writable
+            && parent->exports[3].writable);
+        assert(
             parent->exports[0].signal
             == parent->internal_signals[0].signal);
         assert(
@@ -540,6 +636,289 @@ assert(std::any_of(
       return diagnostic.code == "FSIM-SC-A004";
     }));
 
+auto custom_metadata_config = hdl_systemc_config;
+custom_metadata_config.project.top =
+    "systemc:models.custom_metadata";
+custom_metadata_config.bindings.clear();
+fsim::diagnostic::Engine custom_metadata_diagnostics;
+auto custom_metadata_project = fsim::app::build_project(
+    custom_metadata_config, custom_metadata_diagnostics);
+assert(custom_metadata_project);
+const auto& custom_objects =
+    custom_metadata_project->design.systemc_objects();
+const auto has_custom_object =
+    [&](const std::string_view name,
+        const fsim::elaboration::SystemCNamedObjectKind kind,
+        const std::string_view type_name) {
+      return std::any_of(
+          custom_objects.begin(), custom_objects.end(),
+          [&](const fsim::elaboration::SystemCNamedObjectInfo& object) {
+            return object.name == name && object.kind == kind
+                && object.type_name == type_name && !object.signal
+                && !object.process;
+          });
+    };
+assert(has_custom_object(
+    "custom_metadata.endpoint",
+    fsim::elaboration::SystemCNamedObjectKind::port,
+    "models.metadata_interface"));
+assert(has_custom_object(
+    "custom_metadata.exposed",
+    fsim::elaboration::SystemCNamedObjectKind::export_object,
+    "models.metadata_interface"));
+assert(has_custom_object(
+    "custom_metadata.channel",
+    fsim::elaboration::SystemCNamedObjectKind::primitive_channel,
+    "models.metadata_channel"));
+
+auto custom_binding_config = custom_metadata_config;
+custom_binding_config.project.top =
+    "systemc:models.custom_binding_failure";
+fsim::diagnostic::Engine custom_binding_diagnostics;
+assert(!fsim::app::build_project(
+    custom_binding_config, custom_binding_diagnostics));
+assert(std::any_of(
+    custom_binding_diagnostics.diagnostics().begin(),
+    custom_binding_diagnostics.diagnostics().end(),
+    [](const fsim::diagnostic::Diagnostic& diagnostic) {
+      return diagnostic.code == "FSIM-SC-A004"
+          && diagnostic.message.find(
+              "custom SystemC interface binding is metadata-only")
+              != std::string::npos;
+    }));
+
+const auto run_custom_failure =
+    [&](const std::string_view target,
+        const std::string_view expected) {
+      auto failure_config = custom_metadata_config;
+      failure_config.project.top = std::string{target};
+      fsim::diagnostic::Engine failure_diagnostics;
+      auto failure_project = fsim::app::build_project(
+          failure_config, failure_diagnostics);
+      assert(failure_project);
+      fsim::app::Simulation failure_simulation{
+          std::move(*failure_project),
+          failure_config.run.max_deltas,
+          fsim::app::SimulationEngine::interpreter};
+      bool rejected = false;
+      try {
+        (void)failure_simulation.run();
+      } catch (const std::runtime_error& error) {
+        rejected =
+            std::string_view{error.what()}.find(expected)
+            != std::string_view::npos;
+      }
+      assert(rejected && failure_simulation.poisoned());
+    };
+run_custom_failure(
+    "systemc:models.custom_update_failure",
+    "custom SystemC primitive-channel updates are unsupported");
+run_custom_failure(
+    "systemc:models.custom_value_failure",
+    "custom SystemC interface value access is unsupported");
+
+auto named_matrix_config = hdl_systemc_config;
+named_matrix_config.project.top =
+    "sv:work.systemc_named_object_matrix_host";
+named_matrix_config.bindings = {{
+    "systemc_named_object_matrix_host.u_matrix",
+    "systemc:models.named_object_matrix",
+    std::nullopt}};
+named_matrix_config.build.optimization =
+    fsim::project::Optimization::o2;
+named_matrix_config.build.cache_path = directory / "named-matrix-o2";
+fsim::diagnostic::Engine named_matrix_diagnostics;
+auto named_matrix_reference = fsim::app::build_project(
+    named_matrix_config, named_matrix_diagnostics);
+assert(named_matrix_reference);
+const auto& named_matrix_objects =
+    named_matrix_reference->design.systemc_objects();
+const auto matrix_object =
+    [&](const std::string_view name) {
+      return std::find_if(
+          named_matrix_objects.begin(), named_matrix_objects.end(),
+          [&](const fsim::elaboration::SystemCNamedObjectInfo& object) {
+            return object.name == name;
+          });
+    };
+const auto matrix_prefix =
+    std::string{"systemc_named_object_matrix_host.u_matrix"};
+const auto matrix_value = matrix_object(matrix_prefix + ".value");
+const auto matrix_value_channel =
+    matrix_object(matrix_prefix + ".value_channel");
+const auto matrix_endpoint =
+    matrix_object(matrix_prefix + ".value_endpoint");
+const auto matrix_leaf_value =
+    matrix_object(matrix_prefix + ".leaf.value");
+const auto matrix_process =
+    matrix_object(matrix_prefix + ".leaf.evaluate");
+const auto matrix_event = matrix_object(matrix_prefix + ".pulse");
+const auto matrix_custom_port =
+    matrix_object(matrix_prefix + ".custom_port");
+const auto matrix_custom_export =
+    matrix_object(matrix_prefix + ".custom_export");
+const auto matrix_custom_channel =
+    matrix_object(matrix_prefix + ".custom_channel");
+for (const auto object : {
+         matrix_value,
+         matrix_value_channel,
+         matrix_endpoint,
+         matrix_leaf_value,
+         matrix_process,
+         matrix_event,
+         matrix_custom_port,
+         matrix_custom_export,
+         matrix_custom_channel}) {
+  assert(object != named_matrix_objects.end());
+}
+assert(
+    matrix_value->signal == matrix_value_channel->signal
+    && matrix_value->signal == matrix_endpoint->signal
+    && matrix_value->signal == matrix_leaf_value->signal);
+assert(matrix_process->process && !matrix_process->signal);
+assert(matrix_event->signal);
+assert(
+    !matrix_custom_port->signal && !matrix_custom_export->signal
+    && !matrix_custom_channel->signal);
+
+const auto run_named_matrix =
+    [&](fsim::app::BuiltProject project,
+        const fsim::app::SimulationEngine engine) {
+      const auto output = project.design.find_signal("inverted");
+      assert(output);
+      fsim::app::Simulation simulation{
+          std::move(project),
+          named_matrix_config.run.max_deltas,
+          engine};
+      const auto result = simulation.run();
+      return std::tuple{
+          result,
+          simulation.read_signal(*output).to_msb_string(),
+          simulation.native_cache_statistics(),
+          simulation.compiled_process_count()};
+    };
+const auto matrix_reference_capture = run_named_matrix(
+    std::move(*named_matrix_reference),
+    fsim::app::SimulationEngine::interpreter);
+assert(
+    std::get<0>(matrix_reference_capture).status
+    == fsim::runtime::RunStatus::stopped);
+assert(std::get<0>(matrix_reference_capture).time == 2);
+assert(std::get<1>(matrix_reference_capture) == "0");
+
+const auto run_named_matrix_compiled_pair =
+    [&](const fsim::project::Optimization optimization,
+        const std::string_view cache_name) {
+      auto compiled_config = named_matrix_config;
+      compiled_config.build.optimization = optimization;
+      compiled_config.build.cache_path =
+          directory / std::string{cache_name};
+      fsim::diagnostic::Engine compiled_diagnostics;
+      auto cold = fsim::app::build_project(
+          compiled_config, compiled_diagnostics);
+      auto warm = fsim::app::build_project(
+          compiled_config, compiled_diagnostics);
+      assert(cold && warm);
+      auto cold_capture = run_named_matrix(
+          std::move(*cold), fsim::app::SimulationEngine::compiled);
+      auto warm_capture = run_named_matrix(
+          std::move(*warm), fsim::app::SimulationEngine::compiled);
+      assert(
+          std::get<0>(cold_capture).status
+              == std::get<0>(matrix_reference_capture).status
+          && std::get<0>(cold_capture).time
+              == std::get<0>(matrix_reference_capture).time
+          && std::get<1>(cold_capture)
+              == std::get<1>(matrix_reference_capture));
+      assert(
+          std::get<0>(warm_capture).status
+              == std::get<0>(cold_capture).status
+          && std::get<0>(warm_capture).time
+              == std::get<0>(cold_capture).time
+          && std::get<1>(warm_capture) == std::get<1>(cold_capture));
+#if defined(FSIM_HAS_LLVM)
+      assert(std::get<3>(cold_capture) > 0);
+      assert(std::get<2>(cold_capture).misses > 0);
+      assert(std::get<2>(cold_capture).stores > 0);
+      assert(std::get<2>(warm_capture).hits > 0);
+      assert(std::get<2>(warm_capture).misses == 0);
+#endif
+      return cold_capture;
+    };
+(void)run_named_matrix_compiled_pair(
+    fsim::project::Optimization::o0, "named-matrix-o0");
+(void)run_named_matrix_compiled_pair(
+    fsim::project::Optimization::o2, "named-matrix-o2-compiled");
+
+const auto matrix_trace = directory / "named-matrix.vcd";
+auto matrix_debug_config = named_matrix_config;
+matrix_debug_config.build.optimization =
+    fsim::project::Optimization::o0;
+matrix_debug_config.build.cache_path = directory / "named-matrix-debug";
+matrix_debug_config.run.trace_file = matrix_trace;
+fsim::diagnostic::Engine matrix_debug_diagnostics;
+auto matrix_debug_project = fsim::app::build_project(
+    matrix_debug_config, matrix_debug_diagnostics);
+assert(matrix_debug_project);
+std::ostringstream matrix_debug_output;
+std::ostringstream matrix_debug_error;
+{
+  fsim::app::Simulation matrix_debug_simulation{
+      std::move(*matrix_debug_project),
+      matrix_debug_config.run.max_deltas,
+      fsim::app::SimulationEngine::debug};
+  fsim::app::DebuggerControl debugger{
+      matrix_debug_simulation,
+      matrix_debug_output,
+      matrix_debug_error,
+      matrix_debug_config,
+      matrix_debug_diagnostics};
+  debugger.execute({"scope", matrix_prefix});
+  debugger.execute({"scopes"});
+  debugger.execute({"signals", matrix_prefix});
+  debugger.execute({"run"});
+}
+assert(!matrix_debug_diagnostics.has_error());
+assert(matrix_debug_error.str().empty());
+assert(
+    matrix_debug_output.str().find(matrix_prefix + ".leaf")
+    != std::string::npos);
+assert(
+    matrix_debug_output.str().find(matrix_prefix + ".value_endpoint")
+    != std::string::npos);
+std::ifstream matrix_trace_input(matrix_trace, std::ios::binary);
+const std::string matrix_trace_text{
+    std::istreambuf_iterator<char>{matrix_trace_input},
+    std::istreambuf_iterator<char>{}};
+assert(matrix_trace_text.find("$scope module u_matrix $end")
+       != std::string::npos);
+assert(matrix_trace_text.find(" value_endpoint $end")
+       != std::string::npos);
+assert(matrix_trace_text.find(" custom_port $end")
+       == std::string::npos);
+
+{
+  std::ofstream edited_source(systemc_source, std::ios::app);
+  edited_source << "\n// named-object matrix cache edit\n";
+}
+fsim::diagnostic::Engine matrix_edit_diagnostics;
+auto matrix_edited_project = fsim::app::build_project(
+    named_matrix_config, matrix_edit_diagnostics);
+assert(matrix_edited_project && !matrix_edited_project->cache_hit);
+const auto matrix_edited_capture = run_named_matrix(
+    std::move(*matrix_edited_project),
+    fsim::app::SimulationEngine::compiled);
+assert(
+    std::get<0>(matrix_edited_capture).status
+        == std::get<0>(matrix_reference_capture).status
+    && std::get<0>(matrix_edited_capture).time
+        == std::get<0>(matrix_reference_capture).time
+    && std::get<1>(matrix_edited_capture)
+        == std::get<1>(matrix_reference_capture));
+#if defined(FSIM_HAS_LLVM)
+assert(std::get<2>(matrix_edited_capture).misses > 0);
+#endif
+
 auto throwing_lifecycle_config = hdl_systemc_config;
 throwing_lifecycle_config.project.top =
     "systemc:models.throwing_lifecycle";
@@ -589,6 +968,34 @@ assert(std::any_of(
     [](const fsim::diagnostic::Diagnostic& diagnostic) {
       return diagnostic.code == "FSIM-ELAB-BIND-048";
     }));
+
+auto unbound_native_config = hdl_systemc_config;
+unbound_native_config.project.top =
+    "systemc:models.unbound_native_hierarchy";
+unbound_native_config.bindings.clear();
+fsim::diagnostic::Engine unbound_native_diagnostics;
+assert(!fsim::app::build_project(
+    unbound_native_config, unbound_native_diagnostics));
+assert(std::count_if(
+           unbound_native_diagnostics.diagnostics().begin(),
+           unbound_native_diagnostics.diagnostics().end(),
+           [](const fsim::diagnostic::Diagnostic& diagnostic) {
+             return diagnostic.code == "FSIM-ELAB-BIND-058";
+           })
+       == 2);
+
+auto direction_probe_config = hdl_systemc_config;
+direction_probe_config.project.top =
+    "systemc:models.port_direction_probe";
+direction_probe_config.bindings.clear();
+fsim::diagnostic::Engine direction_probe_diagnostics;
+const auto direction_probe_project = fsim::app::build_project(
+    direction_probe_config, direction_probe_diagnostics);
+assert(direction_probe_project);
+assert(!direction_probe_diagnostics.has_error());
+assert(
+    direction_probe_project->design.systemc_instances().size()
+    == 2);
 
 auto invalid_deep_binding_config = hdl_systemc_config;
 invalid_deep_binding_config.project.top =

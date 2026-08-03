@@ -23,9 +23,30 @@ Constructor-time native SystemC child members elaborate recursively and may
 bind their ports directly to parent signals or ports. Module lifecycle
 callbacks execute at deterministic common-kernel boundaries. Standard typed
 signal interfaces and exports retain hierarchy metadata while resolving to
-common signals. `SC_THREAD` and `SC_CTHREAD` use Boost.Context fibers on the
-single simulation thread. General custom-interface metadata is still work in
-progress.
+common signals. Common DesignIR, the C API, debugger, and production VCD now
+retain every supported named module, foreign child, port, process, event,
+primitive channel, signal, and export; value aliases remain distinct hierarchy
+objects over one dense signal identity. `SC_THREAD` and `SC_CTHREAD` use
+Boost.Context fibers on the single simulation thread. Bounded custom-interface
+and custom primitive-channel kinds are retained as metadata-only objects; their
+common-kernel values, binding, and asynchronous updates are rejected
+explicitly.
+
+Native port binding is single-target and direction checked: child inputs may
+chain to parent inputs or inouts, child outputs to parent outputs or inouts,
+and child inouts only to parent inouts. Width and state encoding must match,
+signal targets must belong to the same or direct parent module, port/export
+targets must belong to the direct parent, and every native-child port must be
+bound when common elaboration begins. Root factory ports remain external design
+ports and HDL-connected factory ports follow the ordinary mixed-language alias
+rules.
+
+Typed exports carry an append-only read/write capability bit. Read-only
+`sc_signal_in_if<T>` exports may bind a compatible signal or another readable
+export and may feed input ports; writable `sc_signal_inout_if<T>` exports and
+output/inout ports require a writable target throughout the chain. Legacy ABI
+plug-ins which predate the capability callback retain their original
+read/write-capable interpretation.
 
 ## Source inclusion
 
@@ -47,10 +68,20 @@ The current facade defines:
 - `sc_core::sc_event_or_list` and `sc_event_and_list` expressions;
 - `sc_core::sc_module`, `sc_module_name`, `sc_sensitive`, and
   `sc_gen_unique_name`;
+- `sc_core::sc_object` name, basename, kind, and parent identity for the
+  supported module, port, export, signal, primitive-channel, event, and process
+  objects;
+- declaration-ordered facade child traversal, hierarchy-domain-scoped
+  `sc_find_object`, top-level enumeration, and copied common-registry object
+  metadata/child/path lookup by stable native handles;
 - `sc_core::sc_interface`, `sc_export<IF>`, `sc_signal<T>`, `sc_in<T>`,
   `sc_out<T>`, and `sc_inout<T>`;
+- metadata-only `sc_port<IF>` and unsupported-interface `sc_export<IF>`
+  registration, with an optional stable `IF::fsim_kind()` label;
 - `sc_core::sc_prim_channel` registration and deduplicated
   `request_update()`;
+- derived metadata-only primitive channels with an explicit kind supplied to
+  the protected `(name, kind)` constructor;
 - positive/negative edge event finders for input and inout sensitivity;
 - `SC_MODULE`, `SC_CTOR`, `SC_HAS_PROCESS`, `SC_METHOD`, `SC_THREAD`, and
   `SC_CTHREAD`;
@@ -74,9 +105,9 @@ module-local `sc_signal` constructed by a registered factory instead attaches
 typed value metadata to its primitive-channel handle and enters the common
 kernel.
 
-The remaining v1 subset work includes broader named hierarchy, exports,
-static and dynamic sensitivity, port binding, channel update semantics, and
-event cancellation rules.
+The remaining v1 subset work is the combined closure matrix; arbitrary custom
+value transport, binding, or asynchronous update behavior remains outside this
+subset and is rejected explicitly.
 
 ## Bidirectional mixed-language hierarchy
 

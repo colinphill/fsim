@@ -177,7 +177,10 @@ template <typename Interface>
     using interface_traits =
         signal_interface_traits<std::remove_cv_t<Interface>>;
     if constexpr (!interface_traits::supported) {
-        return 0;
+        return register_metadata_object(
+            name,
+            FSIM_SC_METADATA_EXPORT,
+            custom_interface_kind<Interface>());
     } else {
         using traits =
             value_traits<typename interface_traits::value_type>;
@@ -203,6 +206,14 @@ template <typename Interface>
                 traits::width,
                 &handle),
             "register export");
+        if (current_host->set_export_writable != nullptr) {
+            check_status(
+                current_host->set_export_writable(
+                    current_host->context,
+                    handle,
+                    interface_traits::writable ? 1U : 0U),
+                "set export capability");
+        }
         return handle;
     }
 }
@@ -361,4 +372,3 @@ void write_object(
 }
 
 } // namespace sc_core::detail
-

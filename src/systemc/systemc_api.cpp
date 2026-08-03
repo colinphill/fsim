@@ -188,12 +188,19 @@ void next_trigger(const sc_event_and_list& events){
 }
 
 const char* sc_gen_unique_name(const char* base){
-    if (base == nullptr) {
-        throw std::invalid_argument{"sc_gen_unique_name base must not be null"};
+    if (base == nullptr || *base == '\0') {
+        throw std::invalid_argument{
+            "sc_gen_unique_name base must not be empty"};
     }
-    static thread_local std::uint64_t counter = 0;
+    if (detail::current_cpp_module != nullptr) {
+        return detail::current_cpp_module->fsim_unique_name(base);
+    }
+    static thread_local std::unordered_map<std::string, std::uint64_t>
+        counters;
     static thread_local std::deque<std::string> names;
-    names.emplace_back(std::string{base} + "_" + std::to_string(counter++));
+    auto& counter = counters[base];
+    names.emplace_back(
+        std::string{base} + "_" + std::to_string(counter++));
     return names.back().c_str();
 }
 
@@ -240,6 +247,62 @@ fsim_sc_handle_v1 detail::register_primitive_channel(
             &handle),
         "register primitive channel");
     return handle;
+}
+
+fsim_sc_handle_v1 detail::register_metadata_object(
+    const char* name,
+    const fsim_sc_metadata_category_v1 category,
+    const char* kind) {
+    if (current_host == nullptr || current_module == 0) {
+        return 0;
+    }
+    constexpr auto required =
+        offsetof(fsim_sc_host_v1, register_metadata_object)
+        + sizeof(
+            static_cast<fsim_sc_host_v1*>(nullptr)
+                ->register_metadata_object);
+    if (current_host->struct_size < required
+        || current_host->register_metadata_object == nullptr
+        || name == nullptr || *name == '\0'
+        || kind == nullptr || *kind == '\0') {
+        throw std::logic_error{
+            "custom SystemC interface requires a metadata-capable "
+            "elaboration host"};
+    }
+    fsim_sc_handle_v1 handle = 0;
+    check_status(
+        current_host->register_metadata_object(
+            current_host->context,
+            current_module,
+            name,
+            category,
+            kind,
+            &handle),
+        "register custom interface metadata");
+    return handle;
+}
+
+void detail::set_primitive_channel_kind(
+    const fsim_sc_handle_v1 channel, const char* kind) {
+    if (channel == 0) {
+        return;
+    }
+    constexpr auto required =
+        offsetof(fsim_sc_host_v1, set_primitive_channel_kind)
+        + sizeof(
+            static_cast<fsim_sc_host_v1*>(nullptr)
+                ->set_primitive_channel_kind);
+    if (current_host == nullptr || current_host->struct_size < required
+        || current_host->set_primitive_channel_kind == nullptr
+        || kind == nullptr || *kind == '\0') {
+        throw std::logic_error{
+            "custom SystemC primitive channel requires a "
+            "metadata-capable elaboration host"};
+    }
+    check_status(
+        current_host->set_primitive_channel_kind(
+            current_host->context, channel, kind),
+        "set primitive-channel metadata kind");
 }
 
 bool detail::object_event(const fsim_sc_handle_v1 object){

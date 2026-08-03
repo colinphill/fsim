@@ -103,6 +103,14 @@ DebuggerSession::DebuggerSession(
         }
       }
     }
+    for (const auto& object : simulation.design().systemc_objects()) {
+      using Kind = elaboration::SystemCNamedObjectKind;
+      retain_scope(
+          object.kind == Kind::module
+                  || object.kind == Kind::foreign_child
+              ? object.name
+              : object.parent);
+    }
     std::ranges::sort(execution_scope_paths_);
     observer_ = simulation_.add_signal_change_hook(
         [this](
@@ -681,7 +689,7 @@ void DebuggerSession::trace_command(const std::vector<std::string>& command)  {
 void DebuggerSession::set_trace_enabled(const SignalId signal, const bool enable)  {
     if (signal >= trace_->enabled.size()
         || signal >= trace_->handles.size()
-        || !trace_->handles[signal]) {
+        || trace_->handles[signal].empty()) {
       throw std::logic_error{"debug trace signal is not declared"};
     }
     if (trace_->enabled[signal] == enable) {
@@ -698,8 +706,10 @@ void DebuggerSession::set_trace_enabled(const SignalId signal, const bool enable
     }
     trace_->writer->set_time(
         simulation_.now() * trace_->tick_multiplier);
-    trace_->writer->change(
-        *trace_->handles[signal], simulation_.read_signal(signal));
+    for (const auto handle : trace_->handles[signal]) {
+      trace_->writer->change(
+          handle, simulation_.read_signal(signal));
+    }
   }
 
 void DebuggerSession::add_breakpoint(const std::vector<std::string>& command)  {

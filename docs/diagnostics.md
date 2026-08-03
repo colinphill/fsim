@@ -1653,6 +1653,7 @@ therefore excluded.
 | `FSIM-ELAB-BIND-055` | error | A VHDL array crosses a language boundary without a same-language scalar/vector wrapper. |
 | `FSIM-ELAB-BIND-056` | error | A same-language VHDL hierarchy boundary connects different nominal array types. |
 | `FSIM-ELAB-BIND-057` | error | A same-language hierarchy boundary connects different nominal aggregate or record types. |
+| `FSIM-ELAB-BIND-058` | error | A native SystemC child port is unbound after factory construction. |
 
 ## Time, runtime, trace, and design cache
 

@@ -76,6 +76,14 @@ struct PrimitiveChannelDescription {
     std::string name;
     fsim_sc_channel_update_v1 update{};
     void* user{};
+    std::string kind{"sc_prim_channel"};
+};
+
+struct MetadataObjectDescription {
+    fsim_sc_handle_v1 handle{};
+    std::string name;
+    fsim_sc_metadata_category_v1 category{FSIM_SC_METADATA_PORT};
+    std::string kind;
 };
 
 struct InternalSignalDescription {
@@ -92,6 +100,7 @@ struct ExportDescription {
     fsim_sc_value_encoding_v1 encoding{FSIM_SC_BIT2};
     std::uint32_t width{};
     fsim_sc_handle_v1 bound_object{};
+    bool writable{true};
 };
 
 struct LifecycleDescription {
@@ -116,8 +125,28 @@ struct ModuleDescription {
     std::vector<PrimitiveChannelDescription> primitive_channels;
     std::vector<InternalSignalDescription> internal_signals;
     std::vector<ExportDescription> exports;
+    std::vector<MetadataObjectDescription> metadata_objects;
     std::vector<ModuleDescription> native_children;
     LifecycleDescription lifecycle;
+};
+
+enum class HierarchyObjectKind : std::uint8_t {
+    module,
+    port,
+    foreign_child,
+    process,
+    event,
+    primitive_channel,
+    signal,
+    export_object,
+};
+
+struct HierarchyObjectInfo {
+    fsim_sc_handle_v1 handle{};
+    fsim_sc_handle_v1 parent{};
+    std::string name;
+    std::string path;
+    HierarchyObjectKind kind{HierarchyObjectKind::module};
 };
 
 enum class MethodSuspendKind : std::uint8_t {
@@ -158,6 +187,19 @@ public:
     [[nodiscard]] bool has_elaboration_factory(
         std::string_view name) const noexcept;
     [[nodiscard]] std::size_t factory_count() const noexcept;
+
+    /// Return copied, ABI-neutral metadata for one live hierarchy object.
+    [[nodiscard]] std::optional<HierarchyObjectInfo> object_info(
+        fsim_sc_handle_v1 handle) const;
+
+    /// Return direct children in stable registration-handle order.
+    [[nodiscard]] std::vector<HierarchyObjectInfo> child_objects(
+        fsim_sc_handle_v1 parent) const;
+
+    /// Find an absolute or root-relative path within one live factory root.
+    [[nodiscard]] std::optional<HierarchyObjectInfo> find_object(
+        fsim_sc_handle_v1 root,
+        std::string_view path) const;
     [[nodiscard]] std::optional<
         std::vector<ConstructionParameterDescription>>
     factory_parameters(std::string_view name) const;

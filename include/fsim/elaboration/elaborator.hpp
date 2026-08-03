@@ -45,6 +45,7 @@ struct ForeignPort {
 };
 
 struct ForeignChild {
+    std::uint64_t handle{};
     std::string name;
     std::vector<std::pair<std::string, std::int64_t>>
         construction_actuals;
@@ -74,6 +75,14 @@ struct ExternalEvent {
 struct ExternalPrimitiveChannel {
     std::uint64_t handle{};
     std::string name;
+    std::string kind{"sc_prim_channel"};
+};
+
+struct ExternalMetadataObject {
+    std::uint64_t handle{};
+    std::string name;
+    fsim_sc_metadata_category_v1 category{FSIM_SC_METADATA_PORT};
+    std::string kind;
 };
 
 struct ExternalInternalSignal {
@@ -88,6 +97,7 @@ struct ExternalExport {
     std::string name;
     frontend::Type type;
     std::uint64_t bound_object{};
+    bool writable{true};
 };
 
 /// Immutable, ABI-neutral description produced by one constructed SystemC
@@ -107,6 +117,7 @@ struct SystemCInstanceDescription {
     std::vector<ExternalPrimitiveChannel> primitive_channels;
     std::vector<ExternalInternalSignal> internal_signals;
     std::vector<ExternalExport> exports;
+    std::vector<ExternalMetadataObject> metadata_objects;
     std::vector<SystemCInstanceDescription> native_children;
     // Canonical typed construction values supplied by the authoritative HDL
     // specialization path. Kept trailing for source compatibility with
@@ -331,6 +342,7 @@ struct SystemCExportInfo {
     std::string name;
     std::uint64_t native_handle{};
     runtime::simir::SignalId signal{};
+    bool writable{true};
 };
 
 struct SystemCInstanceInfo {
@@ -354,6 +366,31 @@ struct SystemCProcessInfo {
     std::uint64_t native_handle{};
 };
 
+enum class SystemCNamedObjectKind : std::uint8_t {
+    module,
+    port,
+    foreign_child,
+    process,
+    event,
+    primitive_channel,
+    signal,
+    export_object,
+};
+
+/// One debug-visible object from a compiled SystemC hierarchy. Names and
+/// parent names are common DesignIR paths; value-bearing aliases retain their
+/// distinct object identity while sharing the referenced dense signal.
+struct SystemCNamedObjectInfo {
+    SystemCNamedObjectKind kind{SystemCNamedObjectKind::module};
+    std::uint64_t native_handle{};
+    std::string name;
+    std::string parent;
+    std::string type_name;
+    std::optional<runtime::simir::SignalId> signal;
+    std::optional<runtime::simir::ProcessId> process;
+    runtime::simir::SourceLocation source;
+};
+
 class ElaboratedDesign final {
 public:
     ElaboratedDesign() = default;
@@ -375,6 +412,8 @@ public:
     systemc_instances() const noexcept;
     [[nodiscard]] const std::vector<SystemCProcessInfo>&
     systemc_processes() const noexcept;
+    [[nodiscard]] const std::vector<SystemCNamedObjectInfo>&
+    systemc_objects() const noexcept;
     [[nodiscard]] std::optional<runtime::simir::SignalId> find_signal(
         std::string_view name) const noexcept;
     /// Return every debug-visible signal path in lexical order. Boundary-port
@@ -430,6 +469,7 @@ private:
     std::vector<SpecializationInfo> specializations_;
     std::vector<SystemCInstanceInfo> systemc_instances_;
     std::vector<SystemCProcessInfo> systemc_processes_;
+    std::vector<SystemCNamedObjectInfo> systemc_objects_;
     std::unordered_map<std::string, runtime::simir::SignalId> signal_by_name_;
     std::unordered_map<
         std::string, runtime::simir::StringObjectId>

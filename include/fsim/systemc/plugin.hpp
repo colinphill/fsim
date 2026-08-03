@@ -233,7 +233,18 @@ struct module_factory_state {
             }
             *result = object.release();
             return FSIM_SC_OK;
+        } catch (const std::exception& exception) {
+            if (host->report != nullptr) {
+                host->report(host->context, 3, exception.what());
+            }
+            return FSIM_SC_RUNTIME_ERROR;
         } catch (...) {
+            if (host->report != nullptr) {
+                host->report(
+                    host->context,
+                    3,
+                    "unknown SystemC module-construction failure");
+            }
             return FSIM_SC_RUNTIME_ERROR;
         }
     }

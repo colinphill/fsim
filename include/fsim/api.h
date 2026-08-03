@@ -67,7 +67,10 @@ typedef enum fsim_object_kind {
   FSIM_OBJECT_SIGNAL = 4,
   FSIM_OBJECT_PORT = 5,
   FSIM_OBJECT_VARIABLE = 6,
-  FSIM_OBJECT_DRIVER = 7
+  FSIM_OBJECT_DRIVER = 7,
+  FSIM_OBJECT_EVENT = 8,
+  FSIM_OBJECT_CHANNEL = 9,
+  FSIM_OBJECT_EXPORT = 10
 } fsim_object_kind_t;
 
 typedef enum fsim_step_kind {

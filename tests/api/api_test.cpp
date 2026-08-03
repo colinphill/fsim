@@ -285,6 +285,74 @@ max_deltas = 1000
 )";
   }
   {
+    std::ofstream source(directory / "named_systemc.cpp");
+    source << R"CPP(
+#include <systemc>
+
+struct MetadataChannel final : sc_core::sc_prim_channel {
+  explicit MetadataChannel(const char* name) : sc_prim_channel(name) {}
+};
+
+SC_MODULE(NamedChild) {
+  sc_core::sc_signal<bool> state{"state"};
+  sc_core::sc_event pulse{"pulse"};
+  MetadataChannel metadata{"metadata"};
+  sc_core::sc_export<sc_core::sc_signal_in_if<bool>> view{"view"};
+
+  SC_CTOR(NamedChild) {
+    view.bind(state);
+    SC_METHOD(run);
+  }
+
+  void run() {
+    state.write(true);
+    pulse.notify();
+  }
+};
+
+SC_MODULE(NamedTop) {
+  sc_core::sc_in<bool> input{"input"};
+  NamedChild child{"child"};
+
+  SC_CTOR(NamedTop) {}
+};
+
+extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
+    const fsim_sc_host_v1* host,
+    fsim_sc_registrar_v1* registrar) {
+  return fsim::systemc::register_module_factory<NamedTop>(
+      host, registrar, "named");
+}
+)CPP";
+  }
+  const auto systemc_manifest_path = directory / "systemc.toml";
+  {
+    std::ofstream manifest(systemc_manifest_path);
+    manifest
+        << R"TOML(schema = 1
+[project]
+name = "api-systemc-test"
+top = "systemc:api.named"
+time_resolution = "1ns"
+
+[[source_set]]
+language = "systemc"
+standard = "2023-subset"
+library = "api"
+files = ["named_systemc.cpp"]
+include_directories = [")TOML"
+        << (std::filesystem::path{FSIM_TEST_SOURCE_DIR} / "include")
+               .generic_string()
+        << R"TOML("]
+
+[build]
+cache_path = "systemc-cache"
+
+[run]
+max_deltas = 1000
+)TOML";
+  }
+  {
     std::ofstream source(directory / "assertion.vhd");
     source << R"(
 entity assertion_test is
@@ -1782,6 +1850,121 @@ max_deltas = 1000
   const auto api_seed_111 = api_random_value(111);
   assert(api_seed_111 == api_random_value(111));
   assert(api_seed_111 != api_random_value(112));
+
+  fsim_session_t systemc_session = FSIM_INVALID_SESSION;
+  assert(
+      fsim_session_create(nullptr, &systemc_session)
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_load_project(
+          systemc_session,
+          systemc_manifest_path.string().c_str())
+      == FSIM_STATUS_OK);
+  assert(fsim_session_check(systemc_session) == FSIM_STATUS_OK);
+  assert(fsim_session_build(systemc_session) == FSIM_STATUS_OK);
+
+  const auto find_systemc = [&](const char* path) {
+    fsim_object_t object = FSIM_INVALID_OBJECT;
+    assert(
+        fsim_session_find_object(
+            systemc_session, text(path), &object)
+        == FSIM_STATUS_OK);
+    assert(object != FSIM_INVALID_OBJECT);
+    return object;
+  };
+  const auto systemc_info = [&](const fsim_object_t object) {
+    fsim_object_info_t object_info{};
+    object_info.struct_size = sizeof(object_info);
+    object_info.api_version = FSIM_API_VERSION;
+    assert(
+        fsim_session_get_object_info(
+            systemc_session, object, &object_info)
+        == FSIM_STATUS_OK);
+    return object_info;
+  };
+
+  fsim_object_t systemc_root = FSIM_INVALID_OBJECT;
+  assert(
+      fsim_session_root(systemc_session, &systemc_root)
+      == FSIM_STATUS_OK);
+  const auto input = find_systemc("named.input");
+  const auto child = find_systemc("named.child");
+  const auto state = find_systemc("named.child.state");
+  const auto pulse = find_systemc("named.child.pulse");
+  const auto metadata = find_systemc("named.child.metadata");
+  const auto view_object = find_systemc("named.child.view");
+  const auto run = find_systemc("named.child.run");
+  assert(systemc_info(input).kind == FSIM_OBJECT_PORT);
+  assert(systemc_info(input).parent == systemc_root);
+  assert(systemc_info(child).kind == FSIM_OBJECT_SCOPE);
+  assert(systemc_info(child).parent == systemc_root);
+  assert(systemc_info(state).kind == FSIM_OBJECT_SIGNAL);
+  assert(systemc_info(state).parent == child);
+  assert(systemc_info(pulse).kind == FSIM_OBJECT_EVENT);
+  assert(systemc_info(pulse).parent == child);
+  assert(systemc_info(metadata).kind == FSIM_OBJECT_CHANNEL);
+  assert(systemc_info(metadata).parent == child);
+  assert(systemc_info(view_object).kind == FSIM_OBJECT_EXPORT);
+  assert(systemc_info(view_object).parent == child);
+  assert(systemc_info(run).kind == FSIM_OBJECT_PROCESS);
+  assert(systemc_info(run).parent == child);
+  assert(state != view_object);
+
+  std::vector<fsim_object_t> systemc_root_children;
+  assert(
+      fsim_session_visit_children(
+          systemc_session,
+          systemc_root,
+          collect_object,
+          &systemc_root_children)
+      == FSIM_STATUS_OK);
+  assert(
+      std::ranges::find(systemc_root_children, input)
+      != systemc_root_children.end());
+  assert(
+      std::ranges::find(systemc_root_children, child)
+      != systemc_root_children.end());
+  std::vector<fsim_object_t> systemc_child_objects;
+  assert(
+      fsim_session_visit_children(
+          systemc_session,
+          child,
+          collect_object,
+          &systemc_child_objects)
+      == FSIM_STATUS_OK);
+  assert(systemc_child_objects.size() == 5);
+  for (const auto object : {state, pulse, metadata, view_object, run}) {
+    assert(
+        std::ranges::find(systemc_child_objects, object)
+        != systemc_child_objects.end());
+  }
+
+  const fsim_string_view_t one{"1", 1};
+  assert(
+      fsim_session_deposit(systemc_session, state, one)
+      == FSIM_STATUS_OK);
+  char systemc_value[2]{};
+  size_t systemc_required{};
+  assert(
+      fsim_session_read_value(
+          systemc_session,
+          view_object,
+          systemc_value,
+          sizeof(systemc_value),
+          &systemc_required)
+      == FSIM_STATUS_OK);
+  assert(std::string_view{systemc_value} == "1");
+  assert(
+      fsim_session_read_value(
+          systemc_session,
+          metadata,
+          systemc_value,
+          sizeof(systemc_value),
+          &systemc_required)
+      == FSIM_STATUS_INVALID_HANDLE);
+  assert(
+      fsim_session_destroy(systemc_session)
+      == FSIM_STATUS_OK);
 
   std::error_code cleanup_error;
   std::filesystem::remove_all(directory, cleanup_error);

@@ -4,6 +4,105 @@
 namespace fsim::systemc {
 using namespace hierarchy_detail;
 
+namespace {
+
+void collect_object_info(
+    const ModuleDescription& module,
+    const std::string& path,
+    const fsim_sc_handle_v1 parent,
+    std::vector<HierarchyObjectInfo>& result) {
+    result.push_back(
+        {module.handle, parent, module.instance, path,
+         HierarchyObjectKind::module});
+    std::vector<HierarchyObjectInfo> direct;
+    direct.reserve(
+        module.ports.size() + module.foreign_children.size()
+        + module.processes.size() + module.events.size()
+        + module.primitive_channels.size()
+        + module.internal_signals.size() + module.exports.size()
+        + module.metadata_objects.size()
+        + module.native_children.size());
+    const auto append = [&](const auto& objects, const auto kind) {
+        for (const auto& object : objects) {
+            direct.push_back(
+                {object.handle, module.handle, object.name,
+                 path + "." + object.name, kind});
+        }
+    };
+    append(module.ports, HierarchyObjectKind::port);
+    append(module.foreign_children, HierarchyObjectKind::foreign_child);
+    append(module.processes, HierarchyObjectKind::process);
+    append(module.events, HierarchyObjectKind::event);
+    const auto is_signal = [&](const fsim_sc_handle_v1 handle) {
+        return std::any_of(
+            module.internal_signals.begin(),
+            module.internal_signals.end(),
+            [&](const InternalSignalDescription& signal) {
+                return signal.handle == handle;
+            });
+    };
+    for (const auto& channel : module.primitive_channels) {
+        if (!is_signal(channel.handle)) {
+            direct.push_back(
+                {channel.handle, module.handle, channel.name,
+                 path + "." + channel.name,
+                 HierarchyObjectKind::primitive_channel});
+        }
+    }
+    append(module.internal_signals, HierarchyObjectKind::signal);
+    append(module.exports, HierarchyObjectKind::export_object);
+    for (const auto& object : module.metadata_objects) {
+        direct.push_back({
+            object.handle,
+            module.handle,
+            object.name,
+            path + "." + object.name,
+            object.category == FSIM_SC_METADATA_PORT
+                ? HierarchyObjectKind::port
+                : HierarchyObjectKind::export_object});
+    }
+    for (const auto& child : module.native_children) {
+        direct.push_back(
+            {child.handle, module.handle, child.instance,
+             path + "." + child.instance,
+             HierarchyObjectKind::module});
+    }
+    std::sort(
+        direct.begin(), direct.end(),
+        [](const auto& left, const auto& right) {
+            return left.handle < right.handle;
+        });
+    for (const auto& object : direct) {
+        if (object.kind != HierarchyObjectKind::module) {
+            result.push_back(object);
+            continue;
+        }
+        const auto child = std::find_if(
+            module.native_children.begin(), module.native_children.end(),
+            [&](const ModuleDescription& candidate) {
+                return candidate.handle == object.handle;
+            });
+        if (child != module.native_children.end()) {
+            collect_object_info(*child, object.path, module.handle, result);
+        }
+    }
+}
+
+[[nodiscard]] std::vector<HierarchyObjectInfo> live_object_info(
+    const HierarchyRegistry::Impl& registry) {
+    std::vector<HierarchyObjectInfo> result;
+    for (const auto& root : registry.live) {
+        collect_object_info(
+            root.description,
+            root.description.instance,
+            root.description.parent,
+            result);
+    }
+    return result;
+}
+
+} // namespace
+
 [[nodiscard]] std::optional<fsim_sc_handle_v1> HierarchyRegistry::Impl::allocate_handle()  {
         if (next_handle == 0
             || next_handle
@@ -143,6 +242,10 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
         registry_set_foreign_child_actual;
     host.get_construction_value =
         registry_get_construction_value;
+    host.set_export_writable = registry_set_export_writable;
+    host.register_metadata_object = registry_register_metadata_object;
+    host.set_primitive_channel_kind =
+        registry_set_primitive_channel_kind;
 
     fsim_sc_registrar_v1 registrar{};
     registrar.abi_version = FSIM_SYSTEMC_ABI_VERSION;
@@ -180,6 +283,86 @@ bool HierarchyRegistry::has_elaboration_factory(
 
 std::size_t HierarchyRegistry::factory_count() const noexcept {
     return impl_ == nullptr ? 0 : impl_->factories.size();
+}
+
+std::optional<HierarchyObjectInfo> HierarchyRegistry::object_info(
+    const fsim_sc_handle_v1 handle) const {
+    if (impl_ == nullptr || handle == 0) {
+        return std::nullopt;
+    }
+    auto objects = live_object_info(*impl_);
+    const auto found = std::find_if(
+        objects.begin(), objects.end(),
+        [&](const HierarchyObjectInfo& object) {
+            return object.handle == handle;
+        });
+    return found == objects.end()
+        ? std::nullopt
+        : std::optional<HierarchyObjectInfo>{*found};
+}
+
+std::vector<HierarchyObjectInfo> HierarchyRegistry::child_objects(
+    const fsim_sc_handle_v1 parent) const {
+    std::vector<HierarchyObjectInfo> result;
+    if (impl_ == nullptr || parent == 0) {
+        return result;
+    }
+    for (auto& object : live_object_info(*impl_)) {
+        if (object.parent == parent) {
+            result.push_back(std::move(object));
+        }
+    }
+    std::sort(
+        result.begin(), result.end(),
+        [](const auto& left, const auto& right) {
+            return left.handle < right.handle;
+        });
+    return result;
+}
+
+std::optional<HierarchyObjectInfo> HierarchyRegistry::find_object(
+    const fsim_sc_handle_v1 root,
+    const std::string_view path) const {
+    if (impl_ == nullptr || root == 0 || path.empty()) {
+        return std::nullopt;
+    }
+    auto objects = live_object_info(*impl_);
+    const auto root_object = std::find_if(
+        objects.begin(), objects.end(),
+        [&](const HierarchyObjectInfo& object) {
+            return object.handle == root
+                && object.kind == HierarchyObjectKind::module;
+        });
+    if (root_object == objects.end()) {
+        return std::nullopt;
+    }
+    const auto absolute =
+        path == root_object->path
+        || path.starts_with(root_object->path + ".")
+        ? std::string{path}
+        : root_object->path + "." + std::string{path};
+    for (const auto& candidate : objects) {
+        if (candidate.path != absolute) {
+            continue;
+        }
+        auto ancestor = candidate.handle;
+        while (ancestor != 0 && ancestor != root) {
+            const auto current = std::find_if(
+                objects.begin(), objects.end(),
+                [&](const HierarchyObjectInfo& object) {
+                    return object.handle == ancestor;
+                });
+            if (current == objects.end()) {
+                ancestor = 0;
+                break;
+            }
+            ancestor = current->parent;
+        }
+        if (ancestor == root) {
+            return candidate;
+        }
+    }
+    return std::nullopt;
 }
 
 std::optional<std::vector<ConstructionParameterDescription>>
@@ -297,6 +480,7 @@ std::optional<ModuleDescription> HierarchyRegistry::instantiate(
 
     void* object = nullptr;
     fsim_sc_status_v1 status = FSIM_SC_RUNTIME_ERROR;
+    impl_->elaboration_failure.clear();
     try {
         status = found->second.elaborate(
             found->second.user,
@@ -313,6 +497,11 @@ std::optional<ModuleDescription> HierarchyRegistry::instantiate(
     }
 
     const auto constructed = impl_->pending.find(*handle);
+    if (error.empty() && !impl_->elaboration_failure.empty()) {
+        error = "SystemC factory '" + std::string{factory}
+            + "' failed during elaboration: "
+            + impl_->elaboration_failure;
+    }
     if (error.empty() && status != FSIM_SC_OK) {
         error = "SystemC factory '" + std::string{factory}
             + "' failed with status "
@@ -332,10 +521,12 @@ std::optional<ModuleDescription> HierarchyRegistry::instantiate(
         if (constructed != impl_->pending.end()) {
             impl_->rollback(*handle);
         }
+        impl_->elaboration_failure.clear();
         return std::nullopt;
     }
 
     auto description = impl_->collect(*handle);
+    impl_->elaboration_failure.clear();
     impl_->live.push_back(
         {description,
          found->second.destroy,

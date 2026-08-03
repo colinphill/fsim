@@ -73,6 +73,20 @@ void shutdown_threads(HierarchyRegistry::Impl& registry) noexcept {
         || encoding == FSIM_SC_UNSIGNED;
 }
 
+[[nodiscard]] bool compatible_port_chain(
+    const fsim_sc_port_direction_v1 child,
+    const fsim_sc_port_direction_v1 parent) noexcept {
+    switch (child) {
+    case FSIM_SC_INPUT:
+        return parent == FSIM_SC_INPUT || parent == FSIM_SC_INOUT;
+    case FSIM_SC_OUTPUT:
+        return parent == FSIM_SC_OUTPUT || parent == FSIM_SC_INOUT;
+    case FSIM_SC_INOUT:
+        return parent == FSIM_SC_INOUT;
+    }
+    return false;
+}
+
 [[nodiscard]] bool valid_construction_type(
     const fsim_sc_construction_type_v1 type) noexcept {
     return type >= FSIM_SC_CONSTRUCTION_INTEGER
@@ -94,6 +108,56 @@ void shutdown_threads(HierarchyRegistry::Impl& registry) noexcept {
         return value == 0 || value == 1;
     }
     return false;
+}
+
+[[nodiscard]] bool object_name_in_use(
+    const HierarchyRegistry::Impl& registry,
+    const ModuleDescription& module,
+    const std::string_view name,
+    const fsim_sc_handle_v1 ignored = 0) {
+    const auto named = [&](const auto& objects) {
+        return std::any_of(
+            objects.begin(), objects.end(),
+            [&](const auto& object) {
+                return object.handle != ignored && object.name == name;
+            });
+    };
+    if (named(module.ports) || named(module.foreign_children)
+        || named(module.processes) || named(module.events)
+        || named(module.primitive_channels)
+        || named(module.internal_signals) || named(module.exports)
+        || named(module.metadata_objects)) {
+        return true;
+    }
+    const auto children = registry.native_children.find(module.handle);
+    return children != registry.native_children.end()
+        && std::any_of(
+            children->second.begin(), children->second.end(),
+            [&](const fsim_sc_handle_v1 handle) {
+                if (handle == ignored) {
+                    return false;
+                }
+                const auto child = registry.pending.find(handle);
+                return child != registry.pending.end()
+                    && child->second.instance == name;
+            });
+}
+
+[[nodiscard]] bool valid_metadata_kind(const char* kind) noexcept {
+    if (kind == nullptr || *kind == '\0') {
+        return false;
+    }
+    std::size_t size = 0;
+    for (; kind[size] != '\0'; ++size) {
+        const auto byte = static_cast<unsigned char>(kind[size]);
+        if (size >= 127
+            || (std::isalnum(byte) == 0 && kind[size] != '_'
+                && kind[size] != ':' && kind[size] != '.'
+                && kind[size] != '-')) {
+            return false;
+        }
+    }
+    return size != 0;
 }
 
 [[nodiscard]] const ModuleDescription* find_module_description(
@@ -176,12 +240,7 @@ extern "C" fsim_sc_status_v1 registry_register_port(
             *static_cast<HierarchyRegistry::Impl*>(context);
         const auto found = registry.pending.find(module);
         if (found == registry.pending.end()
-            || std::any_of(
-                found->second.ports.begin(),
-                found->second.ports.end(),
-                [&](const PortDescription& port) {
-                    return port.name == name;
-                })) {
+            || object_name_in_use(registry, found->second, name)) {
             return FSIM_SC_INVALID_ARGUMENT;
         }
         const auto handle = registry.allocate_handle();
@@ -198,7 +257,8 @@ extern "C" fsim_sc_status_v1 registry_register_port(
                 index,
                 encoding,
                 width,
-                HierarchyRegistry::Impl::Object::Kind::port});
+                HierarchyRegistry::Impl::Object::Kind::port,
+                direction});
         *result = *handle;
         return FSIM_SC_OK;
     } catch (...) {
@@ -223,12 +283,7 @@ extern "C" fsim_sc_status_v1 registry_register_export(
             *static_cast<HierarchyRegistry::Impl*>(context);
         const auto found = registry.pending.find(module);
         if (found == registry.pending.end()
-            || std::any_of(
-                found->second.exports.begin(),
-                found->second.exports.end(),
-                [&](const ExportDescription& export_object) {
-                    return export_object.name == name;
-                })) {
+            || object_name_in_use(registry, found->second, name)) {
             return FSIM_SC_INVALID_ARGUMENT;
         }
         const auto handle = registry.allocate_handle();
@@ -274,12 +329,7 @@ extern "C" fsim_sc_status_v1 registry_register_event(
                 ? "$event_"
                     + std::to_string(found->second.events.size())
                 : std::string{name};
-        if (std::any_of(
-                found->second.events.begin(),
-                found->second.events.end(),
-                [&](const EventDescription& event) {
-                    return event.name == event_name;
-                })) {
+        if (object_name_in_use(registry, found->second, event_name)) {
             return FSIM_SC_INVALID_ARGUMENT;
         }
         const auto handle = registry.allocate_handle();
@@ -323,12 +373,7 @@ extern "C" fsim_sc_status_v1 registry_register_primitive_channel(
                     + std::to_string(
                         found->second.primitive_channels.size())
                 : std::string{name};
-        if (std::any_of(
-                found->second.primitive_channels.begin(),
-                found->second.primitive_channels.end(),
-                [&](const PrimitiveChannelDescription& channel) {
-                    return channel.name == channel_name;
-                })) {
+        if (object_name_in_use(registry, found->second, channel_name)) {
             return FSIM_SC_INVALID_ARGUMENT;
         }
         const auto handle = registry.allocate_handle();
@@ -338,7 +383,11 @@ extern "C" fsim_sc_status_v1 registry_register_primitive_channel(
         const auto index =
             found->second.primitive_channels.size();
         found->second.primitive_channels.push_back(
-            {*handle, std::move(channel_name), update, user});
+            {*handle,
+             std::move(channel_name),
+             update,
+             user,
+             "sc_prim_channel"});
         registry.primitive_channels.emplace(
             *handle,
             HierarchyRegistry::Impl::PrimitiveChannel{
@@ -363,24 +412,8 @@ extern "C" fsim_sc_status_v1 registry_register_foreign_child(
         auto& registry =
             *static_cast<HierarchyRegistry::Impl*>(context);
         const auto found = registry.pending.find(module);
-        const auto native = registry.native_children.find(module);
         if (found == registry.pending.end()
-            || std::any_of(
-                found->second.foreign_children.begin(),
-                found->second.foreign_children.end(),
-                [&](const ForeignChildDescription& child) {
-                    return child.name == name;
-                })
-            || (native != registry.native_children.end()
-                && std::any_of(
-                    native->second.begin(),
-                    native->second.end(),
-                    [&](const fsim_sc_handle_v1 child) {
-                        const auto description =
-                            registry.pending.find(child);
-                        return description != registry.pending.end()
-                            && description->second.instance == name;
-                    }))) {
+            || object_name_in_use(registry, found->second, name)) {
             return FSIM_SC_INVALID_ARGUMENT;
         }
         const auto handle = registry.allocate_handle();
@@ -542,12 +575,7 @@ extern "C" fsim_sc_status_v1 registry_register_process(
             *static_cast<HierarchyRegistry::Impl*>(context);
         const auto found = registry.pending.find(module);
         if (found == registry.pending.end()
-            || std::any_of(
-                found->second.processes.begin(),
-                found->second.processes.end(),
-                [&](const ProcessDescription& process) {
-                    return process.name == name;
-                })) {
+            || object_name_in_use(registry, found->second, name)) {
             return FSIM_SC_INVALID_ARGUMENT;
         }
         const auto handle = registry.allocate_handle();
@@ -699,24 +727,8 @@ extern "C" fsim_sc_status_v1 registry_register_signal(
                       .primitive_channels[registered->second.channel]
                       .name
                 : std::string{name};
-        if (std::any_of(
-                pending->second.internal_signals.begin(),
-                pending->second.internal_signals.end(),
-                [&](const InternalSignalDescription& signal) {
-                    return signal.name == signal_name;
-                })
-            || std::any_of(
-                pending->second.ports.begin(),
-                pending->second.ports.end(),
-                [&](const PortDescription& port) {
-                    return port.name == signal_name;
-                })
-            || std::any_of(
-                pending->second.events.begin(),
-                pending->second.events.end(),
-                [&](const EventDescription& event) {
-                    return event.name == signal_name;
-                })) {
+        if (object_name_in_use(
+                registry, pending->second, signal_name, channel)) {
             return FSIM_SC_INVALID_ARGUMENT;
         }
         const auto index = pending->second.internal_signals.size();
@@ -763,7 +775,17 @@ extern "C" fsim_sc_status_v1 registry_bind_port(
             || port_object->second.encoding
                 != target_object->second.encoding
             || port_object->second.width
-                != target_object->second.width) {
+                != target_object->second.width
+            || (target_object->second.kind
+                    == HierarchyRegistry::Impl::Object::Kind::port
+                && !compatible_port_chain(
+                    port_object->second.direction,
+                    target_object->second.direction))
+            || (target_object->second.kind
+                    == HierarchyRegistry::Impl::Object::Kind::
+                        export_object
+                && port_object->second.direction != FSIM_SC_INPUT
+                && !target_object->second.writable)) {
             return FSIM_SC_INVALID_ARGUMENT;
         }
         const auto pending =
@@ -827,7 +849,9 @@ extern "C" fsim_sc_status_v1 registry_bind_export(
             || export_object->second.encoding
                 != target_object->second.encoding
             || export_object->second.width
-                != target_object->second.width) {
+                != target_object->second.width
+            || (export_object->second.writable
+                && !target_object->second.writable)) {
             return FSIM_SC_INVALID_ARGUMENT;
         }
         const auto module =
@@ -877,6 +901,103 @@ extern "C" fsim_sc_status_v1 registry_bind_export(
     }
 }
 
+extern "C" fsim_sc_status_v1 registry_set_export_writable(
+    void* context,
+    const fsim_sc_handle_v1 export_handle,
+    const std::uint8_t writable) noexcept {
+    if (context == nullptr || export_handle == 0 || writable > 1) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto object = registry.objects.find(export_handle);
+        if (object == registry.objects.end()
+            || object->second.kind
+                != HierarchyRegistry::Impl::Object::Kind::export_object) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto module = registry.pending.find(object->second.module);
+        if (module == registry.pending.end()
+            || object->second.index >= module->second.exports.size()
+            || module->second.exports[object->second.index].bound_object
+                != 0) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        object->second.writable = writable != 0;
+        module->second.exports[object->second.index].writable =
+            writable != 0;
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_register_metadata_object(
+    void* context,
+    const fsim_sc_handle_v1 module,
+    const char* name,
+    const fsim_sc_metadata_category_v1 category,
+    const char* kind,
+    fsim_sc_handle_v1* result) noexcept {
+    if (context == nullptr || name == nullptr || *name == '\0'
+        || (category != FSIM_SC_METADATA_PORT
+            && category != FSIM_SC_METADATA_EXPORT)
+        || !valid_metadata_kind(kind) || result == nullptr) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto found = registry.pending.find(module);
+        if (found == registry.pending.end()
+            || object_name_in_use(registry, found->second, name)) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto handle = registry.allocate_handle();
+        if (!handle) {
+            return FSIM_SC_RUNTIME_ERROR;
+        }
+        found->second.metadata_objects.push_back(
+            {*handle, name, category, kind});
+        *result = *handle;
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_set_primitive_channel_kind(
+    void* context,
+    const fsim_sc_handle_v1 channel,
+    const char* kind) noexcept {
+    if (context == nullptr || channel == 0
+        || !valid_metadata_kind(kind)) {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto registered = registry.primitive_channels.find(channel);
+        if (registered == registry.primitive_channels.end()) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        const auto module = registry.pending.find(registered->second.module);
+        if (module == registry.pending.end()
+            || registered->second.channel
+                >= module->second.primitive_channels.size()
+            || registry.internal_signals.contains(channel)) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        module->second
+            .primitive_channels[registered->second.channel]
+            .kind = kind;
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
 extern "C" fsim_sc_status_v1 registry_register_native_module(
     void* context,
     const fsim_sc_handle_v1 parent,
@@ -893,22 +1014,8 @@ extern "C" fsim_sc_status_v1 registry_register_native_module(
         if (parent_module == registry.pending.end()) {
             return FSIM_SC_INVALID_ARGUMENT;
         }
-        const auto descendants = registry.native_children.find(parent);
-        if ((descendants != registry.native_children.end()
-             && std::any_of(
-                 descendants->second.begin(),
-                 descendants->second.end(),
-                 [&](const fsim_sc_handle_v1 child) {
-                     const auto found = registry.pending.find(child);
-                     return found != registry.pending.end()
-                         && found->second.instance == name;
-                 }))
-            || std::any_of(
-                parent_module->second.foreign_children.begin(),
-                parent_module->second.foreign_children.end(),
-                [&](const ForeignChildDescription& child) {
-                    return child.name == name;
-                })) {
+        if (object_name_in_use(
+                registry, parent_module->second, name)) {
             return FSIM_SC_INVALID_ARGUMENT;
         }
         const auto handle = registry.allocate_handle();
@@ -1429,12 +1536,22 @@ extern "C" fsim_sc_status_v1 registry_notify(
 
 extern "C" void registry_report(
     void* context, const int severity, const char* message) noexcept {
-    if (context == nullptr || severity < 2
-        || active_invocation == nullptr
-        || active_invocation->registry != context) {
+    if (context == nullptr || severity < 2) {
         return;
     }
     try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        if (active_invocation == nullptr
+            || active_invocation->registry != context) {
+            if (registry.elaboration_failure.empty()) {
+                registry.elaboration_failure =
+                    message == nullptr || *message == '\0'
+                    ? "SystemC module construction reported a failure"
+                    : message;
+            }
+            return;
+        }
         if (active_invocation->failure.empty()) {
             active_invocation->failure =
                 message == nullptr || *message == '\0'

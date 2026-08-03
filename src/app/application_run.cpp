@@ -426,13 +426,16 @@ std::unique_ptr<TraceState> attach_trace(
             trace->stream, scale->timescale);
     trace->handles.resize(simulation.design().signals().size());
     trace->enabled.resize(simulation.design().signals().size());
-    for (const auto& signal : simulation.design().signals()) {
+    for (const auto& [path, signal_id] :
+         simulation.design().signal_paths()) {
+      const auto& signal = simulation.design().signals().at(signal_id);
       const auto selected =
-          trace_selected(config.run.trace_filters, signal.name);
-      trace->enabled[signal.id] = selected && signal.width != 0;
+          trace_selected(config.run.trace_filters, path);
+      trace->enabled[signal.id] =
+          trace->enabled[signal.id] || (selected && signal.width != 0);
       if (signal.width != 0 && (dynamic_selection || selected)) {
-        trace->handles[signal.id] =
-            trace->writer->declare_signal(signal.name, signal.width);
+        trace->handles[signal.id].push_back(
+            trace->writer->declare_signal(path, signal.width));
       }
     }
     if (simulation.now()
@@ -442,9 +445,11 @@ std::unique_ptr<TraceState> attach_trace(
     }
     trace->writer->begin(simulation.now() * trace->tick_multiplier);
     for (const auto& signal : simulation.design().signals()) {
-      if (trace->handles[signal.id] && trace->enabled[signal.id]) {
-        trace->writer->change(
-            *trace->handles[signal.id], simulation.read_signal(signal.id));
+      if (trace->enabled[signal.id]) {
+        for (const auto handle : trace->handles[signal.id]) {
+          trace->writer->change(
+              handle, simulation.read_signal(signal.id));
+        }
       }
     }
     auto* state = trace.get();
@@ -454,7 +459,8 @@ std::unique_ptr<TraceState> attach_trace(
             const PackedLogic4& value,
             const SimulationTick time,
             std::uint64_t) {
-          if (signal < state->handles.size() && state->handles[signal]
+          if (signal < state->handles.size()
+              && !state->handles[signal].empty()
               && state->enabled[signal]) {
             if (time
                 > std::numeric_limits<SimulationTick>::max()
@@ -462,7 +468,9 @@ std::unique_ptr<TraceState> attach_trace(
               throw std::overflow_error{"VCD timestamp scaling overflow"};
             }
             state->writer->set_time(time * state->tick_multiplier);
-            state->writer->change(*state->handles[signal], value);
+            for (const auto handle : state->handles[signal]) {
+              state->writer->change(handle, value);
+            }
           }
         });
   } catch (const std::exception& error) {

@@ -10,6 +10,137 @@ thread_local fsim_sc_handle_v1 detail::construction_root_module = 0;
 thread_local sc_module* detail::current_cpp_module = nullptr;
 thread_local const char* detail::current_module_name = nullptr;
 
+namespace {
+thread_local std::unordered_map<void*, std::vector<sc_object*>>
+    hierarchy_roots;
+
+[[nodiscard]] void* current_hierarchy_domain() noexcept {
+    return detail::current_host == nullptr
+        ? nullptr
+        : detail::current_host->context;
+}
+} // namespace
+
+sc_object::sc_object(const char* basename, const char* kind)
+    : sc_object(
+          basename,
+          kind,
+          static_cast<const sc_object*>(detail::current_cpp_module)) {}
+
+sc_object::sc_object(
+    const char* basename,
+    const char* kind,
+    const sc_object* parent)
+    : basename_(basename == nullptr ? "" : basename),
+      kind_(kind == nullptr ? "sc_object" : kind),
+      parent_(const_cast<sc_object*>(parent)),
+      hierarchy_domain_(current_hierarchy_domain()) {
+    const bool qualified_root_module =
+        parent_ == nullptr && kind_ == "sc_module"
+        && basename_.find('.') != std::string::npos;
+    if (qualified_root_module) {
+        name_ = basename_;
+        basename_ = basename_.substr(basename_.find_last_of('.') + 1U);
+    }
+    if ((!qualified_root_module
+         && basename_.find('.') != std::string::npos)
+        || std::any_of(
+            basename_.begin(), basename_.end(),
+            [](const unsigned char character) {
+                return character < 0x20U || character == 0x7fU;
+            })) {
+        throw std::invalid_argument{
+            "SystemC object basename contains an invalid character"};
+    }
+    if (auto* module = dynamic_cast<const sc_module*>(parent_);
+        module != nullptr && !basename_.empty()) {
+        const_cast<sc_module*>(module)->fsim_register_object_name(
+            basename_);
+    }
+    if (!qualified_root_module && parent_ != nullptr
+        && *parent_->name() != '\0'
+        && !basename_.empty()) {
+        name_ = std::string{parent_->name()} + "." + basename_;
+    } else if (!qualified_root_module) {
+        name_ = basename_;
+    }
+    if (!name_.empty()) {
+        if (parent_ != nullptr) {
+            parent_->children_.push_back(this);
+        } else {
+            hierarchy_roots[hierarchy_domain_].push_back(this);
+        }
+    }
+}
+
+sc_object::~sc_object() {
+    if (name_.empty()) {
+        return;
+    }
+    auto& objects = parent_ == nullptr
+        ? hierarchy_roots[hierarchy_domain_]
+        : parent_->children_;
+    objects.erase(std::remove(objects.begin(), objects.end(), this), objects.end());
+    if (parent_ == nullptr && objects.empty()) {
+        hierarchy_roots.erase(hierarchy_domain_);
+    }
+}
+
+const char* sc_object::name() const noexcept { return name_.c_str(); }
+
+const char* sc_object::basename() const noexcept {
+    return basename_.c_str();
+}
+
+const char* sc_object::kind() const noexcept { return kind_.c_str(); }
+
+const sc_object* sc_object::get_parent_object() const noexcept {
+    return parent_;
+}
+
+const std::vector<sc_object*>&
+sc_object::get_child_objects() const noexcept {
+    return children_;
+}
+
+sc_object* sc_find_object(const char* name) noexcept {
+    if (name == nullptr || *name == '\0') {
+        return nullptr;
+    }
+    const auto roots = hierarchy_roots.find(current_hierarchy_domain());
+    if (roots == hierarchy_roots.end()) {
+        return nullptr;
+    }
+    const auto find = [&](const auto& self, sc_object* object)
+        -> sc_object* {
+      if (object != nullptr && std::string_view{object->name()} == name) {
+          return object;
+      }
+      if (object != nullptr) {
+          for (auto* child : object->get_child_objects()) {
+              if (auto* found = self(self, child); found != nullptr) {
+                  return found;
+              }
+          }
+      }
+      return nullptr;
+    };
+    for (auto* root : roots->second) {
+        if (auto* found = find(find, root); found != nullptr) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+const std::vector<sc_object*>& sc_get_top_level_objects() noexcept {
+    return hierarchy_roots[current_hierarchy_domain()];
+}
+
+void sc_object::fsim_set_kind(const char* kind) {
+    kind_ = kind == nullptr ? "sc_object" : kind;
+}
+
 sc_module_name::State::~State() {
     detail::current_cpp_module = previous_cpp_module;
     detail::current_module_name = previous_name;
@@ -79,14 +210,18 @@ detail::module_construction_scope::module_construction_scope(
         current_cpp_module = previous_cpp_module_;
     }
 
-sc_event::sc_event() : handle_(detail::register_event(nullptr)) {}
+sc_event::sc_event()
+    : sc_object(nullptr, "sc_event"),
+      handle_(detail::register_event(nullptr)) {}
 
 
     sc_event::sc_event(const char* name)
-        : handle_(detail::register_event(name)) {}
+        : sc_object(name, "sc_event"),
+          handle_(detail::register_event(name)) {}
 
 
-    sc_event::sc_event(const fsim_sc_handle_v1 handle) noexcept : handle_(handle) {}
+    sc_event::sc_event(const fsim_sc_handle_v1 handle)
+        : sc_object(nullptr, "sc_event", nullptr), handle_(handle) {}
 
 
 
@@ -304,6 +439,10 @@ sc_module_name::sc_module_name(const char* name)
 
 
     void sc_prim_channel::request_update() {
+        if (metadata_only_) {
+            throw std::logic_error{
+                "custom SystemC primitive-channel updates are unsupported"};
+        }
         if (update_requested_) {
             return;
         }
@@ -330,10 +469,21 @@ sc_prim_channel::sc_prim_channel()
 
 
 
-    sc_prim_channel::sc_prim_channel(const char* name)
-        : host_(detail::current_host),
+sc_prim_channel::sc_prim_channel(const char* name)
+        : sc_object(name, "sc_prim_channel"),
+          host_(detail::current_host),
           handle_(detail::register_primitive_channel(
               name, invoke_update, this)) {}
+
+sc_prim_channel::sc_prim_channel(
+    const char* name, const char* kind)
+    : sc_object(name, kind),
+      host_(detail::current_host),
+      handle_(detail::register_primitive_channel(
+          name, invoke_update, this)),
+      metadata_only_(true) {
+    detail::set_primitive_channel_kind(handle_, kind);
+}
 
 
 
@@ -367,13 +517,14 @@ void sc_prim_channel::invoke_update(void* user) noexcept {
 sc_sensitive::sc_sensitive(sc_module* owner) noexcept : owner_(owner) {}
 
 sc_module::sc_module()
-        : sensitive(this),
-          name_(
+        : sc_object(
               detail::current_module_name == nullptr
                   ? throw std::logic_error{
                         "sc_module construction requires an active "
                         "sc_module_name"}
-                  : detail::current_module_name),
+                  : detail::current_module_name,
+              "sc_module"),
+          sensitive(this),
           handle_(detail::current_module) {
         attach_to_current_parent();
     }
@@ -381,19 +532,16 @@ sc_module::sc_module()
 
 
     sc_module::sc_module(const sc_module_name name)
-        : sensitive(this),
-          name_(
+        : sc_object(
               name.c_str() == nullptr
                   ? throw std::invalid_argument{
                         "sc_module_name must not be null"}
-                  : name.c_str()),
+                  : name.c_str(),
+              "sc_module"),
+          sensitive(this),
           handle_(name.native_handle()) {
         attach_to_parent(name.previous_cpp_module());
     }
-
-
-
-    [[nodiscard]] const char* sc_module::name() const noexcept { return name_.c_str(); }
 
 
 
@@ -624,6 +772,29 @@ void sc_module::before_end_of_elaboration() {}
         }
         detail::current_cpp_module = this;
     }
+
+void sc_module::fsim_register_object_name(const std::string_view name) {
+    if (!object_names_.insert(std::string{name}).second) {
+        throw std::invalid_argument{
+            "duplicate SystemC sibling object name '"
+            + std::string{name} + "'"};
+    }
+}
+
+const char* sc_module::fsim_unique_name(const std::string_view base) {
+    if (base.empty() || base.find('.') != std::string_view::npos) {
+        throw std::invalid_argument{
+            "sc_gen_unique_name base contains an invalid character"};
+    }
+    auto& counter = unique_name_counters_[std::string{base}];
+    std::string candidate;
+    do {
+        candidate = std::string{base} + "_"
+            + std::to_string(counter++);
+    } while (object_names_.contains(candidate));
+    unique_names_.push_back(std::move(candidate));
+    return unique_names_.back().c_str();
+}
 
 
 

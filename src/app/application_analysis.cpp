@@ -580,6 +580,7 @@ elaboration::SystemCInstanceDescription systemc_description(
   result.foreign_children.reserve(module.foreign_children.size());
   for (const auto& child : module.foreign_children) {
     elaboration::ForeignChild converted;
+    converted.handle = child.handle;
     converted.name = child.name;
     converted.construction_actuals =
         child.construction_actuals;
@@ -618,7 +619,7 @@ elaboration::SystemCInstanceDescription systemc_description(
       module.primitive_channels.size());
   for (const auto& channel : module.primitive_channels) {
     result.primitive_channels.push_back(
-        {channel.handle, channel.name});
+        {channel.handle, channel.name, channel.kind});
   }
   result.internal_signals.reserve(module.internal_signals.size());
   for (const auto& signal : module.internal_signals) {
@@ -640,7 +641,13 @@ elaboration::SystemCInstanceDescription systemc_description(
         systemc_type(
             export_object.encoding, export_object.width),
         export_object.bound_object,
+        export_object.writable,
     });
+  }
+  result.metadata_objects.reserve(module.metadata_objects.size());
+  for (const auto& object : module.metadata_objects) {
+    result.metadata_objects.push_back({
+        object.handle, object.name, object.category, object.kind});
   }
   result.native_children.reserve(module.native_children.size());
   for (const auto& child : module.native_children) {

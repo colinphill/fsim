@@ -19,6 +19,8 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -173,13 +175,58 @@ void bind_port(
     fsim_sc_channel_update_v1 update,
     void* user);
 
+[[nodiscard]] fsim_sc_handle_v1 register_metadata_object(
+    const char* name,
+    fsim_sc_metadata_category_v1 category,
+    const char* kind);
+
+void set_primitive_channel_kind(
+    fsim_sc_handle_v1 channel, const char* kind);
+
 } // namespace detail
 
-class sc_event {
+class sc_object {
+public:
+    virtual ~sc_object();
+
+    sc_object(const sc_object&) = delete;
+    sc_object& operator=(const sc_object&) = delete;
+
+    [[nodiscard]] const char* name() const noexcept;
+    [[nodiscard]] const char* basename() const noexcept;
+    [[nodiscard]] const char* kind() const noexcept;
+    [[nodiscard]] const sc_object* get_parent_object() const noexcept;
+    [[nodiscard]] const std::vector<sc_object*>&
+    get_child_objects() const noexcept;
+
+protected:
+    sc_object(const char* basename, const char* kind);
+    sc_object(
+        const char* basename,
+        const char* kind,
+        const sc_object* parent);
+
+    void fsim_set_kind(const char* kind);
+
+private:
+    std::string name_;
+    std::string basename_;
+    std::string kind_;
+    sc_object* parent_{};
+    void* hierarchy_domain_{};
+    std::vector<sc_object*> children_;
+};
+
+[[nodiscard]] sc_object* sc_find_object(const char* name) noexcept;
+
+[[nodiscard]] const std::vector<sc_object*>&
+sc_get_top_level_objects() noexcept;
+
+class sc_event : public sc_object {
 public:
     sc_event();
     explicit sc_event(const char* name);
-    explicit sc_event(const fsim_sc_handle_v1 handle) noexcept;
+    explicit sc_event(fsim_sc_handle_v1 handle);
 
     void notify() const;
 
@@ -318,6 +365,64 @@ public:
     virtual ~sc_interface() = default;
 };
 
+namespace detail {
+
+template <typename Interface>
+[[nodiscard]] const char* custom_interface_kind() {
+    if constexpr (requires { Interface::fsim_kind(); }) {
+        return Interface::fsim_kind();
+    }
+    return "sc_interface";
+}
+
+} // namespace detail
+
+/// Metadata-only generic custom-interface port. The v1 subset preserves this
+/// object's hierarchy and interface kind but rejects binding and value access
+/// while a compiled fsim elaboration host is active.
+template <typename Interface>
+class sc_port : public sc_object {
+    static_assert(
+        std::is_base_of_v<sc_interface, Interface>,
+        "sc_port requires an sc_interface-derived type");
+
+public:
+    sc_port() : sc_object(nullptr, "sc_port") {}
+    explicit sc_port(const char* name)
+        : sc_object(name, "sc_port"),
+          handle_(detail::register_metadata_object(
+              name,
+              FSIM_SC_METADATA_PORT,
+              detail::custom_interface_kind<Interface>())) {}
+
+    void bind(Interface& interface) {
+        if (handle_ != 0) {
+            throw std::logic_error{
+                "custom SystemC interface binding is metadata-only"};
+        }
+        interface_ = &interface;
+    }
+    void operator()(Interface& interface) { bind(interface); }
+
+    [[nodiscard]] Interface& get_interface() const {
+        if (interface_ == nullptr) {
+            throw std::logic_error{
+                "custom SystemC interface value access is unsupported"};
+        }
+        return *interface_;
+    }
+    [[nodiscard]] Interface* operator->() const {
+        return &get_interface();
+    }
+    [[nodiscard]] fsim_sc_handle_v1 native_handle() const noexcept {
+        return handle_;
+    }
+
+private:
+    Interface* interface_{};
+    fsim_sc_handle_v1 handle_{};
+};
+
 template <typename T>
 class sc_signal_in_if : virtual public sc_interface {
 public:
@@ -370,7 +475,7 @@ struct signal_interface_traits<
 
 } // namespace detail
 
-class sc_prim_channel {
+class sc_prim_channel : public sc_object {
 public:
     virtual ~sc_prim_channel() = default;
 
@@ -388,6 +493,8 @@ protected:
 
     explicit sc_prim_channel(const char* name);
 
+    sc_prim_channel(const char* name, const char* kind);
+
     virtual void update();
 
 private:
@@ -396,31 +503,43 @@ private:
     const fsim_sc_host_v1* host_{};
     fsim_sc_handle_v1 handle_{};
     bool update_requested_{};
+    bool metadata_only_{};
 };
 
 template <typename Interface>
-class sc_export {
+class sc_export : public sc_object {
     static_assert(
         std::is_base_of_v<sc_interface, Interface>,
         "sc_export requires an sc_interface-derived type");
 
 public:
-    sc_export() = default;
+    sc_export() : sc_object(nullptr, "sc_export") {}
     explicit sc_export(const char* name)
-        : handle_(detail::register_export<Interface>(name)) {}
+        : sc_object(name, "sc_export"),
+          handle_(detail::register_export<Interface>(name)) {}
 
     void bind(Interface& interface) {
         if constexpr (
             detail::signal_interface_traits<Interface>::supported) {
             detail::bind_export(
                 handle_, interface.native_handle());
+        } else if (handle_ != 0) {
+            throw std::logic_error{
+                "custom SystemC export binding is metadata-only"};
         }
         interface_ = &interface;
         export_ = nullptr;
     }
-    void operator()(Interface& interface) noexcept { bind(interface); }
+    void operator()(Interface& interface) { bind(interface); }
 
     void bind(sc_export& target) {
+        if constexpr (
+            !detail::signal_interface_traits<Interface>::supported) {
+            if (handle_ != 0 || target.handle_ != 0) {
+                throw std::logic_error{
+                    "custom SystemC export binding is metadata-only"};
+            }
+        }
         for (auto* current = &target;
              current != nullptr; current = current->export_) {
             if (current == this) {
@@ -488,7 +607,29 @@ private:
     sc_module* owner_;
 };
 
-class sc_module {
+class sc_module : public sc_object {
+    class ProcessObject final : public sc_object {
+    public:
+        ProcessObject(
+            const char* name,
+            fsim_sc_process_kind_v1 kind)
+            : sc_object(name, kind_name(kind)) {}
+
+    private:
+        [[nodiscard]] static const char* kind_name(
+            fsim_sc_process_kind_v1 kind) noexcept {
+            switch (kind) {
+            case FSIM_SC_METHOD:
+                return "sc_method_process";
+            case FSIM_SC_THREAD:
+                return "sc_thread_process";
+            case FSIM_SC_CTHREAD:
+                return "sc_cthread_process";
+            }
+            return "sc_process";
+        }
+    };
+
 public:
     sc_module();
 
@@ -498,12 +639,12 @@ public:
     sc_module(const sc_module&) = delete;
     sc_module& operator=(const sc_module&) = delete;
 
-    [[nodiscard]] const char* name() const noexcept;
-
     template <typename Function>
     void fsim_register_process(
         std::string name, const fsim_sc_process_kind_v1 kind, Function&& function) {
+        auto object = std::make_unique<ProcessObject>(name.c_str(), kind);
         processes_.push_back(Process{
+            std::move(object),
             std::move(name),
             kind,
             std::function<void()>{std::forward<Function>(function)},
@@ -540,6 +681,7 @@ protected:
     };
 
     struct Process {
+        std::unique_ptr<ProcessObject> object;
         std::string name;
         fsim_sc_process_kind_v1 kind;
         std::function<void()> entry;
@@ -578,13 +720,23 @@ private:
 
     void attach_to_parent(sc_module* parent);
 
+    void fsim_register_object_name(std::string_view name);
+
+    [[nodiscard]] const char* fsim_unique_name(std::string_view base);
+
     static void invoke_process(void* user) noexcept;
 
-    std::string name_;
     fsim_sc_handle_v1 handle_{};
     std::vector<sc_module*> children_;
     std::vector<Process> processes_;
+    std::unordered_set<std::string> object_names_;
+    std::unordered_map<std::string, std::uint64_t>
+        unique_name_counters_;
+    std::deque<std::string> unique_names_;
     const fsim_sc_host_v1* lifecycle_host_{};
+
+    friend class sc_object;
+    friend const char* sc_gen_unique_name(const char* base);
 };
 
 

@@ -259,6 +259,14 @@ fsim_status_t fsim_session_find_object(
       *out_object = root_handle(value);
       return FSIM_STATUS_OK;
     }
+    const auto& systemc_objects =
+        value.simulation->design().systemc_objects();
+    for (std::size_t index = 0; index < systemc_objects.size(); ++index) {
+      if (systemc_objects[index].name == requested) {
+        *out_object = debug_systemc_object_handle(value, index);
+        return FSIM_STATUS_OK;
+      }
+    }
     if (const auto signal = value.simulation->find_signal(requested)) {
       *out_object = signal_handle(value, *signal);
       return FSIM_STATUS_OK;
@@ -307,6 +315,41 @@ fsim_status_t fsim_session_visit_children(
     if (!ready(value, "hierarchy enumeration")) {
       return FSIM_STATUS_INVALID_ARGUMENT;
     }
+    using SystemCKind = fsim::elaboration::SystemCNamedObjectKind;
+    const auto& systemc_objects =
+        value.simulation->design().systemc_objects();
+    const auto visit_systemc_children =
+        [&](const std::string_view parent_name) {
+          for (std::size_t index = 0;
+               index < systemc_objects.size(); ++index) {
+            const auto& object = systemc_objects[index];
+            if (object.parent != parent_name
+                || object.kind == SystemCKind::module
+                || object.kind == SystemCKind::foreign_child) {
+              continue;
+            }
+            CallbackGuard guard{value};
+            if (callback(
+                    value.handle,
+                    debug_systemc_object_handle(value, index),
+                    user_data)
+                == 0) {
+              return false;
+            }
+          }
+          return true;
+        };
+    const auto systemc_replaces_signal =
+        [&](const auto& signal,
+            const std::string_view parent_name) {
+          return std::any_of(
+              systemc_objects.begin(), systemc_objects.end(),
+              [&](const auto& object) {
+                return object.signal == signal.id
+                    && object.parent == parent_name
+                    && leaf_name(object.name) == leaf_name(signal.name);
+              });
+        };
     if (parent != root_handle(value)) {
       if (const auto signal = object_signal(value, parent)) {
         for (std::size_t index = 0;
@@ -363,6 +406,9 @@ fsim_status_t fsim_session_visit_children(
         }
         return FSIM_STATUS_OK;
       }
+      if (object_systemc(value, parent)) {
+        return FSIM_STATUS_OK;
+      }
       if (const auto scope_index = object_scope(value, parent)) {
         const auto& parent_scope = value.scopes[*scope_index];
         for (std::size_t index = 0;
@@ -381,10 +427,15 @@ fsim_status_t fsim_session_visit_children(
           }
         }
         if (parent_scope.kind != ScopeObjectKind::lexical) {
+          if (!visit_systemc_children(parent_scope.full_name)) {
+            return FSIM_STATUS_OK;
+          }
           for (const auto& signal :
                value.simulation->design().signals()) {
             if (owning_design_scope(value, signal.name)
-                != scope_index) {
+                    != scope_index
+                || systemc_replaces_signal(
+                    signal, parent_scope.full_name)) {
               continue;
             }
             CallbackGuard guard{value};
@@ -401,7 +452,9 @@ fsim_status_t fsim_session_visit_children(
           for (std::size_t index = 0;
                index < processes.size(); ++index) {
             if (owning_design_scope(value, processes[index].name)
-                != scope_index) {
+                    != scope_index
+                || (index < value.systemc_object_by_process.size()
+                    && value.systemc_object_by_process[index])) {
               continue;
             }
             CallbackGuard guard{value};
@@ -447,8 +500,13 @@ fsim_status_t fsim_session_visit_children(
         return FSIM_STATUS_OK;
       }
     }
+    const auto& top = value.simulation->design().top();
+    if (!visit_systemc_children(top)) {
+      return FSIM_STATUS_OK;
+    }
     for (const auto& signal : value.simulation->design().signals()) {
-      if (owning_design_scope(value, signal.name)) {
+      if (owning_design_scope(value, signal.name)
+          || systemc_replaces_signal(signal, top)) {
         continue;
       }
       CallbackGuard guard{value};
@@ -460,7 +518,9 @@ fsim_status_t fsim_session_visit_children(
     }
     const auto& processes = value.simulation->design().processes();
     for (std::size_t index = 0; index < processes.size(); ++index) {
-      if (owning_design_scope(value, processes[index].name)) {
+      if (owning_design_scope(value, processes[index].name)
+          || (index < value.systemc_object_by_process.size()
+              && value.systemc_object_by_process[index])) {
         continue;
       }
       CallbackGuard guard{value};
@@ -537,6 +597,99 @@ fsim_status_t fsim_session_get_object_info(
       out_info->name = view(top);
       out_info->full_name = view(top);
       out_info->type_name = view("design");
+      return FSIM_STATUS_OK;
+    }
+    if (const auto systemc = object_systemc(value, object)) {
+      using SystemCKind = fsim::elaboration::SystemCNamedObjectKind;
+      const auto& info =
+          value.simulation->design().systemc_objects().at(*systemc);
+      out_info->parent = root_handle(value);
+      if (!info.parent.empty()
+          && info.parent != value.simulation->design().top()) {
+        const auto& objects =
+            value.simulation->design().systemc_objects();
+        const auto named_parent = std::find_if(
+            objects.begin(), objects.end(),
+            [&](const auto& candidate) {
+              return candidate.name == info.parent;
+            });
+        if (named_parent != objects.end()) {
+          out_info->parent = debug_systemc_object_handle(
+              value,
+              static_cast<std::size_t>(
+                  std::distance(objects.begin(), named_parent)));
+        } else {
+          const auto scope_parent = std::find_if(
+              value.scopes.begin(), value.scopes.end(),
+              [&](const ScopeObject& candidate) {
+                return candidate.full_name == info.parent;
+              });
+          if (scope_parent != value.scopes.end()) {
+            out_info->parent = scope_handle(
+                value,
+                static_cast<std::size_t>(
+                    std::distance(value.scopes.begin(), scope_parent)));
+          }
+        }
+      }
+      out_info->width = 0;
+      out_info->name = view(leaf_name(info.name));
+      out_info->full_name = view(info.name);
+      out_info->type_name = view(info.type_name);
+      switch (info.kind) {
+      case SystemCKind::module:
+      case SystemCKind::foreign_child:
+        out_info->kind = FSIM_OBJECT_SCOPE;
+        break;
+      case SystemCKind::port:
+        out_info->kind = FSIM_OBJECT_PORT;
+        break;
+      case SystemCKind::process:
+        out_info->kind = FSIM_OBJECT_PROCESS;
+        break;
+      case SystemCKind::event:
+        out_info->kind = FSIM_OBJECT_EVENT;
+        break;
+      case SystemCKind::primitive_channel:
+        out_info->kind = FSIM_OBJECT_CHANNEL;
+        break;
+      case SystemCKind::signal:
+        out_info->kind = FSIM_OBJECT_SIGNAL;
+        break;
+      case SystemCKind::export_object:
+        out_info->kind = FSIM_OBJECT_EXPORT;
+        break;
+      }
+      if (info.signal) {
+        const auto& signal =
+            value.simulation->design().signals().at(*info.signal);
+        out_info->width = signal.width;
+        if (value.simulation->signal_is_forced(*info.signal)) {
+          out_info->flags |= FSIM_OBJECT_FLAG_FORCED;
+        }
+        if (signal.resolution
+            != fsim::runtime::simir::ResolutionKind::none) {
+          out_info->flags |= FSIM_OBJECT_FLAG_RESOLVED;
+        }
+        if (!signal.declaration_span.source_name.empty()) {
+          set_source(
+              signal.declaration_span.source_name,
+              static_cast<std::uint32_t>(
+                  signal.declaration_span.begin.line),
+              static_cast<std::uint32_t>(
+                  signal.declaration_span.begin.column));
+        }
+      }
+      if (info.process) {
+        const auto& process =
+            value.simulation->design().processes().at(*info.process);
+        if (const auto* source = process_source(process)) {
+          set_source(source->path, source->line, source->column);
+        }
+      }
+      if ((out_info->flags & FSIM_OBJECT_FLAG_HAS_SOURCE) == 0) {
+        set_source(info.source.path, info.source.line, info.source.column);
+      }
       return FSIM_STATUS_OK;
     }
     if (const auto signal = object_signal(value, object)) {

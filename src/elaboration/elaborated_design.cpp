@@ -58,6 +58,11 @@ ElaboratedDesign::systemc_processes() const noexcept {
   return systemc_processes_;
 }
 
+const std::vector<SystemCNamedObjectInfo>&
+ElaboratedDesign::systemc_objects() const noexcept {
+  return systemc_objects_;
+}
+
 std::optional<runtime::simir::SignalId>
 ElaboratedDesign::find_signal(
     const std::string_view name) const noexcept {
@@ -65,15 +70,28 @@ ElaboratedDesign::find_signal(
       found != signal_by_name_.end()) {
     return found->second;
   }
+  const auto object = std::find_if(
+      systemc_objects_.begin(), systemc_objects_.end(),
+      [&](const SystemCNamedObjectInfo& candidate) {
+        return candidate.name == name && candidate.signal.has_value();
+      });
+  if (object != systemc_objects_.end()) {
+    return object->signal;
+  }
   return std::nullopt;
 }
 
 std::vector<std::pair<std::string, runtime::simir::SignalId>>
 ElaboratedDesign::signal_paths() const {
   std::vector<std::pair<std::string, runtime::simir::SignalId>> result;
-  result.reserve(signal_by_name_.size());
+  result.reserve(signal_by_name_.size() + systemc_objects_.size());
   for (const auto& [path, signal] : signal_by_name_) {
     result.emplace_back(path, signal);
+  }
+  for (const auto& object : systemc_objects_) {
+    if (object.signal) {
+      result.emplace_back(object.name, *object.signal);
+    }
   }
   std::sort(
       result.begin(),
@@ -84,6 +102,8 @@ ElaboratedDesign::signal_paths() const {
         }
         return left.second < right.second;
       });
+  result.erase(
+      std::unique(result.begin(), result.end()), result.end());
   return result;
 }
 

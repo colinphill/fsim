@@ -1659,6 +1659,10 @@ set_tests_properties(
 
   add_executable(fsim_api_tests api/api_test.cpp)
   fsim_configure_test(fsim_api_tests)
+  target_compile_definitions(
+    fsim_api_tests
+    PRIVATE FSIM_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+  )
   target_link_libraries(fsim_api_tests PRIVATE fsim_api)
   add_test(NAME fsim.api COMMAND fsim_api_tests)
   set_tests_properties(fsim.api PROPERTIES TIMEOUT 120)
