@@ -28,10 +28,11 @@ risky structural transition that needs a durable boundary.
   commit `4ad6153`; mandatory non-documentation GitHub Actions run
   `30765734570` passed all 12 jobs. Batch 121 is complete in the current HEAD,
   Batch 122 through Batch 124 are complete in the current pushed checkpoint;
-  Batch 125 is complete; Batch 126 is current with Task 1 in progress.
+  Batch 125 and Batch 126 are complete; Batch 127 is current with Task 1 in
+  progress.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 402 authored C/C++ source, header,
+- The source-size refactor is complete: all 419 authored C/C++ source, header,
   and test files are at or below the 2,000-line hard limit; the allowlist is
   empty and the maximum is 2,000 lines.
 - The post-Batch-110 Debug-footprint repair partitions the 116-alternative
@@ -4319,49 +4320,324 @@ named SystemC matrix at 43.36 seconds, containers at 92.83, and scoped locals
 at 0.83. Batch 125 closes as one accumulated checkpoint and has no GitHub
 Actions inspection because it is not a tenth-batch boundary.
 
-### Batch 126 — Typed HIR and DesignIR boundaries — In progress
+### Batch 126 — Typed HIR and DesignIR boundaries — Complete
 
 The current ten implementation tasks are:
 
-1. **In progress.** Audit every VHDL and SystemVerilog parse-tree dependency in
+1. **Complete.** Audit every VHDL and SystemVerilog parse-tree dependency in
    analysis, elaboration, specialization, execution, diagnostics, cache, and
    debugger paths; define the exact typed-HIR and elaborated-DesignIR boundary
    gaps, identity requirements, and migration order.
-2. **Pending.** Introduce shared stable semantic identities, owning source-file
+2. **Complete.** Introduce shared stable semantic identities, owning source-file
    and expansion provenance, exact source spans, type/value references, and
    deterministic traversal contracts without retaining parser-owned storage.
-3. **Pending.** Complete typed VHDL HIR for design units, declarations, scopes,
+3. **Complete.** Complete typed VHDL HIR for design units, declarations, scopes,
    names, overload sets, subtypes, constraints, aliases, attributes, generics,
    ports, components, packages, configurations, and generated declarations.
-4. **Pending.** Complete typed VHDL HIR for expressions, aggregates, sequential
+4. **Complete.** Complete typed VHDL HIR for expressions, aggregates, sequential
    and concurrent statements, call associations, waits, assertions, files,
    protected/access operations, and waveform transactions.
-5. **Pending.** Complete typed SystemVerilog HIR for compilation units, modules,
+5. **Complete.** Complete typed SystemVerilog HIR for compilation units, modules,
    packages, interfaces, declarations, scopes, nets/variables, parameters,
    types, ports/modports, callables, classes permitted by v1, and generates.
-6. **Pending.** Complete typed SystemVerilog HIR for expressions, selections,
+6. **Complete.** Complete typed SystemVerilog HIR for expressions, selections,
    assignment patterns, statements, processes, timing/event controls, forks,
    assertions, system tasks, strings, files, and containers.
-7. **Pending.** Complete elaborated DesignIR for hierarchy, specializations,
+7. **Complete.** Complete elaborated DesignIR for hierarchy, specializations,
    objects, drivers, ports/exports, callables, processes, conversions,
    sensitivities, transactions, and mixed-language/SystemC boundaries using
    stable semantic identities only.
-8. **Pending.** Migrate lowering, interpreter, LLVM, cache/provenance,
+8. **Complete.** Migrate lowering, interpreter, LLVM, cache/provenance,
    diagnostics, debugger, VCD, and API consumers to the explicit boundaries;
    prove no downstream consumer depends on parse-tree addresses or lifetimes.
-9. **Pending.** Add a combined VHDL/SystemVerilog/mixed/SystemC boundary matrix
+9. **Complete.** Add a combined VHDL/SystemVerilog/mixed/SystemC boundary matrix
    covering positive and negative legality, stable identities, source and
    macro provenance, cold/warm/edit cache behavior, interpreter/O0/O2/debug
    agreement, serialization-order independence, and Windows portability.
-10. **Pending.** Update matrix/architecture/diagnostics/docs, pass sanitizer,
+10. **Complete.** Update matrix/architecture/diagnostics/docs, pass sanitizer,
     source/catalog and full Debug/Release gates, then create and push the single
     Batch 126 checkpoint. This is not a mandatory CI-inspection boundary.
+
+Batch status is **complete**. This exact ten-task list remains the retained
+official Batch 126 record. Tasks 1 through 9 used one accumulated dirty
+worktree with focused eight-worker Debug builds and tests; Task 10 owns the
+sanitizer, full regressions, documentation, commit, and push gate. GitHub
+builds use parallelism four, and Batch 126 does not require a
+non-documentation CI inspection.
+
+Task 1 fixes the migration plan to the live boundaries. The common 1,588-line
+`frontend::ParsedDesign` is a value-owned parser result, partially typed HIR,
+and mutable semantic workspace at once: project build selection rewrites delay
+metadata, and elaboration copies and mutates `DesignUnit` values for package,
+type, callable, generate, and per-occurrence specialization before lowering
+directly to SimIR. Its 68 source-span occurrences retain logical/physical
+locations, but ordinary nodes do not retain the preprocessor token's macro
+expansion stack. Declarations, scopes, types, expressions, and statements have
+no stable semantic IDs; the elaborator internal surface has 112 explicit
+frontend pointer/reference declarations.
+
+The coupling inventory finds 2,546 `frontend::` uses across 80 elaboration
+files and 145 across eight application files. Compiler and runtime
+implementation files have zero such uses and remain the protected downstream
+boundary. `ElaboratedDesign` already owns dense signal/process/string/
+container/protected/specialization/SystemC mappings, but its public header has
+47 frontend references and no explicit library/unit/scope/instance/port/
+driver/type/source identity tables. The architecture now records the exact
+additive migration: shared semantic IDs and owning provenance first, separate
+VHDL and SystemVerilog HIR next, explicit DesignIR after that, then consumer
+migration and compatibility-adapter removal.
+
+Task 2 adds the pointer-free `fsim::semantic::Model` and strong dense IDs for
+the complete planned semantic/DesignIR identity space. Its owning tables now
+intern physical files with exact content digests, logical/physical source
+spans, nested expansion chains, and generated/specialized origin chains, then
+retain units, root scopes, declared types, values, and instances through IDs.
+`check_project` builds the model only after canonical source merging and
+standard-library injection. Root/dependency sources preserve manifest and
+first-use order; units preserve canonical source order; declarations sort by
+physical source offset with stable tie breakers; VHDL and SV name keys retain
+their distinct case rules. A production application test proves IDs repeat on
+a second check and that all semantic names and spans survive clearing the
+parser tree. The exact eight-worker LLVM 22 Debug build passed, followed by
+semantic/frontend/application focused tests (3/3 in 9.20 seconds), the
+expanded semantic/application ownership gate (2/2 in 9.41 seconds), and
+catalog/source gates (2/2 in 0.12 seconds). Task 3 is current; no sanitizer,
+Release, full regression, commit, push, or CI inspection runs at this task
+boundary.
+
+Task 3 adds the separate owning `semantic::vhdl::Hir` and extends the common
+model with stable declaration, expression, and statement identity tables.
+VHDL units now retain contexts and entity/architecture relations; declarations
+cover every current generic family, ports, objects/files, aliases, callable
+profiles and nested declarations, generic templates/instances, package
+instances, components, configurations, and recursive generated declarations.
+Explicit scopes cover callables, components, protected types, and generate
+regions, while canonical symbol groups retain overload sets without parser
+pointers. Type definitions distinguish aliases/subtypes, enumerations, arrays,
+records, access, files, protected declarations/bodies, physical types, all
+constraints, resolution names, fields/elements/units, and applicable predefined
+attributes. Stable association records preserve configuration, generic, port,
+and block maps; expression-bearing fields already point to shared expression
+IDs for Task 4 to fill.
+
+The direct type-generic HIR test proves stable unit/scope/type identities,
+record fields, repeated-check determinism, and survival after clearing
+`ParsedDesign`. The exact eight-worker LLVM 22 Debug build passed. The complete
+VHDL application slice passed 26/26 in 2.76 seconds, and the final semantic,
+source/catalog, generic-profile, advanced-type, and attribute focus passed
+10/10 in 0.62 seconds. Task 4 is current; no sanitizer, Release, full
+regression, commit, push, or CI inspection runs at this task boundary.
+
+Task 4 fills the VHDL HIR's stable expression, statement, and new process IDs
+with owning executable payloads. Recursive expressions retain names and
+overload candidates, literal/operator/call/selection kinds, named actuals,
+decoded strings, nominal identity, and positional, named, range, and `others`
+aggregate associations. Callable and generic-template bodies, protected
+methods, explicit/generated processes, concurrent statements, and lexical
+block variables now use explicit scopes and IDs. Statement records cover
+signal/variable assignments, conditions/selections, loops and loop control,
+procedure associations, returns, waits, assertions/reports, blocks, and null
+statements. Ordered waveforms retain every value/delay, inertial/transport
+mode, rejection limit, disconnect/`unaffected` state, and exact source span;
+resolved call/name records carry file, protected, access, and attribute
+operations without retaining frontend nodes.
+
+Direct record-aggregate checks prove named, `others`, and positional
+associations. The projected-waveform check proves three-element transactions,
+delay magnitudes, transport mode, `unaffected`, waits, dense expression/
+statement/process identity coverage, and parser-lifetime independence. The
+exact eight-worker LLVM 22 Debug build passed, and the final semantic,
+frontend, catalog/source, and complete VHDL application focus passed 30/30 in
+2.76 seconds. Task 5 is current; no sanitizer, Release, full regression,
+commit, push, or CI inspection runs at this task boundary.
+
+Task 5 adds the separate owning `semantic::sv::Hir`. Module, package, and
+interface units retain their compilation context, imports/exports, declarations,
+instances, generated regions, process identities, and concurrent-statement
+slots through shared stable IDs. Declarations cover value/type parameters,
+local parameters, typedefs, ports, nets, variables, functions, tasks, modports,
+enumeration literals, callable formals/locals/bodies, interface types, and exact
+automatic/static lifetime. The v1 boundary explicitly excludes classes because
+unsupported class syntax is rejected before HIR construction.
+
+Packed integral, enum, packed/unpacked structure and union, dynamic-array,
+bounded-queue, associative-array, fixed-array, string, alias, and type-parameter
+forms retain signedness, packed/unpacked dimensions, queue bounds, associative
+index types, members/offsets, enum values, and source provenance without parser
+pointers. A direct fast HIR application proves compilation context, modports,
+container types, enum/struct metadata, imports, instances, generates,
+deterministic IDs, and survival after clearing `ParsedDesign`. The exact
+eight-worker LLVM 22 Debug build passed. Twelve representative non-container
+SystemVerilog applications passed 12/12 in 11.60 seconds and the heavyweight
+container matrix passed once in 112.93 seconds. The final semantic/frontend,
+catalog/source, interface, type-parameter, aggregate, and direct HIR focus
+passed 8/8 in 1.63 seconds. Task 6 is current; no sanitizer, Release, full
+regression, commit, push, or CI inspection runs at this task boundary.
+
+Task 6 fills every shared SystemVerilog expression, statement, and process ID
+with parser-independent owning payload. Expressions distinguish names,
+literals, unary/binary/update operations, calls/casts, index and slice
+selections, concatenation/replication, and keyed/defaulted assignment patterns;
+decoded strings, nominal typing, named or positional call associations, and
+explicit empty named actuals retain their source spans. Initial/final and all
+four always-process forms own declarations, sensitivities, and statement roots,
+while callable bodies and selection-generate alternatives use the same records.
+
+Statements retain blocking/nonblocking/continuous assignment, captured
+compound/prefix/postfix update form, intra-assignment delay/event control,
+force/release, conditions and qualified cases, runtime/static loops, task
+associations, returns, delay/event/condition waits, event triggers, fork/join
+and wait/disable-fork control, assertions and action presence, display/strobe/
+monitor formatting, file handles and operations, memory radix/direction/bounds,
+container calls, finish/pause, and lexical block declarations/scopes. A direct
+fixture proves complete dense identity coverage and survival after clearing
+`ParsedDesign`.
+
+The exact eight-worker LLVM 22 Debug build passed. The representative
+expression/event/fork/assertion/procedural/task/string/file/interface/aggregate
+application gate passed 16/16 in 8.40 seconds; the heavyweight container matrix
+passed once in 112.42 seconds. After final association and generate-alternative
+hardening, the semantic/frontend/catalog/source and executable SystemVerilog
+focus passed 10/10 in 1.24 seconds. Task 7 is current; no sanitizer, Release,
+full regression, commit, push, or CI inspection runs at this task boundary.
+
+Task 7 adds the owning `semantic::design::DesignIr` and retains its semantic
+model in `BuiltProject`. Dense stable IDs cover realized specializations,
+instance occurrences, objects, process occurrences, sensitivities,
+transactions, conversions, and mixed/external boundaries; shared stable port
+and driver IDs complete the cross-record graph. Internal validation checks
+every relationship, while model-aware validation checks every unit, scope,
+source instance, declaration, type/value, source-process, span, and origin ID.
+Legacy runtime indices and native SystemC handles remain explicitly named
+adapter locators rather than identities.
+
+The builder materializes HDL hierarchy and specialization parameters,
+callables, packed/string/container/protected objects and aliases, ports/exports,
+process sensitivities, driver regions and transactions, all cross-language
+conversion profiles, and SystemC modules, ports, events, channels, signals,
+exports, processes, construction identities, and writable-export policy. A
+direct two-level SystemVerilog hierarchy proves parentage, ports, objects,
+processes, sensitivities, drivers, and transactions. The existing mixed matrix
+proves all 28 conversions have owning formal/actual IDs and boundary records;
+the production SystemC integration proves plug-in objects/exports/processes and
+their semantic owner survive the build handoff.
+
+The exact eight-worker LLVM 22 Debug build passed. The final direct
+SystemVerilog, VHDL projected, mixed-conversion, SystemC/core application,
+semantic, and source focus passed 6/6 in 9.41 seconds; the direct hierarchy took
+0.02 seconds, mixed conversion 0.80, VHDL 0.19, and the SystemC/core host 9.40.
+Task 8 is current; no sanitizer, Release, full regression, commit, push, or CI
+inspection runs at this task boundary.
+
+Task 8 moves the checked parser workspace into one temporary owning lowering
+adapter, applies delay selection/time normalization there, and regenerates the
+semantic model plus both typed HIRs from that exact input. The adapter is
+destroyed immediately after legacy elaboration copies diagnostics and SimIR;
+DesignIR construction and every durable consumer therefore run after the
+original parser owner is empty. A mandatory runtime-projection validator now
+cross-checks every HDL specialization, dense signal and alias, container alias,
+process, mixed conversion, SystemC instance, and named SystemC object/process
+before a build can escape the boundary.
+
+LLVM module grouping, interpreter executor installation, specialization cache
+schema `fsim-specialization-provenance-v5-designir`, debugger scopes/objects,
+VCD declarations, Tcl, and the C API now take identity, hierarchy, paths, and
+sources from DesignIR. The remaining SimIR-rich payload is accessed only
+through the explicitly named `Simulation::runtime_adapter()` and never supplies
+identity. Stable SystemC instance/object/boundary mappings enter cache identity;
+transient native handles do not. Compiler, runtime, and API implementations
+retain zero frontend references.
+
+The exact eight-worker LLVM 22 Debug tree rebuilt cleanly. The isolated SystemC
+matrix passed in 45.46 seconds. The final core/cache, direct HIR, mixed/VCD/
+debugger, Tcl, API, and scoped-locals focus passed 6/6 in 9.46 seconds; API took
+1.22 seconds and scoped locals 0.86.
+
+Task 9 adds selector-hosted `fsim.application.typed_boundaries`, one combined
+SystemVerilog-to-VHDL-to-SystemC execution graph with a width conversion and
+native method boundary. Parsed source spans now own token macro-expansion
+ancestry and intern its exact parent chain into the semantic model. SystemC
+translation-unit roots likewise enter the owning semantic source table with
+normalized generic paths and content digests instead of existing only in the
+host-compiler cache key. The matrix requires positive construction plus a
+stable negative missing-factory diagnostic, valid DesignIR relationships,
+stable record IDs across rebuilds, canonical forward/reverse serialization,
+macro and all-language source provenance, portable path spelling, normalized
+VCD, and identical interpreter, compiled O0/O2, and debug results. It proves
+cold/warm native and project-cache reuse, then edits the macro source and
+requires changed behavior, specialization identity, and native misses.
+
+The exact eight-worker LLVM 22 Debug tree rebuilt cleanly. The final semantic,
+frontend, core application, SystemC matrix, scoped-locals, mixed-conversion,
+and typed-boundary focus passed 7/7 in 46.96 seconds. Typed boundaries took
+4.11 seconds, the SystemC matrix 46.96, mixed conversions 0.79, and scoped
+locals 0.95. Task 10 is current; no Release, full regression, commit, push, or
+CI inspection has run at this task boundary.
+
+Task 10 closes the typed-boundary batch and repairs two defects exposed by its
+full sanitizer gate. DesignIR now projects every debug-visible container path,
+including top-level and whole-port aliases, as one stable container object with
+the applicable port metadata; the container application asserts exact coverage
+of the runtime path table. C API source lookup now returns views into the
+owning semantic source table instead of a temporary copied path, eliminating a
+sanitizer-detected use-after-free. Internal DesignIR validity and incomplete
+runtime projection also produce distinct invariant failures.
+
+The diagnostic catalog covers all 1,622 production codes, and the empty-
+allowlist source gate covers 419 authored files at or below 2,000 lines. The
+LLVM-disabled ASan/UBSan suite passed 80/80 in 570.42 seconds, including
+containers in 281.73 seconds, typed boundaries in 14.23, API in 3.00, and
+scoped locals in 0.62. The exact LLVM 22.1.8 warnings-as-errors Debug suite
+passed 83/83 in 254.55 seconds, including containers in 132.56 seconds,
+SystemC matrix in 45.68, typed boundaries in 4.10, API in 1.19, and scoped
+locals in 0.83. Release passed 83/83 in 216.93 seconds, including containers
+in 100.01 seconds, SystemC matrix in 43.88, typed boundaries in 3.56, API in
+1.17, and scoped locals in 0.85. Batch 126 closes as one accumulated
+checkpoint and has no GitHub Actions inspection because it is not a tenth-
+batch boundary.
+
+### Batch 127 — Language-wide legality closure — In progress
+
+The current ten implementation tasks are:
+
+1. **In progress.** Inventory every required v1 VHDL, Verilog/SystemVerilog,
+   mixed-language, and SystemC construct against the parser, typed HIR,
+   analysis, elaboration, execution, and diagnostic paths; identify every
+   silently accepted, discarded, parser-only, or under-diagnosed case.
+2. **Pending.** Add common legality-audit infrastructure and stable diagnostics
+   that require every accepted required construct to reach an owning semantic
+   record and every unsupported or illegal construct to fail explicitly.
+3. **Pending.** Close Verilog/SystemVerilog declaration, type, parameter, port,
+   interface/package, generate, and specialization legality gaps with exact
+   positive and negative evidence.
+4. **Pending.** Close Verilog/SystemVerilog expression, lvalue, callable,
+   process, statement, timing, event, assertion, system-task, file, string,
+   container, and memory legality gaps.
+5. **Pending.** Close VHDL library/unit, context, declaration, subtype/type,
+   name, overload, generic, port, component, configuration, and generate
+   legality gaps with exact positive and negative evidence.
+6. **Pending.** Close VHDL expression, aggregate, callable, sequential,
+   concurrent, wait, assertion/report, file, access, protected, physical, and
+   waveform legality gaps.
+7. **Pending.** Close mixed-language binding, type conversion, construction
+   parameter, driver/resolution, scheduling, hierarchy, and unsupported-
+   boundary legality gaps.
+8. **Pending.** Close SystemC facade, native ABI, named-object, port/export,
+   process/sensitivity, event/channel, lifecycle, plug-in, and unsupported-
+   subset legality gaps.
+9. **Pending.** Add one language-wide positive/negative legality matrix proving
+   no required construct is silently discarded or remains parser-only, with
+   stable diagnostics, cache/provenance, interpreter/O0/O2/debug, VCD, source,
+   and portable-path evidence.
+10. **Pending.** Update matrix/architecture/diagnostics/docs, pass sanitizer,
+    source/catalog and full Debug/Release gates, then create and push the single
+    Batch 127 checkpoint. This is not a mandatory CI-inspection boundary.
 
 Batch status is **in progress** with Task 1 current. Keep this exact ten-task
 list current in both the official plan and this handoff. Tasks 1 through 9 use
 one accumulated dirty worktree with focused eight-worker Debug builds and
 tests; Task 10 owns the sanitizer, full regressions, documentation, commit, and
-push gate. GitHub builds use parallelism four, and Batch 126 does not require a
+push gate. GitHub builds use parallelism four, and Batch 127 does not require a
 non-documentation CI inspection.
 
 Batch 110 has advanced through these validated features:

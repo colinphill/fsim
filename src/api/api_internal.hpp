@@ -68,6 +68,12 @@ struct ScopeObject {
   std::optional<std::size_t> systemc_object;
 };
 
+struct DesignSourceLocation {
+  std::string_view path;
+  std::uint32_t line{1};
+  std::uint32_t column{1};
+};
+
 struct Session {
   // Callbacks execute synchronously on the simulation thread and may perform
   // read-only API queries, so same-thread re-entry must not deadlock.
@@ -94,6 +100,12 @@ struct Session {
   std::vector<DriverObject> drivers;
   std::vector<std::optional<std::size_t>> systemc_scope_by_object;
   std::vector<std::optional<std::size_t>> systemc_object_by_process;
+  // Legacy SystemC object ordinals are retained solely as the v1 handle ABI
+  // adapter. Public identity and hierarchy metadata come from DesignIR IDs.
+  std::vector<std::optional<fsim::semantic::design::ObjectId>>
+      systemc_design_object_by_object;
+  std::vector<std::optional<fsim::semantic::design::ProcessOccurrenceId>>
+      systemc_design_process_by_object;
   bool finished{};
 };
 
@@ -136,12 +148,6 @@ bool struct_contains(
       (struct_size), offsetof(type, member),            \
       sizeof(((type*)nullptr)->member))
 
-const fsim::runtime::simir::SourceLocation* process_source(
-    const fsim::runtime::simir::Process& process) noexcept;
-
-std::optional<fsim::runtime::simir::SignalId> output_signal(
-    const fsim::runtime::simir::Operation& operation);
-
 fsim_status_t with_session(
     const fsim_session_t handle,
     const std::function<fsim_status_t(Session&)>& function) noexcept;
@@ -165,6 +171,31 @@ fsim_object_t systemc_object_handle(
 
 std::optional<std::size_t> object_systemc(
     const Session& session, fsim_object_t object);
+
+const fsim::semantic::design::Object* design_systemc_object(
+    const Session& session, std::size_t object) noexcept;
+
+const fsim::semantic::design::ProcessOccurrence* design_systemc_process(
+    const Session& session, std::size_t object) noexcept;
+
+std::optional<std::size_t> systemc_adapter_for_object(
+    const Session& session,
+    fsim::semantic::design::ObjectId object) noexcept;
+
+std::optional<std::size_t> systemc_adapter_for_process(
+    const Session& session,
+    fsim::semantic::design::ProcessOccurrenceId process) noexcept;
+
+const fsim::semantic::design::Object* design_signal(
+    const Session& session,
+    fsim::runtime::simir::SignalId signal) noexcept;
+
+const fsim::semantic::design::ProcessOccurrence* design_process(
+    const Session& session, std::size_t process) noexcept;
+
+DesignSourceLocation design_source(
+    const Session& session,
+    std::optional<fsim::semantic::SourceSpanId> source);
 
 fsim_object_t debug_systemc_object_handle(
     const Session& session, std::size_t object);

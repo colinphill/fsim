@@ -347,6 +347,63 @@ end architecture;
       }));
 }
 
+void verify_executable_hir(const fsim::project::Config& config) {
+  fsim::diagnostic::Engine diagnostics;
+  auto checked = fsim::app::check_project(config, diagnostics);
+  assert(checked);
+  const auto architecture = std::ranges::find_if(
+      checked->vhdl_hir.units(), [](const auto& unit) {
+        return unit.kind
+                   == fsim::semantic::vhdl::UnitKind::architecture
+            && unit.name == "rtl"
+            && unit.primary_name == "vhdl_projected";
+      });
+  assert(architecture != checked->vhdl_hir.units().end());
+  assert(architecture->processes.size() == 2);
+  assert(!architecture->concurrent_statements.empty());
+  const auto waveform = std::ranges::find_if(
+      checked->vhdl_hir.statements(), [](const auto& statement) {
+        return statement.kind
+                   == fsim::semantic::vhdl::StatementKind::signal_assignment
+            && statement.waveform.size() == 3;
+      });
+  assert(waveform != checked->vhdl_hir.statements().end());
+  assert(
+      waveform->delay_mechanism
+      == fsim::semantic::vhdl::DelayMechanism::transport);
+  assert(waveform->waveform[0].delay);
+  assert(waveform->waveform[1].delay);
+  assert(waveform->waveform[2].delay);
+  assert(
+      waveform->waveform[0].delay->primary.magnitude == 1);
+  assert(
+      waveform->waveform[2].delay->primary.magnitude == 7);
+  assert(std::ranges::any_of(
+      checked->vhdl_hir.statements(), [](const auto& statement) {
+        return statement.unaffected;
+      }));
+  assert(std::ranges::any_of(
+      checked->vhdl_hir.statements(), [](const auto& statement) {
+        return statement.kind
+            == fsim::semantic::vhdl::StatementKind::wait_statement;
+      }));
+  assert(!checked->vhdl_hir.expressions().empty());
+  assert(
+      checked->semantics.expression_identities().size()
+      == checked->vhdl_hir.expressions().size());
+  assert(
+      checked->semantics.statement_identities().size()
+      == checked->vhdl_hir.statements().size());
+  assert(
+      checked->semantics.process_identities().size()
+      == checked->vhdl_hir.processes().size());
+  const auto retained_statement = waveform->id;
+  const auto retained_expression = waveform->waveform.front().value;
+  checked->parsed.units.clear();
+  assert(waveform->id == retained_statement);
+  assert(waveform->waveform.front().value == retained_expression);
+}
+
 }  // namespace
 
 int main() {
@@ -464,6 +521,12 @@ end architecture;
 )";
     assert(output.good());
   }
+
+  verify_executable_hir(
+      make_config(
+          directory.path,
+          source,
+          fsim::project::Optimization::o0));
 
   for (const auto optimization : {
            fsim::project::Optimization::o0,

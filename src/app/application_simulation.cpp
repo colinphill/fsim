@@ -20,18 +20,28 @@ struct Simulation::Impl {
             runtime::SchedulerOptions{max_deltas, 32},
             built.seed)) {
     interpreter->set_file_root(built.file_root);
-    if (!built.design.systemc_processes().empty()
-        && !built.systemc_hierarchy) {
+    const auto has_systemc_process = std::ranges::any_of(
+        built.design_ir.boundaries(), [](const auto& boundary) {
+          return boundary.kind
+              == semantic::design::BoundaryKind::systemc_process;
+        });
+    if (has_systemc_process && !built.systemc_hierarchy) {
       throw std::logic_error{
           "SystemC processes require their native hierarchy registry"};
     }
-    for (const auto& process :
-         built.design.systemc_processes()) {
+    for (const auto& boundary : built.design_ir.boundaries()) {
+      if (boundary.kind
+              != semantic::design::BoundaryKind::systemc_process
+          || !boundary.process) {
+        continue;
+      }
+      const auto process = built.design_ir.processes()[
+          boundary.process->value()].runtime_index;
       interpreter->set_process_executor(
-          process.process,
+          process,
           std::make_unique<SystemCProcessExecutor>(
               built.systemc_hierarchy,
-              process.native_handle));
+              boundary.native_handle));
     }
 #if defined(FSIM_HAS_LLVM)
     if (engine != SimulationEngine::interpreter) {
@@ -64,14 +74,18 @@ struct Simulation::Impl {
                 : runtime::simir::ValueKind::logic4);
       }
       const auto& processes = built.design.processes();
-      for (const auto& specialization :
-           built.design.specializations()) {
+      for (const auto& specialization : built.design_ir.specializations()) {
+        if (specialization.language == semantic::Language::systemc) {
+          continue;
+        }
         std::vector<const runtime::simir::Process*> selected;
         std::vector<std::string> symbols;
         selected.reserve(specialization.processes.size());
         symbols.reserve(specialization.processes.size());
         for (const auto process_id : specialization.processes) {
-          const auto& process = processes.at(process_id);
+          const auto runtime_id = built.design_ir.processes()[
+              process_id.value()].runtime_index;
+          const auto& process = processes.at(runtime_id);
           if (!jit->supports_process(
                   process,
                   signal_widths,
@@ -93,11 +107,12 @@ struct Simulation::Impl {
         }
         const auto module_identity =
             "fsim-specialization:" +
-            std::to_string(specialization.id) + ":" +
-            specialization.unit + "@" +
-            specialization.instance + "#provenance=" +
+            std::to_string(specialization.id.value()) + ":" +
+            specialization.name + "@" +
+            built.design_ir.instances()[specialization.instance.value()]
+                .path + "#provenance=" +
             built.specialization_cache_keys.at(
-                specialization.id);
+                specialization.id.value());
         jit->add_process_module(
             module_identity,
             entries,
@@ -291,7 +306,20 @@ Simulation::Simulation(Simulation&&) noexcept = default;
 Simulation& Simulation::operator=(Simulation&&) noexcept = default;
 
 const elaboration::ElaboratedDesign& Simulation::design() const noexcept {
+  return runtime_adapter();
+}
+
+const elaboration::ElaboratedDesign&
+Simulation::runtime_adapter() const noexcept {
   return impl_->built.design;
+}
+
+const semantic::design::DesignIr& Simulation::design_ir() const noexcept {
+  return impl_->built.design_ir;
+}
+
+const semantic::Model& Simulation::semantics() const noexcept {
+  return impl_->built.semantics;
 }
 
 std::string_view Simulation::time_resolution() const noexcept {
@@ -300,7 +328,17 @@ std::string_view Simulation::time_resolution() const noexcept {
 
 std::optional<SignalId> Simulation::find_signal(
     const std::string_view path) const noexcept {
-  return impl_->built.design.find_signal(path);
+  const auto found = std::ranges::find_if(
+      impl_->built.design_ir.objects(), [&](const auto& object) {
+        return design_object_is_signal_bearing(object)
+            && object.path == path
+            && object.runtime_index
+                <= std::numeric_limits<SignalId>::max();
+      });
+  return found == impl_->built.design_ir.objects().end()
+      ? std::nullopt
+      : std::optional<SignalId>{
+            static_cast<SignalId>(found->runtime_index)};
 }
 
 const PackedLogic4& Simulation::read_signal(const SignalId signal) const {

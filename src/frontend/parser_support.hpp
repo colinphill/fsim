@@ -94,7 +94,11 @@ inline std::optional<std::int64_t> decimal_i64(std::string_view raw,
 class ParserBase {
  protected:
   ParserBase(std::vector<Token> tokens, std::vector<Diagnostic> diagnostics)
-      : tokens_(std::move(tokens)), diagnostics_(std::move(diagnostics)) {}
+      : tokens_(std::move(tokens)), diagnostics_(std::move(diagnostics)) {
+    for (auto& token : tokens_) {
+      token.span.expansion_stack = token.expansion_stack;
+    }
+  }
 
   [[nodiscard]] const Token& current(std::size_t lookahead = 0) const {
     const auto target = std::min(index_ + lookahead, tokens_.size() - 1);

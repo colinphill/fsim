@@ -141,6 +141,24 @@ Capture run_once(
     fsim::diagnostic::print_text(std::cerr, diagnostics);
   }
   assert(project);
+  assert(project->design_ir.valid());
+  assert(project->design_ir.valid(project->semantics));
+  assert(project->design_ir.specializations().size()
+         == project->design.specializations().size());
+  assert(project->design_ir.processes().size()
+         == project->design.processes().size());
+  assert(project->design_ir.conversions().size()
+         == project->design.boundary_conversions().size());
+  assert(static_cast<std::size_t>(std::ranges::count_if(
+      project->design_ir.boundaries(), [](const auto& boundary) {
+        return boundary.kind
+            == fsim::semantic::design::BoundaryKind::language_conversion;
+      })) == project->design.boundary_conversions().size());
+  assert(std::ranges::all_of(
+      project->design_ir.conversions(), [](const auto& conversion) {
+        return conversion.formal.valid() && conversion.actual.valid()
+            && conversion.source.has_value();
+      }));
 
   Capture capture;
   assert(

@@ -58,6 +58,62 @@ namespace {
   return result;
 }
 
+[[nodiscard]] std::vector<std::pair<std::string, SignalId>>
+design_signal_paths(const Simulation& simulation) {
+  std::vector<std::pair<std::string, SignalId>> result;
+  for (const auto& object : simulation.design_ir().objects()) {
+    if (design_object_is_signal_bearing(object)
+        && object.runtime_index <= std::numeric_limits<SignalId>::max()) {
+      result.emplace_back(
+          object.path, static_cast<SignalId>(object.runtime_index));
+    }
+  }
+  std::ranges::sort(result);
+  return result;
+}
+
+[[nodiscard]] std::vector<std::pair<
+    std::string, runtime::simir::ContainerObjectId>>
+design_container_paths(const Simulation& simulation) {
+  std::vector<std::pair<
+      std::string, runtime::simir::ContainerObjectId>> result;
+  for (const auto& object : simulation.design_ir().objects()) {
+    if (object.kind == semantic::design::ObjectKind::container
+        && object.runtime_index
+            <= std::numeric_limits<runtime::simir::ContainerObjectId>::max()) {
+      result.emplace_back(
+          object.path,
+          static_cast<runtime::simir::ContainerObjectId>(
+              object.runtime_index));
+    }
+  }
+  std::ranges::sort(result);
+  return result;
+}
+
+[[nodiscard]] const semantic::design::Object* design_signal_object(
+    const Simulation& simulation, const SignalId signal) noexcept {
+  const auto& objects = simulation.design_ir().objects();
+  const auto found = std::ranges::find_if(
+      objects, [&](const semantic::design::Object& object) {
+        return object.kind == semantic::design::ObjectKind::signal
+            && !object.parent_object && object.runtime_index == signal;
+      });
+  return found == objects.end() ? nullptr : &*found;
+}
+
+[[nodiscard]] const semantic::design::ProcessOccurrence*
+design_process_occurrence(
+    const Simulation& simulation,
+    const runtime::simir::ProcessId process) noexcept {
+  const auto& processes = simulation.design_ir().processes();
+  const auto found = std::ranges::find_if(
+      processes, [&](const semantic::design::ProcessOccurrence& candidate) {
+        return candidate.runtime_index == process;
+      });
+  return found == processes.end() ? nullptr : &*found;
+}
+
 }  // namespace
 
 DebuggerSession::ExecutionGuard::~ExecutionGuard() {
@@ -73,9 +129,9 @@ DebuggerSession::DebuggerSession(
        output_(output),
        error_(error),
        trace_(trace),
-       scope_(simulation.design().top()),
-       signal_paths_(simulation.design().signal_paths()),
-       container_paths_(simulation.design().container_paths())  {
+       scope_(simulation.design_ir().top()),
+       signal_paths_(design_signal_paths(simulation)),
+       container_paths_(design_container_paths(simulation))  {
     const auto retain_scope = [&](const std::string_view path) {
       auto candidate = std::string{path};
       while (!candidate.empty()) {
@@ -83,7 +139,7 @@ DebuggerSession::DebuggerSession(
             == execution_scope_paths_.end()) {
           execution_scope_paths_.push_back(candidate);
         }
-        if (candidate == simulation.design().top()) {
+        if (candidate == simulation.design_ir().top()) {
           break;
         }
         const auto separator = candidate.rfind('.');
@@ -93,9 +149,11 @@ DebuggerSession::DebuggerSession(
         candidate.resize(separator);
       }
     };
-    for (const auto& process : simulation.design().processes()) {
+    for (const auto& process : simulation.design_ir().processes()) {
       retain_scope(process.name);
-      for (const auto& operation : process.operations) {
+      const auto& runtime_process =
+          simulation.runtime_adapter().processes().at(process.runtime_index);
+      for (const auto& operation : runtime_process.operations) {
         if (const auto* point =
                 runtime::simir::operation_get_if<
                     runtime::simir::DebugPoint>(&operation)) {
@@ -103,13 +161,10 @@ DebuggerSession::DebuggerSession(
         }
       }
     }
-    for (const auto& object : simulation.design().systemc_objects()) {
-      using Kind = elaboration::SystemCNamedObjectKind;
-      retain_scope(
-          object.kind == Kind::module
-                  || object.kind == Kind::foreign_child
-              ? object.name
-              : object.parent);
+    for (const auto& object : simulation.design_ir().objects()) {
+      if (object.kind >= semantic::design::ObjectKind::systemc_module) {
+        retain_scope(object.path);
+      }
     }
     std::ranges::sort(execution_scope_paths_);
     observer_ = simulation_.add_signal_change_hook(
@@ -193,7 +248,7 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
       }
       if (const auto signal = resolve_signal(command[1])) {
         const auto& info =
-            simulation_.design().signals().at(signal->second);
+            simulation_.runtime_adapter().signals().at(signal->second);
         output_ << signal->first << " = "
                 << format_value(
                        simulation_.read_signal(signal->second),
@@ -333,7 +388,7 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
   }
 
 [[nodiscard]] bool DebuggerSession::canonical_path(const std::string_view path) const  {
-    if (path == simulation_.design().top()) {
+    if (path == simulation_.design_ir().top()) {
       return true;
     }
     const auto prefix = std::string(path) + ".";
@@ -355,7 +410,7 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
     const std::string_view name) const {
   std::vector<std::string> paths;
   auto scope = scope_;
-  const auto& top = simulation_.design().top();
+  const auto& top = simulation_.design_ir().top();
   while (true) {
     paths.push_back(scope + "." + std::string{name});
     if (scope == top) {
@@ -379,19 +434,19 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
       return scope_;
     }
     if (requested == "/") {
-      return simulation_.design().top();
+      return simulation_.design_ir().top();
     }
     if (requested == "..") {
-      if (scope_ == simulation_.design().top()) {
+      if (scope_ == simulation_.design_ir().top()) {
         return scope_;
       }
       const auto separator = scope_.rfind('.');
       return separator == std::string::npos
-          ? std::string{simulation_.design().top()}
+          ? std::string{simulation_.design_ir().top()}
           : scope_.substr(0, separator);
     }
     std::string candidate;
-    const auto top = std::string_view{simulation_.design().top()};
+    const auto top = std::string_view{simulation_.design_ir().top()};
     if (requested == top
         || (requested.size() > top.size()
             && requested.starts_with(top)
@@ -417,9 +472,9 @@ DebuggerSession::resolve_signal(const std::string_view name)  {
       const auto found = std::find_if(
           signal_paths_.begin(), signal_paths_.end(),
           [&](const auto& entry) {
-            return entry.second == *signal
-                && entry.first.starts_with(
-                    std::string{simulation_.design().top()} + ".");
+                return entry.second == *signal
+                    && entry.first.starts_with(
+                    std::string{simulation_.design_ir().top()} + ".");
           });
       return std::pair{
           found == signal_paths_.end() ? std::string{name} : found->first,
@@ -431,12 +486,18 @@ DebuggerSession::resolve_signal(const std::string_view name)  {
 
 [[nodiscard]] std::optional<std::pair<
     std::string, runtime::simir::StringObjectId>>
-DebuggerSession::resolve_string_object(
+  DebuggerSession::resolve_string_object(
     const std::string_view name) const {
   for (const auto& path : lexical_paths(name)) {
-    for (const auto& object : simulation_.design().string_objects()) {
-      if (object.name == path) {
-        return std::pair{object.name, object.id};
+    for (const auto& object : simulation_.design_ir().objects()) {
+      if (object.kind == semantic::design::ObjectKind::string
+          && object.path == path
+          && object.runtime_index
+              <= std::numeric_limits<runtime::simir::StringObjectId>::max()) {
+        return std::pair{
+            object.path,
+            static_cast<runtime::simir::StringObjectId>(
+                object.runtime_index)};
       }
     }
   }
@@ -445,11 +506,21 @@ DebuggerSession::resolve_string_object(
 
 [[nodiscard]] std::optional<std::pair<
     std::string, runtime::simir::ContainerObjectId>>
-DebuggerSession::resolve_container_object(
+  DebuggerSession::resolve_container_object(
     const std::string_view name) const {
   for (const auto& path : lexical_paths(name)) {
-    if (const auto object = simulation_.design().find_container(path)) {
-      return std::pair{path, *object};
+    const auto object = std::ranges::find_if(
+        simulation_.design_ir().objects(), [&](const auto& candidate) {
+          return candidate.kind == semantic::design::ObjectKind::container
+              && candidate.path == path
+              && candidate.runtime_index <= std::numeric_limits<
+                  runtime::simir::ContainerObjectId>::max();
+        });
+    if (object != simulation_.design_ir().objects().end()) {
+      return std::pair{
+          path,
+          static_cast<runtime::simir::ContainerObjectId>(
+              object->runtime_index)};
     }
   }
   return std::nullopt;
@@ -561,7 +632,7 @@ void DebuggerSession::signals_command(const std::vector<std::string>& command)  
       }
       found = true;
       const auto& info =
-          simulation_.design().signals().at(signal);
+          simulation_.runtime_adapter().signals().at(signal);
       output_ << path << " = "
               << format_value(
                      simulation_.read_signal(signal),
@@ -581,9 +652,12 @@ void DebuggerSession::modify_signal(const std::vector<std::string>& command)  {
     if (!signal) {
       return;
     }
-    const auto& info = simulation_.design().signals().at(signal->second);
+    const auto* info = design_signal_object(simulation_, signal->second);
+    if (info == nullptr) {
+      throw std::logic_error{"signal lacks its DesignIR runtime adapter"};
+    }
     std::string value_error;
-    auto value = parse_value(command[2], info.width, value_error);
+    auto value = parse_value(command[2], info->width, value_error);
     if (!value) {
       output_ << value_error << '\n';
     } else if (command[0] == "deposit") {
@@ -600,7 +674,7 @@ void DebuggerSession::show_locals()  {
     }
     const auto process_id = current_execution_point_->process;
     const auto& process =
-        simulation_.design().processes().at(
+        simulation_.runtime_adapter().processes().at(
             current_execution_point_->design_process);
     if (process.debug_locals.empty()
         && process.debug_string_locals.empty()
@@ -647,12 +721,15 @@ void DebuggerSession::trace_command(const std::vector<std::string>& command)  {
     }
     if (command.size() == 2 && command[1] == "list") {
       bool found = false;
-      for (const auto& signal : simulation_.design().signals()) {
-        if (!trace_->enabled[signal.id]) {
+      for (const auto& signal : simulation_.design_ir().objects()) {
+        if (signal.kind != semantic::design::ObjectKind::signal
+            || signal.parent_object
+            || signal.runtime_index >= trace_->enabled.size()
+            || !trace_->enabled[signal.runtime_index]) {
           continue;
         }
         found = true;
-        output_ << signal.name << '\n';
+        output_ << signal.path << '\n';
       }
       if (!found) {
         output_ << "(no traced signals)\n";
@@ -662,8 +739,12 @@ void DebuggerSession::trace_command(const std::vector<std::string>& command)  {
     if (command.size() == 2
         && (command[1] == "all" || command[1] == "clear")) {
       const auto enable = command[1] == "all";
-      for (const auto& signal : simulation_.design().signals()) {
-        set_trace_enabled(signal.id, enable);
+      for (const auto& signal : simulation_.design_ir().objects()) {
+        if (signal.kind == semantic::design::ObjectKind::signal
+            && !signal.parent_object) {
+          set_trace_enabled(
+              static_cast<SignalId>(signal.runtime_index), enable);
+        }
       }
       output_
           << (enable ? "tracing all signals\n" : "cleared trace selection\n");
@@ -751,11 +832,15 @@ void DebuggerSession::add_breakpoint(const std::vector<std::string>& command)  {
           output_ << "signal breakpoint comparison must be == or !=\n";
           return;
         }
-        const auto& info =
-            simulation_.design().signals().at(breakpoint.signal);
+        const auto* info = design_signal_object(
+            simulation_, breakpoint.signal);
+        if (info == nullptr) {
+          throw std::logic_error{
+              "signal breakpoint lacks its DesignIR runtime adapter"};
+        }
         std::string value_error;
         auto condition =
-            parse_value(command[4], info.width, value_error);
+            parse_value(command[4], info->width, value_error);
         if (!condition) {
           output_ << value_error << '\n';
           return;
@@ -967,9 +1052,12 @@ void DebuggerSession::report_execution_point()  {
       return;
     }
     const auto& point = *current_execution_point_;
+    const auto* process = design_process_occurrence(
+        simulation_, point.design_process);
     output_ << "process "
-            << simulation_.design().processes().at(
-                   point.design_process).name
+            << (process == nullptr
+                    ? std::to_string(point.design_process)
+                    : process->name)
             << " at " << point.source.path << ':' << point.source.line
             << ':' << point.source.column << '\n';
   }
@@ -1208,7 +1296,7 @@ int handle_debug(
   install_interrupt_hook(simulation);
   const InterruptSignalGuard interrupt_signal;
   simulation.start();
-  output << "fsim debugger: " << simulation.design().top();
+  output << "fsim debugger: " << simulation.design_ir().top();
   if (simulation.compiled_process_count() == 0) {
     output << " (reference evaluator)\n";
   } else {

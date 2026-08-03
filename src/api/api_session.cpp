@@ -95,70 +95,6 @@ bool struct_contains(
       (struct_size), offsetof(type, member),            \
       sizeof(((type*)nullptr)->member))
 
-const fsim::runtime::simir::SourceLocation* process_source(
-    const fsim::runtime::simir::Process& process) noexcept {
-  const fsim::runtime::simir::SourceLocation* first = nullptr;
-  for (const auto& operation : process.operations) {
-    const auto* point =
-        fsim::runtime::simir::operation_get_if<fsim::runtime::simir::DebugPoint>(&operation);
-    if (point == nullptr) {
-      continue;
-    }
-    if (first == nullptr) {
-      first = &point->source;
-    }
-    if (point->kind
-        == fsim::runtime::simir::DebugPointKind::process_entry) {
-      return &point->source;
-    }
-  }
-  return first;
-}
-
-std::optional<fsim::runtime::simir::SignalId> output_signal(
-    const fsim::runtime::simir::Operation& operation) {
-  using namespace fsim::runtime::simir;
-  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteBlocking>(&operation)) {
-    return value->signal;
-  }
-  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteUpdate>(&operation)) {
-    return value->signal;
-  }
-  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteAfter>(&operation)) {
-    return value->signal;
-  }
-  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteInertial>(&operation)) {
-    return value->signal;
-  }
-  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteProjected>(&operation)) {
-    return value->signal;
-  }
-  if (const auto* value =
-          fsim::runtime::simir::operation_get_if<WriteProjectedWaveform>(&operation)) {
-    return value->signal;
-  }
-  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteBlockingSlice>(&operation)) {
-    return value->signal;
-  }
-  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteUpdateSlice>(&operation)) {
-    return value->signal;
-  }
-  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteAfterSlice>(&operation)) {
-    return value->signal;
-  }
-  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteInertialSlice>(&operation)) {
-    return value->signal;
-  }
-  if (const auto* value = fsim::runtime::simir::operation_get_if<WriteProjectedSlice>(&operation)) {
-    return value->signal;
-  }
-  if (const auto* value =
-          fsim::runtime::simir::operation_get_if<WriteProjectedWaveformSlice>(&operation)) {
-    return value->signal;
-  }
-  return std::nullopt;
-}
-
 fsim_status_t with_session(
     const fsim_session_t handle,
     const std::function<fsim_status_t(Session&)>& function) noexcept {
@@ -235,22 +171,123 @@ std::optional<std::size_t> object_systemc(
   }
   const auto index =
       static_cast<std::size_t>(payload & kSystemCObjectIndexMask);
-  if (index >= session.simulation->design().systemc_objects().size()) {
+  if (index >= session.systemc_design_object_by_object.size()) {
     return std::nullopt;
   }
   return index;
 }
 
+const fsim::semantic::design::Object* design_systemc_object(
+    const Session& session, const std::size_t object) noexcept {
+  if (!session.simulation
+      || object >= session.systemc_design_object_by_object.size()) {
+    return nullptr;
+  }
+  const auto id = session.systemc_design_object_by_object[object];
+  return id ? &session.simulation->design_ir().objects()[id->value()]
+            : nullptr;
+}
+
+const fsim::semantic::design::ProcessOccurrence* design_systemc_process(
+    const Session& session, const std::size_t object) noexcept {
+  if (!session.simulation
+      || object >= session.systemc_design_process_by_object.size()) {
+    return nullptr;
+  }
+  const auto id = session.systemc_design_process_by_object[object];
+  return id ? &session.simulation->design_ir().processes()[id->value()]
+            : nullptr;
+}
+
+std::optional<std::size_t> systemc_adapter_for_object(
+    const Session& session,
+    const fsim::semantic::design::ObjectId object) noexcept {
+  const auto found = std::ranges::find(
+      session.systemc_design_object_by_object,
+      std::optional<fsim::semantic::design::ObjectId>{object});
+  return found == session.systemc_design_object_by_object.end()
+      ? std::nullopt
+      : std::optional<std::size_t>{static_cast<std::size_t>(
+            std::distance(
+                session.systemc_design_object_by_object.begin(), found))};
+}
+
+std::optional<std::size_t> systemc_adapter_for_process(
+    const Session& session,
+    const fsim::semantic::design::ProcessOccurrenceId process) noexcept {
+  const auto found = std::ranges::find(
+      session.systemc_design_process_by_object,
+      std::optional<fsim::semantic::design::ProcessOccurrenceId>{process});
+  return found == session.systemc_design_process_by_object.end()
+      ? std::nullopt
+      : std::optional<std::size_t>{static_cast<std::size_t>(
+            std::distance(
+                session.systemc_design_process_by_object.begin(), found))};
+}
+
+const fsim::semantic::design::Object* design_signal(
+    const Session& session,
+    const fsim::runtime::simir::SignalId signal) noexcept {
+  if (!session.simulation) {
+    return nullptr;
+  }
+  const auto& objects = session.simulation->design_ir().objects();
+  const auto found = std::ranges::find_if(
+      objects, [&](const fsim::semantic::design::Object& candidate) {
+        return candidate.kind == fsim::semantic::design::ObjectKind::signal
+            && !candidate.parent_object
+            && candidate.runtime_index == signal;
+      });
+  return found == objects.end() ? nullptr : &*found;
+}
+
+const fsim::semantic::design::ProcessOccurrence* design_process(
+    const Session& session, const std::size_t process) noexcept {
+  if (!session.simulation) {
+    return nullptr;
+  }
+  const auto& processes = session.simulation->design_ir().processes();
+  const auto found = std::ranges::find_if(
+      processes,
+      [&](const fsim::semantic::design::ProcessOccurrence& candidate) {
+        return candidate.runtime_index == process;
+      });
+  return found == processes.end() ? nullptr : &*found;
+}
+
+DesignSourceLocation design_source(
+    const Session& session,
+    const std::optional<fsim::semantic::SourceSpanId> source) {
+  if (!session.simulation || !source) {
+    return {};
+  }
+  const auto& semantics = session.simulation->semantics();
+  if (source->value() >= semantics.source_spans().size()) {
+    return {};
+  }
+  const auto& span = semantics.source_spans()[source->value()];
+  if (span.file.value() >= semantics.source_files().size()) {
+    return {};
+  }
+  return {
+      span.logical_name.empty()
+          ? semantics.source_files()[span.file.value()].physical_name
+          : span.logical_name,
+      span.begin.line,
+      span.begin.column};
+}
+
 fsim_object_t debug_systemc_object_handle(
     const Session& session, const std::size_t object) {
-  const auto& objects = session.simulation->design().systemc_objects();
-  if (object >= objects.size()) {
+  const auto* design_object = design_systemc_object(session, object);
+  const auto* design_process_object = design_systemc_process(session, object);
+  if (design_object == nullptr && design_process_object == nullptr) {
     return FSIM_INVALID_OBJECT;
   }
-  using Kind = fsim::elaboration::SystemCNamedObjectKind;
-  const auto& info = objects[object];
-  if (info.kind == Kind::module || info.kind == Kind::foreign_child) {
-    if (info.name == session.simulation->design().top()) {
+  if (design_object != nullptr
+      && design_object->kind
+          == fsim::semantic::design::ObjectKind::systemc_module) {
+    if (design_object->path == session.simulation->design_ir().top()) {
       return root_handle(session);
     }
     if (object < session.systemc_scope_by_object.size()
@@ -282,15 +319,24 @@ std::optional<fsim::runtime::simir::SignalId> object_signal(
     return std::nullopt;
   }
   if (const auto systemc = object_systemc(session, object)) {
-    return session.simulation->design().systemc_objects()[*systemc].signal;
+    const auto* design_object = design_systemc_object(session, *systemc);
+    if (design_object == nullptr || design_object->width == 0
+        || design_object->runtime_index
+            > std::numeric_limits<fsim::runtime::simir::SignalId>::max()) {
+      return std::nullopt;
+    }
+    return static_cast<fsim::runtime::simir::SignalId>(
+        design_object->runtime_index);
   }
   const auto payload = object_payload(object);
   if ((payload & ~kObjectIndexMask) != kSignalPayload) {
     return std::nullopt;
   }
   const auto index = payload & kObjectIndexMask;
-  if (index >= session.simulation->design().signals().size()
-      || index > std::numeric_limits<fsim::runtime::simir::SignalId>::max()) {
+  if (index > std::numeric_limits<fsim::runtime::simir::SignalId>::max()
+      || design_signal(
+             session,
+             static_cast<fsim::runtime::simir::SignalId>(index)) == nullptr) {
     return std::nullopt;
   }
   return static_cast<fsim::runtime::simir::SignalId>(index);
@@ -319,19 +365,18 @@ std::optional<std::size_t> object_process(
     return std::nullopt;
   }
   if (const auto systemc = object_systemc(session, object)) {
-    const auto process =
-        session.simulation->design().systemc_objects()[*systemc].process;
-    if (!process) {
+    const auto* process = design_systemc_process(session, *systemc);
+    if (process == nullptr) {
       return std::nullopt;
     }
-    return static_cast<std::size_t>(*process);
+    return static_cast<std::size_t>(process->runtime_index);
   }
   const auto payload = object_payload(object);
   if ((payload & ~kObjectIndexMask) != kProcessPayload) {
     return std::nullopt;
   }
   const auto index = payload & kObjectIndexMask;
-  if (index >= session.simulation->design().processes().size()) {
+  if (design_process(session, index) == nullptr) {
     return std::nullopt;
   }
   return static_cast<std::size_t>(index);
@@ -483,14 +528,15 @@ std::optional<std::size_t> append_design_scope(
     const std::optional<std::size_t> parent_scope,
     std::string full_name,
     std::string type_name,
-    const std::string& source) {
+    const std::string_view source) {
   for (std::size_t index = 0; index < session.scopes.size(); ++index) {
     auto& scope = session.scopes[index];
     if (scope.kind != ScopeObjectKind::lexical
         && scope.full_name == full_name) {
       if (!source.empty()) {
         scope.source =
-            fsim::runtime::simir::SourceLocation{source, 1, 1};
+            fsim::runtime::simir::SourceLocation{
+                std::string{source}, 1, 1};
       }
       if (!type_name.empty() && type_name != "hdl_instance") {
         scope.type_name = std::move(type_name);
@@ -508,7 +554,8 @@ std::optional<std::size_t> append_design_scope(
       parent_scope,
       std::move(full_name),
       std::move(type_name),
-      fsim::runtime::simir::SourceLocation{source, 1, 1},
+      fsim::runtime::simir::SourceLocation{
+          std::string{source}, 1, 1},
       std::nullopt});
   return session.scopes.size() - 1;
 }
@@ -520,85 +567,137 @@ bool rebuild_debug_objects(Session& session) {
   session.drivers.clear();
   session.systemc_scope_by_object.clear();
   session.systemc_object_by_process.clear();
+  session.systemc_design_object_by_object.clear();
+  session.systemc_design_process_by_object.clear();
   if (!session.simulation) {
     return true;
   }
-  const auto& design = session.simulation->design();
-  const auto& systemc_objects = design.systemc_objects();
+  const auto& runtime_design = session.simulation->runtime_adapter();
+  const auto& design = session.simulation->design_ir();
+  const auto& systemc_objects = runtime_design.systemc_objects();
   if (systemc_objects.size() > kSystemCObjectIndexMask) {
     return false;
   }
   session.systemc_scope_by_object.resize(systemc_objects.size());
-  session.systemc_object_by_process.resize(design.processes().size());
+  session.systemc_object_by_process.resize(runtime_design.processes().size());
+  session.systemc_design_object_by_object.resize(systemc_objects.size());
+  session.systemc_design_process_by_object.resize(systemc_objects.size());
 
   using SystemCKind = fsim::elaboration::SystemCNamedObjectKind;
   std::vector<std::size_t> systemc_scopes;
   for (std::size_t index = 0; index < systemc_objects.size(); ++index) {
-    const auto kind = systemc_objects[index].kind;
-    if (kind == SystemCKind::module
-        || kind == SystemCKind::foreign_child) {
-      systemc_scopes.push_back(index);
-    }
-    if (systemc_objects[index].process) {
+    const auto& adapter = systemc_objects[index];
+    if (adapter.kind == SystemCKind::process) {
+      const auto boundary = std::ranges::find_if(
+          design.boundaries(), [&](const auto& candidate) {
+            return candidate.kind
+                    == fsim::semantic::design::BoundaryKind::systemc_process
+                && candidate.path == adapter.name && candidate.process;
+          });
+      if (boundary == design.boundaries().end()) {
+        return false;
+      }
+      session.systemc_design_process_by_object[index] = *boundary->process;
       const auto process = static_cast<std::size_t>(
-          *systemc_objects[index].process);
+          design.processes()[boundary->process->value()].runtime_index);
       if (process >= session.systemc_object_by_process.size()) {
         return false;
       }
       session.systemc_object_by_process[process] = index;
+      continue;
+    }
+    const auto expected_kind = [&] {
+      using ObjectKind = fsim::semantic::design::ObjectKind;
+      switch (adapter.kind) {
+        case SystemCKind::module:
+        case SystemCKind::foreign_child:
+          return ObjectKind::systemc_module;
+        case SystemCKind::port:
+          return ObjectKind::systemc_port;
+        case SystemCKind::event:
+          return ObjectKind::systemc_event;
+        case SystemCKind::primitive_channel:
+          return ObjectKind::systemc_channel;
+        case SystemCKind::signal:
+          return ObjectKind::systemc_signal;
+        case SystemCKind::export_object:
+          return ObjectKind::systemc_export;
+        case SystemCKind::process:
+          break;
+      }
+      return ObjectKind::systemc_module;
+    }();
+    const auto object = std::ranges::find_if(
+        design.objects(), [&](const auto& candidate) {
+          return candidate.kind == expected_kind
+              && candidate.path == adapter.name;
+        });
+    if (object == design.objects().end()) {
+      return false;
+    }
+    session.systemc_design_object_by_object[index] = object->id;
+    if (object->kind
+        == fsim::semantic::design::ObjectKind::systemc_module) {
+      systemc_scopes.push_back(index);
     }
   }
   std::stable_sort(
       systemc_scopes.begin(), systemc_scopes.end(),
       [&](const std::size_t left, const std::size_t right) {
+        const auto& left_path = design_systemc_object(session, left)->path;
+        const auto& right_path = design_systemc_object(session, right)->path;
         const auto left_depth = static_cast<std::size_t>(std::count(
-            systemc_objects[left].name.begin(),
-            systemc_objects[left].name.end(), '.'));
+            left_path.begin(), left_path.end(), '.'));
         const auto right_depth = static_cast<std::size_t>(std::count(
-            systemc_objects[right].name.begin(),
-            systemc_objects[right].name.end(), '.'));
+            right_path.begin(), right_path.end(), '.'));
         return left_depth < right_depth;
       });
   for (const auto index : systemc_scopes) {
-    const auto& object = systemc_objects[index];
-    if (object.name == design.top()) {
+    const auto& object = *design_systemc_object(session, index);
+    if (object.path == design.top()) {
       continue;
     }
-    const auto parent_scope = owning_design_scope(session, object.parent);
+    const auto separator = object.path.rfind('.');
+    const auto parent_path = separator == std::string::npos
+        ? std::string_view{design.top()}
+        : std::string_view{object.path}.substr(0, separator);
+    const auto parent_scope = owning_design_scope(session, parent_path);
+    const auto source = design_source(session, object.source);
     const auto scope = append_design_scope(
         session,
         ScopeObjectKind::instance,
         parent_scope,
-        object.name,
-        object.type_name,
-        object.source.path);
+        object.path,
+        object.external_type,
+        source.path);
     if (!scope) {
       session.scopes.clear();
       return false;
     }
-    session.scopes[*scope].source = object.source;
+    session.scopes[*scope].source = {
+        std::string{source.path}, source.line, source.column};
     session.scopes[*scope].systemc_object = index;
     session.systemc_scope_by_object[index] = *scope;
   }
 
-  for (const auto& specialization : design.specializations()) {
-    if (specialization.instance == design.top()) {
+  for (const auto& instance : design.instances()) {
+    const auto& specialization =
+        design.specializations()[instance.specialization.value()];
+    if (specialization.language == fsim::semantic::Language::systemc
+        || instance.path == design.top()) {
       continue;
     }
 
-    std::string_view parent_path = design.top();
-    for (const auto& candidate : design.specializations()) {
-      if (candidate.instance != specialization.instance
-          && candidate.instance.size() > parent_path.size()
-          && path_is_within(
-              specialization.instance, candidate.instance)) {
-        parent_path = candidate.instance;
-      }
-    }
-    auto parent_scope =
-        owning_design_scope(session, specialization.instance);
-    const auto relative = std::string_view{specialization.instance}.substr(
-        parent_path.size() + 1);
+    const auto parent_path = instance.parent
+        ? std::string_view{
+              design.instances()[instance.parent->value()].path}
+        : std::string_view{design.top()};
+    auto parent_scope = owning_design_scope(session, instance.path);
+    const auto relative = instance.path.size() > parent_path.size()
+            && instance.path[parent_path.size()] == '.'
+        ? std::string_view{instance.path}.substr(parent_path.size() + 1)
+        : std::string_view{instance.path};
+    const auto instance_source = design_source(session, instance.source);
     std::size_t segment_begin = 0;
     while (true) {
       const auto segment_end = relative.find('.', segment_begin);
@@ -614,7 +713,7 @@ bool rebuild_debug_objects(Session& session) {
           parent_scope,
           region_name,
           "generate",
-          specialization.source);
+          instance_source.path);
       if (!parent_scope) {
         session.scopes.clear();
         return false;
@@ -625,17 +724,22 @@ bool rebuild_debug_objects(Session& session) {
             session,
             ScopeObjectKind::instance,
             parent_scope,
-            specialization.instance,
-            specialization.unit,
-            specialization.source)) {
+            instance.path,
+            instance.target,
+            instance_source.path)) {
       session.scopes.clear();
       return false;
     }
   }
 
-  const auto& processes = design.processes();
-  for (std::size_t process = 0; process < processes.size(); ++process) {
-    const auto& program = processes[process];
+  const auto& runtime_processes = runtime_design.processes();
+  session.process_names.resize(runtime_processes.size());
+  for (const auto& occurrence : design.processes()) {
+    const auto process = static_cast<std::size_t>(occurrence.runtime_index);
+    if (process >= runtime_processes.size()) {
+      return false;
+    }
+    const auto& program = runtime_processes[process];
     for (std::size_t local = 0;
          local < program.debug_locals.size(); ++local) {
       const auto& debug_local = program.debug_locals[local];
@@ -653,7 +757,7 @@ bool rebuild_debug_objects(Session& session) {
               ? scope_path.size()
               : segment_end;
           const auto full_name =
-              program.name + "."
+              occurrence.name + "."
               + std::string(scope_path.substr(0, prefix_end));
           parent_scope = ensure_scope(
               session,
@@ -681,12 +785,9 @@ bool rebuild_debug_objects(Session& session) {
           process,
           local,
           parent_scope,
-          program.name + "." + debug_local.name});
+          occurrence.name + "." + debug_local.name});
     }
-  }
-  session.process_names.reserve(processes.size());
-  for (const auto& process : processes) {
-    auto name = process.name;
+    auto name = occurrence.name;
     const auto collides_with_scope =
         std::any_of(
             session.scopes.begin(),
@@ -697,38 +798,36 @@ bool rebuild_debug_objects(Session& session) {
     if (collides_with_scope) {
       name += ".$process";
     }
-    session.process_names.push_back(std::move(name));
+    session.process_names[process] = std::move(name);
   }
 
-  std::vector<std::size_t> driver_ordinals(
-      design.signals().size(), 0);
-  for (std::size_t process_index = 0;
-       process_index < processes.size(); ++process_index) {
-    std::vector<fsim::runtime::simir::SignalId> outputs;
-    for (const auto& operation : processes[process_index].operations) {
-      const auto signal = output_signal(operation);
-      if (signal
-          && std::find(outputs.begin(), outputs.end(), *signal)
-              == outputs.end()) {
-        outputs.push_back(*signal);
-      }
+  std::vector<std::pair<std::size_t, fsim::runtime::simir::SignalId>>
+      driver_pairs;
+  std::map<fsim::runtime::simir::SignalId, std::size_t> driver_ordinals;
+  for (const auto& driver : design.drivers()) {
+    const auto& object = design.objects()[driver.object.value()];
+    const auto& process = design.processes()[driver.process.value()];
+    if (object.runtime_index
+            > std::numeric_limits<fsim::runtime::simir::SignalId>::max()
+        || process.runtime_index >= runtime_processes.size()) {
+      return false;
     }
-    for (const auto signal : outputs) {
-      if (session.drivers.size() > kDriverIndexMask
-          || signal >= design.signals().size()) {
-        session.scopes.clear();
-        session.process_names.clear();
-        session.variables.clear();
-        session.drivers.clear();
-        return false;
-      }
-      const auto ordinal = driver_ordinals[signal]++;
-      session.drivers.push_back(DriverObject{
-          signal,
-          process_index,
-          design.signals()[signal].name + ".$driver["
-              + std::to_string(ordinal) + "]"});
+    const auto signal = static_cast<fsim::runtime::simir::SignalId>(
+        object.runtime_index);
+    const auto pair = std::pair<std::size_t, fsim::runtime::simir::SignalId>{
+        process.runtime_index, signal};
+    if (std::ranges::find(driver_pairs, pair) != driver_pairs.end()) {
+      continue;
     }
+    if (session.drivers.size() > kDriverIndexMask) {
+      return false;
+    }
+    driver_pairs.push_back(pair);
+    const auto ordinal = driver_ordinals[signal]++;
+    session.drivers.push_back(DriverObject{
+        signal,
+        process.runtime_index,
+        object.path + ".$driver[" + std::to_string(ordinal) + "]"});
   }
   return true;
 }

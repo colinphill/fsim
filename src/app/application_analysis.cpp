@@ -294,7 +294,7 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
         frontend::DiagnosticSeverity::Error,
         "FSIM-FE-IO-001",
         "unable to open source file",
-        {input.path.string(), {}, {}, input.path.string()},
+        {input.path.string(), {}, {}, input.path.string(), {}},
         {},
     });
     return snapshot;
@@ -307,7 +307,7 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
         frontend::DiagnosticSeverity::Error,
         "FSIM-FE-IO-002",
         "failed while reading source file",
-        {input.path.string(), {}, {}, input.path.string()},
+        {input.path.string(), {}, {}, input.path.string(), {}},
         {},
     });
     return snapshot;

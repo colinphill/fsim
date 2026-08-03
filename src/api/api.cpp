@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "api_internal.hpp"
 
+
 using namespace fsim::api::detail;
 
 extern "C" {
@@ -255,14 +256,17 @@ fsim_status_t fsim_session_find_object(
     const auto requested =
         path.data == nullptr ? std::string_view{}
                              : std::string_view{path.data, path.size};
-    if (requested.empty() || requested == value.simulation->design().top()) {
+    if (requested.empty()
+        || requested == value.simulation->design_ir().top()) {
       *out_object = root_handle(value);
       return FSIM_STATUS_OK;
     }
-    const auto& systemc_objects =
-        value.simulation->design().systemc_objects();
-    for (std::size_t index = 0; index < systemc_objects.size(); ++index) {
-      if (systemc_objects[index].name == requested) {
+    for (std::size_t index = 0;
+         index < value.systemc_design_object_by_object.size(); ++index) {
+      const auto* design_object = design_systemc_object(value, index);
+      const auto* process = design_systemc_process(value, index);
+      if ((design_object != nullptr && design_object->path == requested)
+          || (process != nullptr && process->name == requested)) {
         *out_object = debug_systemc_object_handle(value, index);
         return FSIM_STATUS_OK;
       }
@@ -315,17 +319,25 @@ fsim_status_t fsim_session_visit_children(
     if (!ready(value, "hierarchy enumeration")) {
       return FSIM_STATUS_INVALID_ARGUMENT;
     }
-    using SystemCKind = fsim::elaboration::SystemCNamedObjectKind;
-    const auto& systemc_objects =
-        value.simulation->design().systemc_objects();
     const auto visit_systemc_children =
         [&](const std::string_view parent_name) {
           for (std::size_t index = 0;
-               index < systemc_objects.size(); ++index) {
-            const auto& object = systemc_objects[index];
-            if (object.parent != parent_name
-                || object.kind == SystemCKind::module
-                || object.kind == SystemCKind::foreign_child) {
+               index < value.systemc_design_object_by_object.size();
+               ++index) {
+            const auto* object = design_systemc_object(value, index);
+            const auto* process = design_systemc_process(value, index);
+            const auto path = object != nullptr
+                ? std::string_view{object->path}
+                : process != nullptr ? std::string_view{process->name}
+                                     : std::string_view{};
+            const auto separator = path.rfind('.');
+            const auto object_parent = separator == std::string_view::npos
+                ? std::string_view{}
+                : path.substr(0, separator);
+            if (object_parent != parent_name
+                || (object != nullptr
+                    && object->kind
+                        == fsim::semantic::design::ObjectKind::systemc_module)) {
               continue;
             }
             CallbackGuard guard{value};
@@ -340,15 +352,26 @@ fsim_status_t fsim_session_visit_children(
           return true;
         };
     const auto systemc_replaces_signal =
-        [&](const auto& signal,
+        [&](const fsim::semantic::design::Object& signal,
             const std::string_view parent_name) {
-          return std::any_of(
-              systemc_objects.begin(), systemc_objects.end(),
-              [&](const auto& object) {
-                return object.signal == signal.id
-                    && object.parent == parent_name
-                    && leaf_name(object.name) == leaf_name(signal.name);
-              });
+          for (std::size_t index = 0;
+               index < value.systemc_design_object_by_object.size();
+               ++index) {
+            const auto* object = design_systemc_object(value, index);
+            if (object == nullptr || object->width == 0
+                || object->runtime_index != signal.runtime_index
+                || leaf_name(object->path) != leaf_name(signal.path)) {
+              continue;
+            }
+            const auto separator = object->path.rfind('.');
+            const auto object_parent = separator == std::string::npos
+                ? std::string_view{}
+                : std::string_view{object->path}.substr(0, separator);
+            if (object_parent == parent_name) {
+              return true;
+            }
+          }
+          return false;
         };
     if (parent != root_handle(value)) {
       if (const auto signal = object_signal(value, parent)) {
@@ -431,8 +454,11 @@ fsim_status_t fsim_session_visit_children(
             return FSIM_STATUS_OK;
           }
           for (const auto& signal :
-               value.simulation->design().signals()) {
-            if (owning_design_scope(value, signal.name)
+               value.simulation->design_ir().objects()) {
+            if (signal.kind
+                    != fsim::semantic::design::ObjectKind::signal
+                || signal.parent_object
+                || owning_design_scope(value, signal.path)
                     != scope_index
                 || systemc_replaces_signal(
                     signal, parent_scope.full_name)) {
@@ -441,17 +467,20 @@ fsim_status_t fsim_session_visit_children(
             CallbackGuard guard{value};
             if (callback(
                     value.handle,
-                    signal_handle(value, signal.id),
+                    signal_handle(
+                        value,
+                        static_cast<fsim::runtime::simir::SignalId>(
+                            signal.runtime_index)),
                     user_data)
                 == 0) {
               return FSIM_STATUS_OK;
             }
           }
-          const auto& processes =
-              value.simulation->design().processes();
-          for (std::size_t index = 0;
-               index < processes.size(); ++index) {
-            if (owning_design_scope(value, processes[index].name)
+          for (const auto& process :
+               value.simulation->design_ir().processes()) {
+            const auto index = static_cast<std::size_t>(
+                process.runtime_index);
+            if (owning_design_scope(value, process.name)
                     != scope_index
                 || (index < value.systemc_object_by_process.size()
                     && value.systemc_object_by_process[index])) {
@@ -500,25 +529,32 @@ fsim_status_t fsim_session_visit_children(
         return FSIM_STATUS_OK;
       }
     }
-    const auto& top = value.simulation->design().top();
+    const auto& top = value.simulation->design_ir().top();
     if (!visit_systemc_children(top)) {
       return FSIM_STATUS_OK;
     }
-    for (const auto& signal : value.simulation->design().signals()) {
-      if (owning_design_scope(value, signal.name)
+    for (const auto& signal : value.simulation->design_ir().objects()) {
+      if (signal.kind != fsim::semantic::design::ObjectKind::signal
+          || signal.parent_object
+          || owning_design_scope(value, signal.path)
           || systemc_replaces_signal(signal, top)) {
         continue;
       }
       CallbackGuard guard{value};
       if (callback(
-              value.handle, signal_handle(value, signal.id), user_data)
+              value.handle,
+              signal_handle(
+                  value,
+                  static_cast<fsim::runtime::simir::SignalId>(
+                      signal.runtime_index)),
+              user_data)
           == 0) {
         return FSIM_STATUS_OK;
       }
     }
-    const auto& processes = value.simulation->design().processes();
-    for (std::size_t index = 0; index < processes.size(); ++index) {
-      if (owning_design_scope(value, processes[index].name)
+    for (const auto& process : value.simulation->design_ir().processes()) {
+      const auto index = static_cast<std::size_t>(process.runtime_index);
+      if (owning_design_scope(value, process.name)
           || (index < value.systemc_object_by_process.size()
               && value.systemc_object_by_process[index])) {
         continue;
@@ -590,7 +626,7 @@ fsim_status_t fsim_session_get_object_info(
           out_info->flags |= FSIM_OBJECT_FLAG_HAS_SOURCE;
         };
     if (object == root_handle(value)) {
-      const auto& top = value.simulation->design().top();
+      const auto& top = value.simulation->design_ir().top();
       out_info->parent = FSIM_INVALID_OBJECT;
       out_info->kind = FSIM_OBJECT_ROOT;
       out_info->width = 0;
@@ -600,29 +636,38 @@ fsim_status_t fsim_session_get_object_info(
       return FSIM_STATUS_OK;
     }
     if (const auto systemc = object_systemc(value, object)) {
-      using SystemCKind = fsim::elaboration::SystemCNamedObjectKind;
-      const auto& info =
-          value.simulation->design().systemc_objects().at(*systemc);
+      const auto* design_object = design_systemc_object(value, *systemc);
+      const auto* process = design_systemc_process(value, *systemc);
+      const auto path = design_object != nullptr
+          ? std::string_view{design_object->path}
+          : process != nullptr ? std::string_view{process->name}
+                               : std::string_view{};
+      if (path.empty()) {
+        return FSIM_STATUS_INVALID_HANDLE;
+      }
       out_info->parent = root_handle(value);
-      if (!info.parent.empty()
-          && info.parent != value.simulation->design().top()) {
-        const auto& objects =
-            value.simulation->design().systemc_objects();
-        const auto named_parent = std::find_if(
-            objects.begin(), objects.end(),
-            [&](const auto& candidate) {
-              return candidate.name == info.parent;
+      const auto separator = path.rfind('.');
+      const auto parent_path = separator == std::string_view::npos
+          ? std::string_view{}
+          : path.substr(0, separator);
+      if (!parent_path.empty()
+          && parent_path != value.simulation->design_ir().top()) {
+        const auto parent = std::ranges::find_if(
+            value.simulation->design_ir().objects(),
+            [&](const fsim::semantic::design::Object& candidate) {
+              return candidate.path == parent_path;
             });
-        if (named_parent != objects.end()) {
-          out_info->parent = debug_systemc_object_handle(
-              value,
-              static_cast<std::size_t>(
-                  std::distance(objects.begin(), named_parent)));
+        if (parent != value.simulation->design_ir().objects().end()) {
+          if (const auto adapter =
+                  systemc_adapter_for_object(value, parent->id)) {
+            out_info->parent =
+                debug_systemc_object_handle(value, *adapter);
+          }
         } else {
           const auto scope_parent = std::find_if(
               value.scopes.begin(), value.scopes.end(),
               [&](const ScopeObject& candidate) {
-                return candidate.full_name == info.parent;
+                return candidate.full_name == parent_path;
               });
           if (scope_parent != value.scopes.end()) {
             out_info->parent = scope_handle(
@@ -632,99 +677,98 @@ fsim_status_t fsim_session_get_object_info(
           }
         }
       }
-      out_info->width = 0;
-      out_info->name = view(leaf_name(info.name));
-      out_info->full_name = view(info.name);
-      out_info->type_name = view(info.type_name);
-      switch (info.kind) {
-      case SystemCKind::module:
-      case SystemCKind::foreign_child:
+      out_info->width = design_object == nullptr ? 0 : design_object->width;
+      out_info->name = view(leaf_name(path));
+      out_info->full_name = view(path);
+      out_info->type_name = design_object == nullptr
+          ? view("process")
+          : view(design_object->external_type);
+      if (process != nullptr) {
+        out_info->kind = FSIM_OBJECT_PROCESS;
+      } else {
+        switch (design_object->kind) {
+      case fsim::semantic::design::ObjectKind::systemc_module:
         out_info->kind = FSIM_OBJECT_SCOPE;
         break;
-      case SystemCKind::port:
+      case fsim::semantic::design::ObjectKind::systemc_port:
         out_info->kind = FSIM_OBJECT_PORT;
         break;
-      case SystemCKind::process:
-        out_info->kind = FSIM_OBJECT_PROCESS;
-        break;
-      case SystemCKind::event:
+      case fsim::semantic::design::ObjectKind::systemc_event:
         out_info->kind = FSIM_OBJECT_EVENT;
         break;
-      case SystemCKind::primitive_channel:
+      case fsim::semantic::design::ObjectKind::systemc_channel:
         out_info->kind = FSIM_OBJECT_CHANNEL;
         break;
-      case SystemCKind::signal:
+      case fsim::semantic::design::ObjectKind::systemc_signal:
         out_info->kind = FSIM_OBJECT_SIGNAL;
         break;
-      case SystemCKind::export_object:
+      case fsim::semantic::design::ObjectKind::systemc_export:
         out_info->kind = FSIM_OBJECT_EXPORT;
         break;
+      default:
+        return FSIM_STATUS_INTERNAL_ERROR;
+        }
       }
-      if (info.signal) {
+      if (design_object != nullptr && design_object->width != 0) {
+        const auto signal_id =
+            static_cast<fsim::runtime::simir::SignalId>(
+                design_object->runtime_index);
         const auto& signal =
-            value.simulation->design().signals().at(*info.signal);
-        out_info->width = signal.width;
-        if (value.simulation->signal_is_forced(*info.signal)) {
+            value.simulation->runtime_adapter().signals().at(signal_id);
+        if (value.simulation->signal_is_forced(signal_id)) {
           out_info->flags |= FSIM_OBJECT_FLAG_FORCED;
         }
         if (signal.resolution
             != fsim::runtime::simir::ResolutionKind::none) {
           out_info->flags |= FSIM_OBJECT_FLAG_RESOLVED;
         }
-        if (!signal.declaration_span.source_name.empty()) {
-          set_source(
-              signal.declaration_span.source_name,
-              static_cast<std::uint32_t>(
-                  signal.declaration_span.begin.line),
-              static_cast<std::uint32_t>(
-                  signal.declaration_span.begin.column));
-        }
       }
-      if (info.process) {
-        const auto& process =
-            value.simulation->design().processes().at(*info.process);
-        if (const auto* source = process_source(process)) {
-          set_source(source->path, source->line, source->column);
-        }
-      }
-      if ((out_info->flags & FSIM_OBJECT_FLAG_HAS_SOURCE) == 0) {
-        set_source(info.source.path, info.source.line, info.source.column);
-      }
+      const auto source = design_source(
+          value, design_object != nullptr ? design_object->source
+                                          : process->source);
+      set_source(source.path, source.line, source.column);
       return FSIM_STATUS_OK;
     }
     if (const auto signal = object_signal(value, object)) {
-      const auto& info = value.simulation->design().signals().at(*signal);
-      const auto owner = owning_design_scope(value, info.name);
+      const auto* design_object = design_signal(value, *signal);
+      if (design_object == nullptr) {
+        return FSIM_STATUS_INTERNAL_ERROR;
+      }
+      const auto& runtime_info =
+          value.simulation->runtime_adapter().signals().at(*signal);
+      const auto owner = owning_design_scope(value, design_object->path);
       out_info->parent =
           owner ? scope_handle(value, *owner) : root_handle(value);
-      out_info->kind = info.is_port ? FSIM_OBJECT_PORT : FSIM_OBJECT_SIGNAL;
-      out_info->width = info.width;
-      out_info->name = view(leaf_name(info.name));
-      out_info->full_name = view(info.name);
-      out_info->type_name =
-          info.type_name.empty() ? view("logic4") : view(info.type_name);
+      const auto is_port = std::ranges::any_of(
+          value.simulation->design_ir().ports(), [&](const auto& port) {
+            return port.object == design_object->id;
+          });
+      out_info->kind = is_port ? FSIM_OBJECT_PORT : FSIM_OBJECT_SIGNAL;
+      out_info->width = design_object->width;
+      out_info->name = view(leaf_name(design_object->path));
+      out_info->full_name = view(design_object->path);
+      out_info->type_name = design_object->type.spelling.empty()
+          ? view("logic4")
+          : view(design_object->type.spelling);
       out_info->flags =
           value.simulation->signal_is_forced(*signal)
           ? FSIM_OBJECT_FLAG_FORCED
           : 0U;
-      if (info.resolution
+      if (runtime_info.resolution
           != fsim::runtime::simir::ResolutionKind::none) {
         out_info->flags |= FSIM_OBJECT_FLAG_RESOLVED;
       }
-      if (!info.declaration_span.source_name.empty()) {
-        set_source(
-            info.declaration_span.source_name,
-            static_cast<std::uint32_t>(
-                info.declaration_span.begin.line),
-            static_cast<std::uint32_t>(
-                info.declaration_span.begin.column));
-      }
+      const auto source = design_source(value, design_object->source);
+      set_source(source.path, source.line, source.column);
       return FSIM_STATUS_OK;
     }
     if (const auto process = object_process(value, object)) {
-      const auto& info = value.simulation->design().processes().at(*process);
+      const auto* occurrence = design_process(value, *process);
+      if (occurrence == nullptr) {
+        return FSIM_STATUS_INTERNAL_ERROR;
+      }
       const auto& public_name = value.process_names.at(*process);
-      const auto owner = owning_design_scope(value, info.name);
+      const auto owner = owning_design_scope(value, occurrence->name);
       out_info->parent =
           owner ? scope_handle(value, *owner) : root_handle(value);
       out_info->kind = FSIM_OBJECT_PROCESS;
@@ -732,9 +776,8 @@ fsim_status_t fsim_session_get_object_info(
       out_info->name = view(leaf_name(public_name));
       out_info->full_name = view(public_name);
       out_info->type_name = view("process");
-      if (const auto* source = process_source(info)) {
-        set_source(source->path, source->line, source->column);
-      }
+      const auto source = design_source(value, occurrence->source);
+      set_source(source.path, source.line, source.column);
       return FSIM_STATUS_OK;
     }
     if (const auto scope = object_scope(value, object)) {
@@ -760,7 +803,7 @@ fsim_status_t fsim_session_get_object_info(
     if (const auto variable = object_variable(value, object)) {
       const auto& reference = value.variables[*variable];
       const auto& process =
-          value.simulation->design().processes().at(
+          value.simulation->runtime_adapter().processes().at(
               reference.process);
       const auto& info =
           process.debug_locals.at(reference.local);
@@ -782,19 +825,19 @@ fsim_status_t fsim_session_get_object_info(
     }
     if (const auto driver = object_driver(value, object)) {
       const auto& reference = value.drivers[*driver];
-      const auto& signal =
-          value.simulation->design().signals().at(reference.signal);
-      const auto& process =
-          value.simulation->design().processes().at(reference.process);
+      const auto* signal = design_signal(value, reference.signal);
+      const auto* process = design_process(value, reference.process);
+      if (signal == nullptr || process == nullptr) {
+        return FSIM_STATUS_INTERNAL_ERROR;
+      }
       out_info->parent = signal_handle(value, reference.signal);
       out_info->kind = FSIM_OBJECT_DRIVER;
-      out_info->width = signal.width;
+      out_info->width = signal->width;
       out_info->name = view(leaf_name(reference.full_name));
       out_info->full_name = view(reference.full_name);
       out_info->type_name = view("driver");
-      if (const auto* source = process_source(process)) {
-        set_source(source->path, source->line, source->column);
-      }
+      const auto source = design_source(value, process->source);
+      set_source(source.path, source.line, source.column);
       return FSIM_STATUS_OK;
     }
     return FSIM_STATUS_INVALID_HANDLE;
@@ -867,12 +910,15 @@ fsim_status_t fsim_session_deposit(
     if (!signal) {
       return FSIM_STATUS_INVALID_HANDLE;
     }
-    const auto& info = value.simulation->design().signals().at(*signal);
+    const auto* info = design_signal(value, *signal);
+    if (info == nullptr) {
+      return FSIM_STATUS_INTERNAL_ERROR;
+    }
     const auto text =
         input.data == nullptr ? std::string_view{}
                               : std::string_view{input.data, input.size};
     std::string error;
-    auto parsed = fsim::app::parse_value(text, info.width, error);
+    auto parsed = fsim::app::parse_value(text, info->width, error);
     if (!parsed) {
       value.diagnostics.error("FSIM-API-VALUE-0001", error);
       return FSIM_STATUS_INVALID_ARGUMENT;
@@ -900,12 +946,15 @@ fsim_status_t fsim_session_force(
     if (!signal) {
       return FSIM_STATUS_INVALID_HANDLE;
     }
-    const auto& info = value.simulation->design().signals().at(*signal);
+    const auto* info = design_signal(value, *signal);
+    if (info == nullptr) {
+      return FSIM_STATUS_INTERNAL_ERROR;
+    }
     const auto text =
         input.data == nullptr ? std::string_view{}
                               : std::string_view{input.data, input.size};
     std::string error;
-    auto parsed = fsim::app::parse_value(text, info.width, error);
+    auto parsed = fsim::app::parse_value(text, info->width, error);
     if (!parsed) {
       value.diagnostics.error("FSIM-API-VALUE-0001", error);
       return FSIM_STATUS_INVALID_ARGUMENT;

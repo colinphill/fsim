@@ -3,6 +3,7 @@
 
 #include "fsim/runtime/vcd_writer.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <chrono>
@@ -142,6 +143,78 @@ void verify(const Capture& capture) {
   assert(capture.vcd.find("b1011") != std::string::npos);
 }
 
+void verify_systemverilog_hir(const fsim::project::Config& config) {
+  fsim::diagnostic::Engine diagnostics;
+  auto checked = fsim::app::check_project(config, diagnostics);
+  assert(checked);
+  const auto package = std::ranges::find_if(
+      checked->systemverilog_hir.units(), [](const auto& unit) {
+        return unit.kind == fsim::semantic::sv::UnitKind::package
+            && unit.name == "base_values";
+      });
+  const auto public_package = std::ranges::find_if(
+      checked->systemverilog_hir.units(), [](const auto& unit) {
+        return unit.kind == fsim::semantic::sv::UnitKind::package
+            && unit.name == "public_values";
+      });
+  const auto interface_unit = std::ranges::find_if(
+      checked->systemverilog_hir.units(), [](const auto& unit) {
+        return unit.kind == fsim::semantic::sv::UnitKind::interface
+            && unit.name == "bus_if";
+      });
+  assert(package != checked->systemverilog_hir.units().end());
+  assert(public_package != checked->systemverilog_hir.units().end());
+  assert(interface_unit != checked->systemverilog_hir.units().end());
+  assert(public_package->imports.size() == 1);
+  assert(public_package->exports.size() == 3);
+  assert(interface_unit->modports.size() == 3);
+  assert(interface_unit->modports[0].name == "initiator");
+  assert(interface_unit->modports[0].members.size() == 6);
+  assert(std::ranges::any_of(
+      interface_unit->modports[0].members, [](const auto& member) {
+        return member.kind
+            == fsim::semantic::sv::ModportMemberKind::function_import;
+      }));
+  assert(std::ranges::any_of(
+      interface_unit->modports[0].members, [](const auto& member) {
+        return member.direction == fsim::semantic::sv::Direction::ref;
+      }));
+  const auto word = std::ranges::find_if(
+      checked->systemverilog_hir.types(), [&](const auto& type) {
+        return type.name == "word_t"
+            && std::ranges::find(
+                   package->declarations, type.declaration)
+                != package->declarations.end();
+      });
+  assert(word != checked->systemverilog_hir.types().end());
+  assert(word->form
+         == fsim::semantic::sv::TypeForm::packed_integral);
+  assert(word->base.packed_range);
+  assert(word->base.packed_range->left == 3);
+  assert(word->base.packed_range->right == 0);
+  const auto bump = std::ranges::find_if(
+      checked->systemverilog_hir.declarations(), [&](const auto& declaration) {
+        return declaration.scope == package->scope
+            && declaration.name == "bump";
+      });
+  assert(bump != checked->systemverilog_hir.declarations().end());
+  assert(bump->form == fsim::semantic::sv::DeclarationForm::function);
+  assert(bump->lifetime == fsim::semantic::sv::Lifetime::automatic);
+  assert(bump->callable && bump->callable->formals.size() == 1);
+  const auto producer_mid = std::ranges::find_if(
+      checked->systemverilog_hir.units(), [](const auto& unit) {
+        return unit.name == "producer_mid";
+      });
+  assert(producer_mid != checked->systemverilog_hir.units().end());
+  assert(producer_mid->generates.size() == 1);
+  assert(producer_mid->generates.front().instances.size() == 1);
+  const auto retained_unit = interface_unit->id;
+  const auto retained_modport = interface_unit->modports.front().declaration;
+  checked->parsed.units.clear();
+  assert(interface_unit->id == retained_unit);
+  assert(interface_unit->modports.front().declaration == retained_modport);
+}
+
 }  // namespace
 
 int main() {
@@ -237,6 +310,11 @@ endmodule
 )";
     assert(output.good());
   }
+
+  verify_systemverilog_hir(make_config(
+      directory.path,
+      source,
+      fsim::project::Optimization::o0));
 
   for (const auto optimization : {
            fsim::project::Optimization::o0,

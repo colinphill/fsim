@@ -62,6 +62,45 @@ using runtime::simir::SignalId;
 
 [[nodiscard]] std::uint64_t entropy_seed();
 
+[[nodiscard]] semantic::Model build_semantic_model(
+    const frontend::ParsedDesign& parsed,
+    std::span<const CheckedSource> hdl_sources,
+    std::span<const CheckedSource> systemc_sources,
+    std::span<const CheckedSource> standard_sources);
+
+[[nodiscard]] semantic::SourceSpanId intern_semantic_span(
+    semantic::Model& model,
+    const frontend::SourceSpan& source);
+
+[[nodiscard]] semantic::vhdl::Hir build_vhdl_hir(
+    const frontend::ParsedDesign& parsed,
+    semantic::Model& semantics);
+
+void complete_vhdl_executable_hir(
+    const frontend::ParsedDesign& parsed,
+    semantic::Model& semantics,
+    semantic::vhdl::Hir& hir);
+
+[[nodiscard]] semantic::sv::Hir build_systemverilog_hir(
+    const frontend::ParsedDesign& parsed,
+    semantic::Model& semantics);
+
+void complete_systemverilog_executable_hir(
+    const frontend::ParsedDesign& parsed,
+    semantic::Model& semantics,
+    semantic::sv::Hir& hir);
+
+[[nodiscard]] semantic::design::DesignIr build_design_ir(
+    CheckedProject& checked,
+    const elaboration::ElaboratedDesign& elaborated);
+
+[[nodiscard]] bool design_object_is_signal_bearing(
+    const semantic::design::Object& object) noexcept;
+
+[[nodiscard]] bool valid_runtime_projection(
+    const semantic::design::DesignIr& design,
+    const elaboration::ElaboratedDesign& runtime) noexcept;
+
 class SystemCProcessExecutor final
     : public runtime::simir::ProcessExecutor {
  public:
@@ -760,7 +799,7 @@ std::optional<std::vector<std::string>>
 make_specialization_cache_keys(
     const project::Config& config,
     const CheckedProject& checked,
-    const elaboration::ElaboratedDesign& design,
+    const semantic::design::DesignIr& design,
     std::string_view systemc_plugin_key,
     diagnostic::Engine& diagnostics);
 

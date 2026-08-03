@@ -103,7 +103,7 @@ std::optional<std::vector<std::string>>
 make_specialization_cache_keys(
     const project::Config& config,
     const CheckedProject& checked,
-    const elaboration::ElaboratedDesign& design,
+    const semantic::design::DesignIr& design,
     const std::string_view systemc_plugin_key,
     diagnostic::Engine& diagnostics)  {
   struct SourceSettings {
@@ -119,7 +119,7 @@ make_specialization_cache_keys(
     return source_set;
   }();
   const auto settings_for =
-      [&](const elaboration::SpecializationInfo& specialization,
+      [&](const semantic::design::Specialization& specialization,
           const std::string_view source,
           const bool require_specialization_library)
           -> std::optional<SourceSettings> {
@@ -145,8 +145,13 @@ make_specialization_cache_keys(
             if (source_set.language == project::Language::systemc) {
               continue;
             }
-            if (frontend_language(source_set.language)
-                != specialization.language) {
+            const auto source_language =
+                source_set.language == project::Language::vhdl
+                    ? semantic::Language::vhdl
+                    : source_set.language == project::Language::verilog
+                        ? semantic::Language::verilog
+                        : semantic::Language::system_verilog;
+            if (source_language != specialization.language) {
               continue;
             }
             if (require_specialization_library
@@ -167,7 +172,7 @@ make_specialization_cache_keys(
             }
           }
         }
-        if (specialization.language != frontend::Language::Vhdl2008
+        if (specialization.language != semantic::Language::vhdl
             || (require_specialization_library
                 && specialization.library != "ieee")) {
           return std::nullopt;
@@ -183,29 +188,38 @@ make_specialization_cache_keys(
   std::vector<std::string> result;
   result.reserve(design.specializations().size());
   for (const auto& specialization : design.specializations()) {
+    if (specialization.language == semantic::Language::systemc) {
+      continue;
+    }
+    const auto source_name = specialization.source
+        ? checked.semantics.source_files()[
+              checked.semantics.source_spans()[
+                  specialization.source->value()].file.value()]
+              .physical_name
+        : std::string{};
     const auto settings =
         settings_for(
-            specialization, specialization.source, true);
+            specialization, source_name, true);
     if (!settings) {
       diagnostics.error(
           "FSIM-CACHE-0001",
           "cannot associate elaborated specialization '"
-              + specialization.unit + "' with parsed source '"
-              + specialization.source + "'");
+              + specialization.name + "' with semantic source '"
+              + source_name + "'");
       return std::nullopt;
     }
 
     compiler::CacheKeyBuilder key;
     key.add(
         "specialization-provenance-schema",
-        "fsim-specialization-provenance-v4");
+        "fsim-specialization-provenance-v5-designir");
     key.add("fsim-version", version);
     key.add("standard-library", standard_library_cache_version);
     key.add("delay-mode", project::to_string(config.run.delay_mode));
     key.add(
         "verilog-preprocessor",
         frontend::verilog_preprocessor_cache_version);
-    key.add("unit", specialization.unit);
+    key.add("unit", specialization.name);
     key.add(
         "source-path",
         settings->checked_source->path.lexically_normal().generic_string());
@@ -234,7 +248,7 @@ make_specialization_cache_keys(
             "FSIM-CACHE-0001",
             "cannot associate elaborated specialization dependency '"
                 + dependency_source + "' for '"
-                + specialization.unit + "' with a checked source");
+                + specialization.name + "' with a checked source");
         return std::nullopt;
       }
       key.add(
@@ -298,13 +312,9 @@ make_specialization_cache_keys(
          settings->source_set->include_directories) {
       key.add("include", include.lexically_normal().generic_string());
     }
-    const auto& parameter_identity =
-        specialization.parameter_identity_values.empty()
-            ? specialization.parameter_values
-            : specialization.parameter_identity_values;
-    for (const auto& [name, value] : parameter_identity) {
-      key.add("parameter-name", name);
-      key.add("parameter-value", value);
+    for (const auto& parameter : specialization.parameters) {
+      key.add("parameter-name", parameter.name);
+      key.add("parameter-value", parameter.identity);
     }
     // Native HDL objects address the common runtime by dense signal/process
     // IDs. A SystemC image or hierarchy edit can therefore change the
@@ -316,87 +326,64 @@ make_specialization_cache_keys(
     key.add("systemc-plugin", systemc_plugin_key);
     key.add(
         "systemc-instance-count",
-        std::to_string(design.systemc_instances().size()));
-    for (const auto& instance : design.systemc_instances()) {
-      key.add("systemc-instance-id", std::to_string(instance.id));
-      key.add("systemc-factory-target", instance.target);
-      key.add("systemc-instance-path", instance.instance);
+        std::to_string(std::ranges::count_if(
+            design.specializations(), [](const auto& item) {
+              return item.language == semantic::Language::systemc;
+            })));
+    for (const auto& systemc : design.specializations()) {
+      if (systemc.language != semantic::Language::systemc) {
+        continue;
+      }
+      const auto& instance = design.instances()[systemc.instance.value()];
+      key.add("systemc-instance-id", std::to_string(systemc.id.value()));
+      key.add("systemc-factory-target", systemc.name);
+      key.add("systemc-instance-path", instance.path);
       key.add(
           "systemc-construction-count",
-          std::to_string(
-              instance.construction_identity_values.empty()
-                  ? instance.construction_values.size()
-                  : instance.construction_identity_values.size()));
-      if (instance.construction_identity_values.empty()) {
-        for (const auto& [name, value] : instance.construction_values) {
-          key.add("systemc-construction-name", name);
-          key.add("systemc-construction-value", std::to_string(value));
-        }
-      } else {
-        for (const auto& [name, value] :
-             instance.construction_identity_values) {
-          key.add("systemc-construction-name", name);
-          key.add("systemc-construction-value", value);
-        }
-      }
-      key.add("systemc-port-count", std::to_string(instance.ports.size()));
-      for (const auto& port : instance.ports) {
-        key.add("systemc-port-name", port.name);
-        key.add("systemc-port-signal", std::to_string(port.signal));
-      }
-      key.add("systemc-event-count", std::to_string(instance.events.size()));
-      for (const auto& event : instance.events) {
-        key.add("systemc-event-name", event.name);
-        key.add("systemc-event-signal", std::to_string(event.signal));
-      }
-      key.add(
-          "systemc-channel-count",
-          std::to_string(instance.primitive_channels.size()));
-      for (const auto& channel : instance.primitive_channels) {
-        key.add("systemc-channel-name", channel.name);
-      }
-      key.add(
-          "systemc-signal-count",
-          std::to_string(instance.internal_signals.size()));
-      for (const auto& signal : instance.internal_signals) {
-        key.add("systemc-signal-name", signal.name);
-        key.add("systemc-signal-id", std::to_string(signal.signal));
-      }
-      key.add(
-          "systemc-export-count",
-          std::to_string(instance.exports.size()));
-      for (const auto& export_object : instance.exports) {
-        key.add("systemc-export-name", export_object.name);
-        key.add(
-            "systemc-export-signal",
-            std::to_string(export_object.signal));
-        key.add(
-            "systemc-export-writable",
-            export_object.writable ? "true" : "false");
+          std::to_string(systemc.parameters.size()));
+      for (const auto& parameter : systemc.parameters) {
+        key.add("systemc-construction-name", parameter.name);
+        key.add("systemc-construction-value", parameter.identity);
       }
     }
-    key.add(
-        "systemc-process-count",
-        std::to_string(design.systemc_processes().size()));
-    for (const auto& process : design.systemc_processes()) {
-      key.add("systemc-process-id", std::to_string(process.process));
+    key.add("systemc-boundary-count", std::to_string(
+        std::ranges::count_if(design.boundaries(), [](const auto& boundary) {
+          return boundary.kind
+              != semantic::design::BoundaryKind::language_conversion;
+        })));
+    for (const auto& boundary : design.boundaries()) {
+      if (boundary.kind
+          == semantic::design::BoundaryKind::language_conversion) {
+        continue;
+      }
+      key.add("systemc-boundary-kind", std::to_string(
+          static_cast<unsigned>(boundary.kind)));
+      key.add("systemc-boundary-id", std::to_string(boundary.id.value()));
+      key.add("systemc-boundary-path", boundary.path);
+      key.add("systemc-boundary-object", boundary.object
+          ? std::to_string(boundary.object->value()) : "none");
+      key.add("systemc-boundary-process", boundary.process
+          ? std::to_string(design.processes()[boundary.process->value()]
+                               .runtime_index)
+          : "none");
+      key.add("systemc-boundary-port-writable",
+          boundary.port && design.ports()[boundary.port->value()].writable
+              ? "true" : "false");
     }
-    key.add(
-        "systemc-object-count",
-        std::to_string(design.systemc_objects().size()));
-    for (const auto& object : design.systemc_objects()) {
-      key.add(
-          "systemc-object-kind",
-          std::to_string(static_cast<unsigned>(object.kind)));
-      key.add("systemc-object-name", object.name);
-      key.add("systemc-object-parent", object.parent);
-      key.add("systemc-object-type", object.type_name);
-      key.add(
-          "systemc-object-signal",
-          object.signal ? std::to_string(*object.signal) : "none");
-      key.add(
-          "systemc-object-process",
-          object.process ? std::to_string(*object.process) : "none");
+    key.add("systemc-object-count", std::to_string(
+        std::ranges::count_if(design.objects(), [](const auto& object) {
+          return object.kind >= semantic::design::ObjectKind::systemc_module;
+        })));
+    for (const auto& object : design.objects()) {
+      if (object.kind < semantic::design::ObjectKind::systemc_module) {
+        continue;
+      }
+      key.add("systemc-object-kind", std::to_string(
+          static_cast<unsigned>(object.kind)));
+      key.add("systemc-object-id", std::to_string(object.id.value()));
+      key.add("systemc-object-path", object.path);
+      key.add("systemc-object-type", object.external_type);
+      key.add("systemc-object-runtime", std::to_string(object.runtime_index));
     }
     result.push_back(key.finish());
   }
@@ -517,18 +504,24 @@ std::unique_ptr<TraceState> attach_trace(
     trace->writer =
         std::make_unique<runtime::VcdWriter>(
             trace->stream, scale->timescale);
-    trace->handles.resize(simulation.design().signals().size());
-    trace->enabled.resize(simulation.design().signals().size());
-    for (const auto& [path, signal_id] :
-         simulation.design().signal_paths()) {
-      const auto& signal = simulation.design().signals().at(signal_id);
+    trace->handles.resize(simulation.runtime_adapter().signals().size());
+    trace->enabled.resize(simulation.runtime_adapter().signals().size());
+    for (const auto& object : simulation.design_ir().objects()) {
+      if (!design_object_is_signal_bearing(object)
+          || object.runtime_index
+              > std::numeric_limits<SignalId>::max()) {
+        continue;
+      }
+      const auto signal_id = static_cast<SignalId>(object.runtime_index);
+      const auto& signal =
+          simulation.runtime_adapter().signals().at(signal_id);
       const auto selected =
-          trace_selected(config.run.trace_filters, path);
+          trace_selected(config.run.trace_filters, object.path);
       trace->enabled[signal.id] =
           trace->enabled[signal.id] || (selected && signal.width != 0);
       if (signal.width != 0 && (dynamic_selection || selected)) {
         trace->handles[signal.id].push_back(
-            trace->writer->declare_signal(path, signal.width));
+            trace->writer->declare_signal(object.path, signal.width));
       }
     }
     if (simulation.now()
@@ -537,7 +530,7 @@ std::unique_ptr<TraceState> attach_trace(
       throw std::overflow_error{"VCD timestamp scaling overflow"};
     }
     trace->writer->begin(simulation.now() * trace->tick_multiplier);
-    for (const auto& signal : simulation.design().signals()) {
+    for (const auto& signal : simulation.runtime_adapter().signals()) {
       if (trace->enabled[signal.id]) {
         for (const auto handle : trace->handles[signal.id]) {
           trace->writer->change(
@@ -644,9 +637,13 @@ int handle_build(
   if (!built) {
     return 1;
   }
-  const auto top = built->design.top();
-  const auto signal_count = built->design.signals().size();
-  const auto process_count = built->design.processes().size();
+  const auto top = built->design_ir.top();
+  const auto signal_count = static_cast<std::size_t>(std::ranges::count_if(
+      built->design_ir.objects(), [](const auto& object) {
+        return object.kind == semantic::design::ObjectKind::signal
+            && !object.parent_object;
+      }));
+  const auto process_count = built->design_ir.processes().size();
   const auto plugin_count = built->systemc_plugins.size();
   const auto cache_hit = built->cache_hit;
   const auto selected_seed = built->seed;

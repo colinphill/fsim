@@ -15,6 +15,9 @@ SourceSpan cover(const SourceSpan& first, const SourceSpan& last) {
   if (result.source_name.empty()) {
     result.source_name = last.source_name;
   }
+  if (result.expansion_stack.empty()) {
+    result.expansion_stack = last.expansion_stack;
+  }
   return result;
 }
 

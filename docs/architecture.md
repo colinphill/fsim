@@ -22,8 +22,8 @@ The architectural invariants are:
 
 | Stage | Responsibility | Vertical-slice status |
 |---|---|---|
-| Source manager | Files, source locations, include and macro ancestry | Exact ordered compilation-unit/transitive snapshots plus include/macro ancestry are current for Verilog/SV; VHDL source spans are current |
-| Language frontend | Tokenization, preprocessing, parsing, name/type rules | Hand-written minimal VHDL and SV parsers plus a bounded multi-root SV preprocessor are current; typed semantic HIR is partial |
+| Source manager | Files, source locations, include and macro ancestry | Exact ordered compilation-unit/transitive snapshots, owning VHDL/SV/SystemC source records, and interned include/macro ancestry are current |
+| Language frontend | Tokenization, preprocessing, parsing, name/type rules | Hand-written bounded VHDL and SV parsers, a multi-root SV preprocessor, and complete owning typed HIR for the v1 profile are current |
 | Design elaboration | Specialization, hierarchy, bindings, drivers, stable IDs | Recursive VHDL/SV/SystemC hierarchy, dense instance-specific specialization records, bounded scalar VHDL generic and integral SV parameter specialization, executable conditional/iterative/selection generate expansion, construction-actual transfer across all three languages, explicit mixed bindings, port aliasing, and boundary checks are current; general generic/parameter typing and complete driver semantics are planned |
 | SimIR lowering | Explicit reads, writes, waits, branches, assertions and yields | A typed executable subset is current |
 | Reference engine | Execute any supported SimIR with deterministic scheduling | Current |
@@ -31,19 +31,202 @@ The architectural invariants are:
 | Runtime | Time, deltas, resolution, callbacks, force/deposit and diagnostics | Scheduler, domain-preserving process-owned driver slots, exact nine-state `std_logic` and four-state `sv_wire` policies, committed value changes, deposit, and force/release masking are current; wired/strength resolution remains planned |
 | Visibility | C API, debugger safe points and VCD | Executable session API, VCD, and a scope/signal-oriented REPL with source/time/signal breakpoints, all four step modes, and bounded packed process-local reads are current; complete local scopes/types are planned |
 
-The language-specific HIR will retain resolved symbols, types, overload choices,
-constant values, and legality results. The common `DesignIR` will own dense
+The language-specific HIR retains resolved symbols, types, overload choices,
+constant values, and legality results. The common `DesignIR` owns dense
 stable IDs for libraries, units, specializations, scopes, instances, processes,
-signals, ports, drivers, source locations, and debug-visible objects. These
-layers are still compacted together in parts of the current slice.
+signals, ports, drivers, source locations, and debug-visible objects. The
+remaining legacy elaboration value projection is contained at one lowering
+ingress; durable build and execution consumers use the explicit boundaries.
+
+### Batch 126 boundary audit
+
+The Batch 126 audit fixed the migration boundary to the live implementation,
+rather than treating the names HIR and DesignIR as evidence that the layers
+already existed. Its starting baseline was:
+
+| Boundary | Current ownership and evidence | Release-blocking gap |
+|---|---|---|
+| Parser output | `frontend::ParsedDesign` owns a common 1,588-line value tree for both languages. Its declarations, expressions, statements, types, generates, callables, and source spans already retain much of the bounded syntax needed by semantic analysis. | The same records mix unresolved spelling, resolved/folded fields, elaboration-only substitution markers, and language-specific semantics. There is no immutable syntax-to-semantic handoff or distinct VHDL/SV HIR owner. |
+| Semantic analysis | Project checking merges parsed units and injects reviewed standard-library views. Build selection then mutates the same `ParsedDesign` for delay alternatives and project-time normalization. Elaboration copies `DesignUnit` values per occurrence and mutates those copies for package/type/callable specialization, generate expansion, and name resolution. | A checked project cannot be treated as immutable semantic input. Legality and resolution results are implicit in mutated fields and control flow rather than explicit HIR records. |
+| Semantic identity | Frontend declarations, scopes, types, expressions, and statements have no stable IDs. Units are found by kind/library/name, nominal types use strings and source-derived spellings, and the hierarchy/lowerer use transient pointers into parsed or specialized values. The elaborator internal surface contains 112 explicit frontend pointer/reference declarations. | Identity depends on spelling, vector order, source offsets, and object address during a build. It cannot be serialized, reordered, or compared independently of container lifetime. |
+| Source provenance | The common frontend tree contains 68 `SourceSpan` occurrences with logical and physical file names plus offsets. Preprocessor tokens retain macro expansion stacks, but ordinary HIR nodes retain only `SourceSpan`; expansion ancestry normally survives only when a parser diagnostic copies it immediately. Semantic source dependencies are path strings. | Every semantic and DesignIR node needs an owning source-file/span identity, including macro/include ancestry and generated/specialized origin, without duplicating file strings or losing physical ownership. |
+| Elaboration and DesignIR | `ElaboratedDesign` owns dense runtime signal, process, string-object, container-object, protected-object, specialization, and SystemC mappings. Lowering writes SimIR directly while hierarchy is constructed. | The public elaborated representation still has 47 direct `frontend::` references and lacks explicit library/unit/scope/instance/port/export/driver/type/source identities. There is no inspectable typed DesignIR before SimIR emission. |
+| Downstream consumers | Frontend types appear 2,546 times across 80 elaboration implementation files and 145 times across eight application files. Compiler and runtime implementation files have zero frontend references and already consume SimIR or compact metadata. | Migration must converge at elaboration/application without leaking language nodes into compiler or runtime. Cache, debugger, VCD, diagnostics, and API projections need stable IDs before frontend storage can be retired. |
+
+The migration proceeded additively. A language-neutral semantic core owns
+typed IDs plus source-file, span, expansion, and origin tables. VHDL HIR and
+SystemVerilog HIR adopt those identities while preserving the value-owned
+parser result as a temporary lowering adapter. Explicit DesignIR owns hierarchy
+and executable semantic metadata. Application/cache/debug/VCD/API consumers
+now use stable projections; the remaining compatibility payload is explicitly
+named the runtime adapter.
+At every step the existing SimIR interpreter remains the oracle, compiler and
+runtime stay frontend-free, and deterministic IDs are assigned from canonical
+source/declaration and realized-hierarchy order rather than host addresses.
+
+The shared semantic layer implements that identity contract in
+`fsim::semantic`. Strong, non-interchangeable dense IDs cover source files,
+spans, expansion frames, origins, libraries, units, scopes, declarations,
+types, values, expressions, statements, instances, ports, and drivers. The
+owning tables cover file/span/expansion/origin provenance plus units,
+root scopes, declared types, values, and instances. Records own their strings;
+references use IDs and never parser addresses. Files, expansion chains, and
+exact spans are interned, while semantic occurrences remain distinct.
+
+`check_project` constructs this model after deterministic source merging and
+standard-library injection. Root and transitive input digests enter in manifest
+and first-use order; units remain in canonical source order; declarations use
+physical source offset with stable category/index tie breakers. A preassigned
+dense type-ID range permits forward local type references without pointer
+fixups. VHDL identifiers use their case-insensitive canonical key and
+Verilog/SystemVerilog identifiers remain case-sensitive. The temporary
+conversion adapter reads `ParsedDesign`, but its result remains valid after
+the parse tree is cleared. Parsed source spans own preprocessor token expansion
+stacks; HIR conversion interns their complete parent chains. SystemC
+translation-unit roots enter the same source table with normalized generic
+paths and exact content digests.
+
+The VHDL declaration/type layer is now a separate owning
+`semantic::vhdl::Hir`. It uses the shared unit, scope, declaration, type,
+value, expression, instance, span, and origin IDs while owning all remaining
+names and profiles. Units retain context clauses and architecture/entity
+relationships. Declarations cover generics (including type, subprogram, and
+package profiles), ports, signals, variables/files, aliases, overloadable
+functions/procedures, generic templates and instances, package instances,
+components, and generated declarations. Callable, component, protected, and
+generate regions receive explicit nested scopes.
+
+VHDL type definitions distinguish aliases and subtypes from enumeration,
+array, record, access, file, protected declaration/body, physical, and scalar
+forms. Subtype indications own type marks, optional resolution names, concrete
+or expression-backed constraints, signedness, and indefinite-array state.
+Enumeration literals, record fields, every array dimension, designated/element
+subtypes, protected members, physical units, and the applicable predefined
+type attributes remain explicit. Component/configuration binding aspects and
+generic/port associations are likewise owning HIR records. Recursive generate
+regions retain their lexical scope, declarations, instances, nested regions,
+block interfaces, and association aspects. Expression-bearing fields refer to
+stable expression slots populated by the complete typed expression and
+statement payloads without changing their identity.
+
+The VHDL executable HIR now fills those identities with owning expression,
+statement, and process records. Expressions retain literal/operator/name/call/
+selection/aggregate kinds, ordered operands, named actuals, aggregate choice
+expressions, decoded strings, nominal typing, and scope-resolved declaration or
+overload candidates. Every process, callable body, protected method, generic
+subprogram template, concurrent statement, and generated body is traversed;
+procedural block locals receive their own lexical scope and stable declaration
+and value IDs.
+
+Sequential and concurrent statements explicitly distinguish signal and
+variable assignment, conditionals, selections, loops and loop control,
+returns, procedure associations, waits, assertions/reports, blocks, and null
+statements. Signal assignments own complete ordered waveforms, disconnect or
+`unaffected` state, inertial/transport mode, rejection limits, and exact delay
+alternatives. Process sensitivity items, call actual spans, case choices,
+aggregate associations, and report/severity expressions are independently
+source-addressable. VHDL TextIO/file, protected-method, access/allocation, and
+attribute operations remain ordinary resolved call/name expression records,
+so downstream lowering no longer needs a parser node to distinguish their
+callee and operands.
+
+The SystemVerilog declaration/type layer is likewise an owning
+`semantic::sv::Hir` joined to the common semantic model only by stable IDs.
+Compilation units retain module, package, and interface identity together with
+time unit/precision, `default_nettype`, cell state, imports, and exports.
+Declarations cover value and type parameters, local parameters, typedefs,
+ports, nets, variables, functions, tasks, modports, enumeration literals, and
+generated declarations. Callable profiles retain formal declarations,
+automatic/static lifetime, return type, nested scope, locals, and bodies;
+interface ports retain their interface type and modport rather than flattening
+them to an unresolved spelling.
+
+SystemVerilog types explicitly distinguish packed integral, enum, packed or
+unpacked struct/union, dynamic array, bounded queue, associative array, static
+array, string, alias, and type-parameter forms. Packed and unpacked dimensions,
+signedness, queue bounds, associative index types, member offsets, and enum
+literal values remain independently source-addressable. Generate regions own
+their scopes, declarations, instances, process identities, concurrent
+statements, and nested alternatives. The bounded v1 profile has no classes;
+unsupported class syntax is rejected before HIR construction. Expression and
+statement fields use stable identity slots filled by the owning executable
+SystemVerilog HIR layer without retaining parser storage.
+
+That executable layer preserves every bounded expression form, including
+selected/indexed values, casts and calls, concatenation/replication, decoded
+strings, and positional, named, keyed, or defaulted assignment-pattern and
+call associations. Empty named actuals remain explicit instead of collapsing
+operand positions. Statements distinguish blocking, nonblocking, and
+continuous assignment; compound/prefix/postfix updates; force/release;
+conditionals, qualified case forms, loops, task calls, and returns; delay,
+event, and wait controls; event triggers; fork/join variants and process
+control; assertions; formatted display/monitor/file operations; memory
+transfers; container methods; and finish/pause/null forms. Lexical block and
+fork scopes own their local declarations through stable IDs.
+
+Initial, final, always, `always_ff`, `always_comb`, and `always_latch`
+processes retain their exact kind, declarations, sensitivities, and statement
+roots. Callable bodies and generated alternatives share the same executable
+records, including source-spanned selection choices and delay expressions.
+System-task formatting policy, file handles, memory radix/direction/bounds,
+container receivers and call operands remain explicit metadata, so later
+DesignIR construction does not need to reinterpret parser nodes.
+
+`semantic::design::DesignIr` is now the owning elaborated boundary constructed
+once after legacy elaboration and retained by `BuiltProject` beside its semantic
+model. Dense, non-interchangeable IDs cover realized specializations, instance
+occurrences, objects, process occurrences, sensitivities, transactions,
+conversions, and external boundaries; ports and drivers use the shared semantic
+ID space. Every internal relationship is ID-only and validates independently,
+and every source unit/scope/declaration/value/process/span/origin relationship
+validates against the retained model. Runtime numeric indices and native
+SystemC handles remain explicit adapter locators, never implicit identity.
+
+Realized HDL specializations own their canonical unit, instance occurrence,
+typed parameter identity values, callable declarations, objects, and processes.
+Hierarchy records retain parent occurrence and source instance separately, so
+one source declaration can realize multiple stable occurrences. Packed signals,
+strings, containers and slices, protected objects/members, aliases, and ports
+have occurrence-specific object IDs; process records own static sensitivities,
+drivers, and one explicit transaction descriptor per driven region. Boundary
+conversion records link formal/actual objects and adapter processes without
+frontend references. SystemC modules, ports, events, primitive channels,
+signals, exports, processes, native handles, and writable-export policy enter
+the same object/port/process/boundary tables, including SystemC-to-HDL children.
 
 The compact elaborated design now assigns a dense specialization ID to every
 instantiated unit occurrence and records its canonical unit identity, instance
 path, directly owned process IDs, and canonical bounded VHDL generic or
 SystemVerilog parameter/localparam values. Those values distinguish occurrence
 and native-cache identity. Typed bounded scalar construction values also cross
-SystemC factory boundaries in both directions. Complete generic/parameter
-typing and reusable code-specialization deduplication remain planned.
+SystemC factory boundaries in both directions. This older representation is
+retained only as the execution-payload compatibility adapter.
+`Simulation::runtime_adapter()` names that role explicitly; stable identity,
+hierarchy, provenance, and public metadata come from `Simulation::design_ir()`
+and `Simulation::semantics()`.
+
+The Task 8 migration contains parser storage at the lowering ingress.
+`build_project` moves the checked parser workspace into one temporary owning
+adapter, applies delay-mode selection and time normalization there, then
+reprojects the semantic model and both language HIRs from that exact normalized
+input. Legacy elaboration may use addresses within the temporary value owner
+while it runs, but the owner is destroyed immediately after its diagnostics and
+SimIR payload have been copied. DesignIR construction, cache creation,
+interpreter/JIT setup, debugger, VCD, Tcl, and C API therefore cannot retain an
+address or view into the parser workspace.
+
+Every build validates the compatibility payload against DesignIR before it can
+escape that boundary. The validator proves one stable projection for each HDL
+specialization, dense signal and signal alias, container alias, runtime process,
+mixed conversion, SystemC instance, and named SystemC object/process. Compiler,
+runtime, and API implementation files contain no frontend references. LLVM
+module grouping and identity use DesignIR specialization/process IDs; the
+interpreter sees only SimIR plus explicit runtime indices. Cache schema
+`fsim-specialization-provenance-v5-designir` hashes semantic source ownership,
+typed parameters, stable SystemC instance/object/boundary mappings and writable
+exports while excluding transient native handles. Debugger, trace, Tcl, and C
+API hierarchy/path/source metadata likewise traverse DesignIR, fetching rich
+SimIR execution payload only through the explicitly named runtime adapter.
 
 The bounded VHDL package path represents a constant-only package as its own
 library unit. An explicit `use library.package.all` or

@@ -5,6 +5,7 @@
 #include "fsim/app/application.hpp"
 #include "fsim/support/environment.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <charconv>
@@ -537,13 +538,22 @@ void attach_callbacks(TclContext& context) {
               const runtime::PackedLogic4& value,
               const runtime::SimulationTick time,
               const std::uint64_t delta) {
-            const auto& info =
-                state->simulation->design().signals().at(signal);
+            const auto& objects = state->simulation->design_ir().objects();
+            const auto object = std::ranges::find_if(
+                objects, [&](const semantic::design::Object& candidate) {
+                  return candidate.kind
+                          == semantic::design::ObjectKind::signal
+                      && !candidate.parent_object
+                      && candidate.runtime_index == signal;
+                });
+            const auto name = object == objects.end()
+                ? std::to_string(signal)
+                : object->path;
             (void)invoke_callback(
                 *state,
                 TclCallback::value_change,
                 {
-                    info.name,
+                    name,
                     value.to_msb_string(),
                     std::to_string(time),
                     std::to_string(delta),
@@ -667,13 +677,13 @@ bool ensure_simulation(
             std::move(span),
             {}});
         std::string process = std::to_string(process_id);
-        if (process_id
-            < context.simulation->design().processes().size()) {
-          process =
-              context.simulation->design()
-                  .processes()
-                  .at(process_id)
-                  .name;
+        const auto& processes = context.simulation->design_ir().processes();
+        const auto process_occurrence = std::ranges::find_if(
+            processes, [&](const semantic::design::ProcessOccurrence& item) {
+              return item.runtime_index == process_id;
+            });
+        if (process_occurrence != processes.end()) {
+          process = process_occurrence->name;
         }
         (void)invoke_callback(
             context,
@@ -693,13 +703,13 @@ bool ensure_simulation(
   return true;
 }
 
-const elaboration::ElaboratedDesign* current_design(
+const semantic::design::DesignIr* current_design_ir(
     const TclContext& context) {
   if (context.simulation) {
-    return &context.simulation->design();
+    return &context.simulation->design_ir();
   }
   if (context.built) {
-    return &context.built->design;
+    return &context.built->design_ir;
   }
   return nullptr;
 }
@@ -810,17 +820,23 @@ int build_command(
       interpreter,
       result,
       "top",
-      string_object(context.built->design.top()));
+      string_object(context.built->design_ir.top()));
   dict_put(
       interpreter,
       result,
       "signals",
-      unsigned_object(context.built->design.signals().size()));
+      unsigned_object(static_cast<std::uint64_t>(std::count_if(
+          context.built->design_ir.objects().begin(),
+          context.built->design_ir.objects().end(),
+          [](const auto& object) {
+            return object.kind == semantic::design::ObjectKind::signal
+                && !object.parent_object;
+          }))));
   dict_put(
       interpreter,
       result,
       "processes",
-      unsigned_object(context.built->design.processes().size()));
+      unsigned_object(context.built->design_ir.processes().size()));
   dict_put(
       interpreter,
       result,
@@ -843,8 +859,21 @@ int signals_command(
     return TCL_ERROR;
   }
   Tcl_Obj* result = Tcl_NewListObj(0, nullptr);
-  for (const auto& [path, unused] : current_design(context)->signal_paths()) {
-    (void)unused;
+  std::vector<std::string_view> paths;
+  for (const auto& object : current_design_ir(context)->objects()) {
+    const auto signal_bearing_systemc_object =
+        object.kind == semantic::design::ObjectKind::systemc_port
+        || object.kind == semantic::design::ObjectKind::systemc_event
+        || object.kind == semantic::design::ObjectKind::systemc_signal
+        || object.kind == semantic::design::ObjectKind::systemc_export;
+    if (object.kind == semantic::design::ObjectKind::signal
+        || (signal_bearing_systemc_object && object.width != 0)) {
+      paths.push_back(object.path);
+    }
+  }
+  std::sort(paths.begin(), paths.end());
+  paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
+  for (const auto path : paths) {
     if (Tcl_ListObjAppendElement(
             interpreter, result, string_object(path))
         != TCL_OK) {
@@ -916,10 +945,19 @@ int mutate_command(
         interpreter,
         context.simulation->read_signal(*signal).to_msb_string());
   }
-  const auto& info = context.simulation->design().signals().at(*signal);
+  const auto& design_objects = context.simulation->design_ir().objects();
+  const auto info = std::ranges::find_if(
+      design_objects, [&](const semantic::design::Object& object) {
+        return object.kind == semantic::design::ObjectKind::signal
+            && !object.parent_object && object.runtime_index == *signal;
+      });
+  if (info == design_objects.end()) {
+    return command_error(
+        interpreter, "signal lacks its DesignIR runtime adapter");
+  }
   std::string parse_error;
   auto value = parse_value(
-      Tcl_GetString(arguments[2]), info.width, parse_error);
+      Tcl_GetString(arguments[2]), info->width, parse_error);
   if (!value) {
     return command_error(interpreter, parse_error);
   }
@@ -1166,13 +1204,13 @@ int report_assertion(
         std::move(span),
         {}});
     std::string process = std::to_string(error.process());
-    if (error.process()
-        < context.simulation->design().processes().size()) {
-      process =
-          context.simulation->design()
-              .processes()
-              .at(error.process())
-              .name;
+    const auto& processes = context.simulation->design_ir().processes();
+    const auto process_occurrence = std::ranges::find_if(
+        processes, [&](const semantic::design::ProcessOccurrence& item) {
+          return item.runtime_index == error.process();
+        });
+    if (process_occurrence != processes.end()) {
+      process = process_occurrence->name;
     }
     (void)invoke_callback(
         context,

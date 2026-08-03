@@ -6,6 +6,10 @@
 #include "fsim/frontend/design.hpp"
 #include "fsim/project/project.hpp"
 #include "fsim/runtime/simir.hpp"
+#include "fsim/semantic/model.hpp"
+#include "fsim/semantic/design_ir.hpp"
+#include "fsim/semantic/systemverilog_hir.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -40,8 +44,20 @@ struct CheckedSource {
 
 struct CheckedProject {
   frontend::ParsedDesign parsed;
+  /// Parser-independent semantic identities and owned source provenance in
+  /// deterministic manifest/declaration order. No record retains an address
+  /// into `parsed`.
+  semantic::Model semantics;
+  /// Owning VHDL semantic HIR linked exclusively through `semantics` IDs.
+  semantic::vhdl::Hir vhdl_hir;
+  /// Owning Verilog/SystemVerilog semantic HIR linked by shared IDs.
+  semantic::sv::Hir systemverilog_hir;
   /// HDL roots named by the project manifest, in manifest order.
   std::vector<CheckedSource> hdl_sources;
+  /// SystemC translation-unit roots named by the manifest. These participate
+  /// in the owning semantic source table even though the host compiler, not
+  /// the HDL parser, consumes them.
+  std::vector<CheckedSource> systemc_sources;
   /// Checksum-pinned compiler-supplied standard-library roots.
   std::vector<CheckedSource> standard_sources;
   std::size_t source_count{};
@@ -49,6 +65,11 @@ struct CheckedProject {
 
 struct BuiltProject {
   elaboration::ElaboratedDesign design;
+  /// Stable-ID elaborated hierarchy and executable metadata. The legacy
+  /// `design` remains the Task 8 compatibility/runtime adapter.
+  semantic::design::DesignIr design_ir;
+  /// Owner for every semantic ID referenced by `design_ir`.
+  semantic::Model semantics;
   std::string cache_key;
   std::string time_resolution;
   std::filesystem::path cache_path;
@@ -136,6 +157,12 @@ class Simulation final {
   Simulation& operator=(const Simulation&) = delete;
 
   [[nodiscard]] const elaboration::ElaboratedDesign& design() const noexcept;
+  /// Execution-payload compatibility adapter. Stable identity, hierarchy,
+  /// provenance, and public metadata must come from `design_ir()`.
+  [[nodiscard]] const elaboration::ElaboratedDesign&
+  runtime_adapter() const noexcept;
+  [[nodiscard]] const semantic::design::DesignIr& design_ir() const noexcept;
+  [[nodiscard]] const semantic::Model& semantics() const noexcept;
   [[nodiscard]] std::string_view time_resolution() const noexcept;
   [[nodiscard]] std::optional<runtime::simir::SignalId> find_signal(
       std::string_view path) const noexcept;

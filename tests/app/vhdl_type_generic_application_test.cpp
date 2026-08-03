@@ -152,6 +152,64 @@ void verify_capture(
   assert(capture.specialization_keys.size() == 4);
 }
 
+void verify_vhdl_hir(const fsim::project::Config& config) {
+  fsim::diagnostic::Engine diagnostics;
+  auto checked = fsim::app::check_project(config, diagnostics);
+  assert(checked);
+  const auto unit = std::ranges::find_if(
+      checked->vhdl_hir.units(), [](const auto& candidate) {
+        return candidate.kind
+                   == fsim::semantic::vhdl::UnitKind::architecture
+            && candidate.library == "work"
+            && candidate.name == "rtl"
+            && candidate.primary_name == "type_generic_top";
+      });
+  assert(unit != checked->vhdl_hir.units().end());
+  const auto declaration_for = [&](const std::string_view name) {
+    return std::ranges::find_if(
+        checked->vhdl_hir.declarations(), [&](const auto& declaration) {
+          return declaration.scope == unit->scope
+              && declaration.name == name;
+        });
+  };
+  const auto word = declaration_for("word_t");
+  const auto packet = declaration_for("packet_t");
+  assert(word != checked->vhdl_hir.declarations().end());
+  assert(packet != checked->vhdl_hir.declarations().end());
+  assert(word->form == fsim::semantic::vhdl::DeclarationForm::subtype);
+  assert(packet->form == fsim::semantic::vhdl::DeclarationForm::type);
+  assert(word->declared_type && packet->declared_type);
+  const auto packet_type = std::ranges::find_if(
+      checked->vhdl_hir.types(), [&](const auto& type) {
+        return type.id == *packet->declared_type;
+      });
+  assert(packet_type != checked->vhdl_hir.types().end());
+  assert(packet_type->form == fsim::semantic::vhdl::TypeForm::record);
+  assert(packet_type->record_elements.size() == 2);
+  assert(packet_type->record_elements[0].name == "valid");
+  assert(packet_type->record_elements[1].name == "payload");
+  assert(!checked->vhdl_hir.overload_sets().empty());
+
+  fsim::diagnostic::Engine repeated_diagnostics;
+  const auto repeated = fsim::app::check_project(config, repeated_diagnostics);
+  assert(repeated);
+  const auto repeated_unit = std::ranges::find_if(
+      repeated->vhdl_hir.units(), [&](const auto& candidate) {
+        return candidate.library == unit->library
+            && candidate.name == unit->name
+            && candidate.primary_name == unit->primary_name;
+      });
+  assert(repeated_unit != repeated->vhdl_hir.units().end());
+  assert(repeated_unit->id == unit->id);
+  assert(repeated_unit->scope == unit->scope);
+  const auto retained_unit_id = unit->id;
+  const auto retained_unit_name = unit->name;
+  checked->parsed.units.clear();
+  assert(unit->id == retained_unit_id);
+  assert(unit->name == retained_unit_name);
+  assert(packet_type->record_elements[1].name == "payload");
+}
+
 } // namespace
 
 int main() {
@@ -228,6 +286,13 @@ end architecture;
 )";
         assert(output.good());
       };
+
+  write_top(3);
+  verify_vhdl_hir(make_config(
+      directory.path,
+      child_source,
+      top_source,
+      fsim::project::Optimization::o0));
 
   for (const auto optimization :
        {fsim::project::Optimization::o0,

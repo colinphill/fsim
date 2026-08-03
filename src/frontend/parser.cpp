@@ -48,7 +48,7 @@ ParseResult parse_file(const std::filesystem::path& path,
         "unable to open source file",
         SourceSpan{
             path.string(), SourceLocation{}, SourceLocation{},
-            path.string()},
+            path.string(), {}},
         {},
     });
     return result;
@@ -64,7 +64,7 @@ ParseResult parse_file(const std::filesystem::path& path,
         "failed while reading source file",
         SourceSpan{
             path.string(), SourceLocation{}, SourceLocation{},
-            path.string()},
+            path.string(), {}},
         {},
     });
     return result;
@@ -101,7 +101,7 @@ ParseResult parse_file(const std::filesystem::path& path) {
         "cannot infer HDL language from file extension",
         SourceSpan{
             path.string(), SourceLocation{}, SourceLocation{},
-            path.string()},
+            path.string(), {}},
         {},
     });
     return result;

@@ -280,7 +280,7 @@ class VerilogPreprocessor {
       diagnose(
           "FSIM-SV-PP-031",
           "a Verilog compilation unit requires at least one root file",
-          {fallback.string(), {}, {}, fallback.string()});
+          {fallback.string(), {}, {}, fallback.string(), {}});
       return finish_compilation_unit(fallback);
     }
     define_command_line_macros();
@@ -322,7 +322,7 @@ class VerilogPreprocessor {
         "FSIM-SV-PP-001",
         "the Verilog preprocessor requires Verilog-2005 or "
         "SystemVerilog-2017 input",
-        {source_name, {}, {}, source_name});
+        {source_name, {}, {}, source_name, {}});
     return false;
   }
 
@@ -357,7 +357,7 @@ class VerilogPreprocessor {
   PreprocessCompilationUnitResult finish_compilation_unit(
       const std::filesystem::path& root) {
     const auto root_name = normalized_path(root).generic_string();
-    SourceSpan eof_span{root_name, {}, {}, root_name};
+    SourceSpan eof_span{root_name, {}, {}, root_name, {}};
     if (root_eof_) {
       eof_span = root_eof_->span;
     }
@@ -410,7 +410,8 @@ class VerilogPreprocessor {
           "<command-line:-D" + definition + ">",
           SourceLocation{},
           SourceLocation{},
-          "<command-line:-D" + definition + ">"};
+          "<command-line:-D" + definition + ">",
+          {}};
       if (!identifier_spelling(name)) {
         diagnose(
             "FSIM-SV-PP-003",
@@ -457,7 +458,7 @@ class VerilogPreprocessor {
           "maximum Verilog include depth exceeded while opening '"
               + name + "'",
           include_invocation_.value_or(
-              SourceSpan{name, {}, {}, name}));
+              SourceSpan{name, {}, {}, name, {}}));
       return;
     }
     if (std::find(include_stack_.begin(), include_stack_.end(), normalized)
@@ -466,7 +467,7 @@ class VerilogPreprocessor {
           "FSIM-SV-PP-005",
           "recursive Verilog include of '" + name + "'",
           include_invocation_.value_or(
-              SourceSpan{name, {}, {}, name}));
+              SourceSpan{name, {}, {}, name, {}}));
       return;
     }
     auto snapshot = source_snapshots_.find(name);
@@ -477,7 +478,7 @@ class VerilogPreprocessor {
             "FSIM-FE-IO-001",
             "unable to open source file",
             include_invocation_.value_or(
-                SourceSpan{name, {}, {}, name}));
+                SourceSpan{name, {}, {}, name, {}}));
         return;
       }
       snapshot = source_snapshots_

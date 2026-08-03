@@ -45,6 +45,13 @@ if (!first) {
   }
 }
 assert(first);
+assert(first->design_ir.valid());
+assert(first->design_ir.valid(first->semantics));
+assert(std::ranges::none_of(
+    first->design_ir.boundaries(), [](const auto& boundary) {
+      return boundary.kind
+          == fsim::semantic::design::BoundaryKind::systemc_instance;
+    }));
 assert(first->systemc_plugins.size() == 1);
 assert(!first->cache_hit);
 auto second = fsim::app::build_project(config, diagnostics);
@@ -94,6 +101,19 @@ if (!hdl_systemc_project) {
   }
 }
 assert(hdl_systemc_project);
+assert(hdl_systemc_project->design_ir.valid());
+assert(hdl_systemc_project->design_ir.valid(
+    hdl_systemc_project->semantics));
+assert(std::ranges::any_of(
+    hdl_systemc_project->design_ir.objects(), [](const auto& object) {
+      return object.kind
+          == fsim::semantic::design::ObjectKind::systemc_port;
+    }));
+assert(std::ranges::any_of(
+    hdl_systemc_project->design_ir.boundaries(), [](const auto& boundary) {
+      return boundary.kind
+          == fsim::semantic::design::BoundaryKind::systemc_instance;
+    }));
 assert(hdl_systemc_project->systemc_hierarchy);
 assert(
     hdl_systemc_project->design.systemc_instances().size()

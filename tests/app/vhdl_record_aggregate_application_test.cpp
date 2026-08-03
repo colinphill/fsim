@@ -196,6 +196,43 @@ void verify_capture(const Capture& capture) {
       != std::string::npos);
 }
 
+void verify_aggregate_hir(const fsim::project::Config& config) {
+  fsim::diagnostic::Engine diagnostics;
+  auto checked = fsim::app::check_project(config, diagnostics);
+  assert(checked);
+  const auto named = std::ranges::find_if(
+      checked->vhdl_hir.expressions(), [](const auto& expression) {
+        if (expression.kind
+                != fsim::semantic::vhdl::ExpressionKind::aggregate
+            || expression.associations.size() != 2) {
+          return false;
+        }
+        return std::ranges::any_of(
+            expression.associations, [](const auto& association) {
+              return association.choice_spelling == "data";
+            })
+            && std::ranges::any_of(
+                expression.associations, [](const auto& association) {
+                  return association.choice_spelling == "others";
+                });
+      });
+  assert(named != checked->vhdl_hir.expressions().end());
+  assert(std::ranges::all_of(
+      named->associations, [](const auto& association) {
+        return association.value.valid();
+      }));
+  assert(std::ranges::any_of(
+      checked->vhdl_hir.expressions(), [](const auto& expression) {
+        return expression.kind
+                   == fsim::semantic::vhdl::ExpressionKind::aggregate
+            && expression.associations.size() == 2
+            && std::ranges::all_of(
+                expression.associations, [](const auto& association) {
+                  return association.choice_spelling.empty();
+                });
+      }));
+}
+
 } // namespace
 
 int main() {
@@ -261,6 +298,12 @@ end architecture;
 )";
     assert(output.good());
   }
+
+  verify_aggregate_hir(make_config(
+      directory.path,
+      package_source,
+      top_source,
+      fsim::project::Optimization::o0));
 
   for (const auto optimization : {
            fsim::project::Optimization::o0,

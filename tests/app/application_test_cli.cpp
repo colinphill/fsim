@@ -172,6 +172,7 @@ write_shared_macro("1'b0");
   std::ofstream output(
       shared_module_source, std::ios::binary);
   output << R"(module shared_preprocessor_app;
+typedef logic shared_t;
 assign value = `SHARED_RUNTIME_VALUE;
 initial #1 $finish;
 endmodule
@@ -200,7 +201,7 @@ shared_preprocessor_config.source_sets.push_back(
     shared_preprocessor_sources);
 
 fsim::diagnostic::Engine shared_check_diagnostics;
-const auto shared_checked = fsim::app::check_project(
+auto shared_checked = fsim::app::check_project(
     shared_preprocessor_config, shared_check_diagnostics);
 assert(shared_checked);
 assert(shared_checked->hdl_sources.size() == 2);
@@ -220,6 +221,51 @@ assert(
 assert(
     shared_checked->parsed.units.front().signals.front().type.spelling
     == "tri0");
+assert(shared_checked->semantics.source_files().size() == 2);
+assert(shared_checked->semantics.units().size() == 1);
+assert(shared_checked->semantics.units().front().id.value() == 0);
+assert(shared_checked->semantics.units().front().scope.value() == 0);
+assert(
+    shared_checked->semantics.units().front().name
+    == "shared_preprocessor_app");
+assert(shared_checked->semantics.types().size() == 1);
+assert(shared_checked->semantics.types().front().id.value() == 0);
+assert(shared_checked->semantics.types().front().name == "shared_t");
+assert(shared_checked->semantics.values().size() == 1);
+assert(
+    shared_checked->semantics.values().front().kind
+    == fsim::semantic::ValueKind::signal);
+assert(shared_checked->semantics.values().front().name == "value");
+const auto semantic_source_count =
+    shared_checked->semantics.source_spans().size();
+fsim::diagnostic::Engine repeated_semantic_diagnostics;
+const auto repeated_semantics = fsim::app::check_project(
+    shared_preprocessor_config, repeated_semantic_diagnostics);
+assert(repeated_semantics);
+assert(
+    repeated_semantics->semantics.source_files().size()
+    == shared_checked->semantics.source_files().size());
+assert(
+    repeated_semantics->semantics.source_spans().size()
+    == semantic_source_count);
+assert(
+    repeated_semantics->semantics.units().front().id
+    == shared_checked->semantics.units().front().id);
+assert(
+    repeated_semantics->semantics.units().front().source
+    == shared_checked->semantics.units().front().source);
+assert(
+    repeated_semantics->semantics.types().front().id
+    == shared_checked->semantics.types().front().id);
+assert(
+    repeated_semantics->semantics.values().front().id
+    == shared_checked->semantics.values().front().id);
+shared_checked->parsed.units.clear();
+assert(shared_checked->semantics.units().front().name
+       == "shared_preprocessor_app");
+assert(shared_checked->semantics.values().front().name == "value");
+assert(shared_checked->semantics.source_spans().size()
+       == semantic_source_count);
 
 const auto run_shared_preprocessor =
     [&](const fsim::project::Config& run_config,

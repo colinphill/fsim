@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace fsim::frontend {
 
@@ -24,6 +25,10 @@ struct SourceSpan {
   // Physical input identity retained when a source-language directive
   // changes the logical diagnostic/debug name.
   std::string physical_source_name;
+  // Ordered outermost-to-innermost preprocessor expansion descriptions.
+  // Parsed nodes own this copy so semantic provenance survives after the
+  // preprocessor token stream is released.
+  std::vector<std::string> expansion_stack;
 
   [[nodiscard]] bool empty() const noexcept {
     return begin.offset == end.offset;

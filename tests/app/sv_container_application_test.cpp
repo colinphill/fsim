@@ -2,6 +2,7 @@
 #include "fsim/app/application.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <filesystem>
@@ -76,6 +77,19 @@ Capture run_once(
   fsim::diagnostic::Engine diagnostics;
   auto project = fsim::app::build_project(config, diagnostics);
   assert(project);
+  assert(project->design_ir.valid(project->semantics));
+  for (const auto& [path, runtime_object] :
+       project->design.container_paths()) {
+    assert(
+        std::ranges::count_if(
+            project->design_ir.objects(), [&](const auto& object) {
+              return object.kind
+                      == fsim::semantic::design::ObjectKind::container
+                  && object.path == path
+                  && object.runtime_index == runtime_object;
+            })
+        == 1);
+  }
   fsim::app::Simulation simulation{
       std::move(*project), config.run.max_deltas, engine};
   Capture capture;

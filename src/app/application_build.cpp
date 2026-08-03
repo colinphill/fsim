@@ -1,8 +1,30 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 
+
 namespace fsim::app {
 using namespace application_detail;
+namespace {
+
+[[nodiscard]] diagnostic::SourceSpan diagnostic_span(
+    const semantic::Model& model,
+    const semantic::SourceSpanId source) {
+  const auto& span = model.source_spans().at(source.value());
+  const auto& file = model.source_files().at(span.file.value());
+  diagnostic::SourceSpan result;
+  result.path = span.logical_name.empty()
+      ? file.physical_name
+      : span.logical_name;
+  result.begin.line = span.begin.line;
+  result.begin.column = span.begin.column;
+  result.begin.offset = span.begin.offset;
+  result.end.line = span.end.line;
+  result.end.column = span.end.column;
+  result.end.offset = span.end.offset;
+  return result;
+}
+
+} // namespace
 
 std::optional<BuiltProject> build_project(
     const project::Config& config,
@@ -11,6 +33,11 @@ std::optional<BuiltProject> build_project(
   if (!checked) {
     return std::nullopt;
   }
+  // Lowering remains a temporary compatibility projection while the owning
+  // semantic HIR is the durable boundary. Moving it out proves that no build,
+  // cache, runtime, debugger, trace, or API result can retain an address into
+  // CheckedProject's parser workspace.
+  auto lowering_adapter = std::move(checked->parsed);
   std::vector<std::filesystem::path> systemc_plugins;
   std::shared_ptr<systemc::HierarchyRegistry> systemc_hierarchy;
   std::string systemc_plugin_key;
@@ -28,8 +55,8 @@ std::optional<BuiltProject> build_project(
     systemc_plugins.push_back(std::move(compiled.library_path));
   }
   select_delay_alternatives(
-      checked->parsed, config.run.delay_mode);
-  const auto resolution = effective_resolution(config, checked->parsed);
+      lowering_adapter, config.run.delay_mode);
+  const auto resolution = effective_resolution(config, lowering_adapter);
   if (systemc_hierarchy) {
     const auto parsed_resolution = magnitude_and_unit(resolution);
     const auto factor =
@@ -50,14 +77,26 @@ std::optional<BuiltProject> build_project(
         parsed_resolution->magnitude * *factor);
   }
   if (!validate_declared_time_precisions(
-          checked->parsed, resolution, diagnostics)
+          lowering_adapter, resolution, diagnostics)
       || !normalize_delays(
-          checked->parsed, resolution, diagnostics)) {
+          lowering_adapter, resolution, diagnostics)) {
     return std::nullopt;
   }
-  const auto top = selected_top(config, checked->parsed, diagnostics);
+  // Reproject after delay-mode selection and time normalization so the HIR
+  // consumed by every durable downstream boundary is the exact lowering
+  // input, not the pre-normalization parser snapshot created by `check`.
+  checked->semantics = build_semantic_model(
+      lowering_adapter,
+      checked->hdl_sources,
+      checked->systemc_sources,
+      checked->standard_sources);
+  checked->vhdl_hir = build_vhdl_hir(
+      lowering_adapter, checked->semantics);
+  checked->systemverilog_hir = build_systemverilog_hir(
+      lowering_adapter, checked->semantics);
+  const auto top = selected_top(config, lowering_adapter, diagnostics);
   validate_bindings(
-      config, checked->parsed, systemc_hierarchy.get(), diagnostics);
+      config, lowering_adapter, systemc_hierarchy.get(), diagnostics);
   if (diagnostics.has_error()) {
     return std::nullopt;
   }
@@ -87,17 +126,23 @@ std::optional<BuiltProject> build_project(
             systemc_roots);
   }
   auto elaborated = elaboration::elaborate(
-      checked->parsed,
+      lowering_adapter,
       top,
       bindings,
       *systemc_instances,
       systemc_provider.get());
   for (const auto& input : elaborated.diagnostics) {
-    diagnostics.error(input.code, input.message, span(input.span));
+    const auto source = intern_semantic_span(
+        checked->semantics, input.span);
+    diagnostics.error(
+        input.code,
+        input.message,
+        diagnostic_span(checked->semantics, source));
   }
   if (!elaborated.design || diagnostics.has_error()) {
     return std::nullopt;
   }
+  lowering_adapter = {};
   if (systemc_hierarchy) {
     try {
       for (const auto& instance :
@@ -138,11 +183,18 @@ std::optional<BuiltProject> build_project(
     }
   }
 
+  auto design_ir = build_design_ir(*checked, *elaborated.design);
+  if (!design_ir.valid(checked->semantics)) {
+    throw std::logic_error{"constructed an internally invalid DesignIR"};
+  }
+  if (!valid_runtime_projection(design_ir, *elaborated.design)) {
+    throw std::logic_error{"constructed an incomplete DesignIR projection"};
+  }
   auto specialization_cache_keys =
       make_specialization_cache_keys(
           config,
           *checked,
-          *elaborated.design,
+          design_ir,
           systemc_plugin_key,
           diagnostics);
   if (!specialization_cache_keys) {
@@ -173,8 +225,12 @@ std::optional<BuiltProject> build_project(
     }
     const std::string record =
         "FSIM-DESIGN-CACHE-V1\n" + top + "\n"
-        + std::to_string(elaborated.design->signals().size()) + "\n"
-        + std::to_string(elaborated.design->processes().size()) + "\n";
+        + std::to_string(std::ranges::count_if(
+              design_ir.objects(), [](const auto& object) {
+                return object.kind == semantic::design::ObjectKind::signal
+                    && !object.parent_object;
+              })) + "\n"
+        + std::to_string(design_ir.processes().size()) + "\n";
     const auto bytes = std::as_bytes(
         std::span<const char>{record.data(), record.size()});
     cache_error.clear();
@@ -191,6 +247,8 @@ std::optional<BuiltProject> build_project(
           : config.project.seed;
   return BuiltProject{
       std::move(*elaborated.design),
+      std::move(design_ir),
+      std::move(checked->semantics),
       key,
       resolution,
       config.build.cache_path,

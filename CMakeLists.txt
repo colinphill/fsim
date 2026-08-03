@@ -303,6 +303,14 @@ add_library(fsim::project ALIAS fsim_project)
 fsim_configure_library(fsim_project)
 target_link_libraries(fsim_project PUBLIC fsim_diagnostic)
 
+add_library(fsim_semantic STATIC
+  src/semantic/design_ir.cpp
+  src/semantic/model.cpp
+  src/semantic/systemverilog_hir.cpp
+  src/semantic/vhdl_hir.cpp)
+add_library(fsim::semantic ALIAS fsim_semantic)
+fsim_configure_library(fsim_semantic)
+
 set(
   FSIM_FRONTEND_SOURCES
   "${PROJECT_SOURCE_DIR}/src/frontend/common.cpp"
@@ -332,6 +340,7 @@ set(
 add_library(fsim_frontend STATIC ${FSIM_FRONTEND_SOURCES})
 add_library(fsim::frontend ALIAS fsim_frontend)
 fsim_configure_library(fsim_frontend)
+target_link_libraries(fsim_frontend PUBLIC fsim_semantic)
 
 add_library(
   fsim_runtime
@@ -648,10 +657,16 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_vhdl_analysis.cpp
       src/app/application_debug_control.cpp
       src/app/application_debugger.cpp
+      src/app/application_design_ir.cpp
       src/app/application_executor_frame.cpp
       src/app/application_executors.cpp
       src/app/application_executor_services.cpp
       src/app/application_run.cpp
+      src/app/application_semantic.cpp
+      src/app/application_systemverilog_hir.cpp
+      src/app/application_systemverilog_executable_hir.cpp
+      src/app/application_vhdl_hir.cpp
+      src/app/application_vhdl_executable_hir.cpp
       src/app/application_services.cpp
       src/app/application_simulation.cpp
       src/app/application_time.cpp

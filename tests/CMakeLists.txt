@@ -3,6 +3,36 @@
 add_subdirectory(runtime)
 
 add_executable(
+  fsim_semantic_tests
+  semantic/semantic_model_test.cpp
+)
+fsim_configure_test(fsim_semantic_tests)
+target_link_libraries(fsim_semantic_tests PRIVATE fsim_semantic)
+add_test(NAME fsim.semantic COMMAND fsim_semantic_tests)
+set_tests_properties(
+  fsim.semantic
+  PROPERTIES LABELS "fast;semantic;hir;designir;source"
+)
+
+add_executable(
+  fsim_systemverilog_hir_application_tests
+  app/systemverilog_hir_application_test.cpp
+)
+fsim_configure_test(fsim_systemverilog_hir_application_tests)
+target_link_libraries(
+  fsim_systemverilog_hir_application_tests
+  PRIVATE fsim_application
+)
+add_test(
+  NAME fsim.application.systemverilog_hir
+  COMMAND fsim_systemverilog_hir_application_tests
+)
+set_tests_properties(
+  fsim.application.systemverilog_hir
+  PROPERTIES LABELS "fast;semantic;hir;systemverilog"
+)
+
+add_executable(
   fsim_frontend_tests
   frontend/frontend_tests.cpp
   frontend/frontend_preprocessing_tests.cpp
@@ -625,6 +655,11 @@ if(TARGET fsim_application)
       3 mixed_conversions app/mixed_conversion_application_test.cpp
       fsim.application.mixed_conversions
       fast mixed-language conversions cache debugger vcd)
+    fsim_add_application_case(
+      3 typed_boundaries app/typed_boundary_application_test.cpp
+      fsim.application.typed_boundaries
+      fast semantic hir designir vhdl systemverilog mixed-language systemc
+      cache debugger vcd portability)
 
     set_tests_properties(
       fsim.application.scoped_locals
@@ -1374,6 +1409,30 @@ set_tests_properties(
     fsim.application.mixed_conversions
     PROPERTIES
       LABELS "fast;mixed-language;conversions;cache;debugger;vcd"
+  )
+
+  add_executable(
+    fsim_typed_boundary_application_tests
+    app/typed_boundary_application_test.cpp
+  )
+  fsim_configure_test(fsim_typed_boundary_application_tests)
+  target_compile_definitions(
+    fsim_typed_boundary_application_tests
+    PRIVATE FSIM_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    fsim_typed_boundary_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.typed_boundaries
+    COMMAND fsim_typed_boundary_application_tests
+  )
+  set_tests_properties(
+    fsim.application.typed_boundaries
+    PROPERTIES
+      LABELS
+        "fast;semantic;hir;designir;vhdl;systemverilog;mixed-language;systemc;cache;debugger;vcd;portability"
   )
 
   add_executable(

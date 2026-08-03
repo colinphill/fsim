@@ -125,6 +125,47 @@ std::optional<CheckedProject> check_project(
 
   CheckedProject checked;
   checked.source_count = hdl_source_count + systemc_source_count;
+  if (const auto request = systemc_request(config)) {
+    checked.systemc_sources.reserve(request->sources.size());
+    for (const auto& manifest_path : request->sources) {
+      CheckedSource source;
+      source.path = manifest_path.is_absolute()
+          ? manifest_path
+          : config.base_directory / manifest_path;
+      source.path = source.path.lexically_normal();
+      std::ifstream input{source.path, std::ios::binary};
+      if (!input) {
+        diagnostics.error(
+            "FSIM-FE-IO-001",
+            "unable to open SystemC source file",
+            {source.path.generic_string(), {}, {}});
+        continue;
+      }
+      const std::string contents{
+          std::istreambuf_iterator<char>(input),
+          std::istreambuf_iterator<char>()};
+      if (!input.good() && !input.eof()) {
+        diagnostics.error(
+            "FSIM-FE-IO-002",
+            "failed while reading SystemC source file",
+            {source.path.generic_string(), {}, {}});
+        continue;
+      }
+      source.content_digest = support::Sha256::hex(
+          support::Sha256::digest(contents));
+      compiler::CacheKeyBuilder key;
+      key.add(
+          "compilation-unit-snapshot-schema",
+          "fsim-systemc-compilation-unit-v1");
+      key.add("input-path", source.path.generic_string());
+      key.add("input-content", source.content_digest);
+      source.compilation_unit_digest = key.finish();
+      checked.systemc_sources.push_back(std::move(source));
+    }
+  }
+  if (diagnostics.has_error()) {
+    return std::nullopt;
+  }
   std::vector<std::pair<std::size_t, CheckedSource>> checked_sources;
   struct OrderedUnit {
     std::size_t source_order{};
@@ -229,6 +270,14 @@ std::optional<CheckedProject> check_project(
   if (diagnostics.has_error()) {
     return std::nullopt;
   }
+  checked.semantics = build_semantic_model(
+      checked.parsed,
+      checked.hdl_sources,
+      checked.systemc_sources,
+      checked.standard_sources);
+  checked.vhdl_hir = build_vhdl_hir(checked.parsed, checked.semantics);
+  checked.systemverilog_hir = build_systemverilog_hir(
+      checked.parsed, checked.semantics);
   return checked;
 }
 
