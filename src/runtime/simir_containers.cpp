@@ -18,6 +18,7 @@ template <typename Container>
 
 [[nodiscard]] std::size_t fixed_element_count(
     const ContainerType& type) {
+  const auto storage_limit = maximum_container_elements(type);
   if (!type.dimensions.empty()) {
     std::size_t count = 1;
     for (const auto& dimension : type.dimensions) {
@@ -27,7 +28,14 @@ template <typename Container>
                     - dimension.second
               : static_cast<std::int64_t>(dimension.second)
                     - dimension.first;
-      count *= static_cast<std::size_t>(distance + 1);
+      const auto dimension_count =
+          static_cast<std::size_t>(distance + 1);
+      if (dimension_count > storage_limit
+          || count > storage_limit / dimension_count) {
+        throw std::length_error{
+            "SimIR static array exceeds its owning-storage budget"};
+      }
+      count *= dimension_count;
     }
     return count;
   }
@@ -37,7 +45,12 @@ template <typename Container>
                 - type.index_right
           : static_cast<std::int64_t>(type.index_right)
                 - type.index_left;
-  return static_cast<std::size_t>(distance + 1);
+  const auto count = static_cast<std::size_t>(distance + 1);
+  if (count > storage_limit) {
+    throw std::length_error{
+        "SimIR static array exceeds its owning-storage budget"};
+  }
+  return count;
 }
 
 [[nodiscard]] std::size_t fixed_offset(
@@ -421,12 +434,12 @@ void validate_container_value(const ContainerValue& value) {
     throw std::invalid_argument{
         "SimIR container element width must be in 1..64"};
   }
-  if (value.elements.size() > maximum_container_elements
+  if (value.elements.size() > maximum_container_elements(value.type)
       || (value.type.maximum_elements
           && value.elements.size()
               > *value.type.maximum_elements)) {
     throw std::length_error{
-        "SimIR container exceeds its element limit"};
+        "SimIR container exceeds its owning-storage or declared queue limit"};
   }
   if (!value.type.queue && value.type.maximum_elements) {
     throw std::invalid_argument{
@@ -441,9 +454,9 @@ void validate_container_value(const ContainerValue& value) {
   }
   if (value.type.fixed) {
     const auto count = fixed_element_count(value.type);
-    if (count == 0 || count > maximum_container_elements) {
+    if (count == 0) {
       throw std::length_error{
-          "SimIR static array exceeds its element limit"};
+          "SimIR static array has no materialized elements"};
     }
     if (value.elements.size() != count) {
       throw std::invalid_argument{
@@ -567,10 +580,6 @@ ContainerValue default_container_value(
   result.type = type;
   if (type.fixed) {
     const auto count = fixed_element_count(type);
-    if (count > maximum_container_elements) {
-      throw std::length_error{
-          "SimIR static array exceeds its element limit"};
-    }
     if (type.element_width == 0
         || type.element_width > 64) {
       throw std::invalid_argument{
@@ -890,11 +899,11 @@ void locate_container_values(
   const auto source_type = source.type;
   destination.elements.clear();
   destination.keys.clear();
-  const auto limit = destination.type.maximum_elements.value_or(
-      static_cast<std::uint32_t>(maximum_container_elements));
   const auto append =
       [&](PackedLogic4 value) {
-        if (destination.elements.size() < limit) {
+        if (!destination.type.maximum_elements
+            || destination.elements.size()
+                < *destination.type.maximum_elements) {
           destination.elements.push_back(std::move(value));
         }
       };
@@ -1291,10 +1300,11 @@ void Interpreter::Impl::execute_container(
       process.program.id, process.pc,
       get_register(process, operation.size),
       false, "dynamic-array size");
-  if (size > maximum_container_elements) {
+  if (size > maximum_container_elements(target.type)) {
     container_error(
         process.program.id, process.pc,
-        "dynamic-array size exceeds the 4096-element limit");
+        "dynamic-array size exceeds the per-container "
+        "owning-storage budget");
   }
   std::vector<PackedLogic4> preserved;
   if (operation.initializer) {
@@ -1520,10 +1530,12 @@ void Interpreter::Impl::execute_container(
         && key_equal(target.keys[at], key)) {
       target.elements[at] = source;
     } else {
-      if (target.elements.size() >= maximum_container_elements) {
+      if (target.elements.size()
+          >= maximum_container_elements(target.type)) {
         container_error(
             process.program.id, process.pc,
-            "associative array exceeds the 4096-entry limit");
+            "associative array exceeds the per-container "
+            "owning-storage budget");
       }
       target.keys.insert(iterator_at(target.keys, at), key);
       target.elements.insert(iterator_at(target.elements, at), source);
@@ -1781,10 +1793,17 @@ void Interpreter::Impl::execute_container(
   } else {
     target.elements.push_back(source);
   }
-  const auto maximum = target.type.maximum_elements.value_or(
-      static_cast<std::uint32_t>(
-          maximum_container_elements));
-  if (target.elements.size() > maximum) {
+  const auto storage_limit = maximum_container_elements(target.type);
+  if (target.elements.size() > storage_limit
+      && (!target.type.maximum_elements
+          || *target.type.maximum_elements > storage_limit)) {
+    target.elements.pop_back();
+    container_error(
+        process.program.id, process.pc,
+        "queue exceeds the per-container owning-storage budget");
+  }
+  if (target.type.maximum_elements
+      && target.elements.size() > *target.type.maximum_elements) {
     target.elements.pop_back();
   }
   ++process.pc;

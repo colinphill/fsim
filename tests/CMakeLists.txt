@@ -838,6 +838,14 @@ if(TARGET fsim_application)
       1 sv_containers app/sv_container_application_test.cpp
       fsim.application.sv_containers
       fast containers tasks timing systemverilog cache)
+    add_test(
+      NAME fsim.application.sv_container_capacity
+      COMMAND fsim_application_tests_1 sv_container_capacity)
+    set_tests_properties(
+      fsim.application.sv_container_capacity
+      PROPERTIES
+        LABELS "fast;containers;systemverilog;llvm"
+        TIMEOUT 120)
     fsim_add_application_case(
       1 sv_files app/sv_file_application_test.cpp
       fsim.application.sv_files
@@ -1285,7 +1293,7 @@ set_tests_properties(
     fsim.application.scoped_locals
     PROPERTIES
       LABELS "fast;scoped-locals"
-      TIMEOUT 60
+      TIMEOUT 120
   )
 
   add_executable(
@@ -1436,6 +1444,16 @@ set_tests_properties(
   add_test(
     NAME fsim.application.sv_containers
     COMMAND fsim_sv_container_application_tests
+  )
+  add_test(
+    NAME fsim.application.sv_container_capacity
+    COMMAND fsim_sv_container_application_tests capacity
+  )
+  set_tests_properties(
+    fsim.application.sv_container_capacity
+    PROPERTIES
+      LABELS "fast;containers;systemverilog;llvm"
+      TIMEOUT 60
   )
   set_tests_properties(
     fsim.application.sv_containers

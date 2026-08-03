@@ -805,7 +805,8 @@ femtosecond overflow, while nonstatic, final-tick overflow, and inexact
 resolution cases receive distinct diagnostics. Expression-valued units also
 participate in automatic resolution selection. The resulting integer SimIR
 wait/timeout representation is shared unchanged by the interpreter and LLVM;
-native schema 74 separates these semantics from prior cached objects.
+native schema 75 separates these and the representation-derived container
+storage semantics from prior cached objects.
 The Batch 119 integration boundary keeps those operations inside ordinary
 specialization ownership. A time-generic VHDL child produces a distinct
 canonical native module beside its parent; both modules retain the same keys

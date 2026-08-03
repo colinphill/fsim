@@ -69,7 +69,9 @@ std::optional<ContainerRegisterId> Lowerer::vhdl_access_heap(
   heap_type.two_state = is_two_state_domain(designated.domain);
   heap_type.signed_elements = designated.is_signed;
   heap_type.queue = true;
-  heap_type.maximum_elements = access.maximum_objects;
+  heap_type.maximum_elements = std::min<std::uint64_t>(
+      access.maximum_objects,
+      maximum_container_elements(heap_type));
   heap_type.element_nominal_type = designated.nominal_type;
   const auto heap = allocate_container_register(heap_type);
   vhdl_access_heaps_.emplace(identity, heap);
@@ -269,9 +271,11 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_access_expression(
     process_.operations.emplace_back(ContainerSize{size, *heap});
     const auto maximum = allocate_register(
         access.handle_width, frontend::ValueDomain::Bit2);
+    const auto object_limit = *process_.container_register_types
+        .at(*heap).maximum_elements;
     process_.operations.emplace_back(LoadConstant{
         maximum,
-        unsigned_value(access.maximum_objects, access.handle_width)});
+        unsigned_value(object_limit, access.handle_width)});
     const auto available = allocate_register(
         1, frontend::ValueDomain::Bit2);
     process_.operations.emplace_back(Binary{
@@ -281,7 +285,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_access_expression(
         maximum});
     process_.operations.emplace_back(Assert{
         available,
-        "VHDL access allocation exceeded the bounded object limit",
+        "VHDL access allocation exceeded its owning-storage limit",
         AssertionSeverity::failure,
         access_source_location(expression.span)});
     process_.operations.emplace_back(PushContainer{

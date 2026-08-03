@@ -1310,6 +1310,32 @@ endmodule
               .elements.size()
           == 3);
 
+  const auto expanded_static = fsim::frontend::parse_text(
+      "container-expanded-static.sv",
+      R"(
+module container_expanded_static;
+  byte values[0:4096];
+  initial begin
+    values[0] = 1;
+    values[4096] = 2;
+    assert ($size(values) == 4097);
+    assert (values[0] == 1);
+    assert (values[4096] == 2);
+  end
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(expanded_static.ok());
+  const auto expanded_static_design =
+      fsim::elaboration::elaborate(
+          expanded_static.design, "container_expanded_static");
+  assert(expanded_static_design.ok());
+  auto expanded_static_interpreter =
+      expanded_static_design.design->create_interpreter();
+  assert(
+      expanded_static_interpreter->run().status
+      == fsim::runtime::RunStatus::completed);
+
   const auto invalid = fsim::frontend::parse_text(
       "container-invalid-lowering.sv",
       R"(
@@ -1323,7 +1349,7 @@ module container_invalid_lowering;
   byte lookup[int];
   byte dynamic[];
   byte fixed[1:0];
-  byte too_large[0:4096];
+  byte too_large[0:1000000000];
   int runtime_bound;
   byte nonconstant[runtime_bound:0];
   byte locator_result[$];

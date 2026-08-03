@@ -141,7 +141,8 @@ assignments or equality comparisons require a matching explicit cast where
 supported.
 
 Static unpacked arrays retain one through four locally constant dimensions and
-at most 4,096 dense elements. Full-rank constant or runtime signed-32 indices
+materialize within a 256 MiB per-container owning-storage budget. Full-rank
+constant or runtime signed-32 indices
 use direction-aware row-major flattening with per-dimension checks. Dimension,
 bound, size, increment, and bit queries, whole-value copies, generated
 declarations, same-language exact-rank ports, automatic function/task
@@ -309,7 +310,7 @@ associative arrays, and locally constant static unpacked arrays `[left:right]`
 execute as distinct module objects and automatic block/function/task values.
 The bounded subset supports whole-value copy, element reads and writes, and
 `size()`; dynamic, queue, and associative containers initialize empty and
-support `delete()`, while fixed arrays materialize 1–4,096 elements in declared
+support `delete()`, while fixed arrays materialize their declared range in
 index order with bit-zero or four-state-X defaults.
 Dynamic arrays add `new[size]`; queues add `push_front`, `push_back`,
 `pop_front`, and `pop_back`; associative arrays add `exists(index)`,
@@ -318,7 +319,10 @@ exact element width, signedness, and two-/four-state domain. Associative keys
 add the same exact type metadata, require known values, and remain in canonical
 numeric order; a missing-key read returns the element type's zero default
 without inserting. A full bounded queue discards its back element after
-insertion, and every container is limited to 4,096 elements or entries.
+insertion. Containers have no 4,096-element language cap. Materialized owning
+storage is guarded at 256 MiB per container using the actual `PackedLogic4`
+representation; associative arrays account for both keys and values. A
+source-declared bounded queue retains its independent declared capacity.
 Direct supported container objects also admit `$left`, `$right`, `$low`,
 `$high`, `$increment`, `$size`, `$bits`, `$dimensions`, and
 `$unpacked_dimensions`. Static-array bounds, direction, size, and bit count
@@ -445,8 +449,9 @@ Value results preserve the exact element profile; index results use signed
 two-state 32-bit elements. Empty sources produce empty results, extrema return
 one first-occurring value, uniqueness preserves first occurrences by
 four-state identity, and unique indices use signed declared static indices or
-current dynamic/queue indices. Results remain bounded to 4,096 elements or the
-destination queue capacity, and aliased queue assignment evaluates the source
+current dynamic/queue indices. Results remain bounded to the source-derived
+owning-storage budget or destination queue capacity, and aliased queue
+assignment evaluates the source
 before replacement. A transformation binds implicit `item` or one named
 iterator, exposes its original signed declared/current `.index`, and reuses
 the bounded pure element/index graph: local constants, comparisons, logical
@@ -466,7 +471,7 @@ and logical `&&`, `||`, and `!`. Only an exact scalar one selects an element;
 X/Z predicate results are false. Value methods return exact-element queues,
 index methods return signed two-state 32-bit declared static or current
 dynamic/queue indices, and first/last forms return at most one entry. The
-common empty, destination-capacity, 4,096-element, object/port/callable,
+common empty, destination-capacity, owning-storage, object/port/callable,
 alias-safe, interpreter, and native-cache policies apply. Iterator indexing,
 function calls, side effects, nonconstant external operands, case/wildcard
 equality, arithmetic involving the iterator, associative receivers, and
@@ -518,8 +523,9 @@ callbacks, and VCD-observed results. Distinct nominal element types remain
 incompatible even when their layouts match. One-dimensional fixed arrays of
 those packed words support `$fread`, `$readmemb`/`$readmemh`, and
 `$writememb`/`$writememh`; multidimensional memory-file operands and string or
-unpacked-aggregate elements remain checked exclusions. Native schema 69 and
-container semantic revision 28 retain exact aggregate identity,
+unpacked-aggregate elements remain checked exclusions. Native schema 75 and
+container semantic revision 29 retain exact aggregate identity and the
+representation-derived owning-storage policy,
 construction/mutation operands, string-port aliases, dimensions, source, and
 debug provenance. Unicode/real string conversions, standard or multichannel
 descriptors, `$fstrobe`/`$fmonitor`, string-element containers, and

@@ -73,17 +73,15 @@ std::optional<ContainerType> Lowerer::container_type(
       maximum_index =
           value ? value->integer_value() : std::nullopt;
     }
-    if (!maximum_index || *maximum_index < 0
-        || *maximum_index >= static_cast<std::int64_t>(
-            maximum_container_elements)) {
+    if (!maximum_index || *maximum_index < 0) {
       report(
           "FSIM-ELAB-SVCONTAINER-004",
-          "bounded queue maximum index must be a known value in 0..4095",
+          "bounded queue maximum index must be a known nonnegative value",
           type.systemverilog_container->queue_maximum->span);
       return std::nullopt;
     }
     result.maximum_elements =
-        static_cast<std::uint32_t>(*maximum_index + 1);
+        static_cast<std::uint64_t>(*maximum_index) + 1U;
   }
   if (result.fixed) {
     const auto bound_value =
@@ -113,6 +111,18 @@ std::optional<ContainerType> Lowerer::container_type(
               type.systemverilog_container->static_range) {
         result.index_left = static_cast<std::int32_t>(concrete->left);
         result.index_right = static_cast<std::int32_t>(concrete->right);
+        const auto count = static_cast<std::uint64_t>(
+            concrete->left >= concrete->right
+                ? concrete->left - concrete->right
+                : concrete->right - concrete->left) + 1U;
+        if (count > maximum_container_elements(result)) {
+          report(
+              "FSIM-ELAB-SVCONTAINER-020",
+              "static unpacked array exceeds the per-container "
+              "owning-storage budget",
+              type.systemverilog_container->span);
+          return std::nullopt;
+        }
         result.dimensions.push_back(ContainerDimension{
             result.index_left, result.index_right});
         return result;
@@ -141,11 +151,13 @@ std::optional<ContainerType> Lowerer::container_type(
           *left >= *right
               ? static_cast<std::uint64_t>(*left - *right) + 1U
               : static_cast<std::uint64_t>(*right - *left) + 1U;
-      if (count > maximum_container_elements
-          || total > maximum_container_elements / count) {
+      const auto storage_limit = maximum_container_elements(result);
+      if (count > storage_limit
+          || total > storage_limit / count) {
         report(
             "FSIM-ELAB-SVCONTAINER-020",
-            "static unpacked arrays are limited to 4096 total elements",
+            "static unpacked array exceeds the per-container "
+            "owning-storage budget",
             type.systemverilog_container->span);
         return std::nullopt;
       }
@@ -761,7 +773,7 @@ Lowerer::lower_container_pattern(
   if ((runtime_type.fixed && !static_default_pattern
        && count != fixed_count)
       || count
-          > maximum_container_elements
+          > maximum_container_elements(runtime_type)
               + (static_default_pattern ? 1U : 0U)
       || (runtime_type.maximum_elements
           && count > *runtime_type.maximum_elements)) {

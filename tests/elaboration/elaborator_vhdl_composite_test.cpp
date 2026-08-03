@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
 
+#include <limits>
+
 namespace fsim::tests::elaboration {
 
 void test_vhdl_recursive_composite_layout() {
@@ -429,7 +431,8 @@ end architecture;
           == fsim::frontend::ValueDomain::Bit2
       && info.vhdl_access
       && info.vhdl_access->handle_width == 32
-      && info.vhdl_access->maximum_objects == 4096
+      && info.vhdl_access->maximum_objects
+          == std::numeric_limits<std::uint32_t>::max()
       && info.vhdl_access->nullable
       && info.vhdl_access->owns_designated_object
       && info.vhdl_access->simulation_lifetime
@@ -478,7 +481,9 @@ end architecture;
       process.container_register_count == 3
       && process.container_register_types.size() == 3
       && process.container_register_types[0].queue
-      && process.container_register_types[0].maximum_elements == 4096U
+      && process.container_register_types[0].maximum_elements
+          == fsim::runtime::simir::maximum_container_elements(
+              process.container_register_types[0])
       && process.container_register_types[0].element_width == 8
       && process.container_register_types[1].element_width == 32
       && process.container_register_types[2].element_width == 5);
@@ -734,7 +739,7 @@ end architecture;
     (void)exhausted_interpreter->run();
   } catch (const fsim::runtime::simir::AssertionError& error) {
     saw_exhaustion = std::string_view{error.what()}.find(
-        "VHDL access allocation exceeded the bounded object limit")
+        "VHDL access allocation exceeded its owning-storage limit")
         != std::string_view::npos;
   }
   assert(saw_exhaustion);

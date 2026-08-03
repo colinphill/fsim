@@ -180,19 +180,16 @@ std::optional<ContainerType> HierarchyBuilder::container_port_type(
             error);
     const auto maximum_index =
         maximum ? maximum->integer_value() : std::nullopt;
-    if (!maximum_index || *maximum_index < 0
-        || *maximum_index
-            >= static_cast<std::int64_t>(
-                maximum_container_elements)) {
+    if (!maximum_index || *maximum_index < 0) {
       report(
           "FSIM-ELAB-SVPORT-002",
           "bounded queue port maximum index must specialize to a value "
-          "in 0..4095",
+          "that is nonnegative",
           type.systemverilog_container->queue_maximum->span);
       return std::nullopt;
     }
     result.maximum_elements =
-        static_cast<std::uint32_t>(*maximum_index + 1);
+        static_cast<std::uint64_t>(*maximum_index) + 1U;
   }
   if (result.fixed) {
     const auto& ranges =
@@ -212,7 +209,7 @@ std::optional<ContainerType> HierarchyBuilder::container_port_type(
         report(
             "FSIM-ELAB-SVPORT-002",
             "static-array port bounds must specialize to signed 32-bit "
-            "values spanning at most 4096 total elements",
+            "values within the per-container owning-storage budget",
             type.systemverilog_container->span);
         return std::nullopt;
       }
@@ -221,6 +218,18 @@ std::optional<ContainerType> HierarchyBuilder::container_port_type(
           static_cast<std::int32_t>(concrete->right)});
       result.index_left = result.dimensions.front().first;
       result.index_right = result.dimensions.front().second;
+      const auto count = static_cast<std::uint64_t>(
+          concrete->left >= concrete->right
+              ? concrete->left - concrete->right
+              : concrete->right - concrete->left) + 1U;
+      if (count > maximum_container_elements(result)) {
+        report(
+            "FSIM-ELAB-SVPORT-002",
+            "static-array port exceeds the per-container "
+            "owning-storage budget",
+            type.systemverilog_container->span);
+        return std::nullopt;
+      }
       return result;
     }
     std::uint64_t total = 1;
@@ -241,7 +250,7 @@ std::optional<ContainerType> HierarchyBuilder::container_port_type(
         report(
             "FSIM-ELAB-SVPORT-002",
             "static-array port bounds must specialize to signed 32-bit "
-            "values spanning at most 4096 total elements",
+            "values within the per-container owning-storage budget",
             range.span);
         return std::nullopt;
       }
@@ -249,12 +258,13 @@ std::optional<ContainerType> HierarchyBuilder::container_port_type(
           static_cast<std::uint64_t>(
               *left >= *right ? *left - *right : *right - *left)
           + 1U;
-      if (count > maximum_container_elements
-          || total > maximum_container_elements / count) {
+      const auto storage_limit = maximum_container_elements(result);
+      if (count > storage_limit
+          || total > storage_limit / count) {
         report(
             "FSIM-ELAB-SVPORT-002",
-            "static-array port bounds must specialize to signed 32-bit "
-            "values spanning at most 4096 total elements",
+            "static-array port exceeds the per-container "
+            "owning-storage budget",
             type.systemverilog_container->span);
         return std::nullopt;
       }
@@ -267,7 +277,7 @@ std::optional<ContainerType> HierarchyBuilder::container_port_type(
       report(
           "FSIM-ELAB-SVPORT-002",
           "static-array port bounds must specialize to signed 32-bit "
-          "values spanning at most 4096 total elements",
+          "values within the per-container owning-storage budget",
           type.systemverilog_container->span);
       return std::nullopt;
     }

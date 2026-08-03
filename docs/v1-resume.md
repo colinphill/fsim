@@ -5803,6 +5803,42 @@ The authoritative Batch 99 through 130 language-closure sequence is recorded
 under **Forward language-closure feature batches** in the implementation plan;
 preserve that order unless both documents are explicitly amended.
 
+## Corrective Batch 131 — container and array resource policy — Complete
+
+This post-v1 corrective batch removes the accidental 4,096-element semantic
+cap while retaining explicit, representation-derived host resource safety.
+The ten-task batch record is:
+
+1. **Complete:** audit every production and documentation occurrence of the
+   4,096 container/array policy and separate unrelated string, parser-scan,
+   process-I/O-buffer, and TextIO limits.
+2. **Complete:** replace the element constant with a 256 MiB per-owning-
+   container storage budget derived from `sizeof(PackedLogic4)`.
+3. **Complete:** widen declared queue capacity metadata to 64 bits and allow
+   every nonnegative locally constant bounded-queue maximum.
+4. **Complete:** apply overflow-safe storage-budget checks to one- and
+   multidimensional static arrays, ports, and mixed hierarchy adaptation.
+5. **Complete:** apply the common budget to dynamic resize, associative
+   insertion, unbounded queues, patterns, and native callbacks while
+   preserving source-declared bounded-queue overflow semantics.
+6. **Complete:** replace the internal VHDL access heap's 4,096-object default
+   with the non-null handle domain capped by the common owning-storage budget.
+7. **Complete:** advance native schema 75 and container semantic revision 29
+   so the storage policy participates in cache identity.
+8. **Complete:** add interpreter and elaboration evidence for 4,097-element
+   static arrays and 4,097-entry associative arrays plus oversized-range
+   rejection before allocation.
+9. **Complete:** update language support, diagnostics, architecture, and the
+   feature matrix to distinguish resource budgets from language bounds.
+10. **Complete:** exact-LLVM Debug and Release passed 106/106 in 136.89 and
+    105.34 seconds. The isolated compiled capacity case passed in 14.05/7.46
+    seconds and the unchanged full container differential in 136.88/105.33
+    seconds. LLVM-disabled ASan/UBSan passed the four focused cases in 274.94
+    seconds; leak detection alone was disabled because LeakSanitizer cannot
+    run under the execution environment's tracing layer. Source, diagnostics,
+    resource, SystemVerilog-release, release-audit, and release-candidate
+    gates pass. The accumulated commit and push follow this record.
+
 ## Working cadence
 
 - Implement ten related features before the next full regression.

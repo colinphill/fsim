@@ -10299,3 +10299,35 @@ identify as the current recommended production release at this final review.
 The language-support and feature-matrix records explicitly classify every
 unsupported construct as deferred. fsim v1 is therefore feature-complete and
 release-ready at checkpoint `4565ad8` plus this documentation closure.
+
+### Corrective Batch 131 — container and array resource policy — Complete
+
+This post-v1 batch removes the accidental 4,096-element container/array
+semantic cap without removing host resource protection:
+
+1. **Complete:** audit every 4,096 production/document occurrence and classify
+   container limits separately from strings, TextIO, parser scans, and process
+   I/O buffers.
+2. **Complete:** define one 256 MiB per-container owning-storage budget whose
+   element capacity derives from the concrete `PackedLogic4` representation.
+3. **Complete:** widen declared bounded-queue capacity metadata to 64 bits and
+   accept every nonnegative locally constant source maximum.
+4. **Complete:** enforce overflow-safe budget checks across static and ranked
+   arrays, ports, and hierarchy adaptation.
+5. **Complete:** enforce the same budget across dynamic, associative, queue,
+   pattern, locator, interpreter, and compiled-callback paths.
+6. **Complete:** make VHDL access heaps derive their effective capacity from
+   the non-null handle domain and common owning-storage budget.
+7. **Complete:** advance native schema 75 and container semantic revision 29.
+8. **Complete:** prove 4,097-element and 4,097-entry execution and deterministic
+   preallocation rejection of genuinely excessive static ranges.
+9. **Complete:** update the public support, diagnostic, architecture, feature-
+   matrix, plan, and restart records.
+10. **Complete:** exact-LLVM Debug/Release passed 106/106 in 136.89/105.34
+    seconds; the isolated compiled capacity case passed in 14.05/7.46 seconds
+    and the unchanged full container differential in 136.88/105.33 seconds.
+    LLVM-disabled ASan/UBSan passed the four focused cases in 274.94 seconds
+    with leak detection disabled only because LeakSanitizer cannot run under
+    the execution environment's tracing layer. Source, catalog, resource,
+    SystemVerilog-release, release-audit, and release-candidate gates pass.
+    The accumulated commit and push follow this record.

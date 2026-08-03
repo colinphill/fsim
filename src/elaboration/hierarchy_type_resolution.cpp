@@ -365,9 +365,14 @@ using namespace elaboration_detail;
                         access.designated_span);
                     return false;
                 }
+                const auto handle_capacity =
+                    access.handle_width >= 32
+                        ? std::numeric_limits<std::uint32_t>::max()
+                        : (std::uint32_t{1} << access.handle_width) - 1U;
                 if (access.handle_width == 0
                     || access.handle_width > 64
-                    || access.maximum_objects == 0) {
+                    || access.maximum_objects == 0
+                    || access.maximum_objects > handle_capacity) {
                     report(
                         "FSIM-ELAB-VHACCESS-004",
                         "a VHDL access type has an invalid bounded handle "

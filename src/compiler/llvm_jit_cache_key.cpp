@@ -136,7 +136,7 @@ using runtime::simir::DisableFork;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v74";
+    "fsim-llvm-native-object-v75";
 
 void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
                  const std::uint64_t value) {
@@ -273,11 +273,11 @@ void add_dynamic_part_index_key(
   }
   builder.add(
       "container-semantics",
-      "bounded-static-associative-v28-aggregate-elements");
+      "resource-budgeted-static-associative-v29-aggregate-elements");
   add_key_u64(
       builder,
-      "container-entry-limit",
-      runtime::simir::maximum_container_elements);
+      "container-storage-byte-budget",
+      runtime::simir::maximum_container_storage_bytes);
   add_key_u64(
       builder,
       "read-memory-byte-limit",

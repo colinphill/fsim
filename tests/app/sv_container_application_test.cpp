@@ -539,9 +539,71 @@ void inspect_dynamic_port_aliases(
           != std::string::npos);
 }
 
+int run_capacity_case() {
+  const auto serial =
+      std::chrono::steady_clock::now().time_since_epoch().count();
+  TemporaryDirectory directory{
+      std::filesystem::temp_directory_path()
+      / ("fsim-sv-container-capacity-" + std::to_string(serial))};
+  std::filesystem::create_directories(directory.path);
+  const auto source = directory.path / "capacity.sv";
+  {
+    std::ofstream output(source, std::ios::binary);
+    output << R"(
+module container_capacity;
+  byte dynamic[];
+  byte lookup[int];
+  initial begin
+    dynamic = new[4097];
+    dynamic[4096] = 8'h5a;
+    assert (dynamic.size() == 4097);
+    assert (dynamic[4096] == 8'h5a);
+    for (int index = 0; index < 4097; ++index)
+      lookup[index] = index;
+    assert (lookup.size() == 4097);
+    assert (lookup[4096] == 8'h00);
+  end
+endmodule
+)";
+    assert(output.good());
+  }
+  const auto optimizations = {fsim::project::Optimization::o0};
+  for (const auto optimization : optimizations) {
+    auto config = config_for(directory.path, source, optimization);
+    config.project.name = "sv-container-capacity";
+    config.project.top = "sv:work.container_capacity";
+    fsim::diagnostic::Engine diagnostics;
+    auto project = fsim::app::build_project(config, diagnostics);
+    if (!project) {
+      for (const auto& diagnostic : diagnostics.diagnostics()) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(project);
+    fsim::app::Simulation simulation{
+        std::move(*project), config.run.max_deltas,
+        fsim::app::SimulationEngine::compiled};
+    assert(simulation.run().status
+        == fsim::runtime::RunStatus::completed);
+  }
+  return 0;
+}
+
 }  // namespace
 
+int fsim_application_case_sv_container_capacity() {
+  return run_capacity_case();
+}
+
+#if defined(FSIM_MERGED_APPLICATION_TESTS)
 int main() {
+#else
+int main(const int argc, const char* const argv[]) {
+  if (argc == 2 && std::string_view{argv[1]} == "capacity") {
+    return run_capacity_case();
+  }
+#endif
   const auto serial =
       std::chrono::steady_clock::now().time_since_epoch().count();
   TemporaryDirectory directory{

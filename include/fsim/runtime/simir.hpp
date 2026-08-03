@@ -70,7 +70,14 @@ struct CopyRegister {
 };
 
 inline constexpr std::size_t maximum_string_bytes = 4096;
-inline constexpr std::size_t maximum_container_elements = 4096;
+/// Owning storage budget for one materialized unpacked container.
+///
+/// This is a host-resource guard, not a SystemVerilog size restriction.
+/// Element capacity is derived from the actual in-memory representation, and
+/// associative arrays account for both their key and value storage. Language-
+/// defined bounded queues retain their independent declared maximum.
+inline constexpr std::size_t maximum_container_storage_bytes =
+    256U * 1024U * 1024U;
 inline constexpr std::size_t maximum_container_predicate_nodes = 64;
 inline constexpr std::size_t maximum_memory_file_bytes =
     1024U * 1024U;
@@ -88,7 +95,7 @@ struct ContainerType {
   bool signed_indices{true};
   std::int32_t index_left{};
   std::int32_t index_right{};
-  std::optional<std::uint32_t> maximum_elements;
+  std::optional<std::uint64_t> maximum_elements;
   std::vector<ContainerDimension> dimensions;
   std::string element_nominal_type;
   friend bool operator==(const ContainerType&,
@@ -103,6 +110,13 @@ struct ContainerValue {
   friend bool operator==(const ContainerValue&,
                          const ContainerValue&) = default;
 };
+
+[[nodiscard]] inline constexpr std::size_t
+maximum_container_elements(const ContainerType& type) noexcept {
+  const auto bytes_per_element = sizeof(PackedLogic4)
+      * (type.associative ? 2U : 1U);
+  return maximum_container_storage_bytes / bytes_per_element;
+}
 
 /// Construct the language-defined initial value for a container type. Fixed
 /// unpacked arrays are materialized densely in declared-index order.

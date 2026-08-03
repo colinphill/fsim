@@ -1351,21 +1351,18 @@ void adapt_vhdl_array_port_shapes(
                             ? maximum->integer_value()
                             : std::nullopt;
                     if (!maximum_index
-                        || *maximum_index < 0
-                        || *maximum_index
-                            >= static_cast<std::int64_t>(
-                                maximum_container_elements)) {
+                        || *maximum_index < 0) {
                         report(
                             "FSIM-ELAB-SVCONTAINER-004",
                             "bounded queue maximum index must specialize "
-                            "to a known value in 0..4095",
+                            "to a known nonnegative value",
                             variable.type.systemverilog_container
                                 ->queue_maximum->span);
                         continue;
                     }
                     type.maximum_elements =
-                        static_cast<std::uint32_t>(
-                            *maximum_index + 1);
+                        static_cast<std::uint64_t>(
+                            *maximum_index) + 1U;
                 }
                 if (type.fixed) {
                     const auto& ranges =
@@ -1420,9 +1417,10 @@ void adapt_vhdl_array_port_shapes(
                             left >= right
                                 ? left - right
                                 : right - left) + 1U;
-                        if (count > maximum_container_elements
-                            || total
-                                > maximum_container_elements / count) {
+                        const auto storage_limit =
+                            maximum_container_elements(type);
+                        if (count > storage_limit
+                            || total > storage_limit / count) {
                             valid_dimensions = false;
                             break;
                         }
@@ -1435,8 +1433,8 @@ void adapt_vhdl_array_port_shapes(
                         report(
                             "FSIM-ELAB-SVCONTAINER-020",
                             "static unpacked-array dimensions must "
-                            "specialize to 32-bit ranges spanning at most "
-                            "4096 total elements",
+                            "specialize to 32-bit ranges within the "
+                            "per-container owning-storage budget",
                             variable.type.systemverilog_container->span);
                         continue;
                     }

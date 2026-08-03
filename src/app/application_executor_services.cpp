@@ -915,10 +915,11 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       const auto size = index(
           input0_aval, input0_bval, false,
           "dynamic-array size");
-      if (size > runtime::simir::maximum_container_elements) {
+      if (size > runtime::simir::maximum_container_elements(target.type)) {
         throw runtime::simir::InterpreterError{
             process, instruction,
-            "dynamic-array size exceeds the 4096-element limit"};
+            "dynamic-array size exceeds the per-container "
+            "owning-storage budget"};
       }
       std::vector<PackedLogic4> preserved;
       if (resize->initializer) {
@@ -1064,10 +1065,11 @@ std::uint32_t LlvmProcessExecutor::container_operation(
           target.elements[at] = source;
         } else {
           if (target.elements.size()
-              >= runtime::simir::maximum_container_elements) {
+              >= runtime::simir::maximum_container_elements(target.type)) {
             throw runtime::simir::InterpreterError{
                 process, instruction,
-                "associative array exceeds the 4096-entry limit"};
+                "associative array exceeds the per-container "
+                "owning-storage budget"};
           }
           target.keys.insert(target.keys.begin() + at, sought);
           target.elements.insert(
@@ -1285,11 +1287,18 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       } else {
         target.elements.push_back(source);
       }
-      const auto maximum =
-          target.type.maximum_elements.value_or(
-              static_cast<std::uint32_t>(
-                  runtime::simir::maximum_container_elements));
-      if (target.elements.size() > maximum) {
+      const auto storage_limit =
+          runtime::simir::maximum_container_elements(target.type);
+      if (target.elements.size() > storage_limit
+          && (!target.type.maximum_elements
+              || *target.type.maximum_elements > storage_limit)) {
+        target.elements.pop_back();
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "queue exceeds the per-container owning-storage budget"};
+      }
+      if (target.type.maximum_elements
+          && target.elements.size() > *target.type.maximum_elements) {
         target.elements.pop_back();
       }
     } else if (const auto* pop =

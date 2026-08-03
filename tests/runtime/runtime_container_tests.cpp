@@ -1268,12 +1268,13 @@ void test_simir_containers() {
               "container failure retains its diagnostic");
         }
       };
-  expect_failure(
-      array_type,
-      {LoadConstant{0, value(32, 4097)},
-       ResizeContainer{0, 0},
-       Halt{}},
-      "4096-element limit");
+  require(
+      maximum_container_elements(array_type) > 4096
+          && maximum_container_elements(associative_type) > 4096
+          && maximum_container_elements(associative_type)
+              < maximum_container_elements(array_type),
+      "container capacities derive from owning representation rather than "
+      "the former 4096-element cap");
   expect_failure(
       array_type,
       {LoadConstant{0, value(32, 1)},
@@ -1331,25 +1332,36 @@ void test_simir_containers() {
       {DeleteContainer{0, std::nullopt}, Halt{}},
       "cannot clear a static array");
 
-  ContainerType limited_type = associative_type;
-  limited_type.index_width = 13;
-  std::vector<Operation> limit_operations;
-  limit_operations.reserve(
-      maximum_container_elements * 3U + 1U);
-  for (std::size_t entry = 0;
-       entry <= maximum_container_elements; ++entry) {
-    limit_operations.emplace_back(
+  ContainerType expanded_type = associative_type;
+  expanded_type.index_width = 13;
+  expanded_type.signed_indices = false;
+  Interpreter expanded;
+  const auto expanded_object = expanded.add_container_object(
+      {"expanded", default_container_value(expanded_type), std::nullopt});
+  Process expanded_process;
+  expanded_process.id = 0;
+  expanded_process.name = "expanded_container";
+  expanded_process.register_count = 2;
+  expanded_process.container_register_count = 1;
+  expanded_process.container_register_types = {expanded_type};
+  expanded_process.operations.reserve(4097U * 3U + 2U);
+  for (std::size_t entry = 0; entry < 4097U; ++entry) {
+    expanded_process.operations.emplace_back(
         LoadConstant{0, value(13, entry)});
-    limit_operations.emplace_back(
+    expanded_process.operations.emplace_back(
         LoadConstant{1, value(8, entry)});
-    limit_operations.emplace_back(
+    expanded_process.operations.emplace_back(
         ContainerWrite{0, 0, 1, false});
   }
-  limit_operations.emplace_back(Halt{});
-  expect_failure(
-      limited_type,
-      std::move(limit_operations),
-      "4096-entry limit");
+  expanded_process.operations.emplace_back(
+      WriteContainerObject{expanded_object, 0});
+  expanded_process.operations.emplace_back(Halt{});
+  (void)expanded.add_process(std::move(expanded_process));
+  require(
+      expanded.run().status == RunStatus::completed
+          && expanded.container_object_value(expanded_object)
+                 .elements.size() == 4097U,
+      "associative arrays retain entries beyond the former hard cap");
 }
 
 }  // namespace fsim::tests::runtime

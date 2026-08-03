@@ -1424,7 +1424,7 @@ therefore excluded.
 | `FSIM-ELAB-SVCONTAINER-001` | error | A container local is duplicated in one automatic scope. |
 | `FSIM-ELAB-SVCONTAINER-002` | error | A container element expression has no resolvable element type. |
 | `FSIM-ELAB-SVCONTAINER-003` | error | A container element is a string, unpacked aggregate, unresolved, or outside the executable 1-to-64-bit scalar, enum, or packed-aggregate range. |
-| `FSIM-ELAB-SVCONTAINER-004` | error | A bounded queue maximum index is unknown or outside 0 through 4,095. |
+| `FSIM-ELAB-SVCONTAINER-004` | error | A bounded queue maximum index is unknown or negative. |
 | `FSIM-ELAB-SVCONTAINER-005` | error | A container value is not a direct supported object reference. |
 | `FSIM-ELAB-SVCONTAINER-006` | error | A container expression references an unknown container object. |
 | `FSIM-ELAB-SVCONTAINER-007` | error | A container method receiver is not a direct supported object. |
@@ -1440,7 +1440,7 @@ therefore excluded.
 | `FSIM-ELAB-SVCONTAINER-017` | error | An associative-array traversal argument width does not match the index type. |
 | `FSIM-ELAB-SVCONTAINER-018` | error | `delete(index)` is used on a container other than a queue or associative array. |
 | `FSIM-ELAB-SVCONTAINER-019` | error | A queue-only insert, push, or pop method is used on another container kind. |
-| `FSIM-ELAB-SVCONTAINER-020` | error | Static unpacked-array bounds are not locally constant signed 32-bit values spanning 1 through 4,096 elements. |
+| `FSIM-ELAB-SVCONTAINER-020` | error | Static unpacked-array bounds are not locally constant signed 32-bit values that fit the per-container owning-storage budget. |
 | `FSIM-ELAB-SVCONTAINER-021` | error | `delete()` is used to clear a fixed static unpacked array. |
 | `FSIM-ELAB-SVCONTAINER-022` | error | A mutating container method is applied to a temporary or another non-object receiver. |
 | `FSIM-ELAB-SVCONTAINER-023` | error | A dynamic-array `new[size](initializer)` value is not an exactly compatible dynamic array. |
@@ -1523,7 +1523,7 @@ therefore excluded.
 | `FSIM-ELAB-SVMEMORY-003` | error | A memory-file task object is not a direct bounded static unpacked-array object. |
 | `FSIM-ELAB-SVMEMORY-004` | error | A memory-file task start or finish argument is not a 32-bit integral expression. |
 | `FSIM-ELAB-SVPORT-001` | error | A SystemVerilog container port lacks a supported one-dimensional integral element or associative-index type. |
-| `FSIM-ELAB-SVPORT-002` | error | A bounded-queue maximum or static-array range does not specialize within the 4,096-element limit. |
+| `FSIM-ELAB-SVPORT-002` | error | A bounded-queue maximum is unknown or negative, or a static-array range does not fit the per-container owning-storage budget. |
 | `FSIM-ELAB-SVPORT-003` | error | A container input port attempts to use an unsupported default connection value. |
 | `FSIM-ELAB-SVPORT-004` | error | A SystemVerilog container port attempts to cross a language boundary. |
 | `FSIM-ELAB-SVPORT-005` | error | A container-port actual is an expression, selection, or slice rather than a direct whole-container object. |

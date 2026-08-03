@@ -5,6 +5,7 @@
 #include "fsim/frontend/token.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -302,9 +303,11 @@ struct VhdlAccessInfo {
   SourceSpan designated_span;
   // Access values use a stable integer handle. Zero is null; positive values
   // are monotonically assigned object identities and never expose host
-  // addresses. The bounded v1 heap admits at most this many live identities.
+  // addresses. The frontend limit defaults to the full non-null 32-bit handle
+  // domain; elaboration additionally applies the runtime owning-storage budget.
   std::uint32_t handle_width{32};
-  std::uint32_t maximum_objects{4096};
+  std::uint32_t maximum_objects{
+      std::numeric_limits<std::uint32_t>::max()};
   bool nullable{true};
   bool owns_designated_object{true};
   // Explicit deallocation is outside the bounded v1 subset, so allocated
