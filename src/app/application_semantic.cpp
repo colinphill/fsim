@@ -3,6 +3,7 @@
 #include "fsim/support/path.hpp"
 
 #include <limits>
+#include <system_error>
 
 namespace fsim::app::application_detail {
 namespace {
@@ -61,8 +62,11 @@ namespace {
   if (name.empty()) {
     return "<unknown>";
   }
+  const auto path = fsim::support::path_from_utf8(name);
+  std::error_code error;
+  const auto canonical = std::filesystem::weakly_canonical(path, error);
   return fsim::support::path_to_utf8(
-      fsim::support::path_from_utf8(name).lexically_normal());
+      error ? path.lexically_normal() : canonical);
 }
 
 template <typename Target>
@@ -145,7 +149,7 @@ class SemanticModelBuilder final {
       const std::filesystem::path& path,
       const std::string_view digest) {
     (void)model_.intern_source_file(
-        fsim::support::path_to_utf8(path.lexically_normal()),
+        normalized_source_name(fsim::support::path_to_utf8(path)),
         std::string{digest});
   }
 

@@ -9,6 +9,8 @@ set(FSIM_TEST_CMAKE "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
 set(FSIM_WORKFLOW "${FSIM_SOURCE_DIR}/.github/workflows/ci.yml")
 set(FSIM_APPLICATION_ANALYSIS
   "${FSIM_SOURCE_DIR}/src/app/application_analysis.cpp")
+set(FSIM_APPLICATION_SEMANTIC
+  "${FSIM_SOURCE_DIR}/src/app/application_semantic.cpp")
 set(FSIM_SYSTEMC_CORE "${FSIM_SOURCE_DIR}/include/fsim/systemc/core.hpp")
 set(FSIM_SYSTEMC_COMPILER_TEST
   "${FSIM_SOURCE_DIR}/tests/systemc/plugin_compiler_test.cpp")
@@ -16,6 +18,8 @@ set(FSIM_APPLICATION_SYSTEMC_SOURCE
   "${FSIM_SOURCE_DIR}/tests/app/application_test_sources_systemc.cpp")
 set(FSIM_APPLICATION_SPECIALIZATION_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test_specialization.cpp")
+set(FSIM_APPLICATION_CLI_TEST
+  "${FSIM_SOURCE_DIR}/tests/app/application_test_cli.cpp")
 set(FSIM_RELEASE_AUDIT
   "${FSIM_SOURCE_DIR}/cmake/CheckV1ReleaseAudit.cmake")
 set(FSIM_RELEASE_CANDIDATE
@@ -27,10 +31,12 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_TEST_CMAKE}"
     "${FSIM_WORKFLOW}"
     "${FSIM_APPLICATION_ANALYSIS}"
+    "${FSIM_APPLICATION_SEMANTIC}"
     "${FSIM_SYSTEMC_CORE}"
     "${FSIM_SYSTEMC_COMPILER_TEST}"
     "${FSIM_APPLICATION_SYSTEMC_SOURCE}"
     "${FSIM_APPLICATION_SPECIALIZATION_TEST}"
+    "${FSIM_APPLICATION_CLI_TEST}"
     "${FSIM_RELEASE_AUDIT}"
     "${FSIM_RELEASE_CANDIDATE}"
     "${FSIM_FRONTEND}"
@@ -44,6 +50,7 @@ file(READ "${FSIM_ROOT_CMAKE}" FSIM_ROOT_CONTENTS)
 file(READ "${FSIM_TEST_CMAKE}" FSIM_TEST_CONTENTS)
 file(READ "${FSIM_WORKFLOW}" FSIM_WORKFLOW_CONTENTS)
 file(READ "${FSIM_APPLICATION_ANALYSIS}" FSIM_APPLICATION_ANALYSIS_CONTENTS)
+file(READ "${FSIM_APPLICATION_SEMANTIC}" FSIM_APPLICATION_SEMANTIC_CONTENTS)
 file(READ "${FSIM_SYSTEMC_CORE}" FSIM_SYSTEMC_CORE_CONTENTS)
 file(READ "${FSIM_SYSTEMC_COMPILER_TEST}" FSIM_SYSTEMC_COMPILER_TEST_CONTENTS)
 file(READ
@@ -52,6 +59,7 @@ file(READ
 file(READ
   "${FSIM_APPLICATION_SPECIALIZATION_TEST}"
   FSIM_APPLICATION_SPECIALIZATION_TEST_CONTENTS)
+file(READ "${FSIM_APPLICATION_CLI_TEST}" FSIM_APPLICATION_CLI_TEST_CONTENTS)
 file(READ "${FSIM_RELEASE_AUDIT}" FSIM_RELEASE_AUDIT_CONTENTS)
 file(READ "${FSIM_RELEASE_CANDIDATE}" FSIM_RELEASE_CANDIDATE_CONTENTS)
 file(READ "${FSIM_FRONTEND}" FSIM_FRONTEND_CONTENTS)
@@ -99,6 +107,28 @@ if(FSIM_COMPILER_ENVIRONMENT_INDEX EQUAL -1
     OR NOT FSIM_COMPILER_GETENV_INDEX EQUAL -1)
   message(FATAL_ERROR
     "SystemC compiler test bypasses the MSVC-safe environment helper")
+endif()
+
+foreach(FSIM_SEMANTIC_PATH_POLICY IN ITEMS
+    "std::filesystem::weakly_canonical(path, error)"
+    "normalized_source_name(fsim::support::path_to_utf8(path))")
+  string(FIND
+    "${FSIM_APPLICATION_SEMANTIC_CONTENTS}"
+    "${FSIM_SEMANTIC_PATH_POLICY}"
+    FSIM_SEMANTIC_PATH_INDEX)
+  if(FSIM_SEMANTIC_PATH_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "semantic source identity lost Windows path canonicalization: "
+      "${FSIM_SEMANTIC_PATH_POLICY}")
+  endif()
+endforeach()
+string(FIND
+  "${FSIM_APPLICATION_CLI_TEST_CONTENTS}"
+  "shared_checked->semantics.source_files().size() == 2"
+  FSIM_SHARED_SOURCE_COUNT_INDEX)
+if(FSIM_SHARED_SOURCE_COUNT_INDEX EQUAL -1)
+  message(FATAL_ERROR
+    "shared compilation-unit test lost semantic source de-duplication proof")
 endif()
 
 string(REGEX MATCHALL

@@ -10154,8 +10154,27 @@ all remaining specialization dependency checks through the shared UTF-8/native
 filesystem-identity helper, statically rejects the original comparison, and
 sets a still-bounded 900-second SystemC matrix limit. Exact-LLVM Debug and
 Release rebuilt warning-clean with eight workers; the application and three
-resource/MSVC contracts passed 4/4 in 9.92 and 9.56 seconds. The sixth repair
-checkpoint and replacement hosted run are pending.
+resource/MSVC contracts passed 4/4 in 9.92 and 9.56 seconds. Sixth repair
+checkpoint `379916e` was pushed; replacement run `30831982084` is the current
+mandatory hosted proof.
+
+Replacement run `30831982084` passed all six Ubuntu jobs: GCC Release in
+12m23s, fuzz in 2m16s, exact-LLVM Debug/Release in 19m44s/19m37s, ASan/UBSan
+in 38m25s, and GCC Debug in 13m22s. All six Windows jobs reached
+`application_test_cli.cpp:228` and failed the same shared-compilation-unit
+assertion that the owning semantic source table contains exactly two files;
+no further timeout appeared. The manifest roots remained two, but
+preprocessing canonicalized their physical paths while semantic registration
+retained the manifest spelling. Windows temporary-directory aliases therefore
+caused a parsed span to intern a duplicate semantic source. The seventh
+consolidated repair uses one error-safe, generic-UTF-8 canonical identity for
+both semantic source registration and parsed spans, and extends the MSVC
+contract to pin that canonicalization and the two-source proof. Exact-LLVM
+Debug and Release rebuilt warning-clean with eight workers; the application,
+release-candidate, resource-release, MSVC, and resource-portability gates
+passed 5/5 in 15.73 and 15.23 seconds. The seventh repair checkpoint and
+replacement hosted run are pending. The final source, inventory, resource,
+release-candidate, MSVC, and portability gates passed 6/6 in 6.25 seconds.
 
 ## Forward language-closure feature batches
 
