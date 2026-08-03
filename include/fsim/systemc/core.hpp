@@ -391,8 +391,9 @@ template <typename Interface>
 [[nodiscard]] const char* custom_interface_kind() {
     if constexpr (requires { Interface::fsim_kind(); }) {
         return Interface::fsim_kind();
+    } else {
+        return "sc_interface";
     }
-    return "sc_interface";
 }
 
 } // namespace detail

@@ -10084,7 +10084,15 @@ untrusted ABI metadata seam and extends `fsim.msvc-debug-contract` to reject a
 regression. Exact-LLVM Debug and Release rebuilt warning-clean with eight
 workers; the core application, SystemC compiler/matrix/application, mixed and
 typed boundaries, Windows contracts, and scoped locals passed 10/10 in 63.34
-seconds. The repair checkpoint and replacement hosted run are pending.
+seconds. Repair checkpoint `9748d87` was pushed and replacement run
+`30821583086` crossed the original failure point, then exposed MSVC warning
+C4702 as an error in the standalone SystemC header test: the statement after
+the true arm of `custom_interface_kind` was unreachable for interfaces with a
+custom kind. The follow-up expresses the fallback as the `else` arm of the
+`if constexpr` and extends the MSVC contract to pin that warning-clean shape.
+Exact-LLVM Debug and Release rebuilt with eight workers, and the standalone
+SystemC header plus MSVC contract passed 2/2 in each tree. The second repair
+checkpoint and its replacement hosted run are pending.
 
 ## Forward language-closure feature batches
 
