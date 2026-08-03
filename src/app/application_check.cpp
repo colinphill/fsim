@@ -278,6 +278,12 @@ std::optional<CheckedProject> check_project(
   checked.vhdl_hir = build_vhdl_hir(checked.parsed, checked.semantics);
   checked.systemverilog_hir = build_systemverilog_hir(
       checked.parsed, checked.semantics);
+  if (!checked.semantics.valid()) {
+    diagnostics.error(
+        "FSIM-SEM-0001",
+        "source analysis produced an invalid owning semantic projection");
+    return std::nullopt;
+  }
   return checked;
 }
 

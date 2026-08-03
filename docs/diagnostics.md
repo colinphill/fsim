@@ -56,6 +56,7 @@ therefore excluded.
 | `FSIM-FE-0001` | error | The project contains no HDL or SystemC source files. |
 | `FSIM-FE-0002` | error | More than one parsed source defines the same design-unit identity. |
 | `FSIM-FE-0003` | error | A parallel source-analysis task failed or produced no result. |
+| `FSIM-SEM-0001` | error | Source analysis or build normalization produced an internally invalid owning semantic projection. |
 | `FSIM-FE-CU-0001` | warning | A VHDL source set requested Verilog-style compilation-unit grouping; VHDL files remain independent analysis units. |
 | `FSIM-FE-VHORDER-001` | error | A VHDL architecture appears before its entity in manifest analysis order. |
 | `FSIM-FE-VHORDER-002` | error | A VHDL package body appears before its matching package declaration. |

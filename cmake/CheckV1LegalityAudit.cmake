@@ -1,0 +1,309 @@
+# SPDX-License-Identifier: Apache-2.0
+
+cmake_policy(SET CMP0007 NEW)
+
+if(NOT DEFINED FSIM_SOURCE_DIR)
+  message(FATAL_ERROR "FSIM_SOURCE_DIR is required")
+endif()
+
+set(FSIM_MATRIX "${FSIM_SOURCE_DIR}/docs/feature-matrix.md")
+set(FSIM_AUDIT "${FSIM_SOURCE_DIR}/docs/v1-legality-audit.md")
+foreach(FSIM_INPUT IN ITEMS "${FSIM_MATRIX}" "${FSIM_AUDIT}")
+  if(NOT EXISTS "${FSIM_INPUT}")
+    message(FATAL_ERROR "v1 legality input not found: ${FSIM_INPUT}")
+  endif()
+endforeach()
+
+file(READ "${FSIM_MATRIX}" FSIM_MATRIX_CONTENTS)
+file(READ "${FSIM_AUDIT}" FSIM_AUDIT_CONTENTS)
+string(REPLACE ";" "<SEMICOLON>" FSIM_MATRIX_CONTENTS "${FSIM_MATRIX_CONTENTS}")
+string(REPLACE "\n" ";" FSIM_MATRIX_LINES "${FSIM_MATRIX_CONTENTS}")
+
+set(FSIM_REQUIRED_IDS)
+set(FSIM_GAP_IDS)
+set(FSIM_REQUIRED_COUNT 0)
+set(FSIM_EXECUTE_COUNT 0)
+set(FSIM_ANALYZE_COUNT 0)
+set(FSIM_ELABORATE_COUNT 0)
+set(FSIM_PARSE_COUNT 0)
+set(FSIM_V1_TARGET_COUNT 0)
+set(FSIM_METADATA_COUNT 0)
+set(FSIM_POSITIVE_GAPS 0)
+set(FSIM_NEGATIVE_GAPS 0)
+set(FSIM_ELABORATION_GAPS 0)
+set(FSIM_RUNTIME_GAPS 0)
+set(FSIM_TASK3_IDS
+  SV-002
+  SV-171 SV-172 SV-173 SV-174 SV-175 SV-176 SV-177 SV-178
+  SV-181 SV-182 SV-183 SV-184 SV-185 SV-187 SV-188
+  SV-191 SV-192 SV-193 SV-194 SV-195 SV-198
+  SV-201 SV-202 SV-203 SV-204 SV-205 SV-208
+  SV-291 SV-292 SV-293 SV-297 SV-298
+  SV-301 SV-302 SV-303 SV-308
+  SV-471 SV-477 SV-479
+  SV-631 SV-633 SV-635 SV-638
+  SV-641 SV-642 SV-643 SV-644 SV-646 SV-647
+  SV-651 SV-654 SV-657
+)
+set(FSIM_TASK3_SEEN)
+set(FSIM_TASK4_IDS
+  SV-006 SV-011 SV-012 SV-014 SV-164
+  SV-211 SV-212 SV-213 SV-217 SV-221 SV-222 SV-223 SV-228 SV-231 SV-236
+  SV-241 SV-242 SV-249 SV-252 SV-259 SV-261 SV-269 SV-271 SV-272 SV-279
+  SV-281 SV-282 SV-311 SV-312 SV-315 SV-319 SV-321 SV-322 SV-329
+  SV-331 SV-332 SV-339 SV-341 SV-349 SV-351 SV-352 SV-359 SV-361 SV-362
+  SV-363 SV-371 SV-372 SV-373 SV-379 SV-381 SV-382 SV-383 SV-384 SV-389
+  SV-391 SV-392 SV-393 SV-394 SV-399 SV-401 SV-402 SV-403 SV-404 SV-409
+  SV-411 SV-412 SV-413 SV-415 SV-419 SV-421 SV-422 SV-429 SV-431 SV-432
+  SV-433 SV-439 SV-441 SV-449 SV-451 SV-459 SV-461 SV-469 SV-481 SV-482
+  SV-483 SV-489 SV-491 SV-492 SV-499 SV-501 SV-502 SV-509 SV-511 SV-519
+  SV-521 SV-529 SV-531 SV-532 SV-539 SV-541 SV-542 SV-549 SV-551 SV-552
+  SV-559 SV-561 SV-562 SV-569 SV-571 SV-579 SV-581 SV-591 SV-596 SV-601
+  SV-605 SV-609 SV-611 SV-619 SV-621 SV-629
+)
+set(FSIM_TASK4_SEEN)
+set(FSIM_SYSTEMVERILOG_COUNT 0)
+set(FSIM_TASK6_VHDL_IDS
+  VH-006 VH-007 VH-008 VH-010 VH-013 VH-018
+  VH-203 VH-205 VH-206 VH-207
+)
+set(FSIM_VHDL_COUNT 0)
+set(FSIM_TASK5_GUARDED_COUNT 0)
+set(FSIM_TASK6_VHDL_COUNT 0)
+set(FSIM_MIXED_LANGUAGE_COUNT 0)
+set(FSIM_SYSTEMC_COUNT 0)
+
+foreach(FSIM_LINE IN LISTS FSIM_MATRIX_LINES)
+  if(NOT FSIM_LINE MATCHES
+      "^\\| ((VH|SV|CM|SC|ML|V1-CM|V1-SV|V1-VH)-[0-9]+) \\|")
+    continue()
+  endif()
+  set(FSIM_ID "${CMAKE_MATCH_1}")
+  list(FIND FSIM_REQUIRED_IDS "${FSIM_ID}" FSIM_DUPLICATE_INDEX)
+  if(NOT FSIM_DUPLICATE_INDEX EQUAL -1)
+    message(FATAL_ERROR "duplicate required feature-matrix ID: ${FSIM_ID}")
+  endif()
+  list(APPEND FSIM_REQUIRED_IDS "${FSIM_ID}")
+  math(EXPR FSIM_REQUIRED_COUNT "${FSIM_REQUIRED_COUNT} + 1")
+
+  set(FSIM_FIELDS_TEXT "${FSIM_LINE}")
+  string(REPLACE "\\|" "<PIPE>" FSIM_FIELDS_TEXT "${FSIM_FIELDS_TEXT}")
+  string(REPLACE "|" ";" FSIM_FIELDS "${FSIM_FIELDS_TEXT}")
+  list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
+  if(FSIM_FIELD_COUNT LESS 9)
+    message(FATAL_ERROR "malformed required feature-matrix row: ${FSIM_ID}")
+  endif()
+  math(EXPR FSIM_STATUS_INDEX "${FSIM_FIELD_COUNT} - 6")
+  math(EXPR FSIM_POSITIVE_INDEX "${FSIM_FIELD_COUNT} - 5")
+  math(EXPR FSIM_NEGATIVE_INDEX "${FSIM_FIELD_COUNT} - 4")
+  math(EXPR FSIM_ELABORATION_INDEX "${FSIM_FIELD_COUNT} - 3")
+  math(EXPR FSIM_RUNTIME_INDEX "${FSIM_FIELD_COUNT} - 2")
+  list(GET FSIM_FIELDS ${FSIM_STATUS_INDEX} FSIM_STATUS)
+  list(GET FSIM_FIELDS ${FSIM_POSITIVE_INDEX} FSIM_POSITIVE)
+  list(GET FSIM_FIELDS ${FSIM_NEGATIVE_INDEX} FSIM_NEGATIVE)
+  list(GET FSIM_FIELDS ${FSIM_ELABORATION_INDEX} FSIM_ELABORATION)
+  list(GET FSIM_FIELDS ${FSIM_RUNTIME_INDEX} FSIM_RUNTIME)
+  foreach(FSIM_FIELD IN ITEMS
+      FSIM_STATUS FSIM_POSITIVE FSIM_NEGATIVE FSIM_ELABORATION FSIM_RUNTIME)
+    string(STRIP "${${FSIM_FIELD}}" ${FSIM_FIELD})
+  endforeach()
+
+  if(FSIM_STATUS STREQUAL "execute")
+    math(EXPR FSIM_EXECUTE_COUNT "${FSIM_EXECUTE_COUNT} + 1")
+  elseif(FSIM_STATUS STREQUAL "analyze")
+    math(EXPR FSIM_ANALYZE_COUNT "${FSIM_ANALYZE_COUNT} + 1")
+  elseif(FSIM_STATUS STREQUAL "elaborate")
+    math(EXPR FSIM_ELABORATE_COUNT "${FSIM_ELABORATE_COUNT} + 1")
+  elseif(FSIM_STATUS STREQUAL "parse")
+    math(EXPR FSIM_PARSE_COUNT "${FSIM_PARSE_COUNT} + 1")
+  elseif(FSIM_STATUS STREQUAL "v1 target")
+    math(EXPR FSIM_V1_TARGET_COUNT "${FSIM_V1_TARGET_COUNT} + 1")
+  elseif(FSIM_STATUS STREQUAL "metadata" AND FSIM_ID STREQUAL "SC-024")
+    math(EXPR FSIM_METADATA_COUNT "${FSIM_METADATA_COUNT} + 1")
+  else()
+    message(FATAL_ERROR
+      "required row ${FSIM_ID} has unsupported status '${FSIM_STATUS}'")
+  endif()
+
+  set(FSIM_HAS_GAP FALSE)
+  foreach(FSIM_EVIDENCE IN ITEMS
+      FSIM_POSITIVE FSIM_NEGATIVE FSIM_ELABORATION FSIM_RUNTIME)
+    if(${FSIM_EVIDENCE} STREQUAL "")
+      message(FATAL_ERROR "${FSIM_ID} has an empty evidence cell")
+    endif()
+    if(${FSIM_EVIDENCE} STREQUAL "—")
+      set(FSIM_HAS_GAP TRUE)
+    endif()
+  endforeach()
+  if(FSIM_POSITIVE STREQUAL "—")
+    math(EXPR FSIM_POSITIVE_GAPS "${FSIM_POSITIVE_GAPS} + 1")
+  endif()
+  if(FSIM_NEGATIVE STREQUAL "—")
+    math(EXPR FSIM_NEGATIVE_GAPS "${FSIM_NEGATIVE_GAPS} + 1")
+  endif()
+  if(FSIM_ELABORATION STREQUAL "—")
+    math(EXPR FSIM_ELABORATION_GAPS "${FSIM_ELABORATION_GAPS} + 1")
+  endif()
+  if(FSIM_RUNTIME STREQUAL "—")
+    math(EXPR FSIM_RUNTIME_GAPS "${FSIM_RUNTIME_GAPS} + 1")
+  endif()
+  if(FSIM_HAS_GAP OR NOT FSIM_STATUS STREQUAL "execute")
+    string(FIND "${FSIM_AUDIT_CONTENTS}" "`${FSIM_ID}`" FSIM_AUDIT_INDEX)
+    if(FSIM_AUDIT_INDEX EQUAL -1)
+      message(FATAL_ERROR
+        "${FSIM_ID} has a status/evidence gap missing from the legality audit")
+    endif()
+  endif()
+  if(NOT FSIM_STATUS STREQUAL "execute" OR FSIM_HAS_GAP)
+    message(FATAL_ERROR
+      "required v1 row ${FSIM_ID} is not executable with complete evidence")
+  endif()
+  if(FSIM_HAS_GAP)
+    list(APPEND FSIM_GAP_IDS "${FSIM_ID}")
+  endif()
+
+  list(FIND FSIM_TASK3_IDS "${FSIM_ID}" FSIM_TASK3_INDEX)
+  if(NOT FSIM_TASK3_INDEX EQUAL -1)
+    if(NOT FSIM_STATUS STREQUAL "execute" OR FSIM_HAS_GAP)
+      message(FATAL_ERROR
+        "Batch 127 Task 3 row ${FSIM_ID} is not executable with complete evidence")
+    endif()
+    list(APPEND FSIM_TASK3_SEEN "${FSIM_ID}")
+  endif()
+  list(FIND FSIM_TASK4_IDS "${FSIM_ID}" FSIM_TASK4_INDEX)
+  if(NOT FSIM_TASK4_INDEX EQUAL -1)
+    if(NOT FSIM_STATUS STREQUAL "execute" OR FSIM_HAS_GAP)
+      message(FATAL_ERROR
+        "Batch 127 Task 4 row ${FSIM_ID} is not executable with complete evidence")
+    endif()
+    list(APPEND FSIM_TASK4_SEEN "${FSIM_ID}")
+  endif()
+  if(FSIM_ID MATCHES "^SV-")
+    math(EXPR FSIM_SYSTEMVERILOG_COUNT "${FSIM_SYSTEMVERILOG_COUNT} + 1")
+    if(NOT FSIM_STATUS STREQUAL "execute" OR FSIM_HAS_GAP)
+      message(FATAL_ERROR
+        "SystemVerilog v1 row ${FSIM_ID} is not executable with complete evidence")
+    endif()
+  endif()
+  if(FSIM_ID MATCHES "^VH-")
+    math(EXPR FSIM_VHDL_COUNT "${FSIM_VHDL_COUNT} + 1")
+    list(FIND FSIM_TASK6_VHDL_IDS "${FSIM_ID}" FSIM_TASK6_VHDL_INDEX)
+    if(FSIM_TASK6_VHDL_INDEX EQUAL -1)
+      math(EXPR FSIM_TASK5_GUARDED_COUNT "${FSIM_TASK5_GUARDED_COUNT} + 1")
+    else()
+      math(EXPR FSIM_TASK6_VHDL_COUNT "${FSIM_TASK6_VHDL_COUNT} + 1")
+    endif()
+    if(NOT FSIM_STATUS STREQUAL "execute" OR FSIM_HAS_GAP)
+      message(FATAL_ERROR
+        "VHDL v1 row ${FSIM_ID} is not executable with complete evidence")
+    endif()
+  endif()
+  if(FSIM_ID MATCHES "^ML-")
+    math(EXPR FSIM_MIXED_LANGUAGE_COUNT "${FSIM_MIXED_LANGUAGE_COUNT} + 1")
+    if(NOT FSIM_STATUS STREQUAL "execute" OR FSIM_HAS_GAP)
+      message(FATAL_ERROR
+        "mixed-language v1 row ${FSIM_ID} is not executable with complete evidence")
+    endif()
+  endif()
+  if(FSIM_ID MATCHES "^SC-")
+    math(EXPR FSIM_SYSTEMC_COUNT "${FSIM_SYSTEMC_COUNT} + 1")
+    if(NOT FSIM_STATUS STREQUAL "execute" OR FSIM_HAS_GAP)
+      message(FATAL_ERROR
+        "SystemC v1 row ${FSIM_ID} is not executable with complete evidence")
+    endif()
+  endif()
+
+  set(FSIM_LINK_TEXT "${FSIM_LINE}")
+  while(FSIM_LINK_TEXT MATCHES "\\]\\(([^)]*)\\)")
+    set(FSIM_LINK_MATCH "${CMAKE_MATCH_0}")
+    set(FSIM_TARGET "${CMAKE_MATCH_1}")
+    string(REPLACE
+      "${FSIM_LINK_MATCH}" "" FSIM_LINK_TEXT "${FSIM_LINK_TEXT}")
+    if(FSIM_TARGET MATCHES "^(https?://|mailto:|#)")
+      continue()
+    endif()
+    if(NOT FSIM_TARGET MATCHES "^(\\.\\./|\\./|[A-Za-z0-9_.-]+\\.[A-Za-z0-9]+($|#))")
+      continue()
+    endif()
+    string(REGEX REPLACE "#.*$" "" FSIM_TARGET "${FSIM_TARGET}")
+    get_filename_component(
+      FSIM_TARGET_PATH
+      "${FSIM_TARGET}"
+      ABSOLUTE
+      BASE_DIR "${FSIM_SOURCE_DIR}/docs"
+    )
+    if(NOT EXISTS "${FSIM_TARGET_PATH}")
+      message(FATAL_ERROR
+        "${FSIM_ID} references missing evidence path: ${FSIM_TARGET}")
+    endif()
+  endwhile()
+endforeach()
+
+set(FSIM_EXPECTED_COUNTS
+  FSIM_REQUIRED_COUNT 1080
+  FSIM_EXECUTE_COUNT 1080
+  FSIM_ANALYZE_COUNT 0
+  FSIM_ELABORATE_COUNT 0
+  FSIM_PARSE_COUNT 0
+  FSIM_V1_TARGET_COUNT 0
+  FSIM_METADATA_COUNT 0
+  FSIM_POSITIVE_GAPS 0
+  FSIM_NEGATIVE_GAPS 0
+  FSIM_ELABORATION_GAPS 0
+  FSIM_RUNTIME_GAPS 0
+)
+while(FSIM_EXPECTED_COUNTS)
+  list(POP_FRONT FSIM_EXPECTED_COUNTS FSIM_COUNT_NAME FSIM_COUNT_EXPECTED)
+  if(NOT ${FSIM_COUNT_NAME} EQUAL FSIM_COUNT_EXPECTED)
+    message(FATAL_ERROR
+      "v1 legality baseline changed for ${FSIM_COUNT_NAME}: "
+      "expected ${FSIM_COUNT_EXPECTED}, found ${${FSIM_COUNT_NAME}}; "
+      "update implementation, matrix evidence, and audit together")
+  endif()
+endwhile()
+
+list(LENGTH FSIM_GAP_IDS FSIM_GAP_ROW_COUNT)
+if(NOT FSIM_GAP_ROW_COUNT EQUAL 0)
+  message(FATAL_ERROR
+    "expected no required rows with evidence gaps, found ${FSIM_GAP_ROW_COUNT}")
+endif()
+if(NOT FSIM_MIXED_LANGUAGE_COUNT EQUAL 16)
+  message(FATAL_ERROR
+    "expected 16 mixed-language v1 rows, found ${FSIM_MIXED_LANGUAGE_COUNT}")
+endif()
+if(NOT FSIM_SYSTEMC_COUNT EQUAL 28)
+  message(FATAL_ERROR
+    "expected 28 SystemC v1 rows, found ${FSIM_SYSTEMC_COUNT}")
+endif()
+
+list(LENGTH FSIM_TASK3_IDS FSIM_TASK3_EXPECTED_COUNT)
+list(LENGTH FSIM_TASK3_SEEN FSIM_TASK3_SEEN_COUNT)
+if(NOT FSIM_TASK3_SEEN_COUNT EQUAL FSIM_TASK3_EXPECTED_COUNT)
+  message(FATAL_ERROR
+    "Batch 127 Task 3 expected ${FSIM_TASK3_EXPECTED_COUNT} rows, "
+    "found ${FSIM_TASK3_SEEN_COUNT}")
+endif()
+
+list(LENGTH FSIM_TASK4_IDS FSIM_TASK4_EXPECTED_COUNT)
+list(LENGTH FSIM_TASK4_SEEN FSIM_TASK4_SEEN_COUNT)
+if(NOT FSIM_TASK4_SEEN_COUNT EQUAL FSIM_TASK4_EXPECTED_COUNT)
+  message(FATAL_ERROR
+    "Batch 127 Task 4 expected ${FSIM_TASK4_EXPECTED_COUNT} rows, "
+    "found ${FSIM_TASK4_SEEN_COUNT}")
+endif()
+if(NOT FSIM_SYSTEMVERILOG_COUNT EQUAL 671)
+  message(FATAL_ERROR
+    "expected 671 SystemVerilog v1 rows, found ${FSIM_SYSTEMVERILOG_COUNT}")
+endif()
+if(NOT FSIM_VHDL_COUNT EQUAL 252
+    OR NOT FSIM_TASK5_GUARDED_COUNT EQUAL 242
+    OR NOT FSIM_TASK6_VHDL_COUNT EQUAL 10)
+  message(FATAL_ERROR
+    "expected 252 VHDL rows split 242/10 across Tasks 5/6, found "
+    "${FSIM_VHDL_COUNT}, ${FSIM_TASK5_GUARDED_COUNT}, and "
+    "${FSIM_TASK6_VHDL_COUNT}")
+endif()
+
+message(STATUS
+  "v1 legality audit covers ${FSIM_REQUIRED_COUNT} required rows; "
+  "${FSIM_GAP_ROW_COUNT} retain explicit evidence gaps")

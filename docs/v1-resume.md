@@ -28,7 +28,7 @@ risky structural transition that needs a durable boundary.
   commit `4ad6153`; mandatory non-documentation GitHub Actions run
   `30765734570` passed all 12 jobs. Batch 121 is complete in the current HEAD,
   Batch 122 through Batch 124 are complete in the current pushed checkpoint;
-  Batch 125 and Batch 126 are complete; Batch 127 is current with Task 1 in
+  Batch 125 and Batch 126 are complete; Batch 127 is current with Task 2 in
   progress.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
@@ -4596,48 +4596,229 @@ in 100.01 seconds, SystemC matrix in 43.88, typed boundaries in 3.56, API in
 checkpoint and has no GitHub Actions inspection because it is not a tenth-
 batch boundary.
 
-### Batch 127 — Language-wide legality closure — In progress
+### Batch 127 — Language-wide legality closure — Complete
 
 The current ten implementation tasks are:
 
-1. **In progress.** Inventory every required v1 VHDL, Verilog/SystemVerilog,
+1. **Complete.** Inventory every required v1 VHDL, Verilog/SystemVerilog,
    mixed-language, and SystemC construct against the parser, typed HIR,
    analysis, elaboration, execution, and diagnostic paths; identify every
    silently accepted, discarded, parser-only, or under-diagnosed case.
-2. **Pending.** Add common legality-audit infrastructure and stable diagnostics
+2. **Complete.** Add common legality-audit infrastructure and stable diagnostics
    that require every accepted required construct to reach an owning semantic
    record and every unsupported or illegal construct to fail explicitly.
-3. **Pending.** Close Verilog/SystemVerilog declaration, type, parameter, port,
+3. **Complete.** Close Verilog/SystemVerilog declaration, type, parameter, port,
    interface/package, generate, and specialization legality gaps with exact
    positive and negative evidence.
-4. **Pending.** Close Verilog/SystemVerilog expression, lvalue, callable,
+4. **Complete.** Close Verilog/SystemVerilog expression, lvalue, callable,
    process, statement, timing, event, assertion, system-task, file, string,
    container, and memory legality gaps.
-5. **Pending.** Close VHDL library/unit, context, declaration, subtype/type,
+5. **Complete.** Close VHDL library/unit, context, declaration, subtype/type,
    name, overload, generic, port, component, configuration, and generate
    legality gaps with exact positive and negative evidence.
-6. **Pending.** Close VHDL expression, aggregate, callable, sequential,
+6. **Complete.** Close VHDL expression, aggregate, callable, sequential,
    concurrent, wait, assertion/report, file, access, protected, physical, and
    waveform legality gaps.
-7. **Pending.** Close mixed-language binding, type conversion, construction
+7. **Complete.** Close mixed-language binding, type conversion, construction
    parameter, driver/resolution, scheduling, hierarchy, and unsupported-
    boundary legality gaps.
-8. **Pending.** Close SystemC facade, native ABI, named-object, port/export,
+8. **Complete.** Close SystemC facade, native ABI, named-object, port/export,
    process/sensitivity, event/channel, lifecycle, plug-in, and unsupported-
    subset legality gaps.
-9. **Pending.** Add one language-wide positive/negative legality matrix proving
+9. **Complete.** Add one language-wide positive/negative legality matrix proving
    no required construct is silently discarded or remains parser-only, with
    stable diagnostics, cache/provenance, interpreter/O0/O2/debug, VCD, source,
    and portable-path evidence.
-10. **Pending.** Update matrix/architecture/diagnostics/docs, pass sanitizer,
+10. **Complete.** Update matrix/architecture/diagnostics/docs, pass sanitizer,
     source/catalog and full Debug/Release gates, then create and push the single
     Batch 127 checkpoint. This is not a mandatory CI-inspection boundary.
+
+Batch status is **complete**. Keep this exact completed ten-task list in both
+the official plan and this handoff while Batch 128 is current. Tasks 1 through
+9 used one accumulated dirty worktree with focused eight-worker Debug builds
+and tests; Task 10 owns the single sanitizer, full-regression, documentation,
+commit, and push gate. GitHub builds use parallelism four, and Batch 127 does
+not require a non-documentation CI inspection.
+
+Task 1 records the complete closure set in
+[`docs/v1-legality-audit.md`](v1-legality-audit.md). The initial matrix had
+1,080 required rows: 791 `execute` rows and 289 rows below execution status. The
+closure set is exactly 102 VHDL, 173 Verilog/SystemVerilog, one mixed-language,
+one SystemC, and 12 common/release-contract rows. Within it, 106 rows already
+have all four evidence cells and require coverage verification plus status
+correction; the non-`execute` cells contain 2 P+, 16 P-, 15 E, and 175 R gaps.
+An additional 109 `execute` rows retain at least one dash, bringing the complete
+required-row gap inventory to 292 rows and 8 P+, 120 P-, 28 E, and 176 R empty
+cells. The audit lists every affected ID, isolates all 13 parser-only rows,
+flags the undocumented `metadata` status on `SC-024`, defines owning-record and targeted-
+diagnostic closure rules, and routes each row to Tasks 2 through 9. The initial
+discard-site scan confirms the explicitly named VHDL `Statement ignored`
+temporary follows a targeted misplaced-delay diagnostic; all other parse-result
+discard sites remain in the per-language classification queues.
+
+Task 2 is focused-complete. The new `fsim.v1-legality-audit` CTest parses all
+required feature-matrix rows without treating escaped pipes as columns, pins
+the 1,080-row status distribution and 292-row evidence-gap baseline, rejects
+duplicate IDs and undocumented statuses, requires every open row in this
+audit, and verifies every path-like evidence link. Applying the gate repaired
+stale elaboration links, a missing fork fixture link, and the duplicate
+`SV-100` identity now assigned uniquely to `SV-671`. The pointer-free semantic
+model now validates every dense ID and owned relationship before application
+checking and DesignIR projection; invalid ownership fails with cataloged
+`FSIM-SEM-0001`. The exact eight-worker Debug build succeeded, and semantic,
+SystemVerilog HIR, legality/matrix, diagnostics/source, typed-boundary, and
+scoped-locals tests passed 9/9 in 5.63 seconds, with typed boundaries in 4.18
+seconds and scoped locals in 0.94. Task 3 is current; no sanitizer, Release,
+full regression, commit, push, or CI inspection is due at this task boundary.
+
+Task 3 is focused-complete. The legality gate now names and enforces 53 exact
+declaration/type rows covering non-ANSI Verilog ports; integral, type, and
+string parameters; static, dynamic, and sliced hierarchy ports; interfaces,
+modports, and package re-exports; preprocessing/directive state; generated
+declarations; and aggregate/multidimensional types. All 53 are `execute` with
+complete P+, P-, E, and direct R evidence. Duplicate non-ANSI declarations now
+have an explicit `FSIM-SV-SEM-004` regression, and the Verilog-2005 non-ANSI
+`output reg` path executes through the interpreter. The required matrix now
+has 844 executable and 236 open rows; the SystemVerilog queue falls from 173
+to 120 and the all-language evidence-gap queue from 292 to 261. The exact
+eight-worker Debug build succeeded. The 13-test frontend, elaboration,
+parameter, type, string, port/container, interface/package,
+preprocessor/generate, aggregate, catalog/source, HIR, and legality gate passed
+in 132.61 seconds; the intentionally merged container application accounted
+for 125.89 seconds. Scoped locals passed separately in 0.81 seconds. Task 4 is
+current; no sanitizer, Release, full regression, commit, push, or CI inspection
+is due at this task boundary.
+
+Task 4 is focused-complete. It promotes the remaining 120 SystemVerilog
+expression, callable, process, timing, assertion, file/string, container,
+memory, and statement rows and supplies the missing evidence for 76 rows that
+were already executable. The legality gate now requires every one of the 671
+required SystemVerilog rows to remain `execute` with nonempty P+, P-, E, and R
+evidence. The all-language matrix stands at 964 executable and 116 open rows,
+with its evidence-gap queue reduced to 98 and no SystemVerilog entry remaining.
+The 24-test Debug focus spanning frontend/elaboration, core and expression
+applications, scheduling/control, assertions, callables, strings/files,
+containers, catalog/source, and the legality gate passed in 168.92 seconds.
+The merged container application took 127.33 seconds and scoped locals 0.87.
+Task 5 is current; no sanitizer, Release, full regression, commit, push, or CI
+inspection is due at this task boundary.
+
+Task 5 is focused-complete. It closes 97 non-execute unit, declaration, type,
+name, generic, component, configuration, generate, and binding rows plus four
+pre-existing negative-evidence gaps. The legality gate now protects 242 of 252
+VHDL rows as executable with complete evidence and leaves exactly ten
+expression/callable rows to Task 6. The complete matrix now has 1,061
+executable and 19 open rows, with 39 rows retaining any evidence gap. The
+17-test Debug focus covering frontend/elaboration, all generic families,
+overloads, configurations, analysis order, components, reviewed packages,
+catalog/source, core execution, and legality passed in 16.52 seconds; scoped
+locals took 0.85. Task 6 is current; no sanitizer, Release, full regression,
+commit, push, or CI inspection is due at this task boundary.
+
+Task 6 is focused-complete. Its exact ten-row expression/callable remainder is
+now executable with complete evidence, and the legality gate requires all 252
+VHDL rows to remain fully closed. The all-language matrix reaches 1,066
+executable rows with 14 open statuses and 31 rows retaining any evidence gap.
+The 34-test Debug focus covered the full VHDL application surface plus
+frontend/elaboration, expressions, resolution, catalog/source, and legality;
+all passed in 15.98 seconds. VHDL-labeled applications accounted for 12.70
+seconds, arrays 2.18, overloads 1.90, and scoped locals 0.86. Task 7 is
+current; no sanitizer, Release, full regression, commit, push, or CI inspection
+is due at this task boundary.
+
+Task 7 is focused-complete. Parser-only manifest binding plus the three
+pre-existing mixed-hierarchy negative gaps are closed, and the gate now
+requires all 16 mixed-language rows to remain executable with complete
+evidence. The complete matrix reaches 1,067 executable rows and 27 rows with
+any evidence gap. The 12-test Debug focus spanning project/frontend,
+elaboration, the compact conversion matrix, recursive mixed execution,
+resolution, typed boundaries, catalog/source, legality, and scoped locals
+passed in 16.41 seconds; typed boundaries took 4.02, core mixed execution 9.62,
+and scoped locals 0.84. Task 8 is current; no sanitizer, Release, full
+regression, commit, push, or CI inspection is due at this task boundary.
+
+Task 8 is focused-complete. `SC-024` now uses the documented `execute` status,
+the earlier facade/signal evidence gaps are filled, and the legality gate
+requires all 28 SystemC rows to remain executable with complete evidence. The
+matrix reaches 1,068 executable rows with only the 12 common/release statuses
+open and 24 rows retaining any gap. The 13-test Debug focus covering facade,
+strict ABI, loader/compiler matrices, lifecycle/thread execution, datatypes,
+typed boundaries, catalog/source, legality, and scoped locals passed in 68.97
+seconds. The SystemC application matrix took 47.89 seconds, typed boundaries
+4.00, and scoped locals 0.85.
+
+Task 9 is focused-complete. The release-authority gate now requires all 1,080
+required rows to be `execute`, every P+, P-, E, and R cell to be populated,
+all path-like evidence links to resolve, all IDs to be unique, and the exact
+language row counts to remain stable. The final 12 common/release status rows
+and 18 existing common evidence-gap rows are closed. The 18-test Debug focus
+covering semantic/project/cache, runtime/LLVM/C ABI, API/Tcl, VHDL/mixed/
+legality matrices, core/SystemC execution, typed boundaries, catalog/source,
+and scoped locals passed in 64.83 seconds; the SystemC application matrix took
+45.85, typed boundaries 3.90, and scoped locals 0.83. Task 10 is current; it
+owns the single sanitizer, full Debug/Release, documentation, commit, and push
+closure. Batch 127 is not a mandatory CI-inspection boundary.
+
+Task 10 is complete. The release authority now contains 1,080 required rows,
+all `execute` with complete positive, negative, elaboration, and runtime
+evidence. The legality gate also validates unique IDs, exact language/status
+counts, documented states, audit membership, and every path-like evidence
+link. The semantic ownership validator rejects invalid dense IDs and
+relationships with `FSIM-SEM-0001`; the direct Verilog-2005 non-ANSI path has
+stable duplicate-port diagnostics and interpreter execution. The
+LLVM-disabled ASan/UBSan suite passed 81/81 in 541.69 seconds with leak
+detection disabled for the managed ptrace environment; containers took
+277.62 seconds, SystemC matrix 139.37, typed boundaries 13.92, and scoped
+locals 0.60. Exact LLVM 22.1.8 warnings-as-errors Debug passed 84/84 in
+245.89 seconds, with containers at 124.34, SystemC matrix 47.16, typed
+boundaries 3.87, and scoped locals 0.85. Release passed 84/84 in 205.75
+seconds, with containers at 94.82, SystemC matrix 41.67, typed boundaries
+3.51, and scoped locals 0.84. The diagnostic catalog covers 1,623 production
+codes, all 419 authored sources pass the 2,000-line gate, and `git diff
+--check` is clean. This is the single accumulated Batch 127 commit/push
+checkpoint; no CI inspection is due at this non-boundary batch.
+
+### Batch 128 — License-reviewed conformance differentials — In progress
+
+The current ten implementation tasks are:
+
+1. **In progress.** Inventory the checked-in language, runtime, API, debugger,
+   and tool tests against public Apache-2.0-compatible conformance sources;
+   record license, provenance, bounded expectation, and uncovered semantic
+   families without importing incompatible test text.
+2. **Pending.** Add license-reviewed Verilog/SystemVerilog preprocessing,
+   declaration, type, parameter, package/interface, and generate conformance
+   cases with exact positive and negative frontend/elaboration evidence.
+3. **Pending.** Add license-reviewed Verilog/SystemVerilog expression,
+   statement, process, callable, timing, assertion, file/string/container, and
+   memory conformance cases with direct runtime evidence.
+4. **Pending.** Add license-reviewed VHDL library/unit, context, declaration,
+   type, generic, component, configuration, generate, and analysis-order
+   conformance cases.
+5. **Pending.** Add license-reviewed VHDL expression, aggregate, callable,
+   sequential/concurrent, wait/report, file, access/protected/physical,
+   transaction, and reviewed-package conformance cases.
+6. **Pending.** Add bidirectional mixed-language construction, conversion,
+   ownership, resolution, timing, hierarchy, and failure conformance cases.
+7. **Pending.** Add SystemC facade, ABI, hierarchy, datatype, process/event/
+   channel, lifecycle/thread, plug-in/compiler/cache, and unsupported-subset
+   conformance cases.
+8. **Pending.** Add common scheduler/SimIR/LLVM/cache, C API, debugger, VCD,
+   project/CLI, Tcl, diagnostics, source/provenance, and failure-containment
+   conformance cases.
+9. **Pending.** Prove the complete conformance corpus through interpreter, LLVM
+   O0/O2, cold/warm/edit cache, debugger, callbacks, normalized VCD, source
+   mapping, and portable-path differentials with an exact coverage gate.
+10. **Pending.** Update license inventories, matrix/architecture/diagnostics/
+    docs, pass sanitizer, source/catalog and full Debug/Release gates, then
+    create and push the single Batch 128 checkpoint. This is not a mandatory
+    CI-inspection boundary.
 
 Batch status is **in progress** with Task 1 current. Keep this exact ten-task
 list current in both the official plan and this handoff. Tasks 1 through 9 use
 one accumulated dirty worktree with focused eight-worker Debug builds and
 tests; Task 10 owns the sanitizer, full regressions, documentation, commit, and
-push gate. GitHub builds use parallelism four, and Batch 127 does not require a
+push gate. GitHub builds use parallelism four, and Batch 128 does not require a
 non-documentation CI inspection.
 
 Batch 110 has advanced through these validated features:

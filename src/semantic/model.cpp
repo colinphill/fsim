@@ -25,7 +25,127 @@ void require_id(
     }
 }
 
+template <typename IdType, typename Range>
+[[nodiscard]] bool contains(const IdType id, const Range& range) noexcept {
+    return id.valid() && id.value() < range.size();
+}
+
 } // namespace
+
+bool Model::valid() const noexcept {
+    const auto valid_span = [&](const SourceSpanId id) {
+        return contains(id, source_spans_);
+    };
+    const auto valid_origin = [&](const OriginId id) {
+        return contains(id, origins_);
+    };
+    for (std::size_t index = 0; index < source_files_.size(); ++index) {
+        if (source_files_[index].id.value() != index) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0; index < expansions_.size(); ++index) {
+        const auto& item = expansions_[index];
+        if (item.id.value() != index
+            || (item.parent
+                && (!contains(*item.parent, expansions_)
+                    || item.parent->value() >= index))) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0; index < source_spans_.size(); ++index) {
+        const auto& item = source_spans_[index];
+        if (item.id.value() != index
+            || !contains(item.file, source_files_)
+            || item.end.offset < item.begin.offset
+            || (item.expansion
+                && !contains(*item.expansion, expansions_))) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0; index < origins_.size(); ++index) {
+        const auto& item = origins_[index];
+        if (item.id.value() != index || !valid_span(item.source)
+            || (item.parent
+                && (!contains(*item.parent, origins_)
+                    || item.parent->value() >= index))) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0; index < scopes_.size(); ++index) {
+        const auto& item = scopes_[index];
+        if (item.id.value() != index || !contains(item.unit, units_)
+            || (item.parent && !contains(*item.parent, scopes_))
+            || !valid_span(item.source) || !valid_origin(item.origin)) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0; index < units_.size(); ++index) {
+        const auto& item = units_[index];
+        if (item.id.value() != index || !contains(item.scope, scopes_)
+            || scopes_[item.scope.value()].unit != item.id
+            || !valid_span(item.source) || !valid_origin(item.origin)) {
+            return false;
+        }
+    }
+    const auto valid_type_reference = [&](const TypeReference& reference) {
+        return valid_span(reference.source)
+            && (!reference.target.valid()
+                || contains(reference.target, types_));
+    };
+    for (std::size_t index = 0; index < types_.size(); ++index) {
+        const auto& item = types_[index];
+        if (item.id.value() != index || !contains(item.scope, scopes_)
+            || !valid_type_reference(item.base)
+            || !valid_span(item.source) || !valid_origin(item.origin)) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0; index < values_.size(); ++index) {
+        const auto& item = values_[index];
+        if (item.id.value() != index || !contains(item.scope, scopes_)
+            || !valid_type_reference(item.type)
+            || !valid_span(item.source) || !valid_origin(item.origin)) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0; index < instances_.size(); ++index) {
+        const auto& item = instances_[index];
+        if (item.id.value() != index || !contains(item.scope, scopes_)
+            || !valid_span(item.source) || !valid_origin(item.origin)) {
+            return false;
+        }
+    }
+    const auto valid_identity = [&](const auto& item,
+                                    const std::size_t index) {
+        return item.id.value() == index && contains(item.scope, scopes_)
+            && valid_span(item.source) && valid_origin(item.origin);
+    };
+    for (std::size_t index = 0; index < declarations_.size(); ++index) {
+        if (!valid_identity(declarations_[index], index)) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0;
+         index < expression_identities_.size(); ++index) {
+        if (!valid_identity(expression_identities_[index], index)) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0;
+         index < statement_identities_.size(); ++index) {
+        if (!valid_identity(statement_identities_[index], index)) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0;
+         index < process_identities_.size(); ++index) {
+        if (!valid_identity(process_identities_[index], index)) {
+            return false;
+        }
+    }
+    return true;
+}
 
 SourceFileId Model::intern_source_file(
     std::string physical_name,

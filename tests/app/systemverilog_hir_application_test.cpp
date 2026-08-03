@@ -282,13 +282,16 @@ endmodule
   {
     std::ofstream output{design_source, std::ios::binary};
     output << R"(
-module design_ir_leaf(input logic source, output logic sink);
-  always_comb sink = source;
+module design_ir_leaf(source, sink);
+  input source;
+  output sink;
+  reg sink;
+  always @(*) sink = source;
 endmodule
 
 module design_ir_top;
-  logic source;
-  logic sink;
+  reg source;
+  wire sink;
   design_ir_leaf child(.source(source), .sink(sink));
   initial begin
     source = 1'b0;
@@ -305,8 +308,8 @@ endmodule
   design_config.project.top = "sv:work.design_ir_top";
   design_config.project.time_resolution = "1ns";
   fsim::project::SourceSet design_sources;
-  design_sources.language = fsim::project::Language::system_verilog;
-  design_sources.standard = "2017";
+  design_sources.language = fsim::project::Language::verilog;
+  design_sources.standard = "2005";
   design_sources.library = "work";
   design_sources.files.push_back(design_source);
   design_config.source_sets.push_back(std::move(design_sources));
@@ -348,4 +351,13 @@ endmodule
       built->design_ir.objects(), [](const auto& object) {
         return object.specialization.valid() && !object.path.empty();
       }));
+  fsim::app::Simulation simulation{
+      std::move(*built), design_config.run.max_deltas,
+      fsim::app::SimulationEngine::interpreter};
+  const auto sink = simulation.find_signal("design_ir_top.sink");
+  assert(sink);
+  const auto run = simulation.run();
+  assert(run.status == fsim::runtime::RunStatus::stopped);
+  assert(run.time == 2);
+  assert(simulation.read_signal(*sink).to_msb_string() == "1");
 }

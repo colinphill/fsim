@@ -104,6 +104,13 @@ add_test(
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1MixedConversionMatrix.cmake"
 )
+add_test(
+  NAME fsim.v1-legality-audit
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1LegalityAudit.cmake"
+)
 set_tests_properties(
   fsim.v1-vhdl-matrix
   PROPERTIES LABELS "fast;vhdl;matrix;cmake"
@@ -111,6 +118,10 @@ set_tests_properties(
 set_tests_properties(
   fsim.v1-mixed-conversion-matrix
   PROPERTIES LABELS "fast;mixed-language;conversions;matrix;cmake"
+)
+set_tests_properties(
+  fsim.v1-legality-audit
+  PROPERTIES LABELS "fast;legality;matrix;cmake"
 )
 set_tests_properties(
   fsim.ieee-package-inventory

@@ -104,6 +104,30 @@ int main() {
     assert(model.process_identities().front().name == "drive");
     assert(model.values().front().type.resolved());
     assert(model.values().front().type.target == packed);
+    assert(model.valid());
+
+    Model invalid_model;
+    const auto invalid_file = invalid_model.intern_source_file("invalid.sv");
+    const auto invalid_span = invalid_model.intern_source_span(
+        invalid_file, {}, {0, 1, 1}, {1, 1, 2});
+    const auto invalid_origin = invalid_model.add_origin(
+        OriginKind::parsed, invalid_span);
+    const auto invalid_unit = invalid_model.add_unit(
+        Language::system_verilog,
+        UnitKind::verilog_module,
+        "work",
+        "invalid",
+        {},
+        invalid_span,
+        invalid_origin);
+    (void)invalid_model.add_type(
+        invalid_model.units()[invalid_unit.value()].scope,
+        TypeKind::alias,
+        "missing_t",
+        {TypeId::from_index(7), invalid_span, "missing_t"},
+        invalid_span,
+        invalid_origin);
+    assert(!invalid_model.valid());
 
     bool rejected = false;
     try {

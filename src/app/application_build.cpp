@@ -94,6 +94,12 @@ std::optional<BuiltProject> build_project(
       lowering_adapter, checked->semantics);
   checked->systemverilog_hir = build_systemverilog_hir(
       lowering_adapter, checked->semantics);
+  if (!checked->semantics.valid()) {
+    diagnostics.error(
+        "FSIM-SEM-0001",
+        "build normalization produced an invalid owning semantic projection");
+    return std::nullopt;
+  }
   const auto top = selected_top(config, lowering_adapter, diagnostics);
   validate_bindings(
       config, lowering_adapter, systemc_hierarchy.get(), diagnostics);

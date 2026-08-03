@@ -977,6 +977,24 @@ endmodule
           "a non-ANSI reg redeclaration must refine the port type");
   require(module.processes.front().kind == ProcessKind::VerilogAlways,
           "Verilog always process kind");
+
+  const auto duplicate = parse_text(
+      "duplicate_non_ansi_port.v",
+      R"(
+module duplicate_non_ansi_port(value);
+  input value;
+  input value;
+endmodule
+)",
+      Language::Verilog2005);
+  require(!duplicate.ok(), "duplicate non-ANSI ports must fail");
+  require(
+      std::ranges::any_of(
+          duplicate.diagnostics,
+          [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-004";
+          }),
+      "duplicate non-ANSI ports have a stable diagnostic");
 }
 
 void test_diagnostics_and_spans() {

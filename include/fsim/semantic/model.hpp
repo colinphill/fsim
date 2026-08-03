@@ -288,6 +288,8 @@ struct Instance {
 /// entities intentionally remain declaration occurrences and are not deduped.
 class Model final {
 public:
+    [[nodiscard]] bool valid() const noexcept;
+
     [[nodiscard]] SourceFileId intern_source_file(
         std::string physical_name,
         std::string content_digest = {});
