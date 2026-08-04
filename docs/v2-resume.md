@@ -450,6 +450,15 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   embedded-design diagnostics, and marks load, validation, and simulation
   completion. It builds warning-clean with eight workers and passes the
   exact-LLVM Debug and Release application tests in 20.04 and 19.16 seconds.
-  Push the diagnostic repair, inspect the first Windows failure trace, and fix
-  the demonstrated cause before resuming the full monitoring loop or marking
-  Change 20 and Batch 140 complete.
+  Diagnostic commit `0d67c82` is pushed. Run `30918625659` shows all three
+  producer renames, both permission changes, embedded-design load and
+  structural validation, and the embedded simulation call complete before the
+  abort; it is then canceled. The next diagnostic reports the post-simulation
+  status, callback count, and signal value and marks each later non-project
+  phase. A temporary Windows MSVC Debug workflow builds only
+  `fsim_application_tests` with four hosted workers and runs only
+  `^fsim.application$` verbosely. The expanded test builds warning-clean with
+  eight local workers and passes exact-LLVM Debug and Release in 20.01 and
+  19.49 seconds. Use that focused hosted result to fix the demonstrated cause,
+  remove the temporary workflow, and only then resume the full monitoring loop
+  or mark Change 20 and Batch 140 complete.

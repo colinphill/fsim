@@ -655,9 +655,17 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     change, prints embedded-design diagnostics, and marks load, validation, and
     simulation completion. It builds warning-clean with eight workers and the
     exact-LLVM Debug/Release application tests pass in 20.04 and 19.16 seconds.
-    Push this diagnostic repair, use its first Windows failure to identify the
-    exact operation, and do not resume broad monitoring until that cause is
-    corrected.
+    Diagnostic commit `0d67c82` is pushed. Run `30918625659` proves every
+    producer mutation, embedded-design load and structural check, and embedded
+    simulation call completes before the abort, then is canceled. The next
+    diagnostic reports the post-simulation status, callback count, and value
+    and marks each remaining non-project phase. A temporary Windows MSVC Debug
+    workflow builds only `fsim_application_tests` with four hosted workers and
+    runs only `^fsim.application$` verbosely, avoiding another full matrix while
+    diagnosing this case. The expanded test remains warning-clean after
+    eight-worker exact-LLVM builds and passes locally in 20.01 and 19.49
+    seconds. Use the focused Windows result to correct the demonstrated cause,
+    then remove the temporary workflow before broad monitoring resumes.
 
 ## Forward priority order
 

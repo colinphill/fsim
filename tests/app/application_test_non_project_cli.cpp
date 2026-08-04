@@ -426,10 +426,16 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   const auto systemc_standalone_result =
       systemc_standalone_simulation.run();
   std::cerr << "non-project producer hiding: embedded simulation completed\n";
+  const auto systemc_standalone_value =
+      systemc_standalone_simulation.read_signal(systemc_value).to_msb_string();
+  std::cerr << "non-project producer hiding: simulation status="
+            << static_cast<int>(systemc_standalone_result.status)
+            << " callbacks=" << systemc_standalone_result.callbacks_executed
+            << " value=" << systemc_standalone_value << '\n';
   assert(systemc_standalone_result.status == runtime::RunStatus::completed);
   assert(systemc_standalone_result.callbacks_executed != 0);
-  assert(systemc_standalone_simulation.read_signal(systemc_value).to_msb_string()
-      == "00000101");
+  assert(systemc_standalone_value == "00000101");
+  std::cerr << "non-project producer hiding: embedded simulation validated\n";
 
   assert(cli::run(
       static_cast<int>(compile_arguments.size()), compile_arguments.data(),
@@ -450,6 +456,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   assert(std::ranges::any_of(metadata->units, [](const auto& indexed) {
     return indexed.name == "tb";
   }));
+  std::cerr << "non-project cli: HDL object metadata validated\n";
 
   const auto& indexed_unit = metadata->units.front();
   std::ifstream unit_input(object / indexed_unit.artifact, std::ios::binary);
@@ -465,6 +472,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   assert(unit->name == indexed_unit.name);
   assert(!unit->span.source_name.empty());
   assert(!std::filesystem::path(unit->span.source_name).is_absolute());
+  std::cerr << "non-project cli: portable unit validated\n";
 
   output.str({});
   error.str({});
@@ -488,6 +496,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   assert(loaded->parsed.units[1].name == "tb");
   assert(loaded->parsed.units[2].name == "extra");
   assert(loaded->semantics.valid());
+  std::cerr << "non-project cli: relocated objects loaded\n";
   project::Config object_config;
   object_config.base_directory = directory;
   object_config.project.name = "non-project-object-build";
@@ -531,6 +540,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
       *restored_semantics, deterministic_state_diagnostics) == semantic_state);
   assert(app::serialize_design_ir_state(
       *restored_design_ir, deterministic_state_diagnostics) == design_ir_state);
+  std::cerr << "non-project cli: state round trip validated\n";
 
   const std::vector<const char*> production_elaborate_arguments{
       "fsim", "elaborate", "--object", object_text.c_str(), "--object",
@@ -552,6 +562,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   assert(
       published_design_metadata->roots.front().selected_identity
       == "sv:work.tb");
+  std::cerr << "non-project cli: HDL design published\n";
 
   const auto hidden_object = directory / "unit.fsimobj.producer-hidden";
   const auto hidden_extra_object = directory / "extra.fsimobj.producer-hidden";
@@ -569,6 +580,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   const auto standalone_result = standalone_simulation.run();
   assert(standalone_result.status == runtime::RunStatus::stopped);
   assert(standalone_result.time == 3);
+  std::cerr << "non-project cli: HDL standalone simulation validated\n";
   std::filesystem::create_directories(consumer_cache);
   std::filesystem::create_directories(consumer_file_root);
   output.str({});
@@ -588,6 +600,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
 #endif
   assert(!std::filesystem::exists(design / "llvm-native"));
   assert(!std::filesystem::exists(design / "phase.vcd"));
+  std::cerr << "non-project cli: compiled CLI simulation validated\n";
 
   const std::vector<const char*> interpreter_simulate_arguments{
       "fsim", "simulate", "--design", design_text.c_str(), "--engine",
@@ -627,6 +640,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
       output, error) != 0);
   assert(error.str().find("does not match the elaborated .fsimdesign")
       != std::string::npos);
+  std::cerr << "non-project cli: interpreter and debug CLI validated\n";
 
   const auto provenance_cache = directory / "provenance-cache";
   std::filesystem::create_directories(provenance_cache);

@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Windows application diagnostic
+
+on:
+  push:
+    branches:
+      - codex/v2
+  workflow_dispatch:
+
+concurrency:
+  group: windows-application-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-msvc-debug:
+    name: Windows / MSVC / Debug / fsim.application
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v7
+
+      - name: Initialize MSVC
+        shell: pwsh
+        run: >
+          & ./.github/scripts/setup-msvc.ps1
+          -Architecture x64
+
+      - name: Configure
+        run: cmake --preset ci-windows
+
+      - name: Build application test
+        run: >
+          cmake --build --preset ci-windows
+          --target fsim_application_tests
+          --parallel 4
+
+      - name: Run application test verbosely
+        run: >
+          ctest --test-dir build/ci-windows
+          --output-on-failure
+          --verbose
+          -R "^fsim.application$"
