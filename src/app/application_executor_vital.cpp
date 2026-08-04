@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
 
+#if defined(FSIM_HAS_LLVM)
+
 namespace fsim::app::application_detail {
 
 std::uint32_t LlvmProcessExecutor::vital_timing_check(
@@ -88,3 +90,5 @@ void LlvmProcessExecutor::vital_delay(
 }
 
 }  // namespace fsim::app::application_detail
+
+#endif
