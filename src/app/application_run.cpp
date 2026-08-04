@@ -105,6 +105,16 @@ std::string make_cache_key(
     key.add("mapped-native-kind", mapped.native_kind);
     key.add("mapped-native-fingerprint", mapped.native_fingerprint);
   }
+  for (const auto& object : checked.objects) {
+    key.add("object-metadata", object.metadata_digest);
+    key.add("object-compilation", object.compilation_digest);
+    key.add("object-language", object.language);
+    key.add("object-standard", object.standard);
+    key.add("object-library", object.library);
+    for (const auto& checksum : object.unit_checksums) {
+      key.add("object-unit", checksum);
+    }
+  }
   for (; hdl_source_index < checked.hdl_sources.size(); ++hdl_source_index) {
     const auto& source = checked.hdl_sources[hdl_source_index];
     key.add(
@@ -223,6 +233,28 @@ make_specialization_cache_keys(
                       })) {
                 return SourceSettings{&source_set, checked_source};
               }
+            }
+          }
+          for (const auto& object : checked.objects) {
+            const auto& source_set = object.source_settings;
+            const auto source_language =
+                source_set.language == project::Language::vhdl
+                    ? semantic::Language::vhdl
+                    : source_set.language == project::Language::verilog
+                        ? semantic::Language::verilog
+                        : semantic::Language::system_verilog;
+            if (source_language != specialization.language
+                || (require_specialization_library
+                    && source_set.library != specialization.library)) {
+              continue;
+            }
+            if (std::ranges::any_of(
+                    source_set.files,
+                    [&](const auto& candidate) {
+                      return same_source_path(
+                          candidate, checked_source->path);
+                    })) {
+              return SourceSettings{&source_set, checked_source};
             }
           }
         }
@@ -796,28 +828,24 @@ int handle_build(
   return 0;
 }
 
-int handle_run(
-    const cli::Invocation&,
+int run_built_project(
+    BuiltProject built,
+    const SimulationEngine engine,
     const project::Config& config,
     diagnostic::Engine& diagnostics,
-    std::ostream& output,
-    std::ostream&)  {
-  auto built = build_project(config, diagnostics);
-  if (!built) {
-    return 1;
-  }
+    std::ostream& output)  {
   const auto duration = configured_duration(
-      config, built->time_resolution, diagnostics);
+      config, built.time_resolution, diagnostics);
   if (config.run.duration && !duration) {
     return 1;
   }
-  if (built->entropy_seed) {
-    output << "random seed " << built->seed << '\n';
+  if (built.entropy_seed) {
+    output << "random seed " << built.seed << '\n';
   }
   Simulation simulation(
-      std::move(*built),
+      std::move(built),
       config.run.max_deltas,
-      SimulationEngine::compiled);
+      engine);
   simulation.set_output_hook(
       [&output](
           const runtime::simir::ProcessId,
@@ -918,6 +946,21 @@ int handle_run(
     diagnostics.error("FSIM-RUN-0002", error.what());
   }
   return 1;
+}
+
+int handle_run(
+    const cli::Invocation&,
+    const project::Config& config,
+    diagnostic::Engine& diagnostics,
+    std::ostream& output,
+    std::ostream&)  {
+  auto built = build_project(config, diagnostics);
+  if (!built) {
+    return 1;
+  }
+  return run_built_project(
+      std::move(*built), SimulationEngine::compiled,
+      config, diagnostics, output);
 }
 
 void print_debug_help(std::ostream& output)  {

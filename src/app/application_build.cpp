@@ -26,10 +26,10 @@ namespace {
 
 } // namespace
 
-std::optional<BuiltProject> build_project(
+std::optional<BuiltProject> build_checked_project(
     const project::Config& config,
+    std::optional<CheckedProject> checked,
     diagnostic::Engine& diagnostics) {
-  auto checked = check_project(config, diagnostics);
   if (!checked) {
     return std::nullopt;
   }
@@ -344,7 +344,23 @@ std::optional<BuiltProject> build_project(
       hit,
       config.base_directory,
       std::move(systemc_hierarchies),
-      std::move(mapped_libraries)};
+      std::move(mapped_libraries),
+      std::move(checked->objects), {}};
+}
+
+std::optional<BuiltProject> build_project(
+    const project::Config& config,
+    diagnostic::Engine& diagnostics) {
+  return build_checked_project(
+      config, check_project(config, diagnostics), diagnostics);
+}
+
+std::optional<BuiltProject> build_objects(
+    const project::Config& config,
+    const std::span<const std::filesystem::path> objects,
+    diagnostic::Engine& diagnostics) {
+  return build_checked_project(
+      config, load_objects(objects, diagnostics), diagnostics);
 }
 
 

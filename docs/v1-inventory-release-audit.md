@@ -8,9 +8,9 @@ Task 10 sanitizer and full executable regressions.
 
 | Review ID | Frozen release inventory | Required ownership |
 |---|---|---|
-| `B130-T7-DIAGNOSTICS` | 1,643 production diagnostic codes | Every emitted `FSIM-*` diagnostic is unique in and exactly matched by `docs/diagnostics.md`; stale catalog entries and undocumented emissions fail the gate |
-| `B130-T7-SOURCES` | 445 authored C/C++ source and test files | Every file is at most 2,000 lines with an empty exception allowlist |
-| `B130-T7-LICENSES` | 534 authored repository files | Every owned build, workflow, documentation, example, header, source, and test artifact carries an Apache-2.0 SPDX identifier; the root license is Apache-2.0 |
+| `B130-T7-DIAGNOSTICS` | 1,653 production diagnostic codes | Every emitted `FSIM-*` diagnostic is unique in and exactly matched by `docs/diagnostics.md`; stale catalog entries and undocumented emissions fail the gate |
+| `B130-T7-SOURCES` | 459 authored C/C++ source and test files | Every file is at most 2,000 lines with an empty exception allowlist |
+| `B130-T7-LICENSES` | 549 authored repository files | Every owned build, workflow, documentation, example, header, source, and test artifact carries an Apache-2.0 SPDX identifier; the root license is Apache-2.0 |
 | `B130-T7-THIRD-PARTY` | One reviewed root with 31 files and 26 VHDL sources | IEEE P1076 packages retain the pinned commit, Apache-2.0 license/authorship/provenance files, exact loading inventory, and byte-for-byte SHA-256 checks |
 | `B130-T7-CONFORMANCE` | 105 expectations in 28 fixtures owned by 27 CTests | IDs, source identities, expected outcomes, fixture/test ownership, all required evidence modes, and the exact sorted digest remain frozen |
 | `B130-T7-PROVENANCE` | 10 reviewed source IDs and 6 explicit exclusions | Every external semantic reference is pinned and license-reviewed; no unrecorded third-party root or imported test text is permitted |
@@ -59,3 +59,11 @@ owners advance the reviewed totals to 1,643 diagnostics, 445 bounded C/C++
 sources, 534 authored artifacts, and 192 authored test/control files. The
 conformance expectation, third-party, and provenance inventories remain
 unchanged.
+
+v2 Batch 137 adds 15 SPDX-owned artifacts: public object/design/phase headers,
+artifact and state-codec implementations, focused metadata/application tests,
+and the manifest-free tutorial. Ten artifact diagnostics and four additional
+test/control owners advance the reviewed totals to 1,653 diagnostics, 459
+bounded C/C++ sources, 549 authored artifacts, and 196 authored test/control
+files. The C ABI, conformance expectation, third-party, and provenance
+inventories remain unchanged.

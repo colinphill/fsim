@@ -898,6 +898,39 @@ int handle_run(
     std::ostream& output,
     std::ostream&);
 
+int run_built_project(
+    BuiltProject project,
+    SimulationEngine engine,
+    const project::Config& config,
+    diagnostic::Engine& diagnostics,
+    std::ostream& output);
+
+bool compile_object(
+    const project::Config& config,
+    const std::filesystem::path& destination,
+    diagnostic::Engine& diagnostics);
+
+int handle_compile(
+    const cli::Invocation& invocation,
+    const project::Config& config,
+    diagnostic::Engine& diagnostics,
+    std::ostream& output,
+    std::ostream& error);
+
+int handle_elaborate(
+    const cli::Invocation& invocation,
+    const project::Config& config,
+    diagnostic::Engine& diagnostics,
+    std::ostream& output,
+    std::ostream& error);
+
+int handle_simulate(
+    const cli::Invocation& invocation,
+    const project::Config& config,
+    diagnostic::Engine& diagnostics,
+    std::ostream& output,
+    std::ostream& error);
+
 void print_debug_help(std::ostream& output);
 
 std::vector<std::string> words(const std::string& line);

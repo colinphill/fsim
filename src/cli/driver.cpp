@@ -52,6 +52,12 @@ std::string_view command_name(const Command command) {
       return "debug";
     case Command::tcl:
       return "tcl";
+    case Command::compile:
+      return "compile";
+    case Command::elaborate:
+      return "elaborate";
+    case Command::simulate:
+      return "simulate";
     case Command::migrate:
       return "migrate";
   }
@@ -73,6 +79,15 @@ std::optional<Command> parse_command(const std::string_view spelling) {
   }
   if (spelling == "tcl") {
     return Command::tcl;
+  }
+  if (spelling == "compile") {
+    return Command::compile;
+  }
+  if (spelling == "elaborate") {
+    return Command::elaborate;
+  }
+  if (spelling == "simulate") {
+    return Command::simulate;
   }
   if (spelling == "migrate") {
     return Command::migrate;
@@ -363,6 +378,10 @@ std::optional<project::Config> make_direct_config(
         continue;
       }
       source_set.library = invocation.library;
+      source_set.compilation_unit = invocation.compilation_unit.value_or(
+          invocation.command == Command::compile
+                  && *language != project::Language::vhdl
+              ? "source-set" : "file");
       for (const auto& directory : invocation.include_directories) {
         source_set.include_directories.push_back(absolute_normalized(directory));
       }
@@ -386,6 +405,7 @@ std::optional<project::Config> make_direct_config(
   if (invocation.trace_file.has_value()) {
     config.run.trace_file = absolute_normalized(*invocation.trace_file);
   }
+  config.run.trace_filters = invocation.trace_filters;
   if (invocation.seed.has_value()) {
     config.project.seed = *invocation.seed;
   }
@@ -433,6 +453,9 @@ void apply_overrides(const Invocation& invocation, project::Config& config) {
   if (invocation.trace_file.has_value()) {
     config.run.trace_file = absolute_normalized(*invocation.trace_file);
   }
+  if (!invocation.trace_filters.empty()) {
+    config.run.trace_filters = invocation.trace_filters;
+  }
   if (invocation.seed.has_value()) {
     config.project.seed = *invocation.seed;
     config.project.random_seed = false;
@@ -459,7 +482,8 @@ void apply_overrides(const Invocation& invocation, project::Config& config) {
 void print_help(std::ostream& output, const std::string_view program) {
   output
       << "Usage: " << program
-      << " <check|build|run|debug|tcl|migrate> [options] [files...]\n"
+      << " <check|build|run|debug|tcl|compile|elaborate|simulate|migrate>"
+         " [options] [files...]\n"
       << "\n"
       << "Commands:\n"
       << "  check   Parse and analyze sources\n"
@@ -467,6 +491,9 @@ void print_help(std::ostream& output, const std::string_view program) {
       << "  run     Build incrementally and simulate in optimized mode\n"
       << "  debug   Build incrementally and enter the interactive debugger\n"
       << "  tcl     Enter Tcl or evaluate a Tcl script/command batch\n"
+      << "  compile Compile explicit HDL sources into a .fsimobj artifact\n"
+      << "  elaborate Elaborate explicit .fsimobj inputs into .fsimdesign\n"
+      << "  simulate Simulate an explicit .fsimdesign artifact\n"
       << "  migrate Upgrade a project manifest schema\n"
       << "\n"
       << "Project and source options:\n"
@@ -474,6 +501,8 @@ void print_help(std::ostream& output, const std::string_view program) {
       << "      --top [ALIAS=]NAME   Replace design tops; repeatable, aliases required for multiple\n"
       << "      --lang LANGUAGE      Language for every direct source file\n"
       << "      --standard VERSION   Standard for direct source files\n"
+      << "      --compilation-unit file|source-set\n"
+      << "                           Compile files separately or as one unit\n"
       << "      --library NAME       Library for direct source files (default: work)\n"
       << "      --search-library NAME\n"
       << "                           Replace the manifest elaboration search list; repeatable\n"
@@ -483,6 +512,9 @@ void print_help(std::ostream& output, const std::string_view program) {
       << "                           Publish a project library during build; repeatable\n"
       << "  -I, --include PATH       Add a direct-source include directory\n"
       << "  -D, --define NAME[=VAL]  Add a direct-source preprocessor definition\n"
+      << "      --output PATH        Output for compile or elaborate\n"
+      << "      --object PATH        Input object for elaborate; repeatable\n"
+      << "      --design PATH        Input design for simulate\n"
       << "\n"
       << "Build and run options:\n"
       << "  -O, --optimization O0..O3\n"
@@ -491,6 +523,10 @@ void print_help(std::ostream& output, const std::string_view program) {
       << "      --max-deltas COUNT\n"
       << "      --delay-mode min|typ|max\n"
       << "      --trace PATH\n"
+      << "      --trace-filter GLOB  Trace selection for simulate; repeatable\n"
+      << "      --cache PATH         Native cache for standalone simulate\n"
+      << "      --file-root PATH     File-I/O root for standalone simulate\n"
+      << "      --engine interpreter|compiled|debug\n"
       << "      --seed COUNT|random\n"
       << "      --diagnostics text|json\n"
       << "      --to 2               Migration target schema\n"
@@ -527,6 +563,12 @@ const Handler* select_handler(const Services& services, const Command command) {
       return &services.debug;
     case Command::tcl:
       return &services.tcl;
+    case Command::compile:
+      return &services.compile;
+    case Command::elaborate:
+      return &services.elaborate;
+    case Command::simulate:
+      return &services.simulate;
     case Command::migrate:
       return nullptr;
   }
@@ -647,6 +689,17 @@ std::optional<Invocation> parse_arguments(
           return std::nullopt;
         }
         invocation.standard = std::string(*value);
+      } else if (is_option(argument, "", "--compilation-unit")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--compilation-unit", diagnostics);
+        if (!value.has_value()
+            || (*value != "file" && *value != "source-set")) {
+          argument_error(
+              diagnostics,
+              "--compilation-unit must be file or source-set");
+          return std::nullopt;
+        }
+        invocation.compilation_unit = std::string{*value};
       } else if (is_option(argument, "", "--library")) {
         const auto value =
             take_value(index, argc, argv, argument, "--library", diagnostics);
@@ -695,6 +748,48 @@ std::optional<Invocation> parse_arguments(
           return std::nullopt;
         }
         invocation.library_exports.push_back(*mapping);
+      } else if (is_option(argument, "-o", "--output")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--output", diagnostics);
+        if (!value.has_value() || value->empty()) {
+          argument_error(diagnostics, "--output requires a non-empty path");
+          return std::nullopt;
+        }
+        invocation.artifact_output =
+            fsim::support::path_from_utf8(*value);
+      } else if (is_option(argument, "", "--object")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--object", diagnostics);
+        if (!value.has_value() || value->empty()) {
+          argument_error(diagnostics, "--object requires a non-empty path");
+          return std::nullopt;
+        }
+        invocation.objects.emplace_back(
+            fsim::support::path_from_utf8(*value));
+      } else if (is_option(argument, "", "--design")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--design", diagnostics);
+        if (!value.has_value() || value->empty()) {
+          argument_error(diagnostics, "--design requires a non-empty path");
+          return std::nullopt;
+        }
+        invocation.design = fsim::support::path_from_utf8(*value);
+      } else if (is_option(argument, "", "--cache")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--cache", diagnostics);
+        if (!value.has_value() || value->empty()) {
+          argument_error(diagnostics, "--cache requires a non-empty path");
+          return std::nullopt;
+        }
+        invocation.cache_directory = fsim::support::path_from_utf8(*value);
+      } else if (is_option(argument, "", "--file-root")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--file-root", diagnostics);
+        if (!value.has_value() || value->empty()) {
+          argument_error(diagnostics, "--file-root requires a non-empty path");
+          return std::nullopt;
+        }
+        invocation.file_root = fsim::support::path_from_utf8(*value);
       } else if (
           argument == "-I" || is_option(argument, "", "--include") ||
           (argument.size() > 2 && argument.starts_with("-I"))) {
@@ -790,6 +885,27 @@ std::optional<Invocation> parse_arguments(
           return std::nullopt;
         }
         invocation.trace_file = fsim::support::path_from_utf8(*value);
+      } else if (is_option(argument, "", "--trace-filter")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--trace-filter", diagnostics);
+        if (!value.has_value() || value->empty()) {
+          argument_error(
+              diagnostics, "--trace-filter requires a non-empty glob");
+          return std::nullopt;
+        }
+        invocation.trace_filters.emplace_back(*value);
+      } else if (is_option(argument, "", "--engine")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--engine", diagnostics);
+        if (!value.has_value()
+            || (*value != "interpreter" && *value != "compiled"
+                && *value != "debug")) {
+          argument_error(
+              diagnostics,
+              "--engine must be interpreter, compiled, or debug");
+          return std::nullopt;
+        }
+        invocation.engine = std::string{*value};
       } else if (is_option(argument, "", "--seed")) {
         const auto value = take_value(index, argc, argv, argument, "--seed", diagnostics);
         if (!value.has_value()) {
@@ -853,7 +969,8 @@ std::optional<Invocation> parse_arguments(
         argument_error(
             diagnostics,
             "unknown command '" + std::string(argument) +
-                "'; expected check, build, run, debug, tcl, or migrate");
+                "'; expected check, build, run, debug, tcl, compile, "
+                "elaborate, simulate, or migrate");
         return std::nullopt;
       }
       invocation.command = *command;
@@ -872,7 +989,8 @@ std::optional<Invocation> parse_arguments(
   if (!command_selected && !invocation.help && !invocation.version) {
     argument_error(
         diagnostics,
-        "missing command; expected check, build, run, debug, or tcl");
+        "missing command; expected check, build, run, debug, tcl, compile, "
+        "elaborate, or simulate");
     return std::nullopt;
   }
   if (!invocation.tops.empty()) {
@@ -953,6 +1071,132 @@ std::optional<Invocation> parse_arguments(
   }
   if (invocation.manifest_explicit && !invocation.files.empty()) {
     argument_error(diagnostics, "--project cannot be combined with direct source files");
+    return std::nullopt;
+  }
+  const bool non_project_command = invocation.command == Command::compile
+      || invocation.command == Command::elaborate
+      || invocation.command == Command::simulate;
+  if (non_project_command && invocation.manifest_explicit) {
+    argument_error(
+        diagnostics,
+        "--project is not available with manifest-free artifact commands");
+    return std::nullopt;
+  }
+  if (invocation.artifact_output.has_value()) {
+    invocation.artifact_output =
+        absolute_normalized(*invocation.artifact_output);
+  }
+  for (auto& object : invocation.objects) {
+    object = absolute_normalized(object);
+  }
+  if (invocation.design.has_value()) {
+    invocation.design = absolute_normalized(*invocation.design);
+  }
+  if (invocation.cache_directory.has_value()) {
+    invocation.cache_directory =
+        absolute_normalized(*invocation.cache_directory);
+  }
+  if (invocation.file_root.has_value()) {
+    invocation.file_root = absolute_normalized(*invocation.file_root);
+  }
+  if (!invocation.help && !invocation.version
+      && invocation.command == Command::compile) {
+    if (invocation.files.empty() || !invocation.language.has_value()
+        || !invocation.standard.has_value()
+        || !invocation.artifact_output.has_value()) {
+      argument_error(
+          diagnostics,
+          "compile requires --lang, --standard, --output, and source files");
+      return std::nullopt;
+    }
+    if (*invocation.language == project::Language::systemc) {
+      argument_error(
+          diagnostics,
+          "SystemC source compilation is provided by the Batch 138 "
+          "incremental SystemC compile/link commands");
+      return std::nullopt;
+    }
+    if (!valid_library_name(invocation.library)) {
+      argument_error(
+          diagnostics, "compile requires a safe logical-library name");
+      return std::nullopt;
+    }
+    if (!invocation.tops.empty() || !invocation.search_libraries.empty()
+        || !invocation.library_mappings.empty()
+        || !invocation.library_exports.empty() || !invocation.objects.empty()
+        || invocation.design.has_value() || invocation.duration.has_value()
+        || invocation.max_deltas.has_value()
+        || invocation.delay_mode.has_value()
+        || invocation.trace_file.has_value() || !invocation.trace_filters.empty()
+        || invocation.seed.has_value() || invocation.random_seed
+        || invocation.optimization.has_value() || invocation.engine.has_value()) {
+      argument_error(
+          diagnostics,
+          "compile received an elaboration, simulation, mapping, or native "
+          "build option");
+      return std::nullopt;
+    }
+  }
+  if (!invocation.help && !invocation.version
+      && invocation.command == Command::elaborate) {
+    if (invocation.objects.empty() || invocation.tops.empty()
+        || !invocation.artifact_output.has_value()) {
+      argument_error(
+          diagnostics,
+          "elaborate requires --object, --top, and --output");
+      return std::nullopt;
+    }
+    if (!invocation.files.empty() || invocation.language.has_value()
+        || invocation.standard.has_value()
+        || !invocation.include_directories.empty()
+        || !invocation.defines.empty() || invocation.design.has_value()
+        || !invocation.library_mappings.empty()
+        || !invocation.library_exports.empty() || invocation.duration.has_value()
+        || invocation.max_deltas.has_value()
+        || invocation.trace_file.has_value() || !invocation.trace_filters.empty()
+        || invocation.engine.has_value()) {
+      argument_error(
+          diagnostics,
+          "elaborate received a source, project-mapping, or simulation option");
+      return std::nullopt;
+    }
+  }
+  if (!invocation.help && !invocation.version
+      && invocation.command == Command::simulate) {
+    if (!invocation.design.has_value()) {
+      argument_error(diagnostics, "simulate requires --design");
+      return std::nullopt;
+    }
+    if (!invocation.files.empty() || invocation.artifact_output.has_value()
+        || !invocation.objects.empty() || !invocation.tops.empty()
+        || invocation.language.has_value() || invocation.standard.has_value()
+        || !invocation.include_directories.empty()
+        || !invocation.defines.empty() || !invocation.search_libraries.empty()
+        || !invocation.library_mappings.empty()
+        || !invocation.library_exports.empty()
+        || invocation.jobs.has_value() || invocation.optimization.has_value()) {
+      argument_error(
+          diagnostics,
+          "simulate received a source, compile, elaboration, or project option");
+      return std::nullopt;
+    }
+  }
+  if (invocation.command != Command::simulate
+      && (invocation.cache_directory.has_value()
+          || invocation.file_root.has_value())) {
+    argument_error(
+        diagnostics,
+        "--cache and --file-root are available only with simulate");
+    return std::nullopt;
+  }
+  if (!non_project_command
+      && (invocation.artifact_output.has_value()
+          || !invocation.objects.empty() || invocation.design.has_value()
+          || invocation.engine.has_value() || !invocation.trace_filters.empty())) {
+    argument_error(
+        diagnostics,
+        "--output, --object, --design, --engine, and --trace-filter are "
+        "available only with artifact-phase commands");
     return std::nullopt;
   }
   if (invocation.command == Command::migrate) {
@@ -1057,6 +1301,22 @@ int run(
       }
       tcl_config.project.name = "tcl";
       config = std::move(tcl_config);
+      apply_overrides(*invocation, *config);
+    } else if (invocation->command == Command::compile) {
+      config = make_direct_config(*invocation, diagnostics);
+    } else if (invocation->command == Command::elaborate
+               || invocation->command == Command::simulate) {
+      project::Config phase_config;
+      phase_config.manifest_path = "<non-project>";
+      std::error_code current_error;
+      phase_config.base_directory =
+          std::filesystem::current_path(current_error);
+      if (current_error) {
+        phase_config.base_directory = ".";
+      }
+      phase_config.project.name =
+          std::string{command_name(invocation->command)};
+      config = std::move(phase_config);
       apply_overrides(*invocation, *config);
     } else if (invocation->files.empty()) {
       config = project::load(invocation->manifest, diagnostics);

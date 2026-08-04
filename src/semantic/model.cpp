@@ -147,6 +147,50 @@ bool Model::valid() const noexcept {
     return true;
 }
 
+ModelRecords Model::records() const {
+    return {
+        source_files_, expansions_, source_spans_, origins_, scopes_, units_,
+        types_, values_, instances_, declarations_, expression_identities_,
+        statement_identities_, process_identities_};
+}
+
+std::optional<Model> Model::from_records(ModelRecords records) {
+    Model model;
+    model.source_files_ = std::move(records.source_files);
+    model.expansions_ = std::move(records.expansions);
+    model.source_spans_ = std::move(records.source_spans);
+    model.origins_ = std::move(records.origins);
+    model.scopes_ = std::move(records.scopes);
+    model.units_ = std::move(records.units);
+    model.types_ = std::move(records.types);
+    model.values_ = std::move(records.values);
+    model.instances_ = std::move(records.instances);
+    model.declarations_ = std::move(records.declarations);
+    model.expression_identities_ = std::move(records.expression_identities);
+    model.statement_identities_ = std::move(records.statement_identities);
+    model.process_identities_ = std::move(records.process_identities);
+    if (!model.valid()) {
+        return std::nullopt;
+    }
+    for (const auto& file : model.source_files_) {
+        model.source_file_by_key_.emplace(
+            FileKey{file.physical_name, file.content_digest}, file.id);
+        model.source_file_by_name_.try_emplace(file.physical_name, file.id);
+    }
+    for (const auto& expansion : model.expansions_) {
+        model.expansion_by_key_.emplace(
+            ExpansionKey{expansion.parent, expansion.description},
+            expansion.id);
+    }
+    for (const auto& span : model.source_spans_) {
+        model.source_span_by_key_.emplace(
+            SpanKey{span.file, span.logical_name, span.begin, span.end,
+                    span.expansion},
+            span.id);
+    }
+    return model;
+}
+
 SourceFileId Model::intern_source_file(
     std::string physical_name,
     std::string content_digest) {

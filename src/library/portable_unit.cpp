@@ -396,7 +396,7 @@ bool has_absolute_span(
 std::optional<std::string> mapped_source_name(
     const std::string& name,
     const std::span<const SourceNameMapping> mappings) {
-  if (name.empty() || !std::filesystem::path(name).is_absolute()) {
+  if (name.empty()) {
     return name;
   }
   const auto normalized = std::filesystem::path(name).lexically_normal();
@@ -407,9 +407,11 @@ std::optional<std::string> mapped_source_name(
             || std::filesystem::path(mapping.producer_name).lexically_normal()
                 == normalized;
       });
-  return found == mappings.end()
-      ? std::nullopt
-      : std::optional<std::string>{found->logical_name};
+  if (found != mappings.end()) {
+    return found->logical_name;
+  }
+  return std::filesystem::path(name).is_absolute()
+      ? std::nullopt : std::optional<std::string>{name};
 }
 
 template <typename T>

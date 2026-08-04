@@ -72,6 +72,24 @@ set_tests_properties(
   PROPERTIES LABELS "fast;library;artifact;source"
 )
 
+add_executable(fsim_object_artifact_tests artifact/object_artifact_test.cpp)
+fsim_configure_test(fsim_object_artifact_tests)
+target_link_libraries(fsim_object_artifact_tests PRIVATE fsim_library)
+add_test(NAME fsim.artifact.object COMMAND fsim_object_artifact_tests)
+set_tests_properties(
+  fsim.artifact.object
+  PROPERTIES LABELS "fast;artifact;compile;source"
+)
+
+add_executable(fsim_design_artifact_tests artifact/design_artifact_test.cpp)
+fsim_configure_test(fsim_design_artifact_tests)
+target_link_libraries(fsim_design_artifact_tests PRIVATE fsim_library)
+add_test(NAME fsim.artifact.design COMMAND fsim_design_artifact_tests)
+set_tests_properties(
+  fsim.artifact.design
+  PROPERTIES LABELS "fast;artifact;elaborate"
+)
+
 add_executable(fsim_cache_tests compiler/cache_test.cpp)
 fsim_configure_test(fsim_cache_tests)
 target_link_libraries(fsim_cache_tests PRIVATE fsim_object_cache)
@@ -817,9 +835,11 @@ if(TARGET fsim_application)
       fsim_application_tests
       PRIVATE
         app/application_test_cli.cpp
+        app/application_test_artifact_phases.cpp
         app/application_test_fixture.cpp
         app/application_test_mixed.cpp
         app/application_test_multiple_roots.cpp
+        app/application_test_non_project_cli.cpp
         app/application_test_simulation.cpp
         app/application_test_source_updates.cpp
         app/application_test_sources_common.cpp
@@ -2095,10 +2115,12 @@ set_tests_properties(
   add_executable(
     fsim_application_tests
     app/application_test.cpp
+    app/application_test_artifact_phases.cpp
     app/application_test_cli.cpp
     app/application_test_fixture.cpp
     app/application_test_mixed.cpp
     app/application_test_multiple_roots.cpp
+    app/application_test_non_project_cli.cpp
     app/application_test_simulation.cpp
     app/application_test_source_updates.cpp
     app/application_test_sources_common.cpp

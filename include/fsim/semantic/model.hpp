@@ -280,6 +280,22 @@ struct Instance {
     OriginId origin;
 };
 
+struct ModelRecords {
+    std::vector<SourceFile> source_files;
+    std::vector<Expansion> expansions;
+    std::vector<SourceSpan> source_spans;
+    std::vector<Origin> origins;
+    std::vector<Scope> scopes;
+    std::vector<Unit> units;
+    std::vector<Type> types;
+    std::vector<Value> values;
+    std::vector<Instance> instances;
+    std::vector<Declaration> declarations;
+    std::vector<ExpressionIdentity> expression_identities;
+    std::vector<StatementIdentity> statement_identities;
+    std::vector<ProcessIdentity> process_identities;
+};
+
 /// Owning, deterministic semantic metadata store.
 ///
 /// IDs are dense vector indices assigned in caller-supplied canonical order.
@@ -289,6 +305,9 @@ struct Instance {
 class Model final {
 public:
     [[nodiscard]] bool valid() const noexcept;
+    [[nodiscard]] ModelRecords records() const;
+    [[nodiscard]] static std::optional<Model> from_records(
+        ModelRecords records);
 
     [[nodiscard]] SourceFileId intern_source_file(
         std::string physical_name,

@@ -237,13 +237,155 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     release-candidate gates. Batch 136 is not a CI boundary and ran no
     sanitizer or CI-monitoring gate.
 
+## Batch 137 - explicit non-project artifact phases - Complete
+
+1. **Complete.** Establish this exact 20-change Batch 137 plan and restart
+   record before implementation begins.
+2. **Complete.** Add first-class `compile`, `elaborate`, and `simulate`
+   commands that do not discover or load `fsim.toml` and reject project-only
+   option combinations.
+3. **Complete.** Define a versioned, checksummed, endian-stable `.fsimobj`
+   directory schema for one explicitly scripted HDL compilation unit,
+   including language, standard, logical library, preprocessing inputs,
+   source provenance, and portable owning units.
+4. **Complete.** Implement `fsim compile --language LANGUAGE --standard REVISION
+   --library LIBRARY --output PATH FILE...` with explicit include/define and
+   compilation-unit controls for VHDL and Verilog/SystemVerilog. The production
+   CLI publishes a portable object containing independently checksummed,
+   relocated source and owning-unit payloads; focused exact-LLVM Debug object
+   and application coverage passes after eight-worker builds.
+5. **Complete.** Make compile publication transactional and read-only, refuse
+   overwrite, revalidate every source digest, and avoid project analysis,
+   elaboration, native compilation, or simulation side effects. Publication
+   validates the exact payload set and compilation digest before staging,
+   installs with one rename, leaves no failed destination, and creates no
+   elaboration/native/simulation state.
+6. **Complete.** Load repeated `--object PATH` inputs in declaration order,
+   validate their complete checksummed payloads, and merge compatible
+   compilation units without parsing original sources. The public C++ loader
+   namespaces contained sources by compilation digest, restores owning units
+   directly, rebuilds semantic/HIR projections, and rejects corrupt or
+   duplicate inputs while the producer sources are absent.
+7. **Complete.** Enforce VHDL analysis dependencies, case rules, duplicate-unit
+   identity, logical-library ownership, and SystemVerilog compilation-unit
+   isolation across independently produced objects. Focused coverage splits a
+   compiled VHDL package from its dependent entity/architecture, accepts only
+   dependency order, verifies normalized VHDL names and ownership, and proves
+   preprocessor state does not leak between SystemVerilog objects.
+8. **Complete.** Define a versioned, standalone `.fsimdesign` directory schema
+   that records selected roots, search scope, bindings, resolution, delay mode,
+   time resolution, seed policy, complete elaborated runtime state, semantic
+   source tables, and specialization provenance. Format 1 uses canonical
+   little-endian metadata, content-only object provenance, required runtime,
+   semantic, and DesignIR payloads, exact cache/specialization identities,
+   independent checksums, transactional publication, and a read-only tree.
+9. **Complete.** Implement `fsim elaborate --object PATH... --top ALIAS=TARGET
+   --output PATH` with repeated search-library and explicit binding/resolver
+   options and deterministic multi-root resolution. The production command
+   loads ordered portable objects, performs ordinary multi-root elaboration,
+   and transactionally publishes the requested standalone design. Focused
+   exact-LLVM Debug coverage elaborates a selected SystemVerilog root from two
+   independently compiled objects while all producer sources are unavailable.
+10. **Complete.** Serialize and restore the complete HDL `ElaboratedDesign`
+    runtime adapter, SimIR processes/objects, DesignIR hierarchy/boundaries,
+    semantic source/debug model, and specialization identities without
+    retaining producer memory addresses or absolute source paths. Canonical
+    payload codecs preserve the semantic model, every SimIR operation variant,
+    runtime processes/signals, DesignIR, roots, and specialization keys; the
+    restored state reserializes byte-for-byte and executes to the expected
+    stop time after both producer sources and object directories are hidden.
+11. **Complete.** Prove that successful `simulate` loading invokes neither the
+    frontend nor the elaborator and that corrupt/incompatible/partial design
+    artifacts fail transactionally before constructing a scheduler. The
+    standalone loader restores only the three checksummed state projections;
+    focused coverage hides every producer source and object, then loads and
+    runs successfully. Separate checksum-corrupt, missing-payload, and
+    incompatible-runtime-ABI copies all reject through the loader before a
+    `Simulation` is constructed.
+12. **Complete.** Implement `fsim simulate --design PATH` with explicit
+    interpreter/compiled/debug engine selection, duration, max-delta, seed,
+    delay, trace-file, and trace-filter controls. Production CLI coverage runs
+    the same source/object-independent artifact through interpreter, optimized
+    LLVM, and debug/O0 engines, applies duration and seed overrides, writes a
+    filtered VCD, and rejects a requested delay mode that differs from the
+    artifact's fixed elaboration selection.
+13. **Complete.** Keep `.fsimobj` and `.fsimdesign` directories read-only and
+    place LLVM objects, traces, debugger state, file-I/O state, and every other
+    derived output in explicit consumer paths. Both publishers enforce
+    read-only trees. Standalone simulation accepts explicit `--cache` and
+    `--file-root` directories, requires the file root to exist, and writes its
+    filtered VCD to the requested consumer path; focused coverage confirms no
+    LLVM or trace output appears inside the design artifact.
+14. **Complete.** Include object/design metadata, ordered input digests,
+    selected canonical identities, runtime ABI, LLVM host identity, and engine
+    options in design/native cache provenance with exact-compatible reuse. The
+    canonical design digest covers ordered object content, roots/selections,
+    bindings, ABI, timing, engine policy, and state checksums and now salts each
+    standalone native-module identity. LLVM's host/options fingerprint remains
+    the final cache boundary. Focused cold/warm coverage observes miss/store
+    then hit; debug/O0 and a changed artifact digest both miss independently.
+15. **Complete.** Preserve multiple roots, cross-language inference,
+    configurations, generics/parameters, packages/contexts, callbacks,
+    debugger locations, normalized VCD, and deterministic interpreter/LLVM
+    behavior across the three phase boundary. Focused scripted-phase coverage
+    compiles independent VHDL and SystemVerilog objects containing a package,
+    context, generic, configuration, parameter specialization, inferred
+    SV-to-VHDL child, and two aliased roots. The restored design retains
+    relative semantic/debug sources and callbacks; interpreter and LLVM agree
+    on final values and stop time, and a filtered two-root VCD is normalized.
+    This coverage also exposed and fixed producer-absolute IEEE projection
+    paths by assigning stable `fsim-standard/...` logical names with separate
+    consumer-local backing paths.
+16. **Complete.** Reject SystemC source/factory/proxy inputs in Batch 137 with
+    an actionable diagnostic routing them to Batch 138's separate incremental
+    SystemC compile/link phases; do not silently omit native behavior. The
+    object/design schemas admit portable HDL languages only, and production
+    `fsim compile --lang systemc` fails before publication with the Batch 138
+    route; focused coverage confirms no partial object is created.
+17. **Complete.** Add public C++ artifact compile/elaborate/load APIs and stable
+    inspection records for phase kind, schema, language/library, roots,
+    digests, units, processes, and compatibility without changing the v1 C ABI.
+    `fsim::app::compile_artifact`, `elaborate_artifact`, the existing object and
+    design loaders, and metadata-only `inspect_artifact` form the public C++
+    surface. Direct API tests publish/load a design and inspect both artifact
+    kinds; incompatible schemas/ABIs remain transactional diagnostics. No C
+    ABI symbol or layout changes.
+18. **Complete.** Add positive scripted-phase coverage for VHDL,
+    Verilog/SystemVerilog, mixed hierarchy, packages/configurations,
+    parameters/generics, multiple roots, relocation, cold/warm cache,
+    interpreter, LLVM O0/O2, debugger, callbacks, and VCD. Focused production
+    and direct-API tests cover all listed dimensions, including a complete
+    Verilog-2005 compile/elaborate/simulate path and source/object-independent
+    execution after producer inputs are renamed away.
+19. **Complete.** Add negative coverage for missing/duplicate/reordered objects,
+    option conflicts, format/schema/checksum/identity corruption, incompatible
+    ABI, unresolved/ambiguous units, overwrite/write attempts, and partial
+    publication; update CLI help, architecture, language support, diagnostics,
+    feature matrix, tutorial, inventories, and this record. The complete
+    artifact negative matrix is split between metadata publisher/codec tests
+    and production phase tests; missing and ambiguous targets leave no output.
+    Public documentation now includes the command contract, architecture,
+    portable-HDL boundary, ten diagnostic entries, CM-088 evidence, and an
+    executable vertical-slice tutorial. Focused catalog/source/inventory and
+    installed-public-contract gates pass with 1,653 diagnostics, 459 bounded
+    sources, 549 SPDX-owned artifacts, and 196 test/control files.
+20. **Complete.** Run exact-LLVM Debug and Release plus source, catalog,
+    inventory, and release gates, then commit and push once. Batch 137 is not a
+    CI boundary and runs no sanitizer or CI-monitoring gate. Both configurations
+    built with eight workers. Exact-LLVM Debug passed 109/109 tests in 138.17
+    seconds and Release passed 109/109 in 106.09 seconds. Those suites include
+    artifact, source, diagnostic-catalog, inventory, installed-public-contract,
+    legality, differential, and release-candidate gates. The reviewed matrix
+    contains 1,083 execute rows, 4,332 evidence cells, 331 evidence paths, and
+    96 runtime owners.
+
 ## Forward priority order
 
 1. **Completed in Batch 136:** read-only out-of-tree `.fsimlib` directory
    mappings.
-2. **Batch 137:** explicit non-project compile, elaborate, and simulate
-   artifact phases.
-3. Separate incremental SystemC compilation and linking.
+2. **Completed in Batch 137:** explicit non-project compile, elaborate, and
+   simulate artifact phases.
+3. **Batch 138 next:** separate incremental SystemC compilation and linking.
 4. Complete VHDL-2008/VITAL, Verilog-2005, SystemVerilog-2017 classes/UVM,
    VPI, DPI, and VHPI.
 5. Older VHDL, Verilog, and SystemVerilog standard modes.

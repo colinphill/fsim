@@ -1707,6 +1707,21 @@ are therefore excluded.
 | `FSIM-CACHE-0003` | error | A design-cache entry could not be populated. |
 | `FSIM-CACHE-0004` | warning | Native-object cache load, store, or prune failures prevented complete cache reuse or eviction. |
 
+## Non-project artifacts
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `FSIM-ART-0001` | error | `.fsimobj` metadata has an unsupported, truncated, or trailing format/schema encoding. |
+| `FSIM-ART-0002` | error | `.fsimobj` metadata has an invalid language, library, path, unit index, checksum, or compilation digest. |
+| `FSIM-ART-0003` | error | `.fsimobj` metadata or payload publication/loading failed, including overwrite, staging, permissions, or exact-payload-set failures. |
+| `FSIM-ART-0004` | error | Explicit compilation is not one portable HDL source set, a checked source changed or became unreadable, or no owning unit was produced. |
+| `FSIM-ART-0005` | error | Ordered object loading found no input, corruption, duplicate/colliding identities, inconsistent library ownership, or an invalid restored semantic projection. |
+| `FSIM-ART-0010` | error | `.fsimdesign` metadata has an unsupported, truncated, trailing, or runtime-ABI-incompatible encoding. |
+| `FSIM-ART-0011` | error | `.fsimdesign` metadata has invalid roots, bindings, paths, checksums, object provenance, counts, or design digest. |
+| `FSIM-ART-0012` | error | `.fsimdesign` publication/loading failed, including overwrite, staging, permissions, or exact-payload-set failures. |
+| `FSIM-ART-0013` | error | A runtime, semantic, or DesignIR state payload is malformed, excessive, structurally invalid, or contains a producer-absolute source path. |
+| `FSIM-ART-0014` | error | Standalone design publication, inspection, loading, projection validation, fixed-delay compatibility, or required-payload verification failed. |
+
 ## SystemC source compiler and plug-in validation
 
 | Code | Severity | Meaning |

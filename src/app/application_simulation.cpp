@@ -121,7 +121,10 @@ struct Simulation::Impl {
             built.design_ir.instances()[specialization.instance.value()]
                 .path + "#provenance=" +
             built.specialization_cache_keys.at(
-                specialization.id.value());
+                specialization.id.value())
+            + (built.artifact_identity.empty()
+                   ? std::string{}
+                   : "#artifact=" + built.artifact_identity);
         jit->add_process_module(
             module_identity,
             entries,

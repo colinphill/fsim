@@ -18,6 +18,7 @@
 #include <iosfwd>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -45,6 +46,16 @@ struct CheckedSource {
 };
 
 struct CheckedProject {
+  struct ObjectProvenance {
+    std::filesystem::path directory;
+    std::string metadata_digest;
+    std::string compilation_digest;
+    std::string language;
+    std::string standard;
+    std::string library;
+    std::vector<std::string> unit_checksums;
+    project::SourceSet source_settings;
+  };
   struct MappedLibrary {
     std::string library;
     std::filesystem::path directory;
@@ -76,6 +87,8 @@ struct CheckedProject {
   std::vector<CheckedSource> standard_sources;
   /// Lazily opened precompiled libraries in deterministic dependency order.
   std::vector<MappedLibrary> mapped_libraries;
+  /// Explicit non-project objects in command-line declaration order.
+  std::vector<ObjectProvenance> objects;
   std::size_t source_count{};
 };
 
@@ -113,6 +126,10 @@ struct BuiltProject {
   std::vector<std::shared_ptr<systemc::HierarchyRegistry>>
       systemc_hierarchies;
   std::vector<MappedLibraryProvenance> mapped_libraries;
+  std::vector<CheckedProject::ObjectProvenance> objects;
+  /// Content-only identity of a loaded standalone design artifact. Project
+  /// builds leave this empty; standalone native-cache keys include it.
+  std::string artifact_identity;
 };
 
 /// Parse all HDL source files in deterministic manifest order. Independent
@@ -122,6 +139,13 @@ struct BuiltProject {
 /// previously analyzed units.
 [[nodiscard]] std::optional<CheckedProject> check_project(
     const project::Config& config,
+    diagnostic::Engine& diagnostics);
+
+/// Load and merge explicitly compiled HDL objects in declaration order.
+/// Every indexed payload is checksum-verified and deserialized directly;
+/// producer sources are never preprocessed or parsed again.
+[[nodiscard]] std::optional<CheckedProject> load_objects(
+    std::span<const std::filesystem::path> objects,
     diagnostic::Engine& diagnostics);
 
 // Checks and publishes one project-built logical library as a relocatable,
@@ -137,6 +161,13 @@ struct BuiltProject {
 /// configured or when the process is outside the current JIT subset.
 [[nodiscard]] std::optional<BuiltProject> build_project(
     const project::Config& config,
+    diagnostic::Engine& diagnostics);
+
+/// Elaborate an already compiled, ordered object set without preprocessing or
+/// parsing producer sources. SystemC objects remain unsupported in Batch 137.
+[[nodiscard]] std::optional<BuiltProject> build_objects(
+    const project::Config& config,
+    std::span<const std::filesystem::path> objects,
     diagnostic::Engine& diagnostics);
 
 enum class SimulationEngine : std::uint8_t {

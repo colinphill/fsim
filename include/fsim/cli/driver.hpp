@@ -20,6 +20,9 @@ enum class Command {
   run,
   debug,
   tcl,
+  compile,
+  elaborate,
+  simulate,
   migrate,
 };
 
@@ -37,6 +40,7 @@ struct Invocation {
   std::vector<std::filesystem::path> files;
   std::optional<project::Language> language;
   std::optional<std::string> standard;
+  std::optional<std::string> compilation_unit;
   // Normalized ordered root selections. `top` remains the one-root
   // source-compatible view.
   std::vector<project::ProjectSection::TopLevel> tops;
@@ -47,6 +51,13 @@ struct Invocation {
   std::vector<project::LibraryMapping> library_exports;
   std::vector<std::filesystem::path> include_directories;
   std::vector<std::string> defines;
+  std::optional<std::filesystem::path> artifact_output;
+  std::vector<std::filesystem::path> objects;
+  std::optional<std::filesystem::path> design;
+  std::optional<std::filesystem::path> cache_directory;
+  std::optional<std::filesystem::path> file_root;
+  std::optional<std::string> engine;
+  std::vector<std::string> trace_filters;
   std::optional<std::string> duration;
   std::optional<std::uint64_t> max_deltas;
   std::optional<project::DelayMode> delay_mode;
@@ -78,6 +89,9 @@ struct Services {
   Handler run;
   Handler debug;
   Handler tcl;
+  Handler compile;
+  Handler elaborate;
+  Handler simulate;
 };
 
 [[nodiscard]] std::optional<Invocation> parse_arguments(

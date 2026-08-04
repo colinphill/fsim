@@ -973,6 +973,20 @@ portable fallback yet. See the
 [precompiled-library tutorial](../examples/precompiled_library/README.md) for
 the export, relocation, mapping, build, and run workflow.
 
+The same portable VHDL, Verilog, and SystemVerilog unit representation is
+available without a project manifest. `fsim compile` turns one explicitly
+scripted language/standard/library compilation into a read-only `.fsimobj`;
+`fsim elaborate` consumes ordered objects and explicit aliased tops to publish
+a read-only `.fsimdesign`; and `fsim simulate` restores that design directly
+with interpreter, compiled, or debug/O0 execution. Multiple roots,
+cross-language inference, packages, contexts, configurations,
+generics/parameters, source/debug locations, callbacks, and VCD retain their
+ordinary project-mode semantics. Producer sources and objects are unnecessary
+after design publication. SystemC inputs receive an actionable Batch 138
+diagnostic because native behavior cannot be silently omitted from a portable
+HDL artifact. See the
+[non-project phase tutorial](../examples/non_project_phases/README.md).
+
 Batch 119 frontend closure now retains nested waits rather than rejecting a
 successfully parsed statement tree; general assertion/report and severity
 expressions; nominal file types, file objects, open-kind and logical-name

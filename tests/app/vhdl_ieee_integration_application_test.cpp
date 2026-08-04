@@ -156,7 +156,8 @@ void verify_analysis(const fsim::project::Config& config) {
   assert(checked->hdl_sources.size() == 3);
   assert(checked->standard_sources.size() == 16);
   for (const auto& source : checked->standard_sources) {
-    assert(source.path.generic_string().find(
+    assert(source.path.generic_string().starts_with("fsim-standard/ieee/"));
+    assert(source.backing_path.generic_string().find(
                "third_party/ieee-1076-2019/ieee/")
            != std::string::npos);
   }

@@ -509,6 +509,8 @@ fsim_configure_library(fsim_support)
 
 add_library(
   fsim_library STATIC
+  src/artifact/design.cpp
+  src/artifact/object.cpp
   src/library/artifact.cpp
   src/library/portable_unit.cpp
 )
@@ -717,11 +719,15 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_debug_control.cpp
       src/app/application_debugger.cpp
       src/app/application_design_ir.cpp
+      src/app/application_design_artifact_codec.cpp
       src/app/application_executor_frame.cpp
       src/app/application_executors.cpp
       src/app/application_executor_services.cpp
       src/app/application_library_export.cpp
       src/app/application_library_import.cpp
+      src/app/application_phase_compile.cpp
+      src/app/application_phase_design.cpp
+      src/app/application_phase_object.cpp
       src/app/application_run.cpp
       src/app/application_semantic.cpp
       src/app/application_systemverilog_hir.cpp
@@ -760,6 +766,8 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       fsim_library
       fsim_object_cache
       fsim_systemc
+    PRIVATE
+      fsim_boost_pfr_headers
   )
   if(FSIM_WITH_LLVM)
     target_link_libraries(fsim_application PRIVATE fsim_llvm)

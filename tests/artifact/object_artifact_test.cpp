@@ -1,0 +1,120 @@
+// SPDX-License-Identifier: Apache-2.0
+#include "fsim/artifact/object.hpp"
+
+#include "fsim/support/sha256.hpp"
+
+#include <cassert>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <string>
+
+namespace {
+
+std::string checksum(const std::string_view bytes) {
+  return fsim::support::Sha256::hex(fsim::support::Sha256::digest(bytes));
+}
+
+void make_tree_writable(const std::filesystem::path& root) {
+  std::error_code error;
+  for (std::filesystem::recursive_directory_iterator iterator(root, error), end;
+       !error && iterator != end;
+       iterator.increment(error)) {
+    std::filesystem::permissions(
+        iterator->path(), std::filesystem::perms::owner_all,
+        std::filesystem::perm_options::add, error);
+    error.clear();
+  }
+  std::filesystem::permissions(
+      root, std::filesystem::perms::owner_all,
+      std::filesystem::perm_options::add, error);
+}
+
+}  // namespace
+
+int main() {
+  const std::string source_bytes = "module child; endmodule\n";
+  const std::string unit_bytes = "portable-unit";
+  fsim::artifact::ObjectMetadata metadata;
+  metadata.producer = "fsim test";
+  metadata.language = "systemverilog";
+  metadata.standard = "2017";
+  metadata.library = "work";
+  metadata.compilation_unit = "source-set";
+  metadata.defines = {"WIDTH=8", "TRACE"};
+  metadata.include_roots = {"includes/00000000"};
+  metadata.sources.push_back({
+      "sources/child.sv", "sources/00000000/child.sv",
+      checksum(source_bytes), "systemverilog"});
+  metadata.units.push_back({
+      "systemverilog", "module", "child", {}, {},
+      "units/00000000.fsimir", checksum(unit_bytes)});
+  metadata.compilation_digest =
+      fsim::artifact::compute_object_compilation_digest(metadata);
+
+  const auto encoded = fsim::artifact::serialize_object_metadata(metadata);
+  assert(encoded == fsim::artifact::serialize_object_metadata(metadata));
+  fsim::diagnostic::Engine decode_diagnostics;
+  const auto decoded = fsim::artifact::deserialize_object_metadata(
+      encoded, "object", decode_diagnostics);
+  assert(decoded == metadata);
+  assert(!decode_diagnostics.has_error());
+
+  auto truncated = encoded;
+  truncated.pop_back();
+  fsim::diagnostic::Engine truncated_diagnostics;
+  assert(!fsim::artifact::deserialize_object_metadata(
+      truncated, "truncated", truncated_diagnostics));
+  auto trailing = encoded;
+  trailing.push_back('\0');
+  fsim::diagnostic::Engine trailing_diagnostics;
+  assert(!fsim::artifact::deserialize_object_metadata(
+      trailing, "trailing", trailing_diagnostics));
+  auto invalid = metadata;
+  invalid.sources.front().logical_name = "../producer/child.sv";
+  fsim::diagnostic::Engine invalid_diagnostics;
+  assert(!fsim::artifact::deserialize_object_metadata(
+      fsim::artifact::serialize_object_metadata(invalid),
+      "invalid", invalid_diagnostics));
+
+  const auto directory = std::filesystem::temp_directory_path()
+      / ("fsim-object-artifact-test-"
+         + std::to_string(
+             std::chrono::steady_clock::now().time_since_epoch().count()));
+  const std::vector<fsim::library::PortablePayload> payloads{
+      {metadata.sources.front().artifact, source_bytes},
+      {metadata.units.front().artifact, unit_bytes}};
+  fsim::diagnostic::Engine publish_diagnostics;
+  assert(fsim::artifact::publish_object(
+      directory, metadata, payloads, publish_diagnostics));
+  assert(!publish_diagnostics.has_error());
+  fsim::diagnostic::Engine load_diagnostics;
+  assert(fsim::artifact::load_object_metadata(directory, load_diagnostics)
+      == metadata);
+  assert(!load_diagnostics.has_error());
+  assert(
+      (std::filesystem::status(directory).permissions()
+       & std::filesystem::perms::owner_write)
+      == std::filesystem::perms::none);
+  std::ofstream denied(directory / "write-attempt", std::ios::binary);
+  assert(!denied);
+
+  fsim::diagnostic::Engine overwrite_diagnostics;
+  assert(!fsim::artifact::publish_object(
+      directory, metadata, payloads, overwrite_diagnostics));
+  auto mismatched_payloads = payloads;
+  mismatched_payloads.front().bytes.push_back('x');
+  const auto mismatch_directory = directory.parent_path()
+      / (directory.filename().string() + "-mismatch");
+  fsim::diagnostic::Engine mismatch_diagnostics;
+  assert(!fsim::artifact::publish_object(
+      mismatch_directory, metadata, mismatched_payloads,
+      mismatch_diagnostics));
+  assert(!std::filesystem::exists(mismatch_directory));
+
+  make_tree_writable(directory);
+  std::error_code cleanup_error;
+  std::filesystem::remove_all(directory, cleanup_error);
+  assert(!cleanup_error);
+  return 0;
+}

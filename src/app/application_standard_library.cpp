@@ -148,9 +148,11 @@ std::optional<std::string> checked_source_text(
 
 CheckedSource checked_source(
     const std::filesystem::path& path,
-    const std::string_view text) {
+    const std::string_view text,
+    std::filesystem::path backing_path = {}) {
   CheckedSource source;
   source.path = path;
+  source.backing_path = std::move(backing_path);
   source.content_digest = support::Sha256::hex(
       support::Sha256::digest(text));
   compiler::CacheKeyBuilder key;
@@ -330,17 +332,23 @@ void inject_vhdl_standard_libraries(
               + " package cannot be redeclared by a project source");
       return;
     }
-    const auto declaration_path =
+    const auto declaration_backing_path =
         root / std::filesystem::path{package.declaration};
-    const auto body_path = package.body.empty()
+    const auto body_backing_path = package.body.empty()
         ? std::filesystem::path{}
         : root / std::filesystem::path{package.body};
+    const auto declaration_path = std::filesystem::path{"fsim-standard"}
+        / std::filesystem::path{package.declaration};
+    const auto body_path = package.body.empty()
+        ? std::filesystem::path{}
+        : std::filesystem::path{"fsim-standard"}
+            / std::filesystem::path{package.body};
     const auto declaration = checked_source_text(
-        declaration_path, package.declaration_hash, diagnostics);
+        declaration_backing_path, package.declaration_hash, diagnostics);
     const auto body = package.body.empty()
         ? std::optional<std::string>{std::string{}}
         : checked_source_text(
-              body_path, package.body_hash, diagnostics);
+              body_backing_path, package.body_hash, diagnostics);
     if (!declaration || !body) {
       return;
     }
@@ -349,9 +357,11 @@ void inject_vhdl_standard_libraries(
     if (!package_units) {
       return;
     }
-    sources.push_back(checked_source(declaration_path, *declaration));
+    sources.push_back(checked_source(
+        declaration_path, *declaration, declaration_backing_path));
     if (!package.body.empty()) {
-      sources.push_back(checked_source(body_path, *body));
+      sources.push_back(checked_source(
+          body_path, *body, body_backing_path));
     }
     units.insert(
         units.end(),

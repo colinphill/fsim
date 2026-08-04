@@ -26,6 +26,10 @@ int main() {
   fixture.test_multiple_roots();
   checkpoint("preprocessing debug and cli");
   fixture.test_preprocessing_debug_and_cli();
+  checkpoint("non-project cli");
+  fixture.test_non_project_cli();
+  checkpoint("artifact phase semantics");
+  fixture.test_artifact_phase_semantics();
   checkpoint("complete");
   std::cout << "application tests passed\n";
   return 0;

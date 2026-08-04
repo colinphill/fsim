@@ -66,6 +66,8 @@ class ApplicationTestFixture {
   void test_mixed_language_and_generate();
   void test_multiple_roots();
   void test_preprocessing_debug_and_cli();
+  void test_non_project_cli();
+  void test_artifact_phase_semantics();
 
  private:
   void create_common_sources();

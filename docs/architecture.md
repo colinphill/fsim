@@ -571,6 +571,28 @@ does not. Format-1 SystemC publication rejects producer-only include paths,
 definitions, compiler/linker options, and external libraries rather than
 publishing a bundled-source fallback that cannot reproduce the producer build.
 
+Manifest-free execution uses two additional immutable directory artifacts.
+`fsim compile` publishes one explicit VHDL, Verilog, or SystemVerilog
+compilation unit as `.fsimobj`: canonical metadata indexes independently
+checksummed relocated sources and portable owning units. Repeated objects load
+in command order, preserve VHDL analysis dependencies and SV compilation-unit
+isolation, and never reopen producer sources. `fsim elaborate` resolves one or
+more roots through the ordinary candidate index and publishes `.fsimdesign`.
+Its checksummed runtime, semantic, and DesignIR projections construct a
+scheduler without entering a frontend or elaborator.
+
+The design digest covers ordered object contents, selected identities,
+bindings/search scope, timing/seed/optimization policy, runtime ABI, state
+indexes, and specialization keys. It salts native module identity; LLVM's
+host/ABI/options fingerprint remains the final cache boundary. Both artifact
+trees install by a sibling staging rename, are read-only, and reject overwrite.
+`fsim simulate` places LLVM objects and HDL file state in explicit `--cache`
+and `--file-root` consumer directories and writes traces to the requested path,
+never inside `.fsimdesign`. Delay selection is fixed by elaboration. SystemC is
+excluded from these portable artifacts and routed to Batch 138's separate
+native compile/link phases. The additive C++ phase/inspection API does not
+change the v1 C ABI.
+
 The hierarchy is deliberately bidirectional for SystemC. An HDL instance
 path may bind to a registered SystemC factory. During its elaboration, a
 SystemC factory may mark a normally constructed child module as an HDL proxy;

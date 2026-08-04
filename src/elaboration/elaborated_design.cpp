@@ -163,4 +163,96 @@ ElaboratedDesign::create_interpreter(
   return interpreter;
 }
 
+ElaboratedDesignState ElaboratedDesign::state() const {
+  ElaboratedDesignState result{
+      top_, roots_, signal_info_, boundary_conversions_, signals_,
+      string_object_info_, string_objects_, container_object_info_,
+      container_objects_, vhdl_protected_object_info_, processes_,
+      specializations_, systemc_instances_, systemc_processes_,
+      systemc_objects_, {}, {}, {}};
+  result.signal_names.assign(signal_by_name_.begin(), signal_by_name_.end());
+  result.string_names.assign(string_by_name_.begin(), string_by_name_.end());
+  result.container_names.assign(
+      container_by_name_.begin(), container_by_name_.end());
+  const auto by_name = [](const auto& left, const auto& right) {
+    return left.first < right.first;
+  };
+  std::ranges::sort(result.signal_names, by_name);
+  std::ranges::sort(result.string_names, by_name);
+  std::ranges::sort(result.container_names, by_name);
+  return result;
+}
+
+std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
+    ElaboratedDesignState state) {
+  if (state.top.empty() || state.roots.empty()
+      || state.signal_info.size() != state.signals.size()
+      || state.string_object_info.size() != state.string_objects.size()
+      || state.container_object_info.size() != state.container_objects.size()) {
+    return std::nullopt;
+  }
+  for (std::size_t index = 0; index < state.signal_info.size(); ++index) {
+    if (state.signal_info[index].id != index
+        || state.signal_info[index].width != state.signals[index].initial_value.width()) {
+      return std::nullopt;
+    }
+  }
+  for (std::size_t index = 0; index < state.string_object_info.size(); ++index) {
+    if (state.string_object_info[index].id != index) {
+      return std::nullopt;
+    }
+  }
+  for (std::size_t index = 0; index < state.container_object_info.size(); ++index) {
+    if (state.container_object_info[index].id != index) {
+      return std::nullopt;
+    }
+  }
+  for (std::size_t index = 0; index < state.processes.size(); ++index) {
+    if (state.processes[index].id != index) {
+      return std::nullopt;
+    }
+  }
+  for (std::size_t index = 0; index < state.specializations.size(); ++index) {
+    if (state.specializations[index].id != index) {
+      return std::nullopt;
+    }
+  }
+  ElaboratedDesign result;
+  result.top_ = std::move(state.top);
+  result.roots_ = std::move(state.roots);
+  result.signal_info_ = std::move(state.signal_info);
+  result.boundary_conversions_ = std::move(state.boundary_conversions);
+  result.signals_ = std::move(state.signals);
+  result.string_object_info_ = std::move(state.string_object_info);
+  result.string_objects_ = std::move(state.string_objects);
+  result.container_object_info_ = std::move(state.container_object_info);
+  result.container_objects_ = std::move(state.container_objects);
+  result.vhdl_protected_object_info_ =
+      std::move(state.vhdl_protected_object_info);
+  result.processes_ = std::move(state.processes);
+  result.specializations_ = std::move(state.specializations);
+  result.systemc_instances_ = std::move(state.systemc_instances);
+  result.systemc_processes_ = std::move(state.systemc_processes);
+  result.systemc_objects_ = std::move(state.systemc_objects);
+  for (auto& entry : state.signal_names) {
+    if (entry.first.empty() || entry.second >= result.signals_.size()
+        || !result.signal_by_name_.emplace(std::move(entry)).second) {
+      return std::nullopt;
+    }
+  }
+  for (auto& entry : state.string_names) {
+    if (entry.first.empty() || entry.second >= result.string_objects_.size()
+        || !result.string_by_name_.emplace(std::move(entry)).second) {
+      return std::nullopt;
+    }
+  }
+  for (auto& entry : state.container_names) {
+    if (entry.first.empty() || entry.second >= result.container_objects_.size()
+        || !result.container_by_name_.emplace(std::move(entry)).second) {
+      return std::nullopt;
+    }
+  }
+  return result;
+}
+
 }  // namespace fsim::elaboration

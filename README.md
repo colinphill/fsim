@@ -543,6 +543,9 @@ fsim build
 fsim run
 fsim debug
 fsim tcl
+fsim compile
+fsim elaborate
+fsim simulate
 ```
 
 For example:
@@ -560,6 +563,21 @@ Direct source files are also accepted:
 ```sh
 build/dev/fsim check --lang systemverilog examples/vertical_slice/tb.sv
 ```
+
+Manifest-free, restartable artifact phases are available for portable HDL:
+
+```sh
+fsim compile --lang systemverilog --standard 2017 --library work \
+  --output unit.fsimobj source.sv
+fsim elaborate --object unit.fsimobj --top top=sv:work.top \
+  --output design.fsimdesign
+fsim simulate --design design.fsimdesign --engine compiled \
+  --cache .fsim-native --file-root . --trace run.vcd
+```
+
+Artifact directories are immutable and overwrite-safe. SystemC uses the
+separate incremental native compile/link phases planned for Batch 138. See the
+[non-project phase tutorial](examples/non_project_phases/README.md).
 
 For Verilog/SystemVerilog source sets, `compilation_unit = "file"` resets
 macro and directive context for every listed file, `"source-set"` shares

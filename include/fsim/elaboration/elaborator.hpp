@@ -444,6 +444,29 @@ struct SystemCNamedObjectInfo {
     runtime::simir::SourceLocation source;
 };
 
+struct ElaboratedDesignState {
+    std::string top;
+    std::vector<std::string> roots;
+    std::vector<SignalInfo> signal_info;
+    std::vector<BoundaryConversionInfo> boundary_conversions;
+    std::vector<runtime::simir::Signal> signals;
+    std::vector<StringObjectInfo> string_object_info;
+    std::vector<runtime::simir::StringObject> string_objects;
+    std::vector<ContainerObjectInfo> container_object_info;
+    std::vector<runtime::simir::ContainerObject> container_objects;
+    std::vector<VhdlProtectedObjectInfo> vhdl_protected_object_info;
+    std::vector<runtime::simir::Process> processes;
+    std::vector<SpecializationInfo> specializations;
+    std::vector<SystemCInstanceInfo> systemc_instances;
+    std::vector<SystemCProcessInfo> systemc_processes;
+    std::vector<SystemCNamedObjectInfo> systemc_objects;
+    std::vector<std::pair<std::string, runtime::simir::SignalId>> signal_names;
+    std::vector<std::pair<std::string, runtime::simir::StringObjectId>>
+        string_names;
+    std::vector<std::pair<std::string, runtime::simir::ContainerObjectId>>
+        container_names;
+};
+
 class ElaboratedDesign final {
 public:
     ElaboratedDesign() = default;
@@ -487,6 +510,10 @@ public:
     [[nodiscard]] std::unique_ptr<runtime::simir::Interpreter> create_interpreter(
         runtime::SchedulerOptions options = {},
         std::uint64_t seed = 1) const;
+
+    [[nodiscard]] ElaboratedDesignState state() const;
+    [[nodiscard]] static std::optional<ElaboratedDesign> from_state(
+        ElaboratedDesignState state);
 
 private:
     friend struct ElaborationResult;
