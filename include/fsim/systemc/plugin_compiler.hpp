@@ -43,6 +43,11 @@ struct PluginCompilePlan {
     // Non-cacheable plans use a unique key and are always rebuilt.
     bool cacheable{true};
     std::string cache_key;
+    // Source/path-independent identity of the compiler binary, environment,
+    // ABI-affecting options, runtime ABI, host format, and fiber backend.
+    // This is suitable for exact admission of a precompiled plug-in whose
+    // payload is separately content-addressed.
+    std::string host_fingerprint;
     std::filesystem::path library_path;
     std::filesystem::path build_path;
     // GCC-like toolchains use one compile/link command. MSVC-compatible
@@ -57,6 +62,7 @@ struct PluginCompileResult {
     bool cache_hit{};
     std::filesystem::path library_path;
     std::string cache_key;
+    std::string host_fingerprint;
     int compiler_exit_code{-1};
     std::string compiler_output;
 };
@@ -68,6 +74,14 @@ struct PluginCompileResult {
 // (or the process working directory when it is empty).
 [[nodiscard]] std::optional<PluginCompilePlan> plan_plugin_compile(
     const PluginCompileRequest& request,
+    diagnostic::Engine& diagnostics);
+
+// Computes the source/path-independent portion of a plug-in plan. This is the
+// exact compiler/runtime/host admission identity recorded by .fsimlib native
+// variants. Failure to hash the selected compiler returns no identity.
+[[nodiscard]] std::optional<std::string> plugin_host_fingerprint(
+    const project::SystemCSection& settings,
+    const std::filesystem::path& working_directory,
     diagnostic::Engine& diagnostics);
 
 // Compiles all sources into one cached host shared library. Concurrent

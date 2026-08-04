@@ -350,6 +350,11 @@ const semantic::Model& Simulation::semantics() const noexcept {
   return impl_->built.semantics;
 }
 
+const std::vector<MappedLibraryProvenance>&
+Simulation::mapped_libraries() const noexcept {
+  return impl_->built.mapped_libraries;
+}
+
 std::string_view Simulation::time_resolution() const noexcept {
   return impl_->built.time_resolution;
 }

@@ -59,6 +59,38 @@ std::optional<BuiltProject> build_project(
     }
     systemc_plugins.push_back(std::move(compiled.library_path));
   }
+  for (const auto& mapped : checked->mapped_libraries) {
+    if (mapped.systemc_plugin.empty() && mapped.systemc_sources.empty()) {
+      continue;
+    }
+    auto plugin_path = mapped.systemc_plugin;
+    std::string plugin_identity = mapped.native_fingerprint;
+    if (plugin_path.empty()) {
+      systemc::PluginCompileRequest request;
+      request.sources = mapped.systemc_sources;
+      request.logical_library = mapped.library;
+      request.settings = config.systemc;
+      request.working_directory = config.base_directory;
+      request.cache_directory = config.build.cache_path;
+      auto compiled = systemc::compile_plugin(request, diagnostics);
+      if (!compiled.success) {
+        return std::nullopt;
+      }
+      plugin_path = std::move(compiled.library_path);
+      plugin_identity = "portable-source:" + compiled.cache_key;
+    }
+    auto registry = load_systemc_plugin(plugin_path, diagnostics);
+    if (!registry) {
+      return std::nullopt;
+    }
+    systemc_plugin_key += "mapped:" + mapped.library + ":"
+        + plugin_identity + ";";
+    systemc_registries.push_back({mapped.library, registry});
+    if (!systemc_hierarchy) {
+      systemc_hierarchy = registry;
+    }
+    systemc_plugins.push_back(std::move(plugin_path));
+  }
   select_delay_alternatives(
       lowering_adapter, config.run.delay_mode);
   const auto resolution = effective_resolution(config, lowering_adapter);
@@ -287,6 +319,14 @@ std::optional<BuiltProject> build_project(
   for (const auto& entry : systemc_registries) {
     systemc_hierarchies.push_back(entry.registry);
   }
+  std::vector<MappedLibraryProvenance> mapped_libraries;
+  mapped_libraries.reserve(checked->mapped_libraries.size());
+  for (const auto& mapped : checked->mapped_libraries) {
+    mapped_libraries.push_back({
+        mapped.library, mapped.metadata_digest, mapped.unit_checksums,
+        mapped.native_accepted, mapped.native_kind,
+        mapped.native_fingerprint});
+  }
   return BuiltProject{
       std::move(*elaborated.design),
       std::move(design_ir),
@@ -303,7 +343,8 @@ std::optional<BuiltProject> build_project(
       config.project.random_seed,
       hit,
       config.base_directory,
-      std::move(systemc_hierarchies)};
+      std::move(systemc_hierarchies),
+      std::move(mapped_libraries)};
 }
 
 

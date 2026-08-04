@@ -7,6 +7,19 @@ int main() {
   // FSIM-CONFORMANCE CF-COMMON-CACHE-001 source=SRC-LLVM expectation=execute
   // FSIM-CONFORMANCE CF-COMMON-LLVM-N01 source=SRC-LLVM expectation=reject
   assert(!LlvmJit::llvm_version().empty());
+  const auto native_o0 =
+      LlvmJit::native_host_identity(JitOptimizationLevel::o0);
+  const auto native_o2 =
+      LlvmJit::native_host_identity(JitOptimizationLevel::o2);
+  assert(native_o0.fingerprint.size() == 64);
+  assert(native_o2.fingerprint.size() == 64);
+  assert(native_o0.fingerprint != native_o2.fingerprint);
+  assert(!native_o2.target.empty());
+  assert(!native_o2.data_layout.empty());
+  assert(!native_o2.cpu.empty());
+  assert(
+      LlvmJit::native_host_identity(JitOptimizationLevel::o2)
+      == native_o2);
   run_at_level(JitOptimizationLevel::o0, "arithmetic_o0");
   run_at_level(JitOptimizationLevel::o2, "arithmetic_o2");
   test_scalar_truth_tables_and_64_bits();

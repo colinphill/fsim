@@ -1,0 +1,269 @@
+// SPDX-License-Identifier: Apache-2.0
+#include "fsim/library/artifact.hpp"
+#include "fsim/library/portable_unit.hpp"
+#include "fsim/frontend/parser.hpp"
+#include "fsim/support/sha256.hpp"
+
+#include <algorithm>
+#include <cassert>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <ranges>
+#include <string>
+
+namespace {
+
+std::filesystem::path workspace() {
+  const auto nonce =
+      std::chrono::high_resolution_clock::now().time_since_epoch().count();
+  const auto path = std::filesystem::temp_directory_path()
+      / ("fsim-library-artifact-test-" + std::to_string(nonce));
+  std::filesystem::create_directories(path);
+  return path;
+}
+
+fsim::library::Metadata example_metadata() {
+  fsim::library::Metadata metadata;
+  metadata.library = "vendor";
+  metadata.producer = "fsim 0.2.0-dev";
+  metadata.runtime_schema = 3;
+  metadata.standards = {
+      {"systemverilog", "2017"}, {"vhdl", "2008"}};
+  metadata.dependencies = {"ieee_models", "common"};
+  metadata.sources = {
+      {"sources/00000000/stage.sv", "sources/00000000/stage.sv",
+       std::string(64, 'c'), "systemverilog"}};
+  metadata.units = {
+      {"systemverilog", "module", "stage", {}, {},
+       "units/00000000.fsimir", std::string(64, 'a')},
+      {"vhdl", "architecture", "rtl", "counter", "rtl",
+       "units/00000001.fsimir", std::string(64, 'b')}};
+  metadata.native_artifacts = {{
+      "llvm_object", "native/llvm/fixture.fobj", std::string(64, 'd'),
+      1, 0, {}, "22.1.0", "x86_64-test", "e-m:e-p:64:64", "generic",
+      "+sse2", "O2", std::string(64, 'e')}};
+  return metadata;
+}
+
+}  // namespace
+
+int main() {
+  const auto expected = example_metadata();
+  const auto serialized = fsim::library::serialize_metadata(expected);
+  assert(serialized.starts_with(
+      "format = 1\nlibrary = \"vendor\"\nproducer = \"fsim 0.2.0-dev\"\n"));
+  assert(serialized.find("[[dependency]]") != std::string::npos);
+  assert(serialized.find("artifact = \"units/00000001.fsimir\"")
+      != std::string::npos);
+  assert(serialized.find("[[native]]") != std::string::npos);
+
+  fsim::diagnostic::Engine parse_diagnostics;
+  const auto parsed = fsim::library::parse_metadata(
+      serialized, "fsim-library.toml", parse_diagnostics);
+  assert(parsed.has_value());
+  assert(!parse_diagnostics.has_error());
+  assert(*parsed == expected);
+  assert(fsim::library::serialize_metadata(*parsed) == serialized);
+
+  const auto directory = workspace() / "vendor.fsimlib";
+  std::filesystem::create_directories(directory);
+  {
+    std::ofstream output(
+        directory / fsim::library::kMetadataFilename, std::ios::binary);
+    output << serialized;
+    assert(output.good());
+  }
+  fsim::diagnostic::Engine load_diagnostics;
+  const auto loaded = fsim::library::load_metadata(
+      directory, "vendor", load_diagnostics);
+  assert(loaded == parsed);
+  assert(!load_diagnostics.has_error());
+  // Metadata loading is deliberately lazy: neither indexed payload exists.
+  assert(!std::filesystem::exists(directory / "units"));
+
+  const auto published = directory.parent_path() / "published.fsimlib";
+  auto published_metadata = expected;
+  const std::vector<fsim::library::PortablePayload> payloads{
+      {"units/00000000.fsimir", "first portable unit"},
+      {"units/00000001.fsimir", "second portable unit"},
+      {"sources/00000000/stage.sv", "module stage; endmodule\n"},
+      {"native/llvm/fixture.fobj", "native object fixture"}};
+  for (std::size_t index = 0; index < published_metadata.units.size(); ++index) {
+    published_metadata.units[index].checksum = fsim::support::Sha256::hex(
+        fsim::support::Sha256::digest(payloads[index].bytes));
+  }
+  published_metadata.sources.front().checksum = fsim::support::Sha256::hex(
+      fsim::support::Sha256::digest(payloads[2].bytes));
+  published_metadata.native_artifacts.front().checksum =
+      fsim::support::Sha256::hex(
+          fsim::support::Sha256::digest(payloads[3].bytes));
+  fsim::diagnostic::Engine publish_diagnostics;
+  assert(fsim::library::publish(
+      published, published_metadata, payloads, publish_diagnostics));
+  assert(!publish_diagnostics.has_error());
+  assert(std::filesystem::is_regular_file(
+      published / fsim::library::kMetadataFilename));
+  assert(std::filesystem::is_regular_file(
+      published / "units" / "00000000.fsimir"));
+  fsim::diagnostic::Engine published_load_diagnostics;
+  assert(fsim::library::load_metadata(
+      published, "vendor", published_load_diagnostics)
+      == std::optional{published_metadata});
+  fsim::diagnostic::Engine overwrite_diagnostics;
+  assert(!fsim::library::publish(
+      published, published_metadata, payloads, overwrite_diagnostics));
+
+  auto bad_payloads = payloads;
+  bad_payloads.front().bytes = "corrupt";
+  const auto rejected = directory.parent_path() / "rejected.fsimlib";
+  fsim::diagnostic::Engine rejected_diagnostics;
+  assert(!fsim::library::publish(
+      rejected, published_metadata, bad_payloads, rejected_diagnostics));
+  assert(!std::filesystem::exists(rejected));
+
+  const auto parsed_source = fsim::frontend::parse_text(
+      "sources/stage.sv",
+      R"sv(module stage #(parameter int WIDTH = 4) (
+  input logic [WIDTH-1:0] value,
+  output logic [WIDTH-1:0] result
+);
+  typedef struct packed { logic flag; logic [2:0] payload; } packet_t;
+  packet_t packet;
+  function automatic logic [WIDTH-1:0] invert(
+      input logic [WIDTH-1:0] operand);
+    invert = ~operand;
+  endfunction
+  always_comb begin
+    packet = '{default: '0};
+    result = invert(value);
+  end
+endmodule
+)sv",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(parsed_source.ok());
+  assert(parsed_source.design.units.size() == 1);
+  auto source_unit = parsed_source.design.units.front();
+  source_unit.library = "vendor";
+  fsim::diagnostic::Engine unit_write_diagnostics;
+  const auto unit_bytes = fsim::library::serialize_portable_unit(
+      source_unit, unit_write_diagnostics);
+  assert(unit_bytes.has_value());
+  assert(!unit_write_diagnostics.has_error());
+  fsim::diagnostic::Engine unit_read_diagnostics;
+  const auto restored_unit = fsim::library::deserialize_portable_unit(
+      *unit_bytes, "units/stage.fsimir", unit_read_diagnostics);
+  assert(restored_unit.has_value());
+  assert(!unit_read_diagnostics.has_error());
+  assert(restored_unit->library == "vendor");
+  assert(restored_unit->name == "stage");
+  assert(restored_unit->parameters.size() == 1);
+  assert(restored_unit->functions.size() == 1);
+  fsim::diagnostic::Engine repeat_diagnostics;
+  assert(fsim::library::serialize_portable_unit(
+      *restored_unit, repeat_diagnostics) == unit_bytes);
+
+  source_unit.span.source_name = "/producer/private/stage.sv";
+  fsim::diagnostic::Engine absolute_diagnostics;
+  assert(!fsim::library::serialize_portable_unit(
+      source_unit, absolute_diagnostics));
+  assert(std::ranges::any_of(
+      absolute_diagnostics.diagnostics(),
+      [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-LIB-0006"
+            && diagnostic.message.find("producer-absolute")
+                != std::string::npos;
+      }));
+  fsim::diagnostic::Engine relocation_diagnostics;
+  assert(fsim::library::relocate_unit_sources(
+      source_unit,
+      std::vector<fsim::library::SourceNameMapping>{
+          {"/producer/private/stage.sv", "sources/00000000/stage.sv"}},
+      relocation_diagnostics));
+  assert(source_unit.span.source_name == "sources/00000000/stage.sv");
+  assert(fsim::library::serialize_portable_unit(
+      source_unit, relocation_diagnostics));
+
+  source_unit.span.physical_source_name = "/unmapped/include.svh";
+  fsim::diagnostic::Engine missing_relocation_diagnostics;
+  assert(!fsim::library::relocate_unit_sources(
+      source_unit, {}, missing_relocation_diagnostics));
+  assert(std::ranges::any_of(
+      missing_relocation_diagnostics.diagnostics(),
+      [](const auto& diagnostic) {
+        return diagnostic.message.find("/unmapped/include.svh")
+            != std::string::npos;
+      }));
+
+  auto trailing_unit = *unit_bytes;
+  trailing_unit.push_back('\0');
+  fsim::diagnostic::Engine trailing_diagnostics;
+  assert(!fsim::library::deserialize_portable_unit(
+      trailing_unit, "trailing.fsimir", trailing_diagnostics));
+  auto future_unit = *unit_bytes;
+  future_unit[8] = '\2';
+  fsim::diagnostic::Engine future_diagnostics;
+  assert(!fsim::library::deserialize_portable_unit(
+      future_unit, "future.fsimir", future_diagnostics));
+
+  fsim::diagnostic::Engine wrong_name_diagnostics;
+  assert(!fsim::library::load_metadata(
+      directory, "other", wrong_name_diagnostics));
+  assert(std::ranges::any_of(
+      wrong_name_diagnostics.diagnostics(),
+      [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-LIB-0003"
+            && diagnostic.message.find("metadata for 'vendor'")
+                != std::string::npos;
+      }));
+
+  auto invalid_text = serialized;
+  const auto safe_path = invalid_text.find("units/00000000.fsimir");
+  assert(safe_path != std::string::npos);
+  invalid_text.replace(
+      safe_path, std::string{"units/00000000.fsimir"}.size(),
+      "../escape.fsimir");
+  fsim::diagnostic::Engine path_diagnostics;
+  assert(!fsim::library::parse_metadata(
+      invalid_text, "unsafe.toml", path_diagnostics));
+  assert(std::ranges::any_of(
+      path_diagnostics.diagnostics(),
+      [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-LIB-0003"
+            && diagnostic.message.find("contained relative")
+                != std::string::npos;
+      }));
+
+  auto duplicate_path_metadata = expected;
+  duplicate_path_metadata.sources.front().artifact =
+      duplicate_path_metadata.units.front().artifact;
+  fsim::diagnostic::Engine duplicate_path_diagnostics;
+  assert(!fsim::library::parse_metadata(
+      fsim::library::serialize_metadata(duplicate_path_metadata),
+      "duplicate-path.toml", duplicate_path_diagnostics));
+  assert(std::ranges::any_of(
+      duplicate_path_diagnostics.diagnostics(),
+      [](const auto& diagnostic) {
+        return diagnostic.message.find("payload paths must be unique")
+            != std::string::npos;
+      }));
+
+  auto incompatible_text = serialized;
+  incompatible_text.replace(
+      incompatible_text.find("format = 1"),
+      std::string{"format = 1"}.size(), "format = 99");
+  fsim::diagnostic::Engine schema_diagnostics;
+  assert(!fsim::library::parse_metadata(
+      incompatible_text, "future.toml", schema_diagnostics));
+  assert(std::ranges::any_of(
+      schema_diagnostics.diagnostics(),
+      [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-LIB-0002";
+      }));
+
+  std::error_code ignored;
+  std::filesystem::remove_all(directory.parent_path(), ignored);
+  std::cout << "library_artifact_test: all tests passed\n";
+  return 0;
+}

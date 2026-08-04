@@ -102,6 +102,19 @@ are therefore excluded.
 | `FSIM-FE-PARSE-001` | error | A parser expectation using the common fallback code failed. |
 | `FSIM-FE-PP-0001` | error | Include directories or macro definitions were supplied for a VHDL source set; these settings apply only to Verilog/SystemVerilog or SystemC. |
 
+## Precompiled library artifacts
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `FSIM-LIB-0001` | error | `fsim-library.toml` contains malformed or duplicate syntax. |
+| `FSIM-LIB-0002` | error | The directory uses an unsupported `.fsimlib` or portable-unit schema. |
+| `FSIM-LIB-0003` | error | Metadata contains an unsafe, incomplete, mismatched, duplicate, or otherwise invalid value. |
+| `FSIM-LIB-0004` | error | Mapped-library metadata cannot be opened or read. |
+| `FSIM-LIB-0005` | error | Transactional publication, payload validation, permissions, or atomic installation failed. |
+| `FSIM-LIB-0006` | error | A portable owning unit is malformed, incompatible, truncated, cyclic, excessively nested, or retains unmapped producer-absolute source provenance. |
+| `FSIM-LIB-0007` | error | Project-library export cannot revalidate a source, serialize a unit, reproduce a portable SystemC build, compile/read a native variant, or complete publication. |
+| `FSIM-LIB-0008` | error | A lazily selected mapped library, dependency, payload, unit identity, checksum, native admission, or consumer-cache installation failed. |
+
 ## VHDL frontend
 
 ### VHDL syntax

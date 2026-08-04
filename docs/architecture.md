@@ -538,6 +538,39 @@ exposed through a root-level port or signal. VHDL and SystemC cross-root
 communication likewise uses their defined ports, signals, packages, or common
 kernel services rather than arbitrary foreign hierarchy shortcuts.
 
+Schema-2 `[[library_map]]` records and repeated `--map-library
+LIBRARY=DIRECTORY` replacements map a logical library to one read-only,
+relocatable `.fsimlib` directory. A mapping is metadata-only until a qualified
+top, explicit binding, visible VHDL library reference, or complete unqualified
+search scope actually queries it. The loader then verifies canonical
+`fsim-library.toml` metadata, declared dependency order, every selected payload
+checksum, and each indexed unit identity before committing restored units.
+Dependencies are logical names with explicit mappings; fsim never searches
+neighboring host directories. Portable VHDL and SystemVerilog owning unit
+graphs restore directly into the candidate index without invoking a
+preprocessor or parser. Bundled logical source names and optional source text
+remain artifact-relative, so diagnostics, debugger breakpoints, VCD, and cache
+identity survive moving the complete directory.
+
+`fsim build --export-library LIBRARY=DIRECTORY` publishes through a sibling
+staging tree and one directory rename, refuses replacement, and removes partial
+staging state after failure. The final tree is read-only. All design caches,
+recompiled SystemC images, LLVM objects, trace output, and debugger state live
+under the consumer cache instead. Optional host-native variants are
+accelerators only. A SystemC image requires exact runtime/SystemC ABI,
+compiler, target, CPU policy, and content identities. An LLVM object also
+requires the exact LLVM version, runtime/frame/result ABI sizes, target triple,
+data layout, CPU, sorted feature set, optimization level, object key, and
+checksum. LLVM exports compile optional objects from a temporary self-mapped
+portable artifact, ensuring producer and consumer use identical relocated
+source provenance. Any compatibility mismatch falls back to the portable unit
+or bundled SystemC source; a compatible but corrupt payload is an integrity
+error. Accepted native fingerprints and ordered metadata/unit/source identities
+participate in cache provenance, while the mapped directory's absolute path
+does not. Format-1 SystemC publication rejects producer-only include paths,
+definitions, compiler/linker options, and external libraries rather than
+publishing a bundled-source fallback that cannot reproduce the producer build.
+
 The hierarchy is deliberately bidirectional for SystemC. An HDL instance
 path may bind to a registered SystemC factory. During its elaboration, a
 SystemC factory may mark a normally constructed child module as an HDL proxy;

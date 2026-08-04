@@ -145,6 +145,18 @@ typedef struct fsim_object_info {
   uint32_t source_column;
 } fsim_object_info_t;
 
+typedef struct fsim_mapped_library_info {
+  uint32_t struct_size;
+  uint32_t api_version;
+  fsim_string_view_t library;
+  fsim_string_view_t metadata_digest;
+  uint64_t unit_count;
+  uint32_t native_accepted;
+  uint32_t reserved;
+  fsim_string_view_t native_kind;
+  fsim_string_view_t native_fingerprint;
+} fsim_mapped_library_info_t;
+
 #define FSIM_STRUCT_HEADER_SIZE \
   (offsetof(fsim_session_options_t, max_deltas))
 #define FSIM_OBJECT_INFO_V1_SIZE \
@@ -249,6 +261,13 @@ FSIM_PUBLIC fsim_status_t fsim_session_get_object_info(
     fsim_session_t session,
     fsim_object_t object,
     fsim_object_info_t* out_info);
+FSIM_PUBLIC fsim_status_t fsim_session_mapped_library_count(
+    fsim_session_t session,
+    size_t* out_count);
+FSIM_PUBLIC fsim_status_t fsim_session_get_mapped_library_info(
+    fsim_session_t session,
+    size_t index,
+    fsim_mapped_library_info_t* out_info);
 
 // Values use fsim's canonical textual representation. If buffer is NULL or too
 // small, out_required receives the required byte count including the trailing

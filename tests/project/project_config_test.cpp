@@ -82,6 +82,14 @@ resolver = "sv_wire"
 [elaboration]
 search_libraries = ["vendor", "shared", "vendor"]
 
+[[library_map]]
+library = "vendor"
+path = "libraries/vendor.fsimlib"
+
+[[library_map]]
+library = "shared"
+path = "../shared.fsimlib"
+
 [build]
 optimization = "O3"
 jobs = 4
@@ -146,6 +154,12 @@ libraries = ["m"]
         config->elaboration.search_libraries
             == std::vector<std::string>{"vendor", "shared", "vendor"},
         "elaboration search libraries retain declared order");
+    check(
+        config->library_mappings
+            == std::vector<fsim::project::LibraryMapping>{
+                {"vendor", workspace / "libraries" / "vendor.fsimlib"},
+                {"shared", workspace.parent_path() / "shared.fsimlib"}},
+        "ordered library mappings retain names and manifest-relative paths");
     check(
         config->build.optimization == fsim::project::Optimization::o3,
         "optimization is parsed");
@@ -331,6 +345,102 @@ files = ["top.sv"]
       "empty search-library names use the stable value diagnostic");
 }
 
+void test_library_mapping_validation() {
+  fsim::diagnostic::Engine mapping_only_diagnostics;
+  const auto mapping_only = fsim::project::parse(
+      "schema = 2\n[project]\ntop = \"sv:vendor.top\"\n"
+      "[[library_map]]\nlibrary = \"vendor\"\n"
+      "path = \"vendor.fsimlib\"\n",
+      "mapping-only.toml", ".", mapping_only_diagnostics);
+  check(
+      mapping_only.has_value(),
+      "a mapping-only precompiled-library project is accepted");
+
+  const auto parse_mapping = [](const std::string_view mapping_text) {
+    fsim::diagnostic::Engine diagnostics;
+    const auto config = fsim::project::parse(
+        "schema = 2\n[project]\ntop = \"top\"\n"
+        "[[source_set]]\nlanguage = \"systemverilog\"\n"
+        "library = \"work\"\nfiles = [\"top.sv\"]\n"
+            + std::string{mapping_text},
+        "bad-mapping.toml",
+        ".",
+        diagnostics);
+    return std::pair{std::move(config), std::move(diagnostics)};
+  };
+
+  auto [duplicate, duplicate_diagnostics] = parse_mapping(R"toml(
+[[library_map]]
+library = "vendor"
+path = "one.fsimlib"
+[[library_map]]
+library = "VENDOR"
+path = "two.fsimlib"
+)toml");
+  check(!duplicate.has_value(), "case-folded duplicate mappings are rejected");
+  check(
+      std::ranges::any_of(
+          duplicate_diagnostics.diagnostics(),
+          [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-PROJ-0004"
+                && diagnostic.message.find("duplicate mapped")
+                    != std::string::npos;
+          }),
+      "duplicate mappings use the stable duplicate diagnostic");
+
+  auto [colliding, colliding_diagnostics] = parse_mapping(R"toml(
+[[library_map]]
+library = "work"
+path = "work.fsimlib"
+)toml");
+  check(!colliding.has_value(), "project-built library collisions are rejected");
+  check(
+      std::ranges::any_of(
+          colliding_diagnostics.diagnostics(),
+          [](const auto& diagnostic) {
+            return diagnostic.message.find("project-built")
+                != std::string::npos;
+          }),
+      "project-built collisions receive a targeted diagnostic");
+
+  auto [unsafe, unsafe_diagnostics] = parse_mapping(R"toml(
+[[library_map]]
+library = "../vendor"
+path = "vendor.fsimlib"
+[[library_map]]
+library = "ieee"
+path = "ieee.fsimlib"
+[[library_map]]
+library = "missing_path"
+)toml");
+  check(!unsafe.has_value(), "unsafe, reserved, and incomplete mappings reject");
+  check(
+      std::ranges::any_of(
+          unsafe_diagnostics.diagnostics(),
+          [](const auto& diagnostic) {
+            return diagnostic.message.find("only letters, digits")
+                != std::string::npos;
+          }),
+      "path-unsafe logical names receive a targeted diagnostic");
+  check(
+      std::ranges::any_of(
+          unsafe_diagnostics.diagnostics(),
+          [](const auto& diagnostic) {
+            return diagnostic.message.find("reserved by fsim")
+                != std::string::npos;
+          }),
+      "reserved mapped libraries receive a targeted diagnostic");
+  check(
+      std::ranges::any_of(
+          unsafe_diagnostics.diagnostics(),
+          [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-PROJ-0006"
+                && diagnostic.message.find("non-empty 'path'")
+                    != std::string::npos;
+          }),
+      "missing mapping paths use the stable required-value diagnostic");
+}
+
 void test_schema_migration() {
   const auto workspace = make_workspace();
   const auto manifest = workspace / "fsim.toml";
@@ -458,6 +568,7 @@ int main() {
   test_multiple_top_manifest_model();
   test_schema_and_unknown_key_errors();
   test_elaboration_search_library_validation();
+  test_library_mapping_validation();
   test_schema_migration();
   test_json_diagnostics_are_escaped();
   test_zero_time_resolution_is_rejected();

@@ -7,6 +7,28 @@
 
 namespace fsim::test {
 
+namespace {
+
+void make_tree_writable(const std::filesystem::path& root) noexcept {
+  std::error_code error;
+  if (!std::filesystem::exists(root, error)) {
+    return;
+  }
+  for (std::filesystem::recursive_directory_iterator iterator(root, error), end;
+       !error && iterator != end;
+       iterator.increment(error)) {
+    std::filesystem::permissions(
+        iterator->path(), std::filesystem::perms::owner_all,
+        std::filesystem::perm_options::add, error);
+    error.clear();
+  }
+  std::filesystem::permissions(
+      root, std::filesystem::perms::owner_all,
+      std::filesystem::perm_options::add, error);
+}
+
+}  // namespace
+
 ApplicationTestFixture::ApplicationTestFixture()
     : directory(
           std::filesystem::temp_directory_path()
@@ -22,6 +44,7 @@ ApplicationTestFixture::ApplicationTestFixture()
 }
 
 ApplicationTestFixture::~ApplicationTestFixture() {
+  make_tree_writable(directory);
   std::error_code error;
   std::filesystem::remove_all(directory, error);
 }
@@ -45,8 +68,6 @@ systemc_sources.language = fsim::project::Language::systemc;
 systemc_sources.standard = "2023-subset";
 systemc_sources.library = "models";
 systemc_sources.files.push_back(systemc_source);
-systemc_sources.include_directories.emplace_back(
-    std::filesystem::path{FSIM_TEST_SOURCE_DIR} / "include");
 config.source_sets.push_back(std::move(systemc_sources));
   return config;
 }

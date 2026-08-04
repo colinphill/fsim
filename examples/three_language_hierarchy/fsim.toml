@@ -19,7 +19,6 @@ language = "systemc"
 standard = "2023-subset"
 library = "models"
 files = ["mixed_bridge.cpp"]
-include_dirs = ["../../include"]
 
 [[source_set]]
 language = "vhdl"

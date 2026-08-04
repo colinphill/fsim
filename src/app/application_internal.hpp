@@ -689,6 +689,11 @@ std::string compilation_unit_digest(
 
 ParsedSnapshot parse_group_snapshot(const ParseGroup& group);
 
+bool load_required_mapped_libraries(
+    const project::Config& config,
+    CheckedProject& checked,
+    diagnostic::Engine& diagnostics);
+
 std::optional<systemc::PluginCompileRequest> systemc_request(
     const project::Config& config);
 

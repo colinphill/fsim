@@ -69,6 +69,16 @@ struct Binding {
   std::optional<std::string> resolver;
 };
 
+// Maps one logical library to a relocatable, read-only precompiled library
+// directory. Paths parsed from a manifest are absolute and normalized against
+// the manifest directory; programmatic callers may provide absolute paths.
+struct LibraryMapping {
+  std::string library;
+  std::filesystem::path path;
+
+  friend bool operator==(const LibraryMapping&, const LibraryMapping&) = default;
+};
+
 struct ElaborationSection {
   // Unqualified lookup uses the parent logical library followed by first
   // occurrences from this ordered list as one complete ambiguity scope.
@@ -105,6 +115,7 @@ struct Config {
   ProjectSection project;
   std::vector<SourceSet> source_sets;
   std::vector<Binding> bindings;
+  std::vector<LibraryMapping> library_mappings;
   ElaborationSection elaboration;
   BuildSection build;
   RunSection run;

@@ -122,6 +122,39 @@ if(NOT FSIM_SYSTEMC_FIBER_MODE_NORMALIZED MATCHES "^(AUTO|ON|OFF)$")
   )
 endif()
 
+# Portable owning-unit serialization uses Boost.PFR only as a compile-time
+# aggregate field enumerator. It contributes no runtime ABI and field order is
+# fixed by the fsim portable schema, so any installed PFR is sufficient. Fall
+# back to the same checksum-pinned Boost source used by SystemC fibers.
+find_path(FSIM_BOOST_PFR_INCLUDE_DIR boost/pfr/core.hpp)
+if(NOT FSIM_BOOST_PFR_INCLUDE_DIR)
+  include(FetchContent)
+  string(
+    REPLACE "." "_"
+    FSIM_BOOST_ARCHIVE_VERSION
+    "${FSIM_BOOST_VERSION}"
+  )
+  FetchContent_Declare(
+    fsim_boost
+    URL
+      "https://archives.boost.io/release/${FSIM_BOOST_VERSION}/source/boost_${FSIM_BOOST_ARCHIVE_VERSION}.tar.bz2"
+    URL_HASH
+      "SHA256=${FSIM_BOOST_SOURCE_SHA256}"
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  )
+  message(
+    STATUS
+    "Boost.PFR was not found; fetching pinned Boost ${FSIM_BOOST_VERSION}"
+  )
+  FetchContent_MakeAvailable(fsim_boost)
+  set(FSIM_BOOST_PFR_INCLUDE_DIR "${fsim_boost_SOURCE_DIR}")
+endif()
+add_library(fsim_boost_pfr_headers INTERFACE)
+target_include_directories(
+  fsim_boost_pfr_headers
+  SYSTEM INTERFACE "${FSIM_BOOST_PFR_INCLUDE_DIR}"
+)
+
 set(FSIM_WITH_SYSTEMC_FIBERS OFF)
 if(NOT FSIM_SYSTEMC_FIBER_MODE_NORMALIZED STREQUAL "OFF")
   find_package(
@@ -474,6 +507,16 @@ add_library(
 add_library(fsim::support ALIAS fsim_support)
 fsim_configure_library(fsim_support)
 
+add_library(
+  fsim_library STATIC
+  src/library/artifact.cpp
+  src/library/portable_unit.cpp
+)
+add_library(fsim::library ALIAS fsim_library)
+fsim_configure_library(fsim_library)
+target_link_libraries(fsim_library PUBLIC fsim_diagnostic fsim_support)
+target_link_libraries(fsim_library PRIVATE fsim_boost_pfr_headers fsim_frontend)
+
 add_library(fsim_object_cache STATIC src/compiler/object_cache.cpp)
 add_library(fsim::object_cache ALIAS fsim_object_cache)
 fsim_configure_library(fsim_object_cache)
@@ -545,6 +588,8 @@ endif()
 target_compile_definitions(
   fsim_systemc
   PRIVATE
+    FSIM_SYSTEMC_HEADER_PATH="${PROJECT_SOURCE_DIR}/include"
+    FSIM_SYSTEMC_INSTALLED_HEADER_PATH="${CMAKE_INSTALL_FULL_INCLUDEDIR}"
     FSIM_SYSTEMC_SUPPORT_LIBRARY_PATH="$<TARGET_FILE:fsim_systemc_support>"
     FSIM_SYSTEMC_INSTALLED_SUPPORT_LIBRARY_PATH="${CMAKE_INSTALL_FULL_LIBDIR}/${CMAKE_STATIC_LIBRARY_PREFIX}fsim_systemc_support${CMAKE_STATIC_LIBRARY_SUFFIX}"
     FSIM_SYSTEMC_FIBER_IDENTITY="${FSIM_SYSTEMC_FIBER_IDENTITY}"
@@ -675,6 +720,8 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_executor_frame.cpp
       src/app/application_executors.cpp
       src/app/application_executor_services.cpp
+      src/app/application_library_export.cpp
+      src/app/application_library_import.cpp
       src/app/application_run.cpp
       src/app/application_semantic.cpp
       src/app/application_systemverilog_hir.cpp
@@ -710,6 +757,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
     PUBLIC
       fsim_cli
       fsim_elaboration
+      fsim_library
       fsim_object_cache
       fsim_systemc
   )

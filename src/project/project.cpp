@@ -294,6 +294,7 @@ enum class Context {
   top,
   source_set,
   binding,
+  library_map,
   elaboration,
   build,
   run,
@@ -321,6 +322,24 @@ std::string default_standard(const Language language) {
       return "2023-subset";
   }
   return {};
+}
+
+bool valid_library_name(const std::string_view value) {
+  if (value.empty()) {
+    return false;
+  }
+  const auto identifier_character = [](const unsigned char character) {
+    return std::isalnum(character) != 0 || character == '_';
+  };
+  const auto first = static_cast<unsigned char>(value.front());
+  if (std::isalpha(first) == 0 && first != '_') {
+    return false;
+  }
+  return std::ranges::all_of(
+      value.substr(1),
+      [&](const char character) {
+        return identifier_character(static_cast<unsigned char>(character));
+      });
 }
 
 bool parse_unsigned(const std::string_view spelling, std::uint64_t& result) {
@@ -464,6 +483,12 @@ class Parser {
         binding_has_instance_.push_back(false);
         context_ = Context::binding;
         context_index_ = config_.bindings.size() - 1;
+      } else if (normalized == "library_map") {
+        config_.library_mappings.emplace_back();
+        library_map_has_library_.push_back(false);
+        library_map_has_path_.push_back(false);
+        context_ = Context::library_map;
+        context_index_ = config_.library_mappings.size() - 1;
       } else if (normalized == "project.top") {
         config_.project.tops.emplace_back();
         top_has_target_.push_back(false);
@@ -609,6 +634,8 @@ class Parser {
         return "source_set#" + std::to_string(context_index_);
       case Context::binding:
         return "binding#" + std::to_string(context_index_);
+      case Context::library_map:
+        return "library_map#" + std::to_string(context_index_);
       case Context::elaboration:
         return "elaboration";
       case Context::build:
@@ -704,6 +731,9 @@ class Parser {
         break;
       case Context::binding:
         assign_binding(key, value, key_span);
+        break;
+      case Context::library_map:
+        assign_library_map(key, value, key_span);
         break;
       case Context::elaboration:
         assign_elaboration(key, value, key_span);
@@ -873,6 +903,27 @@ class Parser {
       binding.target = value.text;
     } else {
       binding.resolver = value.text;
+    }
+  }
+
+  void assign_library_map(
+      const std::string& key,
+      const Value& value,
+      const diagnostic::SourceSpan& span) {
+    if (key != "library" && key != "path") {
+      unknown_key(key, span);
+      return;
+    }
+    if (!require_kind(value, Value::Kind::string, key, "a string")) {
+      return;
+    }
+    auto& mapping = config_.library_mappings[context_index_];
+    if (key == "library") {
+      mapping.library = value.text;
+      library_map_has_library_[context_index_] = true;
+    } else {
+      mapping.path = fsim::support::path_from_utf8(value.text);
+      library_map_has_path_[context_index_] = true;
     }
   }
 
@@ -1114,10 +1165,10 @@ class Parser {
       diagnostics_.error(
           std::string(kValueCode), "[run].max_deltas must be greater than zero", document_span);
     }
-    if (config_.source_sets.empty()) {
+    if (config_.source_sets.empty() && config_.library_mappings.empty()) {
       diagnostics_.error(
           std::string(kRequiredCode),
-          "the project must declare at least one [[source_set]]",
+          "the project must declare at least one [[source_set]] or [[library_map]]",
           document_span);
     }
 
@@ -1126,6 +1177,57 @@ class Parser {
         diagnostics_.error(
             std::string(kValueCode),
             "[elaboration].search_libraries contains an empty library name",
+            document_span);
+      }
+    }
+
+    std::unordered_set<std::string> built_libraries;
+    for (const auto& source_set : config_.source_sets) {
+      built_libraries.insert(lowercase(source_set.library));
+    }
+    std::unordered_set<std::string> mapped_libraries;
+    for (std::size_t index = 0; index < config_.library_mappings.size(); ++index) {
+      const auto& mapping = config_.library_mappings[index];
+      const auto number = std::to_string(index + 1);
+      if (!library_map_has_library_[index] || mapping.library.empty()) {
+        diagnostics_.error(
+            std::string(kRequiredCode),
+            "[[library_map]] #" + number
+                + " is missing a non-empty 'library'",
+            document_span);
+      } else if (!valid_library_name(mapping.library)) {
+        diagnostics_.error(
+            std::string(kValueCode),
+            "mapped logical library '" + mapping.library
+                + "' must start with a letter or underscore and contain only "
+                  "letters, digits, and underscores",
+            document_span);
+      } else {
+        const auto normalized = lowercase(mapping.library);
+        if (normalized == "std" || normalized == "ieee"
+            || normalized == "fsim") {
+          diagnostics_.error(
+              std::string(kValueCode),
+              "mapped logical library '" + mapping.library
+                  + "' is reserved by fsim",
+              document_span);
+        } else if (!mapped_libraries.insert(normalized).second) {
+          diagnostics_.error(
+              std::string(kDuplicateCode),
+              "duplicate mapped logical library '" + mapping.library + "'",
+              document_span);
+        } else if (built_libraries.contains(normalized)) {
+          diagnostics_.error(
+              std::string(kDuplicateCode),
+              "mapped logical library '" + mapping.library
+                  + "' collides with a project-built source library",
+              document_span);
+        }
+      }
+      if (!library_map_has_path_[index] || mapping.path.empty()) {
+        diagnostics_.error(
+            std::string(kRequiredCode),
+            "[[library_map]] #" + number + " is missing a non-empty 'path'",
             document_span);
       }
     }
@@ -1303,6 +1405,8 @@ class Parser {
   std::vector<bool> source_has_language_;
   std::vector<bool> source_has_files_;
   std::vector<bool> binding_has_instance_;
+  std::vector<bool> library_map_has_library_;
+  std::vector<bool> library_map_has_path_;
   std::vector<bool> top_has_target_;
   std::vector<bool> top_has_alias_;
 };
@@ -1476,6 +1580,9 @@ void resolve_paths(Config& config, diagnostic::Engine& diagnostics) {
           std::make_move_iterator(expanded.begin()),
           std::make_move_iterator(expanded.end()));
     }
+  }
+  for (auto& mapping : config.library_mappings) {
+    mapping.path = absolute_normalized(mapping.path, base);
   }
   config.build.cache_path = absolute_normalized(config.build.cache_path, base);
   if (config.run.trace_file.has_value()) {

@@ -95,11 +95,23 @@ std::string make_cache_key(
       ++hdl_source_index;
     }
   }
-  if (hdl_source_index != checked.hdl_sources.size()) {
-    diagnostics.error(
-        "FSIM-CACHE-0001",
-        "parsed HDL source count is inconsistent with the project manifest");
-    return {};
+  for (const auto& mapped : checked.mapped_libraries) {
+    key.add("mapped-library", mapped.library);
+    key.add("mapped-metadata", mapped.metadata_digest);
+    for (const auto& checksum : mapped.unit_checksums) {
+      key.add("mapped-unit", checksum);
+    }
+    key.add("mapped-native-accepted", mapped.native_accepted ? "1" : "0");
+    key.add("mapped-native-kind", mapped.native_kind);
+    key.add("mapped-native-fingerprint", mapped.native_fingerprint);
+  }
+  for (; hdl_source_index < checked.hdl_sources.size(); ++hdl_source_index) {
+    const auto& source = checked.hdl_sources[hdl_source_index];
+    key.add(
+        "mapped-source-path",
+        fsim::support::path_to_utf8(source.path.lexically_normal()));
+    key.add("mapped-source-content", source.content_digest);
+    key.add("mapped-source-compilation-unit", source.compilation_unit_digest);
   }
   for (const auto& source : checked.standard_sources) {
     key.add(
@@ -190,6 +202,29 @@ make_specialization_cache_keys(
               return SourceSettings{&source_set, checked_source};
             }
           }
+          for (const auto& mapped : checked.mapped_libraries) {
+            for (const auto& source_set : mapped.source_settings) {
+              const auto source_language =
+                  source_set.language == project::Language::vhdl
+                      ? semantic::Language::vhdl
+                      : source_set.language == project::Language::verilog
+                          ? semantic::Language::verilog
+                          : semantic::Language::system_verilog;
+              if (source_language != specialization.language
+                  || (require_specialization_library
+                      && source_set.library != specialization.library)) {
+                continue;
+              }
+              if (std::ranges::any_of(
+                      source_set.files,
+                      [&](const auto& candidate) {
+                        return same_source_path(
+                            candidate, checked_source->path);
+                      })) {
+                return SourceSettings{&source_set, checked_source};
+              }
+            }
+          }
         }
         if (specialization.language != semantic::Language::vhdl
             || (require_specialization_library
@@ -204,6 +239,14 @@ make_specialization_cache_keys(
         return std::nullopt;
       };
 
+#if defined(FSIM_HAS_LLVM)
+  const auto llvm_native_host_fingerprint =
+      compiler::LlvmJit::native_host_identity(
+          config.build.optimization == project::Optimization::o0
+              ? compiler::JitOptimizationLevel::o0
+              : compiler::JitOptimizationLevel::o2)
+          .fingerprint;
+#endif
   std::vector<std::string> result;
   result.reserve(design.specializations().size());
   for (const auto& specialization : design.specializations()) {
@@ -231,7 +274,7 @@ make_specialization_cache_keys(
     compiler::CacheKeyBuilder key;
     key.add(
         "specialization-provenance-schema",
-        "fsim-specialization-provenance-v7-library-search");
+        "fsim-specialization-provenance-v8-mapped-native");
     key.add("fsim-version", version);
     key.add("standard-library", standard_library_cache_version);
     key.add("delay-mode", project::to_string(config.run.delay_mode));
@@ -241,6 +284,9 @@ make_specialization_cache_keys(
     key.add("unit", specialization.name);
     key.add("selected-unit-identity", specialization.name);
     key.add("selected-logical-library", specialization.library);
+#if defined(FSIM_HAS_LLVM)
+    key.add("llvm-native-host", llvm_native_host_fingerprint);
+#endif
     std::vector<std::string> specialization_search_libraries;
     specialization_search_libraries.reserve(
         config.elaboration.search_libraries.size());
@@ -667,7 +713,7 @@ int handle_check(
 }
 
 int handle_build(
-    const cli::Invocation&,
+    const cli::Invocation& invocation,
     const project::Config& config,
     diagnostic::Engine& diagnostics,
     std::ostream& output,
@@ -685,6 +731,7 @@ int handle_build(
   const auto process_count = built->design_ir.processes().size();
   const auto plugin_count = built->systemc_plugins.size();
   const auto cache_hit = built->cache_hit;
+  const auto mapped_libraries = built->mapped_libraries;
   const auto selected_seed = built->seed;
   const auto entropy_seed_selected = built->entropy_seed;
   Simulation prepared(
@@ -693,6 +740,14 @@ int handle_build(
       SimulationEngine::compiled);
   report_native_cache_failures(prepared, diagnostics);
   const auto native_cache = prepared.native_cache_statistics();
+  for (const auto& request : invocation.library_exports) {
+    if (!export_library(
+            config, request.library, request.path, diagnostics)) {
+      return 1;
+    }
+    output << "exported logical library '" << request.library
+           << "' to " << support::path_to_utf8(request.path) << '\n';
+  }
   output << "built ";
   for (std::size_t index = 0; index < roots.size(); ++index) {
     if (index != 0) {
@@ -706,6 +761,18 @@ int handle_build(
   if (plugin_count != 0) {
     output << ", " << plugin_count
            << " validated SystemC plug-in artifact(s)";
+  }
+  if (!mapped_libraries.empty()) {
+    output << ", " << mapped_libraries.size()
+           << " mapped precompiled librar"
+           << (mapped_libraries.size() == 1 ? "y" : "ies") << " [";
+    for (std::size_t index = 0; index < mapped_libraries.size(); ++index) {
+      if (index != 0) {
+        output << ", ";
+      }
+      output << mapped_libraries[index].library;
+    }
+    output << ']';
   }
   output << ", " << prepared.compiled_process_count()
          << " LLVM-compiled process(es) in "

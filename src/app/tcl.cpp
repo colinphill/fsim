@@ -767,6 +767,18 @@ int project_command(
       result,
       "source_sets",
       unsigned_object(context.config.source_sets.size()));
+  Tcl_Obj* mappings = Tcl_NewListObj(0, nullptr);
+  for (const auto& mapping : context.config.library_mappings) {
+    Tcl_Obj* entry = Tcl_NewDictObj();
+    dict_put(interpreter, entry, "library", string_object(mapping.library));
+    dict_put(
+        interpreter, entry, "path",
+        string_object(fsim::support::path_to_utf8(mapping.path)));
+    if (Tcl_ListObjAppendElement(interpreter, mappings, entry) != TCL_OK) {
+      return TCL_ERROR;
+    }
+  }
+  dict_put(interpreter, result, "library_mappings", mappings);
   Tcl_SetObjResult(interpreter, result);
   return TCL_OK;
 }
@@ -851,6 +863,25 @@ int build_command(
       result,
       "cache_hit",
       Tcl_NewBooleanObj(context.built->cache_hit));
+  Tcl_Obj* mapped_libraries = Tcl_NewListObj(0, nullptr);
+  for (const auto& mapped : context.built->mapped_libraries) {
+    Tcl_Obj* entry = Tcl_NewDictObj();
+    dict_put(interpreter, entry, "library", string_object(mapped.library));
+    dict_put(
+        interpreter, entry, "metadata_digest",
+        string_object(mapped.metadata_digest));
+    dict_put(
+        interpreter, entry, "units",
+        unsigned_object(mapped.unit_checksums.size()));
+    dict_put(
+        interpreter, entry, "native_accepted",
+        Tcl_NewBooleanObj(mapped.native_accepted));
+    if (Tcl_ListObjAppendElement(
+            interpreter, mapped_libraries, entry) != TCL_OK) {
+      return TCL_ERROR;
+    }
+  }
+  dict_put(interpreter, result, "mapped_libraries", mapped_libraries);
   Tcl_SetObjResult(interpreter, result);
   return TCL_OK;
 }

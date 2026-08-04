@@ -28,10 +28,103 @@ std::string_view to_string(const HostToolchain toolchain) noexcept {
     return "unknown";
 }
 
+std::optional<std::string> plugin_host_fingerprint(
+    const project::SystemCSection& settings,
+    const std::filesystem::path& requested_working_directory,
+    diagnostic::Engine& diagnostics) {
+    auto effective_settings = settings;
+#if defined(FSIM_SYSTEMC_HEADER_PATH)
+    auto header_directory = std::filesystem::path{FSIM_SYSTEMC_HEADER_PATH};
+#if defined(FSIM_SYSTEMC_INSTALLED_HEADER_PATH)
+    std::error_code header_error;
+    if (!std::filesystem::is_directory(header_directory, header_error)) {
+        header_directory = FSIM_SYSTEMC_INSTALLED_HEADER_PATH;
+    }
+#endif
+    effective_settings.include_directories.insert(
+        effective_settings.include_directories.begin(), header_directory);
+#endif
+#if defined(FSIM_SYSTEMC_SUPPORT_LIBRARY_PATH)
+    auto support_library =
+        std::filesystem::path{FSIM_SYSTEMC_SUPPORT_LIBRARY_PATH};
+#if defined(FSIM_SYSTEMC_INSTALLED_SUPPORT_LIBRARY_PATH)
+    std::error_code support_error;
+    if (!std::filesystem::is_regular_file(support_library, support_error)) {
+        support_library = FSIM_SYSTEMC_INSTALLED_SUPPORT_LIBRARY_PATH;
+    }
+#endif
+    effective_settings.libraries.insert(
+        effective_settings.libraries.begin(), support_library.string());
+#endif
+    PluginCompileRequest request;
+    request.working_directory = requested_working_directory;
+    std::error_code error;
+    const auto working_directory = effective_working_directory(request, error);
+    if (error || working_directory.empty()) {
+        report_error(
+            diagnostics, "FSIM-SC-C001",
+            "cannot resolve SystemC compiler working directory: "
+                + error.message(),
+            requested_working_directory);
+        return std::nullopt;
+    }
+    const auto compiler_name = effective_settings.compiler.empty()
+        ? default_compiler() : effective_settings.compiler;
+    const auto toolchain = infer_toolchain(compiler_name);
+    if (!validate_options(effective_settings, toolchain, diagnostics)) {
+        return std::nullopt;
+    }
+    const auto resolved_compiler =
+        resolve_executable(compiler_name, working_directory);
+    compiler::CacheKeyBuilder builder;
+    builder.add("kind", "fsim-systemc-host-v1");
+    builder.add("source-language", "c++");
+    builder.add("source-standard", "c++20");
+    builder.add("runtime-abi", std::to_string(runtime_abi_version));
+    builder.add("systemc-abi", std::to_string(FSIM_SYSTEMC_ABI_VERSION));
+    builder.add("toolchain", to_string(toolchain));
+    builder.add("fiber-backend", FSIM_SYSTEMC_FIBER_IDENTITY);
+    if (toolchain == HostToolchain::msvc) {
+        builder.add("msvc-runtime", msvc_runtime_option());
+    }
+#if defined(_WIN32)
+    builder.add("host-format", "windows-pe-x86-64");
+#else
+    builder.add("host-format", "linux-elf-x86-64");
+#endif
+    if (!add_compiler_identity(builder, compiler_name, resolved_compiler)) {
+        report_dependency_cache_disabled(
+            diagnostics,
+            "the selected compiler executable identity could not be hashed",
+            resolved_compiler.empty()
+                ? std::filesystem::path{compiler_name} : resolved_compiler);
+        return std::nullopt;
+    }
+    add_compiler_environment_to_key(builder, toolchain);
+    add_sequence_to_key(builder, "define", effective_settings.defines);
+    add_sequence_to_key(
+        builder, "compile-option", effective_settings.compile_options);
+    add_sequence_to_key(
+        builder, "link-option", effective_settings.link_options);
+    add_sequence_to_key(builder, "library", effective_settings.libraries);
+    return builder.finish();
+}
+
 std::optional<PluginCompilePlan> plan_plugin_compile(
     const PluginCompileRequest& request,
     diagnostic::Engine& diagnostics) {
     auto effective_settings = request.settings;
+#if defined(FSIM_SYSTEMC_HEADER_PATH)
+    auto header_directory = std::filesystem::path{FSIM_SYSTEMC_HEADER_PATH};
+#if defined(FSIM_SYSTEMC_INSTALLED_HEADER_PATH)
+    std::error_code header_error;
+    if (!std::filesystem::is_directory(header_directory, header_error)) {
+        header_directory = FSIM_SYSTEMC_INSTALLED_HEADER_PATH;
+    }
+#endif
+    effective_settings.include_directories.insert(
+        effective_settings.include_directories.begin(), header_directory);
+#endif
 #if defined(FSIM_SYSTEMC_SUPPORT_LIBRARY_PATH)
     auto support_library =
         std::filesystem::path{FSIM_SYSTEMC_SUPPORT_LIBRARY_PATH};
@@ -145,6 +238,36 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     add_sequence_to_key(
         key_builder, "link-option", effective_settings.link_options);
     add_sequence_to_key(key_builder, "library", effective_settings.libraries);
+
+    compiler::CacheKeyBuilder host_builder;
+    host_builder.add("kind", "fsim-systemc-host-v1");
+    host_builder.add("source-language", "c++");
+    host_builder.add("source-standard", "c++20");
+    host_builder.add("runtime-abi", std::to_string(runtime_abi_version));
+    host_builder.add(
+        "systemc-abi", std::to_string(FSIM_SYSTEMC_ABI_VERSION));
+    host_builder.add("toolchain", to_string(toolchain));
+    host_builder.add("fiber-backend", FSIM_SYSTEMC_FIBER_IDENTITY);
+    if (toolchain == HostToolchain::msvc) {
+        host_builder.add("msvc-runtime", msvc_runtime_option());
+    }
+#if defined(_WIN32)
+    host_builder.add("host-format", "windows-pe-x86-64");
+#else
+    host_builder.add("host-format", "linux-elf-x86-64");
+#endif
+    (void)add_compiler_identity(
+        host_builder, compiler_name, resolved_compiler);
+    add_compiler_environment_to_key(host_builder, toolchain);
+    add_sequence_to_key(
+        host_builder, "define", effective_settings.defines);
+    add_sequence_to_key(
+        host_builder, "compile-option", effective_settings.compile_options);
+    add_sequence_to_key(
+        host_builder, "link-option", effective_settings.link_options);
+    add_sequence_to_key(
+        host_builder, "library", effective_settings.libraries);
+    const auto host_fingerprint = host_builder.finish();
     // Raw compiler/linker options can reference response files, plug-ins,
     // profiles, sysroots, forced includes, or other inputs with
     // toolchain-specific spelling. Keep supporting the literal argv contract,
@@ -204,6 +327,7 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     plan.toolchain = toolchain;
     plan.cacheable = cacheable;
     plan.cache_key = key;
+    plan.host_fingerprint = host_fingerprint;
     plan.library_path = artifact_directory / shared_library_filename();
     plan.build_path =
         artifact_directory
@@ -234,6 +358,7 @@ PluginCompileResult compile_plugin(
         return result;
     }
     result.cache_key = plan->cache_key;
+    result.host_fingerprint = plan->host_fingerprint;
     result.library_path = plan->library_path;
 
     std::error_code error;

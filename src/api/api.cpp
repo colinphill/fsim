@@ -1207,4 +1207,52 @@ fsim_status_t fsim_session_diagnostic_count(
   });
 }
 
+fsim_status_t fsim_session_mapped_library_count(
+    const fsim_session_t session,
+    size_t* out_count) {
+  if (out_count == nullptr) {
+    return FSIM_STATUS_INVALID_ARGUMENT;
+  }
+  return with_session(session, [&](Session& value) {
+    if (!ready(value, "mapped library inspection")) {
+      return FSIM_STATUS_UNAVAILABLE;
+    }
+    *out_count = value.simulation->mapped_libraries().size();
+    return FSIM_STATUS_OK;
+  });
+}
+
+fsim_status_t fsim_session_get_mapped_library_info(
+    const fsim_session_t session,
+    const size_t index,
+    fsim_mapped_library_info_t* out_info) {
+  if (out_info == nullptr) {
+    return FSIM_STATUS_INVALID_ARGUMENT;
+  }
+  if (!valid_struct_header(
+          out_info->struct_size,
+          out_info->api_version,
+          sizeof(fsim_mapped_library_info_t))) {
+    return FSIM_STATUS_INCOMPATIBLE_ABI;
+  }
+  return with_session(session, [&](Session& value) {
+    if (!ready(value, "mapped library inspection")) {
+      return FSIM_STATUS_UNAVAILABLE;
+    }
+    const auto& mapped = value.simulation->mapped_libraries();
+    if (index >= mapped.size()) {
+      return FSIM_STATUS_INVALID_ARGUMENT;
+    }
+    const auto& item = mapped[index];
+    out_info->library = view(item.library);
+    out_info->metadata_digest = view(item.metadata_digest);
+    out_info->unit_count = item.unit_checksums.size();
+    out_info->native_accepted = item.native_accepted ? 1U : 0U;
+    out_info->reserved = 0;
+    out_info->native_kind = view(item.native_kind);
+    out_info->native_fingerprint = view(item.native_fingerprint);
+    return FSIM_STATUS_OK;
+  });
+}
+
 }  // extern "C"

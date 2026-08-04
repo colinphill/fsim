@@ -6,6 +6,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -117,6 +118,63 @@ int main() {
     assert(
         output.str().find("tcl-hdl-output\n")
         != std::string::npos);
+    assert(error.str().empty());
+  }
+  const auto mapped_artifact = directory / "tcl-display.fsimlib";
+  fsim::diagnostic::Engine mapped_export_diagnostics;
+  const auto mapped_export_config = fsim::project::load(
+      display_manifest, mapped_export_diagnostics);
+  assert(mapped_export_config);
+  assert(fsim::app::export_library(
+      *mapped_export_config, "work", mapped_artifact,
+      mapped_export_diagnostics));
+  const auto mapped_manifest = directory / "mapped-display.toml";
+  {
+    std::ofstream file(mapped_manifest);
+    file
+        << "schema = 2\n"
+        << "[project]\n"
+        << "name = \"tcl-mapped-display\"\n"
+        << "top = \"sv:work.display\"\n"
+        << "time_resolution = \"1ns\"\n"
+        << "[[library_map]]\n"
+        << "library = \"work\"\n"
+        << "path = \"" << mapped_artifact.string() << "\"\n"
+        << "[build]\n"
+        << "cache_path = \"mapped-display-cache\"\n";
+  }
+  {
+    std::istringstream input;
+    std::ostringstream output;
+    std::ostringstream error;
+    const int result = run_cli(
+        {
+            "fsim", "tcl", "-p", mapped_manifest.string(),
+            "-c", R"tcl(
+set project [fsim::project]
+set mappings [dict get $project library_mappings]
+if {[llength $mappings] != 1} {error "bad mapping count"}
+if {[dict get [lindex $mappings 0] library] ne "work"} {
+  error "bad mapping library"
+}
+set built [fsim::build]
+set selected [dict get $built mapped_libraries]
+if {[llength $selected] != 1} {error "bad selected count"}
+set mapped [lindex $selected 0]
+if {[dict get $mapped library] ne "work" ||
+    [dict get $mapped units] != 1} {
+  error "bad mapped provenance"
+}
+if {[dict get $mapped native_accepted] ni {0 1}} {
+  error "bad native admission value"
+}
+)tcl",
+        },
+        input, output, error);
+    if (result != 0) {
+      std::cerr << error.str();
+    }
+    assert(result == 0);
     assert(error.str().empty());
   }
   const auto script = directory / "arguments.tcl";
@@ -784,6 +842,15 @@ puts "debug-callback-ok"
   }
 
   std::error_code remove_error;
+  for (std::filesystem::recursive_directory_iterator iterator(
+           directory, remove_error), end;
+       !remove_error && iterator != end;
+       iterator.increment(remove_error)) {
+    std::filesystem::permissions(
+        iterator->path(), std::filesystem::perms::owner_all,
+        std::filesystem::perm_options::add, remove_error);
+  }
+  remove_error.clear();
   std::filesystem::remove_all(directory, remove_error);
   assert(!remove_error);
   return 0;

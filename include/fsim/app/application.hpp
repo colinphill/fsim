@@ -40,9 +40,23 @@ struct CheckedSource {
   std::vector<Dependency> dependencies;
   /// Digest of every ordered root/include snapshot in this compilation unit.
   std::string compilation_unit_digest;
+  /// Optional consumer-local backing file for a relocatable logical path.
+  std::filesystem::path backing_path;
 };
 
 struct CheckedProject {
+  struct MappedLibrary {
+    std::string library;
+    std::filesystem::path directory;
+    std::string metadata_digest;
+    std::vector<std::string> unit_checksums;
+    std::vector<project::SourceSet> source_settings;
+    bool native_accepted{};
+    std::string native_kind;
+    std::string native_fingerprint;
+    std::filesystem::path systemc_plugin;
+    std::vector<std::filesystem::path> systemc_sources;
+  };
   frontend::ParsedDesign parsed;
   /// Parser-independent semantic identities and owned source provenance in
   /// deterministic manifest/declaration order. No record retains an address
@@ -60,7 +74,18 @@ struct CheckedProject {
   std::vector<CheckedSource> systemc_sources;
   /// Checksum-pinned compiler-supplied standard-library roots.
   std::vector<CheckedSource> standard_sources;
+  /// Lazily opened precompiled libraries in deterministic dependency order.
+  std::vector<MappedLibrary> mapped_libraries;
   std::size_t source_count{};
+};
+
+struct MappedLibraryProvenance {
+  std::string library;
+  std::string metadata_digest;
+  std::vector<std::string> unit_checksums;
+  bool native_accepted{};
+  std::string native_kind;
+  std::string native_fingerprint;
 };
 
 struct BuiltProject {
@@ -87,6 +112,7 @@ struct BuiltProject {
   /// Every logical-library-specific SystemC plug-in used by this build.
   std::vector<std::shared_ptr<systemc::HierarchyRegistry>>
       systemc_hierarchies;
+  std::vector<MappedLibraryProvenance> mapped_libraries;
 };
 
 /// Parse all HDL source files in deterministic manifest order. Independent
@@ -96,6 +122,14 @@ struct BuiltProject {
 /// previously analyzed units.
 [[nodiscard]] std::optional<CheckedProject> check_project(
     const project::Config& config,
+    diagnostic::Engine& diagnostics);
+
+// Checks and publishes one project-built logical library as a relocatable,
+// read-only .fsimlib directory. Existing destinations are not overwritten.
+[[nodiscard]] bool export_library(
+    const project::Config& config,
+    std::string_view logical_library,
+    const std::filesystem::path& destination,
     diagnostic::Engine& diagnostics);
 
 /// Check and elaborate the selected top, then populate the persistent analysis
@@ -166,6 +200,8 @@ class Simulation final {
   runtime_adapter() const noexcept;
   [[nodiscard]] const semantic::design::DesignIr& design_ir() const noexcept;
   [[nodiscard]] const semantic::Model& semantics() const noexcept;
+  [[nodiscard]] const std::vector<MappedLibraryProvenance>&
+  mapped_libraries() const noexcept;
   [[nodiscard]] std::string_view time_resolution() const noexcept;
   [[nodiscard]] std::optional<runtime::simir::SignalId> find_signal(
       std::string_view path) const noexcept;

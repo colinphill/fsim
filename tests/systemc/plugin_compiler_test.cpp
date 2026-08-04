@@ -402,6 +402,12 @@ int main(const int argc, char** argv) {
     assert(!diagnostics.has_error());
     assert(first_plan->cacheable);
     assert(first_plan->cache_key.size() == 64);
+    assert(first_plan->host_fingerprint.size() == 64);
+    fsim::diagnostic::Engine host_diagnostics;
+    assert(
+        fsim::systemc::plugin_host_fingerprint(
+            request.settings, request.working_directory, host_diagnostics)
+        == std::optional{first_plan->host_fingerprint});
     assert(!first_plan->commands.empty());
     assert(first_plan->commands.front().working_directory == working);
 #if defined(_WIN32)

@@ -954,6 +954,25 @@ that are not defined by the source language are rejected; expose that state
 through a root-level port/signal or a language-defined package/global service.
 The ordered aliased root set participates in design and native-cache identity.
 
+Schema 2 also supports relocatable out-of-tree precompiled libraries. Each
+ordered `[[library_map]]` names a logical library and `.fsimlib` directory;
+repeated `--map-library NAME=DIRECTORY` options replace the manifest list.
+Mapping-only projects are valid. Libraries remain unopened until elaboration
+actually queries them, and declared logical dependencies require explicit
+mappings. Portable VHDL and SystemVerilog units restore without reparsing and
+participate in the same case, ambiguity, architecture, configuration,
+parameter/generic, package, mixed-boundary, and multiple-root rules as local
+units. Relocated logical source identities retain debugger and diagnostic
+locations. Optional exact-host SystemC plug-ins and LLVM objects are used only
+after complete compatibility and checksum validation; incompatible variants
+fall back to bundled SystemC source or portable HDL. Format-1 SystemC export
+accepts self-contained sources that use fsim/SystemC and standard host headers;
+it rejects producer-only include paths, definitions, compiler/linker options,
+or external libraries because those inputs cannot be relocated into the
+portable fallback yet. See the
+[precompiled-library tutorial](../examples/precompiled_library/README.md) for
+the export, relocation, mapping, build, and run workflow.
+
 Batch 119 frontend closure now retains nested waits rather than rejecting a
 successfully parsed statement tree; general assertion/report and severity
 expressions; nominal file types, file objects, open-kind and logical-name

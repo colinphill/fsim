@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fsim::compiler {
 
@@ -47,6 +48,19 @@ struct LlvmJitCacheStatistics {
 
   friend bool operator==(LlvmJitCacheStatistics,
                          LlvmJitCacheStatistics) = default;
+};
+
+struct LlvmNativeHostIdentity {
+  std::string fingerprint;
+  std::string llvm_version;
+  std::string target;
+  std::string data_layout;
+  std::string cpu;
+  std::vector<std::string> features;
+
+  friend bool operator==(
+      const LlvmNativeHostIdentity&,
+      const LlvmNativeHostIdentity&) = default;
 };
 
 /// Opaque process token. It is meaningful only to the LlvmJit that created it.
@@ -265,6 +279,12 @@ public:
 
   /// LLVM version used to compile this adapter (for diagnostics/cache keys).
   [[nodiscard]] static std::string_view llvm_version() noexcept;
+
+  /// Complete source-independent native-code admission identity. This uses
+  /// the same host detection, ABI constants, LLVM version, target, data
+  /// layout, CPU, and sorted feature set as persistent object-cache keys.
+  [[nodiscard]] static LlvmNativeHostIdentity native_host_identity(
+      JitOptimizationLevel optimization);
 
 private:
   struct Impl;

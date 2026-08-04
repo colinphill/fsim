@@ -161,6 +161,79 @@ project::ProjectSection::TopLevel parse_top_option(
       std::string{spelling.substr(0, separator)}};
 }
 
+std::optional<project::LibraryMapping> parse_library_mapping(
+    const std::string_view spelling) {
+  const auto separator = spelling.find('=');
+  if (separator == std::string_view::npos || separator == 0
+      || separator + 1 == spelling.size()) {
+    return std::nullopt;
+  }
+  return project::LibraryMapping{
+      std::string{spelling.substr(0, separator)},
+      fsim::support::path_from_utf8(spelling.substr(separator + 1))};
+}
+
+bool valid_library_name(const std::string_view value) {
+  if (value.empty()
+      || (std::isalpha(static_cast<unsigned char>(value.front())) == 0
+          && value.front() != '_')) {
+    return false;
+  }
+  return std::ranges::all_of(
+      value,
+      [](const unsigned char character) {
+        return std::isalnum(character) != 0 || character == '_';
+      });
+}
+
+void validate_effective_library_mappings(
+    const project::Config& config,
+    diagnostic::Engine& diagnostics) {
+  std::vector<std::string> built_libraries;
+  for (const auto& source_set : config.source_sets) {
+    const auto normalized = lowercase(source_set.library);
+    if (std::ranges::find(built_libraries, normalized)
+        == built_libraries.end()) {
+      built_libraries.push_back(normalized);
+    }
+  }
+  std::vector<std::string> mapped_libraries;
+  for (const auto& mapping : config.library_mappings) {
+    const auto normalized = lowercase(mapping.library);
+    if (!valid_library_name(mapping.library)) {
+      argument_error(
+          diagnostics,
+          "mapped logical library '" + mapping.library
+              + "' is not a safe logical-library identifier");
+    } else if (normalized == "std" || normalized == "ieee"
+               || normalized == "fsim") {
+      argument_error(
+          diagnostics,
+          "mapped logical library '" + mapping.library
+              + "' is reserved by fsim");
+    } else if (std::ranges::find(mapped_libraries, normalized)
+               != mapped_libraries.end()) {
+      argument_error(
+          diagnostics,
+          "duplicate mapped logical library '" + mapping.library + "'");
+    } else if (std::ranges::find(built_libraries, normalized)
+               != built_libraries.end()) {
+      argument_error(
+          diagnostics,
+          "mapped logical library '" + mapping.library
+              + "' collides with a project-built source library");
+    } else {
+      mapped_libraries.push_back(normalized);
+    }
+    if (mapping.path.empty()) {
+      argument_error(
+          diagnostics,
+          "mapped logical library '" + mapping.library
+              + "' requires a non-empty directory path");
+    }
+  }
+}
+
 std::optional<project::Optimization> parse_optimization(
     const std::string_view spelling) {
   const auto normalized = lowercase(spelling);
@@ -252,7 +325,6 @@ std::optional<project::Config> make_direct_config(
   } else if (invocation.top.has_value()) {
     config.project.top = *invocation.top;
   }
-
   for (const auto& input : invocation.files) {
     const auto language =
         invocation.language.has_value() ? invocation.language : infer_language(input);
@@ -327,6 +399,12 @@ std::optional<project::Config> make_direct_config(
   if (!invocation.search_libraries.empty()) {
     config.elaboration.search_libraries = invocation.search_libraries;
   }
+  if (!invocation.library_mappings.empty()) {
+    config.library_mappings = invocation.library_mappings;
+    for (auto& mapping : config.library_mappings) {
+      mapping.path = absolute_normalized(mapping.path);
+    }
+  }
 
   if (diagnostics.has_error()) {
     return std::nullopt;
@@ -370,6 +448,12 @@ void apply_overrides(const Invocation& invocation, project::Config& config) {
   if (!invocation.search_libraries.empty()) {
     config.elaboration.search_libraries = invocation.search_libraries;
   }
+  if (!invocation.library_mappings.empty()) {
+    config.library_mappings = invocation.library_mappings;
+    for (auto& mapping : config.library_mappings) {
+      mapping.path = absolute_normalized(mapping.path);
+    }
+  }
 }
 
 void print_help(std::ostream& output, const std::string_view program) {
@@ -393,6 +477,10 @@ void print_help(std::ostream& output, const std::string_view program) {
       << "      --library NAME       Library for direct source files (default: work)\n"
       << "      --search-library NAME\n"
       << "                           Replace the manifest elaboration search list; repeatable\n"
+      << "      --map-library NAME=DIRECTORY\n"
+      << "                           Replace manifest precompiled-library mappings; repeatable\n"
+      << "      --export-library NAME=DIRECTORY\n"
+      << "                           Publish a project library during build; repeatable\n"
       << "  -I, --include PATH       Add a direct-source include directory\n"
       << "  -D, --define NAME[=VAL]  Add a direct-source preprocessor definition\n"
       << "\n"
@@ -579,6 +667,34 @@ std::optional<Invocation> parse_arguments(
           return std::nullopt;
         }
         invocation.search_libraries.emplace_back(*value);
+      } else if (is_option(argument, "", "--map-library")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--map-library", diagnostics);
+        if (!value.has_value()) {
+          return std::nullopt;
+        }
+        const auto mapping = parse_library_mapping(*value);
+        if (!mapping.has_value()) {
+          argument_error(
+              diagnostics,
+              "--map-library requires a LIBRARY=DIRECTORY value");
+          return std::nullopt;
+        }
+        invocation.library_mappings.push_back(*mapping);
+      } else if (is_option(argument, "", "--export-library")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--export-library", diagnostics);
+        if (!value.has_value()) {
+          return std::nullopt;
+        }
+        const auto mapping = parse_library_mapping(*value);
+        if (!mapping.has_value()) {
+          argument_error(
+              diagnostics,
+              "--export-library requires a LIBRARY=DIRECTORY value");
+          return std::nullopt;
+        }
+        invocation.library_exports.push_back(*mapping);
       } else if (
           argument == "-I" || is_option(argument, "", "--include") ||
           (argument.size() > 2 && argument.starts_with("-I"))) {
@@ -793,10 +909,38 @@ std::optional<Invocation> parse_arguments(
         ? std::optional<std::string>{invocation.tops.front().target}
         : std::nullopt;
   }
+  std::vector<std::string> exported_libraries;
+  for (auto& library_export : invocation.library_exports) {
+    const auto normalized = lowercase(library_export.library);
+    if (!valid_library_name(library_export.library)
+        || normalized == "std" || normalized == "ieee"
+        || normalized == "fsim") {
+      argument_error(
+          diagnostics,
+          "--export-library requires a safe, non-reserved logical library");
+      return std::nullopt;
+    }
+    if (std::ranges::find(exported_libraries, normalized)
+        != exported_libraries.end()) {
+      argument_error(
+          diagnostics,
+          "duplicate --export-library logical library '"
+              + library_export.library + "'");
+      return std::nullopt;
+    }
+    exported_libraries.push_back(normalized);
+    library_export.path = absolute_normalized(library_export.path);
+  }
   if (invocation.command != Command::tcl
       && !invocation.tcl_commands.empty()) {
     argument_error(
         diagnostics, "--command is available only with the tcl command");
+    return std::nullopt;
+  }
+  if (!invocation.library_exports.empty()
+      && invocation.command != Command::build) {
+    argument_error(
+        diagnostics, "--export-library is available only with build");
     return std::nullopt;
   }
   if (invocation.command == Command::tcl
@@ -824,6 +968,18 @@ std::optional<Invocation> parse_arguments(
       argument_error(
           diagnostics,
           "--search-library is not available with migrate");
+      return std::nullopt;
+    }
+    if (!invocation.library_mappings.empty()) {
+      argument_error(
+          diagnostics,
+          "--map-library is not available with migrate");
+      return std::nullopt;
+    }
+    if (!invocation.library_exports.empty()) {
+      argument_error(
+          diagnostics,
+          "--export-library is not available with migrate");
       return std::nullopt;
     }
     if (!invocation.tops.empty()) {
@@ -909,6 +1065,9 @@ int run(
       }
     } else {
       config = make_direct_config(*invocation, diagnostics);
+    }
+    if (config.has_value()) {
+      validate_effective_library_mappings(*config, diagnostics);
     }
     if (!config.has_value() || diagnostics.has_error()) {
       print_diagnostics(error, diagnostics, invocation->diagnostic_format);

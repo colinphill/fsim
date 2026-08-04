@@ -43,6 +43,8 @@ struct Invocation {
   std::optional<std::string> top;
   std::string library{"work"};
   std::vector<std::string> search_libraries;
+  std::vector<project::LibraryMapping> library_mappings;
+  std::vector<project::LibraryMapping> library_exports;
   std::vector<std::filesystem::path> include_directories;
   std::vector<std::string> defines;
   std::optional<std::string> duration;

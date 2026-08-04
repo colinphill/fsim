@@ -204,6 +204,7 @@ fsim_string_view_t text(const char* value) {
 }  // namespace
 
 void test_multiple_root_api(const std::filesystem::path& directory);
+void test_mapped_library_api(const std::filesystem::path& directory);
 
 int main() {
   // FSIM-CONFORMANCE CF-COMMON-CAPI-001 source=SRC-COCOTB expectation=execute
@@ -1980,6 +1981,7 @@ max_deltas = 1000
       == FSIM_STATUS_OK);
 
   test_multiple_root_api(directory);
+  test_mapped_library_api(directory);
 
   std::error_code cleanup_error;
   std::filesystem::remove_all(directory, cleanup_error);

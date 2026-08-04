@@ -82,6 +82,7 @@ std::optional<CheckedProject> check_project(
     }
   }
   if (hdl_source_count == 0 && systemc_source_count == 0
+      && config.library_mappings.empty()
       && !diagnostics.has_error()) {
     diagnostics.error("FSIM-FE-0001", "the project contains no HDL source files");
   }
@@ -265,6 +266,16 @@ std::optional<CheckedProject> check_project(
     } else {
       checked.parsed.units.push_back(std::move(ordered.unit));
     }
+  }
+  if (!load_required_mapped_libraries(config, checked, diagnostics)) {
+    return std::nullopt;
+  }
+  if (checked.parsed.units.empty() && checked.systemc_sources.empty()
+      && checked.mapped_libraries.empty() && !diagnostics.has_error()) {
+    diagnostics.error(
+        "FSIM-FE-0001",
+        "the project contains no local or selected mapped design units");
+    return std::nullopt;
   }
   inject_vhdl_standard_libraries(checked, diagnostics);
   validate_vhdl_analysis_order(checked.parsed.units, diagnostics);

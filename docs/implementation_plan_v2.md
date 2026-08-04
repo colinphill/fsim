@@ -162,10 +162,87 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     gate passes with 521 SPDX-owned artifacts and 190 test/control files.
     Batch 135 is not a CI boundary and ran no sanitizer or CI-monitoring gate.
 
+## Batch 136 - out-of-tree precompiled library mappings - Complete
+
+1. **Complete.** Establish this exact 20-change Batch 136 plan and restart
+   record before implementation begins.
+2. **Complete.** Add ordered `[[library_map]]` schema-2 records containing a
+   logical `library` name and directory `path`, with manifest-relative path
+   resolution and source-compatible project APIs.
+3. **Complete.** Add repeatable `--map-library LIBRARY=DIRECTORY` options whose
+   first occurrence replaces manifest mappings for check, build, run, debug,
+   and Tcl project loads.
+4. **Complete.** Reject empty, duplicate, reserved, path-unsafe, or project-built
+   logical-library collisions before any mapped directory is opened.
+5. **Complete.** Define versioned `fsim-library.toml` metadata for a relocatable
+   `.fsimlib` directory, including logical name, producer/runtime schemas,
+   language standards, unit index, and content checksums.
+6. **Complete.** Add a deterministic project build/export path that
+   publishes a complete library into a staging directory and atomically
+   installs it as a read-only `.fsimlib` artifact.
+7. **Complete.** Serialize the supported owning VHDL, Verilog/SystemVerilog, and
+   cross-unit semantic/HIR records into portable, endian-stable artifacts
+   without retaining producer-absolute paths.
+8. **Complete.** Restore mapped portable units directly into the immutable unit
+   candidate index without preprocessing or reparsing their original sources.
+9. **Complete.** Retain relocatable logical source identities and optional
+   source text/line tables so diagnostics and debugger locations remain useful
+   after the artifact directory moves.
+10. **Complete.** Query mapped libraries lazily through the Batch 133/134
+    resolver and diagnose unavailable, corrupt, incompatible, or renamed
+    directories only when the effective search scope needs them.
+11. **Complete.** Include mapped candidates in complete-scope ambiguity,
+    VHDL case-insensitive identity, SystemVerilog/SystemC case-sensitive
+    identity, architecture eligibility, and explicit-qualified selection.
+12. **Complete.** Resolve mapped-library dependencies through declared logical
+    library names, reject dependency cycles or missing mappings, and never
+    search undeclared host directories implicitly.
+13. **Complete.** Preserve generic/parameter specialization, configuration,
+    package/context visibility, mixed-language target inference, boundary
+    validation, and multiple-root selection for mapped portable units.
+14. **Complete.** Admit optional host-specific SystemC plug-ins and LLVM native
+    objects only when their exact ABI, compiler/LLVM, target, CPU-feature, and
+    content fingerprints match; otherwise fall back to portable artifacts.
+15. **Complete.** Keep mapped directories read-only during check, build,
+    elaboration, simulation, cache maintenance, debugger, and trace use; place
+    all derived state in the consuming project's cache.
+16. **Complete.** Add mapped directory metadata, ordered unit/dependency
+    identities, and accepted optional-native fingerprints to design and native
+    cache provenance so edits, relocation, and compatibility fallback behave
+    deterministically.
+17. **Complete.** Expose mappings and selected mapped-unit provenance through
+    build output, Tcl project/build dictionaries, and the public C/C++ project
+    and session inspection surfaces without breaking legacy clients.
+18. **Complete.** Add positive export/import coverage for VHDL, SystemVerilog,
+    mixed hierarchy, multiple roots, relocation, source diagnostics, debugger,
+    VCD, interpreter, LLVM O0/O2, cold/warm cache, and optional-native reuse.
+19. **Complete.** Add negative coverage for duplicate/colliding mappings,
+    unavailable-on-use directories, format/schema/checksum corruption,
+    wrong-library metadata, missing/cyclic dependencies, incompatible native
+    artifacts, write attempts, and transactional partial-load failure; update
+    public documentation, examples, diagnostics, inventories, and this record.
+    Exact-LLVM Debug focused project, artifact, SystemC compiler, LLVM,
+    application, Tcl, and C/C-header API coverage passes 8/8. The focused
+    source/catalog/legality/differential/inventory/release suite passes 7/7;
+    its reviewed baseline is 1,643 diagnostic emissions, 445 bounded C/C++
+    files, 534 SPDX-owned artifacts, 1,082 execute rows, 4,328 linked evidence
+    cells, and 95 runtime evidence owners. The runnable precompiled-library
+    tutorial exports, maps, resolves, and simulates its relocated child to
+    tick 2.
+20. **Complete.** Run exact-LLVM Debug and Release plus source, catalog,
+    inventory, and release gates, then commit and push once. Exact-LLVM Debug
+    passed 107/107 tests in 292.73 seconds and Release passed 107/107 in 251.81
+    seconds. Both configurations built with eight workers. The complete suites
+    include the source, catalog, inventory, installed-public-contract, and
+    release-candidate gates. Batch 136 is not a CI boundary and ran no
+    sanitizer or CI-monitoring gate.
+
 ## Forward priority order
 
-1. Read-only out-of-tree `.fsimlib` directory mappings.
-2. Explicit non-project compile, elaborate, and simulate artifact phases.
+1. **Completed in Batch 136:** read-only out-of-tree `.fsimlib` directory
+   mappings.
+2. **Batch 137:** explicit non-project compile, elaborate, and simulate
+   artifact phases.
 3. Separate incremental SystemC compilation and linking.
 4. Complete VHDL-2008/VITAL, Verilog-2005, SystemVerilog-2017 classes/UVM,
    VPI, DPI, and VHPI.

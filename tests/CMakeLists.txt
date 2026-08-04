@@ -63,6 +63,15 @@ fsim_configure_test(fsim_project_tests)
 target_link_libraries(fsim_project_tests PRIVATE fsim_project)
 add_test(NAME fsim.project COMMAND fsim_project_tests)
 
+add_executable(fsim_library_tests library/library_artifact_test.cpp)
+fsim_configure_test(fsim_library_tests)
+target_link_libraries(fsim_library_tests PRIVATE fsim_library)
+add_test(NAME fsim.library.artifact COMMAND fsim_library_tests)
+set_tests_properties(
+  fsim.library.artifact
+  PROPERTIES LABELS "fast;library;artifact;source"
+)
+
 add_executable(fsim_cache_tests compiler/cache_test.cpp)
 fsim_configure_test(fsim_cache_tests)
 target_link_libraries(fsim_cache_tests PRIVATE fsim_object_cache)
@@ -2184,6 +2193,7 @@ set_tests_properties(
   add_executable(
     fsim_api_tests
     api/api_test.cpp
+    api/api_mapped_library_test.cpp
     api/api_multiple_root_test.cpp
   )
   fsim_configure_test(fsim_api_tests)
@@ -2191,7 +2201,8 @@ set_tests_properties(
     fsim_api_tests
     PRIVATE FSIM_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
   )
-  target_link_libraries(fsim_api_tests PRIVATE fsim_api)
+  target_link_libraries(
+    fsim_api_tests PRIVATE fsim_api fsim_application)
   add_test(NAME fsim.api COMMAND fsim_api_tests)
   set_tests_properties(fsim.api PROPERTIES TIMEOUT 120)
   if(WIN32)

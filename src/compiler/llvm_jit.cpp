@@ -1336,4 +1336,54 @@ std::string_view LlvmJit::llvm_version() noexcept {
   return LLVM_VERSION_STRING;
 }
 
+LlvmNativeHostIdentity LlvmJit::native_host_identity(
+    const JitOptimizationLevel optimization) {
+  initialize_native_target();
+  auto target_builder = unwrap(
+      llvm::orc::JITTargetMachineBuilder::detectHost(),
+      "cannot detect the native LLVM target");
+  target_builder.setCodeGenOptLevel(
+      optimization == JitOptimizationLevel::o0
+          ? llvm::CodeGenOptLevel::None
+          : llvm::CodeGenOptLevel::Default);
+  const auto target = target_builder.getTargetTriple().str();
+  const auto cpu = target_builder.getCPU();
+  auto features = target_builder.getFeatures().getFeatures();
+  std::sort(features.begin(), features.end());
+  auto target_machine = unwrap(
+      target_builder.createTargetMachine(),
+      "cannot create native LLVM target machine");
+  const auto data_layout =
+      target_machine->createDataLayout().getStringRepresentation();
+
+  CacheKeyBuilder builder;
+  builder.add("kind", "fsim-llvm-native-host-v1");
+  builder.add("llvm-version", LLVM_VERSION_STRING);
+  builder.add(
+      "optimization",
+      optimization == JitOptimizationLevel::o0 ? "O0" : "O2");
+  builder.add(
+      "runtime-abi-version",
+      std::to_string(FSIM_JIT_RUNTIME_ABI_VERSION_V1));
+  builder.add("runtime-abi-size", std::to_string(sizeof(fsim_jit_runtime_v1)));
+  builder.add(
+      "frame-abi-version", std::to_string(FSIM_JIT_FRAME_ABI_VERSION_V1));
+  builder.add("frame-abi-size", std::to_string(sizeof(fsim_jit_frame_v1)));
+  builder.add(
+      "resume-abi-version",
+      std::to_string(FSIM_JIT_RESUME_RESULT_ABI_VERSION_V1));
+  builder.add(
+      "resume-abi-size", std::to_string(sizeof(fsim_jit_resume_result_v1)));
+  builder.add("target", target);
+  builder.add("data-layout", data_layout);
+  builder.add("cpu", cpu);
+  builder.add("feature-count", std::to_string(features.size()));
+  for (const auto& feature : features) {
+    builder.add("feature", feature);
+  }
+  return {
+      builder.finish(), LLVM_VERSION_STRING, target, data_layout, cpu,
+      std::move(features)};
+}
+
 } // namespace fsim::compiler

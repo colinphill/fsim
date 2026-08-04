@@ -9,18 +9,18 @@ groups every row that is not yet `execute` so each one has an explicit Batch
 
 ## Baseline
 
-The current shared matrix contains 1,081 required rows:
+The current shared matrix contains 1,082 required rows:
 
 | Current status | Rows |
 |---|---:|
-| `execute` | 1,081 |
+| `execute` | 1,082 |
 | `analyze` | 0 |
 | `elaborate` | 0 |
 | `parse` | 0 |
 | `v1 target` | 0 |
 | nonstandard `metadata` | 0 |
 
-All 1,081 rows are `execute`, and every P+, P-, E, and R evidence cell is
+All 1,082 rows are `execute`, and every P+, P-, E, and R evidence cell is
 populated. The gate rejects any status regression, evidence dash, duplicate
 ID, undocumented status, missing path-like evidence link, or loss of the exact
 language row counts. Task 8 reclassified the former undocumented `SC-024`
