@@ -621,12 +621,25 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     test jobs expose the same cached SystemC publication failures because the
     staging path repeats the full digest beyond the legacy Windows path limit,
     plus a Tcl fixture that writes an unescaped native path into TOML. The
-    current repair adds target-scoped `/bigobj`, uses a compact collision-safe
-    staging name, writes the fixture path with generic separators, and prints
-    cached-link diagnostics before its assertion. Eight-worker exact-LLVM
-    Debug and Release builds pass the five affected tests and the Debug source,
-    catalog, inventory, installed-public, and Windows portability gates. Push
-    this focused repair and monitor its replacement matrix to green.
+    repair adds target-scoped `/bigobj`, uses a compact collision-safe staging
+    name, writes the fixture path with generic separators, and prints cached-link
+    diagnostics before its assertion. Eight-worker exact-LLVM Debug and Release
+    builds pass the five affected tests and the Debug source, catalog,
+    inventory, installed-public, and Windows portability gates. Repair commit
+    `4bf9195` is pushed. Replacement run `30906493862` confirms that all six
+    non-Windows jobs pass, `/bigobj` clears both MSVC Debug builds, and the prior
+    staging, incremental-link, mixed-SystemC, and Tcl failures are gone. Every
+    completed Windows configuration now fails only the main application at its
+    non-project producer-hiding checkpoint; plain and LLVM MSVC Debug also show
+    the SystemC matrix reaching the former 900-second test bound, while
+    `fsim.application.scoped_locals` remains quick. Windows retains the loaded
+    plug-in DLL, so the test now hides its required metadata rather than
+    renaming the loaded artifact directory. The matrix timeout is raised to
+    1,200 seconds and the plain MSVC job receives the same 70-minute ceiling as
+    the LLVM Windows matrix. Both portability contracts and the application
+    plus SystemC-matrix tests pass after eight-worker exact-LLVM Debug and
+    Release builds; commit this focused repair and monitor its replacement
+    matrix to green.
 
 ## Forward priority order
 

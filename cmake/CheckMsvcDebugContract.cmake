@@ -221,7 +221,7 @@ foreach(FSIM_TIMEOUT_POLICY IN ITEMS
     "fsim.application.scoped_locals"
     "PROPERTIES TIMEOUT 60"
     "fsim.application.systemc_matrix"
-    "PROPERTIES TIMEOUT 900"
+    "PROPERTIES TIMEOUT 1200"
     "fsim.application.sv_containers"
     "PROPERTIES TIMEOUT 1200"
     "PROPERTIES TIMEOUT 600")

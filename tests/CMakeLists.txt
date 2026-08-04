@@ -1087,7 +1087,7 @@ if(TARGET fsim_application)
     )
     set_tests_properties(
       fsim.application.systemc_matrix
-      PROPERTIES TIMEOUT 900
+      PROPERTIES TIMEOUT 1200
     )
     set_tests_properties(
       fsim.application.sv_containers

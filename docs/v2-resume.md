@@ -411,11 +411,27 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   tests fail the same incremental-link, main-application, mixed-SystemC, and
   Tcl tests: the first three share an overlong cache publication staging path,
   while the Tcl fixture embeds unescaped native separators in TOML. The current
-  worktree adds target-scoped `/bigobj`, shortens collision-safe staging names,
+  repair adds target-scoped `/bigobj`, shortens collision-safe staging names,
   writes the TOML fixture path with generic separators, and prints cached-link
   diagnostics before assertion. Both local exact-LLVM configurations build
   with eight workers and pass the five affected tests; the Debug source,
   catalog, inventory, installed-public, and Windows portability gates also
-  pass. Make one focused repair commit/push and monitor the next
+  pass. Repair commit `4bf9195` is pushed. Replacement run `30906493862`
+  completed with all six non-Windows jobs green, both MSVC Debug builds past
+  the former COFF failure, and every prior staging, incremental-link,
+  mixed-SystemC, and Tcl failure cleared. Its Windows configurations converge
+  on one remaining main-application abort at `application: non-project cli`:
+  Windows retains the loaded plug-in DLL while the test renames its containing
+  artifact. Plain and LLVM MSVC Debug additionally reach the old 900-second
+  SystemC-matrix timeout; `fsim.application.scoped_locals` remains quick at
+  0.54 and 1.69 seconds. The current focused repair leaves the loaded DLL at a
+  stable path, makes only its artifact root owner-writable, and hides the
+  required metadata so the producer remains unusable. It also raises the
+  bounded matrix timeout to 1,200 seconds and gives the plain MSVC job the
+  existing 70-minute LLVM Windows ceiling. The exact-LLVM Debug application,
+  matrix, and both portability contracts pass locally in 20.87 and 59.22
+  seconds; Release passes them in 19.92 and 54.48 seconds. A final string-only
+  construction cleanup leaves the application passing in 20.74 and 19.95
+  seconds. Commit/push this focused repair and monitor the next
   non-documentation matrix to green before marking Change 20 and Batch 140
   complete.

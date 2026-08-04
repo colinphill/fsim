@@ -352,11 +352,21 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
       directory / "incremental.cpp.producer-hidden";
   const auto hidden_systemc_object =
       directory / "incremental.fsimscobj.producer-hidden";
-  const auto hidden_systemc_plugin =
-      directory / "incremental.fsimscplugin.producer-hidden";
+  const auto systemc_plugin_metadata = systemc_plugin
+      / systemc::kIncrementalPluginMetadataFilename;
+  const auto hidden_systemc_plugin_metadata = systemc_plugin
+      / (std::string{systemc::kIncrementalPluginMetadataFilename}
+         + ".producer-hidden");
   std::filesystem::rename(incremental_systemc_source, hidden_systemc_source);
   std::filesystem::rename(systemc_object, hidden_systemc_object);
-  std::filesystem::rename(systemc_plugin, hidden_systemc_plugin);
+  // Windows locks a loaded DLL against renaming its containing artifact.
+  // Hiding the required metadata makes the producer artifact unusable while
+  // leaving the loaded native image at its stable path.
+  std::filesystem::permissions(
+      systemc_plugin, std::filesystem::perms::owner_write,
+      std::filesystem::perm_options::add);
+  std::filesystem::rename(
+      systemc_plugin_metadata, hidden_systemc_plugin_metadata);
   diagnostic::Engine systemc_design_load_diagnostics;
   auto loaded_systemc_design = app::load_design_artifact(
       systemc_design, systemc_design_load_diagnostics);

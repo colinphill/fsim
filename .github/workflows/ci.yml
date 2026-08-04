@@ -143,7 +143,9 @@ jobs:
   windows-msvc:
     name: Windows / MSVC / ${{ matrix.configuration }}
     runs-on: windows-2022
-    timeout-minutes: 45
+    # Debug extended-COFF compilation plus the bounded SystemC matrix can
+    # exceed the general 45-minute ceiling on a contended hosted runner.
+    timeout-minutes: 70
     strategy:
       fail-fast: false
       matrix:
