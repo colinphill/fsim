@@ -143,7 +143,7 @@ int main() {
         << "time_resolution = \"1ns\"\n"
         << "[[library_map]]\n"
         << "library = \"work\"\n"
-        << "path = \"" << mapped_artifact.string() << "\"\n"
+        << "path = \"" << mapped_artifact.generic_string() << "\"\n"
         << "[build]\n"
         << "cache_path = \"mapped-display-cache\"\n";
   }

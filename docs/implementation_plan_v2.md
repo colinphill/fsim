@@ -613,8 +613,20 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     non-Windows jobs, including hosted ASan/UBSan, pass. The accumulated repair
     worktree passes post-repair 110/110 exact-LLVM Debug and Release regressions
     in 320.46 and 287.88 seconds. The exact final tree also passes the same
-    14-test cross-platform repair gate in both configurations. Repair
-    commit/push and a fully green replacement matrix remain current.
+    14-test cross-platform repair gate in both configurations. Repair commit
+    `5443c4b` is pushed. Replacement run `30903250986` completed with all four
+    Linux build/test jobs, hosted ASan/UBSan, and frontend fuzz passing. Both
+    MSVC Debug variants advanced past the original warning but expose
+    COFF section-limit `C1128` in the archived DesignIR codec. All four Windows
+    test jobs expose the same cached SystemC publication failures because the
+    staging path repeats the full digest beyond the legacy Windows path limit,
+    plus a Tcl fixture that writes an unescaped native path into TOML. The
+    current repair adds target-scoped `/bigobj`, uses a compact collision-safe
+    staging name, writes the fixture path with generic separators, and prints
+    cached-link diagnostics before its assertion. Eight-worker exact-LLVM
+    Debug and Release builds pass the five affected tests and the Debug source,
+    catalog, inventory, installed-public, and Windows portability gates. Push
+    this focused repair and monitor its replacement matrix to green.
 
 ## Forward priority order
 

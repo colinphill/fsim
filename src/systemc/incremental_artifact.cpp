@@ -430,8 +430,8 @@ std::filesystem::path staging_path(const std::filesystem::path& destination) {
   const auto serial = staging_sequence.fetch_add(1, std::memory_order_relaxed);
   const auto tick = std::chrono::steady_clock::now().time_since_epoch().count();
   return destination.parent_path()
-      / ("." + destination.filename().string() + ".staging-"
-         + std::to_string(tick) + "-" + std::to_string(serial));
+      / (".staging-" + std::to_string(tick) + "-"
+         + std::to_string(serial));
 }
 
 class Cleanup {

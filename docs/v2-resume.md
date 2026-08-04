@@ -402,7 +402,20 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   Tcl, API, and MSVC/tool portability contracts. The post-repair exact-LLVM
   Debug and Release regressions pass 110/110 in 320.46 and 287.88 seconds. The
   exact final tree passes the same 14-test cross-platform repair gate in both
-  configurations after eight-worker builds. Make one repair commit/push, then
-  monitor the replacement
-  non-documentation matrix to green before
-  marking Change 20 and Batch 140 complete.
+  configurations after eight-worker builds. Repair commit `5443c4b` is pushed.
+  Replacement run `30903250986` completed with all four Linux build/test jobs,
+  hosted ASan/UBSan, and frontend fuzz passing. Its plain and LLVM MSVC Debug
+  builds progressed beyond the original warning but both fail
+  with `C1128` because `application_design_artifact_codec.cpp` exceeds COFF's
+  default section count in unoptimized builds. All four Windows jobs that reach
+  tests fail the same incremental-link, main-application, mixed-SystemC, and
+  Tcl tests: the first three share an overlong cache publication staging path,
+  while the Tcl fixture embeds unescaped native separators in TOML. The current
+  worktree adds target-scoped `/bigobj`, shortens collision-safe staging names,
+  writes the TOML fixture path with generic separators, and prints cached-link
+  diagnostics before assertion. Both local exact-LLVM configurations build
+  with eight workers and pass the five affected tests; the Debug source,
+  catalog, inventory, installed-public, and Windows portability gates also
+  pass. Make one focused repair commit/push and monitor the next
+  non-documentation matrix to green before marking Change 20 and Batch 140
+  complete.

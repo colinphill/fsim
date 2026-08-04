@@ -256,6 +256,9 @@ int main() {
   cached_link_request.output.clear();
   auto cached_link = fsim::systemc::link_incremental_plugin_cached(
       cached_link_request, incremental_cache, diagnostics);
+  if (!cached_link.success) {
+    fsim::diagnostic::print_text(std::cerr, diagnostics);
+  }
   assert(cached_link.success && !cached_link.cache_hit);
   auto cached_link_warm = fsim::systemc::link_incremental_plugin_cached(
       cached_link_request, incremental_cache, diagnostics);

@@ -746,6 +746,15 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
   )
   add_library(fsim::application ALIAS fsim_application)
   fsim_configure_library(fsim_application)
+  if(
+    MSVC
+    OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+  )
+    # Rich archived DesignIR aggregates can exceed COFF's default 65,279
+    # section limit in unoptimized builds. Extended section numbering changes
+    # only the object container and avoids forcing a less useful Debug mode.
+    target_compile_options(fsim_application PRIVATE /bigobj)
+  endif()
   file(
     RELATIVE_PATH
     FSIM_IEEE_LIBRARY_RELATIVE_TO_BINDIR
