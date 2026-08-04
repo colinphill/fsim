@@ -638,8 +638,16 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     1,200 seconds and the plain MSVC job receives the same 70-minute ceiling as
     the LLVM Windows matrix. Both portability contracts and the application
     plus SystemC-matrix tests pass after eight-worker exact-LLVM Debug and
-    Release builds; commit this focused repair and monitor its replacement
-    matrix to green.
+    Release builds. Repair commit `696be29` is pushed. Replacement run
+    `30911069043` confirms all six non-Windows jobs green and the matrix bound
+    effective: plain MSVC Debug passes it in 1,014.68 seconds and LLVM MSVC
+    Debug in 1,057.46 seconds; scoped locals pass in 0.41 and 1.69 seconds. All
+    six Windows variants now fail only the producer-hiding checkpoint because
+    the metadata file retains its own read-only attribute after the artifact
+    directory becomes writable. The focused correction makes that one file
+    owner-writable before renaming it, and the exact-LLVM Debug/Release
+    application tests pass locally in 20.42 and 19.72 seconds. Commit this
+    final correction and monitor its replacement matrix to green.
 
 ## Forward priority order
 

@@ -432,6 +432,14 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   matrix, and both portability contracts pass locally in 20.87 and 59.22
   seconds; Release passes them in 19.92 and 54.48 seconds. A final string-only
   construction cleanup leaves the application passing in 20.74 and 19.95
-  seconds. Commit/push this focused repair and monitor the next
-  non-documentation matrix to green before marking Change 20 and Batch 140
-  complete.
+  seconds. Repair commit `696be29` is pushed. Replacement run `30911069043`
+  completes with all six non-Windows jobs green and proves the timeout repair:
+  plain MSVC Debug passes the SystemC matrix in 1,014.68 seconds and LLVM MSVC
+  Debug passes it in 1,057.46 seconds; scoped locals remain quick at 0.41 and
+  1.69 seconds. All six Windows variants now fail only the producer-hiding
+  checkpoint because the metadata file itself retains the artifact's
+  read-only attribute. The current one-line functional correction makes that
+  file owner-writable before renaming it; after eight-worker exact-LLVM builds,
+  the Debug and Release application tests pass in 20.42 and 19.72 seconds.
+  Commit/push this final correction and monitor the next non-documentation
+  matrix to green before marking Change 20 and Batch 140 complete.

@@ -361,9 +361,14 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   std::filesystem::rename(systemc_object, hidden_systemc_object);
   // Windows locks a loaded DLL against renaming its containing artifact.
   // Hiding the required metadata makes the producer artifact unusable while
-  // leaving the loaded native image at its stable path.
+  // leaving the loaded native image at its stable path. Publication makes
+  // both the artifact and its contents read-only, so restore write access only
+  // to the directory and metadata file being renamed.
   std::filesystem::permissions(
       systemc_plugin, std::filesystem::perms::owner_write,
+      std::filesystem::perm_options::add);
+  std::filesystem::permissions(
+      systemc_plugin_metadata, std::filesystem::perms::owner_write,
       std::filesystem::perm_options::add);
   std::filesystem::rename(
       systemc_plugin_metadata, hidden_systemc_plugin_metadata);
