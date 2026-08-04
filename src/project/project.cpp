@@ -293,6 +293,7 @@ enum class Context {
   project,
   source_set,
   binding,
+  elaboration,
   build,
   run,
   systemc,
@@ -476,6 +477,8 @@ class Parser {
       select_single_table(Context::project, "project", header_span);
     } else if (normalized == "build") {
       select_single_table(Context::build, "build", header_span);
+    } else if (normalized == "elaboration") {
+      select_single_table(Context::elaboration, "elaboration", header_span);
     } else if (normalized == "run") {
       select_single_table(Context::run, "run", header_span);
     } else if (normalized == "systemc") {
@@ -597,6 +600,8 @@ class Parser {
         return "source_set#" + std::to_string(context_index_);
       case Context::binding:
         return "binding#" + std::to_string(context_index_);
+      case Context::elaboration:
+        return "elaboration";
       case Context::build:
         return "build";
       case Context::run:
@@ -687,6 +692,9 @@ class Parser {
         break;
       case Context::binding:
         assign_binding(key, value, key_span);
+        break;
+      case Context::elaboration:
+        assign_elaboration(key, value, key_span);
         break;
       case Context::build:
         assign_build(key, value, key_span);
@@ -881,6 +889,19 @@ class Parser {
     unknown_key(key, span);
   }
 
+  void assign_elaboration(
+      const std::string& key,
+      const Value& value,
+      const diagnostic::SourceSpan& span) {
+    if (key != "search_libraries") {
+      unknown_key(key, span);
+      return;
+    }
+    if (const auto libraries = string_array(value, key)) {
+      config_.elaboration.search_libraries = *libraries;
+    }
+  }
+
   void assign_run(
       const std::string& key,
       const Value& value,
@@ -1013,6 +1034,15 @@ class Parser {
           std::string(kRequiredCode),
           "the project must declare at least one [[source_set]]",
           document_span);
+    }
+
+    for (const auto& library : config_.elaboration.search_libraries) {
+      if (library.empty()) {
+        diagnostics_.error(
+            std::string(kValueCode),
+            "[elaboration].search_libraries contains an empty library name",
+            document_span);
+      }
     }
 
     for (std::size_t index = 0; index < config_.source_sets.size(); ++index) {

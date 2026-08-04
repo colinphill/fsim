@@ -9,7 +9,8 @@ HierarchyBuilder::HierarchyBuilder(
     std::vector<Diagnostic>& diagnostics,
     const std::span<const Binding> bindings,
     const std::span<const SystemCInstanceDescription> systemc_instances,
-    SystemCFactoryProvider* systemc_provider)
+    SystemCFactoryProvider* systemc_provider,
+    const std::span<const std::string> search_libraries)
     : parsed_(parsed),
       design_(design),
       diagnostics_(diagnostics),
@@ -17,7 +18,13 @@ HierarchyBuilder::HierarchyBuilder(
       systemc_candidates_(
           systemc_provider != nullptr
               ? systemc_provider->candidates()
-              : std::vector<SystemCFactoryCandidate>{}) {
+              : std::vector<SystemCFactoryCandidate>{}),
+      systemc_libraries_(
+          systemc_provider != nullptr
+              ? systemc_provider->libraries()
+              : std::vector<std::string>{}),
+      search_libraries_(
+          search_libraries.begin(), search_libraries.end()) {
     for (const auto& binding : bindings) {
         if (!bindings_.emplace(binding.instance, &binding).second) {
             report(

@@ -14,11 +14,26 @@ override behavior.
 ## Target resolution and explicit overrides
 
 An unqualified instance name is resolved across VHDL,
-Verilog/SystemVerilog, and exported SystemC factories in the parent logical
-library. VHDL entity matching is case-insensitive; Verilog/SystemVerilog and
-SystemC matching is case-sensitive. Resolution must produce exactly one
-candidate before any interface compatibility checks. Same-language candidates
-receive no preference, and interface shape never breaks a tie.
+Verilog/SystemVerilog, and exported SystemC factories in one effective logical
+library scope. The parent library is first, followed by first occurrences from
+the configured list:
+
+```toml
+[elaboration]
+search_libraries = ["vendor", "shared"]
+```
+
+Repeated `--search-library LIBRARY` options replace that manifest list for one
+command while preserving command-line order. Duplicate spellings collapse at
+their first occurrence. Ordering makes the queried scope and diagnostics
+deterministic; it is not a priority rule. Resolution examines every library in
+the complete scope and therefore reports ambiguity if more than one candidate
+exists anywhere in it.
+
+VHDL entity matching is case-insensitive; Verilog/SystemVerilog and SystemC
+matching is case-sensitive. Resolution must produce exactly one candidate
+before any interface compatibility checks. Same-language and parent-library
+candidates receive no preference, and interface shape never breaks a tie.
 
 An explicit binding remains an authoritative override:
 
@@ -47,9 +62,15 @@ architectures is ambiguous unless a configuration or explicit target selects
 one. Missing and ambiguous diagnostics include the instance path, requested
 spelling, logical-library scope, and canonical candidates.
 
+Configured libraries are queried lazily. Merely declaring an unavailable
+library does not fail parsing, checking, or an elaboration that uses only
+qualified targets. The first unqualified root or child lookup that needs the
+scope reports every unavailable configured library. Explicit qualified tops
+and full-path binding targets remain authoritative and do not query the list.
+
 SystemC factories participate under their public `SC_FSIM_EXPORT` or
 `SC_FSIM_EXPORT_AS` names. `SC_FSIM_HDL_MODULE(Type)` records `Type` as the HDL
-implementation spelling, so an HDL-backed child uses the same parent-library
+implementation spelling, so an HDL-backed child uses the same effective-scope
 resolver while retaining ordinary SystemC construction and port binding.
 Legacy `hdl_instance` objects still require explicit full-path bindings.
 

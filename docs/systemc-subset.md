@@ -438,7 +438,8 @@ callbacks, and callback-originated signal transactions, remain unsupported.
 The root factory object owns native C++ child members, so native children are
 not selected by a separate manifest binding. An `SC_FSIM_HDL_MODULE(Type)`
 crossing from the root or a native child resolves `Type` across HDL units in
-the parent logical library; an explicit full-path binding overrides it.
+the parent logical library followed by configured elaboration search libraries;
+an explicit full-path binding overrides that complete scope.
 Legacy `hdl_instance` crossings still require explicit selection. Dynamic
 module creation after construction,
 non-parent port chains, and arbitrary custom-interface metadata are not yet

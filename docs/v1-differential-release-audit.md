@@ -25,8 +25,8 @@ plug-in, compiler, source-map, and portable-path modes.
 
 The reviewed baseline contains 94 distinct matrix runtime evidence files and
 36 distinct corpus CTests. Runtime cells explicitly name interpreter evidence
-on 441 rows, LLVM/compiled/native evidence on 360, cache/reuse/edit evidence on
-244, debugger evidence on 91, VCD/trace evidence on 117, scheduling/time/event
+on 442 rows, LLVM/compiled/native evidence on 361, cache/reuse/edit evidence on
+245, debugger evidence on 91, VCD/trace evidence on 117, scheduling/time/event
 evidence on 394, and failure/diagnostic/callback/ABI evidence on 89. These
 categories overlap intentionally; they freeze claim ownership, not test count.
 

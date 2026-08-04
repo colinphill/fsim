@@ -880,6 +880,64 @@ assert(
     unicode_invocation->trace_file
     == unicode_directory
         / fsim::support::path_from_utf8("trace-\xCE\xBB.vcd"));
+const std::vector<const char*> search_arguments{
+    "fsim", "build",
+    "--search-library", "vendor",
+    "--search-library=shared"};
+fsim::diagnostic::Engine search_diagnostics;
+const auto search_invocation = fsim::cli::parse_arguments(
+    static_cast<int>(search_arguments.size()),
+    search_arguments.data(),
+    search_diagnostics);
+assert(search_invocation && !search_diagnostics.has_error());
+assert((
+    search_invocation->search_libraries
+    == std::vector<std::string>{"vendor", "shared"}));
+const auto search_manifest = directory / "search-override.toml";
+{
+  std::ofstream output(search_manifest);
+  output << R"(schema = 2
+[project]
+top = "actual_top"
+[elaboration]
+search_libraries = ["manifest_only"]
+[[source_set]]
+language = "systemverilog"
+library = "work"
+files = ["different_filename.sv"]
+)";
+  assert(output.good());
+}
+bool search_handler_called = false;
+fsim::cli::Services search_services;
+search_services.check =
+    [&](const fsim::cli::Invocation&,
+        const fsim::project::Config& captured,
+        fsim::diagnostic::Engine&,
+        std::ostream&,
+        std::ostream&) {
+      search_handler_called = true;
+      assert((
+          captured.elaboration.search_libraries
+          == std::vector<std::string>{"vendor", "shared"}));
+      return 0;
+    };
+const auto search_manifest_text = search_manifest.string();
+const std::vector<const char*> search_override_arguments{
+    "fsim", "check", "--project", search_manifest_text.c_str(),
+    "--search-library", "vendor", "--search-library", "shared"};
+std::ostringstream search_output;
+std::ostringstream search_error;
+assert(
+    fsim::cli::run(
+        static_cast<int>(search_override_arguments.size()),
+        search_override_arguments.data(),
+        search_services,
+        search_output,
+        search_error)
+    == 0);
+assert(search_handler_called);
+assert(search_error.str().empty());
 std::ostringstream unicode_output;
 std::ostringstream unicode_error;
 assert(

@@ -749,20 +749,82 @@ using namespace elaboration_detail;
         return result;
     }
 
+    std::vector<UnitResolutionCandidate>
+    HierarchyBuilder::resolution_candidates(
+        const std::span<const std::string> libraries,
+        const std::string_view name,
+        std::vector<std::string>& unavailable_libraries) const {
+        std::vector<UnitResolutionCandidate> result;
+        for (std::size_t index = 0; index < libraries.size(); ++index) {
+            const auto& library = libraries[index];
+            if (!has_logical_library(
+                    parsed_, systemc_candidates_,
+                    systemc_libraries_, library)) {
+                if (index != 0) {
+                    unavailable_libraries.push_back(library);
+                }
+                continue;
+            }
+            auto candidates = resolution_candidates(library, name);
+            result.insert(
+                result.end(),
+                std::make_move_iterator(candidates.begin()),
+                std::make_move_iterator(candidates.end()));
+        }
+        std::stable_sort(
+            result.begin(), result.end(),
+            [](const auto& left, const auto& right) {
+                return left.identity < right.identity;
+            });
+        return result;
+    }
+
     std::optional<UnitResolutionCandidate>
     HierarchyBuilder::inferred_target(
         const std::string_view library,
         const std::string_view name,
         const std::string& path,
         const frontend::SourceSpan source) {
-        const auto candidates = resolution_candidates(library, name);
+        const auto scope = effective_search_scope(
+            library, search_libraries_);
+        std::vector<std::string> unavailable_libraries;
+        const auto candidates = resolution_candidates(
+            scope, name, unavailable_libraries);
+        const auto formatted_scope = [&] {
+            std::string result;
+            for (const auto& entry : scope) {
+                if (!result.empty()) {
+                    result += ", ";
+                }
+                result += entry;
+            }
+            return result;
+        }();
+        if (!unavailable_libraries.empty()) {
+            std::string unavailable;
+            for (const auto& entry : unavailable_libraries) {
+                if (!unavailable.empty()) {
+                    unavailable += ", ";
+                }
+                unavailable += entry;
+            }
+            report(
+                "FSIM-ELAB-BIND-059",
+                "instance '" + path
+                    + "' queried unavailable logical "
+                      "library/libraries [" + unavailable
+                    + "] while resolving unit '" + std::string{name}
+                    + "' in search scope [" + formatted_scope + "]",
+                source);
+            return std::nullopt;
+        }
         if (candidates.empty()) {
             report(
                 "FSIM-ELAB-BIND-012",
                 "instance '" + path + "' names unit '" + std::string{name}
                     + "', which was not found across VHDL, Verilog, "
-                      "SystemVerilog, or SystemC in logical library '"
-                    + std::string{library} + "'",
+                      "SystemVerilog, or SystemC in search scope ["
+                    + formatted_scope + "]; candidates: <none>",
                 source);
             return std::nullopt;
         }
@@ -770,8 +832,8 @@ using namespace elaboration_detail;
             report(
                 "FSIM-ELAB-BIND-017",
                 "instance '" + path + "' names ambiguous unit '"
-                    + std::string{name} + "' in logical library '"
-                    + std::string{library} + "'; candidates: "
+                    + std::string{name} + "' in search scope ["
+                    + formatted_scope + "]; candidates: "
                     + format_resolution_candidates(candidates),
                 source);
             return std::nullopt;

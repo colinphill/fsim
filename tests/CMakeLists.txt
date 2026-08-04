@@ -405,6 +405,7 @@ add_executable(
   elaboration/elaborator_sv_type_parameter_test.cpp
   elaboration/elaborator_generate_test.cpp
   elaboration/elaborator_mixed_test.cpp
+  elaboration/elaborator_library_search_test.cpp
   elaboration/elaborator_mixed_conversion_test.cpp
   elaboration/elaborator_mixed_construction_test.cpp
   elaboration/elaborator_mixed_driver_test.cpp

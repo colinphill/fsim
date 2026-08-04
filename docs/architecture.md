@@ -47,7 +47,7 @@ than independent semantic definitions.
 |---|---|---|
 | Source manager | Files, source locations, include and macro ancestry | Exact ordered compilation-unit/transitive snapshots, owning VHDL/SV/SystemC source records, and interned include/macro ancestry are current |
 | Language frontend | Tokenization, preprocessing, parsing, name/type rules | Hand-written bounded VHDL and SV parsers, a multi-root SV preprocessor, and complete owning typed HIR for the v1 profile are current |
-| Design elaboration | Candidate resolution, specialization, hierarchy, bindings, drivers, stable IDs | Recursive VHDL/SV/SystemC hierarchy, parent-logical-library candidate resolution with explicit overrides, dense instance-specific specialization records, bounded scalar VHDL generic and integral SV parameter specialization, executable conditional/iterative/selection generate expansion, construction-actual transfer across all three languages, port aliasing, and boundary checks are current; configurable multi-library search, general generic/parameter typing, and complete driver semantics are planned |
+| Design elaboration | Candidate resolution, specialization, hierarchy, bindings, drivers, stable IDs | Recursive VHDL/SV/SystemC hierarchy, configurable complete-scope logical-library resolution with explicit overrides, dense instance-specific specialization records, bounded scalar VHDL generic and integral SV parameter specialization, executable conditional/iterative/selection generate expansion, construction-actual transfer across all three languages, port aliasing, and boundary checks are current; mapped external libraries, general generic/parameter typing, and complete driver semantics are planned |
 | SimIR lowering | Explicit reads, writes, waits, branches, assertions and yields | A typed executable subset is current |
 | Reference engine | Execute any supported SimIR with deterministic scheduling | Current |
 | LLVM engine | Compile each design-unit specialization and execute via ORC | The application groups eligible processes from each bounded elaborated specialization into one LLVM module while retaining typed per-process interpreter fallback; update/delayed writes plus dynamic/static sensitivity waits are current |
@@ -481,7 +481,14 @@ contributes its label as a stable hierarchy component. Direct items inside an
 explicit SystemVerilog `generate` region use one empty static parent scope, so
 they retain module-scope names while their nested generated regions inherit
 the parent's constant and object environments.
-Same-language children resolve within the parsed units. A manifest
+Unqualified children resolve from an immutable per-build candidate index. Each
+lookup lazily queries the parent logical library followed by first occurrences
+from `[elaboration].search_libraries`, or the ordered replacement supplied by
+repeated `--search-library`. All queried libraries form one ambiguity scope;
+library order never hides a later collision. Missing or ambiguous diagnostics
+therefore retain the ordered scope and canonical identities considered. An
+unavailable configured library remains inert until an unqualified lookup needs
+it. A manifest
 binding may override an instance with a language-qualified VHDL or SV target;
 the builder then connects named or positional whole-signal actuals by aliasing
 the child port ID to the parent signal ID. It diagnoses missing or duplicate
@@ -502,7 +509,7 @@ Exact nine-state `std_logic` and four-state `sv_wire` resolution are current
 in the reference runtime; exact nine-state generated code remains a
 capability-gated interpreter fallback.
 
-The v1 hierarchy is deliberately bidirectional for SystemC. An HDL instance
+The hierarchy is deliberately bidirectional for SystemC. An HDL instance
 path may bind to a registered SystemC factory. During its elaboration, a
 SystemC factory may mark a normally constructed child module as an HDL proxy;
 the

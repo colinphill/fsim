@@ -216,6 +216,44 @@ std::vector<UnitResolutionCandidate> resolve_unit_candidates(
     return result;
 }
 
+std::vector<std::string> effective_search_scope(
+    const std::string_view parent_library,
+    const std::span<const std::string> search_libraries) {
+    std::vector<std::string> result;
+    result.reserve(search_libraries.size() + 1);
+    const auto append = [&](const std::string_view library) {
+        const auto normalized = library.empty()
+            ? std::string{"work"} : std::string{library};
+        if (std::ranges::find(result, normalized) == result.end()) {
+            result.push_back(normalized);
+        }
+    };
+    append(parent_library);
+    for (const auto& library : search_libraries) {
+        append(library);
+    }
+    return result;
+}
+
+bool has_logical_library(
+    const frontend::ParsedDesign& parsed,
+    const std::span<const SystemCFactoryCandidate> systemc_candidates,
+    const std::span<const std::string> systemc_libraries,
+    const std::string_view library) {
+    return std::ranges::any_of(
+               parsed.units,
+               [&](const DesignUnit& unit) {
+                   return normalized_library(unit) == library;
+               })
+        || std::ranges::any_of(
+               systemc_candidates,
+               [&](const SystemCFactoryCandidate& candidate) {
+                   return candidate.library == library;
+               })
+        || std::ranges::find(systemc_libraries, library)
+            != systemc_libraries.end();
+}
+
 
 
 std::string format_resolution_candidates(

@@ -1,24 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
 # Batch 130 Task 9 final release-candidate corpus.
 # Every required row is classified execute and owns nonempty P+/P-/E/R links.
-# matrix-rows: 1080
-# matrix-sha256: 84122e4632f30c9751ade317ff37b62366b9aaa76d97b7f85b6b420ff8253883
-# evidence-slots: 4320
-# evidence-paths: 321
-# evidence-sha256: 9fdb780a0883d790ab5db34c250bf1e85adbef6ca957d51c26d2dd89237be069
-# test-evidence-paths: 158
+# matrix-rows: 1081
+# matrix-sha256: c6b806f2c640727519b90d3a932441ef25e75054382213a5c8b8be893618a2db
+# evidence-slots: 4324
+# evidence-paths: 323
+# evidence-sha256: 4bf66f89a475eda33e65ff9b9398afe5338bddada9f7cc546ee8cfe6a17c90e7
+# test-evidence-paths: 159
 # production-evidence-paths: 148
-# release-evidence-paths: 15
+# release-evidence-paths: 16
 # runtime-evidence-paths: 94
 # corpus-ctests: 36
 # required-status: execute
 #
-# B130-T9-ROWS: all 1080 required IDs are unique and in one of the eight
+# B130-T9-ROWS: all 1081 required IDs are unique and in one of the eight
 # reviewed SV/VHDL/mixed/SystemC/common release surfaces.
 # B130-T9-CLASSIFICATION: no required row remains parse, v1-target, deferred,
 # or an evidence gap; every row is reclassified only through its exact matrix
 # record.
-# B130-T9-EVIDENCE: all 4320 evidence cells contain at least one checked-in
+# B130-T9-EVIDENCE: all 4324 evidence cells contain at least one checked-in
 # link; 321 unique paths divide into 158 test, 148 production, and 15
 # documentation/build/release evidence paths.
 # B130-T9-CORPUS: 94 distinct runtime files and 36 named conformance/

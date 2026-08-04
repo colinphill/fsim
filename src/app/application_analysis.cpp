@@ -53,6 +53,16 @@ ApplicationSystemCFactoryProvider::candidates() const {
   return result;
 }
 
+std::vector<std::string>
+ApplicationSystemCFactoryProvider::libraries() const {
+  std::vector<std::string> result;
+  result.reserve(registries_.size());
+  for (const auto& entry : registries_) {
+    result.push_back(entry.library);
+  }
+  return result;
+}
+
 std::optional<std::vector<
     elaboration::SystemCConstructionParameter>>
 ApplicationSystemCFactoryProvider::schema(

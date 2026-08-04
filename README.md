@@ -156,10 +156,10 @@ The current tree contains:
 - bounded scalar `buf`/`not`/`and`/`nand`/`or`/`nor`/`xor`/`xnor` gate
   primitives with shared one/two-value transition delays and comma-separated
   instances, lowered through the common continuous-process path;
-- recursive VHDL/SV instance elaboration in both hierarchy directions with
-  automatic parent-library cross-language resolution with explicit overrides,
-  whole-signal port aliasing, and boundary
-  validation;
+- recursive VHDL/SV/SystemC instance elaboration in every hierarchy direction
+  with automatic parent-plus-configured-library resolution, repeatable
+  `--search-library` overrides, explicit qualified overrides, whole-signal port
+  aliasing, and boundary validation;
 - specialization-time VHDL and SystemVerilog conditional/iterative/selection
   executable generate expansion, unguarded VHDL block statements, and
   explicit or implicit SystemVerilog generate forms with labeled and indexed

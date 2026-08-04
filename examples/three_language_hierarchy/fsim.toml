@@ -17,18 +17,21 @@ compilation_unit = "source-set"
 [[source_set]]
 language = "systemc"
 standard = "2023-subset"
-library = "work"
+library = "models"
 files = ["mixed_bridge.cpp"]
 include_dirs = ["../../include"]
 
 [[source_set]]
 language = "vhdl"
 standard = "2008"
-library = "work"
+library = "models"
 files = ["logic_stage.vhd"]
 
-# Both boundaries infer their uniquely named implementation in logical
-# library work. Add an explicit binding only to override that selection.
+[elaboration]
+search_libraries = ["models"]
+
+# The SV parent searches models for the SystemC factory. The SystemC parent
+# then finds its VHDL child in its own models library.
 
 [build]
 optimization = "O2"

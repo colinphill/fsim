@@ -25,6 +25,16 @@ std::string make_cache_key(
       "verilog-preprocessor",
       frontend::verilog_preprocessor_cache_version);
   key.add("systemc-plugin", systemc_plugin_key);
+  std::vector<std::string> search_libraries;
+  search_libraries.reserve(
+      config.elaboration.search_libraries.size());
+  for (const auto& library : config.elaboration.search_libraries) {
+    if (std::ranges::find(search_libraries, library)
+        == search_libraries.end()) {
+      search_libraries.push_back(library);
+      key.add("elaboration-search-library", library);
+    }
+  }
   std::size_t hdl_source_index = 0;
   for (const auto& set : config.source_sets) {
     key.add("language", project::to_string(set.language));
@@ -217,7 +227,7 @@ make_specialization_cache_keys(
     compiler::CacheKeyBuilder key;
     key.add(
         "specialization-provenance-schema",
-        "fsim-specialization-provenance-v6-resolved-unit");
+        "fsim-specialization-provenance-v7-library-search");
     key.add("fsim-version", version);
     key.add("standard-library", standard_library_cache_version);
     key.add("delay-mode", project::to_string(config.run.delay_mode));
@@ -226,6 +236,19 @@ make_specialization_cache_keys(
         frontend::verilog_preprocessor_cache_version);
     key.add("unit", specialization.name);
     key.add("selected-unit-identity", specialization.name);
+    key.add("selected-logical-library", specialization.library);
+    std::vector<std::string> specialization_search_libraries;
+    specialization_search_libraries.reserve(
+        config.elaboration.search_libraries.size());
+    for (const auto& library :
+         config.elaboration.search_libraries) {
+      if (std::ranges::find(
+              specialization_search_libraries, library)
+          == specialization_search_libraries.end()) {
+        specialization_search_libraries.push_back(library);
+        key.add("elaboration-search-library", library);
+      }
+    }
     key.add(
         "source-path",
         fsim::support::path_to_utf8(

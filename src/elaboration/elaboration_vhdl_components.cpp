@@ -1242,15 +1242,41 @@ HierarchyBuilder::bind_vhdl_component_instance(
 
     if (!result.applied) {
         const auto library = normalized_library(unit);
+        const auto search_scope = effective_search_scope(
+            library, search_libraries_);
+        std::vector<std::string> unavailable_libraries;
         const auto candidates = resolution_candidates(
-            library, component.name);
+            search_scope, component.name, unavailable_libraries);
+        const auto format_libraries = [](const auto& libraries) {
+            std::string formatted;
+            for (const auto& entry : libraries) {
+                if (!formatted.empty()) {
+                    formatted += ", ";
+                }
+                formatted += entry;
+            }
+            return formatted;
+        };
+        if (!unavailable_libraries.empty()) {
+            report(
+                "FSIM-ELAB-BIND-059",
+                "component '" + component.name + "' on '" + path
+                    + "' queried unavailable logical library/libraries ["
+                    + format_libraries(unavailable_libraries)
+                    + "] in search scope ["
+                    + format_libraries(search_scope) + "]",
+                component.span);
+            result.valid = false;
+            return result;
+        }
         if (candidates.empty()) {
             report(
                 "FSIM-ELAB-VHCOMP-003",
                 "component '" + component.name + "' on '" + path
                     + "' was not found across VHDL, Verilog, or "
-                      "SystemVerilog in logical library '"
-                    + library + "'",
+                      "SystemVerilog in search scope ["
+                    + format_libraries(search_scope)
+                    + "]; candidates: <none>",
                 component.span);
             result.valid = false;
             return result;
@@ -1259,8 +1285,8 @@ HierarchyBuilder::bind_vhdl_component_instance(
             report(
                 "FSIM-ELAB-VHCOMP-005",
                 "component '" + component.name + "' on '" + path
-                    + "' is ambiguous in logical library '" + library
-                    + "'; candidates: "
+                    + "' is ambiguous in search scope ["
+                    + format_libraries(search_scope) + "]; candidates: "
                     + format_resolution_candidates(candidates),
                 component.span);
             result.valid = false;

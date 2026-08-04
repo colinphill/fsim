@@ -44,9 +44,9 @@ foreach(FSIM_GATE IN ITEMS
 endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
-    "diagnostic catalog covers 1628 production codes"
-    "Checked 431 authored sources against the 2000-line limit"
-    "v1 conformance audit: 186 authored test/control files, 10 reviewed source IDs, 6 excluded source IDs, 8 coverage queues"
+    "diagnostic catalog covers 1631 production codes"
+    "Checked 432 authored sources against the 2000-line limit"
+    "v1 conformance audit: 187 authored test/control files, 10 reviewed source IDs, 6 excluded source IDs, 8 coverage queues"
     "v1 conformance corpus: 105 expectations, 28 fixtures, 27 CTests, 49f5754862e3785fa964621b770f202d1d1ad5fb21bd4144b016b7ceb47dd5dd")
   string(FIND
     "${FSIM_COMPOSED_OUTPUT}" "${FSIM_EXACT_OUTPUT}" FSIM_OUTPUT_INDEX)
@@ -73,9 +73,9 @@ list(APPEND FSIM_AUTHORED_FILES
 list(FILTER FSIM_AUTHORED_FILES EXCLUDE REGEX "/tests/fuzz/corpus/")
 list(REMOVE_DUPLICATES FSIM_AUTHORED_FILES)
 list(LENGTH FSIM_AUTHORED_FILES FSIM_AUTHORED_COUNT)
-if(NOT FSIM_AUTHORED_COUNT EQUAL 515)
+if(NOT FSIM_AUTHORED_COUNT EQUAL 516)
   message(FATAL_ERROR
-    "authored license inventory changed: expected 515 files, "
+    "authored license inventory changed: expected 516 files, "
     "found ${FSIM_AUTHORED_COUNT}")
 endif()
 foreach(FSIM_FILE IN LISTS FSIM_AUTHORED_FILES)
@@ -121,4 +121,4 @@ endforeach()
 
 message(STATUS
   "final inventory audit: 1624 diagnostics, 428 bounded sources, "
-  "515 SPDX-owned files, 31 reviewed IEEE files, and 105 conformance expectations")
+  "516 SPDX-owned files, 31 reviewed IEEE files, and 105 conformance expectations")

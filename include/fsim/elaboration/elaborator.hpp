@@ -5,6 +5,7 @@
 #include "fsim/runtime/simir.hpp"
 #include "fsim/systemc_abi.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -154,6 +155,20 @@ public:
     [[nodiscard]] virtual std::vector<SystemCFactoryCandidate>
     candidates() const = 0;
 
+    // Logical-library availability is distinct from exporting at least one
+    // factory. The default preserves source compatibility for providers which
+    // expose only candidate records.
+    [[nodiscard]] virtual std::vector<std::string> libraries() const {
+        std::vector<std::string> result;
+        for (const auto& candidate : candidates()) {
+            if (std::ranges::find(result, candidate.library)
+                == result.end()) {
+                result.push_back(candidate.library);
+            }
+        }
+        return result;
+    }
+
     [[nodiscard]] virtual std::optional<
         std::vector<SystemCConstructionParameter>>
     schema(std::string_view target, std::string& error) = 0;
@@ -184,6 +199,15 @@ public:
     std::span<const Binding> bindings,
     std::span<const SystemCInstanceDescription> systemc_instances,
     SystemCFactoryProvider* systemc_provider);
+[[nodiscard]] ElaborationResult elaborate(
+    const frontend::ParsedDesign& parsed,
+    std::string_view top,
+    std::span<const Binding> bindings,
+    std::span<const SystemCInstanceDescription> systemc_instances,
+    SystemCFactoryProvider* systemc_provider,
+    // The parent library is prepended and duplicates are removed at their
+    // first occurrence for each lazy unqualified lookup.
+    std::span<const std::string> search_libraries);
 
 struct Diagnostic {
     std::string code;
@@ -469,6 +493,13 @@ private:
         std::span<const Binding>,
         std::span<const SystemCInstanceDescription>,
         SystemCFactoryProvider*);
+    friend ElaborationResult elaborate(
+        const frontend::ParsedDesign&,
+        std::string_view,
+        std::span<const Binding>,
+        std::span<const SystemCInstanceDescription>,
+        SystemCFactoryProvider*,
+        std::span<const std::string>);
 
     std::string top_;
     std::vector<SignalInfo> signal_info_;

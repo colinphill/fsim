@@ -963,7 +963,9 @@ therefore excluded.
 | `FSIM-ELAB-002` | error | A VHDL architecture has no matching entity. |
 | `FSIM-ELAB-003` | error | A qualified top-level target is malformed. |
 | `FSIM-ELAB-004` | error | A qualified VHDL top does not name an architecture. |
-| `FSIM-ELAB-005` | error | An unqualified top name is ambiguous in logical library `work`. |
+| `FSIM-ELAB-005` | error | An unqualified top name is ambiguous across its complete effective logical-library scope. |
+| `FSIM-ELAB-006` | error | An unqualified top lookup needs one or more configured logical libraries which are unavailable. |
+| `FSIM-ELAB-007` | error | A uniquely inferred top-level SystemC factory could not be constructed. |
 | `FSIM-ELAB-008` | error | The elaborated design exceeds the dense process-ID space. |
 | `FSIM-ELAB-010` | error | A signal has an invalid packed width. |
 | `FSIM-ELAB-011` | error | The design exceeds the dense 32-bit signal-ID limit. |
@@ -1619,12 +1621,12 @@ therefore excluded.
 | `FSIM-ELAB-BIND-0004` | error | A manifest binding resolver is neither `std_logic` nor `sv_wire`. |
 | `FSIM-ELAB-BIND-010` | error | More than one binding names the same instance path. |
 | `FSIM-ELAB-BIND-011` | error | A binding path was not found in the elaborated hierarchy. |
-| `FSIM-ELAB-BIND-012` | error | An unqualified instance spelling has no VHDL, Verilog/SystemVerilog, or SystemC candidate in the parent logical library. |
+| `FSIM-ELAB-BIND-012` | error | An unqualified instance spelling has no VHDL, Verilog/SystemVerilog, or SystemC candidate in its complete effective logical-library scope. |
 | `FSIM-ELAB-BIND-013` | error | An elaboration binding target is malformed. |
 | `FSIM-ELAB-BIND-014` | error | A SystemC binding reached HDL target selection without a matching preconstructed typed factory instance. |
 | `FSIM-ELAB-BIND-015` | error | An explicit binding target was not found. |
 | `FSIM-ELAB-BIND-016` | error | An explicit VHDL binding does not name an architecture. |
-| `FSIM-ELAB-BIND-017` | error | An unqualified instance spelling has multiple canonical candidates in the parent logical library. |
+| `FSIM-ELAB-BIND-017` | error | An unqualified instance spelling has multiple canonical candidates across its complete effective logical-library scope. |
 | `FSIM-ELAB-BIND-018` | error | A logical library exposes the same public SystemC factory name more than once. |
 | `FSIM-ELAB-BIND-019` | error | A boundary port or actual uses an unsupported value domain. |
 | `FSIM-ELAB-BIND-020` | error | Boundary port and actual widths differ. |
@@ -1665,6 +1667,7 @@ therefore excluded.
 | `FSIM-ELAB-BIND-056` | error | A same-language VHDL hierarchy boundary connects different nominal array types. |
 | `FSIM-ELAB-BIND-057` | error | A same-language hierarchy boundary connects different nominal aggregate or record types. |
 | `FSIM-ELAB-BIND-058` | error | A native SystemC child port is unbound after factory construction. |
+| `FSIM-ELAB-BIND-059` | error | An unqualified child lookup needs one or more configured logical libraries which are unavailable. |
 
 ## Time, runtime, trace, and design cache
 

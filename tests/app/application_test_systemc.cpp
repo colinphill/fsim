@@ -553,7 +553,8 @@ assert(
 
 auto natural_lifecycle_config = lifecycle_config;
 natural_lifecycle_config.project.top =
-    "systemc:models.lifecycle_module";
+    "lifecycle_module";
+natural_lifecycle_config.elaboration.search_libraries = {"models"};
 natural_lifecycle_config.bindings.clear();
 fsim::diagnostic::Engine natural_lifecycle_diagnostics;
 auto natural_lifecycle_project = fsim::app::build_project(

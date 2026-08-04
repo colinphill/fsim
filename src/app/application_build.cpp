@@ -143,7 +143,8 @@ std::optional<BuiltProject> build_project(
       top,
       bindings,
       *systemc_instances,
-      systemc_provider.get());
+      systemc_provider.get(),
+      config.elaboration.search_libraries);
   for (const auto& input : elaborated.diagnostics) {
     const auto source = intern_semantic_span(
         checked->semantics, input.span);

@@ -295,6 +295,9 @@ std::optional<project::Config> make_direct_config(
   if (invocation.optimization.has_value()) {
     config.build.optimization = *invocation.optimization;
   }
+  if (!invocation.search_libraries.empty()) {
+    config.elaboration.search_libraries = invocation.search_libraries;
+  }
 
   if (diagnostics.has_error()) {
     return std::nullopt;
@@ -330,6 +333,9 @@ void apply_overrides(const Invocation& invocation, project::Config& config) {
   if (invocation.optimization.has_value()) {
     config.build.optimization = *invocation.optimization;
   }
+  if (!invocation.search_libraries.empty()) {
+    config.elaboration.search_libraries = invocation.search_libraries;
+  }
 }
 
 void print_help(std::ostream& output, const std::string_view program) {
@@ -351,6 +357,8 @@ void print_help(std::ostream& output, const std::string_view program) {
       << "      --lang LANGUAGE      Language for every direct source file\n"
       << "      --standard VERSION   Standard for direct source files\n"
       << "      --library NAME       Library for direct source files (default: work)\n"
+      << "      --search-library NAME\n"
+      << "                           Replace the manifest elaboration search list; repeatable\n"
       << "  -I, --include PATH       Add a direct-source include directory\n"
       << "  -D, --define NAME[=VAL]  Add a direct-source preprocessor definition\n"
       << "\n"
@@ -524,6 +532,19 @@ std::optional<Invocation> parse_arguments(
           return std::nullopt;
         }
         invocation.library = std::string(*value);
+      } else if (is_option(argument, "", "--search-library")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--search-library", diagnostics);
+        if (!value.has_value()) {
+          return std::nullopt;
+        }
+        if (value->empty()) {
+          argument_error(
+              diagnostics,
+              "--search-library requires a non-empty library name");
+          return std::nullopt;
+        }
+        invocation.search_libraries.emplace_back(*value);
       } else if (
           argument == "-I" || is_option(argument, "", "--include") ||
           (argument.size() > 2 && argument.starts_with("-I"))) {
@@ -731,6 +752,12 @@ std::optional<Invocation> parse_arguments(
       argument_error(diagnostics, "migrate currently requires '--to 2'");
       return std::nullopt;
     }
+    if (!invocation.search_libraries.empty()) {
+      argument_error(
+          diagnostics,
+          "--search-library is not available with migrate");
+      return std::nullopt;
+    }
   } else if (invocation.migration_schema.has_value()
              || invocation.migration_in_place) {
     argument_error(
@@ -802,6 +829,7 @@ int run(
       }
       tcl_config.project.name = "tcl";
       config = std::move(tcl_config);
+      apply_overrides(*invocation, *config);
     } else if (invocation->files.empty()) {
       config = project::load(invocation->manifest, diagnostics);
       if (config.has_value()) {

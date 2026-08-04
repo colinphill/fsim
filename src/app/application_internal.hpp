@@ -769,6 +769,8 @@ public:
   std::vector<elaboration::SystemCFactoryCandidate>
   candidates() const override;
 
+  std::vector<std::string> libraries() const override;
+
   std::optional<std::vector<
       elaboration::SystemCConstructionParameter>>
   schema(

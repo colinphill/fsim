@@ -7,7 +7,8 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
-- Current unit: Batch 133, all 20 changes complete; Batch 134 is next.
+- Current unit: Batch 135, exactly 20 planned changes. Implementation has not
+  started; its first task is the multiple-root manifest and migration model.
 - Completed work: Batch 133 implements parent-library inference for HDL-to-HDL,
   HDL-to-SystemC, and SystemC-proxy-to-HDL boundaries, including resolver-only
   bindings, deterministic ambiguity, multiple logical-library SystemC
@@ -18,6 +19,20 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   inventory, and release gates pass. The batch is committed and pushed as one
   accumulated unit. No sanitizer or GitHub CI monitoring was run because
   Batch 133 is not a scheduled monitoring boundary.
-- Build every target with at least eight workers. Batch 134 must begin with
-  exactly 20 numbered changes in `implementation_plan_v2.md`; sanitizers remain
-  reserved for the next CI-monitoring batch, Batch 140.
+- Batch 134 adds `[elaboration].search_libraries` and repeated
+  `--search-library`; command-line occurrences replace the manifest list. The
+  parent library followed by first occurrences from that list is one complete
+  ambiguity scope. Queries are lazy, so an unavailable configured library is
+  diagnosed only when a reference needs the scope. Explicit targets bypass it.
+  Exact-LLVM Debug passed 106/106 tests in 280.62 seconds and Release passed
+  106/106 tests in 242.71 seconds. Source, diagnostic-catalog, inventory, and
+  release gates pass. The batch is committed and pushed as one accumulated
+  unit; no sanitizer or CI monitoring was run because Batch 134 is not a
+  scheduled monitoring boundary.
+- Batch 135 implements multiple aliased top-level roots sharing one scheduler,
+  time domain, language-global state, trace namespace, and debugger session.
+  Its exact 20 changes are recorded in the implementation plan.
+- Build every target with at least eight workers. Changes 1-19 accumulate in
+  one worktree and Change 20 owns full Debug/Release gates, documentation, one
+  commit, and one push. Do not run sanitizers or monitor CI in Batch 135;
+  sanitizers remain reserved for Batch 140.

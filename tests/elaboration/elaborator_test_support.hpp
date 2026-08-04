@@ -42,10 +42,22 @@ public:
     std::string construction_failure;
     std::vector<fsim::elaboration::SystemCFactoryCandidate>
         factory_candidates;
+    std::vector<std::string> available_libraries;
 
     std::vector<fsim::elaboration::SystemCFactoryCandidate>
     candidates() const override {
         return factory_candidates;
+    }
+
+    std::vector<std::string> libraries() const override {
+        auto result = available_libraries;
+        for (const auto& candidate : factory_candidates) {
+            if (std::ranges::find(result, candidate.library)
+                == result.end()) {
+                result.push_back(candidate.library);
+            }
+        }
+        return result;
     }
 
     std::optional<std::vector<
@@ -105,6 +117,7 @@ void test_systemverilog_string_constants();
 void test_systemverilog_type_parameters();
 void test_generate_elaboration();
 void test_mixed_language_and_systemc();
+void test_multi_library_resolution();
 void test_mixed_language_conversions();
 void test_mixed_language_construction();
 void test_mixed_language_driver_ownership();

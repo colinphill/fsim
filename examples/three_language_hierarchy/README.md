@@ -2,8 +2,8 @@
 # Three-language hierarchy tutorial
 
 This project is a runnable SystemVerilog, SystemC, and VHDL example. It uses
-automatic parent-library resolution at both language boundaries and executes
-every language in one recursively elaborated hierarchy:
+automatic parent-plus-search-library resolution and executes every language
+in one recursively elaborated hierarchy:
 
 ```text
 three_language_tb                         SystemVerilog testbench
@@ -66,12 +66,20 @@ observe a cold build.
 
 ## 3. Understand target resolution
 
-The SystemVerilog source names `mixed_bridge`, matching the public factory
-alias exported by `SC_FSIM_EXPORT_AS`. Both are in logical library `work`, so
-the instance resolves uniquely:
+The SystemVerilog source in `work` names `mixed_bridge`, matching the public
+factory alias exported by `SC_FSIM_EXPORT_AS` in logical library `models`.
+The manifest makes that library visible during unqualified elaboration:
+
+```toml
+[elaboration]
+search_libraries = ["models"]
+```
+
+The complete scope contains `work` followed by `models`, so the factory
+resolves uniquely:
 
 ```text
-three_language_tb.u_bridge -> systemc:work.mixed_bridge
+three_language_tb.u_bridge -> systemc:models.mixed_bridge
 ```
 
 `LogicStage` is declared with `SC_FSIM_HDL_MODULE`, so `MixedBridge` constructs
@@ -79,16 +87,18 @@ it like another SystemC module and connects `u_vhdl.value(to_vhdl)` and
 `u_vhdl.result(result)` with ordinary port-binding syntax. The
 `SC_FSIM_EXPORT_AS(MixedBridge, "mixed_bridge")` declaration publishes the
 parent factory. `SC_FSIM_HDL_MODULE(LogicStage)` records `LogicStage` as the
-child implementation spelling; VHDL matching is case-insensitive, and the
-unique entity in `work` supplies its `rtl` architecture:
+child implementation spelling. The SystemC parent is already in `models`, so
+that parent library is searched first; VHDL matching is case-insensitive and
+the unique entity supplies its `rtl` architecture:
 
 ```text
-three_language_tb.u_bridge.u_vhdl -> vhdl:work.LogicStage(rtl)
+three_language_tb.u_bridge.u_vhdl -> vhdl:models.LogicStage(rtl)
 ```
 
+Repeated `--search-library` options replace the manifest list for one command.
 An explicit full-path `[[binding]]` can still override either inferred target.
-If a name is missing or ambiguous, elaboration stops before comparing ports or
-construction actuals.
+If a name is missing or ambiguous anywhere in the complete scope, elaboration
+stops before comparing ports or construction actuals.
 
 ## 4. Record and inspect a VCD
 

@@ -98,7 +98,7 @@ implementation repair needed by that evidence.
 Task 10 completed the accumulated sanitizer, source/catalog, and full local
 Debug and Release regressions. ASan/UBSan passed 92/92 in 545.85 seconds;
 exact LLVM Debug and Release passed 95/95 in 249.39 and 210.55 seconds. The
-final gates cover 1,628 diagnostics, 431 authored sources, 1,080 required
+final gates cover 1,631 diagnostics, 432 authored sources, 1,081 required
 release rows with no explicit evidence gaps, 105 conformance expectations, and
 20 portability rows. Batch 129 was not a mandatory CI-inspection boundary.
 Hosted proof remains assigned to Batch 130.

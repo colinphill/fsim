@@ -59,6 +59,12 @@ struct Binding {
   std::optional<std::string> resolver;
 };
 
+struct ElaborationSection {
+  // Unqualified lookup uses the parent logical library followed by first
+  // occurrences from this ordered list as one complete ambiguity scope.
+  std::vector<std::string> search_libraries;
+};
+
 struct BuildSection {
   Optimization optimization{Optimization::o2};
   std::uint32_t jobs{0};
@@ -89,6 +95,7 @@ struct Config {
   ProjectSection project;
   std::vector<SourceSet> source_sets;
   std::vector<Binding> bindings;
+  ElaborationSection elaboration;
   BuildSection build;
   RunSection run;
   SystemCSection systemc;

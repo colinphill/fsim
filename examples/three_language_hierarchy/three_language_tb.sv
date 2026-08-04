@@ -3,8 +3,8 @@ module three_language_tb;
   logic stimulus;
   logic observed;
 
-  // The public SystemC factory name resolves automatically in logical
-  // library work. That factory declares the inferred VHDL child below it.
+  // The public SystemC factory resolves through the configured models search
+  // library. That factory finds its inferred VHDL child in models as well.
   mixed_bridge u_bridge (
     .source(stimulus),
     .result(observed)

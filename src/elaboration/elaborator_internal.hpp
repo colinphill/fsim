@@ -1523,7 +1523,8 @@ public:
         const std::span<const Binding> bindings,
         const std::span<const SystemCInstanceDescription>
             systemc_instances,
-        SystemCFactoryProvider* systemc_provider);
+        SystemCFactoryProvider* systemc_provider,
+        std::span<const std::string> search_libraries);
 
     void build(const DesignUnit& root);
 
@@ -1809,6 +1810,11 @@ private:
         std::string_view library,
         std::string_view name) const;
 
+    std::vector<UnitResolutionCandidate> resolution_candidates(
+        std::span<const std::string> libraries,
+        std::string_view name,
+        std::vector<std::string>& unavailable_libraries) const;
+
     std::optional<UnitResolutionCandidate> inferred_target(
         std::string_view library,
         std::string_view name,
@@ -1956,6 +1962,8 @@ private:
         owned_systemc_instances_;
     SystemCFactoryProvider* systemc_provider_{};
     const std::vector<SystemCFactoryCandidate> systemc_candidates_;
+    const std::vector<std::string> systemc_libraries_;
+    const std::vector<std::string> search_libraries_;
     std::unordered_set<std::string> used_systemc_instances_;
     std::unordered_set<std::string> instance_paths_;
     // Interface instances are registered by canonical hierarchy path after

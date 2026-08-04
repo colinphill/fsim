@@ -52,6 +52,16 @@ std::vector<UnitResolutionCandidate> resolve_unit_candidates(
     std::string_view name,
     bool include_vhdl_configurations = false);
 
+std::vector<std::string> effective_search_scope(
+    std::string_view parent_library,
+    std::span<const std::string> search_libraries);
+
+bool has_logical_library(
+    const frontend::ParsedDesign& parsed,
+    std::span<const SystemCFactoryCandidate> systemc_candidates,
+    std::span<const std::string> systemc_libraries,
+    std::string_view library);
+
 std::string format_resolution_candidates(
     std::span<const UnitResolutionCandidate> candidates);
 

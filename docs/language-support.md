@@ -915,8 +915,12 @@ wide-value runtime kernels remain incomplete.
 For the bounded hierarchy slice, child ports alias parent signal IDs after
 unique target resolution and then width, signedness, and lossy-2-state checks.
 Unqualified names search VHDL, Verilog/SystemVerilog, and exported SystemC
-factories in the parent logical library without a same-language preference;
-explicit manifest targets override inference. Automated runtime evidence
+factories across the parent logical library plus ordered
+`[elaboration].search_libraries`, without a same-language or parent-library
+preference. Repeated `--search-library` options replace the manifest list,
+complete-scope collisions are ambiguous, unavailable configured libraries fail
+only when queried, and explicit targets override inference. Automated runtime
+evidence
 covers both hierarchy directions: an SV top driving a VHDL counter and an SV
 child, plus a VHDL top driving an SV combinational child. Bounded scalar
 generic/parameter actuals cross inferred or explicit VHDL/SV boundaries before

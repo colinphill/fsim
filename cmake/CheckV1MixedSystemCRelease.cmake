@@ -125,11 +125,11 @@ foreach(FSIM_GAP_SET IN ITEMS
   endif()
 endforeach()
 
-if(NOT FSIM_ROW_COUNT EQUAL 44
-    OR NOT FSIM_ML_COUNT EQUAL 16
+if(NOT FSIM_ROW_COUNT EQUAL 45
+    OR NOT FSIM_ML_COUNT EQUAL 17
     OR NOT FSIM_SC_COUNT EQUAL 28)
   message(FATAL_ERROR
-    "expected 44 mixed/SystemC rows split 16/28, found "
+    "expected 45 mixed/SystemC rows split 17/28, found "
     "${FSIM_ROW_COUNT} split ${FSIM_ML_COUNT}/${FSIM_SC_COUNT}")
 endif()
 

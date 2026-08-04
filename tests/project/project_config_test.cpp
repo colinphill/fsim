@@ -78,6 +78,9 @@ resolver = "std_logic"
 instance = "tb.bus"
 resolver = "sv_wire"
 
+[elaboration]
+search_libraries = ["vendor", "shared", "vendor"]
+
 [build]
 optimization = "O3"
 jobs = 4
@@ -134,6 +137,10 @@ libraries = ["m"]
                 == std::optional<std::string>{"sv_wire"},
         "schema 2 retains a resolver-only inferred binding");
     check(
+        config->elaboration.search_libraries
+            == std::vector<std::string>{"vendor", "shared", "vendor"},
+        "elaboration search libraries retain declared order");
+    check(
         config->build.optimization == fsim::project::Optimization::o3,
         "optimization is parsed");
     check(config->run.max_deltas == 999, "maximum delta count is parsed");
@@ -183,6 +190,32 @@ mystery = true
                     != std::string::npos;
           }),
       "schema 1 rejection names the migration command");
+}
+
+void test_elaboration_search_library_validation() {
+  const std::string manifest = R"(
+schema = 2
+[project]
+top = "top"
+[elaboration]
+search_libraries = ["vendor", ""]
+[[source_set]]
+language = "systemverilog"
+files = ["top.sv"]
+)";
+  fsim::diagnostic::Engine diagnostics;
+  const auto config =
+      fsim::project::parse(manifest, "bad-search.toml", ".", diagnostics);
+  check(!config.has_value(), "an empty search-library name is rejected");
+  check(
+      std::ranges::any_of(
+          diagnostics.diagnostics(),
+          [](const fsim::diagnostic::Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-PROJ-0007"
+                && diagnostic.message.find("search_libraries")
+                    != std::string::npos;
+          }),
+      "empty search-library names use the stable value diagnostic");
 }
 
 void test_schema_migration() {
@@ -310,6 +343,7 @@ int main() {
   // FSIM-CONFORMANCE CF-COMMON-DIAGNOSTIC-N01 source=SRC-FSIM expectation=reject
   test_complete_manifest_and_glob_order();
   test_schema_and_unknown_key_errors();
+  test_elaboration_search_library_validation();
   test_schema_migration();
   test_json_diagnostics_are_escaped();
   test_zero_time_resolution_is_rejected();

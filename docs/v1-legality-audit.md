@@ -9,18 +9,18 @@ groups every row that is not yet `execute` so each one has an explicit Batch
 
 ## Baseline
 
-The current Batch 127 working matrix contains 1,080 required rows:
+The current shared matrix contains 1,081 required rows:
 
 | Current status | Rows |
 |---|---:|
-| `execute` | 1,080 |
+| `execute` | 1,081 |
 | `analyze` | 0 |
 | `elaborate` | 0 |
 | `parse` | 0 |
 | `v1 target` | 0 |
 | nonstandard `metadata` | 0 |
 
-All 1,080 rows are `execute`, and every P+, P-, E, and R evidence cell is
+All 1,081 rows are `execute`, and every P+, P-, E, and R evidence cell is
 populated. The gate rejects any status regression, evidence dash, duplicate
 ID, undocumented status, missing path-like evidence link, or loss of the exact
 language row counts. Task 8 reclassified the former undocumented `SC-024`
@@ -61,8 +61,9 @@ E, and R evidence; there is no remaining SystemVerilog legality queue.
 ## Mixed-language and SystemC queues — Batch 127 Tasks 7 and 8
 
 - Task 7 closed parser-only manifest binding row `ML-001` and the negative-
-  evidence gaps on `ML-002` through `ML-004`; all 16 mixed-language rows are
-  now gated as executable with complete evidence.
+  evidence gaps on `ML-002` through `ML-004`. V2 Batch 134 adds `ML-017` for
+  configurable logical-library search; all 17 mixed-language rows are now
+  gated as executable with complete evidence.
 - Task 8 reclassified `SC-024` from undocumented `metadata` to `execute` and
   filled the three earlier SystemC evidence gaps. All 28 SystemC rows are now
   gated as executable with complete evidence.

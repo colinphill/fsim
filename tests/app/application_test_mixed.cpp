@@ -22,6 +22,115 @@ namespace fsim::test {
 
 void ApplicationTestFixture::test_mixed_language_and_generate() {
   auto config = base_config();
+const auto library_search_top_source =
+    directory / "library-search-top.sv";
+const auto library_search_leaf_source =
+    directory / "library-search-leaf.vhd";
+const auto library_search_placeholder_source =
+    directory / "library-search-placeholder.sv";
+{
+  std::ofstream output(library_search_top_source);
+  output << R"(
+module library_search_top;
+  logic result;
+  library_search_leaf child(.result(result));
+  initial begin
+    #1;
+    if (result !== 1'b1) $fatal(1, "library search failed");
+    $finish;
+  end
+endmodule
+)";
+  assert(output.good());
+}
+{
+  std::ofstream output(library_search_leaf_source);
+  output << R"(
+entity library_search_leaf is
+  port (result : out std_logic);
+end entity;
+architecture rtl of library_search_leaf is
+begin
+  result <= '1';
+end architecture;
+)";
+  assert(output.good());
+}
+{
+  std::ofstream output(library_search_placeholder_source);
+  output << "module shared_placeholder; endmodule\n";
+  assert(output.good());
+}
+auto library_search_config = config;
+library_search_config.project.name = "library-search-test";
+library_search_config.project.top = "sv:work.library_search_top";
+library_search_config.build.cache_path =
+    directory / "library-search-cache";
+library_search_config.source_sets.clear();
+fsim::project::SourceSet library_search_top_set;
+library_search_top_set.language =
+    fsim::project::Language::system_verilog;
+library_search_top_set.standard = "2017";
+library_search_top_set.library = "work";
+library_search_top_set.files = {library_search_top_source};
+library_search_config.source_sets.push_back(
+    std::move(library_search_top_set));
+fsim::project::SourceSet library_search_leaf_set;
+library_search_leaf_set.language = fsim::project::Language::vhdl;
+library_search_leaf_set.standard = "2008";
+library_search_leaf_set.library = "vendor";
+library_search_leaf_set.files = {library_search_leaf_source};
+library_search_config.source_sets.push_back(
+    std::move(library_search_leaf_set));
+fsim::project::SourceSet library_search_shared_set;
+library_search_shared_set.language =
+    fsim::project::Language::system_verilog;
+library_search_shared_set.standard = "2017";
+library_search_shared_set.library = "shared";
+library_search_shared_set.files = {
+    library_search_placeholder_source};
+library_search_config.source_sets.push_back(
+    std::move(library_search_shared_set));
+library_search_config.elaboration.search_libraries = {"vendor"};
+const auto run_library_search =
+    [&](const fsim::app::SimulationEngine engine,
+        const std::vector<std::string>& search_libraries) {
+      auto run_config = library_search_config;
+      run_config.elaboration.search_libraries = search_libraries;
+      fsim::diagnostic::Engine diagnostics;
+      auto project = fsim::app::build_project(run_config, diagnostics);
+      if (!project) {
+        fsim::diagnostic::print_text(std::cerr, diagnostics);
+      }
+      assert(project);
+      assert(project->design.specializations().size() == 2);
+      assert(
+          project->design.specializations().back().unit
+          == "vhdl:vendor.library_search_leaf(rtl)");
+      const auto keys = project->specialization_cache_keys;
+      auto capture = capture_simulation(std::move(*project), engine);
+      return std::pair{keys, capture};
+    };
+const auto [library_search_reference_keys, library_search_reference] =
+    run_library_search(
+        fsim::app::SimulationEngine::interpreter,
+        {"vendor"});
+const auto [library_search_native_keys, library_search_native] =
+    run_library_search(
+        fsim::app::SimulationEngine::compiled,
+        {"vendor", "vendor"});
+compare_captures(library_search_reference, library_search_native);
+assert(library_search_reference_keys == library_search_native_keys);
+assert(library_search_native.result.status
+       == fsim::runtime::RunStatus::stopped);
+assert(library_search_native.result.time == 1);
+const auto [expanded_search_keys, expanded_search] =
+    run_library_search(
+        fsim::app::SimulationEngine::compiled,
+        {"vendor", "shared"});
+assert(expanded_search.result.status
+       == fsim::runtime::RunStatus::stopped);
+assert(expanded_search_keys != library_search_native_keys);
 // Explicit mixed-language bindings carry construction actuals from the
 // parent syntax into the selected foreign unit before boundary widths are
 // checked. Exercise both hierarchy directions through the interpreter and
