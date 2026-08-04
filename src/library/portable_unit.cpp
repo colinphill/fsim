@@ -21,6 +21,7 @@ namespace fsim::library {
 namespace {
 
 constexpr std::string_view kMagic = "FSIMUNIT";
+constexpr std::string_view kUdpMagic = "FSIMUDPD";
 constexpr std::string_view kCode = "FSIM-LIB-0006";
 constexpr std::size_t kMaximumArchiveNesting = 512;
 
@@ -506,6 +507,30 @@ bool relocate_unit_sources(
   return true;
 }
 
+bool relocate_udp_sources(
+    frontend::VerilogUdpDeclaration& declaration,
+    const std::span<const SourceNameMapping> mappings,
+    diagnostic::Engine& diagnostics) {
+  std::unordered_set<const void*> visited;
+  std::string missing;
+  if (!remap_spans(declaration, mappings, visited, missing)) {
+    diagnostics.error(
+        std::string{kCode},
+        "no relocatable source identity was supplied for producer path '"
+            + missing + "'");
+    return false;
+  }
+  visited.clear();
+  if (has_absolute_span(declaration, visited)) {
+    diagnostics.error(
+        std::string{kCode},
+        "source relocation left a producer-absolute path in the UDP "
+        "declaration");
+    return false;
+  }
+  return true;
+}
+
 std::optional<std::string> serialize_portable_unit(
     const frontend::DesignUnit& unit,
     diagnostic::Engine& diagnostics) {
@@ -521,6 +546,36 @@ std::optional<std::string> serialize_portable_unit(
   auto schema = kOwningUnitSchemaVersion;
   writer.write(schema);
   auto owning = unit;
+  writer.write(owning);
+  if (!writer.failure().empty()) {
+    diagnostics.error(std::string{kCode}, writer.failure());
+    return std::nullopt;
+  }
+  return std::move(writer).finish();
+}
+
+std::optional<std::string> serialize_portable_udp(
+    const frontend::VerilogUdpDeclaration& declaration,
+    diagnostic::Engine& diagnostics) {
+  if (!frontend::verilog_udp_declaration_well_formed(declaration)) {
+    diagnostics.error(
+        std::string{kCode},
+        "portable UDP declaration is structurally invalid or exceeds its "
+        "resource budget");
+    return std::nullopt;
+  }
+  std::unordered_set<const void*> visited;
+  if (has_absolute_span(declaration, visited)) {
+    diagnostics.error(
+        std::string{kCode},
+        "portable UDP declaration contains a producer-absolute source path");
+    return std::nullopt;
+  }
+  Writer writer;
+  writer.raw(kUdpMagic);
+  auto schema = kUdpDeclarationSchemaVersion;
+  writer.write(schema);
+  auto owning = declaration;
   writer.write(owning);
   if (!writer.failure().empty()) {
     diagnostics.error(std::string{kCode}, writer.failure());
@@ -552,6 +607,35 @@ std::optional<frontend::DesignUnit> deserialize_portable_unit(
     return std::nullopt;
   }
   return unit;
+}
+
+std::optional<frontend::VerilogUdpDeclaration> deserialize_portable_udp(
+    const std::string_view bytes,
+    std::string source_name,
+    diagnostic::Engine& diagnostics) {
+  Reader reader(bytes);
+  std::uint32_t schema{};
+  frontend::VerilogUdpDeclaration declaration;
+  if (!reader.raw(kUdpMagic) || !reader.read(schema)
+      || schema != kUdpDeclarationSchemaVersion
+      || !reader.read(declaration) || reader.remaining() != 0
+      || !frontend::verilog_udp_declaration_well_formed(declaration)) {
+    auto message = reader.failure();
+    if (message.empty() && schema != kUdpDeclarationSchemaVersion) {
+      message = "unsupported portable UDP-declaration schema "
+          + std::to_string(schema);
+    } else if (message.empty() && reader.remaining() != 0) {
+      message = "portable UDP declaration contains trailing bytes";
+    } else if (message.empty()) {
+      message = "portable UDP declaration is structurally invalid or "
+          "exceeds its resource budget";
+    }
+    diagnostics.error(
+        std::string{kCode}, std::move(message),
+        {std::move(source_name), {1, 1, 0}, {1, 1, 0}});
+    return std::nullopt;
+  }
+  return declaration;
 }
 
 }  // namespace fsim::library

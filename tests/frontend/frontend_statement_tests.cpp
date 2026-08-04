@@ -1583,7 +1583,7 @@ module invalid_gate;
   bufif1 (y, a);
   logic [1:0] narrow;
   and too_wide[3:0] (narrow, a, a);
-  and enormous[64:0] (y, a, a);
+  and enormous[2147483647:0] (y, a, a);
   and [3:0] (y, a, a);
   and symbolic[a:0] (y, a, a);
   and (strong1, pull0) (y, a, a);

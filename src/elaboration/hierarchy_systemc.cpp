@@ -114,8 +114,6 @@ void adapt_vhdl_array_port_shapes(
         return found->second;
     }
 
-
-
     const SystemCInstanceDescription* HierarchyBuilder::construct_systemc_description(
         const frontend::Instance& instance,
         const std::string& path,
@@ -203,8 +201,6 @@ void adapt_vhdl_array_port_shapes(
         used_systemc_instances_.insert(path);
         return description;
     }
-
-
 
     void HierarchyBuilder::instantiate_systemc(
         const SystemCInstanceDescription& instance,
@@ -847,8 +843,6 @@ void adapt_vhdl_array_port_shapes(
         }
         stack_.pop_back();
     }
-
-
 
     void HierarchyBuilder::instantiate(
         const DesignUnit& unit,
@@ -1785,6 +1779,19 @@ void adapt_vhdl_array_port_shapes(
                             *inferred->systemc_target);
                         continue;
                     }
+                    if (inferred->udp != nullptr) {
+                        instantiate_udp(
+                            *inferred->udp,
+                            *selected_instance,
+                            child_path,
+                            local,
+                            local_string_objects,
+                            read_only_strings,
+                            local_container_objects,
+                            read_only_container_objects,
+                            binding);
+                        continue;
+                    }
                     target = inferred->unit;
                 } else {
                     target = bound_target(
@@ -1795,6 +1802,19 @@ void adapt_vhdl_array_port_shapes(
                 }
             }
             if (target == nullptr) {
+                continue;
+            }
+            if (selected_instance->anonymous) {
+                report("FSIM-ELAB-BIND-062", "module instance '"
+                    + child_path + "' requires an explicit instance name",
+                    selected_instance->span);
+                continue;
+            }
+            if (selected_instance->udp_delay.has_value()) {
+                report("FSIM-ELAB-BIND-063", "module instance '"
+                    + child_path
+                    + "' cannot use UDP propagation-delay syntax",
+                    selected_instance->span);
                 continue;
             }
             auto child_specialized = specialize_selected_unit(

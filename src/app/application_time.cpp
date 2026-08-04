@@ -107,6 +107,17 @@ void visit_signal_delays(
 }
 
 template <typename Function>
+void visit_instance_delays(
+    std::vector<frontend::Instance>& instances,
+    Function& function) {
+  for (auto& instance : instances) {
+    if (instance.udp_delay) {
+      visit_delay(*instance.udp_delay, function);
+    }
+  }
+}
+
+template <typename Function>
 void visit_procedure_delays(
     frontend::ProcedureDeclaration& procedure,
     Function& function) {
@@ -122,6 +133,7 @@ void visit_generate_delays(
     Function& function) {
   const auto visit_body = [&](frontend::GenerateBody& body) {
     visit_signal_delays(body.signals, function);
+    visit_instance_delays(body.instances, function);
     visit_delays(body.concurrent_statements, function);
     for (auto& process : body.processes) {
       visit_delays(process.statements, function);
@@ -268,6 +280,7 @@ std::string effective_resolution(
     };
     visit_signal_delays(unit.ports, consider);
     visit_signal_delays(unit.signals, consider);
+    visit_instance_delays(unit.instances, consider);
     visit_delays(unit.concurrent_statements, consider);
     for (auto& process : unit.processes) {
       visit_delays(process.statements, consider);
@@ -708,6 +721,7 @@ bool normalize_delays(
     };
     visit_signal_delays(unit.ports, normalize);
     visit_signal_delays(unit.signals, normalize);
+    visit_instance_delays(unit.instances, normalize);
     visit_delays(unit.concurrent_statements, normalize);
     for (auto& process : unit.processes) {
       visit_delays(process.statements, normalize);
@@ -770,6 +784,7 @@ void select_delay_alternatives(
     };
     visit_signal_delays(unit.ports, select);
     visit_signal_delays(unit.signals, select);
+    visit_instance_delays(unit.instances, select);
     visit_delays(unit.concurrent_statements, select);
     for (auto& process : unit.processes) {
       visit_delays(process.statements, select);

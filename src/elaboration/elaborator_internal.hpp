@@ -1885,10 +1885,8 @@ private:
 
     static frontend::SignalDeclaration external_port_declaration(
         const ExternalPort& port);
-
     static frontend::SignalDeclaration foreign_port_declaration(
         const ForeignPort& port);
-
     std::pair<SignalMap, ObjectMap> connect_systemc_instance(
         const frontend::Instance& instance,
         const SystemCInstanceDescription& target,
@@ -1901,32 +1899,34 @@ private:
         const DesignUnit& target,
         const std::string& path,
         const ObjectMap& objects);
-
     const DesignUnit* systemc_foreign_target(
         const ForeignChild& child,
         const SystemCInstanceDescription& parent,
         const std::string& path,
         const Binding* binding);
-
     const SystemCInstanceDescription* systemc_description(
         const std::string& path,
         const std::string_view target,
         const frontend::SourceSpan& source);
-
     const SystemCInstanceDescription* construct_systemc_description(
         const frontend::Instance& instance,
         const std::string& path,
         const std::string_view target,
         const ConstantEnvironment& parent_environment,
         const frontend::Language association_language);
-
     void instantiate_systemc(
         const SystemCInstanceDescription& instance,
         const std::string& path,
         SignalMap aliases,
         ObjectMap objects,
         const bool native_child = false);
-
+    void instantiate_udp(const frontend::VerilogUdpDeclaration&,
+        const frontend::Instance&, const std::string&, const SignalMap&,
+        const StringMap&, const std::unordered_set<StringObjectId>&,
+        const ContainerMap&, const std::unordered_set<std::string>&,
+        const Binding*);
+    UdpTableId normalized_udp_table(
+        const frontend::VerilogUdpDeclaration&);
     void instantiate(
         const DesignUnit& unit,
         const std::string& path,
@@ -1941,7 +1941,6 @@ private:
         std::vector<std::pair<std::string, std::string>>
             parameter_identity_values,
         PackageEnvironment package_environment);
-
     void report(
         std::string code,
         std::string message,
@@ -1974,6 +1973,7 @@ private:
         prepared_systemverilog_roots_;
     std::unordered_set<std::string> used_systemc_instances_;
     std::unordered_set<std::string> instance_paths_;
+    std::unordered_map<std::string, UdpTableId> udp_table_by_identity_;
     // Interface instances are registered by canonical hierarchy path after
     // their member signals have been allocated. Later sibling module ports
     // bind modport members through this exact instance identity.

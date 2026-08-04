@@ -4,10 +4,12 @@
 #include "fsim/frontend/source.hpp"
 #include "fsim/frontend/token.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -906,10 +908,21 @@ struct Instance {
   // cross-language manifest binding overrides it.
   std::string unit_name;
   std::string name;
+  // Verilog UDPs permit an omitted instance name. The parser assigns a
+  // deterministic internal hierarchy name while retaining this distinction;
+  // ordinary module instances reject the form after target resolution.
+  bool anonymous{};
+  // True when compilation-unit declaration lookup identifies unit_name as a
+  // user-defined primitive. Cross-file project resolution revalidates the
+  // canonical declaration before elaboration.
+  bool udp_instance{};
   // Empty for a scalar instance. A bounded SystemVerilog instance array is
   // expanded in this exact declared order after specialization.
   std::vector<std::int64_t> array_indices;
   std::vector<ParameterOverride> parameter_overrides;
+  // Populated for UDP propagation-delay syntax after declaration-aware
+  // frontend normalization. Module parameter overrides remain separate.
+  std::optional<Delay> udp_delay;
   std::vector<PortConnection> connections;
   // True for `label: component_name ...`; false for direct entity/module
   // instantiation. VHDL configuration specifications apply only to the
@@ -1512,6 +1525,90 @@ struct SystemVerilogExport {
   SourceSpan span;
 };
 
+enum class VerilogUdpLevelSymbol {
+  Zero,
+  One,
+  Unknown,
+  DontCare,
+  Binary,
+};
+
+enum class VerilogUdpEdgeSymbol {
+  None,
+  Rising,
+  Falling,
+  Positive,
+  Negative,
+  Any,
+  Explicit,
+};
+
+enum class VerilogUdpOutputSymbol {
+  Zero,
+  One,
+  Unknown,
+  NoChange,
+};
+
+struct VerilogUdpInputPattern {
+  VerilogUdpLevelSymbol level{VerilogUdpLevelSymbol::DontCare};
+  VerilogUdpEdgeSymbol edge{VerilogUdpEdgeSymbol::None};
+  VerilogUdpLevelSymbol previous{VerilogUdpLevelSymbol::DontCare};
+  VerilogUdpLevelSymbol current{VerilogUdpLevelSymbol::DontCare};
+  SourceSpan span;
+};
+
+struct VerilogUdpTableRow {
+  std::vector<VerilogUdpInputPattern> inputs;
+  std::optional<VerilogUdpLevelSymbol> current_state;
+  VerilogUdpOutputSymbol output{VerilogUdpOutputSymbol::Unknown};
+  SourceSpan span;
+};
+
+struct VerilogUdpDeclaration {
+  Language language{Language::Verilog2005};
+  std::string library;
+  std::string name;
+  std::string output;
+  std::vector<std::string> inputs;
+  bool sequential{};
+  bool output_reg{};
+  std::optional<VerilogUdpOutputSymbol> initial_output;
+  std::vector<VerilogUdpTableRow> rows;
+  std::string time_unit;
+  std::string time_precision;
+  SourceSpan span;
+};
+
+/// Owning metadata budget for one materialized UDP table. This is a host
+/// resource guard rather than an IEEE 1364 terminal- or row-count limit.
+inline constexpr std::size_t maximum_udp_table_storage_bytes =
+    256U * 1024U * 1024U;
+
+[[nodiscard]] bool verilog_udp_table_within_resource_budget(
+    std::size_t input_count,
+    std::size_t row_count) noexcept;
+
+/// Validate an owning UDP declaration restored from an untrusted artifact.
+/// Source parsing emits more specific diagnostics before producing this HIR.
+[[nodiscard]] bool verilog_udp_declaration_well_formed(
+    const VerilogUdpDeclaration& declaration) noexcept;
+
+[[nodiscard]] bool verilog_udp_level_matches(
+    VerilogUdpLevelSymbol pattern,
+    VerilogUdpLevelSymbol actual) noexcept;
+
+[[nodiscard]] bool verilog_udp_input_matches(
+    const VerilogUdpInputPattern& pattern,
+    VerilogUdpLevelSymbol previous,
+    VerilogUdpLevelSymbol current) noexcept;
+
+[[nodiscard]] const VerilogUdpTableRow* find_verilog_udp_table_row(
+    const VerilogUdpDeclaration& declaration,
+    std::span<const VerilogUdpLevelSymbol> previous_inputs,
+    std::span<const VerilogUdpLevelSymbol> current_inputs,
+    VerilogUdpLevelSymbol current_output) noexcept;
+
 struct DesignUnit {
   UnitKind kind{UnitKind::VerilogModule};
   Language language{Language::SystemVerilog2017};
@@ -1583,6 +1680,7 @@ struct DesignUnit {
 
 struct ParsedDesign {
   std::vector<DesignUnit> units;
+  std::vector<VerilogUdpDeclaration> udp_declarations;
 
   [[nodiscard]] const DesignUnit* find(UnitKind kind,
                                        std::string_view name) const noexcept;

@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -50,6 +52,11 @@ ElaboratedDesign::processes() const noexcept {
 const std::vector<SpecializationInfo>&
 ElaboratedDesign::specializations() const noexcept {
   return specializations_;
+}
+
+const std::vector<UdpTableInfo>&
+ElaboratedDesign::udp_tables() const noexcept {
+  return udp_tables_;
 }
 
 const std::vector<SystemCInstanceInfo>&
@@ -168,7 +175,7 @@ ElaboratedDesignState ElaboratedDesign::state() const {
       top_, roots_, signal_info_, boundary_conversions_, signals_,
       string_object_info_, string_objects_, container_object_info_,
       container_objects_, vhdl_protected_object_info_, processes_,
-      specializations_, systemc_instances_, systemc_processes_,
+      specializations_, udp_tables_, systemc_instances_, systemc_processes_,
       systemc_objects_, {}, {}, {}};
   result.signal_names.assign(signal_by_name_.begin(), signal_by_name_.end());
   result.string_names.assign(string_by_name_.begin(), string_by_name_.end());
@@ -217,6 +224,63 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
       return std::nullopt;
     }
   }
+  for (std::size_t index = 0; index < state.udp_tables.size(); ++index) {
+    const auto& table = state.udp_tables[index];
+    const auto digest_is_hex = table.digest.size() == 64
+        && std::ranges::all_of(table.digest, [](const char character) {
+             return (character >= '0' && character <= '9')
+                 || (character >= 'a' && character <= 'f');
+           });
+    frontend::VerilogUdpDeclaration declaration;
+    declaration.language = frontend::Language::Verilog2005;
+    declaration.name = table.identity;
+    declaration.sequential = table.sequential;
+    declaration.output_reg = table.sequential;
+    declaration.initial_output = table.initial_output;
+    declaration.rows = table.rows;
+    if (!table.terminals.empty()) {
+      declaration.output = table.terminals.front();
+      declaration.inputs.assign(
+          table.terminals.begin() + 1, table.terminals.end());
+    }
+    if (table.id != index || !table.identity.starts_with("udp:")
+        || !digest_is_hex
+        || !frontend::verilog_udp_declaration_well_formed(declaration)) {
+      return std::nullopt;
+    }
+  }
+  std::unordered_map<std::string, std::string> udp_digests;
+  for (const auto& table : state.udp_tables) {
+    if (!udp_digests.emplace(table.identity, table.digest).second) {
+      return std::nullopt;
+    }
+  }
+  std::unordered_set<std::string> referenced_udp_tables;
+  for (const auto& specialization : state.specializations) {
+    std::optional<std::string_view> identity;
+    std::optional<std::string_view> digest;
+    for (const auto& [name, value] :
+         specialization.parameter_identity_values) {
+      if (name == "__udp") {
+        if (identity) return std::nullopt;
+        identity = value;
+      } else if (name == "__udp_table") {
+        if (digest) return std::nullopt;
+        digest = value;
+      }
+    }
+    if (identity.has_value() != digest.has_value()) return std::nullopt;
+    if (identity) {
+      const auto table = udp_digests.find(std::string{*identity});
+      if (table == udp_digests.end() || table->second != *digest) {
+        return std::nullopt;
+      }
+      referenced_udp_tables.emplace(*identity);
+    }
+  }
+  if (referenced_udp_tables.size() != state.udp_tables.size()) {
+    return std::nullopt;
+  }
   ElaboratedDesign result;
   result.top_ = std::move(state.top);
   result.roots_ = std::move(state.roots);
@@ -231,6 +295,7 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
       std::move(state.vhdl_protected_object_info);
   result.processes_ = std::move(state.processes);
   result.specializations_ = std::move(state.specializations);
+  result.udp_tables_ = std::move(state.udp_tables);
   result.systemc_instances_ = std::move(state.systemc_instances);
   result.systemc_processes_ = std::move(state.systemc_processes);
   result.systemc_objects_ = std::move(state.systemc_objects);

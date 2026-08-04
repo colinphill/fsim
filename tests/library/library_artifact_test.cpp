@@ -165,6 +165,57 @@ endmodule
   assert(fsim::library::serialize_portable_unit(
       *restored_unit, repeat_diagnostics) == unit_bytes);
 
+  const auto parsed_udp = fsim::frontend::parse_text(
+      "sources/invert.v",
+      R"(
+primitive invert_udp(q, d);
+  output q; input d;
+  table
+    0 : 1;
+    1 : 0;
+    x : x;
+  endtable
+endprimitive
+)",
+      fsim::frontend::Language::Verilog2005);
+  assert(parsed_udp.ok());
+  assert(parsed_udp.design.udp_declarations.size() == 1);
+  auto udp = parsed_udp.design.udp_declarations.front();
+  udp.library = "vendor";
+  fsim::diagnostic::Engine udp_write_diagnostics;
+  const auto udp_bytes = fsim::library::serialize_portable_udp(
+      udp, udp_write_diagnostics);
+  assert(udp_bytes.has_value());
+  assert(!udp_write_diagnostics.has_error());
+  fsim::diagnostic::Engine udp_read_diagnostics;
+  const auto restored_udp = fsim::library::deserialize_portable_udp(
+      *udp_bytes, "units/invert.fsimudp", udp_read_diagnostics);
+  assert(restored_udp.has_value());
+  assert(!udp_read_diagnostics.has_error());
+  assert(
+      restored_udp->library == "vendor"
+      && restored_udp->name == "invert_udp"
+      && restored_udp->rows.size() == 3);
+  fsim::diagnostic::Engine udp_repeat_diagnostics;
+  assert(fsim::library::serialize_portable_udp(
+      *restored_udp, udp_repeat_diagnostics) == udp_bytes);
+  auto trailing_udp = *udp_bytes;
+  trailing_udp.push_back('\0');
+  fsim::diagnostic::Engine trailing_udp_diagnostics;
+  assert(!fsim::library::deserialize_portable_udp(
+      trailing_udp, "trailing.fsimudp", trailing_udp_diagnostics));
+  auto malformed_udp = udp;
+  malformed_udp.rows.front().inputs.clear();
+  fsim::diagnostic::Engine malformed_udp_diagnostics;
+  assert(!fsim::library::serialize_portable_udp(
+      malformed_udp, malformed_udp_diagnostics));
+  assert(malformed_udp_diagnostics.has_error());
+  auto future_udp = *udp_bytes;
+  future_udp[8] = '\2';
+  fsim::diagnostic::Engine future_udp_diagnostics;
+  assert(!fsim::library::deserialize_portable_udp(
+      future_udp, "future.fsimudp", future_udp_diagnostics));
+
   const auto producer_source = directory.parent_path()
       / "producer" / "private" / "stage.sv";
   std::filesystem::create_directories(producer_source.parent_path());
@@ -229,7 +280,7 @@ endmodule
   assert(!fsim::library::deserialize_portable_unit(
       trailing_unit, "trailing.fsimir", trailing_diagnostics));
   auto future_unit = *unit_bytes;
-  future_unit[8] = '\2';
+  future_unit[8] = '\3';
   fsim::diagnostic::Engine future_diagnostics;
   assert(!fsim::library::deserialize_portable_unit(
       future_unit, "future.fsimir", future_diagnostics));

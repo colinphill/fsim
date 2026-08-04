@@ -382,13 +382,21 @@ bool export_library(
       units.push_back(&unit);
     }
   }
+  std::vector<const frontend::VerilogUdpDeclaration*> udp_declarations;
+  for (const auto& declaration : checked->parsed.udp_declarations) {
+    const auto library_name = declaration.library.empty()
+        ? std::string_view{"work"} : std::string_view{declaration.library};
+    if (library_name == logical_library) {
+      udp_declarations.push_back(&declaration);
+    }
+  }
   const bool has_systemc = std::ranges::any_of(
       config.source_sets,
       [&](const auto& source_set) {
         return source_set.library == logical_library
             && source_set.language == project::Language::systemc;
       });
-  if (units.empty() && !has_systemc) {
+  if (units.empty() && udp_declarations.empty() && !has_systemc) {
     diagnostics.error(
         "FSIM-LIB-0007",
         "project contains no exportable units or sources in logical library '"
@@ -527,11 +535,32 @@ bool export_library(
          artifact, checksum});
     payloads.push_back({artifact, std::move(*bytes)});
   }
+  for (std::size_t index = 0;
+       index < udp_declarations.size(); ++index) {
+    auto declaration = *udp_declarations[index];
+    if (!library::relocate_udp_sources(
+            declaration, source_mappings, diagnostics)) {
+      return false;
+    }
+    auto bytes = library::serialize_portable_udp(declaration, diagnostics);
+    if (!bytes.has_value()) {
+      return false;
+    }
+    const auto artifact = indexed_path(
+        "units", units.size() + index, ".fsimudp");
+    const auto checksum = support::Sha256::hex(
+        support::Sha256::digest(*bytes));
+    metadata.units.push_back({
+        declaration.language == frontend::Language::Verilog2005
+            ? "verilog" : "systemverilog",
+        "primitive", declaration.name, {}, {}, artifact, checksum});
+    payloads.push_back({artifact, std::move(*bytes)});
+  }
   if (!append_systemc_native_artifact(
           config, logical_library, metadata, payloads, diagnostics)) {
     return false;
   }
-  if (!units.empty()) {
+  if (!units.empty() || !udp_declarations.empty()) {
     append_canonical_llvm_native_artifacts(
         config, logical_library, destination, metadata, payloads);
   }

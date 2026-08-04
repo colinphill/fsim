@@ -38,3 +38,9 @@ differential gate pass as 20 focused CTests. This includes frontend/runtime,
 LLVM O0/O2/cache, SystemC compiler/lifecycle, strict C ABIs, full application,
 scoped locals, files/preprocessing, arrays, typed boundaries, public API, and
 all static Windows/resource contracts.
+
+Batch 144's ten UDP rows advance the reviewed differential inventory to 1,111
+required rows and 103 runtime owners. The linked evidence covers 459
+interpreter rows, 378 LLVM rows, 254 cache rows, 97 debugger rows, 127 VCD rows,
+410 scheduling rows, and 92 failure rows; the reviewed 36-CTest corpus inventory
+is unchanged.

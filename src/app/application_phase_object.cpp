@@ -94,6 +94,19 @@ bool identity_matches(
       && indexed.architecture == architecture;
 }
 
+bool identity_matches(
+    const artifact::ObjectMetadata& metadata,
+    const library::UnitIndexEntry& indexed,
+    const frontend::VerilogUdpDeclaration& declaration) {
+  return declaration.library == metadata.library
+      && indexed.language == metadata.language
+      && indexed.language == expected_language(declaration.language)
+      && indexed.kind == "primitive"
+      && indexed.name == declaration.name
+      && indexed.primary_name.empty()
+      && indexed.architecture.empty();
+}
+
 std::filesystem::path object_source_root(
     const artifact::ObjectMetadata& metadata) {
   return std::filesystem::path{"objects"} / metadata.compilation_digest;
@@ -190,6 +203,41 @@ std::optional<CheckedProject> load_objects(
           object / indexed.artifact, indexed.checksum, diagnostics);
       if (!bytes.has_value()) {
         return std::nullopt;
+      }
+      if (indexed.kind == "primitive") {
+        auto declaration = library::deserialize_portable_udp(
+            *bytes,
+            support::path_to_utf8(object / indexed.artifact),
+            diagnostics);
+        if (!declaration.has_value()
+            || !identity_matches(*metadata, indexed, *declaration)) {
+          if (declaration.has_value()) {
+            diagnostics.error(
+                "FSIM-ART-0005",
+                ".fsimobj UDP identity does not match its metadata index: "
+                    + support::path_to_utf8(object / indexed.artifact));
+          }
+          return std::nullopt;
+        }
+        if (!library::relocate_udp_sources(
+                *declaration, source_mappings, diagnostics)) {
+          return std::nullopt;
+        }
+        const auto key = "udp:"
+            + (declaration->library.empty()
+                   ? std::string{"work"} : declaration->library)
+            + "." + declaration->name;
+        if (!known_units.insert(key).second) {
+          diagnostics.error(
+              "FSIM-ART-0005",
+              "object UDP declaration collides with an earlier input: '"
+                  + key + "'");
+          return std::nullopt;
+        }
+        provenance.unit_checksums.push_back(indexed.checksum);
+        checked.parsed.udp_declarations.push_back(
+            std::move(*declaration));
+        continue;
       }
       auto unit = library::deserialize_portable_unit(
           *bytes, support::path_to_utf8(object / indexed.artifact),

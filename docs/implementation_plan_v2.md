@@ -941,6 +941,132 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     evidence cells, 346 evidence paths, and 100 runtime owners. Batch 143 is
     not a CI boundary and ran no sanitizer or hosted CI-monitoring gate.
 
+## Batch 144 - Verilog-2005 user-defined primitive closure - Complete
+
+1. **Complete.** Start after pushed Batch 143 closeout `cc5a6bb` and corrective
+   LLVM-disabled VITAL callback build repair `e012444`, record this exact
+   20-change contract, and synchronize the restart handoff before
+   implementation changes.
+2. **Complete.** Audit IEEE 1364-2005 UDP declaration, table, instance,
+   delay, and state semantics against the existing compact Verilog HIR and
+   publish the clean-room internal representation and diagnostic contract. UDP
+   declarations remain distinct from top-selectable design units and retain
+   level/output/edge symbols, ordered rows, state, timing context, and spans.
+3. **Complete.** Parse combinational UDP declarations with ordered scalar
+   terminals, exactly one output, input declarations, optional ANSI-style
+   declaration forms where legal, checked end names, and source spans. Classic
+   and ANSI positive fixtures pass the focused frontend suite.
+4. **Complete.** Parse sequential UDP declarations with `reg` output refinement,
+   optional legal initial output state, and deterministic declaration identity.
+   ANSI `output reg` and explicit `reg`/`initial` forms share one HIR.
+5. **Complete.** Tokenize and retain combinational table rows with exact
+   level-input symbols, output symbols, separators, comments, and first-row
+   priority without treating table text as ordinary expressions.
+6. **Complete.** Retain sequential table rows with current-state columns,
+   parenthesized edge descriptors, shorthand transition symbols, and explicit
+   transition pairs. Focused HIR checks cover `(01)`, `r`, `n`, current-state
+   don't-care, initial zero, and no-change output.
+7. **Complete.** Implement exact UDP table symbol matching for `0`, `1`, `x`,
+   `?`, `b`, rising/falling/positive/negative/any transitions, no-change `-`,
+   and unknown output, with deterministic first-match behavior. The common
+   matcher normalizes actual Z to unknown at its future execution boundary and
+   covers `r`, `f`, `p`, `n`, `*`, explicit pairs, stable nonedges, current
+   state, and ordered lookup in the focused frontend suite.
+8. **Complete.** Validate terminal counts/directions, scalar-only profiles,
+   output refinement, initial values, row widths, one-edge-per-row rules,
+   duplicate declarations, malformed symbols, and unreachable table shapes
+   through stable cataloged diagnostics. Codes `FSIM-SV-PARSE-224` through
+   `243` and `FSIM-SV-SEM-130` through `144` are cataloged; positive/negative
+   frontend, catalog, and source-budget gates pass.
+9. **Complete.** Resolve UDP instantiations distinctly from built-in primitives
+   and modules, including forward declarations, library identity, ambiguity,
+   missing definitions, ordered terminals, and illegal named-port connections.
+   Project snapshot merging now preserves declaration source order and logical
+   libraries; focused elaboration distinguishes `udp:` candidates, detects
+   module collisions, and proves built-in gates never enter unit resolution.
+10. **Complete.** Retain optional instance names, comma-separated instances,
+    bounded static instance arrays, scalar/vector terminal mapping, and
+    one/two/three-value UDP propagation delays through the common delay model.
+    Declaration-aware normalization disambiguates positional module parameters
+    from UDP delays, array expansion creates deterministic scalar bridges, and
+    ordinary modules reject UDP-only anonymous or delay syntax. Frontend,
+    elaboration, diagnostic-catalog, and source-budget gates pass.
+11. **Complete.** Elaborate each UDP declaration into one immutable normalized
+    table specialization shared by its instances, with selected identity and
+    table digest included in design and cache provenance. Canonical terminal,
+    state, edge, row, and output metadata hashes to a stable SHA-256 identity;
+    repeated instances share one `UdpTableInfo` and record its digest.
+12. **Complete.** Execute combinational UDP tables as four-state continuous
+    drivers with initialization, stable-input suppression, first-row priority,
+    unmatched-row X, and normal resolved-net ownership. Declaration rows lower
+    to ordinary case-equality SimIR control and pass repeated 0/1/X/Z deposits.
+13. **Complete.** Execute sequential UDP tables with per-instance current output
+    and previous input state, initial-state application, exact edge detection,
+    no-change rows, unmatched-event retention, and delta-cycle determinism.
+    Hidden per-instance state signals retain all prior inputs and an
+    initialization marker in the same sole-driver process; focused rising,
+    negative/no-change, state-retention, and repeated-edge execution passes.
+14. **Complete.** Schedule UDP output transitions through the common inertial
+    rise/fall/turnoff delay kernel, including zero delay, cancellation,
+    same-value events, overflow checks, and VCD/callback publication. UDP table
+    evaluation now drives a hidden scalar value through an ordinary delayed
+    continuous driver, so the existing cancellation and publication path is
+    shared without a UDP-specific scheduler. Focused interpreter and LLVM
+    O0/O2 cold/warm-cache execution proves the `5/7/11` transition profile,
+    cancellation of a short pulse, zero-delay deltas, same-value stability,
+    unknown transitions, callbacks, debugger reads, VCD timestamps, and
+    `FSIM-TIME-0003` scale-overflow diagnostics.
+15. **Complete.** Cover UDPs under generates, parameter-specialized hierarchy,
+    multiple roots, logical-library search, out-of-tree libraries, and mixed
+    VHDL/SystemC boundaries without bypassing the central resolver. Focused
+    elaboration covers one- and two-lane generated specializations, aliased
+    roots, searched `vendor` declarations, a VHDL-to-SV-to-UDP path, and a
+    SystemC-proxy-to-SV-to-UDP path; the application fixture executes a UDP
+    hierarchy loaded lazily from a mapped read-only `.fsimlib`.
+16. **Complete.** Preserve UDP declarations, normalized tables, instance state,
+    selected provenance, and pending outputs through `.fsimobj`, `.fsimdesign`,
+    relocation, standalone simulation, and cold/warm/edit native caches. The
+    portable owning schema now has a distinct `.fsimudp` payload, source-span
+    relocation, object/library indexing, checksum validation, and normalized
+    runtime-state tables. A standalone design runs after its source and object
+    are hidden, and edited table content causes native-cache misses and stores.
+17. **Complete.** Add interpreter and LLVM O0/O2 differentials for
+    combinational, level-sensitive sequential, edge-sensitive sequential,
+    delayed, generated, resolved-driver, debugger, callback, and VCD behavior.
+    Source and relocated-artifact fixtures compare changes, final state,
+    debugger output, and VCD text across interpreter plus compiled cold/warm
+    runs; O0/O2 timing and native-cache reuse remain identical.
+18. **Complete.** Add transactional negative and resource coverage for malformed
+    declarations/tables/instances, unsupported profiles, excessive table or
+    array geometry, time overflow, corrupt artifacts, and invalid native HIR.
+    UDP tables and static instance arrays now use 256 MiB owning-storage budgets
+    derived from their actual materialized records instead of the former
+    64-instance semantic ceiling. Portable declarations and restored design
+    state reject malformed rows, invalid digests, duplicate identities, and
+    inconsistent specialization provenance; duplicate UDP object inputs and a
+    corrupted primitive payload reject without a partial result. The focused
+    frontend, elaboration, library-artifact, and transition-delay cases pass.
+19. **Complete.** Update architecture, language support, diagnostics, feature
+    matrix, inventories, Verilog compatibility notes, and restart evidence;
+    keep strengths/switch primitives and specify timing assigned to later
+    Verilog-2005 closure batches and SDF assigned to its roadmap batch. Ten
+    executable feature rows `SV-672` through `SV-681` cover the UDP surface and
+    remove UDPs from the deferred inventory. Architecture documents the
+    candidate, normalized-table, artifact, and ordinary-SimIR boundaries;
+    language/README compatibility notes distinguish the remaining strength,
+    switch, specify, and SDF work. Focused source, catalog, IEEE-package, and
+    inventory gates pass at 1,735 diagnostics, 484 bounded sources, 574
+    SPDX-owned artifacts, and 202 test/control files.
+20. **Complete.** Run exact-LLVM Debug and Release plus source, catalog,
+    inventory, installed-public-contract, Windows ABI, differential, and
+    release gates after eight-worker builds, then commit and push once. Debug
+    passes 111/111 tests in 310.43 seconds and Release passes 111/111 in 278.64
+    seconds. The reviewed baselines are 1,735 diagnostics, 484 bounded sources,
+    574 SPDX-owned artifacts, 202 test/control files, 1,111 executable feature
+    rows, 4,444 evidence cells, 351 evidence paths, and 103 runtime owners.
+    Batch 144 is not a CI boundary and ran no sanitizer or hosted CI-monitoring
+    gate.
+
 ## Forward priority order
 
 1. **Completed in Batch 136:** read-only out-of-tree `.fsimlib` directory
@@ -952,7 +1078,9 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
 4. **In progress:** complete VHDL-2008/VITAL, followed by Verilog-2005,
    SystemVerilog-2017 classes/UVM, VPI, DPI, and VHPI. Batches 139-143 complete
    the clean-room VITAL timing, primitive, path, memory, and vendor-model
-   compatibility surface; the next batch begins Verilog-2005 closure.
+   compatibility surface; Batch 144 begins Verilog-2005 closure with UDPs,
+   followed by strengths/switch primitives and specify timing in separate
+   batches before the later dedicated SDF batch.
 5. Older VHDL, Verilog, and SystemVerilog standard modes.
 6. Full SDF annotation with 2.1/3.0 compatibility and VITAL integration.
 7. FST tracing for every value exposed through the trace model.

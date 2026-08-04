@@ -26,6 +26,26 @@ ParseResult VerilogParser::run() {
     } else if (match_keyword("interface")) {
       compilation_unit_has_design_item_ = true;
       design.units.push_back(parse_module(previous(), true));
+    } else if (match_keyword("primitive")) {
+      compilation_unit_has_design_item_ = true;
+      auto declaration = parse_udp_declaration(previous());
+      const bool duplicate = std::ranges::any_of(
+          design.udp_declarations,
+          [&](const VerilogUdpDeclaration& existing) {
+            return existing.name == declaration.name;
+          }) || std::ranges::any_of(
+          design.units, [&](const DesignUnit& existing) {
+            return existing.name == declaration.name;
+          });
+      if (duplicate) {
+        error(
+            previous(),
+            "FSIM-SV-SEM-135",
+            "duplicate Verilog design declaration '"
+                + declaration.name + "'");
+      } else {
+        design.udp_declarations.push_back(std::move(declaration));
+      }
     } else if (match_keyword("package")) {
       compilation_unit_has_design_item_ = true;
       auto package = parse_package(previous());
@@ -55,6 +75,7 @@ ParseResult VerilogParser::run() {
         "unterminated `begin_keywords region");
     keyword_stack_.clear();
   }
+  normalize_udp_instances(design);
   return ParseResult{std::move(design), std::move(diagnostics_)};
 }
 
@@ -936,7 +957,7 @@ DesignUnit VerilogParser::parse_module(
             && current().text == "final")) {
       module_has_non_time_item_ = true;
       unit.processes.push_back(parse_final());
-    } else if (is_declaration_start()) {
+    } else if (is_declaration_start() && !instance_start()) {
       module_has_non_time_item_ = true;
       parse_declaration(unit);
     } else if (is_gate_primitive()) {
@@ -987,14 +1008,13 @@ DesignUnit VerilogParser::parse_module(
       module_has_non_time_item_ = true;
       unit.generate_regions.push_back(
           parse_selection_generate(previous()));
-    } else if (
-        at(TokenKind::Identifier)
-        && ((at(TokenKind::Identifier, 1)
-             && at(TokenKind::LeftParen, 2))
-            || (at(TokenKind::Hash, 1)
-                && at(TokenKind::LeftParen, 2)))) {
+    } else if (instance_start()) {
       module_has_non_time_item_ = true;
-      unit.instances.push_back(parse_instance());
+      auto instances = parse_instances();
+      unit.instances.insert(
+          unit.instances.end(),
+          std::make_move_iterator(instances.begin()),
+          std::make_move_iterator(instances.end()));
     } else if (at(TokenKind::Backtick)) {
       parse_directive();
     } else {
@@ -1035,6 +1055,38 @@ DesignUnit VerilogParser::parse_module(
   resolve_implicit_nets(unit);
   unit.span = span_from(start, previous());
   return unit;
+}
+
+bool VerilogParser::instance_start() const {
+  if (!at(TokenKind::Identifier)) {
+    return false;
+  }
+  if (keyword_reserved(keyword_set_, current().text)) {
+    return false;
+  }
+  if (at(TokenKind::LeftParen, 1) || at(TokenKind::Hash, 1)) {
+    return true;
+  }
+  if (!at(TokenKind::Identifier, 1)) {
+    return false;
+  }
+  if (at(TokenKind::LeftParen, 2)) {
+    return true;
+  }
+  if (!at(TokenKind::LeftBracket, 2)) {
+    return false;
+  }
+  std::size_t depth = 1;
+  for (std::size_t lookahead = 3;
+       !at(TokenKind::EndOfFile, lookahead); ++lookahead) {
+    if (at(TokenKind::LeftBracket, lookahead)) {
+      ++depth;
+    } else if (at(TokenKind::RightBracket, lookahead)
+               && --depth == 0) {
+      return at(TokenKind::LeftParen, lookahead + 1);
+    }
+  }
+  return false;
 }
 
 }  // namespace fsim::frontend

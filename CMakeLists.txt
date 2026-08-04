@@ -367,9 +367,11 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_expressions.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_functions.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_processes.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_udp.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_events.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_fork.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_units.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_udp.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_concurrent.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_components.cpp"
@@ -451,6 +453,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/hierarchy_resolution.cpp
       src/elaboration/hierarchy_sv_ports.cpp
       src/elaboration/hierarchy_systemc.cpp
+      src/elaboration/hierarchy_udp.cpp
       src/elaboration/hierarchy_type_resolution.cpp
       src/elaboration/hierarchy_types.cpp
       src/elaboration/lowerer_assignment.cpp
@@ -504,7 +507,8 @@ fsim_configure_library(fsim_runtime)
   )
 add_library(fsim::elaboration ALIAS fsim_elaboration)
 fsim_configure_library(fsim_elaboration)
-target_link_libraries(fsim_elaboration PUBLIC fsim_frontend fsim_runtime)
+target_link_libraries(
+  fsim_elaboration PUBLIC fsim_frontend fsim_runtime PRIVATE fsim_support)
 
 add_library(
   fsim_support

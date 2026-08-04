@@ -111,3 +111,11 @@ diagnostics, 479 bounded C/C++ sources, 569 authored artifacts, and 200
 authored test/control files. The complete memory/vendor compatibility matrix
 uses only clean-room interfaces and implementations; no external VITAL body,
 vendor source, third-party artifact, or provenance entry is imported.
+
+v2 Batch 144 adds the split UDP parser, matcher, hierarchy lowerer, and focused
+frontend/elaboration owners as five SPDX-owned bounded C++ sources. Forty-three
+declaration, table, instance, resolver, and artifact diagnostics advance the
+reviewed totals to 1,735 diagnostics, 484 bounded C/C++ sources, 574 authored
+artifacts, and 202 authored test/control files. The UDP implementation and
+fixtures are clean-room code; no external Verilog model, table, third-party
+artifact, or provenance entry is imported.

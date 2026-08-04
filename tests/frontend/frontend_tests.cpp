@@ -105,6 +105,7 @@ int main() {
     test_systemverilog_membership_expressions();
     test_systemverilog_arithmetic_expressions();
     test_gate_primitives();
+    test_verilog_udp_declarations();
     test_systemverilog_select_and_concatenation_expressions();
     test_conditional_statement_trees();
     test_conditional_generate_hierarchy();

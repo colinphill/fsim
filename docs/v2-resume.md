@@ -7,11 +7,78 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
-- Current unit: Batch 143, exactly 20 changes, complete from clean pushed
-  Batch 142 closeout `0b8f212`. Its authoritative VITAL memory/vendor-model
-  contract and per-change status are recorded in `implementation_plan_v2.md`.
-  Changes 1 through 20 are complete. Batch 143 is not a
-  CI-monitoring batch.
+- Current unit: Batch 144, exactly 20 changes, complete after pushed Batch 143
+  closeout `cc5a6bb` and corrective LLVM-disabled VITAL callback build repair
+  `e012444`. Its authoritative Verilog-2005 UDP contract and per-change status
+  are recorded in `implementation_plan_v2.md`. Changes 1-20 are complete and
+  the next implementation unit is Batch 145. Batch 144 is not a CI-monitoring
+  batch.
+- Batch 144 owns Verilog-2005 combinational and sequential user-defined
+  primitives: declarations, table symbols and edge descriptors, instance
+  resolution and arrays, normalized specialization, per-instance state,
+  inertial delays, resolved drivers, artifacts, both engines, debugger,
+  callbacks, VCD, diagnostics, and release evidence. Changes 1-19 remain one
+  accumulated worktree; Change 20 owns the completed full exact-LLVM
+  Debug/Release gates, documentation closeout, one commit, and one push.
+  Strengths/switch
+  primitives and specify timing remain separate Verilog-2005 closure batches;
+  SDF remains in its dedicated roadmap batch. Do not run a sanitizer or inspect
+  hosted CI for Batch 144.
+- The clean-room UDP frontend HIR keeps declarations separate from
+  top-selectable modules and retains ordered terminals, combinational or
+  sequential kind, optional initial output, level/output symbols, shorthand or
+  explicit edge descriptors, table priority, timing context, closing identity,
+  and source spans. Classic combinational plus ANSI `output reg` sequential
+  fixtures cover initial state, `(01)`, `r`, `n`, current-state don't-care, and
+  no-change output; the focused warnings-as-errors frontend build and test pass.
+  The common matcher covers every level wildcard and `r`/`f`/`p`/`n`/`*` or
+  explicit transition class, current state, no-change output, stable nonedges,
+  and first-row selection. Cataloged parse codes 224-243 and semantic codes
+  130-144 reject malformed profiles, symbols, pairs, widths, edge counts,
+  empty/duplicate rows, and duplicate declarations. The central candidate
+  variant now retains UDPs separately from HDL units and SystemC factories;
+  project merging preserves source order and logical libraries, while focused
+  elaboration covers forward, missing, ambiguous, module-collision, positional,
+  and built-in-gate cases. Declaration-aware normalization retains anonymous
+  and comma-separated instances, arrays with scalar/vector bridges, and
+  one/two/three-value common-model delays while ordinary modules reject UDP-only
+  syntax. The focused frontend, elaboration, diagnostic-catalog, and
+  source-budget gates pass. Each canonical UDP now owns one immutable shared
+  normalized table and SHA-256 digest exposed through elaborated-design state;
+  every specialization records the same selected table provenance. Combinational
+  rows lower to ordinary four-state SimIR with first-match priority, X/Z
+  normalization, unmatched X, and normal driver ownership. Sequential rows use
+  one sole-driver process with persistent previous-input and initialization
+  signals; focused execution covers initial state, rising/negative edges,
+  no-change, retention, and repeated transitions. UDP table evaluation now
+  drives a hidden value through the common continuous inertial driver. Focused
+  interpreter and LLVM O0/O2 cold/warm-cache execution proves `5/7/11`
+  rise/fall/turnoff timing, short-pulse cancellation, zero-delay deltas,
+  same-value stability, X transitions, callbacks, debugger reads, VCD, and
+  scale-overflow rejection. Generated and parameter-specialized instances,
+  multiple roots, searched logical libraries, mapped `.fsimlib` content, and
+  mixed VHDL/SystemC wrapper paths all retain central resolver selection.
+  Portable `.fsimudp` payloads now survive `.fsimobj`, relocated
+  `.fsimdesign`, standalone execution after producer inputs are hidden, and
+  cold/warm/edit native-cache cycles. Combinational, edge- and level-sensitive,
+  delayed, generated, and resolved-driver behavior matches across interpreter,
+  LLVM O0/O2, debugger, callbacks, and VCD. Negative coverage rejects malformed
+  declaration and restored-state geometry, bad table digests/provenance,
+  duplicate UDP object inputs, corrupt payloads, unsupported instance forms,
+  excessive host materialization, and time overflow. Static instance arrays no
+  longer carry the former arbitrary 64-instance ceiling; both arrays and UDP
+  tables use documented 256 MiB owning-storage guards derived from their
+  materialized records. Architecture, language support, diagnostics, README,
+  feature rows `SV-672` through `SV-681`, and the release inventory are now
+  synchronized. Focused source/catalog/IEEE/inventory gates pass at 1,735
+  diagnostics, 484 bounded sources, 574 SPDX-owned artifacts, and 202
+  test/control files. Change 20 is complete: exact-LLVM Debug passes 111/111
+  tests in 310.43 seconds and Release passes 111/111 in 278.64 seconds after
+  eight-worker builds. The release evidence contains 1,111 executable feature
+  rows, 4,444 evidence cells, 351 evidence paths, and 103 runtime owners. No
+  sanitizer or hosted CI inspection ran for this non-monitoring batch. Resume
+  by defining the exact 20-change Batch 145 contract for Verilog-2005 strength
+  and switch-primitive closure.
 - Batch 143 owns clean-room `ieee.vital_memory` public metadata and execution:
   memory declaration/loading, action and violation tables, word/subword state,
   multi-port contention, vector memory timing checks, path accumulation and

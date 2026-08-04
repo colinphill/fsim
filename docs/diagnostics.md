@@ -692,6 +692,26 @@ are therefore excluded.
 | `FSIM-SV-PARSE-221` | error | Expected `:` in a multidimensional static unpacked range. |
 | `FSIM-SV-PARSE-222` | error | Expected `]` after a multidimensional static unpacked range. |
 | `FSIM-SV-PARSE-223` | error | Expected `)` after a dynamic-array `new[size](initializer)` expression. |
+| `FSIM-SV-PARSE-224` | error | Expected `(` after a user-defined primitive name. |
+| `FSIM-SV-PARSE-225` | error | Expected `)` after a user-defined primitive terminal list. |
+| `FSIM-SV-PARSE-226` | error | Expected `;` after a user-defined primitive header. |
+| `FSIM-SV-PARSE-227` | error | Expected `;` after a user-defined primitive terminal declaration. |
+| `FSIM-SV-PARSE-228` | error | Expected `)` after a user-defined primitive transition pair. |
+| `FSIM-SV-PARSE-229` | error | A user-defined primitive transition pair does not contain exactly two valid level symbols. |
+| `FSIM-SV-PARSE-230` | error | A user-defined primitive table contains an invalid input symbol. |
+| `FSIM-SV-PARSE-231` | error | Expected `:` after a user-defined primitive row's input symbols. |
+| `FSIM-SV-PARSE-232` | error | A sequential user-defined primitive row has no current-state symbol. |
+| `FSIM-SV-PARSE-233` | error | Expected `:` after a sequential user-defined primitive current-state symbol. |
+| `FSIM-SV-PARSE-234` | error | A user-defined primitive row contains an invalid output symbol. |
+| `FSIM-SV-PARSE-235` | error | Expected `;` after a user-defined primitive table row. |
+| `FSIM-SV-PARSE-236` | error | Expected `;` after a sequential user-defined primitive output refinement. |
+| `FSIM-SV-PARSE-237` | error | Expected `=` in a user-defined primitive initial statement. |
+| `FSIM-SV-PARSE-238` | error | A user-defined primitive initial statement has no scalar value. |
+| `FSIM-SV-PARSE-239` | error | Expected `;` after a user-defined primitive initial statement. |
+| `FSIM-SV-PARSE-240` | error | A user-defined primitive contains an unsupported declaration item. |
+| `FSIM-SV-PARSE-241` | error | Expected `table` in a user-defined primitive declaration. |
+| `FSIM-SV-PARSE-242` | error | Expected `endtable` after user-defined primitive rows. |
+| `FSIM-SV-PARSE-243` | error | Expected `endprimitive` after a user-defined primitive table. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -842,7 +862,7 @@ are therefore excluded.
 | `FSIM-SV-SEM-110` | error | A net-declaration delay is attached to a variable rather than a `wire` net. |
 | `FSIM-SV-SEM-111` | error | A static gate-instance array has no instance name. |
 | `FSIM-SV-SEM-112` | error | A static gate-instance array bound is not a decimal locally static integer in the bounded slice. |
-| `FSIM-SV-SEM-113` | error | A static gate-instance array exceeds the 64-instance bound. |
+| `FSIM-SV-SEM-113` | error | Materializing a static gate-instance array would exceed the frontend owning-storage budget. |
 | `FSIM-SV-SEM-114` | error | A gate-array terminal is neither scalar nor equal in width to the instance count. |
 | `FSIM-SV-SEM-115` | error | A modport declaration appears outside a SystemVerilog interface. |
 | `FSIM-SV-SEM-116` | error | A modport signal member has no explicit direction. |
@@ -850,7 +870,7 @@ are therefore excluded.
 | `FSIM-SV-SEM-118` | error | A modport names a signal that is not declared by its interface. |
 | `FSIM-SV-SEM-119` | error | An interface repeats a modport declaration name. |
 | `FSIM-SV-SEM-120` | error | A bounded instance-array range is not a decimal locally static integer range. |
-| `FSIM-SV-SEM-121` | error | A bounded instance array exceeds 64 instances. |
+| `FSIM-SV-SEM-121` | error | Materializing a static instance array would exceed the frontend owning-storage budget. |
 | `FSIM-SV-SEM-122` | error | A modport import/export entry does not name an interface function or task. |
 | `FSIM-SV-SEM-123` | error | A modport callable's explicit function/task kind does not match its interface declaration. |
 | `FSIM-SV-SEM-124` | error | A generated typedef or enum literal conflicts with another declaration in the same generated body. |
@@ -859,6 +879,24 @@ are therefore excluded.
 | `FSIM-SV-SEM-127` | error | A bounded SystemVerilog string method has the wrong number of arguments. |
 | `FSIM-SV-SEM-128` | error | A dynamic-array `new[size](initializer)` expression has other than one initializer. |
 | `FSIM-SV-SEM-129` | error | A module or interface declaration end name does not match its opening name. |
+| `FSIM-SV-SEM-130` | error | A user-defined primitive declares more than one output terminal. |
+| `FSIM-SV-SEM-131` | error | A sequential user-defined primitive `reg` refinement does not name its output. |
+| `FSIM-SV-SEM-132` | error | A user-defined primitive initial statement does not assign its output. |
+| `FSIM-SV-SEM-133` | error | A user-defined primitive initial value is not scalar `0`, `1`, or `x`. |
+| `FSIM-SV-SEM-134` | error | A user-defined primitive closing name does not match its opening name. |
+| `FSIM-SV-SEM-135` | error | A Verilog compilation unit repeats a user-defined primitive design name. |
+| `FSIM-SV-SEM-136` | error | User-defined primitive terminal declarations do not name one output first followed by every header input in order. |
+| `FSIM-SV-SEM-137` | error | A user-defined primitive header repeats a terminal name. |
+| `FSIM-SV-SEM-138` | error | A user-defined primitive has no input terminal. |
+| `FSIM-SV-SEM-139` | error | A sequential user-defined primitive output is not declared `reg`. |
+| `FSIM-SV-SEM-140` | error | A user-defined primitive table has no rows. |
+| `FSIM-SV-SEM-141` | error | A user-defined primitive table row has the wrong number of input symbols. |
+| `FSIM-SV-SEM-142` | error | A combinational user-defined primitive table row contains an edge symbol. |
+| `FSIM-SV-SEM-143` | error | A sequential user-defined primitive table row contains more than one edge symbol. |
+| `FSIM-SV-SEM-144` | error | A user-defined primitive table row duplicates an earlier input/state pattern. |
+| `FSIM-SV-SEM-145` | error | A user-defined primitive propagation delay is not a representable nonnegative decimal expression. |
+| `FSIM-SV-SEM-146` | error | A user-defined primitive propagation delay supplies more than three transition values. |
+| `FSIM-SV-SEM-147` | error | Materializing a user-defined primitive table would exceed the frontend owning-storage budget. |
 | `FSIM-ELAB-SVIFACE-006` | error | A process writes through a read-only input port or modport input member. |
 | `FSIM-ELAB-SVIFACE-007` | error | A retained interface callable cannot be materialized at its same-language module boundary. |
 | `FSIM-ELAB-SVIFACE-008` | error | An interface callable is visible more than once through the same module port. |
@@ -1718,6 +1756,11 @@ are therefore excluded.
 | `FSIM-ELAB-BIND-057` | error | A same-language hierarchy boundary connects different nominal aggregate or record types. |
 | `FSIM-ELAB-BIND-058` | error | A native SystemC child port is unbound after factory construction. |
 | `FSIM-ELAB-BIND-059` | error | An unqualified child lookup needs one or more configured logical libraries which are unavailable. |
+| `FSIM-ELAB-BIND-060` | error | A user-defined primitive instance supplies module parameter overrides. |
+| `FSIM-ELAB-BIND-061` | error | A user-defined primitive instance uses named rather than positional terminal connections. |
+| `FSIM-ELAB-BIND-062` | error | An ordinary module instance omits its required instance name. |
+| `FSIM-ELAB-BIND-063` | error | An ordinary module instance uses syntax reserved for a UDP propagation delay. |
+| `FSIM-ELAB-BIND-064` | error | A user-defined primitive instance-array terminal is neither scalar nor width-matched to the array. |
 
 ## Time, runtime, trace, and design cache
 

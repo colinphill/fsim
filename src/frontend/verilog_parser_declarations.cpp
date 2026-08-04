@@ -1544,11 +1544,12 @@ void VerilogParser::parse_gate_primitive(
                 - static_cast<std::uint64_t>(*right_value)
             : static_cast<std::uint64_t>(*right_value)
                 - static_cast<std::uint64_t>(*left_value);
-        if (distance >= 64) {
+        if (distance >= maximum_instance_array_elements) {
           error(
               range_start,
               "FSIM-SV-SEM-113",
-              "a gate-instance array may contain at most 64 instances");
+              "materializing the gate-instance array would exceed the "
+              "256 MiB frontend owning-storage budget");
         } else {
           const auto count = distance + 1;
           for (std::uint64_t ordinal = 0; ordinal < count; ++ordinal) {

@@ -368,6 +368,22 @@ struct SpecializationInfo {
         parameter_identity_values;
 };
 
+using UdpTableId = std::uint32_t;
+
+/// One declaration-normalized Verilog user-defined primitive table.
+///
+/// The table is stored once per canonical logical-library identity. Every UDP
+/// instance references its stable ID/digest through specialization provenance.
+struct UdpTableInfo {
+    UdpTableId id{};
+    std::string identity;
+    std::string digest;
+    bool sequential{};
+    std::optional<frontend::VerilogUdpOutputSymbol> initial_output;
+    std::vector<std::string> terminals;
+    std::vector<frontend::VerilogUdpTableRow> rows;
+};
+
 struct SystemCPortInfo {
     std::string name;
     std::uint64_t native_handle{};
@@ -457,6 +473,7 @@ struct ElaboratedDesignState {
     std::vector<VhdlProtectedObjectInfo> vhdl_protected_object_info;
     std::vector<runtime::simir::Process> processes;
     std::vector<SpecializationInfo> specializations;
+    std::vector<UdpTableInfo> udp_tables;
     std::vector<SystemCInstanceInfo> systemc_instances;
     std::vector<SystemCProcessInfo> systemc_processes;
     std::vector<SystemCNamedObjectInfo> systemc_objects;
@@ -485,6 +502,8 @@ public:
     [[nodiscard]] const std::vector<runtime::simir::Process>& processes() const noexcept;
     [[nodiscard]] const std::vector<SpecializationInfo>&
     specializations() const noexcept;
+    [[nodiscard]] const std::vector<UdpTableInfo>&
+    udp_tables() const noexcept;
     [[nodiscard]] const std::vector<SystemCInstanceInfo>&
     systemc_instances() const noexcept;
     [[nodiscard]] const std::vector<SystemCProcessInfo>&
@@ -563,6 +582,7 @@ private:
     std::vector<VhdlProtectedObjectInfo> vhdl_protected_object_info_;
     std::vector<runtime::simir::Process> processes_;
     std::vector<SpecializationInfo> specializations_;
+    std::vector<UdpTableInfo> udp_tables_;
     std::vector<SystemCInstanceInfo> systemc_instances_;
     std::vector<SystemCProcessInfo> systemc_processes_;
     std::vector<SystemCNamedObjectInfo> systemc_objects_;

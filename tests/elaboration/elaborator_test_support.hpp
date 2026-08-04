@@ -118,6 +118,7 @@ void test_systemverilog_type_parameters();
 void test_generate_elaboration();
 void test_mixed_language_and_systemc();
 void test_multi_library_resolution();
+void test_verilog_udp_resolution();
 void test_multiple_root_elaboration();
 void test_mixed_language_conversions();
 void test_mixed_language_construction();

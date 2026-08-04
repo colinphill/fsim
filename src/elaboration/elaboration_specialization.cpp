@@ -1633,10 +1633,103 @@ void expand_specialized_unit_generates(
         expanded_instances.push_back(std::move(instance));
         continue;
       }
-      for (const auto index : instance.array_indices) {
+      for (std::size_t ordinal = 0;
+           ordinal < instance.array_indices.size(); ++ordinal) {
+        const auto index = instance.array_indices[ordinal];
         auto expanded = instance;
         expanded.name += "[" + std::to_string(index) + "]";
         expanded.array_indices.clear();
+        if (instance.udp_instance) {
+          for (std::size_t connection_index = 0;
+               connection_index < expanded.connections.size();
+               ++connection_index) {
+            auto& connection = expanded.connections[connection_index];
+            if (connection.value.kind
+                != frontend::ExpressionKind::Identifier) {
+              continue;
+            }
+            const auto find_signal = [&](const auto& declarations) {
+              return std::ranges::find(
+                  declarations,
+                  connection.value.text,
+                  &frontend::SignalDeclaration::name);
+            };
+            const frontend::SignalDeclaration* declaration = nullptr;
+            const auto signal = find_signal(specialized.unit.signals);
+            if (signal != specialized.unit.signals.end()) {
+              declaration = &*signal;
+            } else {
+              const auto port = find_signal(specialized.unit.ports);
+              if (port != specialized.unit.ports.end()) {
+                declaration = &*port;
+              }
+            }
+            if (declaration == nullptr) {
+              continue;
+            }
+            const auto width = declaration->type.width();
+            if (width && *width == 1) {
+              continue;
+            }
+            if (!width
+                || *width != instance.array_indices.size()
+                || !declaration->type.packed_range) {
+              diagnostics.push_back({
+                  "FSIM-ELAB-BIND-064",
+                  "UDP instance-array terminal '"
+                      + connection.value.text
+                      + "' must be scalar or match the instance count",
+                  connection.span});
+              continue;
+            }
+            const auto& range = *declaration->type.packed_range;
+            const auto selected = range.left
+                + (range.descending
+                       ? -static_cast<std::int64_t>(ordinal)
+                       : static_cast<std::int64_t>(ordinal));
+            auto base = connection.value;
+            auto selected_expression = frontend::Expression{
+                frontend::ExpressionKind::Index,
+                "",
+                {std::move(base),
+                 frontend::Expression{
+                     frontend::ExpressionKind::IntegerLiteral,
+                     std::to_string(selected),
+                     {},
+                     connection.span}},
+                connection.span};
+            const auto alias = "$udp_array$" + expanded.name + "$"
+                + std::to_string(connection_index);
+            specialized.unit.signals.emplace_back(
+                alias,
+                frontend::Type{
+                    frontend::ValueDomain::Logic4,
+                    "wire",
+                    std::nullopt,
+                    false},
+                frontend::PortDirection::Unknown,
+                false,
+                connection.span);
+            connection.value = frontend::Expression{
+                frontend::ExpressionKind::Identifier,
+                alias,
+                {},
+                connection.span};
+            frontend::Statement bridge;
+            bridge.kind = frontend::StatementKind::Assignment;
+            bridge.assignment_kind = frontend::AssignmentKind::Continuous;
+            if (connection_index == 0) {
+              bridge.target = std::move(selected_expression);
+              bridge.value = connection.value;
+            } else {
+              bridge.target = connection.value;
+              bridge.value = std::move(selected_expression);
+            }
+            bridge.span = connection.span;
+            specialized.unit.concurrent_statements.push_back(
+                std::move(bridge));
+          }
+        }
         expanded_instances.push_back(std::move(expanded));
       }
     }

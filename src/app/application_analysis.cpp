@@ -345,6 +345,30 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
       }
       snapshot.unit_source_orders.push_back(source_order);
     }
+    for (auto& udp : snapshot.result.design.udp_declarations) {
+      const auto udp_source =
+          fsim::support::path_from_utf8(physical_source(udp.span));
+      auto source_order = group.inputs.empty()
+          ? std::size_t{}
+          : group.inputs.front().source_order;
+      for (std::size_t root_index = 0;
+           root_index < snapshot.sources.size()
+           && root_index < group.inputs.size(); ++root_index) {
+        const auto& source = snapshot.sources[root_index];
+        if (same_source_path(source.path, udp_source)
+            || std::ranges::any_of(
+                source.dependencies,
+                [&](const CheckedSource::Dependency& dependency) {
+                  return same_source_path(
+                      dependency.path, udp_source);
+                })) {
+          udp.library = group.inputs[root_index].library;
+          source_order = group.inputs[root_index].source_order;
+          break;
+        }
+      }
+      snapshot.udp_source_orders.push_back(source_order);
+    }
     return snapshot;
   }
 
@@ -399,6 +423,10 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
   for (auto& unit : snapshot.result.design.units) {
     unit.library = input.library;
     snapshot.unit_source_orders.push_back(input.source_order);
+  }
+  for (auto& udp : snapshot.result.design.udp_declarations) {
+    udp.library = input.library;
+    snapshot.udp_source_orders.push_back(input.source_order);
   }
   snapshot.sources.push_back(std::move(source));
   return snapshot;

@@ -180,7 +180,8 @@ std::vector<UnitResolutionCandidate> resolve_unit_candidates(
     const frontend::ParsedDesign& parsed,
     const std::string_view library,
     const std::string_view name,
-    const bool include_vhdl_configurations) {
+    const bool include_vhdl_configurations,
+    const bool include_udp_declarations) {
     const auto requested_library =
         library.empty() ? std::string_view{"work"} : library;
     std::vector<UnitResolutionCandidate> result;
@@ -207,6 +208,21 @@ std::vector<UnitResolutionCandidate> resolve_unit_candidates(
             continue;
         }
         result.push_back({&unit, std::nullopt, unit_identity(unit)});
+    }
+    if (include_udp_declarations) {
+        for (const auto& udp : parsed.udp_declarations) {
+            const auto udp_library = udp.library.empty()
+                ? std::string_view{"work"}
+                : std::string_view{udp.library};
+            if (udp_library != requested_library || udp.name != name) {
+                continue;
+            }
+            result.push_back({
+                nullptr,
+                std::nullopt,
+                "udp:" + std::string{udp_library} + "." + udp.name,
+                &udp});
+        }
     }
     std::stable_sort(
         result.begin(), result.end(),
@@ -244,6 +260,14 @@ bool has_logical_library(
                parsed.units,
                [&](const DesignUnit& unit) {
                    return normalized_library(unit) == library;
+               })
+        || std::ranges::any_of(
+               parsed.udp_declarations,
+               [&](const frontend::VerilogUdpDeclaration& udp) {
+                   return (udp.library.empty()
+                               ? std::string_view{"work"}
+                               : std::string_view{udp.library})
+                       == library;
                })
         || std::ranges::any_of(
                systemc_candidates,

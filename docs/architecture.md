@@ -554,6 +554,16 @@ Exact nine-state `std_logic` and four-state `sv_wire` resolution are current
 in the reference runtime; exact nine-state generated code remains a
 capability-gated interpreter fallback.
 
+Verilog user-defined primitives are a distinct candidate kind rather than
+top-selectable modules. The immutable candidate index resolves each UDP
+instance by case-sensitive logical-library identity before terminal checks;
+built-in gates never enter that lookup. One normalized `UdpTableInfo` per
+selected declaration owns its canonical `udp:library.name` identity, ordered
+rows, terminal profile, sequential state, and SHA-256 digest. Instance
+specialization provenance carries both identity and digest, so generated,
+multi-root, searched-library, and mixed-language wrapper paths use the same
+resolver and native-cache contract as ordinary hierarchy.
+
 Schema-2 projects may select an ordered list of aliased roots with repeated
 `[[project.top]]` records or repeated `--top ALIAS=TARGET` replacements. The
 application resolves the complete list transactionally before hierarchy
@@ -592,8 +602,11 @@ search scope actually queries it. The loader then verifies canonical
 checksum, and each indexed unit identity before committing restored units.
 Dependencies are logical names with explicit mappings; fsim never searches
 neighboring host directories. Portable VHDL and SystemVerilog owning unit
-graphs restore directly into the candidate index without invoking a
-preprocessor or parser. Bundled logical source names and optional source text
+graphs plus distinct `.fsimudp` declaration payloads restore directly into the
+candidate index without invoking a preprocessor or parser. UDP payloads receive
+the same checksum, identity, source-relocation, duplicate-input, and
+transactional publication checks as ordinary units. Bundled logical source
+names and optional source text
 remain artifact-relative, so diagnostics, debugger breakpoints, VCD, and cache
 identity survive moving the complete directory.
 
@@ -882,6 +895,16 @@ an independent cancelable scheduler handle so a later evaluation removes its
 pending transaction and timestamp, including a short pulse that returns to
 the current driven value. Procedural delayed nonblocking assignments retain
 `WriteAfter` transport behavior.
+
+Combinational UDP rows lower to an ordered chain of ordinary four-state
+case-equality conditions; unmatched inputs drive `X`. Sequential rows add
+per-instance previous-input, current-output, and optional initialization state
+to one sole-driver process, with edge descriptors lowered through the same
+packed operations. The table process drives a hidden scalar `$udp_value` and
+an ordinary continuous assignment drives the public output. UDP propagation
+delays therefore reuse the common rise/fall/turnoff inertial scheduler,
+cancellation, callbacks, debugger visibility, VCD publication, LLVM lowering,
+and cache validation without a UDP-specific runtime operation or ABI callback.
 
 Verilog/SystemVerilog intra-assignment controls retain a distinct typed HIR
 kind. For a blocking `target = #delay expression`, lowering evaluates the

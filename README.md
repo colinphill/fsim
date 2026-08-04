@@ -156,6 +156,10 @@ The current tree contains:
 - bounded scalar `buf`/`not`/`and`/`nand`/`or`/`nor`/`xor`/`xnor` gate
   primitives with shared one/two-value transition delays and comma-separated
   instances, lowered through the common continuous-process path;
+- Verilog-2005 combinational and sequential user-defined primitives with
+  ordered four-state/edge tables, optional initial state, static instance
+  arrays, common inertial transition delays, logical-library resolution, and
+  interpreter/LLVM/artifact/debugger/VCD parity;
 - recursive VHDL/SV/SystemC instance elaboration in every hierarchy direction
   with automatic parent-plus-configured-library resolution, repeatable
   `--search-library` overrides, explicit qualified overrides, whole-signal port

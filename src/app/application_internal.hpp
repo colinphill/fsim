@@ -709,6 +709,7 @@ struct ParsedSnapshot {
   frontend::ParseResult result;
   std::vector<CheckedSource> sources;
   std::vector<std::size_t> unit_source_orders;
+  std::vector<std::size_t> udp_source_orders;
 };
 
 bool same_source_path(

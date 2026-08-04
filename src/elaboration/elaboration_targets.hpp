@@ -44,13 +44,15 @@ struct UnitResolutionCandidate {
     const DesignUnit* unit{};
     std::optional<std::string> systemc_target;
     std::string identity;
+    const frontend::VerilogUdpDeclaration* udp{};
 };
 
 std::vector<UnitResolutionCandidate> resolve_unit_candidates(
     const frontend::ParsedDesign& parsed,
     std::string_view library,
     std::string_view name,
-    bool include_vhdl_configurations = false);
+    bool include_vhdl_configurations = false,
+    bool include_udp_declarations = true);
 
 std::vector<std::string> effective_search_scope(
     std::string_view parent_library,

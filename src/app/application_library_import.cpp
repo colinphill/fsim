@@ -125,6 +125,18 @@ bool metadata_identity_matches(
       && entry.architecture == architecture;
 }
 
+bool metadata_identity_matches(
+    const library::UnitIndexEntry& entry,
+    const frontend::VerilogUdpDeclaration& declaration) {
+  const auto language =
+      declaration.language == frontend::Language::Verilog2005
+      ? std::string_view{"verilog"}
+      : std::string_view{"systemverilog"};
+  return entry.name == declaration.name
+      && entry.primary_name.empty() && entry.architecture.empty()
+      && entry.language == language && entry.kind == "primitive";
+}
+
 #if defined(FSIM_HAS_LLVM)
 std::string feature_identity(const std::vector<std::string>& features) {
   std::string result;
@@ -392,6 +404,43 @@ bool load_required_mapped_libraries(
           diagnostics);
       if (!bytes.has_value()) {
         return false;
+      }
+      if (entry.kind == "primitive") {
+        auto declaration = library::deserialize_portable_udp(
+            *bytes,
+            support::path_to_utf8(
+                mapping->second->path / entry.artifact),
+            diagnostics);
+        if (!declaration.has_value()
+            || declaration->library != library_name
+            || !metadata_identity_matches(entry, *declaration)) {
+          if (declaration.has_value()) {
+            diagnostics.error(
+                "FSIM-LIB-0008",
+                "mapped UDP identity does not match its metadata index");
+          }
+          return false;
+        }
+        const auto duplicate = std::ranges::find_if(
+            checked.parsed.udp_declarations,
+            [&](const auto& existing) {
+              const auto existing_library = existing.library.empty()
+                  ? std::string_view{"work"}
+                  : std::string_view{existing.library};
+              return existing_library == library_name
+                  && existing.name == declaration->name;
+            });
+        if (duplicate != checked.parsed.udp_declarations.end()) {
+          diagnostics.error(
+              "FSIM-LIB-0008",
+              "mapped UDP collides with an already loaded declaration 'udp:"
+                  + library_name + "." + declaration->name + "'");
+          return false;
+        }
+        provenance.unit_checksums.push_back(entry.checksum);
+        checked.parsed.udp_declarations.push_back(
+            std::move(*declaration));
+        continue;
       }
       auto unit = library::deserialize_portable_unit(
           *bytes,

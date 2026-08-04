@@ -174,7 +174,13 @@ std::optional<CheckedProject> check_project(
     std::size_t unit_order{};
     frontend::DesignUnit unit;
   };
+  struct OrderedUdp {
+    std::size_t source_order{};
+    std::size_t declaration_order{};
+    frontend::VerilogUdpDeclaration declaration;
+  };
   std::vector<OrderedUnit> ordered_units;
+  std::vector<OrderedUdp> ordered_udps;
   for (std::size_t input_index = 0;
        input_index < parsed_inputs.size(); ++input_index) {
     if (parse_failures[input_index]) {
@@ -235,6 +241,15 @@ std::optional<CheckedProject> check_project(
           unit_index,
           std::move(result.design.units[unit_index])});
     }
+    for (std::size_t udp_index = 0;
+         udp_index < result.design.udp_declarations.size(); ++udp_index) {
+      ordered_udps.push_back({
+          udp_index < snapshot.udp_source_orders.size()
+              ? snapshot.udp_source_orders[udp_index]
+              : std::size_t{},
+          udp_index,
+          std::move(result.design.udp_declarations[udp_index])});
+    }
   }
   std::sort(
       checked_sources.begin(),
@@ -254,6 +269,13 @@ std::optional<CheckedProject> check_project(
         return std::tie(left.source_order, left.unit_order)
             < std::tie(right.source_order, right.unit_order);
       });
+  std::stable_sort(
+      ordered_udps.begin(),
+      ordered_udps.end(),
+      [](const OrderedUdp& left, const OrderedUdp& right) {
+        return std::tie(left.source_order, left.declaration_order)
+            < std::tie(right.source_order, right.declaration_order);
+      });
   std::set<std::string> known_units;
   checked.parsed.units.reserve(ordered_units.size());
   for (auto& ordered : ordered_units) {
@@ -267,10 +289,30 @@ std::optional<CheckedProject> check_project(
       checked.parsed.units.push_back(std::move(ordered.unit));
     }
   }
+  std::set<std::string> known_udps;
+  checked.parsed.udp_declarations.reserve(ordered_udps.size());
+  for (auto& ordered : ordered_udps) {
+    const auto library = ordered.declaration.library.empty()
+        ? std::string{"work"}
+        : ordered.declaration.library;
+    const auto key = "verilog:" + library + ":udp:"
+        + ordered.declaration.name;
+    if (!known_udps.insert(key).second) {
+      diagnostics.error(
+          "FSIM-FE-0002",
+          "duplicate design unit '" + key + "'",
+          span(ordered.declaration.span));
+    } else {
+      checked.parsed.udp_declarations.push_back(
+          std::move(ordered.declaration));
+    }
+  }
   if (!load_required_mapped_libraries(config, checked, diagnostics)) {
     return std::nullopt;
   }
-  if (checked.parsed.units.empty() && checked.systemc_sources.empty()
+  if (checked.parsed.units.empty()
+      && checked.parsed.udp_declarations.empty()
+      && checked.systemc_sources.empty()
       && checked.mapped_libraries.empty() && !diagnostics.has_error()) {
     diagnostics.error(
         "FSIM-FE-0001",

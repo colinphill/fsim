@@ -334,14 +334,12 @@ void VerilogParser::parse_generate_region(
           parse_initial());
       continue;
     }
-    if (
-        at(TokenKind::Identifier)
-        && ((at(TokenKind::Identifier, 1)
-             && at(TokenKind::LeftParen, 2))
-            || (at(TokenKind::Hash, 1)
-                && at(TokenKind::LeftParen, 2)))) {
-      direct_region.then_body.instances.push_back(
-          parse_instance());
+    if (instance_start()) {
+      auto instances = parse_instances();
+      direct_region.then_body.instances.insert(
+          direct_region.then_body.instances.end(),
+          std::make_move_iterator(instances.begin()),
+          std::make_move_iterator(instances.end()));
       continue;
     }
     const auto unsupported = advance();
@@ -662,13 +660,12 @@ void VerilogParser::parse_generate_branch(
     } else if (keyword("begin")) {
       body.generate_regions.push_back(
           parse_static_generate_block());
-    } else if (
-        at(TokenKind::Identifier)
-        && ((at(TokenKind::Identifier, 1)
-             && at(TokenKind::LeftParen, 2))
-            || (at(TokenKind::Hash, 1)
-                && at(TokenKind::LeftParen, 2)))) {
-      body.instances.push_back(parse_instance());
+    } else if (instance_start()) {
+      auto instances = parse_instances();
+      body.instances.insert(
+          body.instances.end(),
+          std::make_move_iterator(instances.begin()),
+          std::make_move_iterator(instances.end()));
     } else {
       const auto unsupported = advance();
       error(
@@ -1191,15 +1188,28 @@ void VerilogParser::parse_parameter_port_list(
   (void)hash;
 }
 
-Instance VerilogParser::parse_instance() {
+std::vector<Instance> VerilogParser::parse_instances() {
   const auto start = expect_identifier("instantiated module name");
-  Instance instance;
-  instance.unit_name = start.text;
+  Instance common;
+  common.unit_name = start.text;
   if (match(TokenKind::Hash)) {
-    parse_parameter_overrides(instance, previous());
+    const auto hash = previous();
+    if (at(TokenKind::LeftParen)) {
+      parse_parameter_overrides(common, hash);
+    } else {
+      common.udp_delay = parse_verilog_delay(hash, 3);
+    }
   }
-  const auto name = expect_identifier("instance name");
-  instance.name = name.text;
+  std::vector<Instance> instances;
+  do {
+  Instance instance = common;
+  if (at(TokenKind::Identifier)) {
+    instance.name = advance().text;
+  } else {
+    instance.anonymous = true;
+    instance.name = "$udp$" + std::to_string(start.span.begin.offset)
+        + "$" + std::to_string(instances.size());
+  }
   if (match(TokenKind::LeftBracket)) {
     const auto range = previous();
     const auto left_expression = parse_expression();
@@ -1247,11 +1257,12 @@ Instance VerilogParser::parse_instance() {
               - static_cast<std::uint64_t>(*right)
           : static_cast<std::uint64_t>(*right)
               - static_cast<std::uint64_t>(*left);
-      if (distance >= 64) {
+      if (distance >= maximum_instance_array_elements) {
         error(
             range,
             "FSIM-SV-SEM-121",
-            "an instance array may contain at most 64 instances");
+            "materializing the instance array would exceed the 256 MiB "
+            "frontend owning-storage budget");
       } else {
         for (std::uint64_t ordinal = 0;
              ordinal <= distance; ++ordinal) {
@@ -1292,11 +1303,13 @@ Instance VerilogParser::parse_instance() {
   expect(
       TokenKind::RightParen, "')' after instance connections",
       "FSIM-SV-PARSE-037");
-  expect(
-      TokenKind::Semicolon, "';' after module instance",
-      "FSIM-SV-PARSE-038");
   instance.span = span_from(start, previous());
-  return instance;
+  instances.push_back(std::move(instance));
+  } while (match(TokenKind::Comma));
+  expect(
+      TokenKind::Semicolon, "';' after module or UDP instance",
+      "FSIM-SV-PARSE-038");
+  return instances;
 }
 
 }  // namespace fsim::frontend

@@ -219,7 +219,7 @@ ElaborationResult elaborate(
                     continue;
                 }
                 auto library_candidates = resolve_unit_candidates(
-                    parsed, library, requested, true);
+                    parsed, library, requested, true, false);
                 candidates.insert(
                     candidates.end(),
                     std::make_move_iterator(library_candidates.begin()),

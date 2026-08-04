@@ -231,6 +231,31 @@ bool compile_object(
         path, checksum});
     payloads.push_back({path, std::move(*bytes)});
   }
+  for (const auto& original : checked->parsed.udp_declarations) {
+    const auto unit_library = original.library.empty()
+        ? std::string_view{"work"} : std::string_view{original.library};
+    if (unit_library != source_set.library) {
+      continue;
+    }
+    auto declaration = original;
+    if (!library::relocate_udp_sources(
+            declaration, source_mappings, diagnostics)) {
+      return false;
+    }
+    auto bytes = library::serialize_portable_udp(declaration, diagnostics);
+    if (!bytes.has_value()) {
+      return false;
+    }
+    const auto path = std::filesystem::path{indexed_path(
+        "units", unit_index++, ".fsimudp")};
+    const auto checksum = support::Sha256::hex(
+        support::Sha256::digest(*bytes));
+    metadata.units.push_back({
+        declaration.language == frontend::Language::Verilog2005
+            ? "verilog" : "systemverilog",
+        "primitive", declaration.name, {}, {}, path, checksum});
+    payloads.push_back({path, std::move(*bytes)});
+  }
   if (metadata.units.empty()) {
     diagnostics.error(
         "FSIM-ART-0004",

@@ -20,6 +20,14 @@
 
 namespace fsim::frontend {
 
+// Static instance arrays are materialized as owning frontend records.  This
+// host-resource guard is intentionally derived from their actual in-memory
+// representation; it is not a Verilog language-size restriction.
+inline constexpr std::size_t maximum_instance_array_storage_bytes =
+    256U * 1024U * 1024U;
+inline constexpr std::size_t maximum_instance_array_elements =
+    maximum_instance_array_storage_bytes / sizeof(Instance);
+
 
 using detail::decimal_i64;
 using detail::decimal_u64;
@@ -407,6 +415,16 @@ class VerilogParser final : private detail::ParserBase {
 
   DesignUnit parse_package(const Token& start);
 
+  VerilogUdpDeclaration parse_udp_declaration(const Token& start);
+
+  VerilogUdpTableRow parse_udp_table_row(
+      const VerilogUdpDeclaration& declaration);
+
+  std::optional<VerilogUdpLevelSymbol> parse_udp_level_symbol();
+
+  std::optional<VerilogUdpOutputSymbol> parse_udp_output_symbol(
+      bool allow_no_change);
+
   FunctionDeclaration parse_function(const Token& start);
 
   void validate_function_body(
@@ -470,7 +488,9 @@ class VerilogParser final : private detail::ParserBase {
       DesignUnit& unit,
       const Token& hash);
 
-  Instance parse_instance();
+  std::vector<Instance> parse_instances();
+
+  void normalize_udp_instances(ParsedDesign& design);
 
   void parse_parameter_overrides(
       Instance& instance,
@@ -512,6 +532,8 @@ class VerilogParser final : private detail::ParserBase {
   bool parse_optional_container_dimension(Type& type);
 
   [[nodiscard]] bool is_declaration_start() const;
+
+  [[nodiscard]] bool instance_start() const;
 
   void parse_event_declaration(
       DesignUnit& unit, const Token& start);
