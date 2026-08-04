@@ -168,7 +168,16 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, force_signal_slice) == 488,
                "runtime force helper was not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, release_signal_slice) == 504,
                "runtime release helper was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 512,
+_Static_assert(offsetof(fsim_jit_runtime_v1, signal_last_active) == 512,
+               "runtime last-active helper was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, signal_driving) == 520,
+               "runtime driving helper was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, signal_driving_value) == 528,
+               "runtime driving-value helper was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, signal_driving_value_logic9) == 536,
+    "runtime exact driving-value helper was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 544,
                "unexpected extended runtime ABI size");
 _Static_assert(sizeof(fsim_jit_projected_element_v1) == 24,
                "unexpected projected-waveform element size");
@@ -352,6 +361,34 @@ static uint64_t signal_last_event(void* context, uint32_t signal) {
 static uint32_t signal_active(void* context, uint32_t signal) {
   (void)context;
   return signal == UINT32_C(11);
+}
+
+static uint64_t signal_last_active(void* context, uint32_t signal) {
+  (void)context;
+  return UINT64_C(2000) + signal;
+}
+
+static uint32_t signal_driving(void* context, uint32_t signal) {
+  (void)context;
+  return signal == UINT32_C(14);
+}
+
+static uint64_t signal_driving_value(
+    void* context, uint32_t signal, uint64_t* bval) {
+  (void)context;
+  *bval = UINT64_C(0x40);
+  return UINT64_C(0xb0) + signal;
+}
+
+static void signal_driving_value_logic9(
+    void* context,
+    uint32_t signal,
+    fsim_jit_logic9_word_v1* value) {
+  (void)context;
+  value->planes[0] = signal;
+  value->planes[1] = signal + UINT32_C(1);
+  value->planes[2] = signal + UINT32_C(2);
+  value->planes[3] = signal + UINT32_C(3);
 }
 
 static void write_output(
@@ -650,7 +687,11 @@ int main(void) {
       NULL,
       NULL,
       NULL,
-      NULL};
+      NULL,
+      signal_last_active,
+      signal_driving,
+      signal_driving_value,
+      signal_driving_value_logic9};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);
@@ -678,6 +719,13 @@ int main(void) {
       runtime.context, UINT32_C(7));
   const uint32_t active = runtime.signal_active(
       runtime.context, UINT32_C(11));
+  const uint64_t last_active = runtime.signal_last_active(
+      runtime.context, UINT32_C(13));
+  const uint32_t driving = runtime.signal_driving(
+      runtime.context, UINT32_C(14));
+  uint64_t driving_bval = 0;
+  const uint64_t driving_aval = runtime.signal_driving_value(
+      runtime.context, UINT32_C(3), &driving_bval);
   runtime.write_output(
       runtime.context, UINT32_C(12), "hello", UINT64_C(5), UINT32_C(1));
   runtime.schedule_output(
@@ -785,6 +833,14 @@ int main(void) {
   }
   if (active != UINT32_C(1)) {
     return 8;
+  }
+  if (last_active != UINT64_C(2013)) {
+    return 24;
+  }
+  if (driving != UINT32_C(1)
+      || driving_aval != UINT64_C(0xb3)
+      || driving_bval != UINT64_C(0x40)) {
+    return 25;
   }
   if (state.update_count != UINT32_C(1) ||
       state.after_count != UINT32_C(1) ||

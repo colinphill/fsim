@@ -849,6 +849,8 @@ public:
         const std::string& name,
         const std::size_t order);
 
+    [[nodiscard]] std::vector<Process> take_generated_processes();
+
 private:
     [[nodiscard]] const frontend::Type* visible_type(
         const std::string_view name) const;
@@ -1347,19 +1349,15 @@ private:
 
     void validate_read_only_signal_writes(
         const frontend::SourceSpan& source);
-
     void collect_identifiers(
         const Expression& expression,
         std::set<std::string>& output) const;
-
     void collect_statement_identifiers(
         const std::vector<Statement>& statements,
         std::set<std::string>& output) const;
-
     void collect_wildcard_identifiers(
         const std::vector<Statement>& statements,
         std::set<std::string>& output) const;
-
     RegisterId allocate_register(
         const std::size_t width,
         const frontend::ValueDomain domain);
@@ -1369,11 +1367,16 @@ private:
     [[nodiscard]] frontend::ValueDomain register_domain(
         const RegisterId id) const;
 
+    [[nodiscard]] std::optional<SignalId> vhdl_implicit_signal_attribute(
+        SignalId source, std::string_view attribute,
+        runtime::SimulationTick duration, frontend::SourceSpan span);
+    void validate_vhdl_driver_attributes(frontend::SourceSpan span);
     [[nodiscard]] RegisterId resize_register(
         RegisterId source,
         std::size_t width,
         bool sign_extend);
-    void report(std::string code, std::string message, frontend::SourceSpan span);
+    void report(std::string code, std::string message,
+                frontend::SourceSpan span);
     [[nodiscard]] bool report_unsupported_cross_root_reference(
         std::string_view name,
         frontend::SourceSpan span);
@@ -1397,6 +1400,8 @@ private:
     const std::vector<frontend::ProcedureDeclaration>& procedures_;
     std::vector<Diagnostic>& diagnostics_;
     Process process_;
+    std::vector<Process> generated_processes_;
+    std::vector<SignalId> implicit_signal_dependencies_;
     RegisterId next_register_{};
     StringRegisterId next_string_register_{};
     ContainerRegisterId next_container_register_{};

@@ -26,6 +26,9 @@ using runtime::simir::SignalEvent;
 using runtime::simir::SignalLastValue;
 using runtime::simir::SignalLastEvent;
 using runtime::simir::SignalActive;
+using runtime::simir::SignalLastActive;
+using runtime::simir::SignalDriving;
+using runtime::simir::SignalDrivingValue;
 using runtime::simir::ValueKind;
 
 void SignalOperationLowerer::lower(
@@ -601,6 +604,88 @@ void SignalOperationLowerer::lower(
                       1});
               branch_to_next();
             
+}
+
+void SignalOperationLowerer::lower(
+    const SignalLastActive& operation) {
+              auto* elapsed = builder.CreateCall(
+                  signal_last_active_type,
+                  signal_last_active_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(i32, operation.signal)},
+                  "signal.last_active");
+              store_register(
+                  builder, registers, operation.destination,
+                  EncodedValue{
+                      elapsed,
+                      constant_i64(context, 0),
+                      64});
+              branch_to_next();
+}
+
+void SignalOperationLowerer::lower(
+    const SignalDriving& operation) {
+              auto* driving = builder.CreateCall(
+                  signal_driving_type,
+                  signal_driving_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(i32, operation.signal)},
+                  "signal.driving");
+              store_register(
+                  builder, registers, operation.destination,
+                  EncodedValue{
+                      builder.CreateZExt(driving, i64),
+                      constant_i64(context, 0),
+                      1});
+              branch_to_next();
+}
+
+void SignalOperationLowerer::lower(
+    const SignalDrivingValue& operation) {
+              const auto width = signal_widths[operation.signal];
+              const auto signal_kind =
+                  signal_value_kinds.empty()
+                      ? ValueKind::logic4
+                      : signal_value_kinds[operation.signal];
+              if (signal_kind == ValueKind::logic9) {
+                builder.CreateCall(
+                    read_logic9_type,
+                    signal_driving_value_logic9_callback,
+                    {
+                        context_pointer,
+                        llvm::ConstantInt::get(
+                            i32, operation.signal),
+                        logic9_word_slot});
+                store_register(
+                    builder,
+                    registers,
+                    operation.destination,
+                    load_logic9_word(logic9_word_slot, width));
+                branch_to_next();
+                return;
+              }
+              builder.CreateStore(
+                  constant_i64(context, 0), read_bval_slot);
+              auto* aval = builder.CreateCall(
+                  signal_driving_value_type,
+                  signal_driving_value_callback,
+                  {
+                      context_pointer,
+                      llvm::ConstantInt::get(i32, operation.signal),
+                      read_bval_slot},
+                  "signal.driving_value.aval");
+              auto* bval = builder.CreateLoad(
+                  i64, read_bval_slot, "signal.driving_value.bval");
+              auto* mask = constant_i64(context, width_mask(width));
+              store_register(
+                  builder, registers, operation.destination,
+                  EncodedValue{
+                      builder.CreateAnd(aval, mask),
+                      builder.CreateAnd(bval, mask),
+                      width});
+              branch_to_next();
 }
 
 

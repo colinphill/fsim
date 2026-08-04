@@ -69,6 +69,10 @@ template <std::size_t SignalCount>
       fsim::runtime::simir::SignalId, SignalCount> signals{};
   for (std::size_t index = 0; index < signal_paths.size(); ++index) {
     const auto signal = project.design.find_signal(signal_paths[index]);
+    if (!signal) {
+      std::cerr << "missing expression-test signal: "
+                << signal_paths[index] << '\n';
+    }
     assert(signal);
     signals[index] = *signal;
   }
@@ -764,21 +768,38 @@ void test_vhdl_falling_edge(
       fsim::app::build_project(config, diagnostics);
   auto compiled_project =
       fsim::app::build_project(config, diagnostics);
-  if (!reference_project || !compiled_project) {
+  auto warm_project =
+      fsim::app::build_project(config, diagnostics);
+  if (!reference_project || !compiled_project || !warm_project) {
     print_diagnostics(diagnostics);
   }
   assert(reference_project);
   assert(compiled_project);
+  assert(warm_project);
 
-  const std::array<std::string, 8> signal_paths{
+  const std::array<std::string, 22> signal_paths{
       "falling_edge_app.hit",
       "falling_edge_app.legacy_hit",
       "falling_edge_app.falling_previous",
       "falling_edge_app.elapsed",
+      "falling_edge_app.active_elapsed",
       "falling_edge_app.stable_during_event",
       "falling_edge_app.stable_after_event",
       "falling_edge_app.redundant_active",
-      "falling_edge_app.redundant_event"};
+      "falling_edge_app.redundant_event",
+      "falling_edge_app.driving_seen",
+      "falling_edge_app.driving_value_seen",
+      "falling_edge_app.driving_vector_seen",
+      "falling_edge_app.foreign_driving",
+      "falling_edge_app.stable_window_early",
+      "falling_edge_app.quiet_window_early",
+      "falling_edge_app.delayed_sample",
+      "falling_edge_app.redundant_transaction",
+      "falling_edge_app.single_transaction",
+      "falling_edge_app.stable_window_late",
+      "falling_edge_app.quiet_window_late",
+      "falling_edge_app.transaction_sensitive",
+      "falling_edge_app.transaction_waited"};
   const auto reference = run(
       std::move(*reference_project),
       fsim::app::SimulationEngine::interpreter,
@@ -787,12 +808,18 @@ void test_vhdl_falling_edge(
       std::move(*compiled_project),
       fsim::app::SimulationEngine::compiled,
       signal_paths);
+  const auto warm = run(
+      std::move(*warm_project),
+      fsim::app::SimulationEngine::compiled,
+      signal_paths);
 
   assert(reference.result.status == fsim::runtime::RunStatus::completed);
   assert(reference.result.status == compiled.result.status);
   assert(reference.result.time == compiled.result.time);
   assert(reference.result.delta == compiled.result.delta);
   assert(reference.values == compiled.values);
+  assert(warm.result.status == compiled.result.status);
+  assert(warm.values == compiled.values);
   assert((
       compiled.values
       == std::vector<std::string>{
@@ -800,13 +827,29 @@ void test_vhdl_falling_edge(
           "1",
           "1",
           "0000000000000000000000000000000000000000000000000000000000000001",
+          "0000000000000000000000000000000000000000000000000000000000000001",
           "1",
           "1",
           "1",
-          "0"}));
+          "0",
+          "1",
+          "1",
+          "10ZX",
+          "0",
+          "0",
+          "0",
+          "1",
+          "0",
+          "1",
+          "1",
+          "1",
+          "0",
+          "1"}));
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 4);
+  assert(compiled.compiled_processes == 12);
   assert(compiled.compiled_modules == 1);
+  assert(warm.native_cache.hits == 1);
+  assert(warm.native_cache.misses == 0);
 #else
   assert(compiled.compiled_processes == 0);
   assert(compiled.compiled_modules == 0);
@@ -1382,20 +1425,53 @@ architecture rtl of falling_edge_app is
   signal legacy_hit : std_logic;
   signal falling_previous : std_logic;
   signal elapsed : signed(63 downto 0);
+  signal active_elapsed : signed(63 downto 0);
   signal stable_during_event : boolean;
   signal stable_after_event : boolean;
   signal redundant : std_logic;
   signal redundant_active : boolean;
   signal redundant_event : boolean;
+  signal driven : std_logic;
+  signal driving_seen : boolean;
+  signal driving_value_seen : std_logic;
+  signal driven_vector : std_logic_vector(3 downto 0);
+  signal driving_vector_seen : std_logic_vector(3 downto 0);
+  signal foreign_driving : boolean;
+  signal single : std_logic;
+  signal stable_window_early : boolean;
+  signal quiet_window_early : boolean;
+  signal delayed_sample : std_logic;
+  signal redundant_transaction : boolean;
+  signal single_transaction : boolean;
+  signal stable_window_late : boolean;
+  signal quiet_window_late : boolean;
+  signal transaction_sensitive : boolean;
+  signal transaction_waited : boolean;
 begin
   stimulus: process
   begin
     clk <= '1';
     redundant <= '0';
+    driven <= '1';
+    driven_vector <= "10ZX";
+    single <= '1';
     wait for 1 ns;
+    driving_seen <= driven'driving;
+    driving_value_seen <= driven'driving_value;
+    driving_vector_seen <= driven_vector'driving_value;
     clk <= '0';
     redundant <= '0';
+    wait for 0 ns;
+    redundant <= '0';
+    wait for 0 ns;
+    redundant <= '0';
     wait for 1 ns;
+    wait;
+  end process;
+
+  resolved_driver: process
+  begin
+    driven <= '0';
     wait;
   end process;
 
@@ -1429,10 +1505,34 @@ begin
     end if;
   end process;
 
+  transaction_capture: process(redundant'transaction)
+  begin
+    transaction_sensitive <= redundant'transaction;
+  end process;
+
+  transaction_wait: process
+  begin
+    wait on single'transaction;
+    transaction_waited <= true;
+    wait;
+  end process;
+
   observe_elapsed: process
   begin
     wait for 2 ns;
     elapsed <= clk'last_event;
+    active_elapsed <= redundant'last_active;
+    foreign_driving <= driven'driving;
+    wait for 0 ns;
+    stable_window_early <= clk'stable(2 ns);
+    quiet_window_early <= redundant'quiet(2 ns);
+    delayed_sample <= clk'delayed(1 ns);
+    redundant_transaction <= redundant'transaction;
+    single_transaction <= single'transaction;
+    wait for 2 ns;
+    wait for 0 ns;
+    stable_window_late <= clk'stable(2 ns);
+    quiet_window_late <= redundant'quiet(2 ns);
     stable_after_event <= clk'stable;
     wait;
   end process;

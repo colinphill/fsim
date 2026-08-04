@@ -317,14 +317,97 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
         }
         if (expression.kind == ExpressionKind::Call
             && language_ == frontend::Language::Vhdl2008
-            && expression.text == "'stable") {
+            && expression.text == "'last_active") {
             if (expression.operands.size() != 1
                 || expression.operands.front().kind
                     != ExpressionKind::Identifier) {
                 report(
+                    "FSIM-ELAB-VHATTR-001",
+                    "'last_active requires one signal name and no duration",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto signal =
+                signals_.find(expression.operands.front().text);
+            if (signal == signals_.end()) {
+                report(
+                    "FSIM-ELAB-VHATTR-001",
+                    "'last_active object is not a visible signal",
+                    expression.operands.front().span);
+                return std::nullopt;
+            }
+            const auto destination = allocate_register(
+                64, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                SignalLastActive{destination, signal->second});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008
+            && expression.text == "'driving") {
+            if (expression.operands.size() != 1
+                || expression.operands.front().kind
+                    != ExpressionKind::Identifier) {
+                report(
+                    "FSIM-ELAB-VHATTR-002",
+                    "'driving requires one signal name and no argument",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto signal =
+                signals_.find(expression.operands.front().text);
+            if (signal == signals_.end()) {
+                report(
+                    "FSIM-ELAB-VHATTR-002",
+                    "'driving object is not a visible signal",
+                    expression.operands.front().span);
+                return std::nullopt;
+            }
+            const auto destination = allocate_register(
+                1, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(
+                SignalDriving{destination, signal->second});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008
+            && expression.text == "'driving_value") {
+            if (expression.operands.size() != 1
+                || expression.operands.front().kind
+                    != ExpressionKind::Identifier) {
+                report(
+                    "FSIM-ELAB-VHATTR-003",
+                    "'driving_value requires one signal name and no argument",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto signal =
+                signals_.find(expression.operands.front().text);
+            if (signal == signals_.end()) {
+                report(
+                    "FSIM-ELAB-VHATTR-003",
+                    "'driving_value object is not a visible signal",
+                    expression.operands.front().span);
+                return std::nullopt;
+            }
+            const auto& info = design_.signal_info_[signal->second];
+            const auto destination =
+                allocate_register(info.width, info.source_domain);
+            process_.operations.emplace_back(
+                SignalDrivingValue{destination, signal->second});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008
+            && expression.text == "'stable") {
+            if ((expression.operands.size() != 1
+                 && expression.operands.size() != 2)
+                || expression.operands.front().kind
+                    != ExpressionKind::Identifier) {
+                report(
                     "FSIM-ELAB-097",
-                    "bounded 'stable supports one signal name and its "
-                    "default zero duration",
+                    "'stable requires one signal name and at most one "
+                    "static nonnegative duration",
                     expression.span);
                 return std::nullopt;
             }
@@ -337,6 +420,33 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
                     expression.operands.front().span);
                 return std::nullopt;
             }
+            runtime::SimulationTick duration{};
+            if (expression.operands.size() == 2) {
+                std::string error;
+                const auto value = evaluate_constant_expression(
+                    expression.operands[1], {}, error);
+                if (!value || *value < 0) {
+                    report(
+                        "FSIM-ELAB-VHATTR-004",
+                        "'stable duration must be a static nonnegative "
+                        "time value in project ticks",
+                        expression.operands[1].span);
+                    return std::nullopt;
+                }
+                duration = static_cast<runtime::SimulationTick>(*value);
+            }
+            if (duration != 0) {
+                const auto derived = vhdl_implicit_signal_attribute(
+                    signal->second, "stable", duration, expression.span);
+                if (!derived) {
+                    return std::nullopt;
+                }
+                const auto destination = allocate_register(
+                    1, frontend::ValueDomain::Boolean);
+                process_.operations.emplace_back(
+                    ReadSignal{destination, *derived});
+                return destination;
+            }
             const auto event = allocate_register(
                 1, frontend::ValueDomain::Boolean);
             process_.operations.emplace_back(
@@ -345,6 +455,66 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
                 1, frontend::ValueDomain::Boolean);
             process_.operations.emplace_back(
                 UnaryNot{destination, event});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008
+            && expression.text == "'quiet") {
+            if ((expression.operands.size() != 1
+                 && expression.operands.size() != 2)
+                || expression.operands.front().kind
+                    != ExpressionKind::Identifier) {
+                report(
+                    "FSIM-ELAB-VHATTR-005",
+                    "'quiet requires one signal name and at most one "
+                    "static nonnegative duration",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto signal =
+                signals_.find(expression.operands.front().text);
+            if (signal == signals_.end()) {
+                report(
+                    "FSIM-ELAB-VHATTR-005",
+                    "'quiet object is not a visible signal",
+                    expression.operands.front().span);
+                return std::nullopt;
+            }
+            runtime::SimulationTick duration{};
+            if (expression.operands.size() == 2) {
+                std::string error;
+                const auto value = evaluate_constant_expression(
+                    expression.operands[1], {}, error);
+                if (!value || *value < 0) {
+                    report(
+                        "FSIM-ELAB-VHATTR-005",
+                        "'quiet duration must be a static nonnegative time "
+                        "value in project ticks",
+                        expression.operands[1].span);
+                    return std::nullopt;
+                }
+                duration = static_cast<runtime::SimulationTick>(*value);
+            }
+            if (duration != 0) {
+                const auto derived = vhdl_implicit_signal_attribute(
+                    signal->second, "quiet", duration, expression.span);
+                if (!derived) {
+                    return std::nullopt;
+                }
+                const auto destination = allocate_register(
+                    1, frontend::ValueDomain::Boolean);
+                process_.operations.emplace_back(
+                    ReadSignal{destination, *derived});
+                return destination;
+            }
+            const auto active = allocate_register(
+                1, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(
+                SignalActive{active, signal->second});
+            const auto destination = allocate_register(
+                1, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(
+                UnaryNot{destination, active});
             return destination;
         }
         if (expression.kind == ExpressionKind::Call
@@ -372,6 +542,88 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
                 1, frontend::ValueDomain::Boolean);
             process_.operations.emplace_back(
                 SignalActive{destination, signal->second});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008
+            && expression.text == "'transaction") {
+            if (expression.operands.size() != 1
+                || expression.operands.front().kind
+                    != ExpressionKind::Identifier) {
+                report(
+                    "FSIM-ELAB-VHATTR-006",
+                    "'transaction requires one signal name and no argument",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto signal =
+                signals_.find(expression.operands.front().text);
+            if (signal == signals_.end()) {
+                report(
+                    "FSIM-ELAB-VHATTR-006",
+                    "'transaction object is not a visible signal",
+                    expression.operands.front().span);
+                return std::nullopt;
+            }
+            const auto derived = vhdl_implicit_signal_attribute(
+                signal->second, "transaction", 0, expression.span);
+            if (!derived) {
+                return std::nullopt;
+            }
+            const auto destination = allocate_register(
+                1, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(
+                ReadSignal{destination, *derived});
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
+            && language_ == frontend::Language::Vhdl2008
+            && expression.text == "'delayed") {
+            if ((expression.operands.size() != 1
+                 && expression.operands.size() != 2)
+                || expression.operands.front().kind
+                    != ExpressionKind::Identifier) {
+                report(
+                    "FSIM-ELAB-VHATTR-007",
+                    "'delayed requires one signal name and at most one "
+                    "static nonnegative duration",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto signal =
+                signals_.find(expression.operands.front().text);
+            if (signal == signals_.end()) {
+                report(
+                    "FSIM-ELAB-VHATTR-007",
+                    "'delayed object is not a visible signal",
+                    expression.operands.front().span);
+                return std::nullopt;
+            }
+            runtime::SimulationTick duration{};
+            if (expression.operands.size() == 2) {
+                std::string error;
+                const auto value = evaluate_constant_expression(
+                    expression.operands[1], {}, error);
+                if (!value || *value < 0) {
+                    report(
+                        "FSIM-ELAB-VHATTR-007",
+                        "'delayed duration must be a static nonnegative time "
+                        "value in project ticks",
+                        expression.operands[1].span);
+                    return std::nullopt;
+                }
+                duration = static_cast<runtime::SimulationTick>(*value);
+            }
+            const auto derived = vhdl_implicit_signal_attribute(
+                signal->second, "delayed", duration, expression.span);
+            if (!derived) {
+                return std::nullopt;
+            }
+            const auto& info = design_.signal_info_[*derived];
+            const auto destination =
+                allocate_register(info.width, info.source_domain);
+            process_.operations.emplace_back(
+                ReadSignal{destination, *derived});
             return destination;
         }
         if (expression.kind == ExpressionKind::Call

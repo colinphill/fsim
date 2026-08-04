@@ -7,10 +7,11 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
-- Current unit: Batch 138, exactly 20 changes, complete; this checkpoint is its
-  single commit/push boundary. The exact incremental SystemC
-  compilation/linking contract and evidence are recorded in
-  `implementation_plan_v2.md`. Batch 137 was committed and pushed as `461ffae`.
+- Current unit: Batch 139, exactly 20 changes, complete. Its authoritative
+  timing/driver-attribute contract, per-change status, and gate evidence are
+  recorded in `implementation_plan_v2.md`. Batch 138 was committed and pushed
+  once as `83dd339`; Batch 139 was accumulated from that clean synchronized
+  baseline and committed and pushed once at closeout.
 - Completed work: Batch 133 implements parent-library inference for HDL-to-HDL,
   HDL-to-SystemC, and SystemC-proxy-to-HDL boundaries, including resolver-only
   bindings, deterministic ambiguity, multiple logical-library SystemC
@@ -259,7 +260,7 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   or CI monitoring ran because Batch 137 is not a scheduled boundary.
 - Build every target with at least eight workers. Changes 1-19 accumulate in
   one worktree and Change 20 owns full Debug/Release gates, documentation, one
-  commit, and one push. Do not run sanitizers or monitor CI in Batch 138;
+  commit, and one push. Do not run sanitizers or monitor CI in Batch 139;
   sanitizers remain reserved for Batch 140.
 
 - Batch 138 starts from clean pushed commit `31b983d`. Its 20-change contract
@@ -291,3 +292,50 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   diagnostics, 463 bounded sources, 553 SPDX-owned artifacts, 197 test/control
   files, 1,084 execute rows, 4,336 evidence cells, 334 evidence paths, and 97
   runtime owners. No sanitizer or CI monitoring ran.
+
+- Batch 139 starts from clean pushed commit `83dd339`. It closes the VHDL
+  signal timing and driver attribute foundation needed by later VITAL work:
+  `'last_active`, `'driving`, `'driving_value`, static-duration `'stable` and
+  `'quiet`, and the implicit `'transaction` and `'delayed` signals. The exact
+  completed 20-change contract is in `implementation_plan_v2.md`. Changes 1-19
+  remained one accumulated worktree; Change 20 alone owned the full exact-LLVM
+  Debug/Release gates, documentation closeout, commit, and push.
+  Batch 139 runs neither sanitizers nor GitHub CI monitoring.
+  Changes 2-13 and 15 are complete: the parser retains all remaining timing and
+  driver attribute designators; `'last_active` reads the kernel's independent
+  redundant-transaction-aware timestamp; and `'driving`/`'driving_value` use
+  stable process driver regions plus exact two-, four-, and nine-state driver
+  contributions. Change 15 is complete for these direct queries through an
+  append-only ABI tail at offsets 512-536 and LLVM O0/O2 lowering. Existing
+  ABI offsets remain unchanged. Exact-LLVM Debug focused frontend,
+  elaboration, C-ABI, LLVM, expression application, and design-artifact tests
+  pass after eight-worker builds. Static-duration `'stable` and `'quiet`, plus
+  typed `'delayed` and toggling `'transaction`, are interned hierarchy-local
+  implicit signals driven by scheduler-visible support processes. Redundant
+  transactions use transaction sensitivity, delayed values use transport
+  projection, and support processes loop after each sensitivity wake. Ordinary
+  expressions, VHDL process sensitivity attributes, and `wait on` attributes
+  now select the derived signal rather than the prefix signal. The focused
+  exact-LLVM Debug frontend and expression application tests pass with matching
+  interpreter/compiled values across early/late timing windows and redundant
+  transaction cases. Changes 14 and 16-19 are now complete. The differential
+  adds packed nine-state driver values, a resolved multi-driver prefix,
+  several redundant transactions at one timestamp, process and wait
+  sensitivities, and cold/warm native-cache reuse. The standalone
+  `.fsimdesign` phase test restores a hierarchy-local implicit `'stable(1)`
+  signal in both engines, reads it through the debugger, observes callbacks,
+  and verifies its deterministic VCD name. Negative elaboration covers
+  invalid/nonstatic/negative durations, transaction arity, and missing
+  `'driving_value` ownership through cataloged `FSIM-ELAB-VHATTR-003` through
+  `008` diagnostics. Architecture, language-support/VITAL dependency notes,
+  feature matrix, test inventory, and the public README are synchronized.
+  Source and diagnostic catalog gates pass after splitting signal-query
+  declarations, runtime helpers, native callbacks, and frontend fixtures along
+  existing structural boundaries. Change 20 is complete: exact-LLVM Debug
+  passed 110/110 tests in 134.43 seconds and Release passed 110/110 in 107.71
+  seconds, both after eight-worker builds. Source, diagnostic-catalog,
+  inventory, installed-public-contract, and release gates pass. The reviewed
+  inventory is 1,667 diagnostics, 468 bounded sources, 558 SPDX-owned
+  artifacts, 198 test/control files, 1,092 execute rows, 4,368 evidence cells,
+  335 evidence paths, and 97 runtime owners. No sanitizer or CI monitoring ran
+  because Batch 139 is not a scheduled boundary.

@@ -39,6 +39,7 @@ add_executable(
   frontend/frontend_sv_conformance_tests.cpp
   frontend/frontend_vhdl_type_tests.cpp
   frontend/frontend_vhdl_statement_tests.cpp
+  frontend/frontend_vhdl_attribute_tests.cpp
   frontend/frontend_vhdl_time_file_tests.cpp
   frontend/frontend_declaration_tests.cpp
   frontend/frontend_interface_tests.cpp

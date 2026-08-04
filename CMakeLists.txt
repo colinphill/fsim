@@ -466,6 +466,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_vhdl_fixed.cpp
       src/elaboration/lowerer_vhdl_float.cpp
       src/elaboration/lowerer_vhdl_physical.cpp
+      src/elaboration/lowerer_vhdl_signal_attributes.cpp
       src/elaboration/lowerer_vhdl_protected.cpp
       src/elaboration/lowerer_control.cpp
       src/elaboration/lowerer_expression.cpp
@@ -724,6 +725,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_design_artifact_codec.cpp
       src/app/application_executor_frame.cpp
       src/app/application_executors.cpp
+      src/app/application_executor_signal_attributes.cpp
       src/app/application_executor_services.cpp
       src/app/application_library_export.cpp
       src/app/application_library_import.cpp

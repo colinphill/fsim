@@ -752,6 +752,15 @@ void Interpreter::Impl::publish(SignalId signal_id, PackedLogic4 value)  {
     }
     signal_transactions[signal_id] =
         std::pair{scheduler.now(), scheduler.delta() + 1};
+    for (const auto& sensitivity : static_fanout[signal_id]) {
+      if (sensitivity.edge != EdgeKind::transaction) {
+        continue;
+      }
+      auto& process = get_process(sensitivity.process);
+      if (process.waiting_on_static) {
+        queue_next_delta(sensitivity.process);
+      }
+    }
     if (signal.initial_value == value) {
       return;
     }
@@ -769,6 +778,9 @@ void Interpreter::Impl::publish(SignalId signal_id, PackedLogic4 value)  {
     }
 
     for (const auto &sensitivity : static_fanout[signal_id]) {
+      if (sensitivity.edge == EdgeKind::transaction) {
+        continue;
+      }
       auto &process = get_process(sensitivity.process);
       if (!process.waiting_on_static) {
         continue;

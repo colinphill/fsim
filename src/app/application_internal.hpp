@@ -548,6 +548,24 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       void* context,
       const std::uint32_t signal) noexcept;
 
+  static std::uint64_t signal_last_active(
+      void* context,
+      const std::uint32_t signal) noexcept;
+
+  static std::uint32_t signal_driving(
+      void* context,
+      const std::uint32_t signal) noexcept;
+
+  static std::uint64_t signal_driving_value(
+      void* context,
+      const std::uint32_t signal,
+      std::uint64_t* bval) noexcept;
+
+  static void signal_driving_value_logic9(
+      void* context,
+      const std::uint32_t signal,
+      fsim_jit_logic9_word_v1* result) noexcept;
+
   static void write_output(
       void* context,
       const std::uint32_t,

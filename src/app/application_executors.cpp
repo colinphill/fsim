@@ -40,6 +40,10 @@ namespace fsim::app::application_detail {
     runtime.signal_last_value = signal_last_value;
     runtime.signal_last_event = signal_last_event;
     runtime.signal_active = signal_active;
+    runtime.signal_last_active = signal_last_active;
+    runtime.signal_driving = signal_driving;
+    runtime.signal_driving_value = signal_driving_value;
+    runtime.signal_driving_value_logic9 = signal_driving_value_logic9;
     runtime.write_output = write_output;
     runtime.schedule_output = schedule_output;
     runtime.write_report = write_report;

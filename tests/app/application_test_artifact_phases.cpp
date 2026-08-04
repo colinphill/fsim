@@ -94,6 +94,8 @@ entity phase_counter is
 end entity;
 
 architecture rtl of phase_counter is
+  signal attribute_source : std_logic;
+  signal stable_probe : boolean;
 begin
   process (clk)
   begin
@@ -104,6 +106,20 @@ begin
         q <= q + step;
       end if;
     end if;
+  end process;
+  attribute_stimulus: process
+  begin
+    attribute_source <= '0';
+    wait for 1 ns;
+    attribute_source <= '1';
+    wait;
+  end process;
+  attribute_probe: process
+  begin
+    wait for 3 ns;
+    wait for 0 ns;
+    stable_probe <= attribute_source'stable(1 ns);
+    wait;
   end process;
 end architecture;
 
@@ -229,7 +245,9 @@ end architecture;
     app::Simulation simulation{std::move(*built), 1000, engine};
     const auto counter = simulation.find_signal("main.counter_q");
     const auto watch = simulation.find_signal("observer.watched");
-    assert(counter && watch);
+    const auto stable_probe =
+        simulation.find_signal("main.counter.stable_probe");
+    assert(counter && watch && stable_probe);
     std::size_t callbacks{};
     simulation.set_signal_change_hook(
         [&](runtime::simir::SignalId, const runtime::PackedLogic4&,
@@ -238,6 +256,15 @@ end architecture;
     assert(result.status == runtime::RunStatus::stopped);
     assert(result.time == 6);
     assert(callbacks != 0);
+    assert(simulation.read_signal(*stable_probe).to_msb_string() == "1");
+    std::ostringstream debugger_output;
+    std::ostringstream debugger_error;
+    app::DebuggerControl debugger{
+        simulation, debugger_output, debugger_error};
+    debugger.execute({
+        "show", "main.counter.attribute_source'stable(1)"});
+    assert(debugger_error.str().empty());
+    assert(debugger_output.str().find("1") != std::string::npos);
     return std::pair{
         simulation.read_signal(*counter).to_msb_string(),
         simulation.read_signal(*watch).to_msb_string()};
@@ -266,6 +293,10 @@ end architecture;
   }();
   assert(trace_bytes.find("main") != std::string::npos);
   assert(trace_bytes.find("observer") != std::string::npos);
+  assert(trace_bytes.find("stable_probe") != std::string::npos);
+  assert(
+      trace_bytes.find("attribute_source'stable(1)")
+      != std::string::npos);
 
   const auto systemc_phase_source = directory / "artifact_phase.cpp";
   const auto systemc_phase_object = directory / "artifact-systemc.fsimobj";

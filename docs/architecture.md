@@ -1360,6 +1360,12 @@ none copies scheduler-owned state into generated code. CMake requires
 the exact supported LLVM package when `FSIM_LLVM_MODE=ON`; the checked-in Linux
 LLVM job builds and runs the adapter suite against 22.1.8. A separate C11 test
 verifies the offsets, extended size, callback handoff, and genuine C ABI.
+The Batch 139 append-only tail adds `signal_last_active`, `signal_driving`,
+`signal_driving_value`, and `signal_driving_value_logic9` at offsets 512 through
+536, for a 544-byte table. Transaction-sensitive support processes drive
+interned `'stable(T)`, `'quiet(T)`, `'transaction`, and `'delayed(T)` signals
+through ordinary projected writes; their scheduler state therefore remains in
+the serialized common signal/process graph rather than in generated code.
 `WAIT_ON`, `WAIT_SENSITIVITY`, `DEBUG_POINT`, and `WAIT_FOREVER` are append-only
 resume-status values 6 through 9; values 0 through 5, the v1 result ABI
 version, and the 24-byte result layout are unchanged. The existing instruction

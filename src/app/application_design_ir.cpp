@@ -70,6 +70,8 @@ namespace di = semantic::design;
       return di::EdgeKind::positive;
     case runtime::simir::EdgeKind::negedge:
       return di::EdgeKind::negative;
+    case runtime::simir::EdgeKind::transaction:
+      return di::EdgeKind::transaction;
   }
   return di::EdgeKind::any;
 }

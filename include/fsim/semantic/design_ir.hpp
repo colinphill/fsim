@@ -51,7 +51,7 @@ enum class Direction : std::uint8_t {
     buffer,
 };
 
-enum class EdgeKind : std::uint8_t { any, positive, negative };
+enum class EdgeKind : std::uint8_t { any, positive, negative, transaction };
 
 enum class TransactionKind : std::uint8_t {
     procedural,

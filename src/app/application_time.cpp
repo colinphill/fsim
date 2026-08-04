@@ -394,6 +394,55 @@ bool normalize_delays(
       expression.operands.clear();
       return true;
     };
+    const auto normalize_expression = [&](frontend::Expression& expression) {
+      if (expression.valid()) {
+        (void)normalize_time_literals(expression);
+      }
+    };
+    std::function<void(std::vector<frontend::Statement>&)>
+        normalize_statement_expressions;
+    normalize_statement_expressions =
+        [&](std::vector<frontend::Statement>& statements) {
+          for (auto& statement : statements) {
+            normalize_expression(statement.target);
+            normalize_expression(statement.value);
+            normalize_expression(statement.condition);
+            normalize_expression(statement.loop_initial);
+            normalize_expression(statement.loop_limit);
+            normalize_expression(statement.vhdl_guard);
+            normalize_expression(statement.vhdl_report_expression);
+            normalize_expression(statement.vhdl_severity_expression);
+            normalize_expression(statement.file_handle);
+            for (auto& argument : statement.task_arguments) {
+              normalize_expression(argument);
+            }
+            for (auto& association : statement.procedure_arguments) {
+              normalize_expression(association.value);
+            }
+            for (auto& waveform : statement.vhdl_waveform) {
+              normalize_expression(waveform.value);
+            }
+            for (auto& sensitivity : statement.sensitivities) {
+              normalize_expression(sensitivity.expression);
+            }
+            for (auto& output : statement.output_values) {
+              normalize_expression(output.value);
+            }
+            for (auto& declaration : statement.declarations) {
+              if (declaration.initializer) {
+                normalize_expression(*declaration.initializer);
+              }
+            }
+            normalize_statement_expressions(statement.statements);
+            normalize_statement_expressions(statement.else_statements);
+            for (auto& alternative : statement.case_alternatives) {
+              for (auto& choice : alternative.choices) {
+                normalize_expression(choice);
+              }
+              normalize_statement_expressions(alternative.statements);
+            }
+          }
+        };
     const auto normalize_constants = [&](auto& constants) {
       for (auto& constant : constants) {
         if (constant.default_value.valid()) {
@@ -409,6 +458,7 @@ bool normalize_delays(
           normalize_procedure;
       normalize_function = [&](frontend::FunctionDeclaration& function) {
         normalize_constants(function.constants);
+        normalize_statement_expressions(function.statements);
         for (auto& argument : function.arguments) {
           if (argument.default_value) {
             (void)normalize_time_literals(*argument.default_value);
@@ -424,6 +474,7 @@ bool normalize_delays(
       normalize_procedure =
           [&](frontend::ProcedureDeclaration& procedure) {
         normalize_constants(procedure.constants);
+        normalize_statement_expressions(procedure.statements);
         for (auto& argument : procedure.arguments) {
           if (argument.default_value) {
             (void)normalize_time_literals(*argument.default_value);
@@ -438,6 +489,10 @@ bool normalize_delays(
       };
       for (auto& process : unit.processes) {
         normalize_constants(process.constants);
+        normalize_statement_expressions(process.statements);
+        for (auto& sensitivity : process.sensitivities) {
+          normalize_expression(sensitivity.expression);
+        }
         for (auto& function : process.functions) {
           normalize_function(function);
         }
@@ -457,11 +512,16 @@ bool normalize_delays(
       for (auto& procedure_template : unit.generic_procedure_templates) {
         normalize_procedure(procedure_template.procedure);
       }
+      normalize_statement_expressions(unit.concurrent_statements);
       const auto normalize_generate_body =
           [&](const auto& self, frontend::GenerateBody& body) -> void {
         normalize_constants(body.constants);
         for (auto& process : body.processes) {
           normalize_constants(process.constants);
+          normalize_statement_expressions(process.statements);
+          for (auto& sensitivity : process.sensitivities) {
+            normalize_expression(sensitivity.expression);
+          }
           for (auto& function : process.functions) {
             normalize_function(function);
           }
@@ -481,6 +541,7 @@ bool normalize_delays(
         for (auto& procedure_template : body.generic_procedure_templates) {
           normalize_procedure(procedure_template.procedure);
         }
+        normalize_statement_expressions(body.concurrent_statements);
         for (auto& region : body.generate_regions) {
           self(self, region.then_body);
           self(self, region.else_body);

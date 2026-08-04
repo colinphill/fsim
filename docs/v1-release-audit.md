@@ -9,7 +9,7 @@ remains the final Task 10 boundary.
 
 ## Matrix baseline
 
-The current matrix contains exactly 1,084 required rows. Every row is classified
+The current matrix contains exactly 1,092 required rows. Every row is classified
 `execute`, has nonempty positive parse, negative diagnostic, elaboration, and
 runtime evidence, and names evidence paths that exist in the checkout.
 
@@ -25,7 +25,7 @@ runtime evidence, and names evidence paths that exist in the checkout.
 | Common release contract | `V1-CM` | 10 | Tasks 5 through 9 |
 
 The Task 1 baseline matrix digest is
-`6182bc92b69fa9436f6fd4f4503f40ea0f5ab61f275123246da08a3430e9a507`.
+`e2f701ce10dd42811569b87485ed38b9b90e84aabe692b8f1cf8266f0134a6a5`.
 Changing any row requires an intentional audit update and the owning focused
 gate; the digest is evidence of review, not a substitute for semantic tests.
 Corrective Batch 131 re-reviewed the affected container rows after replacing
@@ -42,9 +42,9 @@ and advance the required-row count and matrix digest together.
 
 The composed local gates currently establish:
 
-- 1,659 production diagnostics are cataloged;
-- 463 authored C/C++ sources remain within the 2,000-line limit;
-- all 1,084 required matrix rows are executable with no explicit evidence gap;
+- 1,667 production diagnostics are cataloged;
+- 468 authored C/C++ sources remain within the 2,000-line limit;
+- all 1,092 required matrix rows are executable with no explicit evidence gap;
 - 105 independently authored conformance expectations in 28 fixtures are
   owned by 27 CTests;
 - 20 exact portability rows cover Debug/Release, interpreter/LLVM O0/O2,

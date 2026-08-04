@@ -548,6 +548,18 @@ typedef struct fsim_jit_runtime_v1 {
       uint32_t signal,
       uint32_t offset,
       uint32_t width);
+
+  /* Append-only elapsed ticks since the latest committed transaction. */
+  uint64_t (*signal_last_active)(void* context, uint32_t signal);
+
+  /* Append-only current-process driver queries for VHDL signal attributes. */
+  uint32_t (*signal_driving)(void* context, uint32_t signal);
+  uint64_t (*signal_driving_value)(
+      void* context, uint32_t signal, uint64_t* bval);
+  void (*signal_driving_value_logic9)(
+      void* context,
+      uint32_t signal,
+      fsim_jit_logic9_word_v1* value);
 } fsim_jit_runtime_v1;
 
 /*

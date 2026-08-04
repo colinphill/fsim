@@ -241,10 +241,13 @@ The current tree contains:
   before the latest value-changing event;
 - VHDL signal `'last_event` as elapsed global-resolution ticks, with
   `TIME'HIGH` before the first event;
-- zero-duration VHDL signal `'stable`, tested both during and after an event
-  delta;
+- VHDL signal `'last_active` as elapsed time since the latest transaction;
+- zero-duration and static-duration VHDL signal `'stable`/`'quiet`, plus
+  interned typed `'transaction` and `'delayed` implicit signals in expressions,
+  process sensitivity lists, and waits;
 - VHDL signal `'active` with transaction semantics distinct from
   value-changing `'event`;
+- process-relative VHDL signal `'driving` and typed `'driving_value` queries;
 - bounded SystemVerilog conditional-expression lowering with exact
   four-state unknown-condition bit merging;
 - SystemVerilog procedural arithmetic/bitwise/shift compound assignments and

@@ -1672,12 +1672,20 @@ void adapt_vhdl_array_port_shapes(
                 index);
             specialization.processes.push_back(process.id);
             design_.processes_.push_back(std::move(process));
+            for (auto& generated : lowerer.take_generated_processes()) {
+                specialization.processes.push_back(generated.id);
+                design_.processes_.push_back(std::move(generated));
+            }
         }
         for (const auto& process : unit.processes) {
             auto lowered =
                 lowerer.lower_process(process, unit.language, path);
             specialization.processes.push_back(lowered.id);
             design_.processes_.push_back(std::move(lowered));
+            for (auto& generated : lowerer.take_generated_processes()) {
+                specialization.processes.push_back(generated.id);
+                design_.processes_.push_back(std::move(generated));
+            }
         }
         design_.specializations_.push_back(std::move(specialization));
 

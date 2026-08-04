@@ -896,11 +896,22 @@ attribute; its Boolean result is true only in the delta cycle containing that
 signal's committed effective-value change. The same signal may use
 `'last_value` to read its packed effective value immediately before the latest
 value-changing event. `'last_event` returns elapsed global-resolution ticks
-since that event, or `TIME'HIGH` if the signal has never changed. The
-zero-duration form of `'stable` is false in the signal's event delta and true
-otherwise; explicit duration arguments are not yet lowered. `'active` is true
-for any committed signal transaction in the current delta, including a
-same-value transaction for which `'event` remains false.
+since that event, or `TIME'HIGH` if the signal has never changed.
+`'last_active` applies the same elapsed-time contract to all transactions,
+including redundant assignments. The zero-duration form of `'stable` is false
+in the signal's event delta and true otherwise; a static nonnegative duration
+creates one hierarchy-local implicit Boolean signal that becomes false on an
+event and true after the exact quiet window. `'quiet(T)` uses the same model
+for every transaction. `'active` is true for any committed signal transaction
+in the current delta, including a same-value transaction for which `'event`
+remains false. `'transaction` is an interned implicit Boolean signal that
+toggles on every transaction, and `'delayed(T)` is an interned typed signal
+whose effective-value history is transported by the exact static duration.
+Implicit attributes are legal in ordinary expressions, process sensitivity
+lists, and wait sensitivities. Within a process, `'driving` reports whether
+that process owns a driver for the prefix and `'driving_value` reads its exact
+two-, four-, or nine-state contribution; using `'driving_value` without such a
+driver is diagnosed during elaboration.
 
 VHDL identifiers are canonicalized case-insensitively. Verilog and
 SystemVerilog identifiers remain case-sensitive. VHDL nine-state scalar and
@@ -1102,6 +1113,13 @@ qualified `numeric_bit` and `numeric_std` types remain independently two- and
 nine-state; fixed and floating default generic-package instances coexist with
 their transitive logic, numeric, math, and utility dependencies. No host VHDL
 package installation participates in analysis.
+
+The VITAL dependency baseline now includes transaction-aware
+`'last_active`/`'quiet`/`'transaction`, time-qualified `'stable`, typed
+`'delayed`, and per-driver `'driving`/`'driving_value`. This is not yet VITAL
+support: the reviewed VITAL packages, path-delay and timing-check procedures,
+pulse rejection semantics, wire delays, SDF annotation, and conformance
+fixtures remain in subsequent v2 batches.
 
 ## v1 target
 

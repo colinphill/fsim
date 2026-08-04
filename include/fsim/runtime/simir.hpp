@@ -35,34 +35,7 @@ struct LoadConstant {
   RegisterId destination{};
   PackedLogic4 value;
 };
-struct ReadSignal {
-  RegisterId destination{};
-  SignalId signal{};
-};
-
-/// True only during the delta in which the signal most recently changed.
-struct SignalEvent {
-  RegisterId destination{};
-  SignalId signal{};
-};
-
-/// The effective value immediately before the signal's most recent event.
-struct SignalLastValue {
-  RegisterId destination{};
-  SignalId signal{};
-};
-
-/// Elapsed ticks since the signal's latest event, or TIME'HIGH if none.
-struct SignalLastEvent {
-  RegisterId destination{};
-  SignalId signal{};
-};
-
-/// True during the delta following any committed signal transaction.
-struct SignalActive {
-  RegisterId destination{};
-  SignalId signal{};
-};
+#include "fsim/runtime/simir_signal_queries.hpp"
 
 struct CopyRegister {
   RegisterId destination{};
@@ -904,6 +877,7 @@ enum class EdgeKind : std::uint8_t {
   any,
   posedge,
   negedge,
+  transaction,
 };
 
 /// Suspend until a listed signal has its corresponding edge. An empty edge
@@ -1664,6 +1638,27 @@ public:
   /// effective value.
   [[nodiscard]] virtual bool signal_active(SignalId) const {
     return false;
+  }
+
+  /// Elapsed global-resolution ticks since the latest committed transaction,
+  /// or the maximum tick value if the signal has never been active.
+  [[nodiscard]] virtual SimulationTick signal_last_active(SignalId) const {
+    return std::numeric_limits<SimulationTick>::max();
+  }
+
+  [[nodiscard]] virtual bool signal_driving(SignalId) const {
+    return false;
+  }
+
+  [[nodiscard]] virtual Logic4Word signal_driving_value_word(SignalId) const {
+    throw std::logic_error{
+        "alternate process executor does not support signal driving-value reads"};
+  }
+  [[nodiscard]] virtual Logic9Word
+  signal_driving_value_logic9_word(SignalId) const {
+    throw std::logic_error{
+        "alternate process executor does not support exact signal "
+        "driving-value reads"};
   }
 
   /// Request one alternate-language primitive-channel update. `channel` is a

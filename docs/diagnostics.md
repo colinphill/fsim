@@ -1050,6 +1050,14 @@ are therefore excluded.
 | `FSIM-ELAB-096` | error | The VHDL `'last_event` attribute does not name one visible signal. |
 | `FSIM-ELAB-097` | error | The bounded zero-duration VHDL `'stable` attribute does not name one visible signal or supplies a duration. |
 | `FSIM-ELAB-098` | error | The VHDL `'active` attribute does not name one visible signal. |
+| `FSIM-ELAB-VHATTR-001` | error | The VHDL `'last_active` attribute does not name one visible signal or supplies an argument. |
+| `FSIM-ELAB-VHATTR-002` | error | The VHDL `'driving` attribute does not name one visible signal or supplies an argument. |
+| `FSIM-ELAB-VHATTR-003` | error | The VHDL `'driving_value` attribute does not name one visible signal or supplies an argument. |
+| `FSIM-ELAB-VHATTR-004` | error | A VHDL `'stable` implicit signal has an invalid prefix or a nonstatic or negative duration. |
+| `FSIM-ELAB-VHATTR-005` | error | A VHDL `'quiet` implicit signal has an invalid prefix or a nonstatic or negative duration. |
+| `FSIM-ELAB-VHATTR-006` | error | A VHDL `'transaction` implicit signal has an invalid prefix, supplies an argument, or is invalid in a wait sensitivity. |
+| `FSIM-ELAB-VHATTR-007` | error | A VHDL `'delayed` implicit signal has an invalid prefix or a nonstatic or negative duration. |
+| `FSIM-ELAB-VHATTR-008` | error | An implicit VHDL signal attribute would exceed the supported process-ID space. |
 | `FSIM-ELAB-099` | error | A named-event trigger does not contain a simple event name. |
 | `FSIM-ELAB-100` | error | A named-event trigger references an unknown event. |
 | `FSIM-ELAB-101` | error | A named-event trigger targets an object not declared as an event. |

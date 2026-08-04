@@ -464,6 +464,30 @@ extern "C" inline std::uint32_t signal_active(
   return 0;
 }
 
+extern "C" inline std::uint64_t signal_last_active(
+    void*, const std::uint32_t) {
+  return 0;
+}
+
+extern "C" inline std::uint32_t signal_driving(
+    void*, const std::uint32_t) {
+  return 1;
+}
+
+extern "C" inline std::uint64_t signal_driving_value(
+    void* opaque,
+    const std::uint32_t signal,
+    std::uint64_t* bval) {
+  return read_signal(opaque, signal, bval);
+}
+
+extern "C" inline void signal_driving_value_logic9(
+    void* opaque,
+    const std::uint32_t signal,
+    fsim_jit_logic9_word_v1* value) {
+  read_signal_logic9(opaque, signal, value);
+}
+
 extern "C" inline void write_output(
     void* opaque,
     const std::uint32_t process,
@@ -847,6 +871,10 @@ extern "C" inline std::uint32_t write_string_output(
   result.signal_last_value = &signal_last_value;
   result.signal_last_event = &signal_last_event;
   result.signal_active = &signal_active;
+  result.signal_last_active = &signal_last_active;
+  result.signal_driving = &signal_driving;
+  result.signal_driving_value = &signal_driving_value;
+  result.signal_driving_value_logic9 = &signal_driving_value_logic9;
   result.write_output = &write_output;
   result.schedule_output = &schedule_output;
   result.write_report = &write_report;

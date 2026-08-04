@@ -106,7 +106,12 @@ static_assert(offsetof(fsim_jit_runtime_v1, force_signal_slice) == 488);
 static_assert(
     offsetof(fsim_jit_runtime_v1, force_signal_slice_logic9) == 496);
 static_assert(offsetof(fsim_jit_runtime_v1, release_signal_slice) == 504);
-static_assert(sizeof(fsim_jit_runtime_v1) == 512);
+static_assert(offsetof(fsim_jit_runtime_v1, signal_last_active) == 512);
+static_assert(offsetof(fsim_jit_runtime_v1, signal_driving) == 520);
+static_assert(offsetof(fsim_jit_runtime_v1, signal_driving_value) == 528);
+static_assert(
+    offsetof(fsim_jit_runtime_v1, signal_driving_value_logic9) == 536);
+static_assert(sizeof(fsim_jit_runtime_v1) == 544);
 static_assert(sizeof(fsim_jit_projected_element_v1) == 24);
 static_assert(sizeof(fsim_jit_logic9_word_v1) == 32);
 static_assert(sizeof(fsim_jit_logic9_projected_element_v1) == 40);
@@ -340,6 +345,9 @@ struct LlvmJit::Impl {
     bool uses_signal_last_value{};
     bool uses_signal_last_event{};
     bool uses_signal_active{};
+    bool uses_signal_last_active{};
+    bool uses_signal_driving{};
+    bool uses_signal_driving_value{};
     bool uses_output{};
     bool uses_postponed_output{};
     bool uses_report{};
@@ -510,6 +518,9 @@ void LlvmJit::add_process_module(
         validated.uses_signal_last_value,
         validated.uses_signal_last_event,
         validated.uses_signal_active,
+        validated.uses_signal_last_active,
+        validated.uses_signal_driving,
+        validated.uses_signal_driving_value,
         validated.uses_output,
         validated.uses_postponed_output,
         validated.uses_report,
@@ -942,6 +953,39 @@ LlvmJit::resume(const JitProcessHandle process,
     if (runtime.signal_active == nullptr) {
       throw LlvmJitError(
           "JIT runtime ABI requires signal_active for this process");
+    }
+  }
+  if (entry.info.uses_signal_last_active) {
+    if (runtime.struct_size
+        < offsetof(fsim_jit_runtime_v1, signal_driving)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include signal_last_active");
+    }
+    if (runtime.signal_last_active == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires signal_last_active for this process");
+    }
+  }
+  if (entry.info.uses_signal_driving) {
+    if (runtime.struct_size
+        < offsetof(fsim_jit_runtime_v1, signal_driving_value)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include signal_driving");
+    }
+    if (runtime.signal_driving == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires signal_driving for this process");
+    }
+  }
+  if (entry.info.uses_signal_driving_value) {
+    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include signal_driving_value");
+    }
+    if (runtime.signal_driving_value == nullptr
+        || runtime.signal_driving_value_logic9 == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime requires signal driving-value callbacks for this process");
     }
   }
   if (entry.info.uses_output) {

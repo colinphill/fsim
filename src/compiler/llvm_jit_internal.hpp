@@ -41,6 +41,9 @@ struct ValidatedProcess {
   bool uses_signal_last_value{};
   bool uses_signal_last_event{};
   bool uses_signal_active{};
+  bool uses_signal_last_active{};
+  bool uses_signal_driving{};
+  bool uses_signal_driving_value{};
   bool uses_output{};
   bool uses_postponed_output{};
   bool uses_report{};

@@ -81,6 +81,9 @@ using runtime::simir::ShiftOperator;
 using runtime::simir::SignalActive;
 using runtime::simir::SignalEvent;
 using runtime::simir::SignalLastEvent;
+using runtime::simir::SignalLastActive;
+using runtime::simir::SignalDriving;
+using runtime::simir::SignalDrivingValue;
 using runtime::simir::SignalLastValue;
 using runtime::simir::Stop;
 using runtime::simir::TimeDisplay;
@@ -136,7 +139,7 @@ void lower_process(llvm::Module &module, const std::string &symbol,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer},
+       pointer, pointer, pointer, pointer, pointer, pointer, pointer},
       "fsim_jit_runtime_v1");
   auto *frame_type = llvm::StructType::create(
       context,
@@ -268,6 +271,36 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         builder.CreateStructGEP(
             runtime_type, runtime_argument, 16),
         "signal_active");
+  }
+  llvm::Value* signal_last_active_callback = nullptr;
+  if (validated.uses_signal_last_active) {
+    signal_last_active_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 66),
+        "signal_last_active");
+  }
+  llvm::Value* signal_driving_callback = nullptr;
+  if (validated.uses_signal_driving) {
+    signal_driving_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 67),
+        "signal_driving");
+  }
+  llvm::Value* signal_driving_value_callback = nullptr;
+  llvm::Value* signal_driving_value_logic9_callback = nullptr;
+  if (validated.uses_signal_driving_value) {
+    signal_driving_value_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 68),
+        "signal_driving_value");
+    signal_driving_value_logic9_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 69),
+        "signal_driving_value_logic9");
   }
   llvm::Value* output_callback = nullptr;
   if (validated.uses_output) {
@@ -502,6 +535,12 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       llvm::FunctionType::get(i64, {pointer, i32}, false);
   auto* signal_active_type =
       llvm::FunctionType::get(i32, {pointer, i32}, false);
+  auto* signal_last_active_type =
+      llvm::FunctionType::get(i64, {pointer, i32}, false);
+  auto* signal_driving_type =
+      llvm::FunctionType::get(i32, {pointer, i32}, false);
+  auto* signal_driving_value_type =
+      llvm::FunctionType::get(i64, {pointer, i32, pointer}, false);
   auto* output_type =
       llvm::FunctionType::get(
           llvm::Type::getVoidTy(context),
@@ -1136,6 +1175,10 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         signal_last_value_logic9_callback,
         signal_last_event_callback,
         signal_active_callback,
+        signal_last_active_callback,
+        signal_driving_callback,
+        signal_driving_value_callback,
+        signal_driving_value_logic9_callback,
         read_type,
         read_logic9_type,
         write_type,
@@ -1157,6 +1200,9 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         signal_last_value_type,
         signal_last_event_type,
         signal_active_type,
+        signal_last_active_type,
+        signal_driving_type,
+        signal_driving_value_type,
         projected_element_type,
         logic9_projected_element_type,
         read_bval_slot,
@@ -1222,6 +1268,15 @@ void lower_process(llvm::Module &module, const std::string &symbol,
           } else if constexpr (std::is_same_v<OperationType, SignalLastEvent>) {
             signal_lowerer.lower(operation);
           } else if constexpr (std::is_same_v<OperationType, SignalActive>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (
+              std::is_same_v<OperationType, SignalLastActive>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (
+              std::is_same_v<OperationType, SignalDriving>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (
+              std::is_same_v<OperationType, SignalDrivingValue>) {
             signal_lowerer.lower(operation);
           } else if constexpr (std::is_same_v<OperationType, CopyRegister>) {
             value_lowerer.lower(operation);

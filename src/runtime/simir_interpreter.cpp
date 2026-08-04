@@ -143,7 +143,8 @@ ProcessId Interpreter::add_process(Process process) {
     if (signal.signal >= impl_->signals.size()) {
       throw std::invalid_argument("process sensitivity references invalid signal");
     }
-    if (signal.edge != EdgeKind::any &&
+    if (signal.edge != EdgeKind::any
+        && signal.edge != EdgeKind::transaction &&
         impl_->signals[signal.signal].initial_value.width() != 1) {
       throw std::invalid_argument(
           "edge sensitivity currently requires a scalar signal");

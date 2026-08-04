@@ -106,6 +106,8 @@ bool Lowerer::report_unsupported_cross_root_reference(
         const frontend::Language language,
         const std::string_view hierarchy) {
         process_ = Process{};
+        generated_processes_.clear();
+        implicit_signal_dependencies_.clear();
         language_ = language;
         process_kind_ = source.kind;
         hierarchy_ = std::string{hierarchy};
@@ -148,6 +150,24 @@ bool Lowerer::report_unsupported_cross_root_reference(
                 continue;
             }
             if (sensitivity.expression.valid()) {
+                if (language == frontend::Language::Vhdl2008) {
+                    const auto dependency_start =
+                        implicit_signal_dependencies_.size();
+                    const auto width = infer_width(
+                        sensitivity.expression);
+                    if (width && *width != 0) {
+                        static_cast<void>(lower_expression(
+                            sensitivity.expression, *width));
+                    }
+                    for (auto index = dependency_start;
+                         index < implicit_signal_dependencies_.size();
+                         ++index) {
+                        process_.static_sensitivity.push_back({
+                            implicit_signal_dependencies_[index],
+                            runtime::simir::EdgeKind::any});
+                    }
+                    continue;
+                }
                 if (general_sensitivity != nullptr
                     || source.sensitivities.size() != 1) {
                     report(
@@ -171,13 +191,6 @@ bool Lowerer::report_unsupported_cross_root_reference(
                             {found->second,
                              runtime::simir::EdgeKind::any});
                     }
-                }
-                if (process_.static_sensitivity.empty()) {
-                    report(
-                        "FSIM-ELAB-SVEVENT-001",
-                        "packed process event expression has no readable "
-                        "signal dependencies",
-                        sensitivity.span);
                 }
                 continue;
             }
@@ -212,13 +225,14 @@ bool Lowerer::report_unsupported_cross_root_reference(
                          runtime::simir::EdgeKind::any});
                 }
             }
-            if (process_.static_sensitivity.empty()) {
-                report(
-                    "FSIM-ELAB-061",
-                    "wildcard process sensitivity has no readable signal "
-                    "dependencies",
-                    source.span);
-            }
+        }
+        if (general_sensitivity != nullptr
+            && process_.static_sensitivity.empty()) {
+            report(
+                "FSIM-ELAB-SVEVENT-001",
+                "packed process event expression has no readable signal "
+                "dependencies",
+                general_sensitivity->span);
         }
 
         const bool verilog_event_process =
@@ -307,6 +321,19 @@ bool Lowerer::report_unsupported_cross_root_reference(
         } else {
             lower_statements(source.statements);
         }
+        if (wildcard_sensitivity) {
+            for (const auto dependency : implicit_signal_dependencies_) {
+                process_.static_sensitivity.push_back(
+                    {dependency, runtime::simir::EdgeKind::any});
+            }
+            if (process_.static_sensitivity.empty()) {
+                report(
+                    "FSIM-ELAB-061",
+                    "wildcard process sensitivity has no readable signal "
+                    "dependencies",
+                    source.span);
+            }
+        }
         if (source.kind == ProcessKind::Initial
             || source.kind == ProcessKind::Final) {
             process_.operations.emplace_back(Halt{});
@@ -384,6 +411,7 @@ bool Lowerer::report_unsupported_cross_root_reference(
         }
         process_.driver_regions = collect_driver_regions(
             process_, register_widths_);
+        validate_vhdl_driver_attributes(source.span);
         next_register_ = 0;
         next_string_register_ = 0;
         next_container_register_ = 0;
@@ -1523,6 +1551,8 @@ bool Lowerer::report_unsupported_cross_root_reference(
             return;
         }
 
+        const auto dependency_start =
+            implicit_signal_dependencies_.size();
         const auto condition_operations_start =
             process_.operations.size();
         const auto condition = lower_condition(
@@ -1560,6 +1590,12 @@ bool Lowerer::report_unsupported_cross_root_reference(
                     found != signals_.end()) {
                     waited_signals.push_back(found->second);
                 }
+            }
+            for (auto index = dependency_start;
+                 index < implicit_signal_dependencies_.size();
+                 ++index) {
+                waited_signals.push_back(
+                    implicit_signal_dependencies_[index]);
             }
             std::ranges::sort(waited_signals);
             waited_signals.erase(

@@ -463,6 +463,76 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     test/control files, 1,084 execute rows, 4,336 evidence cells, 334 evidence
     paths, and 97 runtime owners.
 
+## Batch 139 - VHDL timing and driver attribute foundation - Complete
+
+1. **Complete.** Establish this exact 20-change Batch 139 plan and synchronized
+   restart status from clean pushed Batch 138 commit `83dd339` before
+   implementation begins.
+2. **Complete.** Extend the VHDL attribute parser and semantic model with
+   `'last_active`, `'driving`, `'driving_value`, `'quiet`, `'transaction`, and
+   `'delayed`, retaining the existing case-insensitive designator rules.
+3. **Complete.** Define immutable typed HIR and SimIR operations for signal
+   activity time, current-driver presence/value, and transaction toggles
+   without exposing scheduler-owned storage to generated code.
+4. **Complete.** Track each signal's latest transaction time independently of
+   its latest effective-value event time, including redundant assignments and
+   resolved multi-driver transactions.
+5. **Complete.** Track stable process-to-driver identity through hierarchy,
+   serialization, native-cache provenance, interpreter execution, and compiled
+   process callbacks.
+6. **Complete.** Implement scalar and packed-vector `'driving` in a process that
+   owns a driver, returning false outside a valid driving context with the
+   standard object and process legality checks.
+7. **Complete.** Implement typed scalar and packed-vector `'driving_value` for
+   the calling process's current driver contribution, including nine-state
+   resolved signals and a diagnostic when no driver exists.
+8. **Complete.** Implement `'last_active` as elapsed global-resolution time since
+   the most recent transaction, with `TIME'HIGH` before any transaction and
+   exact overflow behavior matching `'last_event`.
+9. **Complete.** Implement zero-duration and static time-qualified `'stable(T)`
+   as implicit Boolean signals that update in the correct delta and time
+   regions after value-changing events.
+10. **Complete.** Implement zero-duration and static time-qualified `'quiet(T)`
+    as implicit Boolean signals driven by transaction activity, including
+    redundant assignments that do not produce an event.
+11. **Complete.** Implement `'transaction` as an implicit Boolean signal that
+    toggles for every transaction affecting the prefix signal and can appear
+    in ordinary expressions, waits, and sensitivity lists.
+12. **Complete.** Implement `'delayed(T)` as an implicit signal preserving the
+    prefix type/domain and reproducing effective-value events after the exact
+    static delay, including the default zero duration.
+13. **Complete.** Intern identical implicit attributes per elaborated signal and
+    duration so repeated references share state, while distinct durations and
+    hierarchy instances remain independent.
+14. **Complete.** Integrate implicit attribute signals with delta scheduling,
+    multiple transactions at one timestamp, cancellation-free delayed history,
+    stop limits, callbacks, debugger reads, and deterministic VCD naming.
+15. **Complete.** Add append-only C/JIT runtime callbacks and LLVM O0/O2 lowering
+    for the new direct queries while preserving every existing v1 ABI offset
+    and validating only the callback tail each compiled process needs.
+16. **Complete.** Preserve the new operations, implicit signals, driver identity,
+    and timing state through `.fsimobj`, `.fsimdesign`, native-cache,
+    relocation, and standalone simulation round trips.
+17. **Complete.** Add frontend/elaboration negative coverage for invalid
+    prefixes, arguments, nonstatic or negative durations, unsupported types,
+    illegal driver contexts, and overflow, with cataloged diagnostics.
+18. **Complete.** Add interpreter/LLVM O0/O2 application differentials for
+    scalar/vector, two-state/nine-state, redundant transaction, resolved
+    multi-driver, hierarchy, sensitivity, debugger, callback, VCD, cold/warm
+    cache, and standalone-artifact behavior.
+19. **Complete.** Update architecture, language support, diagnostics, feature
+    matrix, inventories, VITAL dependency notes, and this resume evidence with
+    the exact bounded support and remaining VHDL/VITAL gaps.
+20. **Complete.** Run exact-LLVM Debug and Release plus source, catalog,
+    inventory, installed-public-contract, and release gates with at least eight
+    workers, then commit and push once. Batch 139 is not a CI boundary and runs
+    no sanitizer or CI-monitoring gate. Both exact-LLVM configurations built
+    with eight workers. Debug passed 110/110 tests in 134.43 seconds and Release
+    passed 110/110 in 107.71 seconds. The reviewed inventory contains 1,667
+    diagnostics, 468 bounded sources, 558 SPDX-owned artifacts, 198
+    test/control files, 1,092 execute rows, 4,368 evidence cells, 335 evidence
+    paths, and 97 runtime owners.
+
 ## Forward priority order
 
 1. **Completed in Batch 136:** read-only out-of-tree `.fsimlib` directory
@@ -471,8 +541,11 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
    simulate artifact phases.
 3. **Completed in Batch 138:** separate incremental SystemC compilation and
    linking.
-4. Complete VHDL-2008/VITAL, Verilog-2005, SystemVerilog-2017 classes/UVM,
-   VPI, DPI, and VHPI.
+4. **Started in completed Batch 139; continuing in Batch 140:** complete
+   VHDL-2008/VITAL, followed by Verilog-2005, SystemVerilog-2017 classes/UVM,
+   VPI, DPI, and VHPI. Batch 139 supplies the remaining timing and driver
+   attribute foundation required by later VITAL timing-check and path-delay
+   work.
 5. Older VHDL, Verilog, and SystemVerilog standard modes.
 6. Full SDF annotation with 2.1/3.0 compatibility and VITAL integration.
 7. FST tracing for every value exposed through the trace model.

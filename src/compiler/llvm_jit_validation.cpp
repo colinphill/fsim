@@ -233,6 +233,7 @@ validate_process(
         sensitivity.signal, sensitivity_instruction);
     switch (sensitivity.edge) {
     case EdgeKind::any:
+    case EdgeKind::transaction:
       break;
     case EdgeKind::posedge:
     case EdgeKind::negedge:
@@ -295,6 +296,26 @@ validate_process(
             (void)signal_width(operation.signal, index);
             record_definition(operation.destination, index);
             constrain_width(operation.destination, 1U, index);
+          } else if constexpr (
+              std::is_same_v<OperationType, SignalLastActive>) {
+            result.uses_signal_last_active = true;
+            (void)signal_width(operation.signal, index);
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 64U, index);
+          } else if constexpr (
+              std::is_same_v<OperationType, SignalDriving>) {
+            result.uses_signal_driving = true;
+            (void)signal_width(operation.signal, index);
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 1U, index);
+          } else if constexpr (
+              std::is_same_v<OperationType, SignalDrivingValue>) {
+            result.uses_signal_driving_value = true;
+            record_definition(operation.destination, index);
+            constrain_width(
+                operation.destination,
+                signal_width(operation.signal, index),
+                index);
           } else if constexpr (std::is_same_v<OperationType, CopyRegister>) {
             record_definition(operation.destination, index);
             record_use(operation.source, index);

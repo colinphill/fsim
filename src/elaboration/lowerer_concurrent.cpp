@@ -12,6 +12,8 @@ Process Lowerer::lower_concurrent(
     const std::string& name,
     const std::size_t order) {
   process_ = Process{};
+  generated_processes_.clear();
+  implicit_signal_dependencies_.clear();
   language_ = language;
   hierarchy_ = name;
   process_kind_ = ProcessKind::VhdlProcess;
@@ -124,6 +126,10 @@ Process Lowerer::lower_concurrent(
       process_.operations[exit] = Jump{end};
     }
   }
+  for (const auto dependency : implicit_signal_dependencies_) {
+    process_.static_sensitivity.push_back(
+        {dependency, runtime::simir::EdgeKind::any});
+  }
   if (!process_.static_sensitivity.empty()) {
     process_.operations.emplace_back(WaitSensitivity{});
     process_.operations.emplace_back(Jump{0});
@@ -143,6 +149,7 @@ Process Lowerer::lower_concurrent(
   }
   process_.driver_regions = collect_driver_regions(
       process_, register_widths_);
+  validate_vhdl_driver_attributes(statement.span);
   next_register_ = 0;
   next_string_register_ = 0;
   next_container_register_ = 0;

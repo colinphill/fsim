@@ -1946,6 +1946,44 @@ endmodule
     assert(!wrong_language_result.ok());
     assert(has_diagnostic(
         wrong_language_result, "FSIM-ELAB-SVCASEINSIDE-001"));
+
+    const auto vhdl_attribute_negative = fsim::frontend::parse_text(
+        "vhdl_attribute_negative.vhd",
+        R"(
+entity vhdl_attribute_negative is
+end entity;
+
+architecture rtl of vhdl_attribute_negative is
+  signal source : std_logic;
+  signal duration : signed(63 downto 0);
+  signal flag : boolean;
+  signal value : std_logic;
+begin
+  invalid: process
+  begin
+    flag <= source'stable(-1);
+    flag <= source'quiet(duration);
+    flag <= source'transaction(1);
+    value <= source'delayed(-1);
+    value <= source'driving_value;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_attribute_negative.ok());
+    const auto rejected_vhdl_attributes = fsim::elaboration::elaborate(
+        vhdl_attribute_negative.design,
+        "vhdl:work.vhdl_attribute_negative(rtl)");
+    assert(!rejected_vhdl_attributes.ok());
+    for (const auto code : {
+             "FSIM-ELAB-VHATTR-003",
+             "FSIM-ELAB-VHATTR-004",
+             "FSIM-ELAB-VHATTR-005",
+             "FSIM-ELAB-VHATTR-006",
+             "FSIM-ELAB-VHATTR-007"}) {
+      assert(has_diagnostic(rejected_vhdl_attributes, code));
+    }
 }
 
 } // namespace fsim::tests::elaboration

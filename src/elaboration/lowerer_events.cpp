@@ -13,6 +13,32 @@ Lowerer::resolve_wait_sensitivities(const Statement& statement) {
     for (const auto& sensitivity : statement.sensitivities) {
         if (sensitivity.signal == "*"
             || sensitivity.expression.valid()) {
+            if (language_ == frontend::Language::Vhdl2008
+                && sensitivity.expression.valid()) {
+                const auto dependency_start =
+                    implicit_signal_dependencies_.size();
+                const auto width = infer_width(sensitivity.expression);
+                if (width && *width != 0) {
+                    static_cast<void>(lower_expression(
+                        sensitivity.expression, *width));
+                }
+                for (auto index = dependency_start;
+                     index < implicit_signal_dependencies_.size();
+                     ++index) {
+                    signals.push_back(
+                        implicit_signal_dependencies_[index]);
+                    edges.push_back(runtime::simir::EdgeKind::any);
+                }
+                if (dependency_start
+                    == implicit_signal_dependencies_.size()) {
+                    report(
+                        "FSIM-ELAB-VHATTR-006",
+                        "a VHDL wait sensitivity attribute must denote an "
+                        "implicit signal",
+                        sensitivity.span);
+                }
+                continue;
+            }
             std::set<std::string> dependencies;
             if (sensitivity.signal == "*") {
                 collect_wildcard_identifiers(
@@ -159,6 +185,14 @@ bool Lowerer::emit_single_event_control_wait(
         [](const frontend::Sensitivity& sensitivity) {
             return sensitivity.expression.valid();
         });
+    if (language_ == frontend::Language::Vhdl2008) {
+        WaitOn wait{std::move(signals), std::move(edges)};
+        if (statement.delay) {
+            wait.timeout = statement.delay->magnitude;
+        }
+        process_.operations.emplace_back(std::move(wait));
+        return true;
+    }
     if (general == statement.sensitivities.end()) {
         WaitOn wait{std::move(signals), std::move(edges)};
         if (statement.delay) {

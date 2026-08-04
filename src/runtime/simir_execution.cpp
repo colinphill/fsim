@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
+#include "simir_signal_attributes.hpp"
 #include "fsim/runtime/string_methods.hpp"
 namespace fsim::runtime::simir {
 struct Interpreter::Impl::ExecutionContext final
@@ -396,6 +397,25 @@ struct Interpreter::Impl::ExecutionContext final
     return transaction
         && transaction->first == owner.scheduler.now()
         && transaction->second == owner.scheduler.delta();
+  }
+
+  [[nodiscard]] SimulationTick signal_last_active(
+      const SignalId signal) const override {
+    return signal_attribute_detail::last_active(owner, signal);
+  }
+  [[nodiscard]] bool signal_driving(
+      const SignalId signal) const override {
+    return signal_attribute_detail::driving(owner, process, signal);
+  }
+  [[nodiscard]] Logic4Word signal_driving_value_word(
+      const SignalId signal) const override {
+    return signal_attribute_detail::driving_value(
+        owner, process, signal).low_word();
+  }
+  [[nodiscard]] Logic9Word signal_driving_value_logic9_word(
+      const SignalId signal) const override {
+    return signal_attribute_detail::driving_value(
+        owner, process, signal).logic9_low_word();
   }
 
   void request_channel_update(
@@ -997,6 +1017,34 @@ void Interpreter::Impl::execute(ProcessId id) {
             get_register(process, op.destination) =
                 PackedLogic4(
                     1, active ? Logic4::one : Logic4::zero);
+            ++process.pc;
+          } else if constexpr (
+              std::is_same_v<OperationType, SignalLastActive>) {
+            const auto elapsed = signal_attribute_detail::last_active(
+                *this, op.signal);
+            get_register(process, op.destination) =
+                PackedLogic4::from_aval_bval(64, elapsed, 0);
+            ++process.pc;
+          } else if constexpr (
+              std::is_same_v<OperationType, SignalDriving>) {
+            const auto driving = signal_attribute_detail::driving(
+                *this, process.program.id, op.signal);
+            get_register(process, op.destination) =
+                PackedLogic4(
+                    1, driving ? Logic4::one : Logic4::zero);
+            ++process.pc;
+          } else if constexpr (
+              std::is_same_v<OperationType, SignalDrivingValue>) {
+            if (!signal_attribute_detail::driving(
+                    *this, process.program.id, op.signal)) {
+              fail(process,
+                   "VHDL 'driving_value queried a signal without a driver");
+            }
+            get_register(process, op.destination) =
+                coerce_value_kind(
+                    signal_attribute_detail::driving_value(
+                        *this, process.program.id, op.signal),
+                    register_value_kind(process, op.destination));
             ++process.pc;
           } else if constexpr (std::is_same_v<OperationType, CopyRegister>) {
             get_register(process, op.destination) =

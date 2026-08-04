@@ -89,6 +89,9 @@ using runtime::simir::ShiftOperator;
 using runtime::simir::SignalActive;
 using runtime::simir::SignalEvent;
 using runtime::simir::SignalLastEvent;
+using runtime::simir::SignalLastActive;
+using runtime::simir::SignalDriving;
+using runtime::simir::SignalDrivingValue;
 using runtime::simir::SignalLastValue;
 using runtime::simir::Stop;
 using runtime::simir::StringDisplay;
@@ -403,6 +406,23 @@ void add_dynamic_part_index_key(
             builder.add("operation", "SignalActive");
             add_key_u64(builder, "destination", value.destination);
             add_key_u64(builder, "signal", value.signal);
+          } else if constexpr (
+              std::is_same_v<OperationType, SignalLastActive>) {
+            builder.add("operation", "SignalLastActive");
+            add_key_u64(builder, "destination", value.destination);
+            add_key_u64(builder, "signal", value.signal);
+          } else if constexpr (
+              std::is_same_v<OperationType, SignalDriving>) {
+            builder.add("operation", "SignalDriving");
+            add_key_u64(builder, "destination", value.destination);
+            add_key_u64(builder, "signal", value.signal);
+          } else if constexpr (
+              std::is_same_v<OperationType, SignalDrivingValue>) {
+            builder.add("operation", "SignalDrivingValue");
+            add_key_u64(builder, "destination", value.destination);
+            add_key_u64(builder, "signal", value.signal);
+            add_key_u64(
+                builder, "signal-width", signal_widths[value.signal]);
           } else if constexpr (std::is_same_v<OperationType, CopyRegister>) {
             builder.add("operation", "CopyRegister");
             add_key_u64(builder, "destination", value.destination);

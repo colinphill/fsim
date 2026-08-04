@@ -944,14 +944,18 @@ Process VhdlParser::parse_process(std::optional<Token> label) {
 
   if (match(TokenKind::LeftParen)) {
     while (!at_end() && !at(TokenKind::RightParen)) {
-      const auto signal = expect_identifier("sensitivity name");
-      const bool wildcard = detail::iequals(signal.text, "all");
-      process.sensitivities.push_back(
-          Sensitivity{
-              EdgeKind::Any,
-              wildcard ? "*" : vhdl_name(signal.text),
-              signal.span,
-              {}});
+      auto expression = parse_expression();
+      const bool identifier =
+          expression.kind == ExpressionKind::Identifier;
+      const bool wildcard = identifier
+          && detail::iequals(expression.text, "all");
+      process.sensitivities.push_back(Sensitivity{
+          EdgeKind::Any,
+          identifier
+              ? (wildcard ? "*" : vhdl_name(expression.text))
+              : std::string{},
+          expression.span,
+          identifier ? Expression{} : std::move(expression)});
       if (!match(TokenKind::Comma)) {
         break;
       }

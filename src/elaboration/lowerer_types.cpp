@@ -341,13 +341,16 @@ using namespace elaboration_detail;
         }
         if (expression.kind == ExpressionKind::Call
             && language_ == frontend::Language::Vhdl2008
-            && expression.text == "'last_value"
-            && expression.operands.size() == 1) {
+            && (expression.text == "'last_value"
+                || expression.text == "'driving_value"
+                || expression.text == "'delayed")
+            && !expression.operands.empty()) {
             return infer_width(expression.operands.front());
         }
         if (expression.kind == ExpressionKind::Call
             && language_ == frontend::Language::Vhdl2008
-            && expression.text == "'last_event") {
+            && (expression.text == "'last_event"
+                || expression.text == "'last_active")) {
             return std::size_t{64};
         }
         if (expression.kind == ExpressionKind::Call
@@ -357,7 +360,10 @@ using namespace elaboration_detail;
         }
         if (expression.kind == ExpressionKind::Call
             && language_ == frontend::Language::Vhdl2008
-            && expression.text == "'active") {
+            && (expression.text == "'active"
+                || expression.text == "'driving"
+                || expression.text == "'quiet"
+                || expression.text == "'transaction")) {
             return std::size_t{1};
         }
         if (expression.kind == ExpressionKind::Call
@@ -697,12 +703,15 @@ using namespace elaboration_detail;
                 return false;
             }
             if (language_ == frontend::Language::Vhdl2008
-                && expression.text == "'last_value"
-                && expression.operands.size() == 1) {
+                && (expression.text == "'last_value"
+                    || expression.text == "'driving_value"
+                    || expression.text == "'delayed")
+                && !expression.operands.empty()) {
                 return is_signed_expression(expression.operands.front());
             }
             if (language_ == frontend::Language::Vhdl2008
-                && expression.text == "'last_event") {
+                && (expression.text == "'last_event"
+                    || expression.text == "'last_active")) {
                 return true;
             }
             if (language_ == frontend::Language::Vhdl2008
@@ -710,7 +719,10 @@ using namespace elaboration_detail;
                 return false;
             }
             if (language_ == frontend::Language::Vhdl2008
-                && expression.text == "'active") {
+                && (expression.text == "'active"
+                    || expression.text == "'driving"
+                    || expression.text == "'quiet"
+                    || expression.text == "'transaction")) {
                 return false;
             }
             if (language_ != frontend::Language::Vhdl2008
@@ -984,7 +996,8 @@ using namespace elaboration_detail;
                 || expression.text == "'low"
                 || expression.text == "'high"
                 || expression.text == "'length"
-                || expression.text == "'last_event";
+                || expression.text == "'last_event"
+                || expression.text == "'last_active";
         case ExpressionKind::BooleanLiteral:
         case ExpressionKind::LogicLiteral:
         case ExpressionKind::StringLiteral:
@@ -1005,6 +1018,14 @@ using namespace elaboration_detail;
     void Lowerer::collect_identifiers(
         const Expression& expression,
         std::set<std::string>& output) const {
+        const bool implicit_signal_attribute =
+            language_ == frontend::Language::Vhdl2008
+            && expression.kind == ExpressionKind::Call
+            && (expression.text == "'transaction"
+                || expression.text == "'delayed"
+                || ((expression.text == "'stable"
+                     || expression.text == "'quiet")
+                    && expression.operands.size() == 2));
         if (expression.kind == ExpressionKind::Identifier) {
             if (const auto selected =
                     packed_member_reference(expression.text)) {
@@ -1025,8 +1046,10 @@ using namespace elaboration_detail;
                 output.insert(expression.text);
             }
         }
-        for (const auto& operand : expression.operands) {
-            collect_identifiers(operand, output);
+        if (!implicit_signal_attribute) {
+            for (const auto& operand : expression.operands) {
+                collect_identifiers(operand, output);
+            }
         }
     }
 

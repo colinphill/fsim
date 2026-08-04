@@ -406,6 +406,10 @@ struct SignalOperationLowerer {
   llvm::Value* signal_last_value_logic9_callback;
   llvm::Value* signal_last_event_callback;
   llvm::Value* signal_active_callback;
+  llvm::Value* signal_last_active_callback;
+  llvm::Value* signal_driving_callback;
+  llvm::Value* signal_driving_value_callback;
+  llvm::Value* signal_driving_value_logic9_callback;
   llvm::FunctionType* read_type;
   llvm::FunctionType* read_logic9_type;
   llvm::FunctionType* write_type;
@@ -427,6 +431,9 @@ struct SignalOperationLowerer {
   llvm::FunctionType* signal_last_value_type;
   llvm::FunctionType* signal_last_event_type;
   llvm::FunctionType* signal_active_type;
+  llvm::FunctionType* signal_last_active_type;
+  llvm::FunctionType* signal_driving_type;
+  llvm::FunctionType* signal_driving_value_type;
   llvm::StructType* projected_element_type;
   llvm::StructType* logic9_projected_element_type;
   llvm::Value* read_bval_slot;
@@ -457,6 +464,9 @@ struct SignalOperationLowerer {
   void lower(const runtime::simir::SignalLastValue& operation);
   void lower(const runtime::simir::SignalLastEvent& operation);
   void lower(const runtime::simir::SignalActive& operation);
+  void lower(const runtime::simir::SignalLastActive& operation);
+  void lower(const runtime::simir::SignalDriving& operation);
+  void lower(const runtime::simir::SignalDrivingValue& operation);
 };
 
 struct OutputOperationLowerer {
