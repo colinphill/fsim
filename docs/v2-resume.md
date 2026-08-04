@@ -386,5 +386,23 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   107/107 in 291.02 seconds with leak detection disabled because the managed
   runner executes under ptrace. That gate repaired strict incremental SystemC
   plug-in linking of sanitizer-instrumented support code and corrected
-  LLVM-disabled native-cache assertions. No commit, push, or CI inspection has
-  run yet.
+  LLVM-disabled native-cache assertions. Batch 140 commit `527a031` is pushed
+  on `codex/v2`; initial hosted run `30898580367` completed with all four Linux
+  build/test jobs, Ubuntu ASan/UBSan, and frontend fuzz passing. All
+  four MSVC jobs stopped at the same warnings-as-errors signed/unsigned
+  optional comparison in `src/cli/driver.cpp`. Both Windows Clang jobs reached
+  tests and exposed POSIX-only absolute-path and permission assumptions,
+  case-insensitive producer-path relocation, an incremental SystemC
+  `/WHOLEARCHIVE` option placed before `/link`, and one mixed-SystemC failure
+  whose assertion hid its diagnostic. The current accumulated repair worktree
+  corrects the directly diagnosed defects and exposes that remaining
+  diagnostic. Eight-worker exact-LLVM Debug and Release
+  builds pass the same 12-test focused gate, including artifacts,
+  source/catalog, incremental SystemC, application, mixed SystemC hierarchy,
+  Tcl, API, and MSVC/tool portability contracts. The post-repair exact-LLVM
+  Debug and Release regressions pass 110/110 in 320.46 and 287.88 seconds. The
+  exact final tree passes the same 14-test cross-platform repair gate in both
+  configurations after eight-worker builds. Make one repair commit/push, then
+  monitor the replacement
+  non-documentation matrix to green before
+  marking Change 20 and Batch 140 complete.

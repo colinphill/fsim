@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/api.h"
 #include "fsim/app/application.hpp"
+#include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/support/path.hpp"
 
 #include <cassert>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <string_view>
 #include <utility>
 
@@ -38,8 +40,12 @@ void test_mapped_library_api(const std::filesystem::path& directory) {
   producer.source_sets.push_back(std::move(sources));
   const auto artifact = directory / "api-vendor.fsimlib";
   fsim::diagnostic::Engine export_diagnostics;
-  assert(fsim::app::export_library(
-      producer, "vendor", artifact, export_diagnostics));
+  const auto exported = fsim::app::export_library(
+      producer, "vendor", artifact, export_diagnostics);
+  if (!exported) {
+    fsim::diagnostic::print_text(std::cerr, export_diagnostics);
+  }
+  assert(exported);
 
   const auto manifest_path = directory / "api-mapped-library.toml";
   {

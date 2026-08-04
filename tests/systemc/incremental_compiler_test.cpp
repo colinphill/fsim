@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc/incremental.hpp"
 
+#include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/support/path.hpp"
 
 #include <cassert>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <string>
 
 namespace {
@@ -201,8 +203,12 @@ int main() {
   link_request.settings = settings;
   link_request.working_directory = root;
   link_request.scratch_directory = root / "scratch";
-  assert(fsim::systemc::link_incremental_plugin(
-      link_request, diagnostics));
+  const auto linked = fsim::systemc::link_incremental_plugin(
+      link_request, diagnostics);
+  if (!linked) {
+    fsim::diagnostic::print_text(std::cerr, diagnostics);
+  }
+  assert(linked);
   assert(!diagnostics.has_error());
 
   auto plugin_metadata = fsim::systemc::load_incremental_plugin_metadata(

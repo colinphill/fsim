@@ -919,14 +919,16 @@ bool link_incremental_plugin(
     for (const auto& payload : payloads) {
       argv.push_back(path_argument(payload));
     }
-    argv.push_back(
-        needs_support
-            ? "/WHOLEARCHIVE:" + path_argument(support)
-            : path_argument(support));
+    if (!needs_support && !support.empty()) {
+      argv.push_back(path_argument(support));
+    }
     argv.push_back("/Fe" + path_argument(output));
     argv.emplace_back("/link");
     argv.emplace_back("/INCREMENTAL:NO");
     argv.emplace_back("/MACHINE:X64");
+    if (needs_support) {
+      argv.push_back("/WHOLEARCHIVE:" + path_argument(support));
+    }
     argv.insert(
         argv.end(), settings.link_options.begin(), settings.link_options.end());
     for (const auto& library : settings.libraries) {

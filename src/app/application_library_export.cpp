@@ -496,8 +496,15 @@ bool export_library(
       const auto mapping = std::ranges::find_if(
           source_mappings,
           [&](const auto& item) {
-            return std::filesystem::path(item.producer_name).lexically_normal()
-                == normalized;
+            if (std::filesystem::path(item.producer_name).lexically_normal()
+                == normalized) {
+              return true;
+            }
+            std::error_code error;
+            return std::filesystem::equivalent(
+                       support::path_from_utf8(item.producer_name),
+                       support::path_from_utf8(dependency), error)
+                && !error;
           });
       if (mapping != source_mappings.end()) {
         dependency = mapping->logical_name;

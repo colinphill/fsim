@@ -2,6 +2,7 @@
 #include "fsim/library/artifact.hpp"
 #include "fsim/library/portable_unit.hpp"
 #include "fsim/frontend/parser.hpp"
+#include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
@@ -164,7 +165,17 @@ endmodule
   assert(fsim::library::serialize_portable_unit(
       *restored_unit, repeat_diagnostics) == unit_bytes);
 
-  source_unit.span.source_name = "/producer/private/stage.sv";
+  const auto producer_source = directory.parent_path()
+      / "producer" / "private" / "stage.sv";
+  std::filesystem::create_directories(producer_source.parent_path());
+  {
+    std::ofstream source(producer_source, std::ios::binary);
+    source << "module stage; endmodule\n";
+    assert(source.good());
+  }
+  const auto producer_source_name =
+      fsim::support::path_to_utf8(producer_source);
+  source_unit.span.source_name = producer_source_name;
   fsim::diagnostic::Engine absolute_diagnostics;
   assert(!fsim::library::serialize_portable_unit(
       source_unit, absolute_diagnostics));
@@ -179,20 +190,36 @@ endmodule
   assert(fsim::library::relocate_unit_sources(
       source_unit,
       std::vector<fsim::library::SourceNameMapping>{
-          {"/producer/private/stage.sv", "sources/00000000/stage.sv"}},
+          {producer_source_name, "sources/00000000/stage.sv"}},
       relocation_diagnostics));
   assert(source_unit.span.source_name == "sources/00000000/stage.sv");
   assert(fsim::library::serialize_portable_unit(
       source_unit, relocation_diagnostics));
 
-  source_unit.span.physical_source_name = "/unmapped/include.svh";
+  const auto producer_alias = producer_source.parent_path() / "stage-alias.sv";
+  std::error_code alias_error;
+  std::filesystem::create_hard_link(
+      producer_source, producer_alias, alias_error);
+  assert(!alias_error);
+  source_unit.span.source_name = fsim::support::path_to_utf8(producer_alias);
+  fsim::diagnostic::Engine identity_relocation_diagnostics;
+  assert(fsim::library::relocate_unit_sources(
+      source_unit,
+      std::vector<fsim::library::SourceNameMapping>{
+          {producer_source_name, "sources/00000000/stage.sv"}},
+      identity_relocation_diagnostics));
+  assert(source_unit.span.source_name == "sources/00000000/stage.sv");
+
+  const auto unmapped_source_name = fsim::support::path_to_utf8(
+      std::filesystem::temp_directory_path() / "unmapped" / "include.svh");
+  source_unit.span.physical_source_name = unmapped_source_name;
   fsim::diagnostic::Engine missing_relocation_diagnostics;
   assert(!fsim::library::relocate_unit_sources(
       source_unit, {}, missing_relocation_diagnostics));
   assert(std::ranges::any_of(
       missing_relocation_diagnostics.diagnostics(),
-      [](const auto& diagnostic) {
-        return diagnostic.message.find("/unmapped/include.svh")
+      [&](const auto& diagnostic) {
+        return diagnostic.message.find(unmapped_source_name)
             != std::string::npos;
       }));
 

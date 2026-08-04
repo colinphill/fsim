@@ -582,6 +582,9 @@ multiple_systemc_config.build.cache_path =
 fsim::diagnostic::Engine multiple_systemc_diagnostics;
 auto multiple_systemc_project = fsim::app::build_project(
     multiple_systemc_config, multiple_systemc_diagnostics);
+if (!multiple_systemc_project) {
+  fsim::diagnostic::print_text(std::cerr, multiple_systemc_diagnostics);
+}
 assert(multiple_systemc_project);
 assert(multiple_systemc_project->systemc_roots.size() == 2);
 assert((

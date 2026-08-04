@@ -113,8 +113,12 @@ int main() {
       (std::filesystem::status(directory).permissions()
        & std::filesystem::perms::owner_write)
       == std::filesystem::perms::none);
+#if !defined(_WIN32)
+  // POSIX mode bits deny publication-tree mutation. Windows maps those bits
+  // to file attributes, not directory ACLs, so creation remains permitted.
   std::ofstream denied(directory / "write-attempt", std::ios::binary);
   assert(!denied);
+#endif
 
   fsim::diagnostic::Engine overwrite_diagnostics;
   assert(!fsim::artifact::publish_design(

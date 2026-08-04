@@ -105,6 +105,16 @@ foreach(FSIM_COMPILER_POLICY IN ITEMS
     message(FATAL_ERROR "SystemC compiler lost key policy: ${FSIM_COMPILER_POLICY}")
   endif()
 endforeach()
+string(FIND "${FSIM_INCREMENTAL_CONTENTS}"
+  "argv.emplace_back(\"/link\")" FSIM_INCREMENTAL_LINK_INDEX)
+string(FIND "${FSIM_INCREMENTAL_CONTENTS}"
+  "argv.push_back(\"/WHOLEARCHIVE:" FSIM_INCREMENTAL_WHOLE_INDEX)
+if(FSIM_INCREMENTAL_LINK_INDEX EQUAL -1
+    OR FSIM_INCREMENTAL_WHOLE_INDEX EQUAL -1
+    OR FSIM_INCREMENTAL_WHOLE_INDEX LESS FSIM_INCREMENTAL_LINK_INDEX)
+  message(FATAL_ERROR
+    "Incremental SystemC link lost post-/link /WHOLEARCHIVE ordering")
+endif()
 foreach(FSIM_COMMAND_POLICY IN ITEMS
     "msvc_runtime_option()"
     "-fPIC"

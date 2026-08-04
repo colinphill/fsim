@@ -125,9 +125,13 @@ int main() {
   const auto mapped_export_config = fsim::project::load(
       display_manifest, mapped_export_diagnostics);
   assert(mapped_export_config);
-  assert(fsim::app::export_library(
+  const auto mapped_exported = fsim::app::export_library(
       *mapped_export_config, "work", mapped_artifact,
-      mapped_export_diagnostics));
+      mapped_export_diagnostics);
+  if (!mapped_exported) {
+    fsim::diagnostic::print_text(std::cerr, mapped_export_diagnostics);
+  }
+  assert(mapped_exported);
   const auto mapped_manifest = directory / "mapped-display.toml";
   {
     std::ofstream file(mapped_manifest);

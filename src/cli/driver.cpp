@@ -1359,7 +1359,7 @@ std::optional<Invocation> parse_arguments(
       argument_error(diagnostics, "migrate requires exactly one manifest path");
       return std::nullopt;
     }
-    if (invocation.migration_schema != 2) {
+    if (invocation.migration_schema != std::uint32_t{2}) {
       argument_error(diagnostics, "migrate currently requires '--to 2'");
       return std::nullopt;
     }

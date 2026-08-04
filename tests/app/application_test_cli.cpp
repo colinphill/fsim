@@ -69,8 +69,12 @@ std::erase_if(
     });
 native_export_config.build.cache_path = directory / "native-export-cache";
 fsim::diagnostic::Engine export_diagnostics;
-assert(fsim::app::export_library(
-    native_export_config, "work", exported_library, export_diagnostics));
+const auto exported = fsim::app::export_library(
+    native_export_config, "work", exported_library, export_diagnostics);
+if (!exported) {
+  fsim::diagnostic::print_text(std::cerr, export_diagnostics);
+}
+assert(exported);
 assert(!export_diagnostics.has_error());
 fsim::diagnostic::Engine exported_metadata_diagnostics;
 const auto exported_metadata = fsim::library::load_metadata(

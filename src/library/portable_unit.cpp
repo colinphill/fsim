@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/library/portable_unit.hpp"
+#include "fsim/support/path.hpp"
 
 #include <boost/pfr/core.hpp>
 
@@ -403,9 +404,19 @@ std::optional<std::string> mapped_source_name(
   const auto found = std::ranges::find_if(
       mappings,
       [&](const auto& mapping) {
-        return mapping.producer_name == name
+        if (mapping.producer_name == name
             || std::filesystem::path(mapping.producer_name).lexically_normal()
-                == normalized;
+                == normalized) {
+          return true;
+        }
+        // Windows path comparison is lexically case-sensitive even when the
+        // underlying filesystem is not.  Producer paths name checked source
+        // files, so use filesystem identity as the portable fallback.
+        std::error_code error;
+        return std::filesystem::equivalent(
+                   fsim::support::path_from_utf8(mapping.producer_name),
+                   fsim::support::path_from_utf8(name), error)
+            && !error;
       });
   if (found != mappings.end()) {
     return found->logical_name;

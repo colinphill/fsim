@@ -605,8 +605,16 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     seconds with leak detection disabled because the managed runner executes
     under ptrace. The gate also repaired strict incremental SystemC plug-in
     linking of sanitizer-instrumented support code and made native-cache
-    assertions reflect LLVM-disabled builds. Commit, push, and hosted
-    inspection remain current.
+    assertions reflect LLVM-disabled builds. Commit `527a031` is pushed on
+    `codex/v2`. Hosted inspection is current: four Linux build/test jobs and
+    the frontend fuzz job pass, the initial six Windows jobs exposed one MSVC
+    warnings-as-errors comparison plus Windows path, permission, source-name,
+    incremental-link, and mixed-SystemC portability defects. All six
+    non-Windows jobs, including hosted ASan/UBSan, pass. The accumulated repair
+    worktree passes post-repair 110/110 exact-LLVM Debug and Release regressions
+    in 320.46 and 287.88 seconds. The exact final tree also passes the same
+    14-test cross-platform repair gate in both configurations. Repair
+    commit/push and a fully green replacement matrix remain current.
 
 ## Forward priority order
 
