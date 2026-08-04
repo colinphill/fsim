@@ -469,7 +469,8 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   Windows error 5 at the first directory rename after both permission changes
   succeed. The earlier portable-unit input stream still holds a child file open,
   so Windows locks the containing directory; close the stream immediately after
-  reading it. The pre-close repair passes exact-LLVM Debug and Release locally
-  in 21.90 and 20.87 seconds. Re-run the focused workflow with the close, remove
-  it once the case is green, and only then resume the full monitoring loop or
-  mark Change 20 and Batch 140 complete.
+  reading it. The final local exact-LLVM Debug and Release application tests
+  pass in 19.58 and 18.86 seconds. Focused Windows run `30922930843` passes the
+  sole MSVC Debug `fsim.application` case in 10 minutes 29 seconds. Remove the
+  temporary workflow and resume the normal non-documentation matrix once;
+  only its green completion can mark Change 20 and Batch 140 complete.

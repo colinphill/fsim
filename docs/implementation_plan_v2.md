@@ -673,10 +673,11 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     `30921845380` reports exact Windows error 5 at the first object-directory
     rename after both permission changes succeed. The portable-unit input stream
     still holds a child file open, so Windows locks the containing directory;
-    close that stream immediately after reading it. The pre-close repair passes
-    exact-LLVM Debug and Release locally in 21.90 and 20.87 seconds. Re-run the
-    focused workflow with the close, then remove it before broad monitoring
-    resumes.
+    close that stream immediately after reading it. The final local
+    exact-LLVM Debug and Release application tests pass in 19.58 and 18.86
+    seconds. Focused Windows run `30922930843` passes the sole MSVC Debug
+    `fsim.application` case in 10 minutes 29 seconds. Remove the temporary
+    workflow and resume the normal non-documentation matrix once.
 
 ## Forward priority order
 
