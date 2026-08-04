@@ -32,6 +32,51 @@ SimulationTick level_limit(
   return std::max(high, low);
 }
 
+SimulationTick vital_transition_delay(
+    const Logic9 previous,
+    const Logic9 current,
+    const VitalDelayShape shape,
+    const std::array<SimulationTick, 6>& delays) noexcept {
+  if (shape == VitalDelayShape::single) return delays[0];
+  const auto before = vital_x01_ordinal(previous);
+  const auto after = vital_x01_ordinal(current);
+  const bool before_z = previous == Logic9::z;
+  const bool after_z = current == Logic9::z;
+  const auto rise = delays[0];
+  const auto fall = delays[1];
+  if (shape == VitalDelayShape::delay01) {
+    if (after == 1U) return fall;
+    if (after == 2U) return rise;
+    if (before == 1U) return rise;
+    if (before == 2U) return fall;
+    if (before_z) return std::min(rise, fall);
+    return std::max(rise, fall);
+  }
+  if (before == 1U && after == 2U) return rise;
+  if (before == 2U && after == 1U) return fall;
+  if (before == 1U && after_z) return delays[2];
+  if (before_z && after == 2U) return delays[3];
+  if (before == 2U && after_z) return delays[4];
+  if (before_z && after == 1U) return delays[5];
+  if (before == 1U) return after == 1U ? fall : std::min(rise, delays[2]);
+  if (before == 2U) return after == 2U ? rise : std::min(fall, delays[4]);
+  if (before_z) {
+    if (after == 1U) return delays[5];
+    if (after == 2U) return delays[3];
+    return std::min(delays[3], delays[5]);
+  }
+  if (after == 1U) return std::max(fall, delays[5]);
+  if (after == 2U) return std::max(rise, delays[3]);
+  if (after_z) return std::max(delays[2], delays[4]);
+  return std::max(rise, fall);
+}
+
+PackedLogic4 vital_scalar(const Logic9 value) {
+  PackedLogic4 result(1U);
+  result.fill(value);
+  return result;
+}
+
 }  // namespace
 
 Logic9 evaluate_vital_timing_check(
@@ -288,6 +333,141 @@ Logic9 Interpreter::Impl::execute_vital_timing_check(
         scheduler.delta());
   }
   return result;
+}
+
+void Interpreter::Impl::execute_vital_delay(
+    const ProcessId process,
+    const InstructionIndex instruction,
+    const VitalDelay& operation,
+    const VitalDelayRuntimeValues& values) {
+  auto& state = get_process(process).vital_delay_states[instruction];
+  auto delay = vital_transition_delay(
+      state.last_value, values.source,
+      operation.shape, values.default_delays);
+  bool selected{};
+  for (const auto& path : values.paths) {
+    if (!path.condition
+        || path.input_change_time
+            == std::numeric_limits<SimulationTick>::max()) {
+      continue;
+    }
+    const auto path_delay = vital_transition_delay(
+        state.last_value, values.source, operation.shape, path.delays);
+    const auto remaining = path_delay > path.input_change_time
+        ? path_delay - path.input_change_time : SimulationTick{};
+    if (!selected || remaining < delay) delay = remaining;
+    selected = true;
+  }
+  if (operation.kind == VitalDelayKind::path && !selected
+      && operation.ignore_default_delay) {
+    state.last_value = values.source;
+    return;
+  }
+  if (delay > std::numeric_limits<SimulationTick>::max() - scheduler.now()) {
+    throw std::overflow_error{
+        "simulation time overflow while scheduling a VITAL delay"};
+  }
+  auto output = values.source;
+  if (operation.shape == VitalDelayShape::delay01z) {
+    const auto ordinal = static_cast<std::size_t>(values.source);
+    if (ordinal >= values.output_map.size()) {
+      throw std::invalid_argument{"VITAL output map index is outside its range"};
+    }
+    output = values.output_map[ordinal];
+  }
+  const auto now = scheduler.now();
+  const auto target = now + delay;
+  const bool glitch = operation.kind == VitalDelayKind::path
+      && state.initialized && output != state.scheduled_value
+      && now < state.scheduled_time;
+  state.last_glitch = glitch;
+  if (glitch) state.glitch_time = now;
+  if (glitch && operation.message_on && report_hook) {
+    report_hook(
+        process, operation.message, operation.severity,
+        operation.source_location, now, scheduler.delta());
+  }
+  if (glitch && operation.reject_fast_path && target < state.scheduled_time) {
+    state.last_value = values.source;
+    return;
+  }
+  if (glitch && !operation.negative_preemption
+      && target < state.scheduled_time) {
+    delay = state.scheduled_time - now;
+  }
+  if (glitch && operation.x_on
+      && operation.mode == VitalGlitchMode::on_detect) {
+    std::vector<ProjectedWaveformValue> waveform;
+    waveform.push_back({vital_scalar(Logic9::x), 0U});
+    if (delay != 0U) waveform.push_back({vital_scalar(output), delay});
+    schedule_projected_waveform(
+        process, operation.output, waveform, std::nullopt, 0U,
+        ProjectedDelayMode::transport);
+    state.scheduled_value = delay == 0U ? Logic9::x : output;
+    state.scheduled_time = now + delay;
+  } else if (glitch && operation.x_on
+             && operation.mode == VitalGlitchMode::on_event) {
+    const auto event_delay = state.scheduled_time - now;
+    std::vector<ProjectedWaveformValue> waveform;
+    waveform.push_back({vital_scalar(Logic9::x), std::min(event_delay, delay)});
+    if (delay > event_delay) waveform.push_back({vital_scalar(output), delay});
+    schedule_projected_waveform(
+        process, operation.output, waveform, std::nullopt, 0U,
+        ProjectedDelayMode::transport);
+    state.scheduled_value = delay > event_delay ? output : Logic9::x;
+    state.scheduled_time = now + delay;
+  } else {
+    const auto mode = operation.mode == VitalGlitchMode::inertial
+        ? ProjectedDelayMode::inertial : ProjectedDelayMode::transport;
+    schedule_projected(
+        process, operation.output, vital_scalar(output), std::nullopt,
+        delay, mode == ProjectedDelayMode::inertial ? delay : 0U, mode);
+    state.scheduled_value = output;
+    state.scheduled_time = now + delay;
+  }
+  state.initialized = true;
+  state.last_value = values.source;
+}
+
+void Interpreter::Impl::execute_vital_delay_operation(
+    const ProcessId process_id,
+    ProcessState& process,
+    const InstructionIndex instruction,
+    const VitalDelay& operation) {
+  const auto tick = [&](const RegisterId id) {
+    const auto word = get_register(process, id).low_word();
+    if (word.bval != 0U) {
+      throw std::invalid_argument{"VITAL delay contains an unknown time value"};
+    }
+    return static_cast<SimulationTick>(word.aval);
+  };
+  VitalDelayRuntimeValues values;
+  values.source = get_register(process, operation.source).get_logic9(0U);
+  for (std::size_t index = 0; index < 6U; ++index) {
+    values.default_delays[index] = tick(operation.default_delays[index]);
+  }
+  if (operation.shape == VitalDelayShape::delay01z) {
+    const auto& map = get_register(process, operation.output_map);
+    for (std::size_t index = 0; index < 9U; ++index) {
+      values.output_map[index] = map.get_logic9(8U - index);
+    }
+  }
+  values.paths.reserve(operation.paths.size());
+  for (const auto& path : operation.paths) {
+    VitalPathRuntimeValue value;
+    value.input_change_time = tick(path.input_change_time);
+    const auto condition = get_register(process, path.condition).low_word();
+    if (condition.bval != 0U) {
+      throw std::invalid_argument{
+          "VITAL path condition contains an unknown value"};
+    }
+    value.condition = (condition.aval & 1U) != 0U;
+    for (std::size_t index = 0; index < 6U; ++index) {
+      value.delays[index] = tick(path.delays[index]);
+    }
+    values.paths.push_back(value);
+  }
+  execute_vital_delay(process_id, instruction, operation, values);
 }
 
 }  // namespace fsim::runtime::simir

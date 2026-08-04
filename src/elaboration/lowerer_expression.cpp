@@ -1362,7 +1362,9 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     emit_enumeration_check(*lowered, *member_type);
                   } else if (
                       member_type->domain
-                      == frontend::ValueDomain::Integer) {
+                          == frontend::ValueDomain::Integer
+                      && !member_type->vhdl_physical
+                      && member_type->nominal_type != "@builtin:time") {
                     emit_integer_check(
                         *lowered, member_type->integer_range);
                   }

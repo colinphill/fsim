@@ -896,7 +896,9 @@ using namespace elaboration_detail;
                   emit_enumeration_check(*lowered, element_type);
               } else if (
                   element_type.domain
-                  == frontend::ValueDomain::Integer) {
+                      == frontend::ValueDomain::Integer
+                  && !element_type.vhdl_physical
+                  && element_type.nominal_type != "@builtin:time") {
                   emit_integer_check(
                       *lowered, element_type.integer_range);
               }

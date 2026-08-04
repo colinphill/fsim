@@ -567,6 +567,10 @@ typedef struct fsim_jit_runtime_v1 {
   /* Append-only intrinsic VITAL timing-check callback. */
   uint32_t (*vital_timing_check)(
       void* context, uint32_t process, uint32_t instruction);
+
+  /* Append-only intrinsic VITAL path/wire-delay callback. */
+  void (*vital_delay)(
+      void* context, uint32_t process, uint32_t instruction);
 } fsim_jit_runtime_v1;
 
 /*

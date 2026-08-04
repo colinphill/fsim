@@ -323,6 +323,31 @@ validate_process(
             }
             record_definition(operation.destination, index);
             constrain_width(operation.destination, 1U, index);
+          } else if constexpr (std::is_same_v<OperationType, VitalDelay>) {
+            result.uses_vital_delay = true;
+            if (signal_width(operation.output, index) != 1U) {
+              reject(process, index, "VitalDelay output signal must be scalar");
+            }
+            record_use(operation.source, index);
+            constrain_width(operation.source, 1U, index);
+            if (operation.shape == VitalDelayShape::delay01z) {
+              record_use(operation.output_map, index);
+              constrain_width(operation.output_map, 9U, index);
+            }
+            for (const auto delay : operation.default_delays) {
+              record_use(delay, index);
+              constrain_width(delay, 64U, index);
+            }
+            for (const auto& path : operation.paths) {
+              record_use(path.input_change_time, index);
+              constrain_width(path.input_change_time, 64U, index);
+              record_use(path.condition, index);
+              constrain_width(path.condition, 1U, index);
+              for (const auto delay : path.delays) {
+                record_use(delay, index);
+                constrain_width(delay, 64U, index);
+              }
+            }
           } else if constexpr (std::is_same_v<OperationType, SignalActive>) {
             result.uses_signal_active = true;
             (void)signal_width(operation.signal, index);

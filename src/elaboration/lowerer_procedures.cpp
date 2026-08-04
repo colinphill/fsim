@@ -357,6 +357,10 @@ void Lowerer::initialize_procedure_support() {
 
 void Lowerer::lower_procedure_call(const Statement& statement) {
     if (language_ == frontend::Language::Vhdl2008
+        && lower_vhdl_vital_delay_call(statement)) {
+        return;
+    }
+    if (language_ == frontend::Language::Vhdl2008
         && lower_vhdl_vital_state_table_call(statement)) {
         return;
     }

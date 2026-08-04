@@ -247,6 +247,7 @@ struct Interpreter::Impl {
     std::uint64_t wait_timeout_generation{};
     std::uint64_t random_state{};
     std::map<InstructionIndex, VitalTimingState> vital_timing_states;
+    std::map<InstructionIndex, VitalDelayState> vital_delay_states;
     bool halted{};
     std::optional<ProcessId> fork_parent;
     std::optional<std::uint64_t> fork_group;
@@ -411,6 +412,17 @@ struct Interpreter::Impl {
       ProcessId process,
       InstructionIndex instruction,
       const VitalTimingCheck& operation);
+
+  void execute_vital_delay(
+      ProcessId process,
+      InstructionIndex instruction,
+      const VitalDelay& operation,
+      const VitalDelayRuntimeValues& values);
+  void execute_vital_delay_operation(
+      ProcessId process_id,
+      ProcessState& process,
+      InstructionIndex instruction,
+      const VitalDelay& operation);
 
   [[nodiscard]] PackedLogic4 &get_register(ProcessState &process,
                                            RegisterId id);

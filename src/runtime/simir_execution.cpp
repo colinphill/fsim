@@ -565,26 +565,25 @@ struct Interpreter::Impl::ExecutionContext final
       const std::optional<PackedLogic4>& minimum) override {
     return owner.random_value(process, kind, maximum, minimum);
   }
-  void report(
-      const std::string_view message,
-      const AssertionSeverity severity,
-      const SourceLocation& source) override {
+  void report(const std::string_view message,
+              const AssertionSeverity severity,
+              const SourceLocation& source) override {
     if (!owner.report_hook) return;
-    owner.report_hook(
-        process, message, severity, source,
-        owner.scheduler.now(), owner.scheduler.delta());
+    owner.report_hook(process, message, severity, source,
+                      owner.scheduler.now(), owner.scheduler.delta());
   }
   [[nodiscard]] Logic9 evaluate_vital_timing_check(
-      const InstructionIndex instruction,
-      const VitalTimingCheck& operation) override {
+      const InstructionIndex instruction, const VitalTimingCheck& operation) override {
     return owner.execute_vital_timing_check(process, instruction, operation);
   }
-
+  void execute_vital_delay(const InstructionIndex instruction,
+      const VitalDelay& operation, const VitalDelayRuntimeValues& values) override {
+    owner.execute_vital_delay(process, instruction, operation, values);
+  }
   [[nodiscard]] bool execution_points_enabled() const noexcept override {
     return static_cast<bool>(owner.execution_point_hook);
   }
 };
-
 void Interpreter::Impl::request_channel_update(
     const ProcessId process_id,
     const std::uint64_t channel) {
@@ -596,7 +595,6 @@ void Interpreter::Impl::request_channel_update(
   if (!pending_channel_updates.insert(channel).second) {
     return;
   }
-
   auto callback =
       [this, process_id, channel](Scheduler&) {
         auto& state = get_process(process_id);
@@ -618,7 +616,6 @@ void Interpreter::Impl::request_channel_update(
         SchedulerPhase::update, channel, std::move(callback));
   }
 }
-
 void Interpreter::Impl::handle_boundary(
     ProcessState& process,
     const InstructionIndex instruction,
@@ -1013,6 +1010,9 @@ void Interpreter::Impl::execute(ProcessId id) {
             result.fill(context.evaluate_vital_timing_check(
                 instruction, op));
             get_register(process, op.destination) = std::move(result);
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, VitalDelay>) {
+            execute_vital_delay_operation(id, process, instruction, op);
             ++process.pc;
           } else if constexpr (std::is_same_v<OperationType, SignalActive>) {
             (void)get_signal(op.signal);

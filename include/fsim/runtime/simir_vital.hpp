@@ -80,3 +80,61 @@ struct VitalTimingState {
   std::optional<SimulationTick> trigger_request;
   bool trigger_level{};
 };
+
+enum class VitalDelayKind : std::uint8_t { signal, wire, path };
+enum class VitalDelayShape : std::uint8_t { single, delay01, delay01z };
+enum class VitalGlitchMode : std::uint8_t {
+  on_event,
+  on_detect,
+  inertial,
+  transport,
+};
+
+struct VitalPathCandidate {
+  RegisterId input_change_time{};
+  RegisterId condition{};
+  std::array<RegisterId, 6> delays{};
+};
+
+/// One intrinsic VITAL signal, wire, or path-delay call site.
+struct VitalDelay {
+  VitalDelayKind kind{VitalDelayKind::signal};
+  VitalDelayShape shape{VitalDelayShape::single};
+  SignalId output{};
+  RegisterId source{};
+  std::optional<RegisterId> glitch_data;
+  std::vector<VitalPathCandidate> paths;
+  std::array<RegisterId, 6> default_delays{};
+  VitalGlitchMode mode{VitalGlitchMode::on_event};
+  RegisterId output_map{};
+  bool x_on{true};
+  bool message_on{true};
+  bool negative_preemption{};
+  bool ignore_default_delay{};
+  bool reject_fast_path{};
+  AssertionSeverity severity{AssertionSeverity::warning};
+  std::string message;
+  SourceLocation source_location;
+};
+
+struct VitalDelayState {
+  bool initialized{};
+  bool last_glitch{};
+  Logic9 last_value{Logic9::u};
+  Logic9 scheduled_value{Logic9::u};
+  SimulationTick scheduled_time{};
+  SimulationTick glitch_time{};
+};
+
+struct VitalPathRuntimeValue {
+  SimulationTick input_change_time{};
+  bool condition{};
+  std::array<SimulationTick, 6> delays{};
+};
+
+struct VitalDelayRuntimeValues {
+  Logic9 source{Logic9::u};
+  std::vector<VitalPathRuntimeValue> paths;
+  std::array<SimulationTick, 6> default_delays{};
+  std::array<Logic9, 9> output_map{};
+};

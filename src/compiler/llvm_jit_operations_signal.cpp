@@ -27,6 +27,7 @@ using runtime::simir::SignalLastValue;
 using runtime::simir::SignalLastEvent;
 using runtime::simir::ReadSimulationTime;
 using runtime::simir::VitalTimingCheck;
+using runtime::simir::VitalDelay;
 using runtime::simir::SignalActive;
 using runtime::simir::SignalLastActive;
 using runtime::simir::SignalDriving;
@@ -48,7 +49,7 @@ llvm::StructType* create_jit_runtime_type(llvm::LLVMContext& context) {
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer},
+       pointer, pointer, pointer},
       "fsim_jit_runtime_v1");
 }
 
@@ -642,6 +643,16 @@ void SignalOperationLowerer::lower(
       builder, registers, operation.destination,
       EncodedValue{
           plane(0), plane(1), 1, plane(2), plane(3), ValueKind::logic9});
+  branch_to_next();
+}
+
+void SignalOperationLowerer::lower(const VitalDelay&) {
+  builder.CreateCall(
+      vital_delay_type,
+      vital_delay_callback,
+      {context_pointer,
+       llvm::ConstantInt::get(i32, process_id),
+       llvm::ConstantInt::get(i32, instruction)});
   branch_to_next();
 }
 

@@ -654,4 +654,274 @@ void test_vital_timing_checks() {
       "VITAL MsgOn reporting is independent of XOn result corruption");
 }
 
+void test_vital_delay_scheduling() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  struct Result {
+    std::vector<std::pair<SimulationTick, std::string>> changes;
+    std::size_t reports{};
+  };
+  const auto run = [](
+                       const VitalDelayKind kind,
+                       const VitalDelayShape shape,
+                       const VitalGlitchMode mode,
+                       const std::array<SimulationTick, 6>& defaults,
+                       const std::vector<std::array<SimulationTick, 6>>& paths,
+                       const std::vector<std::pair<SimulationTick, Logic9>>& stimulus,
+                       const std::string_view output_map = "UX01ZWLH-",
+                       const bool x_on = true,
+                       const bool negative_preemption = false,
+                       const bool reject_fast_path = false,
+                       const bool ignore_default_delay = false) {
+    Interpreter interpreter{{1000, 64}};
+    const auto input = interpreter.add_signal(
+        {"vital.input", PackedLogic4::from_logic9_msb_string("0"),
+         ResolutionKind::none, ValueKind::logic9});
+    const auto output = interpreter.add_signal(
+        {"vital.output", PackedLogic4::from_logic9_msb_string("U"),
+         ResolutionKind::none, ValueKind::logic9});
+
+    constexpr RegisterId source_register = 0U;
+    constexpr RegisterId default_begin = 1U;
+    constexpr RegisterId map_register = 7U;
+    constexpr RegisterId condition_register = 8U;
+    constexpr RegisterId last_event_register = 9U;
+    constexpr RegisterId path_begin = 10U;
+    constexpr std::size_t maximum_paths = 2U;
+    constexpr std::size_t register_count =
+        path_begin + maximum_paths * 6U;
+
+    Process delay_process;
+    delay_process.name = "vital-delay";
+    delay_process.register_count = register_count;
+    delay_process.register_value_kinds.assign(
+        register_count, ValueKind::logic4);
+    delay_process.register_value_kinds[source_register] = ValueKind::logic9;
+    delay_process.register_value_kinds[map_register] = ValueKind::logic9;
+    delay_process.static_sensitivity = {{input, EdgeKind::any}};
+    delay_process.driver_regions = {{output, 0, 1, true}};
+    delay_process.operations.emplace_back(ReadSignal{source_register, input});
+    for (std::size_t index = 0; index < defaults.size(); ++index) {
+      delay_process.operations.emplace_back(LoadConstant{
+          static_cast<RegisterId>(default_begin + index),
+          PackedLogic4::from_aval_bval(64U, defaults[index], 0U)});
+    }
+    delay_process.operations.emplace_back(LoadConstant{
+        map_register,
+        PackedLogic4::from_logic9_msb_string(output_map)});
+    delay_process.operations.emplace_back(LoadConstant{
+        condition_register, PackedLogic4::from_aval_bval(1U, 1U, 0U)});
+    delay_process.operations.emplace_back(
+        SignalLastEvent{last_event_register, input});
+
+    VitalDelay delay;
+    delay.kind = kind;
+    delay.shape = shape;
+    delay.output = output;
+    delay.source = source_register;
+    delay.output_map = map_register;
+    delay.mode = mode;
+    delay.x_on = x_on;
+    delay.message_on = true;
+    delay.negative_preemption = negative_preemption;
+    delay.reject_fast_path = reject_fast_path;
+    delay.ignore_default_delay = ignore_default_delay;
+    delay.message = "VITAL delay glitch";
+    for (std::size_t index = 0; index < defaults.size(); ++index) {
+      delay.default_delays[index] =
+          static_cast<RegisterId>(default_begin + index);
+    }
+    require(paths.size() <= maximum_paths, "VITAL test path capacity");
+    for (std::size_t path_index = 0; path_index < paths.size(); ++path_index) {
+      VitalPathCandidate candidate;
+      candidate.input_change_time = last_event_register;
+      candidate.condition = condition_register;
+      for (std::size_t delay_index = 0; delay_index < 6U; ++delay_index) {
+        const auto id = static_cast<RegisterId>(
+            path_begin + path_index * 6U + delay_index);
+        delay_process.operations.emplace_back(LoadConstant{
+            id,
+            PackedLogic4::from_aval_bval(
+                64U, paths[path_index][delay_index], 0U)});
+        candidate.delays[delay_index] = id;
+      }
+      delay.paths.push_back(candidate);
+    }
+    delay_process.operations.emplace_back(delay);
+    delay_process.operations.emplace_back(WaitSensitivity{});
+    delay_process.operations.emplace_back(Jump{0U});
+    static_cast<void>(interpreter.add_process(std::move(delay_process)));
+
+    Process driver;
+    driver.id = 1U;
+    driver.name = "vital-delay-stimulus";
+    driver.register_count = stimulus.size();
+    driver.register_value_kinds.assign(stimulus.size(), ValueKind::logic9);
+    driver.driver_regions = {{input, 0, 1, true}};
+    for (std::size_t index = 0; index < stimulus.size(); ++index) {
+      PackedLogic4 value(1U);
+      value.fill(stimulus[index].second);
+      driver.operations.emplace_back(LoadConstant{
+          static_cast<RegisterId>(index),
+          std::move(value)});
+      driver.operations.emplace_back(WriteAfter{
+          input, static_cast<RegisterId>(index), stimulus[index].first});
+    }
+    driver.operations.emplace_back(Halt{});
+    static_cast<void>(interpreter.add_process(std::move(driver)));
+
+    Result result;
+    interpreter.set_signal_change_hook(
+        [&](const SignalId signal,
+            const PackedLogic4& value,
+            const SimulationTick time) {
+          if (signal == output) {
+            result.changes.emplace_back(time, value.to_msb_string());
+          }
+        });
+    interpreter.set_report_hook(
+        [&](ProcessId, std::string_view, AssertionSeverity,
+            const SourceLocation&, SimulationTick, std::uint64_t) {
+          ++result.reports;
+        });
+    interpreter.start();
+    static_cast<void>(interpreter.run());
+    return result;
+  };
+
+  const auto single = run(
+      VitalDelayKind::wire, VitalDelayShape::single,
+      VitalGlitchMode::transport, {5, 0, 0, 0, 0, 0}, {},
+      {{2, Logic9::one}, {4, Logic9::zero}});
+  require(
+      single.changes
+          == std::vector<std::pair<SimulationTick, std::string>>{
+              {5, "0"}, {7, "1"}, {9, "0"}},
+      "VitalWireDelay scalar uses transport event propagation");
+
+  const auto zero_delay = run(
+      VitalDelayKind::signal, VitalDelayShape::single,
+      VitalGlitchMode::transport, {0, 0, 0, 0, 0, 0}, {},
+      {{2, Logic9::one}});
+  require(
+      zero_delay.changes
+          == std::vector<std::pair<SimulationTick, std::string>>{
+              {0, "0"}, {2, "1"}},
+      "VitalSignalDelay zero delay commits through deterministic delta updates");
+
+  bool overflow_rejected{};
+  try {
+    static_cast<void>(run(
+        VitalDelayKind::signal, VitalDelayShape::single,
+        VitalGlitchMode::transport,
+        {std::numeric_limits<SimulationTick>::max(), 0, 0, 0, 0, 0}, {},
+        {{2, Logic9::one}}));
+  } catch (const std::overflow_error&) {
+    overflow_rejected = true;
+  }
+  require(
+      overflow_rejected,
+      "VitalSignalDelay rejects checked simulation-time overflow");
+
+  const auto delay01 = run(
+      VitalDelayKind::wire, VitalDelayShape::delay01,
+      VitalGlitchMode::transport, {3, 7, 0, 0, 0, 0}, {},
+      {{10, Logic9::one}, {20, Logic9::zero}});
+  require(
+      delay01.changes
+          == std::vector<std::pair<SimulationTick, std::string>>{
+              {7, "0"}, {13, "1"}, {27, "0"}},
+      "VitalWireDelay01 selects rise and fall delays");
+
+  const auto delay01z = run(
+      VitalDelayKind::wire, VitalDelayShape::delay01z,
+      VitalGlitchMode::transport, {2, 3, 4, 5, 6, 7}, {},
+      {{10, Logic9::z}, {20, Logic9::one}}, "UX0HZWLH-");
+  require(
+      delay01z.changes
+          == std::vector<std::pair<SimulationTick, std::string>>{
+              {7, "0"}, {14, "Z"}, {25, "H"}},
+      "VitalWireDelay01Z selects Z transitions and applies OutputMap");
+
+  const std::vector<std::array<SimulationTick, 6>> path_delays{
+      {10, 10, 0, 0, 0, 0}, {4, 4, 0, 0, 0, 0}};
+  const auto selected_path = run(
+      VitalDelayKind::path, VitalDelayShape::single,
+      VitalGlitchMode::transport, {10, 0, 0, 0, 0, 0}, path_delays,
+      {{20, Logic9::one}});
+  require(
+      selected_path.changes
+          == std::vector<std::pair<SimulationTick, std::string>>{
+              {10, "0"}, {24, "1"}},
+      "simultaneous VITAL candidates select the shortest effective path");
+
+  const auto on_detect = run(
+      VitalDelayKind::path, VitalDelayShape::single,
+      VitalGlitchMode::on_detect, {10, 0, 0, 0, 0, 0}, path_delays,
+      {{2, Logic9::one}});
+  require(
+      on_detect.changes
+          == std::vector<std::pair<SimulationTick, std::string>>{
+              {2, "X"}, {10, "1"}},
+      "OnDetect injects X immediately without negative preemption");
+  require(on_detect.reports == 1U, "OnDetect reports one detected glitch");
+
+  const auto on_event = run(
+      VitalDelayKind::path, VitalDelayShape::single,
+      VitalGlitchMode::on_event, {10, 0, 0, 0, 0, 0}, path_delays,
+      {{2, Logic9::one}});
+  require(
+      on_event.changes
+          == std::vector<std::pair<SimulationTick, std::string>>{{10, "X"}},
+      "OnEvent injects X at the projected event boundary");
+
+  const auto transport = run(
+      VitalDelayKind::path, VitalDelayShape::single,
+      VitalGlitchMode::transport, {10, 0, 0, 0, 0, 0}, path_delays,
+      {{2, Logic9::one}}, "UX01ZWLH-", false);
+  require(
+      transport.changes
+          == std::vector<std::pair<SimulationTick, std::string>>{{10, "1"}},
+      "VitalTransport retains ordered path transactions without X injection");
+  require(
+      transport.reports == 1U,
+      "MsgOn reports independently when XOn is disabled");
+
+  const auto inertial = run(
+      VitalDelayKind::path, VitalDelayShape::single,
+      VitalGlitchMode::inertial, {10, 0, 0, 0, 0, 0}, path_delays,
+      {{2, Logic9::one}}, "UX01ZWLH-", false);
+  require(
+      inertial.changes
+          == std::vector<std::pair<SimulationTick, std::string>>{{10, "1"}},
+      "VitalInertial rejects the superseded default transaction");
+
+  const auto negative_preemption = run(
+      VitalDelayKind::path, VitalDelayShape::single,
+      VitalGlitchMode::transport, {10, 0, 0, 0, 0, 0}, path_delays,
+      {{2, Logic9::one}}, "UX01ZWLH-", false, true);
+  require(
+      negative_preemption.changes
+          == std::vector<std::pair<SimulationTick, std::string>>{{6, "1"}},
+      "NegPreemptOn permits a faster path to replace a later transaction");
+
+  const auto reject_fast_path = run(
+      VitalDelayKind::path, VitalDelayShape::delay01,
+      VitalGlitchMode::transport, {10, 10, 0, 0, 0, 0}, path_delays,
+      {{2, Logic9::one}}, "UX01ZWLH-", false, true, true);
+  require(
+      reject_fast_path.changes
+          == std::vector<std::pair<SimulationTick, std::string>>{{10, "0"}},
+      "RejectFastPath preserves the already projected slower path");
+
+  const auto ignored_default = run(
+      VitalDelayKind::path, VitalDelayShape::single,
+      VitalGlitchMode::transport, {10, 0, 0, 0, 0, 0}, {},
+      {{20, Logic9::one}}, "UX01ZWLH-", false, false, false, true);
+  require(
+      ignored_default.changes.empty(),
+      "a null path range with IgnoreDefaultDelay schedules no transaction");
+}
+
 } // namespace fsim::tests::runtime

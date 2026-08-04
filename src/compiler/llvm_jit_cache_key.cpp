@@ -78,6 +78,7 @@ using runtime::simir::Process;
 using runtime::simir::ReadSignal;
 using runtime::simir::ReadSimulationTime;
 using runtime::simir::VitalTimingCheck;
+using runtime::simir::VitalDelay;
 using runtime::simir::ReadStringObject;
 using runtime::simir::Reduction;
 using runtime::simir::ReductionOperator;
@@ -141,7 +142,7 @@ using runtime::simir::DisableFork;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v75";
+    "fsim-llvm-native-object-v76";
 
 void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
                  const std::uint64_t value) {
@@ -441,6 +442,39 @@ void add_dynamic_part_index_key(
             builder.add("source-path", value.source.path);
             add_key_u64(builder, "source-line", value.source.line);
             add_key_u64(builder, "source-column", value.source.column);
+          } else if constexpr (std::is_same_v<OperationType, VitalDelay>) {
+            builder.add("operation", "VitalDelay");
+            add_key_u64(builder, "kind", static_cast<std::uint8_t>(value.kind));
+            add_key_u64(builder, "shape", static_cast<std::uint8_t>(value.shape));
+            add_key_u64(builder, "output", value.output);
+            add_key_u64(builder, "source", value.source);
+            add_key_u64(builder, "has-glitch-data", value.glitch_data.has_value());
+            if (value.glitch_data) {
+              add_key_u64(builder, "glitch-data", *value.glitch_data);
+            }
+            for (const auto delay : value.default_delays) {
+              add_key_u64(builder, "default-delay", delay);
+            }
+            add_key_u64(builder, "path-count", value.paths.size());
+            for (const auto& path : value.paths) {
+              add_key_u64(builder, "input-change", path.input_change_time);
+              add_key_u64(builder, "condition", path.condition);
+              for (const auto delay : path.delays) {
+                add_key_u64(builder, "path-delay", delay);
+              }
+            }
+            add_key_u64(builder, "mode", static_cast<std::uint8_t>(value.mode));
+            add_key_u64(builder, "output-map", value.output_map);
+            add_key_u64(builder, "x-on", value.x_on);
+            add_key_u64(builder, "message-on", value.message_on);
+            add_key_u64(builder, "negative-preemption", value.negative_preemption);
+            add_key_u64(builder, "ignore-default", value.ignore_default_delay);
+            add_key_u64(builder, "reject-fast", value.reject_fast_path);
+            add_key_u64(builder, "severity", static_cast<std::uint8_t>(value.severity));
+            builder.add("message", value.message);
+            builder.add("source-path", value.source_location.path);
+            add_key_u64(builder, "source-line", value.source_location.line);
+            add_key_u64(builder, "source-column", value.source_location.column);
           } else if constexpr (std::is_same_v<OperationType, SignalActive>) {
             builder.add("operation", "SignalActive");
             add_key_u64(builder, "destination", value.destination);

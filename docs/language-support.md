@@ -1133,9 +1133,15 @@ direction enables, Trigger deadlines, deterministic violation/report controls,
 and cataloged static-profile diagnostics. All four `VitalStateTable` procedures
 execute with first-row priority, previous-input transitions, present/next state,
 unknown/no-match and retention behavior, scalar/vector results, zero state
-count, null input expressions, and ascending/descending vectors. Path/wire
-delays and pulse rejection, VITAL memories/vendor profiles, and SDF annotation
-remain in subsequent v2 batches.
+count, null input expressions, and ascending/descending vectors. The public
+path-record/array families, scalar signal delay, scalar/01/01Z wire delays, and
+single/01/01Z path delays now execute with static choices and null ranges,
+shortest remaining-path selection, custom output maps, default-delay controls,
+fast/negative preemption, and distinct `OnEvent`, `OnDetect`, `VitalInertial`,
+and `VitalTransport` pulse behavior. Per-call glitch state, X/report/severity
+controls, interpreter/LLVM O0/O2/debug execution, cold/warm cache reuse,
+relocatable artifacts, callbacks, and VCD use the common scheduler. VITAL
+memories/vendor profiles and SDF annotation remain in subsequent v2 batches.
 
 ## v1 target
 

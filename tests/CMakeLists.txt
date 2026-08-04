@@ -1029,6 +1029,10 @@ if(TARGET fsim_application)
       fsim.application.vhdl_ieee_integration
       fast vhdl packages contexts integration)
     fsim_add_application_case(
+      2 vhdl_vital_delays app/vhdl_vital_delay_application_test.cpp
+      fsim.application.vhdl_vital_delays
+      fast vhdl vital timing delay llvm cache vcd)
+    fsim_add_application_case(
       2 vhdl_records app/vhdl_record_application_test.cpp
       fsim.application.vhdl_records fast vhdl records logic9)
     fsim_add_application_case(

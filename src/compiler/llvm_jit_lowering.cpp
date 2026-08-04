@@ -24,30 +24,18 @@
 #include <vector>
 namespace fsim::compiler::llvm_detail {
 using runtime::Logic9;
-using runtime::simir::Assert;
-using runtime::simir::Binary;
-using runtime::simir::BinaryOperator;
-using runtime::simir::Branch;
-using runtime::simir::Call;
-using runtime::simir::Concatenate;
-using runtime::simir::ConditionalSelect;
-using runtime::simir::CountOnes;
-using runtime::simir::CountBits;
-using runtime::simir::CopyRegister;
-using runtime::simir::DebugPoint;
-using runtime::simir::Display;
-using runtime::simir::DynamicExtract;
-using runtime::simir::DynamicPartSelect;
-using runtime::simir::DynamicIndex;
-using runtime::simir::DynamicInsert;
-using runtime::simir::DynamicPartIndex;
-using runtime::simir::DynamicPartInsert;
-using runtime::simir::EdgeKind;
-using runtime::simir::Extract;
-using runtime::simir::FormatDisplay;
-using runtime::simir::ForceSignalSlice;
-using runtime::simir::Fork;
-using runtime::simir::ForkEnd;
+using runtime::simir::Assert; using runtime::simir::Binary;
+using runtime::simir::BinaryOperator; using runtime::simir::Branch;
+using runtime::simir::Call; using runtime::simir::Concatenate;
+using runtime::simir::ConditionalSelect; using runtime::simir::CountOnes;
+using runtime::simir::CountBits; using runtime::simir::CopyRegister;
+using runtime::simir::DebugPoint; using runtime::simir::Display;
+using runtime::simir::DynamicExtract; using runtime::simir::DynamicPartSelect;
+using runtime::simir::DynamicIndex; using runtime::simir::DynamicInsert;
+using runtime::simir::DynamicPartIndex; using runtime::simir::DynamicPartInsert;
+using runtime::simir::EdgeKind; using runtime::simir::Extract;
+using runtime::simir::FormatDisplay; using runtime::simir::ForceSignalSlice;
+using runtime::simir::Fork; using runtime::simir::ForkEnd;
 using runtime::simir::Halt;
 using runtime::simir::InstructionIndex;
 using runtime::simir::Insert;
@@ -70,6 +58,7 @@ using runtime::simir::Process;
 using runtime::simir::ReadSignal;
 using runtime::simir::ReadSimulationTime;
 using runtime::simir::VitalTimingCheck;
+using runtime::simir::VitalDelay;
 using runtime::simir::Reduction;
 using runtime::simir::ReductionOperator;
 using runtime::simir::RegisterId;
@@ -305,6 +294,13 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         pointer,
         builder.CreateStructGEP(runtime_type, runtime_argument, 71),
         "vital_timing_check");
+  }
+  llvm::Value* vital_delay_callback = nullptr;
+  if (validated.uses_vital_delay) {
+    vital_delay_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(runtime_type, runtime_argument, 72),
+        "vital_delay");
   }
   llvm::Value* output_callback = nullptr;
   if (validated.uses_output) {
@@ -549,6 +545,8 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       llvm::FunctionType::get(i64, {pointer}, false);
   auto* vital_timing_check_type =
       llvm::FunctionType::get(i32, {pointer, i32, i32}, false);
+  auto* vital_delay_type = llvm::FunctionType::get(
+      llvm::Type::getVoidTy(context), {pointer, i32, i32}, false);
   auto* output_type =
       llvm::FunctionType::get(
           llvm::Type::getVoidTy(context),
@@ -1191,6 +1189,7 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         signal_driving_value_logic9_callback,
         read_simulation_time_callback,
         vital_timing_check_callback,
+        vital_delay_callback,
         read_type,
         read_logic9_type,
         write_type,
@@ -1217,6 +1216,7 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         signal_driving_value_type,
         read_simulation_time_type,
         vital_timing_check_type,
+        vital_delay_type,
         projected_element_type,
         logic9_projected_element_type,
         read_bval_slot,
@@ -1286,6 +1286,8 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             signal_lowerer.lower(operation);
           } else if constexpr (
               std::is_same_v<OperationType, VitalTimingCheck>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (std::is_same_v<OperationType, VitalDelay>) {
             signal_lowerer.lower(operation);
           } else if constexpr (std::is_same_v<OperationType, SignalActive>) {
             signal_lowerer.lower(operation);

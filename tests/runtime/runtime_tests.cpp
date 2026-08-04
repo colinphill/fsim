@@ -66,6 +66,7 @@ int main() {
     test_simir_inertial_transition_writes();
     test_simir_projected_writes();
     test_vital_timing_checks();
+    test_vital_delay_scheduling();
     test_vcd();
   } catch (const std::exception& error) {
     std::cerr << "runtime test failure: " << error.what() << '\n';

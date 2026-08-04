@@ -464,6 +464,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_vhdl_matching.cpp
       src/elaboration/lowerer_vhdl_logic.cpp
   src/elaboration/lowerer_vhdl_vital.cpp
+  src/elaboration/lowerer_vhdl_vital_delay.cpp
   src/elaboration/lowerer_vhdl_vital_state.cpp
   src/elaboration/lowerer_vhdl_vital_timing.cpp
       src/elaboration/lowerer_vhdl_numeric.cpp
@@ -729,6 +730,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_design_artifact_codec.cpp
       src/app/application_executor_frame.cpp
       src/app/application_executors.cpp
+      src/app/application_executor_vital.cpp
       src/app/application_executor_signal_attributes.cpp
       src/app/application_executor_services.cpp
       src/app/application_library_export.cpp

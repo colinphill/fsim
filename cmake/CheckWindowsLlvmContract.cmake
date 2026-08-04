@@ -119,7 +119,7 @@ foreach(FSIM_ABI_POLICY IN ITEMS
   endif()
 endforeach()
 foreach(FSIM_ABI_EVIDENCE IN ITEMS
-    "sizeof(fsim_jit_runtime_v1) == 560"
+    "sizeof(fsim_jit_runtime_v1) == 568"
     "sizeof(fsim_jit_frame_v1) == 80"
     "sizeof(fsim_jit_resume_result_v1) == 24")
   string(FIND "${FSIM_ABI_TEST_CONTENTS}" "${FSIM_ABI_EVIDENCE}" FSIM_INDEX)

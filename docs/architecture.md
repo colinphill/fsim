@@ -341,9 +341,19 @@ delayed signals for test/reference delay. Skew checks schedule their standard
 Trigger signal at the earliest outstanding directional deadline. State tables
 expand to packed comparisons and selections; variable profiles update
 caller-owned previous-input storage while signal profiles use exact runtime
-last-value history. Interpreter, LLVM, artifacts, debugging, callbacks,
-native caching, and tracing therefore share one deterministic path. Path/wire
-delays, pulse rejection, and memory models remain in Batches 142-143.
+last-value history. The three path-record families and their unconstrained
+arrays retain 64-bit project-tick delays, Boolean conditions, nominal record
+layout, static choices, and null ranges. `VitalSignalDelay`, all three
+`VitalWireDelay` overloads, and all three `VitalPathDelay` procedures lower to
+one typed operation per call site. The kernel selects the shortest remaining
+sensitized path, applies 01/01Z transition and output-map rules, and uses the
+common projected-waveform scheduler for `OnEvent`, `OnDetect`,
+`VitalInertial`, and `VitalTransport`. Scheduler-owned per-call glitch state
+tracks the prior source, projected time/value, and detection time without
+putting mutable scheduler state in generated code. Interpreter, LLVM,
+artifacts, debugging, callbacks, native caching, and tracing therefore share
+one deterministic path. VITAL memory and vendor-model closure remains in
+Batch 143.
 
 Executable VHDL units and package declarations may also name a constant as
 `package.constant` in their own library or
@@ -1383,7 +1393,9 @@ The Batch 139 append-only tail adds `signal_last_active`, `signal_driving`,
 `signal_driving_value`, and `signal_driving_value_logic9` at offsets 512 through
 536, preserving a 544-byte compatible prefix. Batch 141 appends
 `read_simulation_time` and `vital_timing_check` at offsets 544 and 552 for a
-560-byte table. Transaction-sensitive support processes drive
+560-byte table. Batch 142 appends `vital_delay` at offset 560 for a 568-byte
+table while retaining the complete 560-byte timing-check prefix.
+Transaction-sensitive support processes drive
 interned `'stable(T)`, `'quiet(T)`, `'transaction`, and `'delayed(T)` signals
 through ordinary projected writes; their scheduler state therefore remains in
 the serialized common signal/process graph rather than in generated code.

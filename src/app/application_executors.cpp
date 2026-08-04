@@ -46,6 +46,7 @@ namespace fsim::app::application_detail {
     runtime.signal_driving_value_logic9 = signal_driving_value_logic9;
     runtime.read_simulation_time = read_simulation_time;
     runtime.vital_timing_check = vital_timing_check;
+    runtime.vital_delay = vital_delay;
     runtime.write_output = write_output;
     runtime.schedule_output = schedule_output;
     runtime.write_report = write_report;
@@ -1614,33 +1615,6 @@ std::uint64_t LlvmProcessExecutor::read_simulation_time(
     return 0;
   }
   return state.context->current_time();
-}
-
-std::uint32_t LlvmProcessExecutor::vital_timing_check(
-    void* context,
-    const std::uint32_t process,
-    const std::uint32_t instruction) noexcept {
-  auto& state = *static_cast<CallbackState*>(context);
-  if (state.failure || state.context == nullptr || state.process == nullptr
-      || process != state.process->id
-      || instruction >= state.process->operations.size()) {
-    return static_cast<std::uint32_t>(runtime::Logic9::x);
-  }
-  try {
-    const auto* operation = runtime::simir::operation_get_if<
-        runtime::simir::VitalTimingCheck>(
-            &state.process->operations[instruction]);
-    if (operation == nullptr) {
-      throw std::logic_error{
-          "generated VITAL callback references the wrong operation"};
-    }
-    return static_cast<std::uint32_t>(
-        state.context->evaluate_vital_timing_check(
-            instruction, *operation));
-  } catch (...) {
-    capture_failure(state);
-    return static_cast<std::uint32_t>(runtime::Logic9::x);
-  }
 }
 
 std::uint32_t LlvmProcessExecutor::signal_active(

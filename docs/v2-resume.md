@@ -7,11 +7,28 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
-- Current unit: Batch 141, exactly 20 changes, complete from clean pushed Batch
-  140 closeout `c5c8a5c`; Batch 142 is next. Its authoritative VITAL
-  timing-check/state-table contract and per-change status are recorded in
-  `implementation_plan_v2.md`. Batch 140's final normal hosted run
-  `30923945372` passed all 12 jobs.
+- Current unit: Batch 142, exactly 20 changes, complete from clean pushed Batch
+  141 closeout `0d3be3e`. Its authoritative VITAL path/wire/pulse contract and
+  per-change status are recorded in `implementation_plan_v2.md`. Changes 1-20
+  are complete; Batch 143 is the next implementation unit. Batch 142 is not a
+  CI-monitoring batch.
+- Batch 142 accumulated work materializes all three public path-record/array
+  families and lowers scalar signal delay, all three wire-delay profiles, and
+  all three path-delay profiles to one append-only `VitalDelay` operation.
+  The common scheduler covers static and null path choices, shortest remaining
+  delay, 01/01Z transitions, custom maps, default suppression, all four glitch
+  modes, fast/negative preemption, checked time arithmetic, and independent
+  X/report controls. Focused interpreter, LLVM O0/O2, debug, cold/warm cache,
+  runtime-state, `.fsimobj`, relocated `.fsimdesign`, callback, diagnostic, and
+  VCD evidence passes. The JIT table extends from 560 to 568 bytes with
+  `vital_delay` at offset 560; the prior prefix is unchanged. Documentation,
+  inventories and focused gates pass at 1,688 diagnostics, 476 bounded
+  sources, 566 SPDX-owned artifacts, 1,099 execute rows, 4,396 evidence cells,
+  343 evidence paths, and 99 runtime owners. Exact-LLVM Debug and Release pass
+  111/111 tests after eight-worker builds, in 135.60 and 109.60 seconds
+  respectively. Source, catalog, inventory, installed-public-contract, Windows
+  ABI, differential, and release-candidate gates pass. Do not run a sanitizer
+  or inspect hosted CI for this non-monitoring batch.
 - Batch 141 Changes 1-20 are complete. Clean-room
   VITAL timing metadata, exact nine-state edge matching, persistent timing
   state, all five timing-check procedures, delayed sampling, Trigger-driven
@@ -32,6 +49,14 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   inventory, installed-public-contract, Windows ABI, differential, and
   release-candidate gates pass. No sanitizer or hosted CI monitoring ran
   because Batch 141 is not a scheduled boundary.
+- Batch 142 preserved one accumulated worktree through Changes 1-19. It owns
+  the three path-record/array families, three `VitalPathDelay` profiles, three
+  `VitalWireDelay` profiles, `VitalSignalDelay`, path selection, transition and
+  output-map delay selection, all four glitch modes, pulse rejection,
+  preemption controls, diagnostics, artifacts, both engines, callbacks,
+  debugger, and VCD. Change 20 completed the full exact-LLVM Debug/Release
+  gates, documentation closeout, one commit, and one push. Do not run a
+  sanitizer or inspect hosted CI for this batch.
 - Completed work: Batch 133 implements parent-library inference for HDL-to-HDL,
   HDL-to-SystemC, and SystemC-proxy-to-HDL boundaries, including resolver-only
   bindings, deterministic ambiguity, multiple logical-library SystemC
@@ -516,3 +541,4 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   cells, 340 evidence paths, and 97 runtime owners. The append-only JIT ABI
   retains its 544-byte compatible prefix and extends to 560 bytes. No sanitizer
   or hosted CI monitoring ran because Batch 141 is not a monitoring boundary.
+  Batch 141 is committed and pushed as `0d3be3e`.

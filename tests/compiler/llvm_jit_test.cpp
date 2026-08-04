@@ -114,6 +114,10 @@ int main() {
       JitOptimizationLevel::o0, "vital_timing_o0");
   test_vital_timing_at_level(
       JitOptimizationLevel::o2, "vital_timing_o2");
+  test_vital_delay_at_level(
+      JitOptimizationLevel::o0, "vital_delay_o0");
+  test_vital_delay_at_level(
+      JitOptimizationLevel::o2, "vital_delay_o2");
   test_persistent_object_cache();
   test_process_control_cache_identity();
   test_rejections();

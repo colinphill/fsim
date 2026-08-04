@@ -306,6 +306,11 @@ std::optional<std::vector<frontend::DesignUnit>> projected_units(
           "vitalglitchkindtype", "vitalglitchdatatype",
           "vitalglitchdataarraytype", "vitalskewexpectedtype",
           "vitalskewdatatype", "vitalskewdatainit",
+          "vitalpathtype", "vitalpath01type", "vitalpath01ztype",
+          "vitalpatharraytype", "vitalpatharray01type",
+          "vitalpatharray01ztype", "vitalpathdelay",
+          "vitalpathdelay01", "vitalpathdelay01z", "vitalwiredelay",
+          "vitalsignaldelay",
           "vitalextendtofilldelay", "vitalcalcdelay",
           "vitalsetupholdcheck", "vitalrecoveryremovalcheck",
           "vitalperiodpulsecheck", "vitalinphaseskewcheck",
@@ -697,6 +702,28 @@ void materialize_vital_types(frontend::DesignUnit& unit) {
             "vitalglitchdataarraytype", "natural", std::nullopt,
             glitch_data, unit.span, natural_base),
         frontend::TypeDeclarationKind::VhdlArray);
+    for (const auto& [record_name, array_name, delay_type] : {
+             std::tuple{
+                 "vitalpathtype", "vitalpatharraytype", time},
+             std::tuple{
+                 "vitalpath01type", "vitalpatharray01type", delay01},
+             std::tuple{
+                 "vitalpath01ztype", "vitalpatharray01ztype", delay01z}}) {
+      auto record = vital_record_type(
+          record_name,
+          {{"inputchangetime", time}, {"pathdelay", delay_type},
+           {"pathcondition", boolean}},
+          unit.span);
+      add_vital_alias(
+          unit, record_name, record,
+          frontend::TypeDeclarationKind::VhdlRecord);
+      add_vital_alias(
+          unit, array_name,
+          vital_array_type(
+              array_name, "natural", std::nullopt, std::move(record),
+              unit.span, natural_base),
+          frontend::TypeDeclarationKind::VhdlArray);
+    }
     auto skew_expected = vital_enumeration_type(
         "vitalskewexpectedtype", {"none", "s1r", "s1f", "s2r", "s2f"},
         unit.span);

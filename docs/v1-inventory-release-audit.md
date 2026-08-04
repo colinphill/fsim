@@ -96,3 +96,10 @@ bounded C/C++ sources, and 563 authored artifacts. Existing focused integration
 owners carry the positive, negative, artifact, debugger, callback, and trace
 matrix, so the test/control count remains 198. No external VITAL body or new
 third-party provenance is imported.
+
+v2 Batch 142 adds the path/wire lowerer, split compiled-callback adapter, and
+focused VITAL delay application as three SPDX-owned bounded C++ sources. Five
+delay diagnostics advance the reviewed totals to 1,688 diagnostics, 476
+bounded C/C++ sources, 566 authored artifacts, and 199 authored test/control
+files. The path/wire/pulse matrix adds no external VITAL body or third-party
+provenance.

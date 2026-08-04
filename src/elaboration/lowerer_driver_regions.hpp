@@ -68,6 +68,8 @@ collect_driver_regions(
           } else if constexpr (
               std::is_same_v<OperationType, VitalTimingCheck>) {
             if (value.trigger_signal) whole(*value.trigger_signal);
+          } else if constexpr (std::is_same_v<OperationType, VitalDelay>) {
+            whole(value.output);
           } else if constexpr (
               std::is_same_v<OperationType, WriteBlockingSlice>
               || std::is_same_v<OperationType, WriteUpdateSlice>

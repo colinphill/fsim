@@ -313,6 +313,26 @@ void verify_analysis(const fsim::project::Config& config) {
       "vital_timing", "vitalglitchdatatype");
   assert(glitch_data.packed_members.size() == 4);
   assert(glitch_data.width() == 130);
+  for (const auto& [record_name, array_name, width] : {
+           std::tuple{
+               "vitalpathtype", "vitalpatharraytype", std::uint64_t{129}},
+           std::tuple{
+               "vitalpath01type", "vitalpatharray01type",
+               std::uint64_t{193}},
+           std::tuple{
+               "vitalpath01ztype", "vitalpatharray01ztype",
+               std::uint64_t{449}}}) {
+    const auto record = package_type("vital_timing", record_name);
+    assert(record.packed_members.size() == 3U);
+    assert(record.packed_members[0].name == "inputchangetime");
+    assert(record.packed_members[1].name == "pathdelay");
+    assert(record.packed_members[2].name == "pathcondition");
+    assert(record.width() == width);
+    const auto array = package_type("vital_timing", array_name);
+    assert(array.vhdl_array && !array.width());
+    assert(array.vhdl_array->element_types.size() == 1U);
+    assert(array.vhdl_array->element_types.front().width() == width);
+  }
   const auto skew_data = package_type(
       "vital_timing", "vitalskewdatatype");
   assert(skew_data.packed_members.size() == 5);

@@ -97,6 +97,7 @@ int fsim_application_case_vhdl_numeric();
 int fsim_application_case_vhdl_fixed();
 int fsim_application_case_vhdl_float();
 int fsim_application_case_vhdl_ieee_integration();
+int fsim_application_case_vhdl_vital_delays();
 int fsim_application_case_vhdl_records();
 int fsim_application_case_vhdl_package_records();
 
@@ -118,6 +119,7 @@ constexpr NamedApplicationCase application_cases[] = {
     {"vhdl_fixed", fsim_application_case_vhdl_fixed},
     {"vhdl_float", fsim_application_case_vhdl_float},
     {"vhdl_ieee_integration", fsim_application_case_vhdl_ieee_integration},
+    {"vhdl_vital_delays", fsim_application_case_vhdl_vital_delays},
     {"vhdl_records", fsim_application_case_vhdl_records},
     {"vhdl_package_records", fsim_application_case_vhdl_package_records},
 };

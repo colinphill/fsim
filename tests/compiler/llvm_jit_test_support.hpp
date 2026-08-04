@@ -108,6 +108,7 @@ struct TestRuntime {
   std::uint64_t current_time{};
   std::uint32_t vital_timing_result{
       static_cast<std::uint32_t>(Logic9::zero)};
+  std::vector<std::pair<std::uint32_t, std::uint32_t>> vital_delay_calls;
   std::vector<ScheduledWrite> scheduled_writes;
   std::vector<std::string> output;
   std::vector<std::uint32_t> output_processes;
@@ -499,6 +500,14 @@ extern "C" inline std::uint32_t vital_timing_check(
   return static_cast<TestRuntime*>(opaque)->vital_timing_result;
 }
 
+extern "C" inline void vital_delay(
+    void* opaque,
+    const std::uint32_t process,
+    const std::uint32_t instruction) {
+  static_cast<TestRuntime*>(opaque)->vital_delay_calls.emplace_back(
+      process, instruction);
+}
+
 extern "C" inline void write_output(
     void* opaque,
     const std::uint32_t process,
@@ -888,6 +897,7 @@ extern "C" inline std::uint32_t write_string_output(
   result.signal_driving_value_logic9 = &signal_driving_value_logic9;
   result.read_simulation_time = &read_simulation_time;
   result.vital_timing_check = &vital_timing_check;
+  result.vital_delay = &vital_delay;
   result.write_output = &write_output;
   result.schedule_output = &schedule_output;
   result.write_report = &write_report;
@@ -1155,6 +1165,9 @@ void test_logic9_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_vital_timing_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_vital_delay_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_persistent_object_cache();

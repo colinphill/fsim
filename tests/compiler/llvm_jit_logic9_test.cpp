@@ -163,6 +163,56 @@ void test_vital_timing_at_level(
       == planes(PackedLogic4::from_logic9_msb_string("X")));
 }
 
+void test_vital_delay_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol) {
+  Process process;
+  process.id = 93;
+  process.name = "vital_delay";
+  process.register_count = 8;
+  process.register_value_kinds.assign(8U, ValueKind::logic4);
+  process.register_value_kinds[0] = ValueKind::logic9;
+  process.register_value_kinds[7] = ValueKind::logic9;
+  process.operations.emplace_back(LoadConstant{
+      0, PackedLogic4::from_logic9_msb_string("1")});
+  for (RegisterId index = 1U; index <= 6U; ++index) {
+    process.operations.emplace_back(LoadConstant{
+        index, PackedLogic4::from_aval_bval(64U, index, 0U)});
+  }
+  process.operations.emplace_back(LoadConstant{
+      7, PackedLogic4::from_logic9_msb_string("UX01ZWLH-")});
+  VitalDelay delay;
+  delay.kind = VitalDelayKind::wire;
+  delay.shape = VitalDelayShape::delay01z;
+  delay.output = 0U;
+  delay.source = 0U;
+  delay.output_map = 7U;
+  delay.default_delays = {1U, 2U, 3U, 4U, 5U, 6U};
+  process.operations.emplace_back(delay);
+  process.operations.emplace_back(Halt{});
+
+  const std::array<std::uint32_t, 1> widths{1U};
+  const std::array<ValueKind, 1> kinds{ValueKind::logic9};
+  LlvmJit jit{LlvmJitOptions{optimization, {}}};
+  assert(jit.supports_process(process, widths, kinds));
+  jit.add_process(symbol, process, widths, kinds);
+  const auto handle = jit.lookup(symbol);
+  TestRuntime runtime;
+  auto descriptor = abi(runtime);
+  assert(
+      jit.execute(handle, descriptor)
+      == JitExecutionStatus::completed);
+  assert((
+      runtime.vital_delay_calls
+      == std::vector<std::pair<std::uint32_t, std::uint32_t>>{{93U, 8U}}));
+
+  auto missing_callback = descriptor;
+  missing_callback.vital_delay = nullptr;
+  expect_error(
+      [&] { (void)jit.execute(handle, missing_callback); },
+      "requires vital_delay");
+}
+
 void test_rejections() {
   LlvmJit jit;
   const std::array<std::uint32_t, 1> one_signal{1};

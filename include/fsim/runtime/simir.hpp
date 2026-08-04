@@ -1715,6 +1715,13 @@ public:
     throw std::logic_error{
         "alternate process executor does not support VITAL timing checks"};
   }
+  virtual void execute_vital_delay(
+      InstructionIndex,
+      const VitalDelay&,
+      const VitalDelayRuntimeValues&) {
+    throw std::logic_error{
+        "alternate process executor does not support VITAL delays"};
+  }
 
   /// True when an embedding debugger currently requests source boundaries.
   [[nodiscard]] virtual bool execution_points_enabled() const noexcept {

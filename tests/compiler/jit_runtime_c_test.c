@@ -181,7 +181,9 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, read_simulation_time) == 544,
                "runtime simulation-time helper was not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, vital_timing_check) == 552,
                "runtime VITAL timing helper was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 560,
+_Static_assert(offsetof(fsim_jit_runtime_v1, vital_delay) == 560,
+               "runtime VITAL delay helper was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 568,
                "unexpected extended runtime ABI size");
 _Static_assert(sizeof(fsim_jit_projected_element_v1) == 24,
                "unexpected projected-waveform element size");
@@ -406,6 +408,13 @@ static uint32_t vital_timing_check(
   return process == UINT32_C(4) && instruction == UINT32_C(9)
       ? UINT32_C(1)
       : UINT32_C(2);
+}
+
+static void vital_delay(
+    void* context, uint32_t process, uint32_t instruction) {
+  (void)context;
+  (void)process;
+  (void)instruction;
 }
 
 static void write_output(
@@ -710,7 +719,8 @@ int main(void) {
       signal_driving_value,
       signal_driving_value_logic9,
       read_simulation_time,
-      vital_timing_check};
+      vital_timing_check,
+      vital_delay};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);

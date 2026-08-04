@@ -1079,7 +1079,7 @@ private:
     bool lower_vhdl_protected_procedure_call(const Statement&);
     bool lower_vhdl_file_procedure_call(const Statement&);
     bool lower_vhdl_textio_procedure_call(const Statement&);
-    bool lower_vhdl_vital_state_table_call(const Statement&);
+    bool lower_vhdl_vital_delay_call(const Statement&); bool lower_vhdl_vital_state_table_call(const Statement&);
     bool lower_vhdl_vital_procedure_call(const Statement&);
     bool lower_vhdl_access_assignment(const Statement&);
     std::optional<ContainerRegisterId> vhdl_access_heap(

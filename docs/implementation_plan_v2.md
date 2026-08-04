@@ -749,6 +749,69 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     Commit and push the accumulated batch once. Batch 141 is not a CI boundary;
     no sanitizer or hosted CI-monitoring gate ran.
 
+## Batch 142 - VITAL path, wire, and pulse semantics - Complete
+
+1. **Complete.** Start from clean pushed Batch 141 closeout `0d3be3e`, record
+   this exact 20-change contract, and synchronize the restart handoff before
+   implementation changes.
+2. **Complete.** Materialize the public `VitalPathType`, `VitalPath01Type`,
+   `VitalPath01ZType`, their unconstrained array types, and all standard
+   `VitalPathDelay`, `VitalWireDelay`, and `VitalSignalDelay` declarations.
+3. **Complete.** Decode path records and arrays with exact nominal layouts,
+   declared directions, static/nonnegative physical delays, Boolean path
+   conditions, null ranges, and deterministic positional/named associations.
+4. **Complete.** Implement scalar `VitalSignalDelay` through the common signal
+   scheduler for zero/nonzero delay, redundant transactions, delta cycles, and
+   checked simulation-time arithmetic.
+5. **Complete.** Implement scalar `VitalWireDelay(VitalDelayType)` with exact
+   event propagation and transport semantics.
+6. **Complete.** Implement scalar `VitalWireDelay(VitalDelayType01)` with exact
+   low/high transition selection across all nine input states.
+7. **Complete.** Implement scalar `VitalWireDelay(VitalDelayType01Z)` with exact
+   rise, fall, and high-impedance transition selection.
+8. **Complete.** Select sensitized VITAL paths from `InputChangeTime`, preserve
+   simultaneous-path behavior, and choose deterministic effective delays
+   without using interface compatibility to mask malformed path sets.
+9. **Complete.** Implement `VitalPathDelay` single-delay scheduling, default
+   delay selection, `IgnoreDefaultDelay`, and no-selected-path behavior.
+10. **Complete.** Implement `VitalPathDelay01` transition-dependent scheduling,
+    including unknown/weak transitions and `RejectFastPath` behavior.
+11. **Complete.** Implement `VitalPathDelay01Z` transition-dependent scheduling,
+    output-strength mapping, unknown/high-impedance transitions, and custom
+    `VitalOutputMapType` values.
+12. **Complete.** Implement `OnEvent` glitch handling with persistent
+    `VitalGlitchDataType`, pulse detection, scheduled-time/value tracking,
+    cancellation, X injection, and deterministic reporting.
+13. **Complete.** Implement `OnDetect` glitch handling with immediate detection
+    behavior distinct from `OnEvent` while retaining one scheduler-owned
+    output-driver identity.
+14. **Complete.** Implement `VitalInertial` mode using bounded rejection and
+    cancellation rules shared with ordinary VHDL projected waveforms.
+15. **Complete.** Implement `VitalTransport` mode without pulse rejection while
+    preserving transaction order, equal-time replacement, and delta behavior.
+16. **Complete.** Implement `NegPreemptOn` and fast/slow-path preemption at exact
+    boundaries without underflow, overflow, duplicate reports, or stale output
+    transactions.
+17. **Complete.** Integrate `XOn`, `MsgOn`, `MsgSeverity`, output names, glitch
+    state mutation, and callback/debugger visibility independently of whether
+    an X waveform is emitted.
+18. **Complete.** Preserve wire/path operations, glitch state, selected delays,
+    and scheduled output behavior through project/non-project compilation,
+    `.fsimobj`, `.fsimdesign`, relocation, standalone simulation, interpreter,
+    LLVM O0/O2, cold/warm cache, callbacks, debugger, and VCD.
+19. **Complete.** Add focused positive/negative differentials and update
+    architecture, language support, diagnostics, feature matrix, inventories,
+    VITAL compatibility notes, and restart evidence; keep memory models and
+    vendor-library closure assigned to Batch 143.
+20. **Complete.** Exact-LLVM Debug and Release each pass 111/111 tests after
+    eight-worker builds, in 135.60 and 109.60 seconds respectively. Source,
+    catalog, inventory, installed-public-contract, Windows ABI, differential,
+    and release-candidate gates pass. The reviewed baselines are 1,688
+    diagnostics, 476 bounded sources, 566 SPDX-owned artifacts, 1,099 execute
+    rows, 4,396 evidence cells, 343 evidence paths, and 99 runtime owners.
+    Commit and push the accumulated batch once. Batch 142 is not a CI boundary;
+    no sanitizer or hosted CI-monitoring gate ran.
+
 ## Forward priority order
 
 1. **Completed in Batch 136:** read-only out-of-tree `.fsimlib` directory
@@ -759,10 +822,10 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
    linking.
 4. **In progress:** complete VHDL-2008/VITAL, followed by Verilog-2005,
    SystemVerilog-2017 classes/UVM, VPI, DPI, and VHPI. Batch 139 supplied the
-   signal timing/driver substrate; Batch 140 owns VITAL public types and
-   combinational functions, Batch 141 owns timing checks/state tables, Batch
-   142 owns path/wire delays and pulse rejection, and Batch 143 owns VITAL
-   memory models plus vendor-library compatibility closure.
+   signal timing/driver substrate; Batch 140 completed VITAL public types and
+   combinational functions, Batch 141 completed timing checks/state tables,
+   Batch 142 completed path/wire delays and pulse rejection, and Batch 143 owns
+   VITAL memory models plus vendor-library compatibility closure.
 5. Older VHDL, Verilog, and SystemVerilog standard modes.
 6. Full SDF annotation with 2.1/3.0 compatibility and VITAL integration.
 7. FST tracing for every value exposed through the trace model.

@@ -43,7 +43,7 @@ using SignalOperationGroup =
                    WriteProjectedDynamicSlice,
                    WriteProjectedWaveformDynamicSlice, SignalLastActive,
                    SignalDriving, SignalDrivingValue, ReadSimulationTime,
-                   VitalTimingCheck>;
+                   VitalTimingCheck, VitalDelay>;
 
 using StringOperationGroup =
     OperationGroup<LoadStringConstant, CopyStringRegister, ReadStringObject,
@@ -183,7 +183,7 @@ static_assert(
         + std::variant_size_v<SchedulingOperationGroup::Storage>
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
-    == 121);
+    == 122);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept {
