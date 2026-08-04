@@ -586,12 +586,28 @@ bindings/search scope, timing/seed/optimization policy, runtime ABI, state
 indexes, and specialization keys. It salts native module identity; LLVM's
 host/ABI/options fingerprint remains the final cache boundary. Both artifact
 trees install by a sibling staging rename, are read-only, and reject overwrite.
-`fsim simulate` places LLVM objects and HDL file state in explicit `--cache`
-and `--file-root` consumer directories and writes traces to the requested path,
-never inside `.fsimdesign`. Delay selection is fixed by elaboration. SystemC is
-excluded from these portable artifacts and routed to Batch 138's separate
-native compile/link phases. The additive C++ phase/inspection API does not
-change the v1 C ABI.
+`fsim systemc compile` publishes one host-native C++20 translation unit as a
+`.fsimscobj`. Its canonical metadata records the complete compiler dependency
+closure, settings, toolchain/target/runtime ABI fingerprints, and object
+checksum. `fsim systemc link` consumes an ordered object list and publishes one
+logical-library `.fsimscplugin` after loading the image and transactionally
+validating its sorted factory and parameter-schema inventory. Project builds
+use the same content-addressed compile/link path, so editing one translation
+unit does not rebuild its peers.
+
+`fsim elaborate --systemc-plugin` merges those factory candidates with ordered
+HDL objects. Format-2 `.fsimdesign` metadata embeds every selected plug-in and
+its native provenance. Standalone loading checksum-validates the embedded
+image, recreates factory roots and their native children, remaps serialized
+handles by stable hierarchy path, and reconnects ports, events, signals,
+processes, exports, lifecycle callbacks, debugger objects, and trace signals to
+the common runtime. Designs containing SystemC are therefore relocatable only
+between exact-compatible hosts; HDL-only format-1 and format-2 designs remain
+portable. `fsim simulate` places LLVM objects and HDL file state in explicit
+`--cache` and `--file-root` consumer directories and writes traces to the
+requested path, never inside `.fsimdesign`. Delay selection is fixed by
+elaboration. The additive C++ phase/inspection API does not change the v1 C
+ABI.
 
 The hierarchy is deliberately bidirectional for SystemC. An HDL instance
 path may bind to a registered SystemC factory. During its elaboration, a

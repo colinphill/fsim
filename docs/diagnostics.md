@@ -1747,6 +1747,12 @@ are therefore excluded.
 | `FSIM-SC-C011` | error | A raw compiler option hides inputs from the persistent cache dependency model. |
 | `FSIM-SC-C012` | warning | Compiler identity, dependency closure, a raw external input, or a volatile predefined macro prevents safe persistent plug-in cache reuse. |
 | `FSIM-SC-C013` | error | A tracked plug-in input or compiler identity changed during compilation; the unpublished output was discarded. |
+| `FSIM-SC-I001` | error | Incremental SystemC object or plug-in metadata has an unsupported, truncated, or trailing schema encoding. |
+| `FSIM-SC-I002` | error | Incremental SystemC metadata has invalid ABI, toolchain, path, checksum, dependency, option, factory, schema, or digest values. |
+| `FSIM-SC-I003` | error | Incremental SystemC artifact payload loading or transactional read-only publication failed, including checksum, overwrite, staging, or permission errors. |
+| `FSIM-SC-I004` | error | One SystemC translation-unit compile or dependency scan is invalid, unavailable, mutated, unsafe, unsuccessful, or produced no object. |
+| `FSIM-SC-I005` | error | Ordered SystemC object linking found duplicate/incompatible inputs, unsafe settings, invalid exports/entry points, ABI failure, or no published factories. |
+| `FSIM-SC-I006` | error | Explicit SystemC plug-in inputs contain the same logical library more than once. |
 
 ## Consistency check
 

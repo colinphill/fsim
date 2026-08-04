@@ -561,14 +561,6 @@ bool portable_semantics(
 std::optional<std::string> serialize_runtime_state(
     const elaboration::ElaboratedDesign& design,
     diagnostic::Engine& diagnostics) {
-  if (!design.systemc_instances().empty() || !design.systemc_processes().empty()
-      || !design.systemc_objects().empty()) {
-    diagnostics.error(
-        std::string{kCode},
-        "Batch 137 design artifacts do not support SystemC runtime state; "
-        "use the Batch 138 incremental SystemC compile/link phases");
-    return std::nullopt;
-  }
   return serialize(
       "FSIMRUN1", kRuntimeStateSchema, design.state(), diagnostics);
 }
@@ -584,12 +576,10 @@ std::optional<elaboration::ElaboratedDesign> deserialize_runtime_state(
     return std::nullopt;
   }
   auto design = elaboration::ElaboratedDesign::from_state(std::move(*state));
-  if (!design || !design->systemc_instances().empty()
-      || !design->systemc_processes().empty()
-      || !design->systemc_objects().empty()) {
+  if (!design) {
     diagnostics.error(
         std::string{kCode},
-        "runtime state is structurally invalid or contains unsupported SystemC");
+        "runtime state is structurally invalid");
     return std::nullopt;
   }
   return design;

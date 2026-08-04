@@ -58,6 +58,10 @@ std::string_view command_name(const Command command) {
       return "elaborate";
     case Command::simulate:
       return "simulate";
+    case Command::systemc_compile:
+      return "systemc compile";
+    case Command::systemc_link:
+      return "systemc link";
     case Command::migrate:
       return "migrate";
   }
@@ -477,6 +481,14 @@ void apply_overrides(const Invocation& invocation, project::Config& config) {
       mapping.path = absolute_normalized(mapping.path);
     }
   }
+  if (invocation.systemc_compiler.has_value()) {
+    config.systemc.compiler = *invocation.systemc_compiler;
+  }
+  config.systemc.include_directories = invocation.include_directories;
+  config.systemc.defines = invocation.defines;
+  config.systemc.compile_options = invocation.systemc_compile_options;
+  config.systemc.link_options = invocation.systemc_link_options;
+  config.systemc.libraries = invocation.systemc_libraries;
 }
 
 void print_help(std::ostream& output, const std::string_view program) {
@@ -494,6 +506,8 @@ void print_help(std::ostream& output, const std::string_view program) {
       << "  compile Compile explicit HDL sources into a .fsimobj artifact\n"
       << "  elaborate Elaborate explicit .fsimobj inputs into .fsimdesign\n"
       << "  simulate Simulate an explicit .fsimdesign artifact\n"
+      << "  systemc compile Compile one SystemC C++ translation unit into .fsimscobj\n"
+      << "  systemc link Link .fsimscobj inputs into one .fsimscplugin\n"
       << "  migrate Upgrade a project manifest schema\n"
       << "\n"
       << "Project and source options:\n"
@@ -514,6 +528,12 @@ void print_help(std::ostream& output, const std::string_view program) {
       << "  -D, --define NAME[=VAL]  Add a direct-source preprocessor definition\n"
       << "      --output PATH        Output for compile or elaborate\n"
       << "      --object PATH        Input object for elaborate; repeatable\n"
+      << "      --systemc-plugin PATH\n"
+      << "                           Linked SystemC input for elaborate; repeatable\n"
+      << "      --compiler PATH      SystemC C++ compiler executable\n"
+      << "      --compile-option ARG SystemC compiler option; repeatable\n"
+      << "      --link-option ARG    SystemC linker option; repeatable\n"
+      << "      --link-library ARG   SystemC link library/path; repeatable\n"
       << "      --design PATH        Input design for simulate\n"
       << "\n"
       << "Build and run options:\n"
@@ -569,6 +589,10 @@ const Handler* select_handler(const Services& services, const Command command) {
       return &services.elaborate;
     case Command::simulate:
       return &services.simulate;
+    case Command::systemc_compile:
+      return &services.systemc_compile;
+    case Command::systemc_link:
+      return &services.systemc_link;
     case Command::migrate:
       return nullptr;
   }
@@ -766,6 +790,51 @@ std::optional<Invocation> parse_arguments(
         }
         invocation.objects.emplace_back(
             fsim::support::path_from_utf8(*value));
+      } else if (is_option(argument, "", "--systemc-plugin")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--systemc-plugin", diagnostics);
+        if (!value.has_value() || value->empty()) {
+          argument_error(
+              diagnostics, "--systemc-plugin requires a non-empty path");
+          return std::nullopt;
+        }
+        invocation.systemc_plugins.emplace_back(
+            fsim::support::path_from_utf8(*value));
+      } else if (is_option(argument, "", "--compiler")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--compiler", diagnostics);
+        if (!value.has_value() || value->empty()) {
+          argument_error(diagnostics, "--compiler requires a non-empty value");
+          return std::nullopt;
+        }
+        invocation.systemc_compiler = std::string{*value};
+      } else if (is_option(argument, "", "--compile-option")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--compile-option", diagnostics);
+        if (!value.has_value() || value->empty()) {
+          argument_error(
+              diagnostics, "--compile-option requires a non-empty value");
+          return std::nullopt;
+        }
+        invocation.systemc_compile_options.emplace_back(*value);
+      } else if (is_option(argument, "", "--link-option")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--link-option", diagnostics);
+        if (!value.has_value() || value->empty()) {
+          argument_error(
+              diagnostics, "--link-option requires a non-empty value");
+          return std::nullopt;
+        }
+        invocation.systemc_link_options.emplace_back(*value);
+      } else if (is_option(argument, "", "--link-library")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--link-library", diagnostics);
+        if (!value.has_value() || value->empty()) {
+          argument_error(
+              diagnostics, "--link-library requires a non-empty value");
+          return std::nullopt;
+        }
+        invocation.systemc_libraries.emplace_back(*value);
       } else if (is_option(argument, "", "--design")) {
         const auto value = take_value(
             index, argc, argv, argument, "--design", diagnostics);
@@ -964,6 +1033,27 @@ std::optional<Invocation> parse_arguments(
     }
 
     if (!command_selected) {
+      if (argument == "systemc") {
+        if (index + 1 >= argc || argv[index + 1] == nullptr) {
+          argument_error(
+              diagnostics, "systemc requires a compile or link subcommand");
+          return std::nullopt;
+        }
+        const std::string_view subcommand{argv[++index]};
+        if (subcommand == "compile") {
+          invocation.command = Command::systemc_compile;
+        } else if (subcommand == "link") {
+          invocation.command = Command::systemc_link;
+        } else {
+          argument_error(
+              diagnostics,
+              "unknown systemc subcommand '" + std::string{subcommand}
+                  + "'; expected compile or link");
+          return std::nullopt;
+        }
+        command_selected = true;
+        continue;
+      }
       const auto command = parse_command(argument);
       if (!command.has_value()) {
         argument_error(
@@ -1075,7 +1165,9 @@ std::optional<Invocation> parse_arguments(
   }
   const bool non_project_command = invocation.command == Command::compile
       || invocation.command == Command::elaborate
-      || invocation.command == Command::simulate;
+      || invocation.command == Command::simulate
+      || invocation.command == Command::systemc_compile
+      || invocation.command == Command::systemc_link;
   if (non_project_command && invocation.manifest_explicit) {
     argument_error(
         diagnostics,
@@ -1088,6 +1180,9 @@ std::optional<Invocation> parse_arguments(
   }
   for (auto& object : invocation.objects) {
     object = absolute_normalized(object);
+  }
+  for (auto& plugin : invocation.systemc_plugins) {
+    plugin = absolute_normalized(plugin);
   }
   if (invocation.design.has_value()) {
     invocation.design = absolute_normalized(*invocation.design);
@@ -1138,12 +1233,56 @@ std::optional<Invocation> parse_arguments(
     }
   }
   if (!invocation.help && !invocation.version
-      && invocation.command == Command::elaborate) {
-    if (invocation.objects.empty() || invocation.tops.empty()
+      && invocation.command == Command::systemc_compile) {
+    if (invocation.files.size() != 1
         || !invocation.artifact_output.has_value()) {
       argument_error(
           diagnostics,
-          "elaborate requires --object, --top, and --output");
+          "systemc compile requires exactly one source and --output");
+      return std::nullopt;
+    }
+    if (!invocation.objects.empty() || !invocation.systemc_plugins.empty()
+        || invocation.language.has_value() || invocation.standard.has_value()
+        || !invocation.tops.empty() || invocation.design.has_value()
+        || !invocation.systemc_link_options.empty()
+        || !invocation.systemc_libraries.empty()) {
+      argument_error(
+          diagnostics,
+          "systemc compile received a link, HDL, elaboration, or simulation option");
+      return std::nullopt;
+    }
+  }
+  if (!invocation.help && !invocation.version
+      && invocation.command == Command::systemc_link) {
+    if (invocation.objects.empty() || !invocation.artifact_output.has_value()) {
+      argument_error(
+          diagnostics, "systemc link requires --object and --output");
+      return std::nullopt;
+    }
+    if (!valid_library_name(invocation.library)) {
+      argument_error(
+          diagnostics, "systemc link requires a safe logical-library name");
+      return std::nullopt;
+    }
+    if (!invocation.files.empty() || !invocation.systemc_plugins.empty()
+        || invocation.language.has_value() || invocation.standard.has_value()
+        || !invocation.include_directories.empty() || !invocation.defines.empty()
+        || !invocation.systemc_compile_options.empty()
+        || !invocation.tops.empty() || invocation.design.has_value()) {
+      argument_error(
+          diagnostics,
+          "systemc link received a compile, HDL, elaboration, or simulation option");
+      return std::nullopt;
+    }
+  }
+  if (!invocation.help && !invocation.version
+      && invocation.command == Command::elaborate) {
+    if ((invocation.objects.empty() && invocation.systemc_plugins.empty())
+        || invocation.tops.empty()
+        || !invocation.artifact_output.has_value()) {
+      argument_error(
+          diagnostics,
+          "elaborate requires --object or --systemc-plugin, plus --top and --output");
       return std::nullopt;
     }
     if (!invocation.files.empty() || invocation.language.has_value()
@@ -1168,7 +1307,8 @@ std::optional<Invocation> parse_arguments(
       return std::nullopt;
     }
     if (!invocation.files.empty() || invocation.artifact_output.has_value()
-        || !invocation.objects.empty() || !invocation.tops.empty()
+        || !invocation.objects.empty() || !invocation.systemc_plugins.empty()
+        || !invocation.tops.empty()
         || invocation.language.has_value() || invocation.standard.has_value()
         || !invocation.include_directories.empty()
         || !invocation.defines.empty() || !invocation.search_libraries.empty()
@@ -1191,12 +1331,27 @@ std::optional<Invocation> parse_arguments(
   }
   if (!non_project_command
       && (invocation.artifact_output.has_value()
-          || !invocation.objects.empty() || invocation.design.has_value()
+          || !invocation.objects.empty() || !invocation.systemc_plugins.empty()
+          || invocation.design.has_value()
           || invocation.engine.has_value() || !invocation.trace_filters.empty())) {
     argument_error(
         diagnostics,
         "--output, --object, --design, --engine, and --trace-filter are "
         "available only with artifact-phase commands");
+    return std::nullopt;
+  }
+  const bool systemc_phase =
+      invocation.command == Command::systemc_compile
+      || invocation.command == Command::systemc_link;
+  if (!systemc_phase
+      && (invocation.systemc_compiler.has_value()
+          || !invocation.systemc_compile_options.empty()
+          || !invocation.systemc_link_options.empty()
+          || !invocation.systemc_libraries.empty())) {
+    argument_error(
+        diagnostics,
+        "--compiler, --compile-option, --link-option, and --link-library are "
+        "available only with systemc compile or systemc link");
     return std::nullopt;
   }
   if (invocation.command == Command::migrate) {
@@ -1305,7 +1460,9 @@ int run(
     } else if (invocation->command == Command::compile) {
       config = make_direct_config(*invocation, diagnostics);
     } else if (invocation->command == Command::elaborate
-               || invocation->command == Command::simulate) {
+               || invocation->command == Command::simulate
+               || invocation->command == Command::systemc_compile
+               || invocation->command == Command::systemc_link) {
       project::Config phase_config;
       phase_config.manifest_path = "<non-project>";
       std::error_code current_error;

@@ -55,6 +55,9 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli() {
   fsim::diagnostic::Engine diagnostics;
   auto first = fsim::app::build_project(config, diagnostics);
   auto second = fsim::app::build_project(config, diagnostics);
+  if (!first || !second) {
+    fsim::diagnostic::print_text(std::cerr, diagnostics);
+  }
   assert(first);
   assert(second);
 const auto exported_library = directory / "work.fsimlib";

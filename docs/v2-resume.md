@@ -7,9 +7,10 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
-- Current unit: Batch 137, exactly 20 changes, complete. Batch 138 is next and
-  will implement separate incremental SystemC compilation/linking. Batch 136
-  was committed and pushed as `461ffae`.
+- Current unit: Batch 138, exactly 20 changes, complete; this checkpoint is its
+  single commit/push boundary. The exact incremental SystemC
+  compilation/linking contract and evidence are recorded in
+  `implementation_plan_v2.md`. Batch 137 was committed and pushed as `461ffae`.
 - Completed work: Batch 133 implements parent-library inference for HDL-to-HDL,
   HDL-to-SystemC, and SystemC-proxy-to-HDL boundaries, including resolver-only
   bindings, deterministic ambiguity, multiple logical-library SystemC
@@ -258,5 +259,35 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   or CI monitoring ran because Batch 137 is not a scheduled boundary.
 - Build every target with at least eight workers. Changes 1-19 accumulate in
   one worktree and Change 20 owns full Debug/Release gates, documentation, one
-  commit, and one push. Do not run sanitizers or monitor CI in Batch 137;
+  commit, and one push. Do not run sanitizers or monitor CI in Batch 138;
   sanitizers remain reserved for Batch 140.
+
+- Batch 138 starts from clean pushed commit `31b983d`. Its 20-change contract
+  implements true one-translation-unit `.fsimscobj` compilation and separate
+  ordered `.fsimscplugin` linking, then integrates the linked native artifact
+  into project builds and manifest-free HDL/SystemC elaboration. Standalone
+  `.fsimdesign` publication must embed selected plug-ins and reload, re-elaborate,
+  remap, and bind their native hierarchy without producer sources or object
+  artifacts. Changes 1-11 now provide canonical host-specific object and
+  plug-in metadata, transactional read-only publication, exact dependency
+  revalidation, separate compiler/linker execution, sorted factory inventory,
+  macro exports across translation units, typed schemas, legacy entry points,
+  and cold/warm/selective cache evidence. Project builds route through the same
+  cache while preserving shared registry identity. Manifest-free elaboration
+  accepts repeated logical-library plug-ins; format-2 designs embed only
+  selected images and reload them without producer sources or intermediate
+  objects by reconstructing hierarchy paths and remapping runtime handles.
+  Public phase inspection covers all four artifact types. Focused exact-LLVM
+  Debug evidence passes `fsim.systemc.incremental`, `fsim.application`,
+  `fsim.application.systemc_matrix`, `fsim.application.typed_boundaries`, and
+  `fsim.systemc-portability-contract`. Preserve the accumulated worktree until
+  the single Change 20 commit and push. Change 20 is complete: exact-LLVM Debug
+  passed 110/110 in 137.08 seconds and Release passed 110/110 in 106.22 seconds,
+  both after eight-worker builds. Focused post-review design/application reruns
+  pass in both configurations. A manual execution of the documented
+  three-language artifact flow also passed after all producer objects and the
+  original plug-in were renamed, proving embedded SystemC-parent/VHDL-proxy
+  reconstruction through tick 3. The current reviewed inventory is 1,659
+  diagnostics, 463 bounded sources, 553 SPDX-owned artifacts, 197 test/control
+  files, 1,084 execute rows, 4,336 evidence cells, 334 evidence paths, and 97
+  runtime owners. No sanitizer or CI monitoring ran.

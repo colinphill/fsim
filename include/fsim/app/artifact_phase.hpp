@@ -4,6 +4,7 @@
 #include "fsim/app/application.hpp"
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/project/project.hpp"
+#include "fsim/systemc/incremental.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -16,6 +17,8 @@ namespace fsim::app {
 
 enum class ArtifactPhaseKind {
   compilation,
+  systemc_compilation,
+  systemc_link,
   elaboration,
 };
 
@@ -30,6 +33,8 @@ struct ArtifactInspection {
   std::optional<std::string> language;
   std::optional<std::string> standard;
   std::optional<std::string> library;
+  std::optional<std::string> toolchain;
+  std::optional<std::string> target;
   std::vector<std::string> roots;
   std::vector<std::string> digests;
   std::vector<std::string> units;
@@ -41,9 +46,24 @@ struct ArtifactInspection {
     const std::filesystem::path& destination,
     diagnostic::Engine& diagnostics);
 
+[[nodiscard]] bool compile_systemc_artifact(
+    const systemc::IncrementalCompileRequest& request,
+    diagnostic::Engine& diagnostics);
+
+[[nodiscard]] bool link_systemc_artifact(
+    const systemc::IncrementalLinkRequest& request,
+    diagnostic::Engine& diagnostics);
+
 [[nodiscard]] bool elaborate_artifact(
     const project::Config& config,
     std::span<const std::filesystem::path> objects,
+    const std::filesystem::path& destination,
+    diagnostic::Engine& diagnostics);
+
+[[nodiscard]] bool elaborate_artifact(
+    const project::Config& config,
+    std::span<const std::filesystem::path> objects,
+    std::span<const std::filesystem::path> systemc_plugins,
     const std::filesystem::path& destination,
     diagnostic::Engine& diagnostics);
 

@@ -197,7 +197,9 @@ class Reader {
 };
 
 void write_digest_fields(Writer& writer, const DesignMetadata& metadata) {
-  writer.string("fsim-design-provenance-v1");
+  writer.string(
+      metadata.format == 1 ? "fsim-design-provenance-v1"
+                           : "fsim-design-provenance-v2");
   writer.u32(metadata.runtime_abi);
   writer.string(metadata.time_resolution);
   writer.string(metadata.delay_mode);
@@ -228,6 +230,19 @@ void write_digest_fields(Writer& writer, const DesignMetadata& metadata) {
       writer.string(checksum);
     });
   });
+  if (metadata.format >= 2) {
+    writer.sequence(metadata.systemc_plugins, [&](const auto& plugin) {
+      writer.string(plugin.logical_library);
+      writer.string(plugin.input_digest);
+      writer.string(plugin.link_digest);
+      writer.string(plugin.compiler_fingerprint);
+      writer.string(plugin.metadata_checksum);
+      writer.string(plugin.library_checksum);
+      writer.sequence(plugin.factories, [&](const auto& factory) {
+        writer.string(factory);
+      });
+    });
+  }
   writer.sequence(metadata.payloads, [&](const auto& payload) {
     writer.string(payload.kind);
     writer.string(payload.checksum);
@@ -246,7 +261,7 @@ bool validate(
     const DesignMetadata& metadata,
     diagnostic::Engine& diagnostics,
     const std::string& source) {
-  if (metadata.format != kDesignFormatVersion
+  if ((metadata.format != 1 && metadata.format != kDesignFormatVersion)
       || metadata.runtime_abi != runtime_abi_version) {
     report(
         diagnostics, kSchemaCode,
@@ -309,6 +324,40 @@ bool validate(
           source);
     }
   }
+  std::set<std::string> systemc_libraries;
+  std::set<std::string> systemc_directories;
+  if (metadata.format == 1 && !metadata.systemc_plugins.empty()) {
+    report(
+        diagnostics, kValueCode,
+        "format-1 .fsimdesign metadata cannot index SystemC plug-ins",
+        source);
+  }
+  for (const auto& plugin : metadata.systemc_plugins) {
+    const auto directory = support::path_to_utf8(plugin.directory);
+    if (!safe_name(plugin.logical_library)
+        || !systemc_libraries.insert(plugin.logical_library).second
+        || !checksum_spelling(plugin.input_digest)
+        || !checksum_spelling(plugin.link_digest)
+        || !checksum_spelling(plugin.compiler_fingerprint)
+        || !safe_relative_path(plugin.directory)
+        || !systemc_directories.insert(directory).second
+        || !checksum_spelling(plugin.metadata_checksum)
+        || !checksum_spelling(plugin.library_checksum)
+        || plugin.factories.empty()
+        || !std::ranges::is_sorted(plugin.factories)
+        || std::adjacent_find(
+               plugin.factories.begin(), plugin.factories.end())
+            != plugin.factories.end()
+        || std::ranges::any_of(
+            plugin.factories,
+            [](const auto& factory) { return factory.empty(); })) {
+      report(
+          diagnostics, kValueCode,
+          "design SystemC plug-ins require unique safe libraries/directories, "
+          "compatible checksums, and a sorted unique factory inventory",
+          source);
+    }
+  }
   std::set<std::string> payload_kinds;
   std::set<std::string> payload_paths;
   for (const auto& payload : metadata.payloads) {
@@ -332,6 +381,34 @@ bool validate(
           source);
     }
   }
+  for (const auto& plugin : metadata.systemc_plugins) {
+    const auto metadata_kind =
+        "systemc-plugin-metadata:" + plugin.logical_library;
+    const auto native_kind = "systemc-plugin-native:" + plugin.logical_library;
+    const auto metadata_payload = std::ranges::find_if(
+        metadata.payloads,
+        [&](const auto& payload) { return payload.kind == metadata_kind; });
+    const auto native_payload = std::ranges::find_if(
+        metadata.payloads,
+        [&](const auto& payload) { return payload.kind == native_kind; });
+    const auto native_relative = native_payload == metadata.payloads.end()
+        ? std::filesystem::path{}
+        : native_payload->artifact.lexically_relative(plugin.directory);
+    if (metadata_payload == metadata.payloads.end()
+        || native_payload == metadata.payloads.end()
+        || metadata_payload->artifact.parent_path() != plugin.directory
+        || !safe_relative_path(native_relative)
+        || metadata_payload->artifact.filename()
+            != "fsim-systemc-plugin.bin"
+        || metadata_payload->checksum != plugin.metadata_checksum
+        || native_payload->checksum != plugin.library_checksum) {
+      report(
+          diagnostics, kValueCode,
+          "design SystemC plug-in records must match their metadata and "
+          "native payload indexes",
+          source);
+    }
+  }
   if (std::ranges::any_of(
           metadata.specialization_cache_keys,
           [](const auto& key) { return !checksum_spelling(key); })) {
@@ -340,11 +417,15 @@ bool validate(
         "design specialization cache keys must be lowercase SHA-256 values",
         source);
   }
-  if (metadata.roots.empty() || metadata.objects.empty()
-      || metadata.payloads.empty() || metadata.unit_count == 0) {
+  if (metadata.roots.empty()
+      || (metadata.objects.empty() && metadata.systemc_plugins.empty())
+      || metadata.payloads.empty()
+      || (metadata.unit_count == 0 && metadata.systemc_plugins.empty())) {
     report(
         diagnostics, kValueCode,
-        "design metadata requires roots, objects, units, and payloads", source);
+        "design metadata requires roots, compiled inputs, HDL units when "
+        "applicable, and payloads",
+        source);
   }
   if (checksum_spelling(metadata.design_digest)
       && metadata.design_digest != compute_design_digest(metadata)) {
@@ -498,6 +579,20 @@ std::string serialize_design_metadata(const DesignMetadata& metadata) {
       writer.string(checksum);
     });
   });
+  if (metadata.format >= 2) {
+    writer.sequence(metadata.systemc_plugins, [&](const auto& plugin) {
+      writer.string(plugin.logical_library);
+      writer.string(plugin.input_digest);
+      writer.string(plugin.link_digest);
+      writer.string(plugin.compiler_fingerprint);
+      writer.path(plugin.directory);
+      writer.string(plugin.metadata_checksum);
+      writer.string(plugin.library_checksum);
+      writer.sequence(plugin.factories, [&](const auto& factory) {
+        writer.string(factory);
+      });
+    });
+  }
   writer.sequence(metadata.payloads, [&](const auto& payload) {
     writer.string(payload.kind);
     writer.path(payload.artifact);
@@ -532,6 +627,12 @@ std::optional<DesignMetadata> deserialize_design_metadata(
   }
   metadata.format = *format;
   metadata.runtime_abi = *runtime_abi;
+  if (metadata.format != 1 && metadata.format != kDesignFormatVersion) {
+    report(
+        diagnostics, kSchemaCode,
+        "unsupported .fsimdesign format or runtime ABI", source_name);
+    return std::nullopt;
+  }
   const auto read_string = [&](std::string& value) {
     auto read = reader.string();
     if (!read) {
@@ -609,6 +710,24 @@ std::optional<DesignMetadata> deserialize_design_metadata(
            metadata.objects.push_back(std::move(object));
            return true;
          })
+      || (metadata.format >= 2 && !read_sequence([&] {
+           DesignSystemCPlugin plugin;
+           if (!read_string(plugin.logical_library)
+               || !read_string(plugin.input_digest)
+               || !read_string(plugin.link_digest)
+               || !read_string(plugin.compiler_fingerprint)) return false;
+           auto directory = reader.path();
+           if (!directory || !read_string(plugin.metadata_checksum)
+               || !read_string(plugin.library_checksum)) return false;
+           plugin.directory = std::move(*directory);
+           if (!read_sequence([&] {
+                 auto factory = reader.string();
+                 if (factory) plugin.factories.push_back(std::move(*factory));
+                 return factory.has_value();
+               })) return false;
+           metadata.systemc_plugins.push_back(std::move(plugin));
+           return true;
+         }))
       || !read_sequence([&] {
            DesignPayload payload;
            if (!read_string(payload.kind)) return false;
@@ -694,7 +813,14 @@ bool publish_design(
   const auto canonical = serialize_design_metadata(metadata);
   if (!deserialize_design_metadata(
           canonical, std::string{kDesignMetadataFilename}, validation)) {
-    report(diagnostics, kIoCode, "invalid design metadata supplied for publication");
+    diagnostic::Diagnostic failure;
+    failure.severity = diagnostic::Severity::error;
+    failure.code = std::string{kIoCode};
+    failure.message = "invalid design metadata supplied for publication";
+    for (const auto& detail : validation.diagnostics()) {
+      failure.notes.push_back({detail.code + ": " + detail.message, {}});
+    }
+    diagnostics.report(std::move(failure));
     return false;
   }
   std::unordered_map<std::string, std::string> expected;

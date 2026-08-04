@@ -670,6 +670,17 @@ target_link_libraries(fsim_systemc_compiler_tests PRIVATE fsim_systemc)
 add_test(NAME fsim.systemc.compiler COMMAND fsim_systemc_compiler_tests)
 
 add_executable(
+  fsim_systemc_incremental_tests
+  systemc/incremental_compiler_test.cpp
+)
+fsim_configure_test(fsim_systemc_incremental_tests)
+target_link_libraries(fsim_systemc_incremental_tests PRIVATE fsim_systemc)
+add_test(
+  NAME fsim.systemc.incremental
+  COMMAND fsim_systemc_incremental_tests
+)
+
+add_executable(
   fsim_systemc_matrix_tests
   systemc/plugin_matrix_test.cpp
 )

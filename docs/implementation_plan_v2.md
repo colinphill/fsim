@@ -379,13 +379,98 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     contains 1,083 execute rows, 4,332 evidence cells, 331 evidence paths, and
     96 runtime owners.
 
+## Batch 138 - incremental SystemC compilation and linking - Complete
+
+1. **Complete.** Establish this exact 20-change Batch 138 plan and synchronized
+   restart record from the clean pushed Batch 137 baseline before implementation
+   begins.
+2. **Complete.** Add manifest-free `fsim systemc compile` and `fsim systemc
+   link` command families with phase-specific option validation and no implicit
+   project discovery.
+3. **Complete.** Define a versioned, checksummed, host-specific `.fsimscobj`
+   directory schema for one C++20 translation unit, including compiler/runtime
+   ABI, target/toolchain, compile settings, source and dependency identities,
+   and one native object payload.
+4. **Complete.** Implement `fsim systemc compile --output PATH SOURCE` with
+   explicit include, define, compiler, and compile-option inputs on GCC-like and
+   MSVC-compatible toolchains.
+5. **Complete.** Discover and checksum the complete translation-unit dependency
+   closure, revalidate it after compilation, publish transactionally and
+   read-only, refuse overwrite, and leave no partial artifact on failure.
+6. **Complete.** Make translation-unit compilation independently cacheable and
+   deterministic so an unchanged object is reused while edits rebuild only the
+   affected source and its dependency closure.
+7. **Complete.** Define a versioned, checksummed, host-specific `.fsimscplugin`
+   directory schema containing one linked native plug-in, its logical library,
+   ordered object identities, link inputs, ABI fingerprint, and exported factory
+   inventory.
+8. **Complete.** Implement `fsim systemc link --object PATH... --library LIBRARY
+   --output PATH` with explicit library and link-option inputs and deterministic
+   object ordering on GCC-like and MSVC-compatible toolchains.
+9. **Complete.** Reject mixed compiler/runtime/target/compile-ABI objects,
+   duplicate or reordered object identities, unsafe link inputs, incompatible
+   options, and source/object mutation before publishing any plug-in artifact.
+10. **Complete.** Load the newly linked library through the production SystemC
+    ABI before publication, transactionally validate its entry point, factories,
+    aliases, parameter schemas, and duplicate-name behavior, and record the
+    sorted public factory inventory.
+11. **Complete.** Support `SC_FSIM_EXPORT` and `SC_FSIM_EXPORT_AS` descriptors
+    spread across independently compiled translation units while linking the
+    fsim SystemC support library exactly once and retaining legacy handwritten
+    entry-point compatibility.
+12. **Complete.** Route project-mode SystemC builds through the same incremental
+    compile-object/link pipeline, preserving the existing manifest and public
+    build APIs while avoiding recompilation of unchanged translation units.
+13. **Complete.** Add repeatable `--systemc-plugin PATH` inputs to manifest-free
+    elaboration, merge each plug-in's logical-library factory candidates with
+    ordered HDL `.fsimobj` inputs, and preserve automatic mixed-language target
+    resolution and multiple roots.
+14. **Complete.** Extend `.fsimdesign` metadata and publication to embed every
+    selected linked SystemC plug-in plus its content and host fingerprints,
+    factory inventory, instance construction records, and native provenance.
+15. **Complete.** Reload embedded plug-ins during standalone simulation,
+    reconstruct their hierarchy deterministically, remap serialized native
+    handles, bind ports/events/channels/processes to the common runtime, and
+    preserve lifecycle behavior without producer objects or source files.
+16. **Complete.** Add public C++ compile/link/load/inspection APIs for SystemC
+    object and plug-in artifacts and extend artifact inspection without changing
+    the v1 C ABI.
+17. **Complete.** Preserve response-file-safe process execution, bounded compiler
+    output, Windows CRT/iterator policy, unique object names, concurrent cache
+    locking, and the configured eight-way linker pool without introducing a
+    shell-evaluated command path.
+18. **Complete.** Add positive incremental coverage for multiple translation
+    units, multiple exports and aliases, typed parameters, cold/warm/selective
+    rebuild, project compatibility, SystemC-only and mixed HDL/SystemC roots,
+    interpreter/LLVM O0/O2, debugger, callbacks, VCD, and relocation.
+19. **Complete.** Add negative coverage for missing or duplicate inputs,
+    format/schema/checksum/ABI/toolchain corruption, compile/link failures,
+    incompatible or mutated objects, missing/invalid entry points, duplicate
+    factories, overwrite/write attempts, and transactional partial failure;
+    update CLI help, architecture, language support, diagnostics, feature
+    matrix, tutorial, inventories, and restart evidence.
+20. **Complete.** Run exact-LLVM Debug and Release plus source, catalog,
+    inventory, installed-public-contract, and release gates with at least eight
+    workers, then commit and push once. Batch 138 is not a CI boundary and runs
+    no sanitizer or CI-monitoring gate. Both exact-LLVM configurations built
+    with eight workers. Debug passed 110/110 tests in 137.08 seconds and Release
+    passed 110/110 in 106.22 seconds; focused post-review artifact/application
+    reruns passed in both configurations. The source-independent scripted
+    three-language design also reloaded its embedded SystemC parent and VHDL
+    proxy child, printed `PASS`, and stopped at tick 3 after every producer
+    object/plug-in directory was renamed away. The reviewed inventory contains
+    1,659 diagnostics, 463 bounded sources, 553 SPDX-owned artifacts, 197
+    test/control files, 1,084 execute rows, 4,336 evidence cells, 334 evidence
+    paths, and 97 runtime owners.
+
 ## Forward priority order
 
 1. **Completed in Batch 136:** read-only out-of-tree `.fsimlib` directory
    mappings.
 2. **Completed in Batch 137:** explicit non-project compile, elaborate, and
    simulate artifact phases.
-3. **Batch 138 next:** separate incremental SystemC compilation and linking.
+3. **Completed in Batch 138:** separate incremental SystemC compilation and
+   linking.
 4. Complete VHDL-2008/VITAL, Verilog-2005, SystemVerilog-2017 classes/UVM,
    VPI, DPI, and VHPI.
 5. Older VHDL, Verilog, and SystemVerilog standard modes.

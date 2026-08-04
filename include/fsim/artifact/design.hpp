@@ -14,7 +14,7 @@
 
 namespace fsim::artifact {
 
-inline constexpr std::uint32_t kDesignFormatVersion = 1;
+inline constexpr std::uint32_t kDesignFormatVersion = 2;
 inline constexpr std::string_view kDesignMetadataFilename = "fsim-design.bin";
 
 struct DesignRoot {
@@ -49,6 +49,19 @@ struct DesignPayload {
   friend bool operator==(const DesignPayload&, const DesignPayload&) = default;
 };
 
+struct DesignSystemCPlugin {
+  std::string logical_library;
+  std::string input_digest;
+  std::string link_digest;
+  std::string compiler_fingerprint;
+  std::filesystem::path directory;
+  std::string metadata_checksum;
+  std::string library_checksum;
+  std::vector<std::string> factories;
+  friend bool operator==(
+      const DesignSystemCPlugin&, const DesignSystemCPlugin&) = default;
+};
+
 // Standalone elaboration artifact metadata. Producer paths are deliberately
 // absent; ordered object content identities and selected canonical units are
 // sufficient provenance for relocation and exact-compatible reuse.
@@ -67,6 +80,7 @@ struct DesignMetadata {
   std::vector<DesignRoot> roots;
   std::vector<DesignBinding> bindings;
   std::vector<DesignObjectInput> objects;
+  std::vector<DesignSystemCPlugin> systemc_plugins;
   std::vector<DesignPayload> payloads;
   std::vector<std::string> specialization_cache_keys;
   std::uint64_t unit_count{};

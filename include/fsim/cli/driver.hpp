@@ -23,6 +23,8 @@ enum class Command {
   compile,
   elaborate,
   simulate,
+  systemc_compile,
+  systemc_link,
   migrate,
 };
 
@@ -53,6 +55,11 @@ struct Invocation {
   std::vector<std::string> defines;
   std::optional<std::filesystem::path> artifact_output;
   std::vector<std::filesystem::path> objects;
+  std::vector<std::filesystem::path> systemc_plugins;
+  std::optional<std::string> systemc_compiler;
+  std::vector<std::string> systemc_compile_options;
+  std::vector<std::string> systemc_link_options;
+  std::vector<std::string> systemc_libraries;
   std::optional<std::filesystem::path> design;
   std::optional<std::filesystem::path> cache_directory;
   std::optional<std::filesystem::path> file_root;
@@ -92,6 +99,8 @@ struct Services {
   Handler compile;
   Handler elaborate;
   Handler simulate;
+  Handler systemc_compile;
+  Handler systemc_link;
 };
 
 [[nodiscard]] std::optional<Invocation> parse_arguments(

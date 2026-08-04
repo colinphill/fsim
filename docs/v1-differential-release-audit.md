@@ -23,7 +23,7 @@ of named corpus CTests. The corpus union must contain interpreter, LLVM O0/O2,
 cold/warm/edit cache, debugger, VCD, callback, diagnostic, lifecycle, ABI,
 plug-in, compiler, source-map, and portable-path modes.
 
-The reviewed baseline contains 96 distinct matrix runtime evidence files and
+The reviewed baseline contains 97 distinct matrix runtime evidence files and
 36 distinct corpus CTests. Runtime cells explicitly name interpreter evidence
 on 444 rows, LLVM/compiled/native evidence on 362, cache/reuse/edit evidence on
 247, debugger evidence on 92, VCD/trace evidence on 119, scheduling/time/event

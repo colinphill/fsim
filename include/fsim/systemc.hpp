@@ -2,3 +2,4 @@
 #pragma once
 
 #include "fsim/systemc/plugin.hpp"
+#include "fsim/systemc/incremental.hpp"

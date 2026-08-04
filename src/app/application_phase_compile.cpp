@@ -6,6 +6,7 @@
 #include "fsim/library/portable_unit.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/systemc/incremental.hpp"
 #include "fsim/version.hpp"
 
 #include <fstream>
@@ -260,6 +261,54 @@ int handle_compile(
   return 0;
 }
 
+int handle_systemc_compile(
+    const cli::Invocation& invocation,
+    const project::Config& config,
+    diagnostic::Engine& diagnostics,
+    std::ostream& output,
+    std::ostream&) {
+  if (invocation.files.size() != 1 || !invocation.artifact_output) {
+    return 1;
+  }
+  systemc::IncrementalCompileRequest request;
+  request.source = invocation.files.front();
+  request.output = *invocation.artifact_output;
+  request.settings = config.systemc;
+  request.working_directory = config.base_directory;
+  request.scratch_directory = config.build.cache_path / "systemc-phase-scratch";
+  if (!systemc::compile_incremental_object(request, diagnostics)) {
+    return 1;
+  }
+  output << "compiled SystemC translation unit into "
+         << support::path_to_utf8(request.output) << '\n';
+  return 0;
+}
+
+int handle_systemc_link(
+    const cli::Invocation& invocation,
+    const project::Config& config,
+    diagnostic::Engine& diagnostics,
+    std::ostream& output,
+    std::ostream&) {
+  if (invocation.objects.empty() || !invocation.artifact_output) {
+    return 1;
+  }
+  systemc::IncrementalLinkRequest request;
+  request.objects = invocation.objects;
+  request.output = *invocation.artifact_output;
+  request.logical_library = invocation.library;
+  request.settings = config.systemc;
+  request.working_directory = config.base_directory;
+  request.scratch_directory = config.build.cache_path / "systemc-phase-scratch";
+  if (!systemc::link_incremental_plugin(request, diagnostics)) {
+    return 1;
+  }
+  output << "linked " << request.objects.size()
+         << " SystemC object(s) into "
+         << support::path_to_utf8(request.output) << '\n';
+  return 0;
+}
+
 }  // namespace fsim::app::application_detail
 
 namespace fsim::app {
@@ -270,6 +319,18 @@ bool compile_artifact(
     diagnostic::Engine& diagnostics) {
   return application_detail::compile_object(
       config, destination, diagnostics);
+}
+
+bool compile_systemc_artifact(
+    const systemc::IncrementalCompileRequest& request,
+    diagnostic::Engine& diagnostics) {
+  return systemc::compile_incremental_object(request, diagnostics);
+}
+
+bool link_systemc_artifact(
+    const systemc::IncrementalLinkRequest& request,
+    diagnostic::Engine& diagnostics) {
+  return systemc::link_incremental_plugin(request, diagnostics);
 }
 
 }  // namespace fsim::app

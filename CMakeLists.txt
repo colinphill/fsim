@@ -565,6 +565,8 @@ add_library(
   STATIC
     src/systemc/hierarchy.cpp
     src/systemc/hierarchy_callbacks.cpp
+    src/systemc/incremental_artifact.cpp
+    src/systemc/incremental_compiler.cpp
     src/systemc/plugin_compiler.cpp
     src/systemc/plugin_compiler_common.cpp
     src/systemc/plugin_compiler_dependencies.cpp

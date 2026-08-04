@@ -64,6 +64,18 @@ int main() {
       encoded, "design", decode_diagnostics) == metadata);
   assert(!decode_diagnostics.has_error());
 
+  auto format_one = metadata;
+  format_one.format = 1;
+  format_one.design_digest =
+      fsim::artifact::compute_design_digest(format_one);
+  const auto format_one_encoded =
+      fsim::artifact::serialize_design_metadata(format_one);
+  fsim::diagnostic::Engine format_one_diagnostics;
+  assert(fsim::artifact::deserialize_design_metadata(
+      format_one_encoded, "format-one-design", format_one_diagnostics)
+      == format_one);
+  assert(!format_one_diagnostics.has_error());
+
   auto truncated = encoded;
   truncated.pop_back();
   fsim::diagnostic::Engine truncated_diagnostics;

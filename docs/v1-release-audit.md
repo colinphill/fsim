@@ -9,7 +9,7 @@ remains the final Task 10 boundary.
 
 ## Matrix baseline
 
-The current matrix contains exactly 1,083 required rows. Every row is classified
+The current matrix contains exactly 1,084 required rows. Every row is classified
 `execute`, has nonempty positive parse, negative diagnostic, elaboration, and
 runtime evidence, and names evidence paths that exist in the checkout.
 
@@ -21,11 +21,11 @@ runtime evidence, and names evidence paths that exist in the checkout.
 | VHDL release contract | `V1-VH` | 8 | Task 3 |
 | Mixed-language behavior | `ML` | 17 | Task 4 plus v2 Batch 134 |
 | SystemC behavior | `SC` | 28 | Task 4 |
-| Common implementation behavior | `CM` | 88 | Tasks 5 through 8 plus v2 Batch 137 |
+| Common implementation behavior | `CM` | 89 | Tasks 5 through 8 plus v2 Batches 137-138 |
 | Common release contract | `V1-CM` | 10 | Tasks 5 through 9 |
 
 The Task 1 baseline matrix digest is
-`6d431cb07ade6a729da9e5d0fe9d00afb7e23a30cbb3075e6a76e66cb6aa6033`.
+`6182bc92b69fa9436f6fd4f4503f40ea0f5ab61f275123246da08a3430e9a507`.
 Changing any row requires an intentional audit update and the owning focused
 gate; the digest is evidence of review, not a substitute for semantic tests.
 Corrective Batch 131 re-reviewed the affected container rows after replacing
@@ -34,16 +34,17 @@ budget; required-row counts and evidence ownership remain unchanged.
 Corrective Batch 132 re-reviewed the SystemC export, proxy hierarchy,
 construction-actual, named-object, and recursive mixed-language rows; row
 counts remain unchanged.
-v2 Batch 137 adds the reviewed CM-088 non-project artifact-phase contract and
-advances the required-row count and matrix digest together.
+v2 Batches 137-138 add the reviewed CM-088 non-project artifact-phase contract,
+CM-089 incremental SystemC compile/link and standalone-native design contract,
+and advance the required-row count and matrix digest together.
 
 ## Existing release evidence
 
 The composed local gates currently establish:
 
-- 1,653 production diagnostics are cataloged;
-- 459 authored C/C++ sources remain within the 2,000-line limit;
-- all 1,083 required matrix rows are executable with no explicit evidence gap;
+- 1,659 production diagnostics are cataloged;
+- 463 authored C/C++ sources remain within the 2,000-line limit;
+- all 1,084 required matrix rows are executable with no explicit evidence gap;
 - 105 independently authored conformance expectations in 28 fixtures are
   owned by 27 CTests;
 - 20 exact portability rows cover Debug/Release, interpreter/LLVM O0/O2,

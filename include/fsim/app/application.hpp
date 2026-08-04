@@ -163,11 +163,19 @@ struct BuiltProject {
     const project::Config& config,
     diagnostic::Engine& diagnostics);
 
-/// Elaborate an already compiled, ordered object set without preprocessing or
-/// parsing producer sources. SystemC objects remain unsupported in Batch 137.
+/// Elaborate an already compiled, ordered HDL object set without preprocessing
+/// or parsing producer sources.
 [[nodiscard]] std::optional<BuiltProject> build_objects(
     const project::Config& config,
     std::span<const std::filesystem::path> objects,
+    diagnostic::Engine& diagnostics);
+
+/// Elaborate ordered portable HDL objects and linked SystemC plug-in artifacts
+/// in one manifest-free hierarchy. Either input span may be empty.
+[[nodiscard]] std::optional<BuiltProject> build_objects(
+    const project::Config& config,
+    std::span<const std::filesystem::path> objects,
+    std::span<const std::filesystem::path> systemc_plugins,
     diagnostic::Engine& diagnostics);
 
 enum class SimulationEngine : std::uint8_t {

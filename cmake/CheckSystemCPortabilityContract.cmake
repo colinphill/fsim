@@ -10,6 +10,7 @@ set(FSIM_MATRIX "${FSIM_SOURCE_DIR}/tests/systemc/plugin_matrix_test.cpp")
 set(FSIM_COMPILER "${FSIM_SOURCE_DIR}/src/systemc/plugin_compiler.cpp")
 set(FSIM_COMMON "${FSIM_SOURCE_DIR}/src/systemc/plugin_compiler_common.cpp")
 set(FSIM_PROCESS "${FSIM_SOURCE_DIR}/src/systemc/plugin_compiler_process.cpp")
+set(FSIM_INCREMENTAL "${FSIM_SOURCE_DIR}/src/systemc/incremental_compiler.cpp")
 set(FSIM_LOADER "${FSIM_SOURCE_DIR}/src/systemc/plugin_loader.cpp")
 set(FSIM_CALLBACKS "${FSIM_SOURCE_DIR}/src/systemc/hierarchy_callbacks.cpp")
 set(FSIM_EXPORTS "${FSIM_SOURCE_DIR}/src/systemc/systemc_exports.cpp")
@@ -21,6 +22,7 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_COMPILER}"
     "${FSIM_COMMON}"
     "${FSIM_PROCESS}"
+    "${FSIM_INCREMENTAL}"
     "${FSIM_LOADER}"
     "${FSIM_CALLBACKS}"
     "${FSIM_EXPORTS}"
@@ -36,6 +38,7 @@ file(READ "${FSIM_MATRIX}" FSIM_MATRIX_CONTENTS)
 file(READ "${FSIM_COMPILER}" FSIM_COMPILER_CONTENTS)
 file(READ "${FSIM_COMMON}" FSIM_COMMON_CONTENTS)
 file(READ "${FSIM_PROCESS}" FSIM_PROCESS_CONTENTS)
+file(READ "${FSIM_INCREMENTAL}" FSIM_INCREMENTAL_CONTENTS)
 file(READ "${FSIM_LOADER}" FSIM_LOADER_CONTENTS)
 file(READ "${FSIM_CALLBACKS}" FSIM_CALLBACK_CONTENTS)
 file(READ "${FSIM_EXPORTS}" FSIM_EXPORT_CONTENTS)
@@ -123,6 +126,23 @@ foreach(FSIM_PROCESS_POLICY IN ITEMS
     message(FATAL_ERROR "SystemC compiler lost Windows process policy: ${FSIM_PROCESS_POLICY}")
   endif()
 endforeach()
+foreach(FSIM_INCREMENTAL_POLICY IN ITEMS
+    "CompilerCommand command"
+    "run_process(command)"
+    "/sourceDependencies"
+    "/WHOLEARCHIVE:"
+    "/INCREMENTAL:NO"
+    "-Wl,--whole-archive"
+    "inputs_unchanged"
+    "compiler_fingerprint")
+  string(FIND
+    "${FSIM_INCREMENTAL_CONTENTS}" "${FSIM_INCREMENTAL_POLICY}" FSIM_INDEX)
+  if(FSIM_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "incremental SystemC phases lost safe cross-platform policy: "
+      "${FSIM_INCREMENTAL_POLICY}")
+  endif()
+endforeach()
 
 foreach(FSIM_ABI_POLICY IN ITEMS
     "host.abi_version != FSIM_SYSTEMC_ABI_VERSION"
@@ -162,4 +182,5 @@ endif()
 message(STATUS
   "SystemC portability contract: parent compiler discovery options are "
   "preserved by a fingerprinted launcher; cache, compiler, Windows process, "
-  "strict C ABI, exception, thread, and loader lifetime policies are present")
+  "incremental compile/link, strict C ABI, exception, thread, and loader "
+  "lifetime policies are present")

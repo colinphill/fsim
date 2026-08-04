@@ -981,10 +981,16 @@ a read-only `.fsimdesign`; and `fsim simulate` restores that design directly
 with interpreter, compiled, or debug/O0 execution. Multiple roots,
 cross-language inference, packages, contexts, configurations,
 generics/parameters, source/debug locations, callbacks, and VCD retain their
-ordinary project-mode semantics. Producer sources and objects are unnecessary
-after design publication. SystemC inputs receive an actionable Batch 138
-diagnostic because native behavior cannot be silently omitted from a portable
-HDL artifact. See the
+ordinary project-mode semantics. `fsim systemc compile` independently compiles
+one dependency-complete C++20 translation unit to `.fsimscobj`; `fsim systemc
+link` combines ordered objects into a logical-library `.fsimscplugin` with a
+validated factory/schema inventory. Repeated `--systemc-plugin` inputs join HDL
+objects during elaboration. Selected plug-ins are embedded in format-2 designs,
+then checksum-validated, reloaded, path-remapped, rebound, and lifecycle-started
+during standalone simulation. Producer sources, `.fsimobj`, `.fsimscobj`, and
+original `.fsimscplugin` directories are unnecessary after design publication.
+The embedded native image still requires the recorded exact-compatible host,
+compiler, runtime, and SystemC ABI. See the
 [non-project phase tutorial](../examples/non_project_phases/README.md).
 
 Batch 119 frontend closure now retains nested waits rather than rejecting a

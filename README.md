@@ -544,6 +544,8 @@ fsim run
 fsim debug
 fsim tcl
 fsim compile
+fsim systemc compile
+fsim systemc link
 fsim elaborate
 fsim simulate
 ```
@@ -575,8 +577,24 @@ fsim simulate --design design.fsimdesign --engine compiled \
   --cache .fsim-native --file-root . --trace run.vcd
 ```
 
-Artifact directories are immutable and overwrite-safe. SystemC uses the
-separate incremental native compile/link phases planned for Batch 138. See the
+SystemC translation units and their linked logical-library plug-in are equally
+explicit:
+
+```sh
+fsim systemc compile --output bridge.fsimscobj bridge.cpp
+fsim systemc link --object bridge.fsimscobj --library models \
+  --output models.fsimscplugin
+fsim elaborate --object unit.fsimobj \
+  --systemc-plugin models.fsimscplugin --top top=sv:work.top \
+  --search-library models --output design.fsimdesign
+```
+
+Each SystemC translation unit has its own dependency-complete compile cache;
+linking records the ordered object identities and exported factory schemas.
+Artifact directories are immutable and overwrite-safe. A design that selects
+a SystemC factory embeds the checksummed native plug-in and reconstructs its
+hierarchy during standalone simulation, so producer sources and intermediate
+objects are no longer needed. See the
 [non-project phase tutorial](examples/non_project_phases/README.md).
 
 For Verilog/SystemVerilog source sets, `compilation_unit = "file"` resets

@@ -10,7 +10,12 @@
 #include "fsim/version.hpp"
 
 #include <fstream>
+#include <iterator>
+#include <limits>
+#include <map>
+#include <set>
 #include <sstream>
+#include <unordered_map>
 
 namespace fsim::app {
 namespace {
@@ -66,6 +71,330 @@ const artifact::DesignPayload* payload_by_kind(
   return found == metadata.payloads.end() ? nullptr : &*found;
 }
 
+std::optional<std::pair<std::string, std::string>> systemc_target(
+    const std::string_view target) {
+  constexpr std::string_view prefix = "systemc:";
+  if (!target.starts_with(prefix)) {
+    return std::nullopt;
+  }
+  const auto body = target.substr(prefix.size());
+  const auto separator = body.find('.');
+  if (separator == std::string_view::npos || separator == 0
+      || separator + 1 == body.size()) {
+    return std::nullopt;
+  }
+  return std::pair{
+      std::string{body.substr(0, separator)},
+      std::string{body.substr(separator + 1)}};
+}
+
+struct RehydratedSystemC {
+  std::vector<std::filesystem::path> native_plugins;
+  std::vector<std::shared_ptr<systemc::HierarchyRegistry>> registries;
+  std::vector<std::uint64_t> roots;
+};
+
+std::optional<RehydratedSystemC> rehydrate_systemc(
+    const std::filesystem::path& directory,
+    const artifact::DesignMetadata& metadata,
+    elaboration::ElaboratedDesign& runtime,
+    semantic::design::DesignIr& design_ir,
+    diagnostic::Engine& diagnostics) {
+  auto state = runtime.state();
+  if (metadata.systemc_plugins.empty()) {
+    if (!state.systemc_instances.empty() || !state.systemc_processes.empty()
+        || !state.systemc_objects.empty()) {
+      diagnostics.error(
+          "FSIM-ART-0014",
+          ".fsimdesign contains SystemC runtime state without embedded plug-ins");
+      return std::nullopt;
+    }
+    return RehydratedSystemC{};
+  }
+
+  RehydratedSystemC result;
+  std::map<std::string, std::shared_ptr<systemc::HierarchyRegistry>> by_library;
+  for (const auto& record : metadata.systemc_plugins) {
+    const auto plugin_directory = directory / record.directory;
+    auto plugin_metadata = systemc::load_incremental_plugin_metadata(
+        plugin_directory, diagnostics);
+    if (!plugin_metadata) {
+      return std::nullopt;
+    }
+    const auto metadata_bytes =
+        systemc::serialize_incremental_plugin_metadata(*plugin_metadata);
+    std::vector<std::string> factories;
+    for (const auto& factory : plugin_metadata->factories) {
+      factories.push_back(factory.name);
+    }
+    if (plugin_metadata->logical_library != record.logical_library
+        || plugin_metadata->input_digest != record.input_digest
+        || plugin_metadata->link_digest != record.link_digest
+        || plugin_metadata->compiler_fingerprint
+            != record.compiler_fingerprint
+        || plugin_metadata->library_checksum != record.library_checksum
+        || support::Sha256::hex(support::Sha256::digest(metadata_bytes))
+            != record.metadata_checksum
+        || factories != record.factories) {
+      diagnostics.error(
+          "FSIM-ART-0014",
+          "embedded SystemC plug-in metadata disagrees with design provenance");
+      return std::nullopt;
+    }
+    auto registry = systemc::load_incremental_plugin(
+        plugin_directory, diagnostics);
+    if (!registry
+        || !by_library.emplace(record.logical_library, registry).second) {
+      if (!diagnostics.has_error()) {
+        diagnostics.error(
+            "FSIM-ART-0014",
+            "duplicate embedded SystemC logical library '"
+                + record.logical_library + "'");
+      }
+      return std::nullopt;
+    }
+    result.native_plugins.push_back(
+        plugin_directory / plugin_metadata->library);
+    result.registries.push_back(std::move(registry));
+  }
+
+  const auto resolution = application_detail::magnitude_and_unit(
+      metadata.time_resolution);
+  const auto factor = resolution
+      ? application_detail::unit_femtoseconds(resolution->unit)
+      : std::nullopt;
+  if (!resolution || !factor || resolution->magnitude == 0
+      || resolution->magnitude
+          > std::numeric_limits<std::uint64_t>::max() / *factor) {
+    diagnostics.error(
+        "FSIM-ART-0014",
+        "cannot restore SystemC time resolution '"
+            + metadata.time_resolution + "'");
+    return std::nullopt;
+  }
+  for (const auto& registry : result.registries) {
+    registry->set_time_resolution(resolution->magnitude * *factor);
+  }
+
+  std::set<std::string> instance_paths;
+  for (const auto& instance : state.systemc_instances) {
+    instance_paths.insert(instance.instance);
+  }
+  const auto has_systemc_parent = [&](const std::string& path) {
+    return std::ranges::any_of(instance_paths, [&](const auto& parent) {
+      return parent.size() < path.size()
+          && path.starts_with(parent)
+          && path[parent.size()] == '.';
+    });
+  };
+  std::map<std::string, std::uint64_t> new_handles_by_path;
+  std::unordered_map<std::uint64_t, std::string> old_paths_by_handle;
+  const auto remember = [&](const std::uint64_t handle, std::string path) {
+    if (handle != 0) {
+      old_paths_by_handle.emplace(handle, std::move(path));
+    }
+  };
+  for (const auto& object : state.systemc_objects) {
+    remember(object.native_handle, object.name);
+  }
+  for (const auto& instance : state.systemc_instances) {
+    remember(instance.native_handle, instance.instance);
+    for (const auto& port : instance.ports) {
+      remember(port.native_handle, instance.instance + "." + port.name);
+    }
+    for (const auto& event : instance.events) {
+      remember(event.native_handle, instance.instance + "." + event.name);
+    }
+    for (const auto& channel : instance.primitive_channels) {
+      remember(channel.native_handle, instance.instance + "." + channel.name);
+    }
+    for (const auto& signal : instance.internal_signals) {
+      remember(signal.native_handle, instance.instance + "." + signal.name);
+    }
+    for (const auto& export_object : instance.exports) {
+      remember(
+          export_object.native_handle,
+          instance.instance + "." + export_object.name);
+    }
+  }
+
+  for (const auto& instance : state.systemc_instances) {
+    if (has_systemc_parent(instance.instance)) {
+      continue;
+    }
+    const auto target = systemc_target(instance.target);
+    if (!target) {
+      diagnostics.error(
+          "FSIM-ART-0014",
+          "serialized SystemC instance has an invalid target '"
+              + instance.target + "'");
+      return std::nullopt;
+    }
+    const auto found = by_library.find(target->first);
+    if (found == by_library.end()) {
+      diagnostics.error(
+          "FSIM-ART-0014",
+          "serialized SystemC instance requires missing logical library '"
+              + target->first + "'");
+      return std::nullopt;
+    }
+    std::string error;
+    auto module = found->second->instantiate(
+        target->second, instance.instance, 0,
+        instance.construction_values, error);
+    if (!module) {
+      diagnostics.error(
+          "FSIM-ART-0014",
+          "cannot reconstruct SystemC instance '" + instance.instance
+              + "': " + error);
+      return std::nullopt;
+    }
+    result.roots.push_back(module->handle);
+    std::vector<std::uint64_t> pending{module->handle};
+    while (!pending.empty()) {
+      const auto handle = pending.back();
+      pending.pop_back();
+      const auto info = found->second->object_info(handle);
+      if (!info || !new_handles_by_path.emplace(info->path, handle).second) {
+        diagnostics.error(
+            "FSIM-ART-0014",
+            "reconstructed SystemC hierarchy has duplicate or missing object metadata");
+        return std::nullopt;
+      }
+      for (const auto& child : found->second->child_objects(handle)) {
+        pending.push_back(child.handle);
+      }
+    }
+  }
+
+  std::unordered_map<std::uint64_t, std::uint64_t> handle_map;
+  for (const auto& [old_handle, path] : old_paths_by_handle) {
+    const auto found = new_handles_by_path.find(path);
+    if (found == new_handles_by_path.end()) {
+      diagnostics.error(
+          "FSIM-ART-0014",
+          "reconstructed SystemC hierarchy is missing object '" + path + "'");
+      return std::nullopt;
+    }
+    handle_map.emplace(old_handle, found->second);
+  }
+  const auto remap = [&](std::uint64_t& handle) {
+    if (handle == 0) {
+      return true;
+    }
+    const auto found = handle_map.find(handle);
+    if (found == handle_map.end()) {
+      return false;
+    }
+    handle = found->second;
+    return true;
+  };
+  const auto require_remap = [&](std::uint64_t& handle) {
+    if (remap(handle)) {
+      return true;
+    }
+    diagnostics.error(
+        "FSIM-ART-0014",
+        "reconstructed SystemC hierarchy cannot remap native handle "
+            + std::to_string(handle));
+    return false;
+  };
+  for (auto& instance : state.systemc_instances) {
+    if (!require_remap(instance.native_handle)) {
+      return std::nullopt;
+    }
+    for (auto& port : instance.ports) {
+      if (!require_remap(port.native_handle)) {
+        return std::nullopt;
+      }
+    }
+    for (auto& event : instance.events) {
+      if (!require_remap(event.native_handle)) {
+        return std::nullopt;
+      }
+    }
+    for (auto& channel : instance.primitive_channels) {
+      if (!require_remap(channel.native_handle)) {
+        return std::nullopt;
+      }
+    }
+    for (auto& signal : instance.internal_signals) {
+      if (!require_remap(signal.native_handle)) {
+        return std::nullopt;
+      }
+    }
+    for (auto& export_object : instance.exports) {
+      if (!require_remap(export_object.native_handle)) {
+        return std::nullopt;
+      }
+    }
+  }
+  for (auto& process : state.systemc_processes) {
+    if (!require_remap(process.native_handle)) {
+      return std::nullopt;
+    }
+  }
+  for (auto& object : state.systemc_objects) {
+    if (!require_remap(object.native_handle)) {
+      return std::nullopt;
+    }
+  }
+  for (auto& object : design_ir.mutable_objects()) {
+    if (object.native_handle != 0 && !require_remap(object.native_handle)) {
+      return std::nullopt;
+    }
+  }
+  for (auto& boundary : design_ir.mutable_boundaries()) {
+    if (boundary.native_handle != 0
+        && !require_remap(boundary.native_handle)) {
+      return std::nullopt;
+    }
+  }
+  auto rebuilt = elaboration::ElaboratedDesign::from_state(std::move(state));
+  if (!rebuilt) {
+    diagnostics.error(
+        "FSIM-ART-0014",
+        "remapped SystemC runtime state is structurally invalid");
+    return std::nullopt;
+  }
+  runtime = std::move(*rebuilt);
+
+  try {
+    for (const auto& instance : runtime.systemc_instances()) {
+      const auto bind = [&](const std::uint64_t handle, const auto signal) {
+        const auto owner = std::ranges::find_if(
+            result.registries, [&](const auto& registry) {
+              return registry->owns_handle(handle);
+            });
+        if (owner == result.registries.end()) {
+          throw std::logic_error{"remapped SystemC object has no owner"};
+        }
+        (*owner)->bind_runtime_object(handle, signal);
+      };
+      for (const auto& port : instance.ports) bind(port.native_handle, port.signal);
+      for (const auto& event : instance.events) bind(event.native_handle, event.signal);
+      for (const auto& signal : instance.internal_signals)
+        bind(signal.native_handle, signal.signal);
+      for (const auto& export_object : instance.exports)
+        bind(export_object.native_handle, export_object.signal);
+    }
+    for (const auto& registry : result.registries) {
+      std::vector<std::uint64_t> owned_roots;
+      std::ranges::copy_if(
+          result.roots, std::back_inserter(owned_roots),
+          [&](const auto handle) { return registry->owns_handle(handle); });
+      registry->complete_elaboration(owned_roots);
+    }
+  } catch (const std::exception& error) {
+    diagnostics.error(
+        "FSIM-ART-0014",
+        "cannot bind reconstructed SystemC hierarchy: "
+            + std::string{error.what()});
+    return std::nullopt;
+  }
+  return result;
+}
+
 }  // namespace
 
 bool publish_design_artifact(
@@ -110,12 +439,6 @@ bool publish_design_artifact(
         object.metadata_digest, object.compilation_digest, object.language,
         object.standard, object.library, object.unit_checksums});
   }
-  if (metadata.objects.empty()) {
-    diagnostics.error(
-        "FSIM-ART-0014",
-        "standalone design publication requires explicit .fsimobj provenance");
-    return false;
-  }
   const auto add_payload = [&](
       const std::string_view kind,
       const std::filesystem::path& path,
@@ -127,6 +450,88 @@ bool publish_design_artifact(
   add_payload("runtime", "state/runtime.bin", *runtime);
   add_payload("semantics", "state/semantics.bin", *semantics);
   add_payload("design-ir", "state/design-ir.bin", *design_ir);
+  std::vector<library::PortablePayload> payloads{
+      {metadata.payloads[0].artifact, std::move(*runtime)},
+      {metadata.payloads[1].artifact, std::move(*semantics)},
+      {metadata.payloads[2].artifact, std::move(*design_ir)}};
+  std::set<std::string> selected_plugin_libraries;
+  for (const auto& instance : project.design.systemc_instances()) {
+    if (const auto target = systemc_target(instance.target)) {
+      selected_plugin_libraries.insert(target->first);
+    }
+  }
+  std::set<std::string> plugin_libraries;
+  for (std::size_t index = 0; index < project.systemc_plugins.size(); ++index) {
+    const auto native = project.systemc_plugins[index];
+    const auto artifact_directory = native.parent_path().parent_path();
+    auto plugin = systemc::load_incremental_plugin_metadata(
+        artifact_directory, diagnostics);
+    if (!plugin) {
+      diagnostics.error(
+          "FSIM-ART-0014",
+          "standalone design publication requires linked .fsimscplugin "
+          "provenance for every SystemC image");
+      return false;
+    }
+    if (!selected_plugin_libraries.contains(plugin->logical_library)) {
+      continue;
+    }
+    if (!plugin_libraries.insert(plugin->logical_library).second) {
+      diagnostics.error(
+          "FSIM-ART-0014",
+          "standalone design contains duplicate SystemC logical library '"
+              + plugin->logical_library + "'");
+      return false;
+    }
+    const auto embedded = std::filesystem::path{"systemc"} / "plugins"
+        / ("plugin-" + std::to_string(index));
+    const auto metadata_bytes =
+        systemc::serialize_incremental_plugin_metadata(*plugin);
+    auto native_bytes = read_design_payload(
+        artifact_directory / plugin->library,
+        plugin->library_checksum, diagnostics);
+    if (!native_bytes) {
+      return false;
+    }
+    artifact::DesignSystemCPlugin record;
+    record.logical_library = plugin->logical_library;
+    record.input_digest = plugin->input_digest;
+    record.link_digest = plugin->link_digest;
+    record.compiler_fingerprint = plugin->compiler_fingerprint;
+    record.directory = embedded;
+    record.metadata_checksum = support::Sha256::hex(
+        support::Sha256::digest(metadata_bytes));
+    record.library_checksum = plugin->library_checksum;
+    for (const auto& factory : plugin->factories) {
+      record.factories.push_back(factory.name);
+    }
+    metadata.systemc_plugins.push_back(record);
+    const auto metadata_path =
+        embedded / systemc::kIncrementalPluginMetadataFilename;
+    const auto native_path = embedded / plugin->library;
+    add_payload(
+        "systemc-plugin-metadata:" + plugin->logical_library,
+        metadata_path, metadata_bytes);
+    add_payload(
+        "systemc-plugin-native:" + plugin->logical_library,
+        native_path, *native_bytes);
+    payloads.push_back({metadata_path, metadata_bytes});
+    payloads.push_back({native_path, std::move(*native_bytes)});
+  }
+  if (plugin_libraries != selected_plugin_libraries) {
+    diagnostics.error(
+        "FSIM-ART-0014",
+        "standalone design publication is missing linked provenance for one "
+        "or more selected SystemC logical libraries");
+    return false;
+  }
+  if (metadata.objects.empty() && metadata.systemc_plugins.empty()) {
+    diagnostics.error(
+        "FSIM-ART-0014",
+        "standalone design publication requires explicit HDL object or "
+        "SystemC plug-in provenance");
+    return false;
+  }
   metadata.specialization_cache_keys = project.specialization_cache_keys;
   metadata.unit_count = project.semantics.units().size();
   metadata.semantic_source_count = project.semantics.source_files().size();
@@ -134,10 +539,6 @@ bool publish_design_artifact(
   metadata.signal_count = project.design.signals().size();
   metadata.process_count = project.design.processes().size();
   metadata.design_digest = artifact::compute_design_digest(metadata);
-  const std::vector<library::PortablePayload> payloads{
-      {metadata.payloads[0].artifact, std::move(*runtime)},
-      {metadata.payloads[1].artifact, std::move(*semantics)},
-      {metadata.payloads[2].artifact, std::move(*design_ir)}};
   return artifact::publish_design(
       destination, metadata, payloads, diagnostics);
 }
@@ -189,6 +590,11 @@ std::optional<BuiltProject> load_design_artifact(
     }
     return std::nullopt;
   }
+  auto live_systemc = rehydrate_systemc(
+      directory, *metadata, *runtime, *design_ir, diagnostics);
+  if (!live_systemc) {
+    return std::nullopt;
+  }
   std::vector<std::string> roots;
   roots.reserve(metadata->roots.size());
   for (const auto& root : metadata->roots) {
@@ -219,12 +625,18 @@ std::optional<BuiltProject> load_design_artifact(
   }
   const auto optimization = metadata->optimization == "O0"
       ? project::Optimization::o0 : project::Optimization::o2;
+  auto primary_hierarchy = live_systemc->registries.empty()
+      ? std::shared_ptr<systemc::HierarchyRegistry>{}
+      : live_systemc->registries.front();
   return BuiltProject{
       std::move(*runtime), std::move(*design_ir), std::move(*semantics),
       metadata->cache_key, metadata->time_resolution,
       directory.parent_path() / ".fsim-sim-cache", optimization,
-      metadata->specialization_cache_keys, {}, {}, {}, metadata->seed,
-      metadata->entropy_seed, false, directory.parent_path(), {}, {},
+      metadata->specialization_cache_keys,
+      std::move(live_systemc->native_plugins),
+      std::move(primary_hierarchy), std::move(live_systemc->roots),
+      metadata->seed, metadata->entropy_seed, false,
+      directory.parent_path(), std::move(live_systemc->registries), {},
       std::move(objects), metadata->design_digest};
 }
 
@@ -239,6 +651,18 @@ bool elaborate_artifact(
           config, *built, destination, diagnostics);
 }
 
+bool elaborate_artifact(
+    const project::Config& config,
+    const std::span<const std::filesystem::path> objects,
+    const std::span<const std::filesystem::path> systemc_plugins,
+    const std::filesystem::path& destination,
+    diagnostic::Engine& diagnostics) {
+  auto built = build_objects(config, objects, systemc_plugins, diagnostics);
+  return built
+      && publish_design_artifact(
+          config, *built, destination, diagnostics);
+}
+
 std::optional<ArtifactInspection> inspect_artifact(
     const std::filesystem::path& directory,
     diagnostic::Engine& diagnostics) {
@@ -246,11 +670,20 @@ std::optional<ArtifactInspection> inspect_artifact(
       std::filesystem::exists(directory / artifact::kObjectMetadataFilename);
   const auto design_metadata =
       std::filesystem::exists(directory / artifact::kDesignMetadataFilename);
-  if (object_metadata == design_metadata) {
+  const auto systemc_object_metadata = std::filesystem::exists(
+      directory / systemc::kIncrementalObjectMetadataFilename);
+  const auto systemc_plugin_metadata = std::filesystem::exists(
+      directory / systemc::kIncrementalPluginMetadataFilename);
+  const auto metadata_count = static_cast<unsigned>(object_metadata)
+      + static_cast<unsigned>(design_metadata)
+      + static_cast<unsigned>(systemc_object_metadata)
+      + static_cast<unsigned>(systemc_plugin_metadata);
+  if (metadata_count != 1) {
     diagnostics.error(
         "FSIM-ART-0014",
-        "artifact inspection requires exactly one .fsimobj or .fsimdesign "
-        "metadata record: " + support::path_to_utf8(directory));
+        "artifact inspection requires exactly one .fsimobj, .fsimscobj, "
+        ".fsimscplugin, or .fsimdesign metadata record: "
+            + support::path_to_utf8(directory));
     return std::nullopt;
   }
   ArtifactInspection result;
@@ -271,6 +704,52 @@ std::optional<ArtifactInspection> inspect_artifact(
       result.units.push_back(
           unit.language + ":" + metadata->library + "." + unit.name);
       result.digests.push_back(unit.checksum);
+    }
+    return result;
+  }
+  if (systemc_object_metadata) {
+    const auto metadata = systemc::load_incremental_object_metadata(
+        directory, diagnostics);
+    if (!metadata) {
+      return std::nullopt;
+    }
+    result.phase = ArtifactPhaseKind::systemc_compilation;
+    result.format = metadata->format;
+    result.runtime_abi = metadata->runtime_abi;
+    result.language = "systemc";
+    result.toolchain = metadata->toolchain;
+    result.target = metadata->target;
+    result.digests = {
+        metadata->compiler_fingerprint, metadata->input_digest,
+        metadata->compilation_digest, metadata->object_checksum};
+    for (const auto& input : metadata->inputs) {
+      result.units.push_back(input.logical_name);
+      result.digests.push_back(input.checksum);
+    }
+    return result;
+  }
+  if (systemc_plugin_metadata) {
+    const auto metadata = systemc::load_incremental_plugin_metadata(
+        directory, diagnostics);
+    if (!metadata) {
+      return std::nullopt;
+    }
+    result.phase = ArtifactPhaseKind::systemc_link;
+    result.format = metadata->format;
+    result.runtime_abi = metadata->runtime_abi;
+    result.language = "systemc";
+    result.library = metadata->logical_library;
+    result.toolchain = metadata->toolchain;
+    result.target = metadata->target;
+    result.digests = {
+        metadata->compiler_fingerprint, metadata->input_digest,
+        metadata->link_digest, metadata->library_checksum};
+    result.digests.insert(
+        result.digests.end(), metadata->object_digests.begin(),
+        metadata->object_digests.end());
+    for (const auto& factory : metadata->factories) {
+      result.units.push_back(
+          "systemc:" + metadata->logical_library + "." + factory.name);
     }
     return result;
   }
@@ -313,7 +792,8 @@ int handle_elaborate(
   if (!invocation.artifact_output) {
     return 1;
   }
-  auto built = build_objects(config, invocation.objects, diagnostics);
+  auto built = build_objects(
+      config, invocation.objects, invocation.systemc_plugins, diagnostics);
   if (!built || !publish_design_artifact(
           config, *built, *invocation.artifact_output, diagnostics)) {
     return 1;

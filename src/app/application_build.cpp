@@ -29,6 +29,7 @@ namespace {
 std::optional<BuiltProject> build_checked_project(
     const project::Config& config,
     std::optional<CheckedProject> checked,
+    const std::span<const std::filesystem::path> incremental_plugins,
     diagnostic::Engine& diagnostics) {
   if (!checked) {
     return std::nullopt;
@@ -42,22 +43,82 @@ std::optional<BuiltProject> build_checked_project(
   std::vector<SystemCLibraryRegistry> systemc_registries;
   std::shared_ptr<systemc::HierarchyRegistry> systemc_hierarchy;
   std::string systemc_plugin_key;
+  std::set<std::string> systemc_libraries;
   for (const auto& entry : systemc_requests(config)) {
-    auto compiled = systemc::compile_plugin(entry.request, diagnostics);
-    if (!compiled.success) {
+    systemc_libraries.insert(entry.library);
+    std::vector<std::filesystem::path> objects;
+    objects.reserve(entry.request.sources.size());
+    for (const auto& source : entry.request.sources) {
+      systemc::IncrementalCompileRequest compile_request;
+      compile_request.source = source;
+      compile_request.settings = entry.request.settings;
+      compile_request.working_directory = entry.request.working_directory;
+      compile_request.scratch_directory =
+          entry.request.cache_directory / "systemc-phase-scratch";
+      auto compiled = systemc::compile_incremental_object_cached(
+          std::move(compile_request), entry.request.cache_directory,
+          diagnostics);
+      if (!compiled.success) {
+        return std::nullopt;
+      }
+      objects.push_back(std::move(compiled.artifact));
+    }
+    systemc::IncrementalLinkRequest link_request;
+    link_request.objects = objects;
+    link_request.logical_library = entry.library;
+    link_request.settings = entry.request.settings;
+    link_request.working_directory = entry.request.working_directory;
+    link_request.scratch_directory =
+        entry.request.cache_directory / "systemc-phase-scratch";
+    auto linked = systemc::link_incremental_plugin_cached(
+        std::move(link_request), entry.request.cache_directory, diagnostics);
+    if (!linked.success) {
       return std::nullopt;
     }
-    auto registry =
-        load_systemc_plugin(compiled.library_path, diagnostics);
+    auto plugin_metadata = systemc::load_incremental_plugin_metadata(
+        linked.artifact, diagnostics);
+    if (!plugin_metadata) {
+      return std::nullopt;
+    }
+    auto registry = systemc::load_incremental_plugin(
+        linked.artifact, diagnostics);
     if (!registry) {
       return std::nullopt;
     }
-    systemc_plugin_key += entry.library + ":" + compiled.cache_key + ";";
+    systemc_plugin_key +=
+        entry.library + ":" + plugin_metadata->link_digest + ";";
     systemc_registries.push_back({entry.library, registry});
     if (!systemc_hierarchy) {
       systemc_hierarchy = registry;
     }
-    systemc_plugins.push_back(std::move(compiled.library_path));
+    systemc_plugins.push_back(
+        linked.artifact / plugin_metadata->library);
+  }
+  for (const auto& artifact : incremental_plugins) {
+    auto plugin_metadata = systemc::load_incremental_plugin_metadata(
+        artifact, diagnostics);
+    if (!plugin_metadata) {
+      return std::nullopt;
+    }
+    if (!systemc_libraries.insert(plugin_metadata->logical_library).second) {
+      diagnostics.error(
+          "FSIM-SC-I006",
+          "duplicate SystemC logical-library plug-in '"
+              + plugin_metadata->logical_library + "'");
+      return std::nullopt;
+    }
+    auto registry = systemc::load_incremental_plugin(artifact, diagnostics);
+    if (!registry) {
+      return std::nullopt;
+    }
+    systemc_plugin_key += plugin_metadata->logical_library + ":"
+        + plugin_metadata->link_digest + ";";
+    systemc_registries.push_back(
+        {plugin_metadata->logical_library, registry});
+    if (!systemc_hierarchy) {
+      systemc_hierarchy = registry;
+    }
+    systemc_plugins.push_back(artifact / plugin_metadata->library);
   }
   for (const auto& mapped : checked->mapped_libraries) {
     if (mapped.systemc_plugin.empty() && mapped.systemc_sources.empty()) {
@@ -352,15 +413,37 @@ std::optional<BuiltProject> build_project(
     const project::Config& config,
     diagnostic::Engine& diagnostics) {
   return build_checked_project(
-      config, check_project(config, diagnostics), diagnostics);
+      config, check_project(config, diagnostics), {}, diagnostics);
 }
 
 std::optional<BuiltProject> build_objects(
     const project::Config& config,
     const std::span<const std::filesystem::path> objects,
     diagnostic::Engine& diagnostics) {
+  return build_objects(config, objects, {}, diagnostics);
+}
+
+std::optional<BuiltProject> build_objects(
+    const project::Config& config,
+    const std::span<const std::filesystem::path> objects,
+    const std::span<const std::filesystem::path> systemc_plugins,
+    diagnostic::Engine& diagnostics) {
+  std::optional<CheckedProject> checked;
+  if (objects.empty()) {
+    CheckedProject empty;
+    inject_vhdl_standard_libraries(empty, diagnostics);
+    empty.semantics = build_semantic_model(
+        empty.parsed, empty.hdl_sources, empty.systemc_sources,
+        empty.standard_sources);
+    empty.vhdl_hir = build_vhdl_hir(empty.parsed, empty.semantics);
+    empty.systemverilog_hir =
+        build_systemverilog_hir(empty.parsed, empty.semantics);
+    checked = std::move(empty);
+  } else {
+    checked = load_objects(objects, diagnostics);
+  }
   return build_checked_project(
-      config, load_objects(objects, diagnostics), diagnostics);
+      config, std::move(checked), systemc_plugins, diagnostics);
 }
 
 

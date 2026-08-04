@@ -100,6 +100,10 @@ An explicit full-path `[[binding]]` can still override either inferred target.
 If a name is missing or ambiguous anywhere in the complete scope, elaboration
 stops before comparing ports or construction actuals.
 
+For an explicitly scripted build of the same three source files using
+`.fsimobj`, `.fsimscobj`, `.fsimscplugin`, and `.fsimdesign`, follow the
+[manifest-free phase tutorial](../non_project_phases/README.md#add-an-incrementally-compiled-systemc-library).
+
 ## 4. Record and inspect a VCD
 
 The manifest enables tracing with:

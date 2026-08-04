@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
 
+#include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/design.hpp"
 #include "fsim/artifact/object.hpp"
@@ -10,6 +11,7 @@
 #include <algorithm>
 #include <cassert>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <sstream>
 #include <vector>
@@ -144,6 +146,56 @@ void ApplicationTestFixture::test_non_project_cli() {
   assert(simulate->cache_directory == consumer_cache);
   assert(simulate->file_root == consumer_file_root);
 
+  const auto incremental_systemc_source = directory / "incremental.cpp";
+  const auto systemc_object = directory / "incremental.fsimscobj";
+  const auto systemc_plugin = directory / "incremental.fsimscplugin";
+  const auto systemc_design = directory / "incremental.fsimdesign";
+  const auto systemc_source_text =
+      support::path_to_utf8(incremental_systemc_source);
+  const auto systemc_object_text = support::path_to_utf8(systemc_object);
+  const auto systemc_plugin_text = support::path_to_utf8(systemc_plugin);
+  const std::vector<const char*> systemc_compile_arguments{
+      "fsim", "systemc", "compile", "--output",
+      systemc_object_text.c_str(), "--define", "WIDTH=8",
+      "--compile-option", "-fno-omit-frame-pointer",
+      systemc_source_text.c_str()};
+  diagnostic::Engine systemc_compile_diagnostics;
+  const auto systemc_compile = cli::parse_arguments(
+      static_cast<int>(systemc_compile_arguments.size()),
+      systemc_compile_arguments.data(), systemc_compile_diagnostics);
+  assert(systemc_compile && !systemc_compile_diagnostics.has_error());
+  assert(systemc_compile->command == cli::Command::systemc_compile);
+  assert(systemc_compile->files == std::vector{incremental_systemc_source});
+  assert(systemc_compile->artifact_output == systemc_object);
+  assert(systemc_compile->defines == std::vector<std::string>{"WIDTH=8"});
+  assert(systemc_compile->systemc_compile_options
+      == std::vector<std::string>{"-fno-omit-frame-pointer"});
+
+  const std::vector<const char*> systemc_link_arguments{
+      "fsim", "systemc", "link", "--object",
+      systemc_object_text.c_str(), "--library", "vendor", "--link-option",
+      "-Wl,--no-undefined", "--output", systemc_plugin_text.c_str()};
+  diagnostic::Engine systemc_link_diagnostics;
+  const auto systemc_link = cli::parse_arguments(
+      static_cast<int>(systemc_link_arguments.size()),
+      systemc_link_arguments.data(), systemc_link_diagnostics);
+  assert(systemc_link && !systemc_link_diagnostics.has_error());
+  assert(systemc_link->command == cli::Command::systemc_link);
+  assert(systemc_link->objects == std::vector{systemc_object});
+  assert(systemc_link->library == "vendor");
+  assert(systemc_link->artifact_output == systemc_plugin);
+
+  const std::vector<const char*> systemc_elaborate_arguments{
+      "fsim", "elaborate", "--object", object_text.c_str(),
+      "--systemc-plugin", systemc_plugin_text.c_str(), "--top",
+      "systemc:vendor.first", "--output", design_text.c_str()};
+  diagnostic::Engine systemc_elaborate_diagnostics;
+  const auto systemc_elaborate = cli::parse_arguments(
+      static_cast<int>(systemc_elaborate_arguments.size()),
+      systemc_elaborate_arguments.data(), systemc_elaborate_diagnostics);
+  assert(systemc_elaborate && !systemc_elaborate_diagnostics.has_error());
+  assert(systemc_elaborate->systemc_plugins == std::vector{systemc_plugin});
+
   const std::vector<const char*> project_arguments{
       "fsim", "simulate", "--project", "fsim.toml", "--design",
       design_text.c_str()};
@@ -198,6 +250,119 @@ void ApplicationTestFixture::test_non_project_cli() {
   output.str({});
   error.str({});
   auto production_services = app::make_cli_services();
+
+  {
+    std::ofstream systemc_output(incremental_systemc_source);
+    systemc_output << R"(#include "fsim/systemc.hpp"
+SC_MODULE(IncrementalTop) {
+  sc_core::sc_signal<sc_dt::sc_uint<8>> value{"value"};
+  SC_CTOR(IncrementalTop) {
+    SC_METHOD(initialize);
+  }
+  void initialize() {
+    value.write(sc_dt::sc_uint<8>{5});
+  }
+};
+SC_FSIM_EXPORT_AS(IncrementalTop, "first");
+)";
+  }
+  output.str({});
+  error.str({});
+  assert(cli::run(
+      static_cast<int>(systemc_compile_arguments.size()),
+      systemc_compile_arguments.data(), production_services,
+      output, error) == 0);
+  assert(error.str().empty());
+  output.str({});
+  error.str({});
+  assert(cli::run(
+      static_cast<int>(systemc_link_arguments.size()),
+      systemc_link_arguments.data(), production_services,
+      output, error) == 0);
+  assert(error.str().empty());
+  diagnostic::Engine systemc_object_inspection_diagnostics;
+  const auto systemc_object_inspection = app::inspect_artifact(
+      systemc_object, systemc_object_inspection_diagnostics);
+  assert(systemc_object_inspection);
+  assert(!systemc_object_inspection_diagnostics.has_error());
+  assert(systemc_object_inspection->phase
+      == app::ArtifactPhaseKind::systemc_compilation);
+  assert(systemc_object_inspection->language == "systemc");
+  assert(systemc_object_inspection->toolchain.has_value());
+  assert(systemc_object_inspection->target.has_value());
+  diagnostic::Engine systemc_plugin_inspection_diagnostics;
+  const auto systemc_plugin_inspection = app::inspect_artifact(
+      systemc_plugin, systemc_plugin_inspection_diagnostics);
+  assert(systemc_plugin_inspection);
+  assert(!systemc_plugin_inspection_diagnostics.has_error());
+  assert(systemc_plugin_inspection->phase
+      == app::ArtifactPhaseKind::systemc_link);
+  assert(systemc_plugin_inspection->library == "vendor");
+  assert(systemc_plugin_inspection->units
+      == std::vector<std::string>{"systemc:vendor.first"});
+  project::Config systemc_phase_config;
+  systemc_phase_config.base_directory = directory;
+  systemc_phase_config.project.name = "systemc-phase";
+  systemc_phase_config.project.top = "systemc:vendor.first";
+  systemc_phase_config.build.cache_path = directory / "systemc-phase-cache";
+  const std::vector<std::filesystem::path> no_hdl_objects;
+  const std::vector systemc_plugin_inputs{systemc_plugin};
+  diagnostic::Engine systemc_publish_diagnostics;
+  const auto systemc_published = app::elaborate_artifact(
+      systemc_phase_config, no_hdl_objects, systemc_plugin_inputs,
+      systemc_design,
+      systemc_publish_diagnostics);
+  if (!systemc_published) {
+    diagnostic::print_text(std::cerr, systemc_publish_diagnostics);
+  }
+  assert(systemc_published);
+  assert(!systemc_publish_diagnostics.has_error());
+
+  diagnostic::Engine systemc_design_metadata_diagnostics;
+  const auto systemc_design_metadata = artifact::load_design_metadata(
+      systemc_design, systemc_design_metadata_diagnostics);
+  assert(systemc_design_metadata);
+  assert(!systemc_design_metadata_diagnostics.has_error());
+  assert(systemc_design_metadata->format == artifact::kDesignFormatVersion);
+  assert(systemc_design_metadata->objects.empty());
+  assert(systemc_design_metadata->systemc_plugins.size() == 1);
+  assert(systemc_design_metadata->systemc_plugins.front().logical_library
+      == "vendor");
+  assert(systemc_design_metadata->systemc_plugins.front().factories
+      == std::vector<std::string>{"first"});
+
+  const auto hidden_systemc_source =
+      directory / "incremental.cpp.producer-hidden";
+  const auto hidden_systemc_object =
+      directory / "incremental.fsimscobj.producer-hidden";
+  const auto hidden_systemc_plugin =
+      directory / "incremental.fsimscplugin.producer-hidden";
+  std::filesystem::rename(incremental_systemc_source, hidden_systemc_source);
+  std::filesystem::rename(systemc_object, hidden_systemc_object);
+  std::filesystem::rename(systemc_plugin, hidden_systemc_plugin);
+  diagnostic::Engine systemc_design_load_diagnostics;
+  auto loaded_systemc_design = app::load_design_artifact(
+      systemc_design, systemc_design_load_diagnostics);
+  assert(loaded_systemc_design && !systemc_design_load_diagnostics.has_error());
+  assert(loaded_systemc_design->systemc_hierarchies.size() == 1);
+  assert(loaded_systemc_design->systemc_roots.size() == 1);
+  assert(loaded_systemc_design->systemc_plugins.size() == 1);
+  assert(loaded_systemc_design->design.systemc_processes().size() == 1);
+  assert(loaded_systemc_design->design.systemc_instances().size() == 1);
+  assert(loaded_systemc_design->design.systemc_instances().front()
+      .internal_signals.size() == 1);
+  const auto systemc_value = loaded_systemc_design->design
+      .systemc_instances().front().internal_signals.front().signal;
+  app::Simulation systemc_standalone_simulation{
+      std::move(*loaded_systemc_design), 1000,
+      app::SimulationEngine::interpreter};
+  const auto systemc_standalone_result =
+      systemc_standalone_simulation.run();
+  assert(systemc_standalone_result.status == runtime::RunStatus::completed);
+  assert(systemc_standalone_result.callbacks_executed != 0);
+  assert(systemc_standalone_simulation.read_signal(systemc_value).to_msb_string()
+      == "00000101");
+
   assert(cli::run(
       static_cast<int>(compile_arguments.size()), compile_arguments.data(),
       production_services, output, error) == 0);

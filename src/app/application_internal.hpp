@@ -14,6 +14,7 @@
 #include "fsim/support/sha256.hpp"
 #include "fsim/support/environment.hpp"
 #include "fsim/systemc/hierarchy.hpp"
+#include "fsim/systemc/incremental.hpp"
 #include "fsim/systemc/plugin_compiler.hpp"
 #include "fsim/version.hpp"
 
@@ -925,6 +926,20 @@ int handle_elaborate(
     std::ostream& error);
 
 int handle_simulate(
+    const cli::Invocation& invocation,
+    const project::Config& config,
+    diagnostic::Engine& diagnostics,
+    std::ostream& output,
+    std::ostream& error);
+
+int handle_systemc_compile(
+    const cli::Invocation& invocation,
+    const project::Config& config,
+    diagnostic::Engine& diagnostics,
+    std::ostream& output,
+    std::ostream& error);
+
+int handle_systemc_link(
     const cli::Invocation& invocation,
     const project::Config& config,
     diagnostic::Engine& diagnostics,

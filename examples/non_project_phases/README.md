@@ -57,3 +57,59 @@ may be supplied at simulation time. Delay selection belongs to elaboration, so
 `simulate --delay-mode` is a compatibility assertion and must match the design.
 All derived output stays in the explicit consumer paths; neither artifact tree
 is modified.
+
+## Add an incrementally compiled SystemC library
+
+SystemC uses a separate host-native object and link pair. The three-language
+example can be scripted from the repository root without reading its manifest:
+
+```sh
+FSIM=build/llvm22-ninja-debug/fsim
+mkdir -p /tmp/fsim-three-language
+
+"$FSIM" compile --lang vhdl --standard 2008 --library models \
+  --output /tmp/fsim-three-language/vhdl.fsimobj \
+  examples/three_language_hierarchy/logic_stage.vhd
+
+"$FSIM" compile --lang systemverilog --standard 2017 --library work \
+  --output /tmp/fsim-three-language/sv.fsimobj \
+  examples/three_language_hierarchy/three_language_tb.sv
+
+"$FSIM" systemc compile \
+  --output /tmp/fsim-three-language/bridge.fsimscobj \
+  examples/three_language_hierarchy/mixed_bridge.cpp
+
+"$FSIM" systemc link \
+  --object /tmp/fsim-three-language/bridge.fsimscobj \
+  --library models \
+  --output /tmp/fsim-three-language/models.fsimscplugin
+
+"$FSIM" elaborate \
+  --object /tmp/fsim-three-language/vhdl.fsimobj \
+  --object /tmp/fsim-three-language/sv.fsimobj \
+  --systemc-plugin /tmp/fsim-three-language/models.fsimscplugin \
+  --search-library models --top demo=sv:work.three_language_tb \
+  --output /tmp/fsim-three-language/design.fsimdesign
+
+"$FSIM" simulate \
+  --design /tmp/fsim-three-language/design.fsimdesign \
+  --engine compiled --cache /tmp/fsim-three-language/native-cache \
+  --trace /tmp/fsim-three-language/three-language.vcd
+```
+
+Each C++ translation unit gets its own `.fsimscobj`; repeat `systemc compile`
+for additional files and pass the ordered objects to one `systemc link`.
+Unchanged translation units are independently reusable in project mode. The
+link phase loads the candidate image before publication and records the sorted
+factory names and parameter schemas. Macro exports may span translation units;
+a legacy handwritten `fsim_plugin_init_v1` remains supported but cannot be
+combined with macro exports in the same plug-in.
+
+The final format-2 `.fsimdesign` embeds only the selected `models` plug-in.
+After elaboration, the original C++ source, `.fsimscobj`, and
+`.fsimscplugin` may all be moved away. Standalone simulation validates the
+embedded checksums and exact host ABI, reconstructs the SystemC hierarchy by
+stable path, reconnects it to the shared runtime, and preserves lifecycle,
+debugger, callback, and trace behavior. Because that image is native, move the
+design only to a host with the recorded compatible compiler target and fsim
+runtime/SystemC ABI.

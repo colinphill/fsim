@@ -132,7 +132,9 @@ cli::Services make_cli_services(std::istream& input) {
       std::move(tcl),
       handle_compile,
       handle_elaborate,
-      handle_simulate};
+      handle_simulate,
+      handle_systemc_compile,
+      handle_systemc_link};
 }
 
 cli::Services make_cli_services() {
