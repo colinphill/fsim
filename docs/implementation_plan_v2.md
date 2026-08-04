@@ -533,7 +533,7 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     test/control files, 1,092 execute rows, 4,368 evidence cells, 335 evidence
     paths, and 97 runtime owners.
 
-## Batch 140 - VITAL package types and combinational primitives - In progress
+## Batch 140 - VITAL package types and combinational primitives - Complete
 
 1. **Complete.** Start from clean pushed Batch 139 commit `e4de752`, record
    this exact 20-change monitoring-batch contract, and synchronize the restart
@@ -592,7 +592,7 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     matrix, inventories, VITAL compatibility notes, and restart evidence; keep
     timing checks, path/wire delays, pulse rejection, and VITAL memory models
     assigned explicitly to subsequent batches.
-20. **In progress.** Run the LLVM-disabled ASan/UBSan regression immediately
+20. **Complete.** Run the LLVM-disabled ASan/UBSan regression immediately
     before commit, then exact-LLVM Debug/Release and all source, catalog,
     inventory, installed-public-contract, and release gates with at least eight
     workers; commit and push once, inspect every non-documentation GitHub
@@ -676,8 +676,11 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     close that stream immediately after reading it. The final local
     exact-LLVM Debug and Release application tests pass in 19.58 and 18.86
     seconds. Focused Windows run `30922930843` passes the sole MSVC Debug
-    `fsim.application` case in 10 minutes 29 seconds. Remove the temporary
-    workflow and resume the normal non-documentation matrix once.
+    `fsim.application` case in 10 minutes 29 seconds. The temporary workflow is
+    removed in `446a654`. Final normal run `30923945372` passes all 12 jobs:
+    four Linux build/test configurations, hosted ASan/UBSan, frontend fuzz,
+    plain MSVC Debug/Release, Clang/LLVM Debug/Release, and MSVC/LLVM
+    Debug/Release. Change 20 and Batch 140 are complete.
 
 ## Forward priority order
 

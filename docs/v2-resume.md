@@ -7,10 +7,11 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
-- Current unit: Batch 140, exactly 20 changes, in progress. Its authoritative
-  VITAL package/primitives contract and per-change status are recorded in
-  `implementation_plan_v2.md`. Batch 139 was committed and pushed once as
-  `e4de752`; begin Batch 140 from that clean synchronized baseline.
+- Current unit: Batch 140, exactly 20 changes, is complete. Its authoritative
+  VITAL package/primitives contract and evidence are recorded in
+  `implementation_plan_v2.md`. Final normal hosted run `30923945372` passes all
+  12 jobs from pushed commit `446a654`. Batch 141 timing checks/state tables is
+  next and has not started in this closeout commit.
 - Completed work: Batch 133 implements parent-library inference for HDL-to-HDL,
   HDL-to-SystemC, and SystemC-proxy-to-HDL boundaries, including resolver-only
   bindings, deterministic ambiguity, multiple logical-library SystemC
@@ -472,5 +473,6 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   reading it. The final local exact-LLVM Debug and Release application tests
   pass in 19.58 and 18.86 seconds. Focused Windows run `30922930843` passes the
   sole MSVC Debug `fsim.application` case in 10 minutes 29 seconds. Remove the
-  temporary workflow and resume the normal non-documentation matrix once;
-  only its green completion can mark Change 20 and Batch 140 complete.
+  temporary workflow is removed in `446a654`. Final normal run `30923945372`
+  passes all 12 jobs: every Linux, Windows, sanitizer, and fuzz job is green.
+  Change 20 and Batch 140 are complete.
