@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/artifact_phase.hpp"
+#include "fsim/app/design_artifact.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <filesystem>
@@ -170,6 +173,11 @@ Capture run_once(
 void verify_analysis(const fsim::project::Config& config) {
   fsim::diagnostic::Engine diagnostics;
   const auto checked = fsim::app::check_project(config, diagnostics);
+  if (!checked) {
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
   assert(checked);
   assert(!diagnostics.has_error());
   assert(checked->source_count == 3);
@@ -278,6 +286,37 @@ void verify_analysis(const fsim::project::Config& config) {
   assert(!table.width());
   assert(table.vhdl_array);
   assert(table.vhdl_array->dimensions.size() == 2);
+  const auto time_array = package_type("vital_timing", "vitaltimearrayt");
+  assert(time_array.vhdl_array && !time_array.width());
+  const auto time_access = package_type(
+      "vital_timing", "vitaltimearraypt");
+  assert(time_access.vhdl_access && time_access.width() == 32);
+  const auto logic_access = package_type(
+      "vital_timing", "vitallogicarraypt");
+  assert(logic_access.vhdl_access && logic_access.width() == 32);
+  const auto timing_data = package_type(
+      "vital_timing", "vitaltimingdatatype");
+  assert(timing_data.packed_members.size() == 11);
+  assert(timing_data.packed_members.front().name == "notfirstflag");
+  assert(timing_data.packed_members.back().name == "setupena");
+  assert(timing_data.width() == 261);
+  const auto period_data = package_type(
+      "vital_timing", "vitalperioddatatype");
+  assert(period_data.packed_members.size() == 4);
+  assert(period_data.width() == 130);
+  const auto glitch_kind = package_type(
+      "vital_timing", "vitalglitchkindtype");
+  const std::vector<std::string> glitch_literals{
+      "onevent", "ondetect", "vitalinertial", "vitaltransport"};
+  assert(glitch_kind.enumeration_literals == glitch_literals);
+  const auto glitch_data = package_type(
+      "vital_timing", "vitalglitchdatatype");
+  assert(glitch_data.packed_members.size() == 4);
+  assert(glitch_data.width() == 130);
+  const auto skew_data = package_type(
+      "vital_timing", "vitalskewdatatype");
+  assert(skew_data.packed_members.size() == 5);
+  assert(skew_data.width() == 259);
 }
 
 }  // namespace
@@ -373,6 +412,33 @@ architecture rtl of ieee_integration is
   signal vital_ident_u : std_logic;
   signal vital_ident_dash : std_logic;
   signal vital_mux_ascending : std_logic;
+  signal vital_clock : std_logic;
+  signal vital_period_seen : std_logic;
+  signal vital_state_input : std_logic_vector(0 downto 0);
+  signal vital_state_variable_vector : std_logic_vector(1 downto 0);
+  signal vital_state_variable_scalar : std_logic;
+  signal vital_state_signal_vector : std_logic_vector(1 downto 0);
+  signal vital_state_signal_scalar : std_logic;
+  signal vital_state_input_ascending : std_logic_vector(0 to 0);
+  signal vital_state_signal_ascending : std_logic_vector(0 to 1);
+  signal vital_state_zero_states : std_logic_vector(1 downto 0);
+  signal vital_state_null_input : std_logic;
+  signal vital_state_no_match : std_logic;
+  signal vital_state_z_output : std_logic;
+  signal vital_timing_test : std_logic;
+  signal vital_timing_vector : std_logic_vector(1 downto 0);
+  signal vital_timing_reference : std_logic;
+  signal vital_recovery_test : std_logic;
+  signal vital_setup_scalar_seen : std_logic;
+  signal vital_setup_vector_seen : std_logic;
+  signal vital_recovery_seen : std_logic;
+  signal vital_skew_signal1 : std_logic;
+  signal vital_skew_signal2 : std_logic;
+  signal vital_out_skew_signal2 : std_logic;
+  signal vital_in_skew_trigger : std_logic;
+  signal vital_out_skew_trigger : std_logic;
+  signal vital_in_skew_seen : std_logic;
+  signal vital_out_skew_seen : std_logic;
 begin
   mapped <= to_x01("ULH-WZ01");
   numeric_logic <= ieee.numeric_std.resize(
@@ -423,6 +489,258 @@ begin
   vital_ident_u <= VitalIDENT('U');
   vital_ident_dash <= VitalIDENT('-');
   vital_mux_ascending <= VitalMUX4(vital_ascending_data, "01");
+  vital_stimulus : process
+  begin
+    vital_clock <= '0';
+    vital_state_input <= "0";
+    vital_state_input_ascending <= "0";
+    vital_timing_test <= '0';
+    vital_timing_vector <= "00";
+    vital_timing_reference <= '0';
+    vital_recovery_test <= '0';
+    vital_skew_signal1 <= '0';
+    vital_skew_signal2 <= '0';
+    vital_out_skew_signal2 <= '1';
+    wait for 4 ns;
+    vital_timing_test <= '1';
+    vital_timing_vector <= "11";
+    vital_recovery_test <= '1';
+    wait for 1 ns;
+    vital_clock <= '1';
+    vital_state_input <= "1";
+    vital_state_input_ascending <= "1";
+    vital_timing_reference <= '1';
+    vital_skew_signal1 <= '1';
+    wait for 1 ns;
+    vital_timing_test <= '0';
+    vital_timing_vector <= "00";
+    vital_recovery_test <= '0';
+    wait for 1 ns;
+    vital_recovery_test <= '1';
+    wait for 1 ns;
+    vital_skew_signal2 <= '1';
+    vital_out_skew_signal2 <= '0';
+    wait for 2 ns;
+    vital_clock <= '0';
+    vital_state_input <= "0";
+    vital_state_input_ascending <= "0";
+    vital_timing_reference <= '0';
+    wait for 10 ns;
+    vital_clock <= '1';
+    vital_state_input <= "1";
+    vital_state_input_ascending <= "1";
+    vital_timing_reference <= '1';
+    wait;
+  end process;
+  vital_period_checker : process(vital_clock)
+    variable timing_data : VitalPeriodDataType := VitalPeriodDataInit;
+    variable violation_value : std_logic := '0';
+  begin
+    VitalPeriodPulseCheck(
+        Violation => violation_value,
+        PeriodData => timing_data,
+        TestSignal => vital_clock,
+        TestSignalName => "vital_clock",
+        Period => 10 ns,
+        PulseWidthHigh => 6 ns,
+        PulseWidthLow => 6 ns,
+        HeaderMsg => "fixture: ",
+        XOn => TRUE,
+        MsgOn => FALSE);
+    if vital_clock = 'U' then
+      vital_period_seen <= '0';
+    elsif violation_value = 'X' then
+      vital_period_seen <= '1';
+    end if;
+  end process;
+  vital_timing_checker : process(
+      vital_timing_test, vital_timing_vector,
+      vital_timing_reference, vital_recovery_test)
+    variable scalar_data : VitalTimingDataType := VitalTimingDataInit;
+    variable vector_data : VitalTimingDataType := VitalTimingDataInit;
+    variable recovery_data : VitalTimingDataType := VitalTimingDataInit;
+    variable scalar_violation : std_logic := '0';
+    variable vector_violation : std_logic := '0';
+    variable recovery_violation : std_logic := '0';
+  begin
+    VitalSetupHoldCheck(
+        Violation => scalar_violation,
+        TimingData => scalar_data,
+        TestSignal => vital_timing_test,
+        TestSignalName => "scalar_data",
+        RefSignal => vital_timing_reference,
+        RefSignalName => "reference",
+        SetupHigh => 2 ns,
+        SetupLow => 2 ns,
+        HoldHigh => 2 ns,
+        HoldLow => 2 ns,
+        RefTransition => '/');
+    VitalSetupHoldCheck(
+        Violation => vector_violation,
+        TimingData => vector_data,
+        TestSignal => vital_timing_vector,
+        TestSignalName => "vector_data",
+        TestDelay => 1 ns,
+        RefSignal => vital_timing_reference,
+        RefSignalName => "reference",
+        SetupHigh => 2 ns,
+        SetupLow => 2 ns,
+        HoldHigh => 2 ns,
+        HoldLow => 2 ns,
+        RefTransition => '/',
+        MsgOn => FALSE);
+    VitalRecoveryRemovalCheck(
+        Violation => recovery_violation,
+        TimingData => recovery_data,
+        TestSignal => vital_recovery_test,
+        TestSignalName => "reset_n",
+        RefSignal => vital_timing_reference,
+        RefSignalName => "reference",
+        Recovery => 2 ns,
+        Removal => 2 ns,
+        ActiveLow => TRUE,
+        RefTransition => '/',
+        MsgOn => FALSE);
+    if vital_timing_reference = 'U' then
+      vital_setup_scalar_seen <= '0';
+      vital_setup_vector_seen <= '0';
+      vital_recovery_seen <= '0';
+    else
+      if scalar_violation = 'X' then
+        vital_setup_scalar_seen <= '1';
+      end if;
+      if vector_violation = 'X' then
+        vital_setup_vector_seen <= '1';
+      end if;
+      if recovery_violation = 'X' then
+        vital_recovery_seen <= '1';
+      end if;
+    end if;
+  end process;
+  vital_skew_checker : process(
+      vital_skew_signal1, vital_skew_signal2, vital_out_skew_signal2,
+      vital_in_skew_trigger, vital_out_skew_trigger)
+    variable in_data : VitalSkewDataType := VitalSkewDataInit;
+    variable out_data : VitalSkewDataType := VitalSkewDataInit;
+    variable in_violation : std_logic := '0';
+    variable out_violation : std_logic := '0';
+  begin
+    VitalInPhaseSkewCheck(
+        Violation => in_violation,
+        SkewData => in_data,
+        Signal1 => vital_skew_signal1,
+        Signal1Name => "signal1",
+        Signal2 => vital_skew_signal2,
+        Signal2Name => "signal2",
+        SkewS1S2RiseRise => 2 ns,
+        SkewS2S1RiseRise => 2 ns,
+        SkewS1S2FallFall => 2 ns,
+        SkewS2S1FallFall => 2 ns,
+        MsgOn => FALSE,
+        Trigger => vital_in_skew_trigger);
+    VitalOutPhaseSkewCheck(
+        Violation => out_violation,
+        SkewData => out_data,
+        Signal1 => vital_skew_signal1,
+        Signal1Name => "signal1",
+        Signal2 => vital_out_skew_signal2,
+        Signal2Name => "signal2",
+        SkewS1S2RiseFall => 2 ns,
+        SkewS2S1RiseFall => 2 ns,
+        SkewS1S2FallRise => 2 ns,
+        SkewS2S1FallRise => 2 ns,
+        MsgOn => FALSE,
+        Trigger => vital_out_skew_trigger);
+    if vital_skew_signal1 = 'U' then
+      vital_in_skew_seen <= '0';
+      vital_out_skew_seen <= '0';
+    else
+      if in_violation = 'X' then
+        vital_in_skew_seen <= '1';
+      end if;
+      if out_violation = 'X' then
+        vital_out_skew_seen <= '1';
+      end if;
+    end if;
+  end process;
+  vital_state_variable_checker : process(vital_state_input)
+    variable vector_result : std_logic_vector(1 downto 0) := "00";
+    variable scalar_result : std_logic := '0';
+    variable vector_previous : std_logic_vector(0 downto 0) := "X";
+    variable scalar_previous : std_logic_vector(0 downto 0) := "X";
+    variable null_result : std_logic := '0';
+    variable null_previous : std_logic_vector(0 downto 0) := "X";
+  begin
+    VitalStateTable(
+        Result => vector_result,
+        PreviousDataIn => vector_previous,
+        StateTable => (
+            ('/', '-', '1', '1'),
+            ('\', '-', '0', '0'),
+            ('-', '-', 'S', 'S')),
+        DataIn => vital_state_input,
+        NumStates => 1);
+    VitalStateTable(
+        Result => scalar_result,
+        PreviousDataIn => scalar_previous,
+        StateTable => (
+            ('/', '-', '1'),
+            ('\', '-', '0'),
+            ('-', '-', 'S')),
+        DataIn => vital_state_input);
+    VitalStateTable(
+        Result => null_result,
+        PreviousDataIn => null_previous,
+        StateTable => (
+            ('0', '1'),
+            ('1', '-')),
+        DataIn => "");
+    vital_state_variable_vector <= vector_result;
+    vital_state_variable_scalar <= scalar_result;
+    vital_state_null_input <= null_result;
+  end process;
+  vital_state_signal_vector_call : VitalStateTable(
+      Result => vital_state_signal_vector,
+      StateTable => (
+          ('/', '-', '1', '1'),
+          ('\', '-', '0', '0'),
+          ('-', '-', 'S', 'S')),
+      DataIn => vital_state_input,
+      NumStates => 1);
+  vital_state_signal_scalar_call : VitalStateTable(
+      Result => vital_state_signal_scalar,
+      StateTable => (
+          ('/', '-', '1'),
+          ('\', '-', '0'),
+          ('-', '-', 'S')),
+      DataIn => vital_state_input);
+  vital_state_signal_ascending_call : VitalStateTable(
+      Result => vital_state_signal_ascending,
+      StateTable => (
+          ('/', '-', '1', '0'),
+          ('\', '-', '0', '1'),
+          ('-', '-', 'S', 'S')),
+      DataIn => vital_state_input_ascending,
+      NumStates => 1);
+  vital_state_zero_states_call : VitalStateTable(
+      Result => vital_state_zero_states,
+      StateTable => (
+          ('/', '1', '0'),
+          ('-', 'S', 'S')),
+      DataIn => vital_state_input,
+      NumStates => 0);
+  vital_state_no_match_call : VitalStateTable(
+      Result => vital_state_no_match,
+      StateTable => (
+          ('0', '-', '0'),
+          ('0', '-', '1')),
+      DataIn => vital_state_input);
+  vital_state_z_output_call : VitalStateTable(
+      Result => vital_state_z_output,
+      StateTable => (
+          ('/', '-', 'Z'),
+          ('-', '-', '-')),
+      DataIn => vital_state_input);
   package_debug : process
     variable package_local_numeric_logic : ieee.numeric_std.unsigned(7 downto 0)
         := ieee.numeric_std.to_unsigned(9, 8);
@@ -475,7 +793,22 @@ end architecture;
       "ieee_integration.vital_decoder8",
       "ieee_integration.vital_ident_u",
       "ieee_integration.vital_ident_dash",
-      "ieee_integration.vital_mux_ascending"};
+      "ieee_integration.vital_mux_ascending",
+      "ieee_integration.vital_period_seen",
+      "ieee_integration.vital_state_variable_vector",
+      "ieee_integration.vital_state_variable_scalar",
+      "ieee_integration.vital_state_signal_vector",
+      "ieee_integration.vital_state_signal_scalar",
+      "ieee_integration.vital_state_signal_ascending",
+      "ieee_integration.vital_state_zero_states",
+      "ieee_integration.vital_state_null_input",
+      "ieee_integration.vital_state_no_match",
+      "ieee_integration.vital_state_z_output",
+      "ieee_integration.vital_setup_scalar_seen",
+      "ieee_integration.vital_setup_vector_seen",
+      "ieee_integration.vital_recovery_seen",
+      "ieee_integration.vital_in_skew_seen",
+      "ieee_integration.vital_out_skew_seen"};
   const std::vector<std::string> expected{
       "X01XXX01", "000000000011", "00000101", "000110", "0010",
       "01000000010000000000000000000000", "1", "1", "1", "0",
@@ -488,7 +821,9 @@ end architecture;
       "0000000000000000000000000000000000000000000000000000000000000010",
       "1", "1", "Z", "X", "0", "X", "1", "1", "0100", "00",
       "1", "1", "01", "1", "1", "1", "1", "1", "0", "1", "1",
-      "00100000", "U", "-", "1"};
+      "00100000", "U", "-", "1", "1", "11", "1", "11", "1",
+      "10", "10", "1", "X", "Z",
+      "1", "1", "1", "1", "1"};
   for (const auto optimization : {
            fsim::project::Optimization::o0,
            fsim::project::Optimization::o2}) {
@@ -500,6 +835,10 @@ end architecture;
         config, fsim::app::SimulationEngine::compiled, names);
     const auto warm = run_once(
         config, fsim::app::SimulationEngine::compiled, names);
+    const auto debug = optimization == fsim::project::Optimization::o0
+        ? std::optional<Capture>{run_once(
+              config, fsim::app::SimulationEngine::debug, names)}
+        : std::nullopt;
     assert(reference.result.status == fsim::runtime::RunStatus::completed);
     if (reference.values != expected) {
       for (std::size_t index = 0; index < names.size(); ++index) {
@@ -510,6 +849,7 @@ end architecture;
     assert(reference.values == expected);
     assert(reference.values == compiled.values);
     assert(reference.values == warm.values);
+    if (debug) assert(reference.values == debug->values);
     assert((reference.local_values == std::vector<std::string>{
         "00000111", "00001001", "01000000000000000000000000000000",
         "100000"}));
@@ -517,6 +857,7 @@ end architecture;
     assert(reference.local_values == warm.local_values);
     assert(reference.vcd == compiled.vcd);
     assert(reference.vcd == warm.vcd);
+    if (debug) assert(reference.vcd == debug->vcd);
     assert(reference.vcd.find("b01000000010000000000000000000000")
            != std::string::npos);
 #if defined(FSIM_HAS_LLVM)
@@ -525,6 +866,81 @@ end architecture;
     assert(compiled.native_cache.misses == compiled.compiled_modules);
     assert(warm.native_cache.hits == warm.compiled_modules);
 #endif
+  }
+
+  {
+    const auto config = make_config(
+        directory.path, sources, fsim::project::Optimization::o2);
+    fsim::diagnostic::Engine diagnostics;
+    auto project = fsim::app::build_project(config, diagnostics);
+    assert(project && !diagnostics.has_error());
+    std::size_t timing_operations{};
+    for (const auto& process : project->design.processes()) {
+      timing_operations += static_cast<std::size_t>(std::ranges::count_if(
+          process.operations, [](const auto& operation) {
+            return fsim::runtime::simir::operation_get_if<
+                fsim::runtime::simir::VitalTimingCheck>(&operation)
+                != nullptr;
+          }));
+    }
+    assert(timing_operations >= 7U);
+    const auto encoded = fsim::app::serialize_runtime_state(
+        project->design, diagnostics);
+    assert(encoded && !diagnostics.has_error());
+    const auto restored = fsim::app::deserialize_runtime_state(
+        *encoded, "vital-runtime-state", diagnostics);
+    assert(restored && !diagnostics.has_error());
+    assert(fsim::app::serialize_runtime_state(*restored, diagnostics)
+           == encoded);
+    auto object_config = config;
+    object_config.source_sets.clear();
+    fsim::project::SourceSet object_sources;
+    object_sources.language = fsim::project::Language::vhdl;
+    object_sources.standard = "2008";
+    object_sources.library = "work";
+    object_sources.compilation_unit = "file";
+    object_sources.files = sources;
+    object_config.source_sets.push_back(std::move(object_sources));
+    const auto object = directory.path / "vital.fsimobj";
+    const auto artifact = directory.path / "vital.fsimdesign";
+    const auto compiled_object = fsim::app::compile_artifact(
+        object_config, object, diagnostics);
+    if (!compiled_object) {
+      for (const auto& diagnostic : diagnostics.diagnostics()) {
+        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+      }
+    }
+    assert(compiled_object);
+    const std::array objects{object};
+    auto elaborate_config = config;
+    elaborate_config.source_sets.clear();
+    const auto elaborated_artifact = fsim::app::elaborate_artifact(
+        elaborate_config, objects, artifact, diagnostics);
+    if (!elaborated_artifact) {
+      for (const auto& diagnostic : diagnostics.diagnostics()) {
+        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+      }
+    }
+    assert(elaborated_artifact);
+    auto loaded = fsim::app::load_design_artifact(artifact, diagnostics);
+    assert(loaded && !diagnostics.has_error());
+    fsim::app::Simulation simulation{
+        std::move(*loaded), config.run.max_deltas,
+        fsim::app::SimulationEngine::compiled};
+    std::vector<fsim::runtime::simir::SignalId> artifact_signals;
+    for (const auto& name : names) {
+      const auto signal = simulation.find_signal(name);
+      assert(signal);
+      artifact_signals.push_back(*signal);
+    }
+    const auto result = simulation.run();
+    assert(result.status == fsim::runtime::RunStatus::completed);
+    std::vector<std::string> artifact_values;
+    for (const auto signal : artifact_signals) {
+      artifact_values.push_back(
+          simulation.read_signal(signal).to_msb_string());
+    }
+    assert(artifact_values == expected);
   }
 
   {
@@ -601,5 +1017,59 @@ end architecture;
       "signal invalid : std_logic;",
       "invalid <= VitalMUX4(\"1010\", \"0\");",
       "FSIM-ELAB-VITAL-007");
+  expect_vital_failure(
+      "signal test_signal : std_logic;",
+      "checker : process(test_signal) "
+      "variable violation : std_logic := '0'; "
+      "variable timing_data : VitalPeriodDataType := VitalPeriodDataInit; "
+      "begin VitalPeriodPulseCheck(Violation => violation, "
+      "PeriodData => timing_data, TestSignal => test_signal, "
+      "Period => -1 ns); end process;",
+      "FSIM-ELAB-VITAL-011");
+  expect_vital_failure(
+      "signal test_signal : std_logic;",
+      "checker : process(test_signal) "
+      "variable violation : std_logic := '0'; "
+      "variable timing_data : VitalTimingDataType := VitalTimingDataInit; "
+      "begin VitalPeriodPulseCheck(Violation => violation, "
+      "PeriodData => timing_data, TestSignal => test_signal); end process;",
+      "FSIM-ELAB-VITAL-012");
+  expect_vital_failure(
+      "signal test_signal : std_logic; signal ref_signal : std_logic;",
+      "checker : process(test_signal, ref_signal) "
+      "variable violation : std_logic := '0'; "
+      "variable timing_data : VitalTimingDataType := VitalTimingDataInit; "
+      "begin VitalSetupHoldCheck(Violation => violation, "
+      "TimingData => timing_data, TestSignal => test_signal, "
+      "RefSignal => ref_signal, RefTransition => 'Z'); end process;",
+      "FSIM-ELAB-VITAL-011");
+  expect_vital_failure(
+      "signal data_in : std_logic_vector(0 downto 0);",
+      "checker : process(data_in) "
+      "variable result_value : std_logic := '0'; "
+      "variable previous : std_logic_vector(0 downto 0) := \"X\"; "
+      "begin VitalStateTable(Result => result_value, "
+      "PreviousDataIn => previous, StateTable => (('0', '1')), "
+      "DataIn => data_in); end process;",
+      "FSIM-ELAB-VITAL-015");
+  expect_vital_failure(
+      "signal data_in : std_logic_vector(0 downto 0);",
+      "checker : process(data_in) "
+      "variable result_value : std_logic := '0'; "
+      "variable previous : std_logic_vector(0 downto 0) := \"X\"; "
+      "begin VitalStateTable(Result => result_value, "
+      "PreviousDataIn => previous, StateTable => "
+      "(('Z', '-', '1'), ('-', '-', 'S')), "
+      "DataIn => data_in); end process;",
+      "FSIM-ELAB-VITAL-016");
+  expect_vital_failure(
+      "signal data_in : std_logic_vector(0 downto 0);",
+      "checker : process(data_in) "
+      "variable result_value : std_logic := '0'; "
+      "variable previous : bit_vector(0 downto 0) := \"0\"; "
+      "begin VitalStateTable(Result => result_value, "
+      "PreviousDataIn => previous, StateTable => (('-', '-', '1')), "
+      "DataIn => data_in); end process;",
+      "FSIM-ELAB-VITAL-014");
   return 0;
 }

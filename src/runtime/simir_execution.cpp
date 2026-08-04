@@ -553,40 +553,34 @@ struct Interpreter::Impl::ExecutionContext final
     }
   }
 
-  void install_monitor(
-      const MonitorInstall& registration) override {
+  void install_monitor(const MonitorInstall& registration) override {
     owner.install_monitor(process, registration);
   }
-
   void set_monitor_enabled(const bool enabled) override {
     owner.set_monitor_enabled(enabled);
   }
-
   [[nodiscard]] PackedLogic4 random_value(
       const RandomKind kind,
       const std::optional<PackedLogic4>& maximum,
       const std::optional<PackedLogic4>& minimum) override {
-    return owner.random_value(
-        process, kind, maximum, minimum);
+    return owner.random_value(process, kind, maximum, minimum);
   }
-
   void report(
       const std::string_view message,
       const AssertionSeverity severity,
       const SourceLocation& source) override {
-    if (owner.report_hook) {
-      owner.report_hook(
-          process,
-          message,
-          severity,
-          source,
-          owner.scheduler.now(),
-          owner.scheduler.delta());
-    }
+    if (!owner.report_hook) return;
+    owner.report_hook(
+        process, message, severity, source,
+        owner.scheduler.now(), owner.scheduler.delta());
+  }
+  [[nodiscard]] Logic9 evaluate_vital_timing_check(
+      const InstructionIndex instruction,
+      const VitalTimingCheck& operation) override {
+    return owner.execute_vital_timing_check(process, instruction, operation);
   }
 
-  [[nodiscard]] bool
-  execution_points_enabled() const noexcept override {
+  [[nodiscard]] bool execution_points_enabled() const noexcept override {
     return static_cast<bool>(owner.execution_point_hook);
   }
 };
@@ -1006,6 +1000,19 @@ void Interpreter::Impl::execute(ProcessId id) {
                     : std::numeric_limits<SimulationTick>::max();
             get_register(process, op.destination) =
                 PackedLogic4::from_aval_bval(64, elapsed, 0);
+            ++process.pc;
+          } else if constexpr (
+              std::is_same_v<OperationType, ReadSimulationTime>) {
+            get_register(process, op.destination) =
+                PackedLogic4::from_aval_bval(64, scheduler.now(), 0);
+            ++process.pc;
+          } else if constexpr (
+              std::is_same_v<OperationType, VitalTimingCheck>) {
+            ExecutionContext context{*this, id};
+            PackedLogic4 result(1);
+            result.fill(context.evaluate_vital_timing_check(
+                instruction, op));
+            get_register(process, op.destination) = std::move(result);
             ++process.pc;
           } else if constexpr (std::is_same_v<OperationType, SignalActive>) {
             (void)get_signal(op.signal);

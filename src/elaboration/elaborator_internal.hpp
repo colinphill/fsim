@@ -1069,9 +1069,7 @@ private:
     [[nodiscard]] std::optional<frontend::Type>
     vhdl_expression_type(const Expression& expression) const;
     ExpressionAttempt lower_vhdl_array_selection_expression(
-        const Expression& expression,
-        std::size_t expected_width,
-        const frontend::Type* expected_type);
+        const Expression&, std::size_t, const frontend::Type*);
     ExpressionAttempt lower_vhdl_access_expression(
         const Expression&, std::size_t, const frontend::Type*);
     ExpressionAttempt lower_vhdl_protected_expression(
@@ -1079,12 +1077,14 @@ private:
     ExpressionAttempt lower_vhdl_physical_expression(
         const Expression&, std::size_t, const frontend::Type*);
     bool lower_vhdl_protected_procedure_call(const Statement&);
-    bool lower_vhdl_file_procedure_call(const Statement&); bool lower_vhdl_textio_procedure_call(const Statement&);
+    bool lower_vhdl_file_procedure_call(const Statement&);
+    bool lower_vhdl_textio_procedure_call(const Statement&);
+    bool lower_vhdl_vital_state_table_call(const Statement&);
+    bool lower_vhdl_vital_procedure_call(const Statement&);
     bool lower_vhdl_access_assignment(const Statement&);
     std::optional<ContainerRegisterId> vhdl_access_heap(
         const frontend::Type&, const frontend::SourceSpan&);
-    std::optional<RegisterId> vhdl_access_index(
-        const Expression&, const frontend::Type&);
+    std::optional<RegisterId> vhdl_access_index(const Expression&, const frontend::Type&);
     ExpressionAttempt lower_vhdl_conversion_expression(
         const Expression&, std::size_t, const frontend::Type*);
     ExpressionAttempt lower_vhdl_composite_expression(const Expression&,

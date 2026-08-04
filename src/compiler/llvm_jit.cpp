@@ -111,7 +111,9 @@ static_assert(offsetof(fsim_jit_runtime_v1, signal_driving) == 520);
 static_assert(offsetof(fsim_jit_runtime_v1, signal_driving_value) == 528);
 static_assert(
     offsetof(fsim_jit_runtime_v1, signal_driving_value_logic9) == 536);
-static_assert(sizeof(fsim_jit_runtime_v1) == 544);
+static_assert(offsetof(fsim_jit_runtime_v1, read_simulation_time) == 544);
+static_assert(offsetof(fsim_jit_runtime_v1, vital_timing_check) == 552);
+static_assert(sizeof(fsim_jit_runtime_v1) == 560);
 static_assert(sizeof(fsim_jit_projected_element_v1) == 24);
 static_assert(sizeof(fsim_jit_logic9_word_v1) == 32);
 static_assert(sizeof(fsim_jit_logic9_projected_element_v1) == 40);
@@ -141,7 +143,8 @@ constexpr auto kJitRuntimeFileSize =
     static_cast<std::uint32_t>(
         offsetof(fsim_jit_runtime_v1, container_operation));
 constexpr auto kJitRuntimeForceSize =
-    static_cast<std::uint32_t>(sizeof(fsim_jit_runtime_v1));
+    static_cast<std::uint32_t>(
+        offsetof(fsim_jit_runtime_v1, read_simulation_time));
 
 class PersistentLlvmObjectCache final : public llvm::ObjectCache {
 public:
@@ -344,6 +347,8 @@ struct LlvmJit::Impl {
     bool uses_signal_event{};
     bool uses_signal_last_value{};
     bool uses_signal_last_event{};
+    bool uses_simulation_time{};
+    bool uses_vital_timing{};
     bool uses_signal_active{};
     bool uses_signal_last_active{};
     bool uses_signal_driving{};
@@ -517,6 +522,8 @@ void LlvmJit::add_process_module(
         validated.uses_signal_event,
         validated.uses_signal_last_value,
         validated.uses_signal_last_event,
+        validated.uses_simulation_time,
+        validated.uses_vital_timing,
         validated.uses_signal_active,
         validated.uses_signal_last_active,
         validated.uses_signal_driving,
@@ -942,6 +949,27 @@ LlvmJit::resume(const JitProcessHandle process,
     if (runtime.signal_last_event == nullptr) {
       throw LlvmJitError(
           "JIT runtime ABI requires signal_last_event for this process");
+    }
+  }
+  if (entry.info.uses_simulation_time) {
+    if (runtime.struct_size
+        < offsetof(fsim_jit_runtime_v1, vital_timing_check)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include read_simulation_time");
+    }
+    if (runtime.read_simulation_time == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires read_simulation_time for this process");
+    }
+  }
+  if (entry.info.uses_vital_timing) {
+    if (runtime.struct_size < sizeof(fsim_jit_runtime_v1)) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include vital_timing_check");
+    }
+    if (runtime.vital_timing_check == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires vital_timing_check for this process");
     }
   }
   if (entry.info.uses_signal_active) {

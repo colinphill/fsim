@@ -985,6 +985,8 @@ struct SourceLocation {
                          const SourceLocation&) = default;
 };
 
+#include "fsim/runtime/simir_vital.hpp"
+
 enum class ExpressionSizingKind : std::uint8_t {
   self_determined,
   context_determined,
@@ -1706,6 +1708,13 @@ public:
       std::string_view,
       AssertionSeverity,
       const SourceLocation&) {}
+
+  [[nodiscard]] virtual Logic9 evaluate_vital_timing_check(
+      InstructionIndex,
+      const VitalTimingCheck&) {
+    throw std::logic_error{
+        "alternate process executor does not support VITAL timing checks"};
+  }
 
   /// True when an embedding debugger currently requests source boundaries.
   [[nodiscard]] virtual bool execution_points_enabled() const noexcept {

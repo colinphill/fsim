@@ -56,6 +56,7 @@ void test_deterministic_random_values();
 void test_transition_delay_selection();
 void test_simir_inertial_transition_writes();
 void test_simir_projected_writes();
+void test_vital_timing_checks();
 void test_vcd();
 
 } // namespace fsim::tests::runtime

@@ -291,6 +291,38 @@ validate_process(
             (void)signal_width(operation.signal, index);
             record_definition(operation.destination, index);
             constrain_width(operation.destination, 64U, index);
+          } else if constexpr (
+              std::is_same_v<OperationType, ReadSimulationTime>) {
+            result.uses_simulation_time = true;
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 64U, index);
+          } else if constexpr (
+              std::is_same_v<OperationType, VitalTimingCheck>) {
+            result.uses_vital_timing = true;
+            const auto test_width = signal_width(
+                operation.test_signal, index);
+            if (operation.test_offset >= test_width) {
+              reject(
+                  process, index,
+                  "VitalTimingCheck test offset is outside the signal");
+            }
+            if (operation.reference_signal) {
+              const auto reference_width = signal_width(
+                  *operation.reference_signal, index);
+              if (operation.reference_offset >= reference_width) {
+                reject(
+                    process, index,
+                    "VitalTimingCheck reference offset is outside the signal");
+              }
+            }
+            if (operation.trigger_signal
+                && signal_width(*operation.trigger_signal, index) != 1U) {
+              reject(
+                  process, index,
+                  "VitalTimingCheck trigger signal must be scalar");
+            }
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 1U, index);
           } else if constexpr (std::is_same_v<OperationType, SignalActive>) {
             result.uses_signal_active = true;
             (void)signal_width(operation.signal, index);

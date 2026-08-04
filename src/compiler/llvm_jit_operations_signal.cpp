@@ -25,11 +25,32 @@ using runtime::simir::ReadSignal;
 using runtime::simir::SignalEvent;
 using runtime::simir::SignalLastValue;
 using runtime::simir::SignalLastEvent;
+using runtime::simir::ReadSimulationTime;
+using runtime::simir::VitalTimingCheck;
 using runtime::simir::SignalActive;
 using runtime::simir::SignalLastActive;
 using runtime::simir::SignalDriving;
 using runtime::simir::SignalDrivingValue;
 using runtime::simir::ValueKind;
+
+llvm::StructType* create_jit_runtime_type(llvm::LLVMContext& context) {
+  auto* i32 = llvm::Type::getInt32Ty(context);
+  auto* pointer = llvm::PointerType::getUnqual(context);
+  return llvm::StructType::create(
+      context,
+      {i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
+       i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
+       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+       pointer, pointer, pointer, pointer, pointer, pointer,
+       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
+       pointer, pointer},
+      "fsim_jit_runtime_v1");
+}
 
 void SignalOperationLowerer::lower(
     const LoadConstant& operation) {
@@ -585,6 +606,43 @@ void SignalOperationLowerer::lower(
                       64});
               branch_to_next();
             
+}
+
+void SignalOperationLowerer::lower(
+    const ReadSimulationTime& operation) {
+  auto* now = builder.CreateCall(
+      read_simulation_time_type,
+      read_simulation_time_callback,
+      {context_pointer},
+      "simulation.time");
+  store_register(
+      builder, registers, operation.destination,
+      EncodedValue{now, constant_i64(context, 0), 64});
+  branch_to_next();
+}
+
+void SignalOperationLowerer::lower(
+    const VitalTimingCheck& operation) {
+  auto* ordinal = builder.CreateCall(
+      vital_timing_check_type,
+      vital_timing_check_callback,
+      {context_pointer,
+       llvm::ConstantInt::get(i32, process_id),
+       llvm::ConstantInt::get(i32, instruction)},
+      "vital.timing");
+  const auto plane = [&](const unsigned shift) {
+    return builder.CreateZExt(
+        builder.CreateAnd(
+            builder.CreateLShr(
+                ordinal, llvm::ConstantInt::get(i32, shift)),
+            llvm::ConstantInt::get(i32, 1)),
+        llvm::Type::getInt64Ty(context));
+  };
+  store_register(
+      builder, registers, operation.destination,
+      EncodedValue{
+          plane(0), plane(1), 1, plane(2), plane(3), ValueKind::logic9});
+  branch_to_next();
 }
 
 void SignalOperationLowerer::lower(

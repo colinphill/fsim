@@ -204,6 +204,16 @@ void check_integer_range(
     const PackedLogic4& when_true,
     const PackedLogic4& when_false);
 
+[[nodiscard]] Logic9 evaluate_vital_timing_check(
+    const VitalTimingCheck& operation,
+    VitalTimingState& state,
+    SimulationTick now,
+    Logic9 test,
+    bool test_event,
+    Logic9 reference,
+    bool reference_event,
+    bool trigger_event);
+
 void validate_container_value(const ContainerValue& value);
 [[nodiscard]] PackedLogic4 default_container_element(
     const ContainerType& type);
@@ -236,6 +246,7 @@ struct Interpreter::Impl {
     std::optional<RegisterId> wait_timeout_result;
     std::uint64_t wait_timeout_generation{};
     std::uint64_t random_state{};
+    std::map<InstructionIndex, VitalTimingState> vital_timing_states;
     bool halted{};
     std::optional<ProcessId> fork_parent;
     std::optional<std::uint64_t> fork_group;
@@ -395,6 +406,11 @@ struct Interpreter::Impl {
   [[nodiscard]] const Signal &get_signal(SignalId id) const;
 
   [[nodiscard]] ProcessState &get_process(ProcessId id);
+
+  [[nodiscard]] Logic9 execute_vital_timing_check(
+      ProcessId process,
+      InstructionIndex instruction,
+      const VitalTimingCheck& operation);
 
   [[nodiscard]] PackedLogic4 &get_register(ProcessState &process,
                                            RegisterId id);

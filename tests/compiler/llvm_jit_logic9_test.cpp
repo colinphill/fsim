@@ -132,6 +132,37 @@ void test_logic9_at_level(
       "Logic9 callbacks");
 }
 
+void test_vital_timing_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol) {
+  Process process;
+  process.id = 92;
+  process.name = "vital_timing";
+  process.register_count = 1;
+  process.register_value_kinds = {ValueKind::logic9};
+  VitalTimingCheck check;
+  check.destination = 0;
+  check.kind = VitalTimingCheckKind::period_pulse;
+  check.test_signal = 0;
+  process.operations = {check, WriteBlocking{1, 0}, Halt{}};
+
+  const std::array<std::uint32_t, 2> widths{1, 1};
+  const std::array<ValueKind, 2> kinds{
+      ValueKind::logic9, ValueKind::logic9};
+  LlvmJit jit{LlvmJitOptions{optimization, {}}};
+  assert(jit.supports_process(process, widths, kinds));
+  jit.add_process(symbol, process, widths, kinds);
+  TestRuntime runtime;
+  runtime.vital_timing_result = static_cast<std::uint32_t>(Logic9::x);
+  auto descriptor = abi(runtime);
+  assert(
+      jit.execute(jit.lookup(symbol), descriptor)
+      == JitExecutionStatus::completed);
+  assert(
+      runtime.logic9_signals[1]
+      == planes(PackedLogic4::from_logic9_msb_string("X")));
+}
+
 void test_rejections() {
   LlvmJit jit;
   const std::array<std::uint32_t, 1> one_signal{1};

@@ -560,6 +560,13 @@ typedef struct fsim_jit_runtime_v1 {
       void* context,
       uint32_t signal,
       fsim_jit_logic9_word_v1* value);
+
+  /* Append-only current global simulation tick query. */
+  uint64_t (*read_simulation_time)(void* context);
+
+  /* Append-only intrinsic VITAL timing-check callback. */
+  uint32_t (*vital_timing_check)(
+      void* context, uint32_t process, uint32_t instruction);
 } fsim_jit_runtime_v1;
 
 /*

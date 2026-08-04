@@ -106,6 +106,8 @@ struct TestRuntime {
   bool leave_bval_untouched{};
   std::vector<std::pair<std::uint32_t, EncodedSignal>> writes;
   std::uint64_t current_time{};
+  std::uint32_t vital_timing_result{
+      static_cast<std::uint32_t>(Logic9::zero)};
   std::vector<ScheduledWrite> scheduled_writes;
   std::vector<std::string> output;
   std::vector<std::uint32_t> output_processes;
@@ -486,6 +488,15 @@ extern "C" inline void signal_driving_value_logic9(
     const std::uint32_t signal,
     fsim_jit_logic9_word_v1* value) {
   read_signal_logic9(opaque, signal, value);
+}
+
+extern "C" inline std::uint64_t read_simulation_time(void* opaque) {
+  return static_cast<TestRuntime*>(opaque)->current_time;
+}
+
+extern "C" inline std::uint32_t vital_timing_check(
+    void* opaque, const std::uint32_t, const std::uint32_t) {
+  return static_cast<TestRuntime*>(opaque)->vital_timing_result;
 }
 
 extern "C" inline void write_output(
@@ -875,6 +886,8 @@ extern "C" inline std::uint32_t write_string_output(
   result.signal_driving = &signal_driving;
   result.signal_driving_value = &signal_driving_value;
   result.signal_driving_value_logic9 = &signal_driving_value_logic9;
+  result.read_simulation_time = &read_simulation_time;
+  result.vital_timing_check = &vital_timing_check;
   result.write_output = &write_output;
   result.schedule_output = &schedule_output;
   result.write_report = &write_report;
@@ -1139,6 +1152,9 @@ void test_initialized_bval_slot(
     std::string_view symbol);
 void test_debug_point_instrumentation();
 void test_logic9_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
+void test_vital_timing_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_persistent_object_cache();

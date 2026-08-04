@@ -76,6 +76,8 @@ using runtime::simir::Operation;
 using runtime::simir::Pause;
 using runtime::simir::Process;
 using runtime::simir::ReadSignal;
+using runtime::simir::ReadSimulationTime;
+using runtime::simir::VitalTimingCheck;
 using runtime::simir::ReadStringObject;
 using runtime::simir::Reduction;
 using runtime::simir::ReductionOperator;
@@ -402,6 +404,43 @@ void add_dynamic_part_index_key(
             builder.add("operation", "SignalLastEvent");
             add_key_u64(builder, "destination", value.destination);
             add_key_u64(builder, "signal", value.signal);
+          } else if constexpr (
+              std::is_same_v<OperationType, ReadSimulationTime>) {
+            builder.add("operation", "ReadSimulationTime");
+            add_key_u64(builder, "destination", value.destination);
+          } else if constexpr (
+              std::is_same_v<OperationType, VitalTimingCheck>) {
+            builder.add("operation", "VitalTimingCheck");
+            add_key_u64(builder, "destination", value.destination);
+            add_key_u64(builder, "kind", static_cast<std::uint8_t>(value.kind));
+            add_key_u64(builder, "test-signal", value.test_signal);
+            add_key_u64(builder, "test-offset", value.test_offset);
+            add_key_u64(builder, "has-reference", value.reference_signal.has_value());
+            if (value.reference_signal) {
+              add_key_u64(builder, "reference-signal", *value.reference_signal);
+            }
+            add_key_u64(builder, "reference-offset", value.reference_offset);
+            add_key_u64(
+                builder, "has-trigger", value.trigger_signal.has_value());
+            if (value.trigger_signal) {
+              add_key_u64(builder, "trigger-signal", *value.trigger_signal);
+            }
+            for (const auto limit : value.limits) {
+              add_key_u64(builder, "limit", limit);
+            }
+            add_key_u64(builder, "reference-edges", value.reference_edges);
+            add_key_u64(builder, "active-low", value.active_low);
+            add_key_u64(builder, "check-enabled", value.check_enabled);
+            for (const auto enabled : value.enables) {
+              add_key_u64(builder, "direction-enabled", enabled);
+            }
+            add_key_u64(builder, "x-on", value.x_on);
+            add_key_u64(builder, "message-on", value.message_on);
+            add_key_u64(builder, "severity", static_cast<std::uint8_t>(value.severity));
+            builder.add("message", value.message);
+            builder.add("source-path", value.source.path);
+            add_key_u64(builder, "source-line", value.source.line);
+            add_key_u64(builder, "source-column", value.source.column);
           } else if constexpr (std::is_same_v<OperationType, SignalActive>) {
             builder.add("operation", "SignalActive");
             add_key_u64(builder, "destination", value.destination);

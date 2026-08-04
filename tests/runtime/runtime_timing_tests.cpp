@@ -543,5 +543,115 @@ void test_vcd() {
   require(text.find("#7") != std::string::npos, "VCD time marker");
 }
 
-} // namespace fsim::tests::runtime
+void test_vital_timing_checks() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
 
+  constexpr std::array<Logic9, 9> states{
+      Logic9::u, Logic9::x, Logic9::zero, Logic9::one, Logic9::z,
+      Logic9::w, Logic9::l, Logic9::h, Logic9::dont_care};
+  constexpr std::array<std::size_t, 9> classes{0, 0, 1, 2, 0, 0, 1, 2, 0};
+  constexpr std::array<std::array<std::uint16_t, 3>, 3> masks{{
+      {{0U, 0xDA08U, 0xB504U}},
+      {{0xA150U, 0U, 0x8145U}},
+      {{0xC2A0U, 0x828AU, 0U}},
+  }};
+  for (std::size_t previous = 0; previous < states.size(); ++previous) {
+    for (std::size_t current = 0; current < states.size(); ++current) {
+      require(
+          vital_edge_symbol_mask(states[previous], states[current])
+              == masks[classes[previous]][classes[current]],
+          "VITAL edge symbols normalize every nine-state transition");
+    }
+  }
+
+  Interpreter interpreter{{1000, 32}};
+  const auto test = interpreter.add_signal(
+      {"vital.test",
+       PackedLogic4::from_logic9_msb_string("0"),
+       ResolutionKind::none,
+       ValueKind::logic9});
+  const auto violation = interpreter.add_signal(
+      {"vital.violation",
+       PackedLogic4::from_logic9_msb_string("0"),
+       ResolutionKind::none,
+       ValueKind::logic9});
+
+  Process checker;
+  checker.name = "vital-period-pulse";
+  checker.register_count = 2;
+  checker.register_value_kinds = {ValueKind::logic9, ValueKind::logic9};
+  checker.static_sensitivity = {{test, EdgeKind::any}};
+  checker.driver_regions = {{violation, 0, 1, true}};
+  VitalTimingCheck check;
+  check.destination = 0;
+  check.kind = VitalTimingCheckKind::period_pulse;
+  check.test_signal = test;
+  check.limits = {10, 6, 6, 0};
+  check.message = "period/pulse violation";
+  auto report_without_x = check;
+  report_without_x.destination = 1;
+  report_without_x.x_on = false;
+  report_without_x.message = "period/pulse report without X";
+  checker.operations = {
+      check,
+      report_without_x,
+      WriteUpdate{violation, 0},
+      WaitSensitivity{},
+      Jump{0}};
+  static_cast<void>(interpreter.add_process(std::move(checker)));
+
+  Process stimulus;
+  stimulus.id = 1;
+  stimulus.name = "vital-stimulus";
+  stimulus.register_count = 2;
+  stimulus.register_value_kinds = {
+      ValueKind::logic9, ValueKind::logic9};
+  stimulus.driver_regions = {{test, 0, 1, true}};
+  stimulus.operations = {
+      LoadConstant{0, PackedLogic4::from_logic9_msb_string("1")},
+      LoadConstant{1, PackedLogic4::from_logic9_msb_string("0")},
+      WriteAfter{test, 0, 5},
+      WriteAfter{test, 1, 10},
+      WriteAfter{test, 0, 20},
+      WaitFor{25},
+      Halt{}};
+  static_cast<void>(interpreter.add_process(std::move(stimulus)));
+
+  std::vector<std::pair<SimulationTick, std::string>> changes;
+  std::size_t reports{};
+  std::size_t reports_without_x{};
+  interpreter.set_signal_change_hook(
+      [&](const SignalId signal,
+          const PackedLogic4& value,
+          const SimulationTick time) {
+        if (signal == violation) {
+          changes.emplace_back(time, value.to_msb_string());
+        }
+      });
+  interpreter.set_report_hook(
+      [&](ProcessId,
+          std::string_view message,
+          AssertionSeverity,
+          const SourceLocation&,
+          SimulationTick,
+          std::uint64_t) {
+        if (message == "period/pulse violation") ++reports;
+        if (message == "period/pulse report without X") {
+          ++reports_without_x;
+        }
+      });
+  interpreter.start();
+  static_cast<void>(interpreter.run());
+  require(
+      changes
+          == std::vector<std::pair<SimulationTick, std::string>>{
+              {10, "X"}, {20, "0"}},
+      "VITAL period/pulse state persists and clears deterministically");
+  require(reports == 1, "VITAL timing violations report exactly once");
+  require(
+      reports_without_x == 1,
+      "VITAL MsgOn reporting is independent of XOn result corruption");
+}
+
+} // namespace fsim::tests::runtime

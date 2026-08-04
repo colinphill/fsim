@@ -299,8 +299,17 @@ std::optional<std::vector<frontend::DesignUnit>> projected_units(
           "vitalresultmaptype", "vitalresultzmaptype",
           "vitaldefaultoutputmap", "vitaldefaultresultmap",
           "vitaldefaultresultzmap", "vitaltablesymboltype",
-          "vitaledgesymboltype", "vitalextendtofilldelay",
-          "vitalcalcdelay",
+          "vitaledgesymboltype", "vitaltimearrayt", "vitaltimearraypt",
+          "vitalboolarrayt", "vitalboolarraypt", "vitallogicarraypt",
+          "vitaltimingdatatype", "vitaltimingdatainit",
+          "vitalperioddatatype", "vitalperioddatainit",
+          "vitalglitchkindtype", "vitalglitchdatatype",
+          "vitalglitchdataarraytype", "vitalskewexpectedtype",
+          "vitalskewdatatype", "vitalskewdatainit",
+          "vitalextendtofilldelay", "vitalcalcdelay",
+          "vitalsetupholdcheck", "vitalrecoveryremovalcheck",
+          "vitalperiodpulsecheck", "vitalinphaseskewcheck",
+          "vitaloutphaseskewcheck",
       };
     } else if (unit.primary_name.empty()
                && package == "vital_primitives") {
@@ -318,7 +327,7 @@ std::optional<std::vector<frontend::DesignUnit>> projected_units(
           "vitalinvif0", "vitalinvif1", "vitalmux", "vitalmux2",
           "vitalmux4", "vitalmux8", "vitaldecoder",
           "vitaldecoder2", "vitaldecoder4", "vitaldecoder8",
-          "vitaltruthtable",
+          "vitaltruthtable", "vitalstatetable",
       };
     } else if (unit.primary_name.empty()) {
       unit.standard_package_declarations = {
@@ -435,6 +444,67 @@ frontend::Type vital_two_dimensional_table_type(
           0, std::numeric_limits<std::int32_t>::max(), false});
   auto& array = *type.vhdl_array;
   array.dimensions.push_back(array.dimensions.front());
+  return type;
+}
+
+frontend::Type vital_access_type(
+    const std::string_view name,
+    frontend::Type designated,
+    const frontend::SourceSpan& span) {
+  frontend::Type type;
+  type.spelling = std::string{name};
+  type.domain = frontend::ValueDomain::Bit2;
+  type.nominal_type = "@fsim-vital:" + std::string{name};
+  type.vhdl_type_declaration = type.nominal_type;
+  type.named_type_span = span;
+  frontend::VhdlAccessInfo access;
+  access.designated_span = span;
+  access.designated_types.push_back(std::move(designated));
+  type.packed_range = frontend::PackedRange{
+      static_cast<std::int64_t>(access.handle_width - 1U), 0, true};
+  type.vhdl_access = std::move(access);
+  return type;
+}
+
+frontend::Type vital_record_type(
+    const std::string_view name,
+    std::vector<std::pair<std::string, frontend::Type>> fields,
+    const frontend::SourceSpan& span) {
+  frontend::Type type;
+  type.spelling = std::string{name};
+  type.domain = frontend::ValueDomain::Bit2;
+  type.nominal_type = "@fsim-vital:" + std::string{name};
+  type.vhdl_type_declaration = type.nominal_type;
+  type.named_type_span = span;
+  type.packed_aggregate = frontend::PackedAggregateKind::Struct;
+  std::uint64_t width = 0;
+  for (auto& [field_name, field_type] : fields) {
+    const auto field_width = field_type.width();
+    if (!field_width || *field_width == 0
+        || *field_width > std::numeric_limits<std::uint64_t>::max() - width) {
+      type.packed_range.reset();
+      width = 0;
+      break;
+    }
+    if (field_type.domain == frontend::ValueDomain::Logic9) {
+      type.domain = frontend::ValueDomain::Logic9;
+    }
+    type.packed_members.push_back(frontend::PackedMember{
+        std::move(field_name), field_type.domain, field_type.spelling,
+        field_type.packed_range, field_type.is_signed,
+        field_type.packed_range_expression, 0, span,
+        std::vector<frontend::Type>{std::move(field_type)}});
+    width += *field_width;
+  }
+  if (width != 0) {
+    auto offset = width;
+    for (auto& member : type.packed_members) {
+      offset -= *member.width();
+      member.lsb_offset = offset;
+    }
+    type.packed_range = frontend::PackedRange{
+        static_cast<std::int64_t>(width - 1U), 0, true};
+  }
   return type;
 }
 
@@ -556,6 +626,92 @@ void materialize_vital_types(frontend::DesignUnit& unit) {
     add_vital_alias(
         unit, "vitaledgesymboltype", std::move(edge),
         frontend::TypeDeclarationKind::VhdlSubtype);
+    const auto boolean = vital_scalar_type(
+        "boolean", frontend::ValueDomain::Boolean, unit.span);
+    const auto time_array = vital_array_type(
+        "vitaltimearrayt", "integer", std::nullopt, time, unit.span);
+    const auto bool_array = vital_array_type(
+        "vitalboolarrayt", "integer", std::nullopt, boolean, unit.span);
+    add_vital_alias(
+        unit, "vitaltimearrayt", time_array,
+        frontend::TypeDeclarationKind::VhdlArray);
+    add_vital_alias(
+        unit, "vitalboolarrayt", bool_array,
+        frontend::TypeDeclarationKind::VhdlArray);
+    const auto time_access = vital_access_type(
+        "vitaltimearraypt", time_array, unit.span);
+    const auto bool_access = vital_access_type(
+        "vitalboolarraypt", bool_array, unit.span);
+    const auto logic_vector = vital_array_type(
+        "std_logic_vector", "natural", std::nullopt, logic, unit.span,
+        natural_base);
+    const auto logic_access = vital_access_type(
+        "vitallogicarraypt", logic_vector, unit.span);
+    add_vital_alias(
+        unit, "vitaltimearraypt", time_access,
+        frontend::TypeDeclarationKind::VhdlAccess);
+    add_vital_alias(
+        unit, "vitalboolarraypt", bool_access,
+        frontend::TypeDeclarationKind::VhdlAccess);
+    add_vital_alias(
+        unit, "vitallogicarraypt", logic_access,
+        frontend::TypeDeclarationKind::VhdlAccess);
+    add_vital_alias(
+        unit, "vitaltimingdatatype",
+        vital_record_type(
+            "vitaltimingdatatype",
+            {{"notfirstflag", boolean}, {"reflast", logic},
+             {"reftime", time}, {"holden", boolean},
+             {"testlast", logic}, {"testtime", time},
+             {"setupen", boolean}, {"testlasta", logic_access},
+             {"testtimea", time_access}, {"holdena", bool_access},
+             {"setupena", bool_access}},
+            unit.span),
+        frontend::TypeDeclarationKind::VhdlRecord);
+    add_vital_alias(
+        unit, "vitalperioddatatype",
+        vital_record_type(
+            "vitalperioddatatype",
+            {{"last", logic}, {"rise", time}, {"fall", time},
+             {"notfirstflag", boolean}},
+            unit.span),
+        frontend::TypeDeclarationKind::VhdlRecord);
+    auto glitch_kind = vital_enumeration_type(
+        "vitalglitchkindtype",
+        {"onevent", "ondetect", "vitalinertial", "vitaltransport"},
+        unit.span);
+    add_vital_alias(
+        unit, "vitalglitchkindtype", glitch_kind,
+        frontend::TypeDeclarationKind::VhdlEnumeration);
+    const auto glitch_data = vital_record_type(
+        "vitalglitchdatatype",
+        {{"schedtime", time}, {"glitchtime", time},
+         {"schedvalue", logic}, {"lastvalue", logic}},
+        unit.span);
+    add_vital_alias(
+        unit, "vitalglitchdatatype", glitch_data,
+        frontend::TypeDeclarationKind::VhdlRecord);
+    add_vital_alias(
+        unit, "vitalglitchdataarraytype",
+        vital_array_type(
+            "vitalglitchdataarraytype", "natural", std::nullopt,
+            glitch_data, unit.span, natural_base),
+        frontend::TypeDeclarationKind::VhdlArray);
+    auto skew_expected = vital_enumeration_type(
+        "vitalskewexpectedtype", {"none", "s1r", "s1f", "s2r", "s2f"},
+        unit.span);
+    add_vital_alias(
+        unit, "vitalskewexpectedtype", skew_expected,
+        frontend::TypeDeclarationKind::VhdlEnumeration);
+    add_vital_alias(
+        unit, "vitalskewdatatype",
+        vital_record_type(
+            "vitalskewdatatype",
+            {{"expectedtype", skew_expected}, {"signal1old1", time},
+             {"signal2old1", time}, {"signal1old2", time},
+             {"signal2old2", time}},
+            unit.span),
+        frontend::TypeDeclarationKind::VhdlRecord);
     return;
   }
   if (unit.name == "vital_primitives") {
@@ -573,7 +729,7 @@ void materialize_vital_types(frontend::DesignUnit& unit) {
         frontend::TypeDeclarationKind::VhdlSubtype);
     auto state = table;
     state.spelling = "vitalstatesymboltype";
-    state.enumeration_range = frontend::EnumerationRange{16, 22, false};
+    state.enumeration_range = frontend::EnumerationRange{0, 22, false};
     add_vital_alias(
         unit, "vitalstatesymboltype", state,
         frontend::TypeDeclarationKind::VhdlSubtype);

@@ -544,6 +544,13 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       void* context,
       const std::uint32_t signal) noexcept;
 
+  static std::uint64_t read_simulation_time(void* context) noexcept;
+
+  static std::uint32_t vital_timing_check(
+      void* context,
+      std::uint32_t process,
+      std::uint32_t instruction) noexcept;
+
   static std::uint32_t signal_active(
       void* context,
       const std::uint32_t signal) noexcept;

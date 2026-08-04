@@ -682,6 +682,73 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     plain MSVC Debug/Release, Clang/LLVM Debug/Release, and MSVC/LLVM
     Debug/Release. Change 20 and Batch 140 are complete.
 
+## Batch 141 - VITAL timing checks and state tables - Complete
+
+1. **Complete.** Start from clean pushed Batch 140 closeout `c5c8a5c`,
+   record this exact 20-change contract, and synchronize the restart handoff
+   before implementation changes.
+2. **Complete.** Materialize the public VITAL timing, period, glitch, skew,
+   Boolean/time/logic access-array, initialization, and supporting record types
+   required by timing checks, without importing third-party package bodies.
+3. **Complete.** Implement exact `VitalEdgeSymbolType` transition matching for
+   all nine logic states, weak-state normalization, no-event cases, and the
+   standard rising, falling, ambiguous, and wildcard symbols.
+4. **Complete.** Add persistent per-call VITAL timing-check state whose identity
+   is stable across process suspension, hierarchy, artifact serialization,
+   interpreter execution, and compiled callbacks.
+5. **Complete.** Implement delayed test/reference sampling and event timestamps
+   at the global time resolution, including zero delay, redundant transactions,
+   simultaneous events, and checked physical-time arithmetic.
+6. **Complete.** Implement both standard `VitalSetupHoldCheck` profiles with
+   setup/hold high/low limits and exact reference-transition selection.
+7. **Complete.** Implement setup/hold enable-direction controls, test/reference
+   delay handling, simultaneous-boundary behavior, and persistent violation
+   state across successive calls.
+8. **Complete.** Implement `VitalRecoveryRemovalCheck` with active-high/low test
+   semantics, recovery/removal enable controls, delayed sampling, and exact
+   reference-edge behavior.
+9. **Complete.** Implement `VitalPeriodPulseCheck` for period and high/low pulse
+   widths, first-event initialization, unknown transitions, enable changes, and
+   resolution-boundary comparisons.
+10. **Complete.** Implement `VitalInPhaseSkewCheck` for both rise/rise and
+    fall/fall directions with independent signal delays and directional limits.
+11. **Complete.** Implement `VitalOutPhaseSkewCheck` for rise/fall and fall/rise
+    directions with independent signal delays and directional limits.
+12. **Complete.** Integrate `CheckEnabled`, `XOn`, `MsgOn`, header text, signal
+    names, severity, deterministic violation flags, and assertion reporting
+    without host-dependent formatting or duplicate messages.
+13. **Complete.** Reject malformed timing profiles, negative or overflowing
+    delays/limits, invalid edges, incompatible timing-state records, duplicate
+    associations, and unsupported dynamic arguments with cataloged diagnostics.
+14. **Complete.** Materialize state-table input/output/state storage and preserve
+    previous input plus current state across delta cycles, suspension,
+    hierarchy, serialization, and native-cache reuse.
+15. **Complete.** Implement exact `VitalStateSymbolType` matching for static and
+    transition symbols, including wildcard, unknown, binary, high-impedance,
+    stable, and retention semantics over nine-state inputs.
+16. **Complete.** Implement first-matching-row `VitalStateTable` evaluation,
+    state-column updates, `'-'` retention, X on no match, and deterministic
+    multi-output ordering for ascending and descending vectors.
+17. **Complete.** Implement all four standard `VitalStateTable` procedure
+    profiles, including scalar/vector results, optional state counts, null
+    input/state ranges, multiple state variables, and named associations.
+18. **Complete.** Preserve timing-check/state-table declarations, call state,
+    results, and violations through project/non-project compilation,
+    `.fsimobj`, `.fsimdesign`, relocation, standalone simulation, debugger,
+    callbacks, VCD, and LLVM O0/O2 cold/warm execution.
+19. **Complete.** Add focused positive/negative differentials and update
+    architecture, language support, diagnostics, feature matrix, inventories,
+    VITAL compatibility notes, and restart evidence; keep path/wire delays,
+    pulse rejection, and memory/vendor closure assigned to Batches 142-143.
+20. **Complete.** Exact-LLVM Debug and Release each pass 110/110 tests after
+    eight-worker builds, in 141.34 and 114.76 seconds respectively. Source,
+    catalog, inventory, installed-public-contract, Windows ABI, differential,
+    and release-candidate gates pass. The reviewed baselines are 1,683
+    diagnostics, 473 bounded sources, 563 SPDX-owned artifacts, 1,097 execute
+    rows, 4,388 evidence cells, 340 evidence paths, and 97 runtime owners.
+    Commit and push the accumulated batch once. Batch 141 is not a CI boundary;
+    no sanitizer or hosted CI-monitoring gate ran.
+
 ## Forward priority order
 
 1. **Completed in Batch 136:** read-only out-of-tree `.fsimlib` directory

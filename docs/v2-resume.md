@@ -7,11 +7,31 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
-- Current unit: Batch 140, exactly 20 changes, is complete. Its authoritative
-  VITAL package/primitives contract and evidence are recorded in
-  `implementation_plan_v2.md`. Final normal hosted run `30923945372` passes all
-  12 jobs from pushed commit `446a654`. Batch 141 timing checks/state tables is
-  next and has not started in this closeout commit.
+- Current unit: Batch 141, exactly 20 changes, complete from clean pushed Batch
+  140 closeout `c5c8a5c`; Batch 142 is next. Its authoritative VITAL
+  timing-check/state-table contract and per-change status are recorded in
+  `implementation_plan_v2.md`. Batch 140's final normal hosted run
+  `30923945372` passed all 12 jobs.
+- Batch 141 Changes 1-20 are complete. Clean-room
+  VITAL timing metadata, exact nine-state edge matching, persistent timing
+  state, all five timing-check procedures, delayed sampling, Trigger-driven
+  skew deadlines, flag/report semantics, and catalog-ready negative profiles
+  execute in the interpreter and LLVM O0/O2. The integration fixture also
+  exercises both setup/hold profiles, recovery/removal, period/pulse, and both
+  skew phases with cold/warm native-cache and VCD equivalence. All four
+  state-table profiles cover transition/static symbols, first-row priority,
+  retention, no-match X, Z output, null input, zero states, and both vector
+  directions. Explicit `.fsimobj`/`.fsimdesign` standalone compiled execution,
+  runtime-state round trips, debugger mode, callbacks, and VCD match the source
+  interpreter. Architecture, language support, diagnostics, feature matrix,
+  inventory, and restart records are synchronized. Exact-LLVM Debug and Release
+  each pass 110/110 tests after eight-worker builds, in 141.34 and 114.76
+  seconds. The reviewed inventory and release baselines are 1,683 diagnostics,
+  473 bounded sources, 563 SPDX-owned artifacts, 1,097 execute rows, 4,388
+  evidence cells, 340 evidence paths, and 97 runtime owners. Source, catalog,
+  inventory, installed-public-contract, Windows ABI, differential, and
+  release-candidate gates pass. No sanitizer or hosted CI monitoring ran
+  because Batch 141 is not a scheduled boundary.
 - Completed work: Batch 133 implements parent-library inference for HDL-to-HDL,
   HDL-to-SystemC, and SystemC-proxy-to-HDL boundaries, including resolver-only
   bindings, deterministic ambiguity, multiple logical-library SystemC
@@ -476,3 +496,23 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   temporary workflow is removed in `446a654`. Final normal run `30923945372`
   passes all 12 jobs: every Linux, Windows, sanitizer, and fuzz job is green.
   Change 20 and Batch 140 are complete.
+
+- Batch 141 starts from clean pushed Batch 140 closeout `c5c8a5c` and completes
+  all exactly 20 changes in one accumulated changeset. It materializes the
+  remaining public VITAL timing/state types and implements exact nine-state
+  edges, persistent setup/hold, recovery/removal, period/pulse, in-phase and
+  out-phase skew checks, delayed sampling, Trigger deadlines, report/violation
+  controls, and all four scalar/vector variable/signal state-table profiles.
+  The implementation preserves state through interpreter and LLVM O0/O2,
+  cold/warm native cache, debugger, callbacks, VCD, `.fsimobj`, `.fsimdesign`,
+  relocation, and standalone execution. Positive and cataloged-negative VHDL
+  integration coverage includes simultaneous boundaries, weak/unknown edges,
+  first-row table priority, retention, no-match X, Z output, null inputs, zero
+  states, and both vector directions. Exact-LLVM Debug passes 110/110 in 141.34
+  seconds and Release passes 110/110 in 114.76 seconds after eight-worker
+  builds. The source, diagnostic, inventory, installed-public, Windows ABI,
+  differential, and release-candidate gates pass with 1,683 diagnostics, 473
+  bounded sources, 563 SPDX-owned artifacts, 1,097 execute rows, 4,388 evidence
+  cells, 340 evidence paths, and 97 runtime owners. The append-only JIT ABI
+  retains its 544-byte compatible prefix and extends to 560 bytes. No sanitizer
+  or hosted CI monitoring ran because Batch 141 is not a monitoring boundary.

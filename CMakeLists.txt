@@ -404,6 +404,7 @@ add_library(
     src/runtime/simir_logic.cpp
       src/runtime/simir_scheduling.cpp
       src/runtime/simir_string_methods.cpp
+      src/runtime/simir_vital.cpp
       src/runtime/simir_state.cpp
     src/runtime/vcd_writer.cpp
 )
@@ -462,7 +463,9 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_vhdl_attributes.cpp
       src/elaboration/lowerer_vhdl_matching.cpp
       src/elaboration/lowerer_vhdl_logic.cpp
-      src/elaboration/lowerer_vhdl_vital.cpp
+  src/elaboration/lowerer_vhdl_vital.cpp
+  src/elaboration/lowerer_vhdl_vital_state.cpp
+  src/elaboration/lowerer_vhdl_vital_timing.cpp
       src/elaboration/lowerer_vhdl_numeric.cpp
       src/elaboration/lowerer_vhdl_fixed.cpp
       src/elaboration/lowerer_vhdl_float.cpp

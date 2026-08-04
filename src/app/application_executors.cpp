@@ -44,6 +44,8 @@ namespace fsim::app::application_detail {
     runtime.signal_driving = signal_driving;
     runtime.signal_driving_value = signal_driving_value;
     runtime.signal_driving_value_logic9 = signal_driving_value_logic9;
+    runtime.read_simulation_time = read_simulation_time;
+    runtime.vital_timing_check = vital_timing_check;
     runtime.write_output = write_output;
     runtime.schedule_output = schedule_output;
     runtime.write_report = write_report;
@@ -1591,23 +1593,59 @@ void LlvmProcessExecutor::signal_last_value_logic9(
 
 std::uint64_t LlvmProcessExecutor::signal_last_event(
     void* context,
-    const std::uint32_t signal) noexcept  {
-    auto& state = *static_cast<CallbackState*>(context);
-    if (state.failure || state.context == nullptr
-        || signal >= state.signal_widths.size()) {
-      return std::numeric_limits<std::uint64_t>::max();
-    }
-    try {
-      return state.context->signal_last_event(signal);
-    } catch (...) {
-      capture_failure(state);
-      return std::numeric_limits<std::uint64_t>::max();
-    }
+    const std::uint32_t signal) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure || state.context == nullptr
+      || signal >= state.signal_widths.size()) {
+    return std::numeric_limits<std::uint64_t>::max();
   }
+  try {
+    return state.context->signal_last_event(signal);
+  } catch (...) {
+    capture_failure(state);
+    return std::numeric_limits<std::uint64_t>::max();
+  }
+}
+
+std::uint64_t LlvmProcessExecutor::read_simulation_time(
+    void* context) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure || state.context == nullptr) {
+    return 0;
+  }
+  return state.context->current_time();
+}
+
+std::uint32_t LlvmProcessExecutor::vital_timing_check(
+    void* context,
+    const std::uint32_t process,
+    const std::uint32_t instruction) noexcept {
+  auto& state = *static_cast<CallbackState*>(context);
+  if (state.failure || state.context == nullptr || state.process == nullptr
+      || process != state.process->id
+      || instruction >= state.process->operations.size()) {
+    return static_cast<std::uint32_t>(runtime::Logic9::x);
+  }
+  try {
+    const auto* operation = runtime::simir::operation_get_if<
+        runtime::simir::VitalTimingCheck>(
+            &state.process->operations[instruction]);
+    if (operation == nullptr) {
+      throw std::logic_error{
+          "generated VITAL callback references the wrong operation"};
+    }
+    return static_cast<std::uint32_t>(
+        state.context->evaluate_vital_timing_check(
+            instruction, *operation));
+  } catch (...) {
+    capture_failure(state);
+    return static_cast<std::uint32_t>(runtime::Logic9::x);
+  }
+}
 
 std::uint32_t LlvmProcessExecutor::signal_active(
     void* context,
-    const std::uint32_t signal) noexcept  {
+    const std::uint32_t signal) noexcept {
     auto& state = *static_cast<CallbackState*>(context);
     if (state.failure || state.context == nullptr
         || signal >= state.signal_widths.size()) {

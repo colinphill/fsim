@@ -1430,6 +1430,13 @@ are therefore excluded.
 | `FSIM-ELAB-VITAL-007` | error | A VITAL mux or decoder has null, incompatible, non-power-of-two, or select-space-exceeding dimensions. |
 | `FSIM-ELAB-VITAL-008` | error | A VITAL truth table is dynamic, empty, dimensionally inconsistent, or lacks a concrete input/result layout. |
 | `FSIM-ELAB-VITAL-009` | error | A VITAL truth-table row contains a symbol that is illegal in its input or output portion. |
+| `FSIM-ELAB-VITAL-010` | error | A VITAL timing-check call has a missing, excessive, duplicate, unknown, or misplaced actual. |
+| `FSIM-ELAB-VITAL-011` | error | A VITAL timing-check limit, delay, Boolean, edge, string, or severity actual is not locally static or lies outside its legal profile. |
+| `FSIM-ELAB-VITAL-012` | error | A VITAL timing-check violation, state, signal, or trigger actual is not a compatible writable scalar, vector, or record object. |
+| `FSIM-ELAB-VITAL-013` | error | A `VitalStateTable` call has a missing, excessive, duplicate, unknown, or misplaced actual. |
+| `FSIM-ELAB-VITAL-014` | error | A `VitalStateTable` result, previous-input, or data actual is not a compatible writable standard-logic object with a concrete profile. |
+| `FSIM-ELAB-VITAL-015` | error | A `VitalStateTable` table, row width, state count, or static dimension is empty, dynamic, or inconsistent with its selected profile. |
+| `FSIM-ELAB-VITAL-016` | error | A `VitalStateTable` row contains a symbol that is illegal in its input, present-state, or output portion. |
 | `FSIM-ELAB-SVENUM-001` | error | An enum base width is unsupported or an enumerator value does not fit it. |
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-SVCONST-001` | error | A SystemVerilog parameter value cannot be converted to its declared bounded integral type without losing X/Z state or valid width metadata. |

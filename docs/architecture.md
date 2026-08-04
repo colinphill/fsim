@@ -334,10 +334,16 @@ copied into the distribution. Typed package metadata supplies exact transition,
 delay, map, fixed-vector, and truth-table declarations. Static composite
 constants and generics retain their complete packed value and nominal identity
 in specialization/cache provenance. Combinational VITAL calls lower to
-ordinary wide packed SimIR operations, so interpreter, LLVM, artifacts,
-debugging, callbacks, and tracing share one execution path. Timing checks,
-state tables, path/wire delays, pulse rejection, and memory models remain in
-Batches 141-143.
+ordinary wide packed SimIR operations. Timing checks use one typed operation
+per call site with persistent runtime state keyed by instruction identity,
+append-only compiled callbacks, exact nine-state edge masks, and ordinary
+delayed signals for test/reference delay. Skew checks schedule their standard
+Trigger signal at the earliest outstanding directional deadline. State tables
+expand to packed comparisons and selections; variable profiles update
+caller-owned previous-input storage while signal profiles use exact runtime
+last-value history. Interpreter, LLVM, artifacts, debugging, callbacks,
+native caching, and tracing therefore share one deterministic path. Path/wire
+delays, pulse rejection, and memory models remain in Batches 142-143.
 
 Executable VHDL units and package declarations may also name a constant as
 `package.constant` in their own library or
@@ -1375,7 +1381,9 @@ LLVM job builds and runs the adapter suite against 22.1.8. A separate C11 test
 verifies the offsets, extended size, callback handoff, and genuine C ABI.
 The Batch 139 append-only tail adds `signal_last_active`, `signal_driving`,
 `signal_driving_value`, and `signal_driving_value_logic9` at offsets 512 through
-536, for a 544-byte table. Transaction-sensitive support processes drive
+536, preserving a 544-byte compatible prefix. Batch 141 appends
+`read_simulation_time` and `vital_timing_check` at offsets 544 and 552 for a
+560-byte table. Transaction-sensitive support processes drive
 interned `'stable(T)`, `'quiet(T)`, `'transaction`, and `'delayed(T)` signals
 through ordinary projected writes; their scheduler state therefore remains in
 the serialized common signal/process graph rather than in generated code.

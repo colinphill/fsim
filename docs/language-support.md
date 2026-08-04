@@ -1126,7 +1126,14 @@ gates, arbitrary-width reductions, fixed 2/3/4 gates, MUX/MUX2/4/8,
 DECODER/2/4/8, and both static `VitalTruthTable` result profiles execute in
 the interpreter and LLVM O0/O2, including wide/null vectors, weak/unknown
 states, pessimistic selection, artifact phases, callbacks, debugging, and VCD.
-Dynamic truth tables are rejected. Timing checks and state tables, path/wire
+Dynamic truth/state tables are rejected. All scalar/vector setup/hold,
+recovery/removal, period/pulse, in-phase skew, and out-of-phase skew profiles
+execute with persistent check state, exact edge symbols, delayed sampling,
+direction enables, Trigger deadlines, deterministic violation/report controls,
+and cataloged static-profile diagnostics. All four `VitalStateTable` procedures
+execute with first-row priority, previous-input transitions, present/next state,
+unknown/no-match and retention behavior, scalar/vector results, zero state
+count, null input expressions, and ascending/descending vectors. Path/wire
 delays and pulse rejection, VITAL memories/vendor profiles, and SDF annotation
 remain in subsequent v2 batches.
 

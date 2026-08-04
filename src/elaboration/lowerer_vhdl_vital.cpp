@@ -25,6 +25,40 @@ bool is_vital_logic_name(const std::string_view name) {
   return false;
 }
 
+constexpr std::size_t vital_x01_ordinal(const runtime::Logic9 value) {
+  if (value == runtime::Logic9::zero || value == runtime::Logic9::l) return 1;
+  if (value == runtime::Logic9::one || value == runtime::Logic9::h) return 2;
+  return 0;
+}
+
+constexpr std::uint16_t vital_edge_symbol_mask(
+    const runtime::Logic9 previous,
+    const runtime::Logic9 current) {
+  // VitalEdgeSymbolType declaration order is
+  // /, \, P, N, r, f, p, n, R, F, ^, v, E, A, D, *.
+  constexpr std::array<std::array<std::uint16_t, 3>, 3> masks{{
+      {{0, 0xDA08U, 0xB504U}},
+      {{0xA150U, 0, 0x8145U}},
+      {{0xC2A0U, 0x828AU, 0}},
+  }};
+  return masks[vital_x01_ordinal(previous)][vital_x01_ordinal(current)];
+}
+
+constexpr bool vital_edge_matches(
+    const runtime::Logic9 previous,
+    const runtime::Logic9 current,
+    const std::size_t symbol_ordinal) {
+  return symbol_ordinal < 16U
+      && (vital_edge_symbol_mask(previous, current)
+          & (std::uint16_t{1} << symbol_ordinal)) != 0;
+}
+
+static_assert(vital_edge_matches(runtime::Logic9::zero, runtime::Logic9::one, 0));
+static_assert(vital_edge_matches(runtime::Logic9::one, runtime::Logic9::zero, 1));
+static_assert(vital_edge_matches(runtime::Logic9::x, runtime::Logic9::one, 12));
+static_assert(vital_edge_matches(runtime::Logic9::l, runtime::Logic9::h, 15));
+static_assert(!vital_edge_matches(runtime::Logic9::zero, runtime::Logic9::zero, 15));
+
 }  // namespace
 
 Lowerer::ExpressionAttempt Lowerer::lower_vhdl_vital_expression(
@@ -37,6 +71,38 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_vital_expression(
     return ExpressionAttempt{};
   }
   const auto name = simple_name(expression.text);
+  if (name == "vitaltimingdatainit"
+      || name == "vitalperioddatainit"
+      || name == "vitalskewdatainit") {
+    const auto required_width = name == "vitaltimingdatainit"
+        ? 261U
+        : name == "vitalperioddatainit" ? 130U : 259U;
+    if (expected_width != required_width
+        || (expression.kind == ExpressionKind::Call
+            && !expression.operands.empty())) {
+      report(
+          "FSIM-ELAB-VITAL-001",
+          std::string{name} + " requires its exact parameterless record type",
+          expression.span);
+      return std::nullopt;
+    }
+    runtime::PackedLogic4 value(expected_width);
+    value.fill(runtime::Logic9::zero);
+    if (name == "vitaltimingdatainit") {
+      value.set_logic9(259, runtime::Logic9::x);
+      value.set_logic9(193, runtime::Logic9::x);
+    } else if (name == "vitalperioddatainit") {
+      value.set_logic9(129, runtime::Logic9::x);
+    }
+    const auto result = allocate_register(
+        expected_width,
+        expected_type != nullptr
+            ? expected_type->domain
+            : frontend::ValueDomain::Logic9);
+    process_.operations.emplace_back(
+        LoadConstant{result, std::move(value)});
+    return result;
+  }
   if (expression.kind == ExpressionKind::Identifier) {
     std::optional<std::string_view> mapped;
     if (name == "vitaldefaultoutputmap") {

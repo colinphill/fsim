@@ -177,7 +177,11 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, signal_driving_value) == 528,
 _Static_assert(
     offsetof(fsim_jit_runtime_v1, signal_driving_value_logic9) == 536,
     "runtime exact driving-value helper was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 544,
+_Static_assert(offsetof(fsim_jit_runtime_v1, read_simulation_time) == 544,
+               "runtime simulation-time helper was not appended");
+_Static_assert(offsetof(fsim_jit_runtime_v1, vital_timing_check) == 552,
+               "runtime VITAL timing helper was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 560,
                "unexpected extended runtime ABI size");
 _Static_assert(sizeof(fsim_jit_projected_element_v1) == 24,
                "unexpected projected-waveform element size");
@@ -389,6 +393,19 @@ static void signal_driving_value_logic9(
   value->planes[1] = signal + UINT32_C(1);
   value->planes[2] = signal + UINT32_C(2);
   value->planes[3] = signal + UINT32_C(3);
+}
+
+static uint64_t read_simulation_time(void* context) {
+  (void)context;
+  return UINT64_C(3001);
+}
+
+static uint32_t vital_timing_check(
+    void* context, uint32_t process, uint32_t instruction) {
+  (void)context;
+  return process == UINT32_C(4) && instruction == UINT32_C(9)
+      ? UINT32_C(1)
+      : UINT32_C(2);
 }
 
 static void write_output(
@@ -691,7 +708,9 @@ int main(void) {
       signal_last_active,
       signal_driving,
       signal_driving_value,
-      signal_driving_value_logic9};
+      signal_driving_value_logic9,
+      read_simulation_time,
+      vital_timing_check};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);
@@ -726,6 +745,10 @@ int main(void) {
   uint64_t driving_bval = 0;
   const uint64_t driving_aval = runtime.signal_driving_value(
       runtime.context, UINT32_C(3), &driving_bval);
+  const uint64_t simulation_time =
+      runtime.read_simulation_time(runtime.context);
+  const uint32_t vital_result = runtime.vital_timing_check(
+      runtime.context, UINT32_C(4), UINT32_C(9));
   runtime.write_output(
       runtime.context, UINT32_C(12), "hello", UINT64_C(5), UINT32_C(1));
   runtime.schedule_output(
@@ -841,6 +864,12 @@ int main(void) {
       || driving_aval != UINT64_C(0xb3)
       || driving_bval != UINT64_C(0x40)) {
     return 25;
+  }
+  if (simulation_time != UINT64_C(3001)) {
+    return 26;
+  }
+  if (vital_result != UINT32_C(1)) {
+    return 27;
   }
   if (state.update_count != UINT32_C(1) ||
       state.after_count != UINT32_C(1) ||

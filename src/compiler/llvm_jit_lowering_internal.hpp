@@ -13,6 +13,9 @@
 
 namespace fsim::compiler::llvm_detail {
 
+[[nodiscard]] llvm::StructType* create_jit_runtime_type(
+    llvm::LLVMContext& context);
+
 struct EncodedValue {
   llvm::Value* aval{};
   llvm::Value* bval{};
@@ -378,6 +381,8 @@ struct SignalOperationLowerer {
   llvm::Type* i32;
   llvm::Type* i64;
   llvm::Value* context_pointer;
+  std::uint32_t process_id;
+  runtime::simir::InstructionIndex instruction;
   llvm::Value* read_callback;
   llvm::Value* read_logic9_callback;
   llvm::Value* write_callback;
@@ -410,6 +415,8 @@ struct SignalOperationLowerer {
   llvm::Value* signal_driving_callback;
   llvm::Value* signal_driving_value_callback;
   llvm::Value* signal_driving_value_logic9_callback;
+  llvm::Value* read_simulation_time_callback;
+  llvm::Value* vital_timing_check_callback;
   llvm::FunctionType* read_type;
   llvm::FunctionType* read_logic9_type;
   llvm::FunctionType* write_type;
@@ -434,6 +441,8 @@ struct SignalOperationLowerer {
   llvm::FunctionType* signal_last_active_type;
   llvm::FunctionType* signal_driving_type;
   llvm::FunctionType* signal_driving_value_type;
+  llvm::FunctionType* read_simulation_time_type;
+  llvm::FunctionType* vital_timing_check_type;
   llvm::StructType* projected_element_type;
   llvm::StructType* logic9_projected_element_type;
   llvm::Value* read_bval_slot;
@@ -463,6 +472,8 @@ struct SignalOperationLowerer {
   void lower(const runtime::simir::SignalEvent& operation);
   void lower(const runtime::simir::SignalLastValue& operation);
   void lower(const runtime::simir::SignalLastEvent& operation);
+  void lower(const runtime::simir::ReadSimulationTime& operation);
+  void lower(const runtime::simir::VitalTimingCheck& operation);
   void lower(const runtime::simir::SignalActive& operation);
   void lower(const runtime::simir::SignalLastActive& operation);
   void lower(const runtime::simir::SignalDriving& operation);

@@ -26,6 +26,15 @@ struct SignalLastEvent {
   SignalId signal{};
 };
 
+/// Capture the current global simulation tick in a 64-bit two-state value.
+///
+/// Unlike TimeDisplay this is an ordinary value-producing operation, so
+/// language libraries can retain and compare timestamps without depending on
+/// host formatting or an executor-specific side channel.
+struct ReadSimulationTime {
+  RegisterId destination{};
+};
+
 /// True during the delta following any committed signal transaction.
 struct SignalActive {
   RegisterId destination{};

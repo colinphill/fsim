@@ -68,6 +68,8 @@ using runtime::simir::Operation;
 using runtime::simir::Pause;
 using runtime::simir::Process;
 using runtime::simir::ReadSignal;
+using runtime::simir::ReadSimulationTime;
+using runtime::simir::VitalTimingCheck;
 using runtime::simir::Reduction;
 using runtime::simir::ReductionOperator;
 using runtime::simir::RegisterId;
@@ -128,19 +130,7 @@ void lower_process(llvm::Module &module, const std::string &symbol,
   auto *i32 = llvm::Type::getInt32Ty(context);
   auto *i64 = llvm::Type::getInt64Ty(context);
   auto *pointer = llvm::PointerType::getUnqual(context);
-  auto *runtime_type = llvm::StructType::create(
-      context,
-      {i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
-       i32, i32, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer, pointer, pointer, pointer, pointer},
-      "fsim_jit_runtime_v1");
+  auto* runtime_type = create_jit_runtime_type(context);
   auto *frame_type = llvm::StructType::create(
       context,
       {i32, i32, i64, i64, i32, i32, i32, i32, pointer, pointer,
@@ -301,6 +291,20 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         builder.CreateStructGEP(
             runtime_type, runtime_argument, 69),
         "signal_driving_value_logic9");
+  }
+  llvm::Value* read_simulation_time_callback = nullptr;
+  if (validated.uses_simulation_time) {
+    read_simulation_time_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(runtime_type, runtime_argument, 70),
+        "read_simulation_time");
+  }
+  llvm::Value* vital_timing_check_callback = nullptr;
+  if (validated.uses_vital_timing) {
+    vital_timing_check_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(runtime_type, runtime_argument, 71),
+        "vital_timing_check");
   }
   llvm::Value* output_callback = nullptr;
   if (validated.uses_output) {
@@ -541,6 +545,10 @@ void lower_process(llvm::Module &module, const std::string &symbol,
       llvm::FunctionType::get(i32, {pointer, i32}, false);
   auto* signal_driving_value_type =
       llvm::FunctionType::get(i64, {pointer, i32, pointer}, false);
+  auto* read_simulation_time_type =
+      llvm::FunctionType::get(i64, {pointer}, false);
+  auto* vital_timing_check_type =
+      llvm::FunctionType::get(i32, {pointer, i32, i32}, false);
   auto* output_type =
       llvm::FunctionType::get(
           llvm::Type::getVoidTy(context),
@@ -1147,6 +1155,8 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         i32,
         i64,
         context_pointer,
+        process.id,
+        instruction,
         read_callback,
         read_logic9_callback,
         write_callback,
@@ -1179,6 +1189,8 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         signal_driving_callback,
         signal_driving_value_callback,
         signal_driving_value_logic9_callback,
+        read_simulation_time_callback,
+        vital_timing_check_callback,
         read_type,
         read_logic9_type,
         write_type,
@@ -1203,6 +1215,8 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         signal_last_active_type,
         signal_driving_type,
         signal_driving_value_type,
+        read_simulation_time_type,
+        vital_timing_check_type,
         projected_element_type,
         logic9_projected_element_type,
         read_bval_slot,
@@ -1266,6 +1280,12 @@ void lower_process(llvm::Module &module, const std::string &symbol,
           } else if constexpr (std::is_same_v<OperationType, SignalLastValue>) {
             signal_lowerer.lower(operation);
           } else if constexpr (std::is_same_v<OperationType, SignalLastEvent>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (
+              std::is_same_v<OperationType, ReadSimulationTime>) {
+            signal_lowerer.lower(operation);
+          } else if constexpr (
+              std::is_same_v<OperationType, VitalTimingCheck>) {
             signal_lowerer.lower(operation);
           } else if constexpr (std::is_same_v<OperationType, SignalActive>) {
             signal_lowerer.lower(operation);

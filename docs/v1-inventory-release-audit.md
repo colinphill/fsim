@@ -88,3 +88,11 @@ artifacts. Existing focused integration and artifact-phase owners carry the
 new positive and negative cases, so the test/control count remains 198. The
 conformance expectation, reviewed IEEE third-party snapshot, and provenance
 inventories remain unchanged because no external VITAL source is imported.
+
+v2 Batch 141 adds three SPDX-owned bounded C++ sources and one internal header
+for timing lowering, persistent timing execution, and state-table lowering.
+Seven VITAL diagnostics advance the reviewed totals to 1,683 diagnostics, 473
+bounded C/C++ sources, and 563 authored artifacts. Existing focused integration
+owners carry the positive, negative, artifact, debugger, callback, and trace
+matrix, so the test/control count remains 198. No external VITAL body or new
+third-party provenance is imported.

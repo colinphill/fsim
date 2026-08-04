@@ -110,6 +110,10 @@ int main() {
       JitOptimizationLevel::o0, "logic9_o0");
   test_logic9_at_level(
       JitOptimizationLevel::o2, "logic9_o2");
+  test_vital_timing_at_level(
+      JitOptimizationLevel::o0, "vital_timing_o0");
+  test_vital_timing_at_level(
+      JitOptimizationLevel::o2, "vital_timing_o2");
   test_persistent_object_cache();
   test_process_control_cache_identity();
   test_rejections();
