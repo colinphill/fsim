@@ -137,6 +137,30 @@ bool is_option(
          option_value(argument, long_name).has_value();
 }
 
+bool valid_top_alias(const std::string_view alias_name) {
+  if (alias_name.empty()
+      || (std::isalpha(static_cast<unsigned char>(alias_name.front())) == 0
+          && alias_name.front() != '_')) {
+    return false;
+  }
+  return std::ranges::all_of(
+      alias_name,
+      [](const unsigned char character) {
+        return std::isalnum(character) != 0 || character == '_';
+      });
+}
+
+project::ProjectSection::TopLevel parse_top_option(
+    const std::string_view spelling) {
+  const auto separator = spelling.find('=');
+  if (separator == std::string_view::npos) {
+    return {std::string{spelling}, {}};
+  }
+  return {
+      std::string{spelling.substr(separator + 1)},
+      std::string{spelling.substr(0, separator)}};
+}
+
 std::optional<project::Optimization> parse_optimization(
     const std::string_view spelling) {
   const auto normalized = lowercase(spelling);
@@ -220,7 +244,12 @@ std::optional<project::Config> make_direct_config(
     config.base_directory = ".";
   }
   config.project.name = "command-line";
-  if (invocation.top.has_value()) {
+  if (!invocation.tops.empty()) {
+    config.project.tops = invocation.tops;
+    config.project.top = invocation.tops.size() == 1
+        ? invocation.tops.front().target
+        : std::string{};
+  } else if (invocation.top.has_value()) {
     config.project.top = *invocation.top;
   }
 
@@ -306,7 +335,12 @@ std::optional<project::Config> make_direct_config(
 }
 
 void apply_overrides(const Invocation& invocation, project::Config& config) {
-  if (invocation.top.has_value()) {
+  if (!invocation.tops.empty()) {
+    config.project.tops = invocation.tops;
+    config.project.top = invocation.tops.size() == 1
+        ? invocation.tops.front().target
+        : std::string{};
+  } else if (invocation.top.has_value()) {
     config.project.top = *invocation.top;
   }
   if (invocation.duration.has_value()) {
@@ -353,7 +387,7 @@ void print_help(std::ostream& output, const std::string_view program) {
       << "\n"
       << "Project and source options:\n"
       << "  -p, --project PATH       Project manifest (default: fsim.toml)\n"
-      << "      --top NAME           Override the design top\n"
+      << "      --top [ALIAS=]NAME   Replace design tops; repeatable, aliases required for multiple\n"
       << "      --lang LANGUAGE      Language for every direct source file\n"
       << "      --standard VERSION   Standard for direct source files\n"
       << "      --library NAME       Library for direct source files (default: work)\n"
@@ -507,7 +541,7 @@ std::optional<Invocation> parse_arguments(
         if (!value.has_value()) {
           return std::nullopt;
         }
-        invocation.top = std::string(*value);
+        invocation.tops.push_back(parse_top_option(*value));
       } else if (is_option(argument, "", "--lang")) {
         const auto value = take_value(index, argc, argv, argument, "--lang", diagnostics);
         if (!value.has_value()) {
@@ -725,6 +759,40 @@ std::optional<Invocation> parse_arguments(
         "missing command; expected check, build, run, debug, or tcl");
     return std::nullopt;
   }
+  if (!invocation.tops.empty()) {
+    std::vector<std::string> aliases;
+    aliases.reserve(invocation.tops.size());
+    for (auto& top : invocation.tops) {
+      if (top.target.empty()) {
+        argument_error(diagnostics, "--top requires a non-empty target");
+        return std::nullopt;
+      }
+      if (top.alias.empty()) {
+        if (invocation.tops.size() != 1) {
+          argument_error(
+              diagnostics,
+              "every repeated --top requires an ALIAS=NAME spelling");
+          return std::nullopt;
+        }
+      } else if (!valid_top_alias(top.alias)) {
+        argument_error(
+            diagnostics,
+            "top alias '" + top.alias
+                + "' must start with a letter or underscore and contain "
+                  "only letters, digits, and underscores");
+        return std::nullopt;
+      } else if (std::ranges::find(aliases, top.alias) != aliases.end()) {
+        argument_error(diagnostics, "duplicate top alias '" + top.alias + "'");
+        return std::nullopt;
+      }
+      if (!top.alias.empty()) {
+        aliases.push_back(top.alias);
+      }
+    }
+    invocation.top = invocation.tops.size() == 1
+        ? std::optional<std::string>{invocation.tops.front().target}
+        : std::nullopt;
+  }
   if (invocation.command != Command::tcl
       && !invocation.tcl_commands.empty()) {
     argument_error(
@@ -756,6 +824,10 @@ std::optional<Invocation> parse_arguments(
       argument_error(
           diagnostics,
           "--search-library is not available with migrate");
+      return std::nullopt;
+    }
+    if (!invocation.tops.empty()) {
+      argument_error(diagnostics, "--top is not available with migrate");
       return std::nullopt;
     }
   } else if (invocation.migration_schema.has_value()

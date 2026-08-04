@@ -12,6 +12,7 @@ int main() {
   test_generate_elaboration();
   test_mixed_language_and_systemc();
   test_multi_library_resolution();
+  test_multiple_root_elaboration();
   test_mixed_language_conversions();
   test_mixed_language_construction();
   test_mixed_language_driver_ownership();

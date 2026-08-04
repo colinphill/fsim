@@ -653,7 +653,7 @@ using namespace elaboration_detail;
         local.emplace(declaration.name, id);
         local.emplace(full_name, id);
         design_.signal_by_name_.emplace(full_name, id);
-        if (path == design_.top_) {
+        if (design_.roots_.size() == 1 && path == active_root_) {
             design_.signal_by_name_.emplace(declaration.name, id);
         }
         design_.signal_info_.push_back({

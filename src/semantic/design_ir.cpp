@@ -12,6 +12,9 @@ template <typename IdType, typename Range>
 } // namespace
 
 const std::string& DesignIr::top() const noexcept { return top_; }
+const std::vector<std::string>& DesignIr::roots() const noexcept {
+    return roots_;
+}
 const std::vector<Specialization>&
 DesignIr::specializations() const noexcept { return specializations_; }
 const std::vector<InstanceOccurrence>&
@@ -40,6 +43,9 @@ const std::vector<Boundary>& DesignIr::boundaries() const noexcept {
 }
 
 std::string& DesignIr::mutable_top() noexcept { return top_; }
+std::vector<std::string>& DesignIr::mutable_roots() noexcept {
+    return roots_;
+}
 std::vector<Specialization>& DesignIr::mutable_specializations() noexcept {
     return specializations_;
 }
@@ -66,6 +72,9 @@ std::vector<Boundary>& DesignIr::mutable_boundaries() noexcept {
 }
 
 bool DesignIr::valid() const noexcept {
+    if (!roots_.empty() && top_ != roots_.front()) {
+        return false;
+    }
     for (std::size_t index = 0; index < specializations_.size(); ++index) {
         const auto& item = specializations_[index];
         if (item.id.value() != index || !contains(item.instance, instances_)) {

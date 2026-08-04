@@ -940,6 +940,20 @@ SystemC factories elaborate as peer hierarchy nodes under their exported
 public names; `SC_FSIM_HDL_MODULE(Type)` uses the stringized type as its
 inferred HDL name.
 
+Schema 2 supports one or more independently resolved top roots. Repeated
+`[[project.top]]` records retain declaration order and require unique aliases
+when the list has more than one member; repeated `--top ALIAS=TARGET` options
+replace that list. All roots share one scheduler, time resolution, parsed
+library/package/configuration state, SystemC kernel lifecycle, trace namespace,
+debugger session, and callback stream. Hierarchy paths begin with the alias,
+and single-root manifests retain their former names and API view. SystemVerilog
+top-level hierarchical references to packed signals on another selected root
+are executable independent of root order, supporting the conventional
+separate `glbl` module. Descendant-state shortcuts and cross-root references
+that are not defined by the source language are rejected; expose that state
+through a root-level port/signal or a language-defined package/global service.
+The ordered aliased root set participates in design and native-cache identity.
+
 Batch 119 frontend closure now retains nested waits rather than rejecting a
 successfully parsed statement tree; general assertion/report and severity
 expressions; nominal file types, file objects, open-kind and logical-name

@@ -257,8 +257,10 @@ fsim_status_t fsim_session_find_object(
     const auto requested =
         path.data == nullptr ? std::string_view{}
                              : std::string_view{path.data, path.size};
+    const auto& design = value.simulation->design_ir();
     if (requested.empty()
-        || requested == value.simulation->design_ir().top()) {
+        || (!has_synthetic_root(design)
+            && is_design_root(design, requested))) {
       *out_object = root_handle(value);
       return FSIM_STATUS_OK;
     }
@@ -530,6 +532,9 @@ fsim_status_t fsim_session_visit_children(
         return FSIM_STATUS_OK;
       }
     }
+    if (has_synthetic_root(value.simulation->design_ir())) {
+      return FSIM_STATUS_OK;
+    }
     const auto& top = value.simulation->design_ir().top();
     if (!visit_systemc_children(top)) {
       return FSIM_STATUS_OK;
@@ -627,12 +632,15 @@ fsim_status_t fsim_session_get_object_info(
           out_info->flags |= FSIM_OBJECT_FLAG_HAS_SOURCE;
         };
     if (object == root_handle(value)) {
-      const auto& top = value.simulation->design_ir().top();
+      const auto& design = value.simulation->design_ir();
+      const auto name = has_synthetic_root(design)
+          ? std::string_view{"$root"}
+          : std::string_view{design.top()};
       out_info->parent = FSIM_INVALID_OBJECT;
       out_info->kind = FSIM_OBJECT_ROOT;
       out_info->width = 0;
-      out_info->name = view(top);
-      out_info->full_name = view(top);
+      out_info->name = view(name);
+      out_info->full_name = view(name);
       out_info->type_name = view("design");
       return FSIM_STATUS_OK;
     }
@@ -651,8 +659,10 @@ fsim_status_t fsim_session_get_object_info(
       const auto parent_path = separator == std::string_view::npos
           ? std::string_view{}
           : path.substr(0, separator);
+      const auto& design = value.simulation->design_ir();
       if (!parent_path.empty()
-          && parent_path != value.simulation->design_ir().top()) {
+          && (has_synthetic_root(design)
+              || !is_design_root(design, parent_path))) {
         const auto parent = std::ranges::find_if(
             value.simulation->design_ir().objects(),
             [&](const fsim::semantic::design::Object& candidate) {

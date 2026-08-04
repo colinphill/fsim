@@ -242,7 +242,7 @@ void adapt_vhdl_array_port_shapes(
             SystemCNamedObjectKind::module,
             instance.handle,
             path,
-            path == design_.top_ || parent_separator == std::string::npos
+            path == active_root_ || parent_separator == std::string::npos
                 ? std::string{}
                 : path.substr(0, parent_separator),
             instance.target,
@@ -352,7 +352,7 @@ void adapt_vhdl_array_port_shapes(
                 }
                 design_.signal_by_name_.emplace(
                     full_name, *bound_signal);
-                if (path == design_.top_) {
+                if (design_.roots_.size() == 1 && path == active_root_) {
                     design_.signal_by_name_.emplace(
                         signal.name, *bound_signal);
                 }
@@ -465,7 +465,7 @@ void adapt_vhdl_array_port_shapes(
                 continue;
             }
             design_.signal_by_name_.emplace(full_name, *signal);
-            if (path == design_.top_) {
+            if (design_.roots_.size() == 1 && path == active_root_) {
                 design_.signal_by_name_.emplace(
                     export_object.name, *signal);
             }
@@ -909,6 +909,12 @@ void adapt_vhdl_array_port_shapes(
         register_vhdl_resolution_functions(unit);
 
         SignalMap local = std::move(aliases);
+        if (unit.language
+            == frontend::Language::SystemVerilog2017) {
+            for (const auto& [name, signal] : global_root_signals_) {
+                local.try_emplace(name, signal);
+            }
+        }
         StringMap local_string_objects =
             std::move(string_aliases);
         ContainerMap local_container_objects =
@@ -1041,7 +1047,9 @@ void adapt_vhdl_array_port_shapes(
             visible_types.emplace(signal.name, &signal.type);
             visible_types.emplace(
                 path + "." + signal.name, &signal.type);
-            (void)add_owned_signal(signal, path, local);
+            if (!local.contains(signal.name)) {
+                (void)add_owned_signal(signal, path, local);
+            }
         }
         for (const auto& alias : unit.signal_aliases) {
             expose_type_mark(alias.type.spelling, alias.type);
@@ -1251,7 +1259,7 @@ void adapt_vhdl_array_port_shapes(
                         member_name, storage_id);
                     design_.container_by_name_.emplace(
                         member_name, storage_id);
-                    if (path == design_.top_) {
+                    if (design_.roots_.size() == 1 && path == active_root_) {
                         design_.container_by_name_.emplace(
                             variable.name + "." + member.name,
                             storage_id);
@@ -1479,7 +1487,7 @@ void adapt_vhdl_array_port_shapes(
                     full_name, id);
                 design_.container_by_name_.emplace(
                     full_name, id);
-                if (path == design_.top_) {
+                if (design_.roots_.size() == 1 && path == active_root_) {
                     design_.container_by_name_.emplace(
                         variable.name, id);
                 }
@@ -1590,7 +1598,7 @@ void adapt_vhdl_array_port_shapes(
             local_string_objects.emplace(
                 full_name, id);
             design_.string_by_name_.emplace(full_name, id);
-            if (path == design_.top_) {
+            if (design_.roots_.size() == 1 && path == active_root_) {
                 design_.string_by_name_.emplace(
                     variable.name, id);
             }

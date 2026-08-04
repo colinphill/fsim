@@ -37,6 +37,9 @@ struct Invocation {
   std::vector<std::filesystem::path> files;
   std::optional<project::Language> language;
   std::optional<std::string> standard;
+  // Normalized ordered root selections. `top` remains the one-root
+  // source-compatible view.
+  std::vector<project::ProjectSection::TopLevel> tops;
   std::optional<std::string> top;
   std::string library{"work"};
   std::vector<std::string> search_libraries;

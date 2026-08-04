@@ -47,6 +47,7 @@
 #include <system_error>
 #include <thread>
 #include <tuple>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -718,7 +719,7 @@ void inject_vhdl_standard_libraries(
     CheckedProject& checked,
     diagnostic::Engine& diagnostics);
 
-std::string selected_top(
+std::vector<project::ProjectSection::TopLevel> selected_tops(
     const project::Config& config,
     const frontend::ParsedDesign& parsed,
     diagnostic::Engine& diagnostics);
@@ -750,7 +751,7 @@ elaboration::SystemCInstanceDescription systemc_description(
 
 std::optional<std::vector<elaboration::SystemCInstanceDescription>>
 construct_systemc_instances(
-    const std::string_view top,
+    std::span<const project::ProjectSection::TopLevel> tops,
     std::span<const SystemCLibraryRegistry> registries,
     diagnostic::Engine& diagnostics);
 
@@ -818,7 +819,7 @@ std::string target_name();
 std::string make_cache_key(
     const project::Config& config,
     const CheckedProject& checked,
-    const std::string_view top,
+    std::span<const project::ProjectSection::TopLevel> tops,
     const std::string_view resolution,
     const std::string_view systemc_plugin_key,
     diagnostic::Engine& diagnostics);

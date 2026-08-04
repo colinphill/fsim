@@ -22,6 +22,8 @@ int main() {
   fixture.test_specialization_and_packages();
   checkpoint("mixed language and generate");
   fixture.test_mixed_language_and_generate();
+  checkpoint("multiple roots");
+  fixture.test_multiple_roots();
   checkpoint("preprocessing debug and cli");
   fixture.test_preprocessing_debug_and_cli();
   checkpoint("complete");

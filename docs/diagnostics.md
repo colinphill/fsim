@@ -14,10 +14,10 @@ metadata rather than a token; CRLF and CR line endings retain the same logical
 line accounting as LF while physical byte offsets remain source-accurate.
 
 The severity column is the severity assigned by the current emitter. All
-entries are errors unless explicitly marked as warnings. The three strings
-`FSIM-OBJECT-CACHE-V1`, `FSIM-CACHE-LOCK-V1`, and
-`FSIM-DESIGN-CACHE-V1` are persistent-format markers, not diagnostics, and are
-therefore excluded.
+entries are errors unless explicitly marked as warnings. The four strings
+`FSIM-OBJECT-CACHE-V1`, `FSIM-CACHE-LOCK-V1`, `FSIM-DESIGN-CACHE-V1`, and
+`FSIM-DESIGN-CACHE-V2` are persistent-format markers, not diagnostics, and
+are therefore excluded.
 
 ## Command line and C API
 
@@ -959,6 +959,7 @@ therefore excluded.
 | Code | Severity | Meaning |
 |---|---|---|
 | `FSIM-ELAB-0001` | error | No unique executable top can be inferred; set `project.top` or `--top`. |
+| `FSIM-ELAB-0002` | error | The effective programmatic or command-line root list contains an empty target, missing or unsafe alias, duplicate alias, or invalid legacy/list combination. |
 | `FSIM-ELAB-001` | error | The requested top-level design unit was not found. |
 | `FSIM-ELAB-002` | error | A VHDL architecture has no matching entity. |
 | `FSIM-ELAB-003` | error | A qualified top-level target is malformed. |
@@ -988,6 +989,9 @@ therefore excluded.
 | `FSIM-ELAB-054` | error | A local variable initializer has the wrong packed width. |
 | `FSIM-ELAB-055` | error | A VHDL rejection limit exceeds its first waveform-element delay during executable lowering. |
 | `FSIM-ELAB-056` | error | A local variable assignment is nonblocking. |
+| `FSIM-ELAB-ROOT-001` | error | A source expression uses an unsupported cross-root hierarchy shortcut instead of a language-defined root-level global mechanism. |
+| `FSIM-ELAB-ROOT-002` | error | The public elaboration root list is empty or contains an empty target or missing or unsafe alias. |
+| `FSIM-ELAB-ROOT-003` | error | The public elaboration root list contains a duplicate alias. |
 | `FSIM-ELAB-057` | error | A local variable assignment has the wrong packed width. |
 | `FSIM-ELAB-058` | error | A local variable initializer or assignment would implicitly lose four- or nine-state values. |
 | `FSIM-ELAB-059` | error | A dynamic wait names an unknown signal. |

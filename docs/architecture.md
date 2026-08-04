@@ -509,6 +509,35 @@ Exact nine-state `std_logic` and four-state `sv_wire` resolution are current
 in the reference runtime; exact nine-state generated code remains a
 capability-gated interpreter fallback.
 
+Schema-2 projects may select an ordered list of aliased roots with repeated
+`[[project.top]]` records or repeated `--top ALIAS=TARGET` replacements. The
+application resolves the complete list transactionally before hierarchy
+construction, then elaborates every selected HDL unit or SystemC factory into
+one `ElaboratedDesign`. The root alias is the first canonical hierarchy path
+component. One root retains the legacy collapsed C API root; multiple roots
+are children of a synthetic `$root` scope. `ElaboratedDesign::top()` remains a
+source-compatible view of the first alias while `roots()` is authoritative.
+Ordered aliases and selected canonical identities participate in the overall
+design key and native-cache provenance, so reordering roots cannot reuse the
+wrong design.
+
+All roots enter one deterministic scheduler and global tick domain. Their
+initial processes, delta activity, timed events, terminal behavior, SystemC
+lifecycle, VCD identifiers, debugger scopes, callbacks, and Tcl/C API objects
+therefore share one session. Library candidate indexes, VHDL package and
+configuration declarations, SystemVerilog package declarations, and SystemC
+plug-in registries are build-global; instance signals, variables, processes,
+and native module objects remain root-local. Before process lowering, the
+elaborator specializes and allocates every SystemVerilog root's packed
+root-level signal surface. That makes language-defined top-level hierarchical
+references such as `glbl.GSR` independent of manifest order, including the
+conventional separately selected vendor global-signaling module. Descendant
+paths are deliberately not opened as an fsim-specific backdoor: a reference
+such as `glbl.child.internal` is rejected with `FSIM-ELAB-ROOT-001` and must be
+exposed through a root-level port or signal. VHDL and SystemC cross-root
+communication likewise uses their defined ports, signals, packages, or common
+kernel services rather than arbitrary foreign hierarchy shortcuts.
+
 The hierarchy is deliberately bidirectional for SystemC. An HDL instance
 path may bind to a registered SystemC factory. During its elaboration, a
 SystemC factory may mark a normally constructed child module as an HDL proxy;

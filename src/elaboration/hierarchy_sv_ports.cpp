@@ -37,7 +37,7 @@ std::optional<StringObjectId> HierarchyBuilder::add_owned_string_port(
   local.emplace(declaration.name, id);
   local.emplace(full_name, id);
   design_.string_by_name_.emplace(full_name, id);
-  if (path == design_.top_) {
+  if (design_.roots_.size() == 1 && path == active_root_) {
     design_.string_by_name_.emplace(declaration.name, id);
   }
   return id;
@@ -327,7 +327,7 @@ HierarchyBuilder::add_owned_container_port(
   local.emplace(declaration.name, id);
   local.emplace(full_name, id);
   design_.container_by_name_.emplace(full_name, id);
-  if (path == design_.top_) {
+  if (design_.roots_.size() == 1 && path == active_root_) {
     design_.container_by_name_.emplace(declaration.name, id);
   }
   return id;

@@ -9,6 +9,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <tuple>
 
 namespace {
 
@@ -114,6 +115,11 @@ libraries = ["m"]
     check(config->schema == 2, "schema is retained");
     check(config->project.name == "mixed", "project name is retained");
     check(config->project.top == "tb", "top is retained");
+    check(
+        config->project.tops
+            == std::vector<fsim::project::ProjectSection::TopLevel>{
+                {"tb", "tb"}},
+        "legacy single top is normalized into the ordered root list");
     check(config->project.seed == 42, "seed is retained");
     check(config->source_sets.size() == 2, "two source sets are retained");
     check(
@@ -156,6 +162,113 @@ libraries = ["m"]
                 (workspace / "waves" / "out.vcd").lexically_normal()),
         "trace path is resolved relative to the manifest");
   }
+  std::error_code ignored;
+  std::filesystem::remove_all(workspace, ignored);
+}
+
+void test_multiple_top_manifest_model() {
+  const auto workspace = make_workspace();
+  write_file(
+      workspace / "tops.sv",
+      "module producer; endmodule\nmodule consumer; endmodule\n");
+  const auto parse_manifest = [&](const std::string_view project_text) {
+    fsim::diagnostic::Engine diagnostics;
+    const auto config = fsim::project::parse(
+        "schema = 2\n" + std::string{project_text}
+            + "\n[[source_set]]\nlanguage = \"systemverilog\"\n"
+              "files = [\"tops.sv\"]\n",
+        (workspace / "fsim.toml").generic_string(),
+        workspace,
+        diagnostics);
+    return std::pair{std::move(config), std::move(diagnostics)};
+  };
+
+  auto [multiple, multiple_diagnostics] = parse_manifest(R"toml(
+[project]
+name = "multiple"
+
+[[project.top]]
+target = "sv:work.producer"
+alias = "source"
+
+[[project.top]]
+target = "consumer"
+alias = "sink"
+)toml");
+  check(multiple.has_value(), "ordered multiple top records parse");
+  check(
+      !multiple_diagnostics.has_error(),
+      "ordered multiple top records have no diagnostics");
+  if (multiple.has_value()) {
+    check(
+        multiple->project.top.empty(),
+        "the legacy singular top remains empty for multiple roots");
+    check(
+        multiple->project.tops
+            == std::vector<fsim::project::ProjectSection::TopLevel>{
+                {"sv:work.producer", "source"},
+                {"consumer", "sink"}},
+        "multiple roots retain target and alias order");
+  }
+
+  auto [single, single_diagnostics] = parse_manifest(R"toml(
+[project]
+
+[[project.top]]
+target = "sv:work.producer"
+)toml");
+  check(single.has_value(), "a single top record may infer its alias");
+  check(!single_diagnostics.has_error(), "single inferred alias is valid");
+  if (single.has_value()) {
+    check(
+        single->project.top == "sv:work.producer"
+            && single->project.tops.front().alias == "producer",
+        "single top record populates the legacy view and inferred alias");
+  }
+
+  for (const auto& [name, project_text, expected] : std::vector<
+           std::tuple<std::string, std::string, std::string>>{
+           {"duplicate",
+            R"toml([project]
+[[project.top]]
+target = "producer"
+alias = "root"
+[[project.top]]
+target = "consumer"
+alias = "root")toml",
+            "duplicate top alias"},
+           {"missing",
+            R"toml([project]
+[[project.top]]
+target = "producer"
+[[project.top]]
+target = "consumer"
+alias = "sink")toml",
+            "missing a non-empty 'alias'"},
+           {"unsafe",
+            R"toml([project]
+[[project.top]]
+target = "producer"
+alias = "bad.path")toml",
+            "top alias 'bad.path'"},
+           {"mixed",
+            R"toml([project]
+top = "producer"
+[[project.top]]
+target = "consumer"
+alias = "sink")toml",
+            "cannot be used together"}}) {
+    auto [rejected, diagnostics] = parse_manifest(project_text);
+    check(!rejected.has_value(), name + " top selection is rejected");
+    check(
+        std::ranges::any_of(
+            diagnostics.diagnostics(),
+            [&](const fsim::diagnostic::Diagnostic& diagnostic) {
+              return diagnostic.message.find(expected) != std::string::npos;
+            }),
+        name + " top selection has a targeted diagnostic");
+  }
+
   std::error_code ignored;
   std::filesystem::remove_all(workspace, ignored);
 }
@@ -342,6 +455,7 @@ int main() {
   // FSIM-CONFORMANCE CF-COMMON-PROJECT-001 source=SRC-FSIM expectation=accept
   // FSIM-CONFORMANCE CF-COMMON-DIAGNOSTIC-N01 source=SRC-FSIM expectation=reject
   test_complete_manifest_and_glob_order();
+  test_multiple_top_manifest_model();
   test_schema_and_unknown_key_errors();
   test_elaboration_search_library_validation();
   test_schema_migration();

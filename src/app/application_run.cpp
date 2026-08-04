@@ -7,7 +7,7 @@ namespace fsim::app::application_detail {
 std::string make_cache_key(
     const project::Config& config,
     const CheckedProject& checked,
-    const std::string_view top,
+    const std::span<const project::ProjectSection::TopLevel> tops,
     const std::string_view resolution,
     const std::string_view systemc_plugin_key,
     diagnostic::Engine& diagnostics)  {
@@ -15,7 +15,11 @@ std::string make_cache_key(
   key.add("fsim-version", version);
   key.add("runtime-abi", std::to_string(runtime_abi_version));
   key.add("target", target_name());
-  key.add("top", top);
+  key.add("root-count", std::to_string(tops.size()));
+  for (const auto& top : tops) {
+    key.add("root-alias", top.alias);
+    key.add("root-target", top.target);
+  }
   key.add("time-resolution", resolution);
   key.add("delay-mode", project::to_string(config.run.delay_mode));
   key.add("optimization", project::to_string(config.build.optimization));
@@ -672,7 +676,7 @@ int handle_build(
   if (!built) {
     return 1;
   }
-  const auto top = built->design_ir.top();
+  const auto roots = built->design_ir.roots();
   const auto signal_count = static_cast<std::size_t>(std::ranges::count_if(
       built->design_ir.objects(), [](const auto& object) {
         return object.kind == semantic::design::ObjectKind::signal
@@ -689,7 +693,14 @@ int handle_build(
       SimulationEngine::compiled);
   report_native_cache_failures(prepared, diagnostics);
   const auto native_cache = prepared.native_cache_statistics();
-  output << "built " << top << " ("
+  output << "built ";
+  for (std::size_t index = 0; index < roots.size(); ++index) {
+    if (index != 0) {
+      output << ", ";
+    }
+    output << roots[index];
+  }
+  output << " ("
          << signal_count << " signals, "
          << process_count << " processes";
   if (plugin_count != 0) {

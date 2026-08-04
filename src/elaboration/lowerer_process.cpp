@@ -67,6 +67,40 @@ Lowerer::Lowerer(
           procedures_(procedures),
           diagnostics_(diagnostics) {}
 
+bool Lowerer::report_unsupported_cross_root_reference(
+    const std::string_view name,
+    const frontend::SourceSpan span) {
+  auto normalized = name;
+  constexpr std::string_view root_prefix{"$root."};
+  if (normalized.starts_with(root_prefix)) {
+    normalized.remove_prefix(root_prefix.size());
+  }
+  const auto hierarchy_separator = hierarchy_.find('.');
+  const auto owning_root = std::string_view{hierarchy_}.substr(
+      0, hierarchy_separator);
+  for (const auto& root : design_.roots()) {
+    if (root == owning_root
+        || !normalized.starts_with(root + ".")) {
+      continue;
+    }
+    report(
+        "FSIM-ELAB-ROOT-001",
+        language_ == frontend::Language::SystemVerilog2017
+            ? "unsupported cross-root hierarchical shortcut '"
+                + std::string{name}
+                + "'; multiple roots expose root-level packed signals "
+                  "through SystemVerilog top-level hierarchical names, "
+                  "while descendant state must be connected through a "
+                  "root-level port or signal"
+            : "cross-root reference '" + std::string{name}
+                + "' is not a language-defined global mechanism for this "
+                  "source language",
+        span);
+    return true;
+  }
+  return false;
+}
+
     Process Lowerer::lower_process(
         const frontend::Process& source,
         const frontend::Language language,

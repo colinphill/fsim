@@ -104,6 +104,7 @@ class DesignIrBuilder final {
 
   [[nodiscard]] di::DesignIr build() {
     result_.mutable_top() = elaborated_.top();
+    result_.mutable_roots() = elaborated_.roots();
     add_hdl_specializations();
     add_systemc_specializations();
     link_instance_parents();
@@ -1274,7 +1275,8 @@ bool valid_runtime_projection(
     const elaboration::ElaboratedDesign& runtime) noexcept {
   using ObjectKind = semantic::design::ObjectKind;
   using BoundaryKind = semantic::design::BoundaryKind;
-  if (!design.valid() || design.top() != runtime.top()) {
+  if (!design.valid() || design.top() != runtime.top()
+      || design.roots() != runtime.roots()) {
     return false;
   }
   const auto hdl_specialization_count = static_cast<std::size_t>(

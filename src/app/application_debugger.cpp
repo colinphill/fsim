@@ -140,7 +140,9 @@ DebuggerSession::DebuggerSession(
             == execution_scope_paths_.end()) {
           execution_scope_paths_.push_back(candidate);
         }
-        if (candidate == simulation.design_ir().top()) {
+        if (std::ranges::find(
+                simulation.design_ir().roots(), candidate)
+            != simulation.design_ir().roots().end()) {
           break;
         }
         const auto separator = candidate.rfind('.');
@@ -389,7 +391,8 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
   }
 
 [[nodiscard]] bool DebuggerSession::canonical_path(const std::string_view path) const  {
-    if (path == simulation_.design_ir().top()) {
+    if (std::ranges::find(simulation_.design_ir().roots(), path)
+        != simulation_.design_ir().roots().end()) {
       return true;
     }
     const auto prefix = std::string(path) + ".";
@@ -411,7 +414,17 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
     const std::string_view name) const {
   std::vector<std::string> paths;
   auto scope = scope_;
-  const auto& top = simulation_.design_ir().top();
+  const auto root = std::ranges::find_if(
+      simulation_.design_ir().roots(),
+      [&](const auto& candidate) {
+        return scope == candidate
+            || (scope.size() > candidate.size()
+                && scope.starts_with(candidate)
+                && scope[candidate.size()] == '.');
+      });
+  const auto& top = root == simulation_.design_ir().roots().end()
+      ? simulation_.design_ir().top()
+      : *root;
   while (true) {
     paths.push_back(scope + "." + std::string{name});
     if (scope == top) {
@@ -438,7 +451,8 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
       return simulation_.design_ir().top();
     }
     if (requested == "..") {
-      if (scope_ == simulation_.design_ir().top()) {
+      if (std::ranges::find(simulation_.design_ir().roots(), scope_)
+          != simulation_.design_ir().roots().end()) {
         return scope_;
       }
       const auto separator = scope_.rfind('.');
@@ -447,11 +461,15 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
           : scope_.substr(0, separator);
     }
     std::string candidate;
-    const auto top = std::string_view{simulation_.design_ir().top()};
-    if (requested == top
-        || (requested.size() > top.size()
-            && requested.starts_with(top)
-            && requested[top.size()] == '.')) {
+    const auto absolute_root = std::ranges::find_if(
+        simulation_.design_ir().roots(),
+        [&](const auto& root) {
+          return requested == root
+              || (requested.size() > root.size()
+                  && requested.starts_with(root)
+                  && requested[root.size()] == '.');
+        });
+    if (absolute_root != simulation_.design_ir().roots().end()) {
       candidate = requested;
     } else {
       candidate = scope_ + "." + std::string(requested);
@@ -473,9 +491,13 @@ DebuggerSession::resolve_signal(const std::string_view name)  {
       const auto found = std::find_if(
           signal_paths_.begin(), signal_paths_.end(),
           [&](const auto& entry) {
-                return entry.second == *signal
-                    && entry.first.starts_with(
-                    std::string{simulation_.design_ir().top()} + ".");
+            return entry.second == *signal
+                && std::ranges::any_of(
+                    simulation_.design_ir().roots(),
+                    [&](const auto& root) {
+                      return entry.first == root
+                          || entry.first.starts_with(root + ".");
+                    });
           });
       return std::pair{
           found == signal_paths_.end() ? std::string{name} : found->first,
@@ -1297,7 +1319,14 @@ int handle_debug(
   install_interrupt_hook(simulation);
   const InterruptSignalGuard interrupt_signal;
   simulation.start();
-  output << "fsim debugger: " << simulation.design_ir().top();
+  output << "fsim debugger: ";
+  for (std::size_t index = 0;
+       index < simulation.design_ir().roots().size(); ++index) {
+    if (index != 0) {
+      output << ", ";
+    }
+    output << simulation.design_ir().roots()[index];
+  }
   if (simulation.compiled_process_count() == 0) {
     output << " (reference evaluator)\n";
   } else {

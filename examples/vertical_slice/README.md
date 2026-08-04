@@ -46,6 +46,19 @@ tb.child_y   = 11111110
 The VCD therefore shows counter value `1` and child value `FE`. No resolver is
 required because each boundary signal has one driver.
 
+To exercise the v2 multiple-root selection contract without changing the
+committed manifest, replace its single top on the command line. Every repeated
+top needs a unique alias:
+
+```sh
+build/dev/fsim check -p examples/vertical_slice/fsim.toml \
+  --top left=sv:work.tb --top right=sv:work.tb
+```
+
+Both copies are resolved before either hierarchy is constructed. A run would
+place them in one scheduler and expose their objects beneath `left.*` and
+`right.*`; the first `$finish` remains terminal for that shared simulation.
+
 This example deliberately uses equal-width, descending packed vectors and
 whole-signal connections. Parameters/generics, expression actuals, arbitrary
 vector-direction conversion, multi-driver resolution, and SystemC factory

@@ -532,36 +532,96 @@ std::string unit_key(const frontend::DesignUnit& unit)  {
   return {};
 }
 
-std::string selected_top(
+std::vector<project::ProjectSection::TopLevel> selected_tops(
     const project::Config& config,
     const frontend::ParsedDesign& parsed,
     diagnostic::Engine& diagnostics)  {
-  if (!config.project.top.empty()) {
-    return config.project.top;
+  const auto default_alias = [](const std::string_view target) {
+    auto spelling = target;
+    if (const auto colon = spelling.find(':');
+        colon != std::string_view::npos) {
+      spelling.remove_prefix(colon + 1);
+    }
+    if (const auto dot = spelling.rfind('.');
+        dot != std::string_view::npos) {
+      spelling.remove_prefix(dot + 1);
+    }
+    if (const auto architecture = spelling.find('(');
+        architecture != std::string_view::npos) {
+      spelling = spelling.substr(0, architecture);
+    }
+    return std::string{spelling};
+  };
+  std::vector<project::ProjectSection::TopLevel> selected;
+  if (!config.project.tops.empty()
+      && (config.project.top.empty()
+          || config.project.tops.size() != 1
+          || config.project.tops.front().target == config.project.top)) {
+    selected = config.project.tops;
+  } else if (!config.project.top.empty()) {
+    selected.push_back(
+        {config.project.top, default_alias(config.project.top)});
   }
-  std::vector<std::string> candidates;
-  for (const auto& unit : parsed.units) {
-    if (unit.kind == frontend::UnitKind::VerilogModule) {
-      candidates.push_back(
-          "sv:" + unit.library + "." + unit.name);
-    } else if (unit.kind == frontend::UnitKind::VhdlArchitecture) {
-      candidates.push_back(
-          "vhdl:" + unit.library + "." + unit.primary_name
-          + "(" + unit.name + ")");
+  if (selected.empty()) {
+    std::vector<std::string> candidates;
+    for (const auto& unit : parsed.units) {
+      if (unit.kind == frontend::UnitKind::VerilogModule) {
+        candidates.push_back(
+            "sv:" + unit.library + "." + unit.name);
+      } else if (unit.kind == frontend::UnitKind::VhdlArchitecture) {
+        candidates.push_back(
+            "vhdl:" + unit.library + "." + unit.primary_name
+            + "(" + unit.name + ")");
+      }
+    }
+    std::sort(candidates.begin(), candidates.end());
+    candidates.erase(std::unique(candidates.begin(), candidates.end()),
+                     candidates.end());
+    if (candidates.size() != 1) {
+      diagnostics.error(
+          "FSIM-ELAB-0001",
+          candidates.empty()
+              ? "the project has no executable HDL design unit"
+              : "the project has multiple possible tops; set project.top, "
+                "[[project.top]], or --top");
+      return {};
+    }
+    selected.push_back(
+        {candidates.front(), default_alias(candidates.front())});
+  }
+  std::unordered_set<std::string> aliases;
+  for (auto& top : selected) {
+    if (top.alias.empty() && selected.size() == 1) {
+      top.alias = default_alias(top.target);
+    }
+    if (top.target.empty() || top.alias.empty()) {
+      diagnostics.error(
+          "FSIM-ELAB-0002",
+          "every selected design top requires a non-empty target and alias");
+      continue;
+    }
+    const bool valid_alias =
+        (std::isalpha(static_cast<unsigned char>(top.alias.front())) != 0
+         || top.alias.front() == '_')
+        && std::ranges::all_of(
+            top.alias,
+            [](const unsigned char character) {
+              return std::isalnum(character) != 0 || character == '_';
+            });
+    if (!valid_alias) {
+      diagnostics.error(
+          "FSIM-ELAB-0002",
+          "top alias '" + top.alias
+              + "' is not a portable hierarchy identifier");
+    } else if (!aliases.insert(top.alias).second) {
+      diagnostics.error(
+          "FSIM-ELAB-0002",
+          "duplicate top alias '" + top.alias + "'");
     }
   }
-  std::sort(candidates.begin(), candidates.end());
-  candidates.erase(std::unique(candidates.begin(), candidates.end()),
-                   candidates.end());
-  if (candidates.size() != 1) {
-    diagnostics.error(
-        "FSIM-ELAB-0001",
-        candidates.empty()
-            ? "the project has no executable HDL design unit"
-            : "the project has multiple possible tops; set project.top or --top");
-    return {};
-  }
-  return candidates.front();
+  return diagnostics.has_error()
+      ? std::vector<project::ProjectSection::TopLevel>{}
+      : selected;
 }
 
 std::optional<BindingTarget> parse_binding_target(std::string_view target)  {
@@ -770,7 +830,7 @@ elaboration::SystemCInstanceDescription systemc_description(
 
 std::optional<std::vector<elaboration::SystemCInstanceDescription>>
 construct_systemc_instances(
-    const std::string_view top,
+    const std::span<const project::ProjectSection::TopLevel> tops,
     const std::span<const SystemCLibraryRegistry> registries,
     diagnostic::Engine& diagnostics)  {
   struct Request {
@@ -779,25 +839,15 @@ construct_systemc_instances(
     BindingTarget parsed;
   };
   std::vector<Request> requests;
-  if (const auto parsed = parse_binding_target(top);
-      parsed && parsed->language == "systemc") {
-    requests.push_back({parsed->unit, std::string{top}, *parsed});
+  for (const auto& top : tops) {
+    if (const auto parsed = parse_binding_target(top.target);
+        parsed && parsed->language == "systemc") {
+      requests.push_back({top.alias, top.target, *parsed});
+    }
   }
   // HDL-bound SystemC instances are constructed on demand by the common
   // hierarchy walk after their source-language actuals are canonicalized.
   // Only a selected SystemC top has no HDL parent and is eager here.
-  std::sort(
-      requests.begin(), requests.end(),
-      [](const Request& left, const Request& right) {
-        const auto left_depth =
-            std::count(left.path.begin(), left.path.end(), '.');
-        const auto right_depth =
-            std::count(right.path.begin(), right.path.end(), '.');
-        return left_depth != right_depth
-            ? left_depth < right_depth
-            : left.path < right.path;
-      });
-
   std::vector<Request> unique;
   for (auto& request : requests) {
     if (request.parsed.qualifier.empty()) {

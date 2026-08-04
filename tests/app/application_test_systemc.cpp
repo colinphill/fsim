@@ -572,6 +572,70 @@ assert(
     && natural_lifecycle_result.time == 0
     && natural_lifecycle_simulation.finished());
 
+auto multiple_systemc_config = natural_lifecycle_config;
+multiple_systemc_config.project.top.clear();
+multiple_systemc_config.project.tops = {
+    {"lifecycle_module", "native_left"},
+    {"lifecycle_module", "native_right"}};
+multiple_systemc_config.build.cache_path =
+    directory / "multiple-systemc-root-cache";
+fsim::diagnostic::Engine multiple_systemc_diagnostics;
+auto multiple_systemc_project = fsim::app::build_project(
+    multiple_systemc_config, multiple_systemc_diagnostics);
+assert(multiple_systemc_project);
+assert(multiple_systemc_project->systemc_roots.size() == 2);
+assert((
+    multiple_systemc_project->design.roots()
+    == std::vector<std::string>{"native_left", "native_right"}));
+assert(multiple_systemc_project->design.systemc_instances().size() == 4);
+assert(std::ranges::any_of(
+    multiple_systemc_project->design.systemc_instances(),
+    [](const auto& instance) {
+      return instance.instance == "native_left.leaf";
+    }));
+assert(std::ranges::any_of(
+    multiple_systemc_project->design.systemc_instances(),
+    [](const auto& instance) {
+      return instance.instance == "native_right.leaf";
+    }));
+fsim::app::Simulation multiple_systemc_simulation{
+    std::move(*multiple_systemc_project),
+    multiple_systemc_config.run.max_deltas,
+    fsim::app::SimulationEngine::interpreter};
+const auto multiple_systemc_result = multiple_systemc_simulation.run();
+assert(
+    multiple_systemc_result.status
+        == fsim::runtime::RunStatus::completed
+    && multiple_systemc_result.time == 0
+    && multiple_systemc_simulation.finished());
+
+auto mixed_root_config = natural_lifecycle_config;
+mixed_root_config.project.top.clear();
+mixed_root_config.project.tops = {
+    {"sv:work.systemc_hdl_child", "hdl_root"},
+    {"lifecycle_module", "native_root"}};
+mixed_root_config.build.cache_path =
+    directory / "mixed-hdl-systemc-root-cache";
+fsim::diagnostic::Engine mixed_root_diagnostics;
+auto mixed_root_project = fsim::app::build_project(
+    mixed_root_config, mixed_root_diagnostics);
+if (!mixed_root_project) {
+  fsim::diagnostic::print_text(std::cerr, mixed_root_diagnostics);
+}
+assert(mixed_root_project);
+assert(mixed_root_project->design.specializations().size() == 1);
+assert(mixed_root_project->design.systemc_instances().size() == 2);
+assert(mixed_root_project->systemc_roots.size() == 1);
+fsim::app::Simulation mixed_root_simulation{
+    std::move(*mixed_root_project),
+    mixed_root_config.run.max_deltas,
+    fsim::app::SimulationEngine::compiled};
+const auto mixed_root_result = mixed_root_simulation.run();
+assert(
+    mixed_root_result.status
+        == fsim::runtime::RunStatus::completed
+    && mixed_root_simulation.finished());
+
 const auto exercise_native_binding =
     [&](const std::string& top,
         const std::string& instance_path,

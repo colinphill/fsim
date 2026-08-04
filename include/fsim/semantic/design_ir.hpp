@@ -222,6 +222,7 @@ struct Boundary {
 class DesignIr final {
 public:
     [[nodiscard]] const std::string& top() const noexcept;
+    [[nodiscard]] const std::vector<std::string>& roots() const noexcept;
     [[nodiscard]] const std::vector<Specialization>&
     specializations() const noexcept;
     [[nodiscard]] const std::vector<InstanceOccurrence>&
@@ -240,6 +241,7 @@ public:
     [[nodiscard]] const std::vector<Boundary>& boundaries() const noexcept;
 
     std::string& mutable_top() noexcept;
+    std::vector<std::string>& mutable_roots() noexcept;
     std::vector<Specialization>& mutable_specializations() noexcept;
     std::vector<InstanceOccurrence>& mutable_instances() noexcept;
     std::vector<Object>& mutable_objects() noexcept;
@@ -258,6 +260,7 @@ public:
 
 private:
     std::string top_;
+    std::vector<std::string> roots_;
     std::vector<Specialization> specializations_;
     std::vector<InstanceOccurrence> instances_;
     std::vector<Object> objects_;

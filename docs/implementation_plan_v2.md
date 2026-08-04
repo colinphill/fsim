@@ -111,63 +111,66 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     once, without a sanitizer run or CI monitoring because Batch 134 is not a
     scheduled CI boundary.
 
-## Batch 135 - multiple top-level roots - Planned
+## Batch 135 - multiple top-level roots - Complete
 
-1. **Planned.** Establish this exact 20-change Batch 135 plan and restart
+1. **Complete.** Establish this exact 20-change Batch 135 plan and restart
    status before implementation begins.
-2. **Planned.** Replace the singular project top setting with an ordered list
+2. **Complete.** Replace the singular project top setting with an ordered list
    of top specifications while migrating existing schema-2 manifests.
-3. **Planned.** Add stable user-selected aliases for top roots and reject
+3. **Complete.** Add stable user-selected aliases for top roots and reject
    empty, duplicate, or hierarchy-unsafe aliases.
-4. **Planned.** Add repeatable CLI top specifications with explicit aliases,
+4. **Complete.** Add repeatable CLI top specifications with explicit aliases,
    preserving the manifest list unless the command line supplies replacements.
-5. **Planned.** Extend the public build and elaboration APIs with immutable
+5. **Complete.** Extend the public build and elaboration APIs with immutable
    ordered root requests while retaining source compatibility for one root.
-6. **Planned.** Resolve every root independently through the Batch 133/134
+6. **Complete.** Resolve every root independently through the Batch 133/134
    language and library resolver contracts.
-7. **Planned.** Diagnose missing, ambiguous, or duplicate root selections
+7. **Complete.** Diagnose missing, ambiguous, or duplicate root selections
    transactionally before constructing any hierarchy.
-8. **Planned.** Elaborate all roots into one design with alias-prefixed
+8. **Complete.** Elaborate all roots into one design with alias-prefixed
    hierarchy paths and no implicit connectivity between roots.
-9. **Planned.** Share one scheduler and simulation time domain across all HDL
+9. **Complete.** Share one scheduler and simulation time domain across all HDL
    and SystemC roots.
-10. **Planned.** Share language library, package, configuration, and global
+10. **Complete.** Share language library, package, configuration, and global
     signaling state across roots while preserving per-instance local state.
-11. **Planned.** Make initialization, delta cycles, time advancement, and
+11. **Complete.** Make initialization, delta cycles, time advancement, and
     shutdown deterministic across the ordered root list.
-12. **Planned.** Admit cross-root references only through language-defined
+12. **Complete.** Admit cross-root references only through language-defined
     global mechanisms and diagnose unsupported hierarchical shortcuts.
-13. **Planned.** Merge all roots into one trace namespace rooted at their
+13. **Complete.** Merge all roots into one trace namespace rooted at their
     aliases, with deterministic VCD name and identifier allocation.
-14. **Planned.** Expose every root in one debugger session with unambiguous
+14. **Complete.** Expose every root in one debugger session with unambiguous
     aliased paths, breakpoints, stepping, inspection, and callbacks.
-15. **Planned.** Execute multiple SystemC roots and mixed HDL/SystemC roots in
+15. **Complete.** Execute multiple SystemC roots and mixed HDL/SystemC roots in
     one kernel without duplicate lifecycle callbacks or plug-in initialization.
-16. **Planned.** Include the ordered aliased root set and each selected
+16. **Complete.** Include the ordered aliased root set and each selected
     canonical identity in elaboration, specialization, and native-cache
     provenance.
-17. **Planned.** Preserve single-root output, diagnostics, cache behavior, and
+17. **Complete.** Preserve single-root output, diagnostics, cache behavior, and
     C/C++ API compatibility as the degenerate multiple-root case.
-18. **Planned.** Add positive execution coverage for HDL-only, SystemC-only,
+18. **Complete.** Add positive execution coverage for HDL-only, SystemC-only,
     mixed-language, global-signaling, trace, debugger, callback, and cache
     scenarios under the interpreter and LLVM O0/O2.
-19. **Planned.** Add negative and migration coverage for aliases, duplicate
+19. **Complete.** Add negative and migration coverage for aliases, duplicate
     roots, partial resolution failure, unsupported references, and old
     single-top manifests, and update public documentation and examples.
-20. **Planned.** Update public/release records, run exact-LLVM Debug and Release
+20. **Complete.** Update public/release records, run exact-LLVM Debug and Release
     plus source/catalog/inventory/release gates, then commit and push once.
-    Batch 135 is not a CI boundary and runs no sanitizer gate.
+    Exact-LLVM Debug passed 106/106 tests in 284.56 seconds and Release passed
+    106/106 in 243.62 seconds. The catalog covers 1,635 diagnostics, the source
+    gate covers 437 authored C/C++ files, and the composed release-candidate
+    gate passes with 521 SPDX-owned artifacts and 190 test/control files.
+    Batch 135 is not a CI boundary and ran no sanitizer or CI-monitoring gate.
 
 ## Forward priority order
 
-1. Batch 135: multiple aliased top-level roots in one simulation.
-2. Read-only out-of-tree `.fsimlib` directory mappings.
-3. Explicit non-project compile, elaborate, and simulate artifact phases.
-4. Separate incremental SystemC compilation and linking.
-5. Complete VHDL-2008/VITAL, Verilog-2005, SystemVerilog-2017 classes/UVM,
+1. Read-only out-of-tree `.fsimlib` directory mappings.
+2. Explicit non-project compile, elaborate, and simulate artifact phases.
+3. Separate incremental SystemC compilation and linking.
+4. Complete VHDL-2008/VITAL, Verilog-2005, SystemVerilog-2017 classes/UVM,
    VPI, DPI, and VHPI.
-6. Older VHDL, Verilog, and SystemVerilog standard modes.
-7. Full SDF annotation with 2.1/3.0 compatibility and VITAL integration.
-8. FST tracing for every value exposed through the trace model.
-9. Cross-platform artifact, migration, conformance, debugger, trace, and
+5. Older VHDL, Verilog, and SystemVerilog standard modes.
+6. Full SDF annotation with 2.1/3.0 compatibility and VITAL integration.
+7. FST tracing for every value exposed through the trace model.
+8. Cross-platform artifact, migration, conformance, debugger, trace, and
     documentation closure before declaring v2.0.

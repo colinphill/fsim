@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "hierarchy_builder_types.hpp"
+
 #include "fsim/elaboration/elaborator.hpp"
 #include "elaboration_targets.hpp"
 
@@ -1372,6 +1374,9 @@ private:
         std::size_t width,
         bool sign_extend);
     void report(std::string code, std::string message, frontend::SourceSpan span);
+    [[nodiscard]] bool report_unsupported_cross_root_reference(
+        std::string_view name,
+        frontend::SourceSpan span);
     ElaboratedDesign& design_;
     const std::unordered_map<std::string, SignalId>& signals_;
     const std::unordered_set<SignalId>& read_only_signals_;
@@ -1530,6 +1535,23 @@ public:
 
     void build(const SystemCInstanceDescription& root);
 
+    void add_root(const DesignUnit& root, std::string path);
+
+    void add_root(
+        const SystemCInstanceDescription& root,
+        std::string path);
+
+    /// Predeclare the packed signal surface of an HDL root before any root
+    /// process is lowered. SystemVerilog permits a top-level instance name in
+    /// a hierarchical reference (the conventional vendor `glbl` module is
+    /// the motivating case), so all root surfaces must exist independently
+    /// of manifest order.
+    void predeclare_root_globals(
+        const DesignUnit& root,
+        std::string path);
+
+    void finalize();
+
 private:
     using SignalMap = std::unordered_map<std::string, SignalId>;
     using StringMap =
@@ -1538,34 +1560,9 @@ private:
         std::unordered_map<std::string, ContainerObjectId>;
     using ObjectMap = std::unordered_map<std::uint64_t, SignalId>;
 
-    struct PortAliases {
-        SignalMap signals;
-        StringMap strings;
-        ContainerMap containers;
-        std::vector<frontend::Statement> vhdl_input_drivers;
-        std::unordered_set<SignalId> read_only_signals;
-        std::unordered_set<StringObjectId> read_only_strings;
-    };
-
-    struct ContainerBoundaryDriver {
-        std::string path;
-        std::optional<std::pair<std::int32_t, std::int32_t>>
-            selected_interval;
-    };
-
-    struct ConfiguredVhdlInstance {
-        frontend::Instance instance;
-        std::optional<DesignUnit> target;
-        std::optional<std::string> systemc_target;
-        const frontend::VhdlComponentConfiguration*
-            configuration_rule{};
-        const DesignUnit* referenced_configuration{};
-        std::string component_name;
-        std::string component_identity;
-        std::string configuration_identity;
-        bool applied{};
-        bool valid{true};
-    };
+    using PortAliases = HierarchyPortAliases;
+    using ContainerBoundaryDriver = HierarchyContainerBoundaryDriver;
+    using ConfiguredVhdlInstance = HierarchyConfiguredVhdlInstance;
 
     static std::vector<std::string> selected_name_parts(
         const std::string_view name);
@@ -1964,6 +1961,12 @@ private:
     const std::vector<SystemCFactoryCandidate> systemc_candidates_;
     const std::vector<std::string> systemc_libraries_;
     const std::vector<std::string> search_libraries_;
+    std::string active_root_;
+    SignalMap global_root_signals_;
+    std::unordered_map<std::string, SignalMap>
+        predeclared_root_signals_;
+    std::unordered_map<std::string, SpecializedUnit>
+        prepared_systemverilog_roots_;
     std::unordered_set<std::string> used_systemc_instances_;
     std::unordered_set<std::string> instance_paths_;
     // Interface instances are registered by canonical hierarchy path after

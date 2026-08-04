@@ -282,7 +282,9 @@ fsim_object_t debug_systemc_object_handle(
   if (design_object != nullptr
       && design_object->kind
           == fsim::semantic::design::ObjectKind::systemc_module) {
-    if (design_object->path == session.simulation->design_ir().top()) {
+    const auto& design = session.simulation->design_ir();
+    if (!has_synthetic_root(design)
+        && is_design_root(design, design_object->path)) {
       return root_handle(session);
     }
     if (object < session.systemc_scope_by_object.size()
@@ -649,12 +651,13 @@ bool rebuild_debug_objects(Session& session) {
       });
   for (const auto index : systemc_scopes) {
     const auto& object = *design_systemc_object(session, index);
-    if (object.path == design.top()) {
+    if (!has_synthetic_root(design)
+        && is_design_root(design, object.path)) {
       continue;
     }
     const auto separator = object.path.rfind('.');
     const auto parent_path = separator == std::string::npos
-        ? std::string_view{design.top()}
+        ? std::string_view{}
         : std::string_view{object.path}.substr(0, separator);
     const auto parent_scope = owning_design_scope(session, parent_path);
     const auto source = design_source(session, object.source);
@@ -679,14 +682,26 @@ bool rebuild_debug_objects(Session& session) {
     const auto& specialization =
         design.specializations()[instance.specialization.value()];
     if (specialization.language == fsim::semantic::Language::systemc
-        || instance.path == design.top()) {
+        || (!has_synthetic_root(design)
+            && is_design_root(design, instance.path))) {
       continue;
     }
 
+    const auto owning_root = std::ranges::find_if(
+        design.roots(),
+        [&](const auto& root) {
+          return instance.path == root
+              || (instance.path.size() > root.size()
+                  && instance.path.starts_with(root)
+                  && instance.path[root.size()] == '.');
+        });
     const auto parent_path = instance.parent
         ? std::string_view{
               design.instances()[instance.parent->value()].path}
-        : std::string_view{design.top()};
+        : owning_root != design.roots().end()
+                  && instance.path != *owning_root
+            ? std::string_view{*owning_root}
+            : std::string_view{};
     auto parent_scope = owning_design_scope(session, instance.path);
     const auto relative = instance.path.size() > parent_path.size()
             && instance.path[parent_path.size()] == '.'

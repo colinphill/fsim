@@ -13,6 +13,7 @@ Process Lowerer::lower_concurrent(
     const std::size_t order) {
   process_ = Process{};
   language_ = language;
+  hierarchy_ = name;
   process_kind_ = ProcessKind::VhdlProcess;
   next_register_ = 0;
   next_string_register_ = 0;

@@ -1153,10 +1153,13 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 return destination;
             }
             {
-                report(
-                    "FSIM-ELAB-040",
-                    "unknown identifier '" + expression.text + "'",
-                    expression.span);
+                if (!report_unsupported_cross_root_reference(
+                        expression.text, expression.span)) {
+                    report(
+                        "FSIM-ELAB-040",
+                        "unknown identifier '" + expression.text + "'",
+                        expression.span);
+                }
                 return std::nullopt;
             }
         }

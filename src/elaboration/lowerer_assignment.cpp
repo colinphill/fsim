@@ -490,10 +490,13 @@ void Lowerer::validate_read_only_signal_writes(
         const auto local = locals_.find(target_name);
         const auto signal = signals_.find(target_name);
         if (local == locals_.end() && signal == signals_.end()) {
-            report(
-                "FSIM-ELAB-032",
-                "unknown assignment target '" + target_name + "'",
-                statement.target.span);
+            if (!report_unsupported_cross_root_reference(
+                    target_name, statement.target.span)) {
+                report(
+                    "FSIM-ELAB-032",
+                    "unknown assignment target '" + target_name + "'",
+                    statement.target.span);
+            }
             return;
         }
         const auto whole_width =

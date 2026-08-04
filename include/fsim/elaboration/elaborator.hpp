@@ -28,6 +28,14 @@ struct Binding {
     std::optional<std::string> resolver;
 };
 
+/// One independently selected simulation root. `target` follows the same
+/// qualified or inferred spelling as the legacy singular top; `alias` is the
+/// stable first hierarchy component visible to tracing and debugging.
+struct Root {
+    std::string target;
+    std::string alias;
+};
+
 struct ExternalPort {
     std::uint64_t handle{};
     std::string name;
@@ -207,6 +215,13 @@ public:
     SystemCFactoryProvider* systemc_provider,
     // The parent library is prepended and duplicates are removed at their
     // first occurrence for each lazy unqualified lookup.
+    std::span<const std::string> search_libraries);
+[[nodiscard]] ElaborationResult elaborate(
+    const frontend::ParsedDesign& parsed,
+    std::span<const Root> roots,
+    std::span<const Binding> bindings,
+    std::span<const SystemCInstanceDescription> systemc_instances,
+    SystemCFactoryProvider* systemc_provider,
     std::span<const std::string> search_libraries);
 
 struct Diagnostic {
@@ -434,6 +449,7 @@ public:
     ElaboratedDesign() = default;
 
     [[nodiscard]] const std::string& top() const noexcept;
+    [[nodiscard]] const std::vector<std::string>& roots() const noexcept;
     [[nodiscard]] const std::vector<SignalInfo>& signals() const noexcept;
     [[nodiscard]] const std::vector<BoundaryConversionInfo>&
     boundary_conversions() const noexcept;
@@ -500,8 +516,16 @@ private:
         std::span<const SystemCInstanceDescription>,
         SystemCFactoryProvider*,
         std::span<const std::string>);
+    friend ElaborationResult elaborate(
+        const frontend::ParsedDesign&,
+        std::span<const Root>,
+        std::span<const Binding>,
+        std::span<const SystemCInstanceDescription>,
+        SystemCFactoryProvider*,
+        std::span<const std::string>);
 
     std::string top_;
+    std::vector<std::string> roots_;
     std::vector<SignalInfo> signal_info_;
     std::vector<BoundaryConversionInfo> boundary_conversions_;
     std::vector<runtime::simir::Signal> signals_;

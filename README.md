@@ -589,6 +589,34 @@ transport, and optional `reject TIME inertial`. Rejection limits and waveform
 delays normalize exactly to project ticks; the runtime edits projected
 transactions independently for every packed scalar subelement.
 
+Schema 2 also accepts an ordered set of aliased simulation roots. Every root
+shares one scheduler, time domain, library/package index, trace, debugger, and
+native session, but retains its own instance-local state:
+
+```toml
+[project]
+name = "device-with-global-signals"
+time_resolution = "1ns"
+
+[[project.top]]
+target = "sv:work.device_tb"
+alias = "dut"
+
+[[project.top]]
+target = "sv:vendor.glbl"
+alias = "glbl"
+```
+
+The equivalent command-line replacement is `--top dut=device_tb --top
+glbl=vendor.glbl`. When more than one `--top` is present, every occurrence
+must have a unique portable alias. A single legacy `[project].top` or one
+unaliased `--top NAME` remains supported. SystemVerilog roots may read or drive
+another root's packed root-level signal through its ordinary top-level
+hierarchical name, such as `glbl.GSR`; deeper descendant shortcuts are
+rejected and should be surfaced through a root port or signal. Trace filters,
+debugger paths, Tcl hierarchy values, and C API lookup use the selected aliases
+as their first path component.
+
 Random facilities use deterministic per-process streams and default to project
 seed `1`. A numeric `seed`/`--seed` value reproduces a run. Explicit
 `--seed=random` selects host entropy once and prints the effective numeric seed

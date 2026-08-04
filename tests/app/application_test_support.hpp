@@ -64,6 +64,7 @@ class ApplicationTestFixture {
   void test_simulation_semantics();
   void test_specialization_and_packages();
   void test_mixed_language_and_generate();
+  void test_multiple_roots();
   void test_preprocessing_debug_and_cli();
 
  private:

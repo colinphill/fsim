@@ -291,6 +291,7 @@ struct Value {
 enum class Context {
   root,
   project,
+  top,
   source_set,
   binding,
   elaboration,
@@ -463,6 +464,12 @@ class Parser {
         binding_has_instance_.push_back(false);
         context_ = Context::binding;
         context_index_ = config_.bindings.size() - 1;
+      } else if (normalized == "project.top") {
+        config_.project.tops.emplace_back();
+        top_has_target_.push_back(false);
+        top_has_alias_.push_back(false);
+        context_ = Context::top;
+        context_index_ = config_.project.tops.size() - 1;
       } else {
         diagnostics_.error(
             std::string(kUnknownCode),
@@ -596,6 +603,8 @@ class Parser {
         return "root";
       case Context::project:
         return "project";
+      case Context::top:
+        return "project.top#" + std::to_string(context_index_);
       case Context::source_set:
         return "source_set#" + std::to_string(context_index_);
       case Context::binding:
@@ -687,6 +696,9 @@ class Parser {
       case Context::project:
         assign_project(key, value, key_span);
         break;
+      case Context::top:
+        assign_top(key, value, key_span);
+        break;
       case Context::source_set:
         assign_source_set(key, value, key_span);
         break;
@@ -757,6 +769,27 @@ class Parser {
       return;
     }
     unknown_key(key, span);
+  }
+
+  void assign_top(
+      const std::string& key,
+      const Value& value,
+      const diagnostic::SourceSpan& span) {
+    if (key != "target" && key != "alias") {
+      unknown_key(key, span);
+      return;
+    }
+    if (!require_kind(value, Value::Kind::string, key, "a string")) {
+      return;
+    }
+    auto& top = config_.project.tops[context_index_];
+    if (key == "target") {
+      top.target = value.text;
+      top_has_target_[context_index_] = true;
+    } else {
+      top.alias = value.text;
+      top_has_alias_[context_index_] = true;
+    }
   }
 
   void assign_source_set(
@@ -1001,9 +1034,61 @@ class Parser {
               "; this build supports schema 2" + migration,
           document_span);
     }
-    if (config_.project.top.empty()) {
+    if (!config_.project.top.empty() && !config_.project.tops.empty()) {
       diagnostics_.error(
-          std::string(kRequiredCode), "[project].top must name the design top", document_span);
+          std::string(kDuplicateCode),
+          "[project].top and [[project.top]] cannot be used together",
+          document_span);
+    }
+    if (config_.project.top.empty() && config_.project.tops.empty()) {
+      diagnostics_.error(
+          std::string(kRequiredCode),
+          "[project].top or [[project.top]] must name at least one design top",
+          document_span);
+    }
+    if (!config_.project.top.empty() && config_.project.tops.empty()) {
+      config_.project.tops.push_back(
+          {config_.project.top, default_top_alias(config_.project.top)});
+    } else if (config_.project.top.empty()
+               && !config_.project.tops.empty()) {
+      std::unordered_set<std::string> aliases;
+      for (std::size_t index = 0; index < config_.project.tops.size(); ++index) {
+        auto& top = config_.project.tops[index];
+        if (!top_has_target_[index] || top.target.empty()) {
+          diagnostics_.error(
+              std::string(kRequiredCode),
+              "[[project.top]] #" + std::to_string(index + 1)
+                  + " is missing a non-empty 'target'",
+              document_span);
+        }
+        if (!top_has_alias_[index] || top.alias.empty()) {
+          if (config_.project.tops.size() == 1 && !top.target.empty()) {
+            top.alias = default_top_alias(top.target);
+          } else {
+            diagnostics_.error(
+                std::string(kRequiredCode),
+                "[[project.top]] #" + std::to_string(index + 1)
+                    + " is missing a non-empty 'alias'",
+                document_span);
+          }
+        }
+        if (!top.alias.empty() && !valid_top_alias(top.alias)) {
+          diagnostics_.error(
+              std::string(kValueCode),
+              "top alias '" + top.alias
+                  + "' must start with a letter or underscore and contain "
+                    "only letters, digits, and underscores",
+              document_span);
+        } else if (!top.alias.empty() && !aliases.insert(top.alias).second) {
+          diagnostics_.error(
+              std::string(kDuplicateCode),
+              "duplicate top alias '" + top.alias + "'",
+              document_span);
+        }
+      }
+      if (config_.project.tops.size() == 1) {
+        config_.project.top = config_.project.tops.front().target;
+      }
     }
     if (config_.project.name.empty()) {
       config_.project.name = fsim::support::path_to_utf8(
@@ -1144,6 +1229,36 @@ class Parser {
            target.starts_with("systemc:");
   }
 
+  static std::string default_top_alias(const std::string_view target) {
+    auto spelling = target;
+    if (const auto colon = spelling.find(':');
+        colon != std::string_view::npos) {
+      spelling.remove_prefix(colon + 1);
+    }
+    if (const auto dot = spelling.rfind('.');
+        dot != std::string_view::npos) {
+      spelling.remove_prefix(dot + 1);
+    }
+    if (const auto architecture = spelling.find('(');
+        architecture != std::string_view::npos) {
+      spelling = spelling.substr(0, architecture);
+    }
+    return std::string{spelling};
+  }
+
+  static bool valid_top_alias(const std::string_view alias_name) {
+    if (alias_name.empty()
+        || (std::isalpha(static_cast<unsigned char>(alias_name.front())) == 0
+            && alias_name.front() != '_')) {
+      return false;
+    }
+    return std::ranges::all_of(
+        alias_name,
+        [](const unsigned char character) {
+          return std::isalnum(character) != 0 || character == '_';
+        });
+  }
+
   void validate_standard(
       const SourceSet& source_set,
       const std::size_t index,
@@ -1188,6 +1303,8 @@ class Parser {
   std::vector<bool> source_has_language_;
   std::vector<bool> source_has_files_;
   std::vector<bool> binding_has_instance_;
+  std::vector<bool> top_has_target_;
+  std::vector<bool> top_has_alias_;
 };
 
 std::filesystem::path absolute_normalized(

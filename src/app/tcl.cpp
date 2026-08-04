@@ -742,6 +742,16 @@ int project_command(
       result,
       "top",
       string_object(context.config.project.top));
+  Tcl_Obj* tops = Tcl_NewListObj(0, nullptr);
+  for (const auto& top : context.config.project.tops) {
+    Tcl_Obj* entry = Tcl_NewDictObj();
+    dict_put(interpreter, entry, "alias", string_object(top.alias));
+    dict_put(interpreter, entry, "target", string_object(top.target));
+    if (Tcl_ListObjAppendElement(interpreter, tops, entry) != TCL_OK) {
+      return TCL_ERROR;
+    }
+  }
+  dict_put(interpreter, result, "tops", tops);
   dict_put(
       interpreter,
       result,
@@ -812,6 +822,14 @@ int build_command(
       result,
       "top",
       string_object(context.built->design_ir.top()));
+  Tcl_Obj* roots = Tcl_NewListObj(0, nullptr);
+  for (const auto& root : context.built->design_ir.roots()) {
+    if (Tcl_ListObjAppendElement(
+            interpreter, roots, string_object(root)) != TCL_OK) {
+      return TCL_ERROR;
+    }
+  }
+  dict_put(interpreter, result, "roots", roots);
   dict_put(
       interpreter,
       result,

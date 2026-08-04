@@ -893,6 +893,35 @@ assert(search_invocation && !search_diagnostics.has_error());
 assert((
     search_invocation->search_libraries
     == std::vector<std::string>{"vendor", "shared"}));
+const std::vector<const char*> top_arguments{
+    "fsim", "build",
+    "--top", "source=sv:work.producer",
+    "--top=sink=consumer"};
+fsim::diagnostic::Engine top_diagnostics;
+const auto top_invocation = fsim::cli::parse_arguments(
+    static_cast<int>(top_arguments.size()),
+    top_arguments.data(),
+    top_diagnostics);
+assert(top_invocation && !top_diagnostics.has_error());
+assert((
+    top_invocation->tops
+    == std::vector<fsim::project::ProjectSection::TopLevel>{
+        {"sv:work.producer", "source"},
+        {"consumer", "sink"}}));
+assert(!top_invocation->top.has_value());
+const std::vector<const char*> invalid_top_arguments{
+    "fsim", "build", "--top", "producer", "--top", "sink=consumer"};
+fsim::diagnostic::Engine invalid_top_diagnostics;
+assert(!fsim::cli::parse_arguments(
+    static_cast<int>(invalid_top_arguments.size()),
+    invalid_top_arguments.data(),
+    invalid_top_diagnostics));
+assert(std::ranges::any_of(
+    invalid_top_diagnostics.diagnostics(),
+    [](const auto& diagnostic) {
+      return diagnostic.message.find("every repeated --top")
+          != std::string::npos;
+    }));
 const auto search_manifest = directory / "search-override.toml";
 {
   std::ofstream output(search_manifest);
@@ -920,12 +949,19 @@ search_services.check =
       assert((
           captured.elaboration.search_libraries
           == std::vector<std::string>{"vendor", "shared"}));
+      assert(captured.project.top.empty());
+      assert((
+          captured.project.tops
+          == std::vector<fsim::project::ProjectSection::TopLevel>{
+              {"actual_top", "primary"},
+              {"actual_top", "secondary"}}));
       return 0;
     };
 const auto search_manifest_text = search_manifest.string();
 const std::vector<const char*> search_override_arguments{
     "fsim", "check", "--project", search_manifest_text.c_str(),
-    "--search-library", "vendor", "--search-library", "shared"};
+    "--search-library", "vendor", "--search-library", "shared",
+    "--top", "primary=actual_top", "--top", "secondary=actual_top"};
 std::ostringstream search_output;
 std::ostringstream search_error;
 assert(

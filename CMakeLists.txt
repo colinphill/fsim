@@ -407,6 +407,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/elaboration_targets.cpp
       src/elaboration/hierarchy_generic_interfaces.cpp
       src/elaboration/hierarchy_packages.cpp
+      src/elaboration/hierarchy_root_globals.cpp
       src/elaboration/hierarchy_builder.cpp
       src/elaboration/hierarchy_vhdl_protected.cpp
       src/elaboration/hierarchy_ports.cpp

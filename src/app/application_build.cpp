@@ -107,14 +107,14 @@ std::optional<BuiltProject> build_project(
         "build normalization produced an invalid owning semantic projection");
     return std::nullopt;
   }
-  const auto top = selected_top(config, lowering_adapter, diagnostics);
+  const auto tops = selected_tops(config, lowering_adapter, diagnostics);
   validate_bindings(
       config, lowering_adapter, systemc_registries, diagnostics);
   if (diagnostics.has_error()) {
     return std::nullopt;
   }
   auto systemc_instances = construct_systemc_instances(
-      top, systemc_registries, diagnostics);
+      tops, systemc_registries, diagnostics);
   if (!systemc_instances) {
     return std::nullopt;
   }
@@ -138,9 +138,14 @@ std::optional<BuiltProject> build_project(
             *systemc_instances,
             systemc_roots);
   }
+  std::vector<elaboration::Root> elaboration_roots;
+  elaboration_roots.reserve(tops.size());
+  for (const auto& top : tops) {
+    elaboration_roots.push_back({top.target, top.alias});
+  }
   auto elaborated = elaboration::elaborate(
       lowering_adapter,
-      top,
+      elaboration_roots,
       bindings,
       *systemc_instances,
       systemc_provider.get(),
@@ -232,7 +237,7 @@ std::optional<BuiltProject> build_project(
   const auto key = make_cache_key(
       config,
       *checked,
-      top,
+      tops,
       resolution,
       systemc_plugin_key,
       diagnostics);
@@ -252,9 +257,11 @@ std::optional<BuiltProject> build_project(
           "discarded an unreadable or incompatible cache entry: "
               + cache_error.message());
     }
-    const std::string record =
-        "FSIM-DESIGN-CACHE-V1\n" + top + "\n"
-        + std::to_string(std::ranges::count_if(
+    std::string record = "FSIM-DESIGN-CACHE-V2\n";
+    for (const auto& top : tops) {
+      record += top.alias + "=" + top.target + "\n";
+    }
+    record += std::to_string(std::ranges::count_if(
               design_ir.objects(), [](const auto& object) {
                 return object.kind == semantic::design::ObjectKind::signal
                     && !object.parent_object;

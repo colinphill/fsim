@@ -35,8 +35,18 @@ enum class DelayMode : std::uint8_t {
 };
 
 struct ProjectSection {
+  struct TopLevel {
+    std::string target;
+    std::string alias;
+
+    friend bool operator==(const TopLevel&, const TopLevel&) = default;
+  };
+
   std::string name;
+  // Legacy source-compatible spelling for one root. Parsed configurations
+  // always expose the normalized ordered selection through tops.
   std::string top;
+  std::vector<TopLevel> tops;
   std::string time_resolution{"auto"};
   std::uint64_t seed{1};
   bool random_seed{false};

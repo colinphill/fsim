@@ -74,6 +74,17 @@ struct DesignSourceLocation {
   std::uint32_t column{1};
 };
 
+inline bool is_design_root(
+    const fsim::semantic::design::DesignIr& design,
+    const std::string_view path) {
+  return std::ranges::find(design.roots(), path) != design.roots().end();
+}
+
+inline bool has_synthetic_root(
+    const fsim::semantic::design::DesignIr& design) noexcept {
+  return design.roots().size() > 1;
+}
+
 struct Session {
   // Callbacks execute synchronously on the simulation thread and may perform
   // read-only API queries, so same-thread re-entry must not deadlock.

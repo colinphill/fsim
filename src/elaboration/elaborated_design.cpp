@@ -13,6 +13,10 @@ const std::string& ElaboratedDesign::top() const noexcept {
   return top_;
 }
 
+const std::vector<std::string>& ElaboratedDesign::roots() const noexcept {
+  return roots_;
+}
+
 const std::vector<SignalInfo>&
 ElaboratedDesign::signals() const noexcept {
   return signal_info_;

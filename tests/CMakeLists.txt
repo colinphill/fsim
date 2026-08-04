@@ -406,6 +406,7 @@ add_executable(
   elaboration/elaborator_generate_test.cpp
   elaboration/elaborator_mixed_test.cpp
   elaboration/elaborator_library_search_test.cpp
+  elaboration/elaborator_multiple_root_test.cpp
   elaboration/elaborator_mixed_conversion_test.cpp
   elaboration/elaborator_mixed_construction_test.cpp
   elaboration/elaborator_mixed_driver_test.cpp
@@ -809,6 +810,7 @@ if(TARGET fsim_application)
         app/application_test_cli.cpp
         app/application_test_fixture.cpp
         app/application_test_mixed.cpp
+        app/application_test_multiple_roots.cpp
         app/application_test_simulation.cpp
         app/application_test_source_updates.cpp
         app/application_test_sources_common.cpp
@@ -2087,6 +2089,7 @@ set_tests_properties(
     app/application_test_cli.cpp
     app/application_test_fixture.cpp
     app/application_test_mixed.cpp
+    app/application_test_multiple_roots.cpp
     app/application_test_simulation.cpp
     app/application_test_source_updates.cpp
     app/application_test_sources_common.cpp
@@ -2178,7 +2181,11 @@ set_tests_properties(
 
   endif()
 
-  add_executable(fsim_api_tests api/api_test.cpp)
+  add_executable(
+    fsim_api_tests
+    api/api_test.cpp
+    api/api_multiple_root_test.cpp
+  )
   fsim_configure_test(fsim_api_tests)
   target_compile_definitions(
     fsim_api_tests

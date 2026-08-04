@@ -6,6 +6,36 @@ using namespace runtime::simir;
 using namespace elaboration_detail;
 
     void HierarchyBuilder::build(const DesignUnit& root) {
+        add_root(root, design_.top_);
+        finalize();
+    }
+
+    void HierarchyBuilder::add_root(
+        const DesignUnit& root,
+        std::string path) {
+        active_root_ = std::move(path);
+        if (auto prepared =
+                prepared_systemverilog_roots_.find(active_root_);
+            prepared != prepared_systemverilog_roots_.end()) {
+            auto specialized = std::move(prepared->second);
+            prepared_systemverilog_roots_.erase(prepared);
+            auto aliases = std::move(
+                predeclared_root_signals_.at(active_root_));
+            predeclared_root_signals_.erase(active_root_);
+            instantiate(
+                specialized.unit,
+                active_root_,
+                std::move(aliases),
+                {},
+                {},
+                {},
+                {},
+                std::move(specialized.environment),
+                std::move(specialized.values),
+                std::move(specialized.identity_values),
+                std::move(specialized.packages));
+            return;
+        }
         const DesignUnit* selected = &root;
         std::optional<DesignUnit> configured_root;
         std::string configuration_identity;
@@ -14,11 +44,10 @@ using namespace elaboration_detail;
             selected =
                 select_vhdl_configuration_root(root);
             if (selected == nullptr) {
-                finish();
                 return;
             }
             active_vhdl_configuration_ = &root;
-            vhdl_configurations_by_path_[design_.top_] = &root;
+            vhdl_configurations_by_path_[active_root_] = &root;
             configured_root = *selected;
             const auto configuration_source = std::string{
                 frontend::physical_source(root.span)};
@@ -45,7 +74,7 @@ using namespace elaboration_detail;
         }
         instantiate(
             specialized.unit,
-            design_.top_,
+            active_root_,
             {},
             {},
             {},
@@ -57,13 +86,20 @@ using namespace elaboration_detail;
             std::move(specialized.packages));
         active_vhdl_configuration_ = nullptr;
         vhdl_configurations_by_path_.clear();
-        finish();
+    }
+    void HierarchyBuilder::build(const SystemCInstanceDescription& root) {
+        add_root(root, root.path);
+        finalize();
     }
 
+    void HierarchyBuilder::add_root(
+        const SystemCInstanceDescription& root,
+        std::string path) {
+        active_root_ = std::move(path);
+        instantiate_systemc(root, active_root_, {}, {});
+    }
 
-
-    void HierarchyBuilder::build(const SystemCInstanceDescription& root) {
-        instantiate_systemc(root, root.path, {}, {});
+    void HierarchyBuilder::finalize() {
         finish();
     }
 
