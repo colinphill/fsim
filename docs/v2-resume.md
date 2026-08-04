@@ -441,5 +441,15 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   read-only attribute. The current one-line functional correction makes that
   file owner-writable before renaming it; after eight-worker exact-LLVM builds,
   the Debug and Release application tests pass in 20.42 and 19.72 seconds.
-  Commit/push this final correction and monitor the next non-documentation
-  matrix to green before marking Change 20 and Batch 140 complete.
+  Repair commit `e4f11ce` is pushed. Run `30916363303` repeats the same coarse
+  `0xc0000409` application checkpoint and is canceled by request before the
+  matrix completes. Because that checkpoint covers all producer mutations,
+  embedded loading, structural assertions, and simulation, it cannot identify
+  the failed operation. The current diagnostic worktree uses error-code
+  overloads and explicit labels for every rename and permission change, prints
+  embedded-design diagnostics, and marks load, validation, and simulation
+  completion. It builds warning-clean with eight workers and passes the
+  exact-LLVM Debug and Release application tests in 20.04 and 19.16 seconds.
+  Push the diagnostic repair, inspect the first Windows failure trace, and fix
+  the demonstrated cause before resuming the full monitoring loop or marking
+  Change 20 and Batch 140 complete.

@@ -646,8 +646,18 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     the metadata file retains its own read-only attribute after the artifact
     directory becomes writable. The focused correction makes that one file
     owner-writable before renaming it, and the exact-LLVM Debug/Release
-    application tests pass locally in 20.42 and 19.72 seconds. Commit this
-    final correction and monitor its replacement matrix to green.
+    application tests pass locally in 20.42 and 19.72 seconds. Repair commit
+    `e4f11ce` is pushed, but run `30916363303` repeats the same coarse
+    `0xc0000409` application checkpoint and is canceled by request. That
+    checkpoint spans every operation from producer relocation through embedded
+    simulation, so it does not establish which assertion failed. The current
+    diagnostic worktree reports error codes for every rename and permission
+    change, prints embedded-design diagnostics, and marks load, validation, and
+    simulation completion. It builds warning-clean with eight workers and the
+    exact-LLVM Debug/Release application tests pass in 20.04 and 19.16 seconds.
+    Push this diagnostic repair, use its first Windows failure to identify the
+    exact operation, and do not resume broad monitoring until that cause is
+    corrected.
 
 ## Forward priority order
 

@@ -14,6 +14,8 @@
 #include <iostream>
 #include <iterator>
 #include <sstream>
+#include <string_view>
+#include <system_error>
 #include <vector>
 
 #if defined(__has_feature)
@@ -357,25 +359,57 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   const auto hidden_systemc_plugin_metadata = systemc_plugin
       / (std::string{systemc::kIncrementalPluginMetadataFilename}
          + ".producer-hidden");
-  std::filesystem::rename(incremental_systemc_source, hidden_systemc_source);
-  std::filesystem::rename(systemc_object, hidden_systemc_object);
+  const auto rename_producer = [&](
+      const std::filesystem::path& producer_path,
+      const std::filesystem::path& destination,
+      const std::string_view label) {
+    std::error_code operation_error;
+    std::filesystem::rename(
+        producer_path, destination, operation_error);
+    if (operation_error) {
+      std::cerr << "non-project producer hiding: " << label << ": "
+                << operation_error.value() << " ("
+                << operation_error.message() << ")\n";
+    }
+    assert(!operation_error);
+    std::cerr << "non-project producer hiding: " << label << " complete\n";
+  };
+  const auto make_writable = [&](
+      const std::filesystem::path& path, const std::string_view label) {
+    std::error_code operation_error;
+    std::filesystem::permissions(
+        path, std::filesystem::perms::owner_write,
+        std::filesystem::perm_options::add, operation_error);
+    if (operation_error) {
+      std::cerr << "non-project producer hiding: " << label << ": "
+                << operation_error.value() << " ("
+                << operation_error.message() << ")\n";
+    }
+    assert(!operation_error);
+    std::cerr << "non-project producer hiding: " << label << " complete\n";
+  };
+  rename_producer(
+      incremental_systemc_source, hidden_systemc_source, "source rename");
+  rename_producer(systemc_object, hidden_systemc_object, "object rename");
   // Windows locks a loaded DLL against renaming its containing artifact.
   // Hiding the required metadata makes the producer artifact unusable while
   // leaving the loaded native image at its stable path. Publication makes
   // both the artifact and its contents read-only, so restore write access only
   // to the directory and metadata file being renamed.
-  std::filesystem::permissions(
-      systemc_plugin, std::filesystem::perms::owner_write,
-      std::filesystem::perm_options::add);
-  std::filesystem::permissions(
-      systemc_plugin_metadata, std::filesystem::perms::owner_write,
-      std::filesystem::perm_options::add);
-  std::filesystem::rename(
-      systemc_plugin_metadata, hidden_systemc_plugin_metadata);
+  make_writable(systemc_plugin, "artifact permissions");
+  make_writable(systemc_plugin_metadata, "metadata permissions");
+  rename_producer(
+      systemc_plugin_metadata, hidden_systemc_plugin_metadata,
+      "metadata rename");
+  std::cerr << "non-project producer hiding: loading embedded design\n";
   diagnostic::Engine systemc_design_load_diagnostics;
   auto loaded_systemc_design = app::load_design_artifact(
       systemc_design, systemc_design_load_diagnostics);
+  if (!loaded_systemc_design) {
+    diagnostic::print_text(std::cerr, systemc_design_load_diagnostics);
+  }
   assert(loaded_systemc_design && !systemc_design_load_diagnostics.has_error());
+  std::cerr << "non-project producer hiding: embedded design loaded\n";
   assert(loaded_systemc_design->systemc_hierarchies.size() == 1);
   assert(loaded_systemc_design->systemc_roots.size() == 1);
   assert(loaded_systemc_design->systemc_plugins.size() == 1);
@@ -383,6 +417,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   assert(loaded_systemc_design->design.systemc_instances().size() == 1);
   assert(loaded_systemc_design->design.systemc_instances().front()
       .internal_signals.size() == 1);
+  std::cerr << "non-project producer hiding: embedded design validated\n";
   const auto systemc_value = loaded_systemc_design->design
       .systemc_instances().front().internal_signals.front().signal;
   app::Simulation systemc_standalone_simulation{
@@ -390,6 +425,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
       app::SimulationEngine::interpreter};
   const auto systemc_standalone_result =
       systemc_standalone_simulation.run();
+  std::cerr << "non-project producer hiding: embedded simulation completed\n";
   assert(systemc_standalone_result.status == runtime::RunStatus::completed);
   assert(systemc_standalone_result.callbacks_executed != 0);
   assert(systemc_standalone_simulation.read_signal(systemc_value).to_msb_string()
