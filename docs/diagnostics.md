@@ -1442,6 +1442,10 @@ are therefore excluded.
 | `FSIM-ELAB-VITAL-019` | error | A VITAL delay output/input signal, `OutTemp`, or writable `VitalGlitchDataType` variable has an incompatible scalar or nominal profile. |
 | `FSIM-ELAB-VITAL-020` | error | A VITAL delay or output-map actual has an incompatible nominal layout, width, state domain, or negative delay value. |
 | `FSIM-ELAB-VITAL-021` | error | A VITAL path array is dynamic or malformed, uses invalid static choices, or contains an incompatible path record. |
+| `FSIM-ELAB-VITALMEM-001` | error | A `VitalDeclareMemory` call has an incompatible result context or a missing, excessive, duplicate, unknown, or misplaced geometry/load actual. |
+| `FSIM-ELAB-VITALMEM-002` | error | `VitalDeclareMemory` geometry is not static and positive, or its subword is wider than its word. |
+| `FSIM-ELAB-VITALMEM-003` | error | A `VitalDeclareMemory` load filename or binary-format control has an incompatible string/Boolean profile. |
+| `FSIM-ELAB-VITALMEM-004` | error | A static `VitalDeclareMemory` load file is unavailable, unreadable, or exceeds the bounded input budget. |
 | `FSIM-ELAB-SVENUM-001` | error | An enum base width is unsupported or an enumerator value does not fit it. |
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-SVCONST-001` | error | A SystemVerilog parameter value cannot be converted to its declared bounded integral type without losing X/Z state or valid width metadata. |

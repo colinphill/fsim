@@ -225,6 +225,7 @@ struct Interpreter::Impl {
     std::vector<PackedLogic4> registers;
     std::vector<std::string> string_registers;
     std::vector<ContainerValue> container_registers;
+    std::vector<VitalMemoryState> vital_memories;
   };
 
   struct ProcessState {
@@ -510,6 +511,7 @@ struct Interpreter::Impl {
   void execute_container(ProcessState&, const ContainerExists&);
   void execute_container(ProcessState&, const TraverseContainer&);
   void execute_container(ProcessState&, const LoadMemory&);
+  void execute_container(ProcessState&, const VitalMemoryDeclare&);
   void execute_container(ProcessState&, const PushContainer&);
   void execute_container(ProcessState&, const PopContainer&);
   void execute_string(ProcessState&, const StringMethod&);

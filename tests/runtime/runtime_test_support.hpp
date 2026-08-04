@@ -58,6 +58,8 @@ void test_simir_inertial_transition_writes();
 void test_simir_projected_writes();
 void test_vital_timing_checks();
 void test_vital_delay_scheduling();
+void test_vital_memory_declaration();
+void test_vital_memory_path_delays();
 void test_vcd();
 
 } // namespace fsim::tests::runtime

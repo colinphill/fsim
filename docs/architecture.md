@@ -352,8 +352,24 @@ common projected-waveform scheduler for `OnEvent`, `OnDetect`,
 tracks the prior source, projected time/value, and detection time without
 putting mutable scheduler state in generated code. Interpreter, LLVM,
 artifacts, debugging, callbacks, native caching, and tracing therefore share
-one deterministic path. VITAL memory and vendor-model closure remains in
-Batch 143.
+one deterministic path.
+
+The clean-room `ieee.vital_memory` projection adds the standard memory,
+port-flag, table, violation, timing, and schedule types without importing an
+external package body. One resource-governed runtime model supplies arbitrary
+logical depth through a default word plus sparse materialization, with a
+contiguous fast path for small memories. Word/subword tables, multi-port
+contention, violations, vector setup/hold and period/pulse checks, and all
+memory path-delay profiles retain independent typed state. Memory paths
+normalize scalar/vector and single/01/01Z/01ZX overloads into cross, parallel,
+or subword candidates before handing per-bit transport waveforms to the common
+projected scheduler. Static load files are validated and embedded in the
+serialized operation so standalone relocated artifacts do not reopen build-
+tree inputs; dynamic filenames retain the confined runtime file service.
+Declarative VITAL_LEVEL attributes are accepted as non-executable metadata in
+entity, architecture, and generated regions, allowing configured vendor-style
+cell and memory models without vendor-name special cases. Native cache v78
+hashes embedded contents and every selected memory/path input.
 
 Executable VHDL units and package declarations may also name a constant as
 `package.constant` in their own library or

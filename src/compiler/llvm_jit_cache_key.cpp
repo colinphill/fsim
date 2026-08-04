@@ -142,7 +142,7 @@ using runtime::simir::DisableFork;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v76";
+    "fsim-llvm-native-object-v78";
 
 void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
                  const std::uint64_t value) {
@@ -827,6 +827,22 @@ void add_dynamic_part_index_key(
                 value.hexadecimal ? 1U : 0U);
             add_key_u64(
                 builder, "write", value.write ? 1U : 0U);
+          } else if constexpr (std::is_same_v<
+                                   OperationType,
+                                   runtime::simir::VitalMemoryDeclare>) {
+            builder.add("operation", "VitalMemoryDeclare");
+            add_key_u64(builder, "destination", value.destination);
+            add_key_u64(builder, "word-count", value.word_count);
+            add_key_u64(builder, "word-width", value.word_width);
+            add_key_u64(builder, "subword-width", value.subword_width);
+            add_key_u64(builder, "load-file", value.load_file);
+            add_key_u64(builder, "binary", value.binary ? 1U : 0U);
+            add_key_u64(
+                builder, "embedded-load", value.embedded_load ? 1U : 0U);
+            builder.add("embedded-load-text", value.embedded_load_text);
+            builder.add("source", value.source.path);
+            add_key_u64(builder, "source-line", value.source.line);
+            add_key_u64(builder, "source-column", value.source.column);
           } else if constexpr (std::is_same_v<OperationType, runtime::simir::PushContainer>) {
             builder.add("operation", "PushContainer");
             add_key_u64(builder, "target", value.target);

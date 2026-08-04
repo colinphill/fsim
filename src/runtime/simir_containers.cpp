@@ -1704,6 +1704,53 @@ void Interpreter::Impl::execute_container(
 
 void Interpreter::Impl::execute_container(
     ProcessState& process,
+    const VitalMemoryDeclare& operation) {
+  auto memory = make_vital_memory(
+      operation.word_count, operation.word_width,
+      operation.subword_width);
+  const auto& path = get_string_register(process, operation.load_file);
+  if (operation.embedded_load) {
+    load_vital_memory_text(
+        memory, operation.embedded_load_text, operation.binary);
+  } else if (!path.empty()) {
+    const auto handle = open_file(process.program.id, path, "r");
+    std::string text;
+    try {
+      while (!file_end_of_file(process.program.id, handle)) {
+        std::uint32_t count{};
+        auto line = read_file_line(
+            process.program.id, handle, count);
+        if (text.size() + line.size() > maximum_memory_file_bytes) {
+          throw std::length_error{
+              "VITAL memory load file exceeds the 1 MiB input budget"};
+        }
+        text += line;
+      }
+      close_file(process.program.id, handle);
+    } catch (...) {
+      try {
+        close_file(process.program.id, handle);
+      } catch (...) {
+      }
+      throw;
+    }
+    load_vital_memory_text(memory, text, operation.binary);
+  }
+  if (process.frame->vital_memories.size()
+      >= std::numeric_limits<std::uint32_t>::max()) {
+    container_error(
+        process.program.id, process.pc,
+        "VITAL memory handle space is exhausted");
+  }
+  process.frame->vital_memories.push_back(std::move(memory));
+  get_register(process, operation.destination) =
+      PackedLogic4::from_aval_bval(
+          32, process.frame->vital_memories.size(), 0U);
+  ++process.pc;
+}
+
+void Interpreter::Impl::execute_container(
+    ProcessState& process,
     const ContainerExists& operation) {
   const auto& source =
       get_container_register(process, operation.source);

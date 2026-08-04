@@ -264,6 +264,12 @@ void ContainerOperationLowerer::lower(
                               : "container.readmemb");
 }
 void ContainerOperationLowerer::lower(
+    const runtime::simir::VitalMemoryDeclare& value) {
+  invoke(
+      std::nullopt, std::nullopt, value.destination,
+      "vital.memory-declare");
+}
+void ContainerOperationLowerer::lower(
     const runtime::simir::PushContainer& value) {
   invoke(
       value.source, value.index, std::nullopt,

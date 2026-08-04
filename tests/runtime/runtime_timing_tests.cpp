@@ -3,6 +3,7 @@
 #include "fsim/runtime/packed_value.hpp"
 #include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_vital.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 
 #include <algorithm>
@@ -922,6 +923,898 @@ void test_vital_delay_scheduling() {
   require(
       ignored_default.changes.empty(),
       "a null path range with IgnoreDefaultDelay schedules no transaction");
+}
+
+void test_vital_memory_declaration() {
+  using namespace fsim::runtime::simir;
+
+  const auto expect_rejection = [](const auto& action, const char* message) {
+    bool rejected{};
+    try {
+      action();
+    } catch (const std::exception&) {
+      rejected = true;
+    }
+    require(rejected, message);
+  };
+
+  auto wide = make_vital_memory(3U, 65U, 8U);
+  require(
+      wide.words.size() == 3U && wide.word_width == 65U
+          && wide.subword_width == 8U && wide.bits_per_enable == 9U,
+      "VITAL memory preserves arbitrary-width geometry");
+  require(
+      wide.words[0].to_msb_string() == std::string(65U, 'U'),
+      "VITAL memory words initialize to the UX01 uninitialized value");
+
+  load_vital_memory_text(wide, "-- comment\n@1 1f 2_a # tail\n", false);
+  require(
+      wide.words[0].to_msb_string() == std::string(65U, 'U')
+          && wide.words[1].to_msb_string()
+              == std::string(57U, '0') + "00011111"
+          && wide.words[2].to_msb_string()
+              == std::string(57U, '0') + "00101010",
+      "VITAL hexadecimal memory loading honors addresses and ascending words");
+
+  auto binary = make_vital_memory(2U, 8U, 8U);
+  load_vital_memory_text(binary, "@0 101x 01u1", true);
+  require(
+      binary.words[0].to_msb_string() == "0000101X"
+          && binary.words[1].to_msb_string() == "000001U1",
+      "VITAL binary memory loading preserves UX01 data");
+
+  expect_rejection(
+      [] { static_cast<void>(make_vital_memory(0U, 8U, 8U)); },
+      "VITAL memory rejects zero-sized geometry");
+  expect_rejection(
+      [] { static_cast<void>(make_vital_memory(1U, 8U, 9U)); },
+      "VITAL memory rejects a subword wider than its word");
+  auto sparse = make_vital_memory(std::uint64_t{1U} << 40U, 8U, 8U);
+  require(
+      sparse.word_count == (std::uint64_t{1U} << 40U)
+          && sparse.words.empty() && sparse.sparse_words.empty()
+          && vital_memory_word(
+                 static_cast<const VitalMemoryState&>(sparse),
+                 (std::size_t{1U} << 39U)).to_msb_string() == "UUUUUUUU",
+      "large logical VITAL memories use unbounded sparse default storage");
+  vital_memory_word(sparse, std::size_t{1U} << 39U) =
+      fsim::runtime::PackedLogic4::from_msb_string("10100101");
+  require(
+      sparse.sparse_words.size() == 1U
+          && vital_memory_word(
+                 static_cast<const VitalMemoryState&>(sparse),
+                 std::size_t{1U} << 39U).to_msb_string() == "10100101"
+          && vital_memory_word(
+                 static_cast<const VitalMemoryState&>(sparse),
+                 (std::size_t{1U} << 39U) + 1U).to_msb_string()
+              == "UUUUUUUU",
+      "sparse VITAL writes materialize only the addressed word");
+  fsim::runtime::PackedLogic4 sparse_output(8U);
+  sparse_output.fill(fsim::runtime::Logic9::zero);
+  const auto sparse_input = sparse_output;
+  VitalMemoryPortFlag sparse_flag;
+  apply_vital_memory_table_actions(
+      sparse, sparse_output, sparse_input, 0U, 0U, 8U,
+      VitalMemoryTableResult{
+          'c', 'S', fsim::runtime::PackedLogic4{8U},
+          fsim::runtime::PackedLogic4{8U}, std::nullopt, false},
+      sparse_flag);
+  require(
+      sparse.sparse_words.empty()
+          && vital_memory_word(
+                 static_cast<const VitalMemoryState&>(sparse), 0U)
+                 .to_msb_string() == "XXXXXXXX"
+          && vital_memory_word(
+                 static_cast<const VitalMemoryState&>(sparse),
+                 std::size_t{1U} << 39U).to_msb_string() == "XXXXXXXX",
+      "whole-memory corruption updates the sparse default transactionally");
+  expect_rejection(
+      [] {
+        static_cast<void>(make_vital_memory(
+            1U, std::numeric_limits<std::uint32_t>::max(), 8U));
+      },
+      "VITAL memory rejects one word beyond the host resource budget");
+  expect_rejection(
+      [] {
+        auto memory = make_vital_memory(1U, 4U, 4U);
+        load_vital_memory_text(memory, "@1 0", false);
+      },
+      "VITAL memory loading rejects an out-of-range address");
+  expect_rejection(
+      [] {
+        auto memory = make_vital_memory(1U, 4U, 4U);
+        load_vital_memory_text(memory, "10", false);
+      },
+      "VITAL memory loading rejects nonzero data wider than the word");
+  expect_rejection(
+      [] {
+        auto memory = make_vital_memory(1U, 8U, 8U);
+        load_vital_memory_text(memory, "102q", true);
+      },
+      "VITAL memory loading rejects invalid digits");
+  auto transactional = make_vital_memory(3U, 8U, 8U);
+  load_vital_memory_text(transactional, "@1 aa", false);
+  expect_rejection(
+      [&] { load_vital_memory_text(transactional, "@1 55 @2 2q", false); },
+      "VITAL memory loading rejects a late malformed token");
+  require(
+      transactional.words[1].to_msb_string() == "10101010"
+          && transactional.words[2].to_msb_string() == "UUUUUUUU",
+      "failed VITAL memory loading leaves all words unchanged");
+
+  const auto descending = fsim::runtime::PackedLogic4::from_msb_string(
+      "0101");
+  const auto descending_decoded = decode_vital_memory_address(
+      descending, descending, 16U);
+  require(
+      descending_decoded.state == VitalMemoryAddressState::good
+          && descending_decoded.value == 5U,
+      "a descending VHDL address range decodes left-to-right");
+  const auto ascending = fsim::runtime::PackedLogic4::from_msb_string(
+      "0011");
+  const auto ascending_decoded = decode_vital_memory_address(
+      ascending, ascending, 16U);
+  require(
+      ascending_decoded.state == VitalMemoryAddressState::good
+          && ascending_decoded.value == 3U,
+      "an ascending VHDL address range uses the same declared-range order");
+
+  const auto changed = decode_vital_memory_address(
+      descending, ascending, 16U);
+  require(
+      changed.state == VitalMemoryAddressState::good_transition
+          && changed.value == 3U,
+      "a changed valid address is classified as a good transition");
+  const auto unknown = fsim::runtime::PackedLogic4::from_logic9_msb_string(
+      "0H01");
+  const auto unknown_decoded = decode_vital_memory_address(
+      unknown, unknown, 16U);
+  require(
+      unknown_decoded.state == VitalMemoryAddressState::unknown
+          && !unknown_decoded.value,
+      "weak and unknown address levels classify as unknown");
+  const auto unknown_changed = decode_vital_memory_address(
+      descending, unknown, 16U);
+  require(
+      unknown_changed.state
+              == VitalMemoryAddressState::unknown_transition
+          && !unknown_changed.value,
+      "an unknown changed address retains transition state");
+  const auto invalid = fsim::runtime::PackedLogic4::from_msb_string(
+      "1111");
+  const auto invalid_decoded = decode_vital_memory_address(
+      invalid, invalid, 8U);
+  require(
+      invalid_decoded.state == VitalMemoryAddressState::invalid
+          && !invalid_decoded.value,
+      "a known out-of-range address is invalid");
+
+  const auto wide_valid = fsim::runtime::PackedLogic4::from_msb_string(
+      std::string(126U, '0') + "0101");
+  const auto wide_valid_decoded = decode_vital_memory_address(
+      wide_valid, wide_valid, 16U);
+  require(
+      wide_valid_decoded.state == VitalMemoryAddressState::good
+          && wide_valid_decoded.value == 5U,
+      "a wide address with leading zeroes decodes without a host-width cap");
+  const auto wide_invalid = fsim::runtime::PackedLogic4::from_msb_string(
+      "1" + std::string(129U, '0'));
+  const auto wide_invalid_decoded = decode_vital_memory_address(
+      wide_valid, wide_invalid, 16U);
+  require(
+      wide_invalid_decoded.state
+              == VitalMemoryAddressState::invalid_transition
+          && !wide_invalid_decoded.value,
+      "a wide overflowing address is invalid without host arithmetic overflow");
+  const auto wide_unknown =
+      fsim::runtime::PackedLogic4::from_logic9_msb_string(
+          "1" + std::string(128U, '0') + "X");
+  const auto wide_unknown_decoded = decode_vital_memory_address(
+      wide_unknown, wide_unknown, 16U);
+  require(
+      wide_unknown_decoded.state == VitalMemoryAddressState::unknown,
+      "unknown address data takes precedence over an out-of-range prefix");
+
+  expect_rejection(
+      [&] {
+        static_cast<void>(decode_vital_memory_address(
+            descending,
+            fsim::runtime::PackedLogic4::from_msb_string("101"),
+            16U));
+      },
+      "VITAL address decoding rejects mismatched history widths");
+  expect_rejection(
+      [&] {
+        static_cast<void>(decode_vital_memory_address(
+            descending, descending, 0U));
+      },
+      "VITAL address decoding rejects an empty memory");
+
+  const std::vector<VitalMemoryTableRow> first_match_rows{
+      {{'S', '/'}, {}, 'g', 'G', 'l', 'd'},
+      {{'S', '/'}, {}, 'g', 'G', 'w', 't'}};
+  const auto first_match = lookup_vital_memory_table(
+      first_match_rows,
+      fsim::runtime::PackedLogic4::from_msb_string("00"),
+      fsim::runtime::PackedLogic4::from_msb_string("01"),
+      VitalMemoryAddressState::good,
+      VitalMemoryAddressState::good_transition,
+      130U);
+  require(
+      first_match.matched_row == 0U
+          && first_match.memory_action == 'l'
+          && first_match.data_action == 'd'
+          && first_match.memory_corrupt_mask.to_msb_string()
+              == std::string(130U, 'X')
+          && first_match.data_corrupt_mask.to_msb_string()
+              == std::string(130U, 'X'),
+      "VITAL word tables select the first exact row and size corruption masks");
+
+  const std::vector<VitalMemoryTableRow> flag_rows{
+      {{'B'}, {}, 'S', '*', 'w', 'M'}};
+  const auto flag_match = lookup_vital_memory_table(
+      flag_rows,
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("H"),
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("H"),
+      VitalMemoryAddressState::unknown,
+      VitalMemoryAddressState::unknown_transition,
+      8U);
+  require(
+      flag_match.matched_row == 0U
+          && flag_match.memory_action == 'w'
+          && flag_match.data_action == 'M'
+          && flag_match.memory_corrupt_mask.to_msb_string() == "00000000",
+      "VITAL word tables match weak controls and steady/transition flags");
+
+  const auto default_action = lookup_vital_memory_table(
+      first_match_rows,
+      fsim::runtime::PackedLogic4::from_msb_string("00"),
+      fsim::runtime::PackedLogic4::from_msb_string("00"),
+      VitalMemoryAddressState::good,
+      VitalMemoryAddressState::good,
+      8U);
+  require(
+      !default_action.matched_row
+          && default_action.memory_action == 's'
+          && default_action.data_action == 'S'
+          && !default_action.invalid_input_symbol,
+      "VITAL word tables retain memory and output when no row matches");
+
+  const auto invalid_symbol = lookup_vital_memory_table(
+      {{{'Z'}, {}, '-', '-', 'w', 'm'}},
+      fsim::runtime::PackedLogic4::from_msb_string("0"),
+      fsim::runtime::PackedLogic4::from_msb_string("1"),
+      VitalMemoryAddressState::good,
+      VitalMemoryAddressState::good,
+      8U);
+  require(
+      invalid_symbol.invalid_input_symbol
+          && !invalid_symbol.matched_row
+          && invalid_symbol.memory_action == 's'
+          && invalid_symbol.data_action == 'S',
+      "an invalid VITAL input symbol terminates lookup with default actions");
+
+  expect_rejection(
+      [&] {
+        static_cast<void>(lookup_vital_memory_table(
+            {{{'-', '-'}, {}, '-', '-', 's', 'S'}},
+            fsim::runtime::PackedLogic4::from_msb_string("0"),
+            fsim::runtime::PackedLogic4::from_msb_string("0"),
+            VitalMemoryAddressState::good,
+            VitalMemoryAddressState::good,
+            8U));
+      },
+      "VITAL memory lookup rejects a row/control width mismatch");
+
+  const std::vector<VitalMemoryTableRow> subword_rows{
+      {{'-'}, {'1', '0'}, '-', '-', 'L', 'D'}};
+  const auto subword_result = lookup_vital_memory_subword_table(
+      subword_rows,
+      fsim::runtime::PackedLogic4::from_msb_string("0"),
+      fsim::runtime::PackedLogic4::from_msb_string("0"),
+      {fsim::runtime::PackedLogic4::from_msb_string("000"),
+       fsim::runtime::PackedLogic4::from_msb_string("000")},
+      {fsim::runtime::PackedLogic4::from_msb_string("101"),
+       fsim::runtime::PackedLogic4::from_msb_string("010")},
+      fsim::runtime::PackedLogic4::from_msb_string("0000000000"),
+      fsim::runtime::PackedLogic4::from_msb_string("1100000011"),
+      VitalMemoryAddressState::good,
+      10U,
+      4U);
+  require(
+      subword_result.subwords.size() == 3U
+          && subword_result.subwords[0].matched_row == 0U
+          && !subword_result.subwords[1].matched_row
+          && subword_result.subwords[2].matched_row == 0U
+          && subword_result.subwords[0]
+                  .memory_corrupt_mask.to_msb_string()
+              == "000000XXXX"
+          && subword_result.subwords[1]
+                  .memory_corrupt_mask.to_msb_string()
+              == "0000000000"
+          && subword_result.subwords[2]
+                  .memory_corrupt_mask.to_msb_string()
+              == "XX00000000"
+          && subword_result.subwords[0]
+                  .data_corrupt_mask.to_msb_string()
+              == "000000XXXX"
+          && subword_result.subwords[2]
+                  .data_corrupt_mask.to_msb_string()
+              == "XX00000000",
+      "VITAL subword lookup independently matches enables and partial masks");
+
+  const auto whole_word_subaction = lookup_vital_memory_subword_table(
+      {{{}, {}, '-', '-', 'c', 'l'}},
+      fsim::runtime::PackedLogic4{},
+      fsim::runtime::PackedLogic4{},
+      {}, {},
+      fsim::runtime::PackedLogic4::from_msb_string("00000"),
+      fsim::runtime::PackedLogic4::from_msb_string("00000"),
+      VitalMemoryAddressState::good,
+      5U,
+      2U);
+  require(
+      whole_word_subaction.subwords.size() == 3U
+          && std::ranges::all_of(
+              whole_word_subaction.subwords,
+              [](const auto& subword) {
+                return subword.memory_corrupt_mask.to_msb_string() == "XXXXX"
+                    && subword.data_corrupt_mask.to_msb_string() == "XXXXX";
+              }),
+      "lowercase subword table corruption actions cover the whole word");
+
+  expect_rejection(
+      [&] {
+        static_cast<void>(lookup_vital_memory_subword_table(
+            subword_rows,
+            fsim::runtime::PackedLogic4::from_msb_string("0"),
+            fsim::runtime::PackedLogic4::from_msb_string("0"),
+            {fsim::runtime::PackedLogic4::from_msb_string("00")},
+            {fsim::runtime::PackedLogic4::from_msb_string("00")},
+            fsim::runtime::PackedLogic4::from_msb_string("0000000000"),
+            fsim::runtime::PackedLogic4::from_msb_string("0000000000"),
+            VitalMemoryAddressState::good,
+            10U,
+            4U));
+      },
+      "VITAL subword lookup rejects inconsistent enable dimensions");
+
+  const auto action = [](const char memory_action,
+                         const char data_action,
+                         const std::string_view memory_mask = "00000000",
+                         const std::string_view data_mask = "00000000") {
+    return VitalMemoryTableResult{
+        memory_action,
+        data_action,
+        fsim::runtime::PackedLogic4::from_msb_string(memory_mask),
+        fsim::runtime::PackedLogic4::from_msb_string(data_mask),
+        0U,
+        false};
+  };
+  auto action_memory = make_vital_memory(2U, 8U, 4U);
+  action_memory.words[0] =
+      fsim::runtime::PackedLogic4::from_msb_string("00001111");
+  action_memory.words[1] =
+      fsim::runtime::PackedLogic4::from_msb_string("11110000");
+  auto action_output =
+      fsim::runtime::PackedLogic4::from_msb_string("01010101");
+  const auto action_input =
+      fsim::runtime::PackedLogic4::from_msb_string("10101010");
+  VitalMemoryPortFlag action_flag;
+  apply_vital_memory_table_actions(
+      action_memory, action_output, action_input, 0U, 0U, 8U,
+      action('w', 'm'), action_flag);
+  require(
+      action_output.to_msb_string() == "00001111"
+          && action_memory.words[0].to_msb_string() == "10101010"
+          && action_flag.data_current == VitalMemoryPortState::read
+          && action_flag.memory_current == VitalMemoryPortState::write,
+      "VITAL data reads occur before same-call memory writes");
+
+  action_output = fsim::runtime::PackedLogic4::from_msb_string("01010101");
+  apply_vital_memory_table_actions(
+      action_memory, action_output, action_input, 0U, 0U, 8U,
+      action('s', 't'), action_flag);
+  require(
+      action_output.to_msb_string() == action_input.to_msb_string()
+          && action_memory.words[0].to_msb_string()
+              == action_input.to_msb_string(),
+      "VITAL transfer and retention actions preserve memory");
+  apply_vital_memory_table_actions(
+      action_memory, action_output, action_input, 0U, 2U, 6U,
+      action('0', '1'), action_flag);
+  require(
+      action_memory.words[0].to_msb_string() == "10000010"
+          && action_output.to_msb_string() == "10111110",
+      "VITAL constant actions update only the selected word range");
+  apply_vital_memory_table_actions(
+      action_memory, action_output, action_input, 0U, 2U, 6U,
+      action('Z', 'Z'), action_flag);
+  require(
+      action_memory.words[0].to_msb_string() == "10ZZZZ10"
+          && action_output.to_msb_string() == "10ZZZZ10"
+          && action_flag.data_current == VitalMemoryPortState::high_z,
+      "VITAL high-impedance actions preserve exact logic state");
+
+  action_memory.words[0] =
+      fsim::runtime::PackedLogic4::from_msb_string("00000000");
+  action_memory.words[1] =
+      fsim::runtime::PackedLogic4::from_msb_string("11111111");
+  action_output = fsim::runtime::PackedLogic4::from_msb_string("00000000");
+  apply_vital_memory_table_actions(
+      action_memory, action_output, action_input, 0U, 2U, 6U,
+      action('C', 'D', "00XXXX00", "00XXXX00"), action_flag);
+  require(
+      action_memory.words[0].to_msb_string() == "00XXXX00"
+          && action_memory.words[1].to_msb_string() == "11XXXX11"
+          && action_output.to_msb_string() == "00XXXX00",
+      "VITAL partial corruption covers every word or the selected output");
+  apply_vital_memory_table_actions(
+      action_memory, action_output, action_input, 0U, 0U, 8U,
+      action('c', 'l', "XXXXXXXX", "XXXXXXXX"), action_flag);
+  require(
+      std::ranges::all_of(
+          action_memory.words,
+          [](const auto& word) { return word.to_msb_string() == "XXXXXXXX"; })
+          && action_output.to_msb_string() == "XXXXXXXX",
+      "VITAL whole-memory and whole-output corruption actions execute");
+
+  action_memory.words[0] =
+      fsim::runtime::PackedLogic4::from_msb_string("00001111");
+  action_output = fsim::runtime::PackedLogic4::from_msb_string("01010101");
+  apply_vital_memory_table_actions(
+      action_memory, action_output, action_input, 0U, 0U, 4U,
+      action('E', 'E', "0000XXXX", "0000XXXX"), action_flag);
+  require(
+      action_memory.words[0].to_msb_string() == "0000XXXX"
+          && action_output.to_msb_string() == "0000XXXX",
+      "VITAL conditional corruption compares selected memory/data ranges");
+
+  action_output = fsim::runtime::PackedLogic4::from_msb_string("01010101");
+  action_flag.output_disable = false;
+  apply_vital_memory_table_actions(
+      action_memory, action_output, action_input, std::nullopt, 0U, 8U,
+      action('s', 'S'), action_flag);
+  require(
+      action_output.to_msb_string() == "01010101"
+          && action_flag.output_disable,
+      "VITAL steady output disables scheduling without changing its value");
+
+  for (const auto memory_action : std::string_view{"sldewcC LDE01Z"}) {
+    if (memory_action == ' ') continue;
+    auto probe = make_vital_memory(1U, 8U, 4U);
+    auto output = fsim::runtime::PackedLogic4::from_msb_string("00000000");
+    VitalMemoryPortFlag flag;
+    apply_vital_memory_table_actions(
+        probe, output, action_input, 0U, 0U, 4U,
+        action(memory_action, 'M', "XXXXXXXX"), flag);
+    require(
+        flag.memory_current != VitalMemoryPortState::undefined,
+        "every public VITAL memory action must be recognized");
+  }
+  for (const auto data_action : std::string_view{"ldem tLDE01ZSM"}) {
+    if (data_action == ' ') continue;
+    auto probe = make_vital_memory(1U, 8U, 4U);
+    auto output = fsim::runtime::PackedLogic4::from_msb_string("00000000");
+    VitalMemoryPortFlag flag;
+    apply_vital_memory_table_actions(
+        probe, output, action_input, 0U, 0U, 4U,
+        action('s', data_action, "00000000", "XXXXXXXX"), flag);
+    require(
+        data_action == 'S' || flag.data_current != VitalMemoryPortState::undefined,
+        "every public VITAL data action must be recognized");
+  }
+
+  auto state_memory = make_vital_memory(2U, 8U, 8U);
+  state_memory.words[0] =
+      fsim::runtime::PackedLogic4::from_msb_string("00001111");
+  state_memory.words[1] =
+      fsim::runtime::PackedLogic4::from_msb_string("11110000");
+  VitalMemoryTableState word_state;
+  auto state_output =
+      fsim::runtime::PackedLogic4::from_msb_string("00000000");
+  const std::vector<VitalMemoryTableRow> state_rows{
+      {{'-'}, {}, '*', '-', 's', 'm'},
+      {{'-'}, {}, '-', '-', 's', 'm'}};
+  const auto state_address0 = execute_vital_memory_word_table(
+      state_memory, word_state, state_output,
+      fsim::runtime::PackedLogic4::from_msb_string("0"),
+      fsim::runtime::PackedLogic4::from_msb_string("00000000"),
+      fsim::runtime::PackedLogic4::from_msb_string("0"),
+      state_rows);
+  require(
+      state_address0.state == VitalMemoryAddressState::good
+          && state_output.to_msb_string() == "00001111"
+          && word_state.port_flags[0].data_current
+              == VitalMemoryPortState::read
+          && word_state.port_flags[0].data_previous
+              == VitalMemoryPortState::undefined,
+      "VITAL word-table state initializes and retains current/previous flags");
+  static_cast<void>(execute_vital_memory_word_table(
+      state_memory, word_state, state_output,
+      fsim::runtime::PackedLogic4::from_msb_string("0"),
+      fsim::runtime::PackedLogic4::from_msb_string("00000000"),
+      fsim::runtime::PackedLogic4::from_msb_string("0"),
+      state_rows));
+  static_cast<void>(execute_vital_memory_word_table(
+      state_memory, word_state, state_output,
+      fsim::runtime::PackedLogic4::from_msb_string("0"),
+      fsim::runtime::PackedLogic4::from_msb_string("00000000"),
+      fsim::runtime::PackedLogic4::from_msb_string("0"),
+      state_rows));
+  require(
+      word_state.port_flags[0].output_disable,
+      "a fully steady VITAL word port suppresses redundant output scheduling");
+  const auto state_address1 = execute_vital_memory_word_table(
+      state_memory, word_state, state_output,
+      fsim::runtime::PackedLogic4::from_msb_string("0"),
+      fsim::runtime::PackedLogic4::from_msb_string("00000000"),
+      fsim::runtime::PackedLogic4::from_msb_string("1"),
+      state_rows);
+  require(
+      state_address1.state == VitalMemoryAddressState::good_transition
+          && state_address1.value == 1U
+          && state_output.to_msb_string() == "11110000"
+          && !word_state.port_flags[0].output_disable,
+      "VITAL word-table state preserves address history across calls");
+
+  auto subword_state_memory = make_vital_memory(1U, 8U, 4U);
+  VitalMemoryTableState subword_state;
+  auto subword_state_output =
+      fsim::runtime::PackedLogic4::from_msb_string("00000000");
+  const auto subword_state_address = execute_vital_memory_subword_table(
+      subword_state_memory, subword_state, subword_state_output,
+      fsim::runtime::PackedLogic4{},
+      {fsim::runtime::PackedLogic4::from_msb_string("11")},
+      action_input,
+      fsim::runtime::PackedLogic4::from_msb_string("0"),
+      {{{}, {'B'}, '-', '-', 'w', 't'}});
+  require(
+      subword_state_address.value == 0U
+          && subword_state_memory.words[0].to_msb_string() == "10101010"
+          && subword_state_output.to_msb_string() == "10101010"
+          && subword_state.port_flags.size() == 2U
+          && std::ranges::all_of(
+              subword_state.port_flags,
+              [](const auto& flag) {
+                return flag.memory_current == VitalMemoryPortState::write
+                    && flag.data_current == VitalMemoryPortState::read;
+              }),
+      "VITAL subword state preserves independent per-enable port flags");
+
+  const auto port_flags = [](const VitalMemoryPortState memory_state,
+                             const std::size_t count = 2U) {
+    std::vector<VitalMemoryPortFlag> flags(count);
+    for (auto& flag : flags) flag.memory_current = memory_state;
+    return flags;
+  };
+  auto cross_memory = make_vital_memory(2U, 8U, 4U);
+  cross_memory.words[0] =
+      fsim::runtime::PackedLogic4::from_msb_string("10100101");
+  cross_memory.words[1] =
+      fsim::runtime::PackedLogic4::from_msb_string("01011010");
+  auto cross_output =
+      fsim::runtime::PackedLogic4::from_msb_string("00000000");
+  auto same_flags = port_flags(VitalMemoryPortState::read);
+  const std::vector<VitalMemoryCrossPort> writing_port{
+      {0U, port_flags(VitalMemoryPortState::write)}};
+  apply_vital_memory_cross_ports(
+      cross_memory, cross_output, same_flags, 0U, writing_port,
+      VitalMemoryCrossPortMode::cross_read);
+  require(
+      cross_output.to_msb_string() == "10100101"
+          && std::ranges::all_of(same_flags, [](const auto& flag) {
+               return flag.memory_current == VitalMemoryPortState::read
+                   && flag.data_current == VitalMemoryPortState::read
+                   && !flag.output_disable;
+             }),
+      "VITAL cross-port reads forward the selected memory word");
+
+  cross_output = fsim::runtime::PackedLogic4::from_msb_string("00000000");
+  same_flags = port_flags(VitalMemoryPortState::write);
+  apply_vital_memory_cross_ports(
+      cross_memory, cross_output, same_flags, 0U, writing_port,
+      VitalMemoryCrossPortMode::write_contention);
+  require(
+      cross_output.to_msb_string() == "XXXXXXXX"
+          && cross_memory.words[0].to_msb_string() == "XXXXXXXX"
+          && std::ranges::all_of(same_flags, [](const auto& flag) {
+               return flag.memory_current == VitalMemoryPortState::corrupt
+                   && flag.data_current == VitalMemoryPortState::corrupt;
+             }),
+      "same-address VITAL write contention corrupts memory and output");
+
+  cross_memory.words[0] =
+      fsim::runtime::PackedLogic4::from_msb_string("10100101");
+  cross_output = fsim::runtime::PackedLogic4::from_msb_string("00000000");
+  same_flags = port_flags(VitalMemoryPortState::read);
+  apply_vital_memory_cross_ports(
+      cross_memory, cross_output, same_flags, 0U, writing_port,
+      VitalMemoryCrossPortMode::read_write_contention);
+  require(
+      cross_output.to_msb_string() == "XXXXXXXX"
+          && cross_memory.words[0].to_msb_string() == "XXXXXXXX",
+      "read/write contention mode corrupts both memory and output");
+
+  cross_memory.words[0] =
+      fsim::runtime::PackedLogic4::from_msb_string("10100101");
+  cross_output = fsim::runtime::PackedLogic4::from_msb_string("00000000");
+  same_flags = port_flags(VitalMemoryPortState::read);
+  apply_vital_memory_cross_ports(
+      cross_memory, cross_output, same_flags, 0U, writing_port,
+      VitalMemoryCrossPortMode::cross_read_and_read_contention);
+  require(
+      cross_output.to_msb_string() == "XXXXXXXX"
+          && cross_memory.words[0].to_msb_string() == "10100101",
+      "read/read contention mode corrupts output without changing memory");
+
+  cross_output = fsim::runtime::PackedLogic4::from_msb_string("01010101");
+  same_flags = port_flags(VitalMemoryPortState::read);
+  apply_vital_memory_cross_ports(
+      cross_memory, cross_output, same_flags, 0U,
+      {{1U, port_flags(VitalMemoryPortState::write)}},
+      VitalMemoryCrossPortMode::cross_read_and_write_contention);
+  require(
+      cross_output.to_msb_string() == "01010101",
+      "unrelated VITAL cross-port addresses do not interact");
+  cross_output = fsim::runtime::PackedLogic4::from_msb_string("ZZZZZZZZ");
+  apply_vital_memory_cross_ports(
+      cross_memory, cross_output, same_flags, 0U, writing_port,
+      VitalMemoryCrossPortMode::read_write_contention);
+  require(
+      cross_output.to_msb_string() == "ZZZZZZZZ"
+          && cross_memory.words[0].to_msb_string() == "10100101",
+      "a disabled high-impedance VITAL port ignores cross-port activity");
+
+  auto pair_memory = make_vital_memory(2U, 8U, 4U);
+  pair_memory.words[0] =
+      fsim::runtime::PackedLogic4::from_msb_string("00000000");
+  pair_memory.words[1] =
+      fsim::runtime::PackedLogic4::from_msb_string("11111111");
+  apply_vital_memory_write_contention(
+      pair_memory,
+      {{0U, port_flags(VitalMemoryPortState::write)},
+       {0U, port_flags(VitalMemoryPortState::write)},
+       {1U, port_flags(VitalMemoryPortState::write)}});
+  require(
+      pair_memory.words[0].to_msb_string() == "XXXXXXXX"
+          && pair_memory.words[1].to_msb_string() == "11111111",
+      "pairwise VITAL write contention is deterministic and address-local");
+
+  expect_rejection(
+      [&] {
+        auto output = fsim::runtime::PackedLogic4::from_msb_string("00000000");
+        auto flags = port_flags(VitalMemoryPortState::read);
+        apply_vital_memory_cross_ports(
+            pair_memory, output, flags, 0U,
+            {{0U, port_flags(VitalMemoryPortState::write, 1U)}},
+            VitalMemoryCrossPortMode::cross_read);
+      },
+      "VITAL cross-port processing rejects inconsistent flag dimensions");
+
+  const std::vector<VitalMemoryTableRow> violation_rows{
+      {{'-', '0'}, {'X', '0'}, '-', '-', 'D', 'L'}};
+  const auto violation_lookup = lookup_vital_memory_violation(
+      violation_rows,
+      fsim::runtime::PackedLogic4::from_msb_string("X0"),
+      fsim::runtime::PackedLogic4::from_msb_string("00X0"),
+      {2U, 2U}, 8U, 4U);
+  require(
+      violation_lookup.violation
+          && violation_lookup.message_requested
+          && violation_lookup.actions.matched_row == 0U
+          && violation_lookup.actions.memory_action == 'D'
+          && violation_lookup.actions.data_action == 'L'
+          && violation_lookup.actions.memory_corrupt_mask.to_msb_string()
+              == "XXXX0000"
+          && violation_lookup.actions.data_corrupt_mask.to_msb_string()
+              == "XXXX0000",
+      "VITAL violation lookup aggregates sized vector flags into subword masks");
+  const auto quiet_violation = lookup_vital_memory_violation(
+      violation_rows,
+      fsim::runtime::PackedLogic4::from_msb_string("X0"),
+      fsim::runtime::PackedLogic4::from_msb_string("00X0"),
+      {2U, 2U}, 8U, 4U, false);
+  require(
+      quiet_violation.violation && !quiet_violation.message_requested,
+      "VITAL violation reporting is independent from X action selection");
+
+  auto violation_memory = make_vital_memory(1U, 8U, 4U);
+  violation_memory.words[0] =
+      fsim::runtime::PackedLogic4::from_msb_string("10101010");
+  auto violation_output =
+      fsim::runtime::PackedLogic4::from_msb_string("01010101");
+  auto violation_flags = port_flags(VitalMemoryPortState::read);
+  const auto read_violation = apply_vital_memory_violation(
+      violation_memory, violation_output, violation_flags, action_input, 0U,
+      fsim::runtime::PackedLogic4::from_msb_string("X0"),
+      fsim::runtime::PackedLogic4::from_msb_string("00X0"),
+      {2U, 2U}, violation_rows, VitalMemoryPortType::read);
+  require(
+      read_violation.violation
+          && violation_output.to_msb_string() == "XXXX1010"
+          && violation_memory.words[0].to_msb_string() == "10101010"
+          && std::ranges::all_of(violation_flags, [](const auto& flag) {
+               return flag.data_current == VitalMemoryPortState::corrupt
+                   && !flag.output_disable;
+             }),
+      "a read-port VITAL violation corrupts output but retains memory");
+
+  violation_output =
+      fsim::runtime::PackedLogic4::from_msb_string("01010101");
+  violation_flags = port_flags(VitalMemoryPortState::write);
+  const auto write_violation = apply_vital_memory_violation(
+      violation_memory, violation_output, violation_flags, action_input, 0U,
+      fsim::runtime::PackedLogic4::from_msb_string("X0"),
+      fsim::runtime::PackedLogic4::from_msb_string("00X0"),
+      {2U, 2U}, violation_rows, VitalMemoryPortType::write);
+  require(
+      write_violation.violation
+          && violation_output.to_msb_string() == "01010101"
+          && violation_memory.words[0].to_msb_string() == "XXXX1010",
+      "a write-port VITAL violation corrupts memory but retains output");
+
+  const auto no_violation = lookup_vital_memory_violation(
+      violation_rows,
+      fsim::runtime::PackedLogic4::from_msb_string("00"),
+      fsim::runtime::PackedLogic4::from_msb_string("0000"),
+      {2U, 2U}, 8U, 4U);
+  require(
+      !no_violation.violation && !no_violation.actions.matched_row
+          && no_violation.actions.memory_action == 's'
+          && no_violation.actions.data_action == 'S',
+      "an unmatched VITAL violation table retains memory and output");
+  const auto bad_violation_symbol = lookup_vital_memory_violation(
+      {{{'1', '-'}, {'-', '-'}, '-', '-', 'c', 'l'}},
+      fsim::runtime::PackedLogic4::from_msb_string("X0"),
+      fsim::runtime::PackedLogic4::from_msb_string("0000"),
+      {2U, 2U}, 8U, 4U);
+  require(
+      bad_violation_symbol.actions.invalid_input_symbol
+          && !bad_violation_symbol.violation,
+      "VITAL violation tables reject symbols outside X, zero, and don't-care");
+  const auto invalid_address_violation = apply_vital_memory_violation(
+      violation_memory, violation_output, violation_flags, action_input,
+      std::nullopt,
+      fsim::runtime::PackedLogic4::from_msb_string("X0"),
+      fsim::runtime::PackedLogic4::from_msb_string("00X0"),
+      {2U, 2U}, violation_rows, VitalMemoryPortType::read_write);
+  require(
+      !invalid_address_violation.violation,
+      "VITAL violations ignore erroneous decoded addresses transactionally");
+  expect_rejection(
+      [&] {
+        static_cast<void>(lookup_vital_memory_violation(
+            violation_rows,
+            fsim::runtime::PackedLogic4::from_msb_string("X0"),
+            fsim::runtime::PackedLogic4::from_msb_string("00X0"),
+            {3U, 2U}, 8U, 4U));
+      },
+      "VITAL violation lookup rejects inconsistent vector flag sizes");
+
+  std::vector<VitalMemorySetupHoldEntry> setup_entries(4U);
+  for (auto& entry : setup_entries) {
+    entry.test_delay = 2U;
+    entry.reference_delay = 3U;
+    entry.limits = {5U, 5U, 5U, 5U};
+    entry.check_enabled = false;
+  }
+  setup_entries[0].check_enabled = true;
+  VitalMemoryVectorTimingState setup_state;
+  static_cast<void>(evaluate_vital_memory_setup_hold(
+      setup_state, 0U,
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("00"),
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("00"),
+      setup_entries, VitalMemoryTimingArc::cross, 1U,
+      std::uint16_t{1U} << 0U));
+  static_cast<void>(evaluate_vital_memory_setup_hold(
+      setup_state, 5U,
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("01"),
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("00"),
+      setup_entries, VitalMemoryTimingArc::cross, 1U,
+      std::uint16_t{1U} << 0U));
+  const auto setup_violation = evaluate_vital_memory_setup_hold(
+      setup_state, 7U,
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("01"),
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("01"),
+      setup_entries, VitalMemoryTimingArc::cross, 1U,
+      std::uint16_t{1U} << 0U);
+  require(
+      setup_violation.violation && setup_violation.message_requested
+          && setup_violation.violated_checks == std::vector<std::size_t>{0U}
+          && setup_violation.test_violations.to_msb_string() == "0X"
+          && setup_violation.reference_violations.to_msb_string() == "0X",
+      "VITAL cross-arc setup checks retain independent test/reference state");
+
+  auto no_x_setup_entries = setup_entries;
+  VitalMemoryVectorTimingState no_x_setup_state;
+  static_cast<void>(evaluate_vital_memory_setup_hold(
+      no_x_setup_state, 0U,
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("00"),
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("00"),
+      no_x_setup_entries, VitalMemoryTimingArc::cross, 1U,
+      std::uint16_t{1U} << 0U, {true, true, true, true}, false, true));
+  static_cast<void>(evaluate_vital_memory_setup_hold(
+      no_x_setup_state, 5U,
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("01"),
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("00"),
+      no_x_setup_entries, VitalMemoryTimingArc::cross, 1U,
+      std::uint16_t{1U} << 0U, {true, true, true, true}, false, true));
+  const auto no_x_setup = evaluate_vital_memory_setup_hold(
+      no_x_setup_state, 7U,
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("01"),
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("01"),
+      no_x_setup_entries, VitalMemoryTimingArc::cross, 1U,
+      std::uint16_t{1U} << 0U, {true, true, true, true}, false, true);
+  require(
+      no_x_setup.violation && no_x_setup.message_requested
+          && no_x_setup.test_violations.to_msb_string() == "00"
+          && no_x_setup.reference_violations.to_msb_string() == "00",
+      "VITAL vector timing reports independently when XOn is disabled");
+
+  VitalMemoryVectorTimingState subword_timing_state;
+  std::vector<VitalMemorySetupHoldEntry> subword_entries(4U);
+  for (auto& entry : subword_entries) entry.limits = {3U, 3U, 3U, 3U};
+  const auto initialized_subword = evaluate_vital_memory_setup_hold(
+      subword_timing_state, 0U,
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("0000"),
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("00"),
+      subword_entries, VitalMemoryTimingArc::subword, 2U,
+      std::uint16_t{1U} << 0U);
+  require(
+      !initialized_subword.violation
+          && subword_timing_state.elements.size() == 4U,
+      "VITAL subword setup checks map each data bit to its enable reference");
+
+  require(
+      aggregate_vital_memory_violations(
+          fsim::runtime::PackedLogic4::from_logic9_msb_string("X00X"),
+          2U).to_msb_string() == "XX",
+      "VITAL memory violations aggregate deterministically by subword");
+
+  VitalMemoryVectorTimingState period_state;
+  const std::vector<VitalMemoryPeriodPulseEntry> period_entries{
+      {1U, 10U, 6U, 6U, true},
+      {2U, 10U, 6U, 6U, false}};
+  static_cast<void>(evaluate_vital_memory_period_pulse(
+      period_state, 0U,
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("00"),
+      period_entries));
+  static_cast<void>(evaluate_vital_memory_period_pulse(
+      period_state, 5U,
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("01"),
+      period_entries));
+  const auto pulse_violation = evaluate_vital_memory_period_pulse(
+      period_state, 10U,
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("00"),
+      period_entries);
+  require(
+      pulse_violation.violation && pulse_violation.message_requested
+          && pulse_violation.violated_checks == std::vector<std::size_t>{0U}
+          && pulse_violation.test_violations.to_msb_string() == "0X",
+      "VITAL vector period/pulse checks retain per-element thresholds and state");
+  const auto quiet_period = evaluate_vital_memory_period_pulse(
+      period_state, 12U,
+      fsim::runtime::PackedLogic4::from_logic9_msb_string("01"),
+      period_entries, false, false,
+      VitalMemoryMessageFormat::vector_enumerated);
+  require(
+      quiet_period.violation && !quiet_period.message_requested
+          && quiet_period.test_violations.to_msb_string() == "00",
+      "VITAL period reporting and X propagation are independently controlled");
+
+  expect_rejection(
+      [&] {
+        VitalMemoryVectorTimingState bad_state;
+        static_cast<void>(evaluate_vital_memory_setup_hold(
+            bad_state, 0U,
+            fsim::runtime::PackedLogic4::from_msb_string("00"),
+            fsim::runtime::PackedLogic4::from_msb_string("0"),
+            {{0U, 0U, {1U, 1U, 1U, 1U}, true}},
+            VitalMemoryTimingArc::parallel, 1U,
+            std::uint16_t{1U} << 0U));
+      },
+      "VITAL parallel timing rejects mismatched vector widths");
 }
 
 } // namespace fsim::tests::runtime

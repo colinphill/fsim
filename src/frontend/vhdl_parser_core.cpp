@@ -464,6 +464,11 @@ DesignUnit VhdlParser::parse_entity(const Token& start) {
           unit.vhdl_component_declarations,
           std::move(declaration),
           component_start);
+    } else if (match_keyword("attribute", true)) {
+      // Attribute declarations/specifications are static design metadata.
+      // Accept them for VITAL and vendor-library compatibility; queried
+      // user-defined attribute semantics remain outside this batch.
+      skip_to_semicolon();
     } else {
       const auto declaration = advance();
       error(declaration, "FSIM-VHDL-UNSUPPORTED-003",
@@ -1145,6 +1150,10 @@ DesignUnit VhdlParser::parse_architecture(const Token& start) {
           parse_vhdl_component_configuration(previous(), false);
       unit.vhdl_configuration_specifications.push_back(
           std::move(specification));
+    } else if (match_keyword("attribute", true)) {
+      // Preserve compatibility with VITAL_LEVEL0/1 and analogous vendor
+      // metadata without assigning executable semantics to the attribute.
+      skip_to_semicolon();
     } else {
       const auto declaration = advance();
       error(declaration, "FSIM-VHDL-UNSUPPORTED-004",

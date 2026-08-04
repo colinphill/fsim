@@ -92,6 +92,8 @@ Capture run_once(
   }
   assert(project);
   std::size_t delay_operations{};
+  std::size_t memory_operations{};
+  std::size_t embedded_memory_operations{};
   std::size_t glitch_locals{};
   for (const auto& process : project->design.processes()) {
     delay_operations += static_cast<std::size_t>(std::ranges::count_if(
@@ -99,12 +101,28 @@ Capture run_once(
           return fsim::runtime::simir::operation_get_if<
               fsim::runtime::simir::VitalDelay>(&operation) != nullptr;
         }));
+    memory_operations += static_cast<std::size_t>(std::ranges::count_if(
+        process.operations, [](const auto& operation) {
+          return fsim::runtime::simir::operation_get_if<
+              fsim::runtime::simir::VitalMemoryDeclare>(&operation)
+              != nullptr;
+        }));
+    for (const auto& operation : process.operations) {
+      const auto* memory = fsim::runtime::simir::operation_get_if<
+          fsim::runtime::simir::VitalMemoryDeclare>(&operation);
+      if (memory != nullptr && memory->embedded_load) {
+        ++embedded_memory_operations;
+        assert(memory->embedded_load_text == "@3 a5\n");
+      }
+    }
     glitch_locals += static_cast<std::size_t>(std::ranges::count_if(
         process.debug_locals, [](const auto& local) {
           return local.name == "glitch";
         }));
   }
-  assert(delay_operations == kNames.size());
+  assert(delay_operations == kNames.size() + 1U);
+  assert(memory_operations == 3U);
+  assert(embedded_memory_operations == 1U);
   assert(glitch_locals == 8U);
 
   Capture capture;
@@ -245,6 +263,37 @@ void expect_failure(
   assert(found);
 }
 
+void expect_memory_load_failure(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const std::filesystem::path& missing) {
+  std::ofstream output{source, std::ios::binary};
+  output << "library ieee;\n"
+            "use ieee.vital_memory.all;\n"
+            "entity vital_delay is end entity;\n"
+            "architecture rtl of vital_delay is begin\n"
+            "  model : process\n"
+            "    variable memory : VitalMemoryDataType := "
+            "VitalDeclareMemory(NoOfWords => 4, NoOfBitsPerWord => 8, "
+            "MemoryLoadFile => \""
+         << missing.generic_string()
+         << "\");\n"
+            "  begin wait; end process;\n"
+            "end architecture;\n";
+  assert(output.good());
+  output.close();
+  fsim::diagnostic::Engine diagnostics;
+  const auto project = fsim::app::build_project(
+      make_config(
+          directory, source, fsim::project::Optimization::o0),
+      diagnostics);
+  assert(!project);
+  assert(std::ranges::any_of(
+      diagnostics.diagnostics(), [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-ELAB-VITALMEM-004";
+      }));
+}
+
 }  // namespace
 
 int main() {
@@ -255,17 +304,99 @@ int main() {
       / ("fsim-vital-delay-" + std::to_string(serial))};
   std::filesystem::create_directories(directory.path);
   const auto source = directory.path / "vital_delay.vhd";
+  const auto memory_load = directory.path / "vendor-memory.hex";
+  {
+    std::ofstream load{memory_load, std::ios::binary};
+    load << "@3 a5\n";
+    assert(load.good());
+  }
   {
     std::ofstream output{source, std::ios::binary};
     output << R"(
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.vital_timing.all;
+use ieee.vital_memory.all;
+
+entity vendor_cell is
+  generic (TimingChecksOn : boolean := true);
+  port (a : in std_logic; y : out std_logic);
+  attribute VITAL_LEVEL0 : boolean;
+  attribute VITAL_LEVEL0 of vendor_cell : entity is true;
+end entity;
+
+architecture vital of vendor_cell is
+  attribute VITAL_LEVEL1 : boolean;
+  attribute VITAL_LEVEL1 of vital : architecture is true;
+  signal \vendor$input\ : std_logic;
+begin
+  \vendor$input\ <= a;
+  -- pragma translate_off
+  assert true report "vendor timing model compatibility" severity note;
+  -- pragma translate_on
+  timing_enabled : if TimingChecksOn generate
+    delay_process : process(\vendor$input\)
+    begin
+      VitalSignalDelay(y, \vendor$input\, 1 ns);
+    end process;
+  end generate;
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.vital_memory.all;
+
+entity vendor_memory is
+  generic (
+    Width : positive := 8;
+    TimingChecksOn : boolean := true);
+  attribute VITAL_LEVEL0 : boolean;
+  attribute VITAL_LEVEL0 of vendor_memory : entity is true;
+end entity;
+
+architecture vital of vendor_memory is
+  attribute VITAL_LEVEL1 : boolean;
+  attribute VITAL_LEVEL1 of vital : architecture is true;
+begin
+  model : process
+    variable memory : VitalMemoryDataType :=
+        VitalDeclareMemory(
+            NoOfWords => 16,
+            NoOfBitsPerWord => Width,
+            NoOfBitsPerSubWord => Width,
+            MemoryLoadFile => )"
+           << '"' << memory_load.generic_string() << '"'
+           << R"(,
+            BinaryLoadFile => false);
+  begin
+    if TimingChecksOn then
+      assert Width > 0
+        report "vendor memory width is invalid" severity failure;
+    end if;
+    wait;
+  end process;
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.vital_timing.all;
+use ieee.vital_memory.all;
 
 entity vital_delay is
 end entity;
 
 architecture rtl of vital_delay is
+  component vendor_cell is
+    generic (TimingChecksOn : boolean := true);
+    port (a : in std_logic; y : out std_logic);
+  end component;
+  component vendor_memory is
+    generic (
+      Width : positive := 8;
+      TimingChecksOn : boolean := true);
+  end component;
+  for all : vendor_cell use entity work.vendor_cell(vital);
+  for all : vendor_memory use entity work.vendor_memory(vital);
   signal input_value : std_logic;
   signal pulse_input : std_logic;
   signal pulse_enable : boolean;
@@ -281,8 +412,23 @@ architecture rtl of vital_delay is
   signal transport_delayed : std_logic;
   signal inertial_delayed : std_logic;
   signal ignored_default_delayed : std_logic;
+  signal vendor_delayed : std_logic;
 begin
+  configured_cell : vendor_cell
+    generic map (TimingChecksOn => true)
+    port map (a => input_value, y => vendor_delayed);
+  configured_memory : vendor_memory
+    generic map (Width => 8, TimingChecksOn => true);
+
   stimulus : process
+    variable memory_default : VitalMemoryDataType :=
+        VitalDeclareMemory(4, 65);
+    variable memory_subword : VitalMemoryDataType := VitalDeclareMemory(
+        NoOfWords => 2,
+        NoOfBitsPerWord => 8,
+        NoOfBitsPerSubWord => 4,
+        MemoryLoadFile => "",
+        BinaryLoadFile => true);
   begin
     input_value <= '0';
     pulse_input <= '0';
@@ -496,14 +642,32 @@ end architecture;
     assert(fsim::app::serialize_runtime_state(*restored, diagnostics)
            == encoded);
     std::size_t restored_delays{};
+    std::size_t restored_memories{};
+    std::size_t restored_embedded_memories{};
     for (const auto& process : restored->processes()) {
       restored_delays += static_cast<std::size_t>(std::ranges::count_if(
           process.operations, [](const auto& operation) {
             return fsim::runtime::simir::operation_get_if<
                 fsim::runtime::simir::VitalDelay>(&operation) != nullptr;
           }));
+      restored_memories += static_cast<std::size_t>(std::ranges::count_if(
+          process.operations, [](const auto& operation) {
+            return fsim::runtime::simir::operation_get_if<
+                fsim::runtime::simir::VitalMemoryDeclare>(&operation)
+                != nullptr;
+          }));
+      for (const auto& operation : process.operations) {
+        const auto* memory = fsim::runtime::simir::operation_get_if<
+            fsim::runtime::simir::VitalMemoryDeclare>(&operation);
+        if (memory != nullptr && memory->embedded_load) {
+          ++restored_embedded_memories;
+          assert(memory->embedded_load_text == "@3 a5\n");
+        }
+      }
     }
-    assert(restored_delays == kNames.size());
+    assert(restored_delays == kNames.size() + 1U);
+    assert(restored_memories == 3U);
+    assert(restored_embedded_memories == 1U);
     project->design = std::move(*restored);
     fsim::app::Simulation simulation{
         std::move(*project), artifact_config.run.max_deltas,
@@ -557,6 +721,7 @@ end architecture;
     std::filesystem::permissions(
         relocated, read_only_directory,
         std::filesystem::perm_options::replace);
+    std::filesystem::remove(memory_load);
     auto loaded = fsim::app::load_design_artifact(relocated, diagnostics);
     if (!loaded) {
       for (const auto& diagnostic : diagnostics.diagnostics()) {
@@ -576,6 +741,11 @@ end architecture;
       assert(
           simulation.read_signal(*signal).to_msb_string()
           == (index + 1U == kNames.size() ? "U" : "0"));
+    }
+    {
+      std::ofstream load{memory_load, std::ios::binary};
+      load << "@3 a5\n";
+      assert(load.good());
     }
   }
 
@@ -607,5 +777,7 @@ end architecture;
       "VitalPathDelay(OutSignal => out_value, GlitchData => glitch, "
       "OutTemp => in_value, Paths => in_value, DefaultDelay => 1 ns);",
       "FSIM-ELAB-VITAL-021");
+  expect_memory_load_failure(
+      directory.path, source, directory.path / "missing-memory.hex");
   return 0;
 }

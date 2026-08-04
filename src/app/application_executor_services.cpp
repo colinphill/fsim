@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+
 #include "fsim/runtime/file_binary.hpp"
 #include "fsim/runtime/file_scanning.hpp"
 #include "fsim/runtime/string_methods.hpp"
@@ -554,7 +555,52 @@ std::uint32_t LlvmProcessExecutor::container_operation(
     *result_bval = 0;
     const auto& operation =
         callback_operation(state, process, instruction);
-    if (const auto* method =
+    if (const auto* declaration =
+            fsim::runtime::simir::operation_get_if<
+                runtime::simir::VitalMemoryDeclare>(&operation)) {
+      auto memory = runtime::simir::make_vital_memory(
+          declaration->word_count, declaration->word_width,
+          declaration->subword_width);
+      const auto& path = state.executor->string_registers_.at(
+          declaration->load_file);
+      if (declaration->embedded_load) {
+        runtime::simir::load_vital_memory_text(
+            memory, declaration->embedded_load_text,
+            declaration->binary);
+      } else if (!path.empty()) {
+        const auto handle = state.context->open_file(path, "r");
+        std::string text;
+        try {
+          while (!state.context->file_end_of_file(handle)) {
+            std::uint32_t count{};
+            auto line = state.context->read_file_line(handle, count);
+            if (text.size() + line.size()
+                > runtime::simir::maximum_memory_file_bytes) {
+              throw std::length_error{
+                  "VITAL memory load file exceeds the 1 MiB input budget"};
+            }
+            text += line;
+          }
+          state.context->close_file(handle);
+        } catch (...) {
+          try {
+            state.context->close_file(handle);
+          } catch (...) {
+          }
+          throw;
+        }
+        runtime::simir::load_vital_memory_text(
+            memory, text, declaration->binary);
+      }
+      auto& memories = state.executor->storage_->vital_memories;
+      if (memories.size() >= std::numeric_limits<std::uint32_t>::max()) {
+        throw compiler::LlvmJitError{
+            "compiled VITAL memory handle space is exhausted"};
+      }
+      memories.push_back(std::move(memory));
+      *result_aval = memories.size();
+      return 0;
+    } else if (const auto* method =
             fsim::runtime::simir::operation_get_if<runtime::simir::StringMethod>(&operation)) {
       auto& source =
           state.executor->string_registers_.at(method->source);
@@ -1326,8 +1372,15 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         target.elements.pop_back();
       }
     } else {
+      const auto alternative = std::visit(
+          [](const auto& group) { return group.storage.index(); },
+          operation.storage);
       throw compiler::LlvmJitError{
-          "compiled container callback has the wrong operation"};
+          "compiled container callback has the wrong operation at process "
+          + std::to_string(process) + ", instruction "
+          + std::to_string(instruction) + " (group "
+          + std::to_string(operation.storage.index()) + ", alternative "
+          + std::to_string(alternative) + ")"};
     }
     return 0;
   } catch (...) {

@@ -7,11 +7,76 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
-- Current unit: Batch 142, exactly 20 changes, complete from clean pushed Batch
-  141 closeout `0d3be3e`. Its authoritative VITAL path/wire/pulse contract and
-  per-change status are recorded in `implementation_plan_v2.md`. Changes 1-20
-  are complete; Batch 143 is the next implementation unit. Batch 142 is not a
+- Current unit: Batch 143, exactly 20 changes, complete from clean pushed
+  Batch 142 closeout `0b8f212`. Its authoritative VITAL memory/vendor-model
+  contract and per-change status are recorded in `implementation_plan_v2.md`.
+  Changes 1 through 20 are complete. Batch 143 is not a
   CI-monitoring batch.
+- Batch 143 owns clean-room `ieee.vital_memory` public metadata and execution:
+  memory declaration/loading, action and violation tables, word/subword state,
+  multi-port contention, vector memory timing checks, path accumulation and
+  retained-output scheduling, resource-governed geometry, representative
+  vendor-style cell/memory compatibility, artifacts, both engines, debugger,
+  callbacks, VCD, diagnostics, and release evidence. Changes 1-19 remain one
+  accumulated worktree; Change 20 alone owns full exact-LLVM Debug/Release
+  gates, documentation closeout, one commit, and one push. Do not run a
+  sanitizer or inspect hosted CI for this batch.
+- Batch 143 now materializes the complete clean-room public
+  `ieee.vital_memory` metadata and both `VitalDeclareMemory` profiles. The
+  declaration runtime uses resource-governed arbitrary-width UX01 storage,
+  confined hexadecimal/binary file loading, interpreter and LLVM callbacks,
+  and native-cache schema v78. Direct runtime negatives plus the existing
+  VITAL application differential pass after an eight-worker structural clean
+  rebuild. Address/data state decoding and word/subword table lookup now cover
+  all legal transition/level/flag symbols, first-row/default behavior,
+  independent vector enables, short final subwords, and arbitrary-width
+  corruption masks. All word/subword table actions now execute with data-before-
+  memory ordering, exact UX01/Z values, current/previous per-port state, bus
+  history, transitioned addresses, and stable-call output suppression; resume
+  with cross-port interaction in Change 9. Both cross-port profiles and both
+  violation profiles now pass focused runtime coverage for forwarding,
+  contention, port disabling, deterministic pairing, sized scalar/vector
+  masks, port-type gating, invalid addresses, and reporting control. Vector
+  setup/hold checks now cover cross, parallel, and subword pair maps with
+  per-pair state, per-entry delay/limits/enables, aggregation, and independent
+  X/message selection. Vector period/pulse checks preserve per-bit state and
+  thresholds with the same independent controls. Memory path initialization,
+  selection, and scheduling now normalize every scalar/vector and
+  single/01/01Z/01ZX profile across cross, parallel, and subword arcs. Focused
+  coverage includes simultaneous shortest paths, scalar/per-bit/subword
+  conditions and flags, bit/word retain corruption, mapped Z values, checked
+  time overflow, null ranges, and projected transport-waveform handoff. VITAL
+  memories now use contiguous storage only as a small-memory optimization;
+  large logical depths retain an explicit default word and resource-bounded
+  sparse materialization, so total depth is not a host-allocation limit.
+  Transactional loading, sparse global corruption, a one-word width budget,
+  malformed geometry, and far-address access pass focused runtime coverage;
+  the VITAL package and delay application cases also pass. Declarative
+  user-defined attributes are now accepted in entity, architecture, and
+  generated regions for VITAL vendor compatibility. The representative
+  configured cell and memory models exercise VITAL_LEVEL metadata, guarded
+  timing generics, extended identifiers, synthesis pragmas, null path ranges,
+  generic memory declaration, component bindings, both engines, LLVM O0/O2
+  cold/warm cache, debugger, VCD, runtime-state and relocated artifacts without
+  vendor-name special cases. Static VITAL memory load files are now validated
+  and embedded into SimIR, hashed by native cache v78, serialized through
+  runtime state and design artifacts, and consumed by interpreter and LLVM
+  callbacks; dynamic paths retain confined runtime loading. The relocated
+  artifact test deletes the original file before standalone execution, proving
+  loaded contents no longer depend on the build tree. Focused runtime, package
+  integration, vendor model, LLVM O0/O2 cold/warm cache, debugger, callback,
+  VCD, `.fsimobj`, runtime-state, and relocated `.fsimdesign` evidence passes.
+  Documentation, diagnostics, feature-matrix, inventory, compatibility, and
+  restart records are synchronized. The focused runtime, VITAL application,
+  diagnostic-catalog, source-budget, IEEE-package, and inventory gates pass.
+  Exact-LLVM Debug and Release each pass 111/111 tests after eight-worker
+  builds, in 133.33 and 104.39 seconds. Source, catalog, inventory,
+  installed-public-contract, MSVC/Windows contract, differential, and
+  release-candidate gates pass. The reviewed baselines are 1,692 diagnostics,
+  479 bounded sources, 569 SPDX-owned artifacts, 200 test/control files, 1,101
+  execute rows, 4,404 evidence cells, 346 evidence paths, and 100 runtime
+  owners. No sanitizer or hosted CI inspection ran for this non-monitoring
+  batch.
 - Batch 142 accumulated work materializes all three public path-record/array
   families and lowers scalar signal delay, all three wire-delay profiles, and
   all three path-delay profiles to one append-only `VitalDelay` operation.

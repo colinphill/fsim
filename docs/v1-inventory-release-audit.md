@@ -103,3 +103,11 @@ delay diagnostics advance the reviewed totals to 1,688 diagnostics, 476
 bounded C/C++ sources, 566 authored artifacts, and 199 authored test/control
 files. The path/wire/pulse matrix adds no external VITAL body or third-party
 provenance.
+
+v2 Batch 143 adds the split VITAL memory lowerer, memory path runtime, and
+focused path runtime matrix as three SPDX-owned bounded C++ sources. Four
+memory-declaration diagnostics advance the reviewed totals to 1,692
+diagnostics, 479 bounded C/C++ sources, 569 authored artifacts, and 200
+authored test/control files. The complete memory/vendor compatibility matrix
+uses only clean-room interfaces and implementations; no external VITAL body,
+vendor source, third-party artifact, or provenance entry is imported.

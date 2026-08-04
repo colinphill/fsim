@@ -1079,7 +1079,8 @@ private:
     bool lower_vhdl_protected_procedure_call(const Statement&);
     bool lower_vhdl_file_procedure_call(const Statement&);
     bool lower_vhdl_textio_procedure_call(const Statement&);
-    bool lower_vhdl_vital_delay_call(const Statement&); bool lower_vhdl_vital_state_table_call(const Statement&);
+    bool lower_vhdl_vital_delay_call(const Statement&);
+    bool lower_vhdl_vital_state_table_call(const Statement&);
     bool lower_vhdl_vital_procedure_call(const Statement&);
     bool lower_vhdl_access_assignment(const Statement&);
     std::optional<ContainerRegisterId> vhdl_access_heap(
@@ -1221,11 +1222,10 @@ private:
         std::size_t expected_width,
         const frontend::Type*);
     ExpressionAttempt lower_system_function_expression(
-        const Expression& expression,
-        std::size_t expected_width,
-        const frontend::Type* expected_type);
+        const Expression&, std::size_t, const frontend::Type*);
     ExpressionAttempt lower_vhdl_logic_function_expression(const Expression&, std::size_t, const frontend::Type*);
     ExpressionAttempt lower_vhdl_vital_expression(const Expression&, std::size_t, const frontend::Type*);
+    ExpressionAttempt lower_vhdl_vital_memory_expression(const Expression&, std::size_t, const frontend::Type*);
     ExpressionAttempt lower_vhdl_fixed_function_expression(const Expression&, std::size_t, const frontend::Type*);
     ExpressionAttempt lower_vhdl_float_function_expression(const Expression&, std::size_t, const frontend::Type*);
     ExpressionAttempt lower_vhdl_numeric_function_expression(const Expression&, std::size_t, const frontend::Type*);

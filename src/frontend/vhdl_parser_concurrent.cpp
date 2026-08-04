@@ -525,9 +525,17 @@ bool VhdlParser::parse_vhdl_generate_declarations(
           component_start);
       continue;
     }
+    if (match_keyword("attribute", true)) {
+      // User-defined attributes are elaboration metadata unless a later
+      // language feature explicitly queries them. VITAL vendor models use
+      // VITAL_LEVEL0/1 declarations and specifications pervasively; preserve
+      // source acceptance without attaching simulator semantics to them.
+      parsed = true;
+      skip_to_semicolon();
+      continue;
+    }
     if (keyword("variable", 0, true)
         || keyword("shared", 0, true)
-        || keyword("attribute", 0, true)
         || keyword("use", 0, true)
         || keyword("group", 0, true)
         || keyword("disconnect", 0, true)

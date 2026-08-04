@@ -171,6 +171,7 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
     std::vector<std::uint8_t> register_initialized;
     std::vector<std::string> string_registers;
     std::vector<runtime::simir::ContainerValue> container_registers;
+    std::vector<runtime::simir::VitalMemoryState> vital_memories;
   };
 
   LlvmProcessExecutor(

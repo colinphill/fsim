@@ -103,7 +103,7 @@ Capture run_once(
   for (const std::string_view dependency : {
            "numeric_bit.vhdl", "numeric_std.vhdl", "fixed_pkg.vhdl",
            "float_pkg.vhdl", "vital_timing.vhdl",
-           "vital_primitives.vhdl"}) {
+           "vital_primitives.vhdl", "vital_memory.vhdl"}) {
     assert(std::ranges::any_of(
         specialization->source_dependencies,
         [&](const std::string& source) {
@@ -182,11 +182,12 @@ void verify_analysis(const fsim::project::Config& config) {
   assert(!diagnostics.has_error());
   assert(checked->source_count == 3);
   assert(checked->hdl_sources.size() == 3);
-  assert(checked->standard_sources.size() == 18);
+  assert(checked->standard_sources.size() == 19);
   for (const auto& source : checked->standard_sources) {
     assert(source.path.generic_string().starts_with("fsim-standard/ieee/"));
     if (source.path.filename() == "vital_timing.vhdl"
-        || source.path.filename() == "vital_primitives.vhdl") {
+        || source.path.filename() == "vital_primitives.vhdl"
+        || source.path.filename() == "vital_memory.vhdl") {
       assert(source.backing_path.empty());
     } else {
       assert(source.backing_path.generic_string().find(
@@ -205,7 +206,8 @@ void verify_analysis(const fsim::project::Config& config) {
       "std_logic_1164", "std_logic_textio", "numeric_bit",
       "numeric_std", "math_real", "fixed_float_types",
       "fixed_generic_pkg", "fixed_pkg", "float_generic_pkg",
-      "float_pkg", "vital_timing", "vital_primitives"}));
+      "float_pkg", "vital_timing", "vital_primitives",
+      "vital_memory"}));
   for (const std::string_view package : {
            "std_logic_1164", "numeric_bit", "numeric_std", "math_real",
            "fixed_generic_pkg", "float_generic_pkg"}) {
@@ -337,6 +339,49 @@ void verify_analysis(const fsim::project::Config& config) {
       "vital_timing", "vitalskewdatatype");
   assert(skew_data.packed_members.size() == 5);
   assert(skew_data.width() == 259);
+  const auto memory_arc = package_type(
+      "vital_memory", "vitalmemoryarctype");
+  assert((memory_arc.enumeration_literals == std::vector<std::string>{
+      "parallelarc", "crossarc", "subwordarc"}));
+  const auto memory_schedule = package_type(
+      "vital_memory", "vitalmemoryscheduledatatype");
+  assert(memory_schedule.packed_members.size() == 8);
+  assert(memory_schedule.packed_members[1].name == "numbitspersubword");
+  assert(memory_schedule.width() == 291);
+  const auto memory_timing = package_type(
+      "vital_memory", "vitalmemorytimingdatatype");
+  assert(memory_timing.packed_members.size() == 13);
+  assert(memory_timing.packed_members[9].name == "reflasta");
+  assert(memory_timing.width() == 325);
+  const auto port_state = package_type(
+      "vital_memory", "vitalportstatetype");
+  assert(port_state.enumeration_literals.size() == 5);
+  const auto port_flag = package_type(
+      "vital_memory", "vitalportflagtype");
+  assert(port_flag.packed_members.size() == 5);
+  assert(port_flag.width() == 13);
+  const auto memory_word_ptr = package_type(
+      "vital_memory", "memorywordptr");
+  assert(memory_word_ptr.vhdl_access && memory_word_ptr.width() == 32);
+  const auto memory_data = package_type(
+      "vital_memory", "vitalmemorydatatype");
+  assert(memory_data.vhdl_access && memory_data.width() == 32);
+  assert(memory_data.vhdl_access->designated_types.size() == 1);
+  assert(memory_data.vhdl_access->designated_types.front().width() == 160);
+  const auto memory_symbol = package_type(
+      "vital_memory", "vitalmemorysymboltype");
+  assert(memory_symbol.enumeration_literals.size() == 40);
+  const auto memory_table = package_type(
+      "vital_memory", "vitalmemorytabletype");
+  assert(memory_table.vhdl_array);
+  assert(memory_table.vhdl_array->dimensions.size() == 2);
+  const auto violation_table = package_type(
+      "vital_memory", "vitalmemoryviolationtabletype");
+  assert(violation_table.vhdl_array);
+  assert(violation_table.vhdl_array->dimensions.size() == 2);
+  const auto address_vector = package_type(
+      "vital_memory", "vitaladdressvaluevectortype");
+  assert(address_vector.vhdl_array && !address_vector.width());
 }
 
 }  // namespace
@@ -366,6 +411,7 @@ context ieee_all is
   use ieee.float_pkg.all;
   use ieee.vital_timing.all;
   use ieee.vital_primitives.all;
+  use ieee.vital_memory.all;
 end context ieee_all;
 )";
     assert(output.good());
@@ -397,6 +443,9 @@ architecture rtl of ieee_integration is
   signal vital_delays : VitalDelayType01;
   signal vital_map : VitalResultMapType;
   signal vital_table : VitalTruthTableType(0 to 0, 0 to 1);
+  signal vital_memory_arc : VitalMemoryArcType;
+  signal vital_memory_symbol : VitalMemorySymbolType;
+  signal vital_memory_table : VitalMemoryTableType(0 to 0, 0 to 1);
   signal vital_buf : std_logic;
   signal vital_inv : std_logic;
   signal vital_and : std_logic;

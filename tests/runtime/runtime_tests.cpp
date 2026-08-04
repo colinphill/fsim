@@ -67,6 +67,8 @@ int main() {
     test_simir_projected_writes();
     test_vital_timing_checks();
     test_vital_delay_scheduling();
+    test_vital_memory_declaration();
+    test_vital_memory_path_delays();
     test_vcd();
   } catch (const std::exception& error) {
     std::cerr << "runtime test failure: " << error.what() << '\n';

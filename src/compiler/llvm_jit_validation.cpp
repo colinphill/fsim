@@ -19,15 +19,12 @@ validate_process(
   ValidatedProcess result;
   result.uses_logic9 = std::ranges::any_of(
       process.register_value_kinds,
-      [](const ValueKind kind) {
-        return kind == ValueKind::logic9;
-      });
+      [](const ValueKind kind) { return kind == ValueKind::logic9; });
   result.register_widths.resize(process.register_count);
   std::vector<RegisterId> parents(process.register_count);
   std::vector<std::size_t> root_widths(process.register_count);
-  for (std::size_t index = 0; index < parents.size(); ++index) {
+  for (std::size_t index = 0; index < parents.size(); ++index)
     parents[index] = static_cast<RegisterId>(index);
-  }
   std::vector<bool> defined(process.register_count);
   std::vector<std::vector<RegisterId>> instruction_definitions(
       process.operations.size());
@@ -36,35 +33,28 @@ validate_process(
   std::optional<std::pair<std::size_t, std::string>> unsupported;
   const auto record_unsupported =
       [&](const std::size_t instruction, const std::string_view message) {
-        if (!unsupported) {
-          unsupported.emplace(instruction, message);
-        }
+        if (!unsupported) unsupported.emplace(instruction, message);
       };
   const auto referenced_signal_width =
       [&](const std::uint32_t signal,
           const std::size_t instruction) -> std::uint32_t {
-    if (signal >= signal_widths.size()) {
+    if (signal >= signal_widths.size())
       reject(process, instruction, "signal ID is outside signal_widths");
-    }
     const auto width = signal_widths[signal];
-    if (width == 0) {
+    if (width == 0)
       reject(process, instruction, "signal width must be greater than zero");
-    }
     return width;
   };
   const auto signal_width =
       [&](const std::uint32_t signal,
           const std::size_t instruction) -> std::uint32_t {
     const auto width = referenced_signal_width(signal, instruction);
-    if (width > 64) {
-      record_unsupported(
-          instruction,
-          "the LLVM scalar subset requires signal widths in [1, 64]");
-    }
+    if (width > 64) record_unsupported(
+        instruction,
+        "the LLVM scalar subset requires signal widths in [1, 64]");
     if (!signal_value_kinds.empty()
-        && signal_value_kinds[signal] == ValueKind::logic9) {
+        && signal_value_kinds[signal] == ValueKind::logic9)
       result.uses_logic9 = true;
-    }
     return width;
   };
   const auto validate_register =
@@ -79,27 +69,22 @@ validate_process(
       [&](const StringRegisterId id,
           const std::size_t instruction,
           const std::string_view role) {
-        if (id >= process.string_register_count) {
-          reject(
-              process,
-              instruction,
-              std::string{role}
-                  + " string register ID is out of range");
-        }
-      };
+    if (id >= process.string_register_count) {
+      reject(process, instruction,
+             std::string{role} + " string register ID is out of range");
+    }
+  };
   const auto validate_container_register =
       [&](const ContainerRegisterId id,
           const std::size_t instruction,
           const std::string_view role) {
-        if (id >= process.container_register_count
-            || process.container_register_types.size()
-                != process.container_register_count) {
-          reject(
-              process, instruction,
-              std::string{role}
-                  + " container register is out of range");
-        }
-      };
+    if (id >= process.container_register_count
+        || process.container_register_types.size()
+            != process.container_register_count) {
+      reject(process, instruction,
+             std::string{role} + " container register is out of range");
+    }
+  };
   const auto find_root = [&](const RegisterId id) {
     auto root = id;
     while (parents[root] != root) {
@@ -711,6 +696,24 @@ validate_process(
                 record_use(*source, index);
                 constrain_width(*source, 32U, index);
               }
+            }
+          } else if constexpr (
+              std::is_same_v<OperationType, VitalMemoryDeclare>) {
+            result.uses_containers = true;
+            result.uses_strings = true;
+            result.uses_files = result.uses_files
+                || !operation.embedded_load;
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 32U, index);
+            validate_string_register(
+                operation.load_file, index, "load-file");
+            if (operation.word_count == 0U
+                || operation.word_width == 0U
+                || operation.subword_width == 0U
+                || operation.subword_width > operation.word_width) {
+              reject(
+                  process, index,
+                  "VitalMemoryDeclare geometry is invalid");
             }
           } else if constexpr (std::is_same_v<OperationType, PushContainer>) {
             result.uses_containers = true;

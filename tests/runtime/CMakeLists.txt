@@ -12,6 +12,7 @@ add_executable(
   runtime_container_tests.cpp
   runtime_executor_tests.cpp
   runtime_timing_tests.cpp
+  runtime_vital_memory_path_tests.cpp
 )
 target_link_libraries(fsim_runtime_tests PRIVATE fsim_runtime)
 fsim_configure_test(fsim_runtime_tests)

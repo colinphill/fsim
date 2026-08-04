@@ -70,6 +70,9 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_vital_expression(
           && expression.kind != ExpressionKind::Call)) {
     return ExpressionAttempt{};
   }
+  auto memory = lower_vhdl_vital_memory_expression(
+      expression, expected_width, expected_type);
+  if (memory.handled) return memory;
   const auto name = simple_name(expression.text);
   if (name == "vitaltimingdatainit"
       || name == "vitalperioddatainit"

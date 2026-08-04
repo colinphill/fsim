@@ -37,6 +37,17 @@ package vital_primitives is
 end package vital_primitives;
 )vhdl";
 
+constexpr std::string_view kVitalMemorySource = R"vhdl(-- SPDX-License-Identifier: Apache-2.0
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.vital_timing.all;
+use ieee.vital_primitives.all;
+package vital_memory is
+  -- The public clean-room interface is represented by fsim's typed intrinsic
+  -- package metadata. No third-party VITAL package body is redistributed.
+end package vital_memory;
+)vhdl";
+
 constexpr std::array kPackages{
     PackageSource{
         "std_logic_1164",
@@ -221,6 +232,11 @@ std::optional<std::vector<frontend::DesignUnit>> projected_units(
     dependency =
         "library ieee;\nuse ieee.std_logic_1164.all;\n"
         "use ieee.vital_timing.all;\n";
+  } else if (package == "vital_memory") {
+    dependency =
+        "library ieee;\nuse ieee.std_logic_1164.all;\n"
+        "use ieee.vital_timing.all;\n"
+        "use ieee.vital_primitives.all;\n";
   }
   const auto declaration_projection = dependency
       + "package " + std::string{package} + " is\n"
@@ -334,6 +350,29 @@ std::optional<std::vector<frontend::DesignUnit>> projected_units(
           "vitaldecoder2", "vitaldecoder4", "vitaldecoder8",
           "vitaltruthtable", "vitalstatetable",
       };
+    } else if (unit.primary_name.empty() && package == "vital_memory") {
+      unit.standard_package_declarations = {
+          "vitalmemoryarctype", "outputretainbehaviortype",
+          "vitalmemorymsgformattype", "x01arrayt", "x01arraypt",
+          "vitalmemoryviolationtype", "defaultnumbitspersubword",
+          "vitalmemoryscheduledatatype", "vitalmemorytimingdatatype",
+          "vitalperioddataarraytype", "vitalmemoryscheduledatavectortype",
+          "vitalportstatetype", "vitalportflagtype",
+          "vitaldefaultportflag", "vitalportflagvectortype",
+          "memorywordtype", "memorywordptr", "memoryarraytype",
+          "memoryarrayptrtype", "vitalmemoryarrayrectype",
+          "vitalmemorydatatype", "vitaltimingdatavectortype",
+          "vitalmemoryviolflagsizetype", "vitalmemorysymboltype",
+          "vitalmemorytabletype", "vitalmemoryviolationsymboltype",
+          "vitalmemoryviolationtabletype", "vitalporttype",
+          "vitalcrossportmodetype", "vitaladdressvaluetype",
+          "vitaladdressvaluevectortype", "vitalmemoryinitpathdelay",
+          "vitalmemoryaddpathdelay", "vitalmemoryschedulepathdelay",
+          "vitalmemorytimingdatainit", "vitalmemorysetupholdcheck",
+          "vitalmemoryperiodpulsecheck", "vitaldeclarememory",
+          "vitalmemorytable", "vitalmemorycrossports",
+          "vitalmemoryviolation",
+      };
     } else if (unit.primary_name.empty()) {
       unit.standard_package_declarations = {
           "signed", "unsigned", "abs", "+", "-", "*", "/", "mod",
@@ -393,6 +432,23 @@ frontend::Type vital_enumeration_type(
       0,
       static_cast<std::int64_t>(type.enumeration_literals.size() - 1U),
       false};
+  return type;
+}
+
+frontend::Type vital_integer_type(
+    const std::string_view spelling,
+    const frontend::SourceSpan& span,
+    const std::int64_t minimum = std::numeric_limits<std::int32_t>::min(),
+    const std::int64_t maximum = std::numeric_limits<std::int32_t>::max()) {
+  frontend::Type type;
+  type.spelling = std::string{spelling};
+  type.domain = frontend::ValueDomain::Integer;
+  type.is_signed = true;
+  type.packed_range = frontend::PackedRange{31, 0, true};
+  type.integer_range = frontend::IntegerRange{minimum, maximum, false};
+  type.nominal_type = "@builtin:integer";
+  type.vhdl_type_declaration = type.nominal_type;
+  type.named_type_span = span;
   return type;
 }
 
@@ -741,6 +797,228 @@ void materialize_vital_types(frontend::DesignUnit& unit) {
         frontend::TypeDeclarationKind::VhdlRecord);
     return;
   }
+  if (unit.name == "vital_memory") {
+    const auto boolean = vital_scalar_type(
+        "boolean", frontend::ValueDomain::Boolean, unit.span);
+    const auto integer = vital_integer_type("integer", unit.span);
+    const auto positive = vital_integer_type(
+        "positive", unit.span, 1, std::numeric_limits<std::int32_t>::max());
+    const auto logic_vector = vital_array_type(
+        "std_logic_vector", "natural", std::nullopt, logic, unit.span,
+        natural_base);
+    const auto x01_array = vital_array_type(
+        "x01arrayt", "natural", std::nullopt, logic, unit.span,
+        natural_base);
+    const auto x01_access = vital_access_type(
+        "x01arraypt", x01_array, unit.span);
+    add_vital_alias(
+        unit, "vitalmemoryarctype",
+        vital_enumeration_type(
+            "vitalmemoryarctype",
+            {"parallelarc", "crossarc", "subwordarc"}, unit.span),
+        frontend::TypeDeclarationKind::VhdlEnumeration);
+    add_vital_alias(
+        unit, "outputretainbehaviortype",
+        vital_enumeration_type(
+            "outputretainbehaviortype", {"bitcorrupt", "wordcorrupt"},
+            unit.span),
+        frontend::TypeDeclarationKind::VhdlEnumeration);
+    add_vital_alias(
+        unit, "vitalmemorymsgformattype",
+        vital_enumeration_type(
+            "vitalmemorymsgformattype", {"vector", "scalar", "vectorenum"},
+            unit.span),
+        frontend::TypeDeclarationKind::VhdlEnumeration);
+    add_vital_alias(
+        unit, "x01arrayt", x01_array,
+        frontend::TypeDeclarationKind::VhdlArray);
+    add_vital_alias(
+        unit, "x01arraypt", x01_access,
+        frontend::TypeDeclarationKind::VhdlAccess);
+    auto violation_access = x01_access;
+    violation_access.spelling = "vitalmemoryviolationtype";
+    violation_access.nominal_type = "@fsim-vital:vitalmemoryviolationtype";
+    violation_access.vhdl_type_declaration = violation_access.nominal_type;
+    add_vital_alias(
+        unit, "vitalmemoryviolationtype", std::move(violation_access),
+        frontend::TypeDeclarationKind::VhdlAccess);
+    const auto schedule_data = vital_record_type(
+        "vitalmemoryscheduledatatype",
+        {{"outputdata", logic}, {"numbitspersubword", integer},
+         {"scheduletime", time}, {"schedulevalue", logic},
+         {"lastoutputvalue", logic}, {"propdelay", time},
+         {"outputretaindelay", time}, {"inputage", time}},
+        unit.span);
+    add_vital_alias(
+        unit, "vitalmemoryscheduledatatype", schedule_data,
+        frontend::TypeDeclarationKind::VhdlRecord);
+    const auto time_array = vital_array_type(
+        "vitaltimearrayt", "integer", std::nullopt, time, unit.span);
+    const auto bool_array = vital_array_type(
+        "vitalboolarrayt", "integer", std::nullopt, boolean, unit.span);
+    const auto time_access = vital_access_type(
+        "vitaltimearraypt", time_array, unit.span);
+    const auto bool_access = vital_access_type(
+        "vitalboolarraypt", bool_array, unit.span);
+    const auto logic_access = vital_access_type(
+        "vitallogicarraypt", logic_vector, unit.span);
+    const auto memory_timing_data = vital_record_type(
+        "vitalmemorytimingdatatype",
+        {{"notfirstflag", boolean}, {"reflast", logic},
+         {"reftime", time}, {"holden", boolean},
+         {"testlast", logic}, {"testtime", time},
+         {"setupen", boolean}, {"testlasta", logic_access},
+         {"testtimea", time_access}, {"reflasta", x01_access},
+         {"reftimea", time_access}, {"holdena", bool_access},
+         {"setupena", bool_access}},
+        unit.span);
+    add_vital_alias(
+        unit, "vitalmemorytimingdatatype", memory_timing_data,
+        frontend::TypeDeclarationKind::VhdlRecord);
+    const auto period_data = vital_record_type(
+        "vitalperioddatatype",
+        {{"last", logic}, {"rise", time}, {"fall", time},
+         {"notfirstflag", boolean}}, unit.span);
+    add_vital_alias(
+        unit, "vitalperioddataarraytype",
+        vital_array_type(
+            "vitalperioddataarraytype", "natural", std::nullopt,
+            period_data, unit.span, natural_base),
+        frontend::TypeDeclarationKind::VhdlArray);
+    add_vital_alias(
+        unit, "vitalmemoryscheduledatavectortype",
+        vital_array_type(
+            "vitalmemoryscheduledatavectortype", "natural", std::nullopt,
+            schedule_data, unit.span, natural_base),
+        frontend::TypeDeclarationKind::VhdlArray);
+    auto port_state = vital_enumeration_type(
+        "vitalportstatetype",
+        {"undef", "read", "write", "corrupt", "highz"}, unit.span);
+    add_vital_alias(
+        unit, "vitalportstatetype", port_state,
+        frontend::TypeDeclarationKind::VhdlEnumeration);
+    const auto port_flag = vital_record_type(
+        "vitalportflagtype",
+        {{"memorycurrent", port_state}, {"memoryprevious", port_state},
+         {"datacurrent", port_state}, {"dataprevious", port_state},
+         {"outputdisable", boolean}}, unit.span);
+    add_vital_alias(
+        unit, "vitalportflagtype", port_flag,
+        frontend::TypeDeclarationKind::VhdlRecord);
+    add_vital_alias(
+        unit, "vitalportflagvectortype",
+        vital_array_type(
+            "vitalportflagvectortype", "natural", std::nullopt,
+            port_flag, unit.span, natural_base),
+        frontend::TypeDeclarationKind::VhdlArray);
+    const auto memory_word = vital_array_type(
+        "memorywordtype", "natural", std::nullopt, logic, unit.span,
+        natural_base);
+    const auto memory_word_ptr = vital_access_type(
+        "memorywordptr", memory_word, unit.span);
+    add_vital_alias(
+        unit, "memorywordtype", memory_word,
+        frontend::TypeDeclarationKind::VhdlArray);
+    add_vital_alias(
+        unit, "memorywordptr", memory_word_ptr,
+        frontend::TypeDeclarationKind::VhdlAccess);
+    const auto memory_array = vital_array_type(
+        "memoryarraytype", "natural", std::nullopt, memory_word_ptr,
+        unit.span, natural_base);
+    const auto memory_array_ptr = vital_access_type(
+        "memoryarrayptrtype", memory_array, unit.span);
+    add_vital_alias(
+        unit, "memoryarraytype", memory_array,
+        frontend::TypeDeclarationKind::VhdlArray);
+    add_vital_alias(
+        unit, "memoryarrayptrtype", memory_array_ptr,
+        frontend::TypeDeclarationKind::VhdlAccess);
+    const auto memory_record = vital_record_type(
+        "vitalmemoryarrayrectype",
+        {{"noofwords", positive}, {"noofbitsperword", positive},
+         {"noofbitspersubword", positive}, {"noofbitsperenable", positive},
+         {"memoryarrayptr", memory_array_ptr}}, unit.span);
+    add_vital_alias(
+        unit, "vitalmemoryarrayrectype", memory_record,
+        frontend::TypeDeclarationKind::VhdlRecord);
+    add_vital_alias(
+        unit, "vitalmemorydatatype",
+        vital_access_type("vitalmemorydatatype", memory_record, unit.span),
+        frontend::TypeDeclarationKind::VhdlAccess);
+    const auto timing_data = vital_record_type(
+        "vitaltimingdatatype",
+        {{"notfirstflag", boolean}, {"reflast", logic},
+         {"reftime", time}, {"holden", boolean},
+         {"testlast", logic}, {"testtime", time},
+         {"setupen", boolean}, {"testlasta", logic_access},
+         {"testtimea", time_access}, {"holdena", bool_access},
+         {"setupena", bool_access}}, unit.span);
+    add_vital_alias(
+        unit, "vitaltimingdatavectortype",
+        vital_array_type(
+            "vitaltimingdatavectortype", "natural", std::nullopt,
+            timing_data, unit.span, natural_base),
+        frontend::TypeDeclarationKind::VhdlArray);
+    add_vital_alias(
+        unit, "vitalmemoryviolflagsizetype",
+        vital_array_type(
+            "vitalmemoryviolflagsizetype", "natural", std::nullopt,
+            integer, unit.span, natural_base),
+        frontend::TypeDeclarationKind::VhdlArray);
+    auto memory_symbol = vital_enumeration_type(
+        "vitalmemorysymboltype",
+        {"'/'", "'\\'", "'P'", "'N'", "'r'", "'f'", "'p'",
+         "'n'", "'R'", "'F'", "'^'", "'v'", "'E'", "'A'", "'D'",
+         "'*'", "'X'", "'0'", "'1'", "'-'", "'B'", "'Z'", "'S'",
+         "'g'", "'u'", "'i'", "'G'", "'U'", "'I'", "'w'", "'s'",
+         "'c'", "'l'", "'d'", "'e'", "'C'", "'L'", "'M'", "'m'",
+         "'t'"}, unit.span);
+    add_vital_alias(
+        unit, "vitalmemorysymboltype", memory_symbol,
+        frontend::TypeDeclarationKind::VhdlEnumeration);
+    add_vital_alias(
+        unit, "vitalmemorytabletype",
+        vital_two_dimensional_table_type(
+            "vitalmemorytabletype", memory_symbol, unit.span),
+        frontend::TypeDeclarationKind::VhdlArray);
+    auto violation_symbol = vital_enumeration_type(
+        "vitalmemoryviolationsymboltype", {"'X'", "'0'", "'-'"},
+        unit.span);
+    add_vital_alias(
+        unit, "vitalmemoryviolationsymboltype", violation_symbol,
+        frontend::TypeDeclarationKind::VhdlEnumeration);
+    add_vital_alias(
+        unit, "vitalmemoryviolationtabletype",
+        vital_two_dimensional_table_type(
+            "vitalmemoryviolationtabletype", violation_symbol, unit.span),
+        frontend::TypeDeclarationKind::VhdlArray);
+    add_vital_alias(
+        unit, "vitalporttype",
+        vital_enumeration_type(
+            "vitalporttype", {"undef", "read", "write", "rdnwr"},
+            unit.span),
+        frontend::TypeDeclarationKind::VhdlEnumeration);
+    add_vital_alias(
+        unit, "vitalcrossportmodetype",
+        vital_enumeration_type(
+            "vitalcrossportmodetype",
+            {"cpread", "writecontention", "readwritecontention",
+             "cpreadandwritecontention", "cpreadandreadcontention"},
+            unit.span),
+        frontend::TypeDeclarationKind::VhdlEnumeration);
+    auto address = integer;
+    address.spelling = "vitaladdressvaluetype";
+    add_vital_alias(
+        unit, "vitaladdressvaluetype", address,
+        frontend::TypeDeclarationKind::VhdlSubtype);
+    add_vital_alias(
+        unit, "vitaladdressvaluevectortype",
+        vital_array_type(
+            "vitaladdressvaluevectortype", "natural", std::nullopt,
+            address, unit.span, natural_base),
+        frontend::TypeDeclarationKind::VhdlArray);
+    return;
+  }
   if (unit.name == "vital_primitives") {
     auto table = vital_enumeration_type(
         "vitaltablesymboltype",
@@ -778,8 +1056,9 @@ void materialize_vital_types(frontend::DesignUnit& unit) {
 void inject_vhdl_standard_libraries(
     CheckedProject& checked,
     diagnostic::Engine& diagnostics) {
-  const bool vital_primitives =
-      uses_package(checked.parsed, "vital_primitives");
+  const bool vital_memory = uses_package(checked.parsed, "vital_memory");
+  const bool vital_primitives = vital_memory
+      || uses_package(checked.parsed, "vital_primitives");
   const bool vital_timing = vital_primitives
       || uses_package(checked.parsed, "vital_timing");
   const bool numeric_bit = uses_package(checked.parsed, "numeric_bit");
@@ -802,7 +1081,7 @@ void inject_vhdl_standard_libraries(
   if (!std_logic && !logic_textio && !numeric_bit && !numeric_std
       && !math_real && !fixed_types && !fixed_generic && !fixed_pkg
       && !float_generic && !float_pkg && !vital_timing
-      && !vital_primitives) {
+      && !vital_primitives && !vital_memory) {
     return;
   }
   const auto root = library_root();
@@ -912,6 +1191,10 @@ void inject_vhdl_standard_libraries(
   }
   if (vital_primitives
       && !inject_vital("vital_primitives", kVitalPrimitivesSource)) {
+    return;
+  }
+  if (vital_memory
+      && !inject_vital("vital_memory", kVitalMemorySource)) {
     return;
   }
   checked.standard_sources.insert(

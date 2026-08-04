@@ -812,6 +812,135 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     Commit and push the accumulated batch once. Batch 142 is not a CI boundary;
     no sanitizer or hosted CI-monitoring gate ran.
 
+## Batch 143 - VITAL memory and vendor-model closure - Complete
+
+1. **Complete.** Start from clean pushed Batch 142 closeout `0b8f212`, record
+   this exact 20-change contract, and synchronize the restart handoff before
+   implementation changes.
+2. **Complete.** Materialize the clean-room `ieee.vital_memory` public
+   enumerations, records, access types, unconstrained arrays, defaults, table
+   symbols, and all standard subprogram profiles without redistributing an
+   upstream package body. Focused package metadata and dependency projection
+   pass in the exact-LLVM Debug application integration case.
+3. **Complete.** Implement both `VitalDeclareMemory` profiles with checked
+   positive geometry, stable access-backed storage, deterministic
+   initialization, and text/binary load-file support through the confined file
+   service. Direct runtime coverage exercises arbitrary 65-bit words, UX01
+   initialization, hexadecimal and binary files, address controls, malformed
+   input, and resource rejection. Source-level VHDL declarations pass the
+   interpreter, LLVM O0/O2 cold/warm cache, debugger, runtime-state artifact,
+   and relocated-design paths; the native cache advances to v78 after static
+   load-file embedding closes relocation independence.
+4. **Complete.** Decode ascending and descending address buses into good,
+   unknown, invalid, and transitioned address states without host-width or
+   signed-overflow dependence. Runtime coverage includes weak/unknown values,
+   changed states, 130-bit valid and invalid buses, and unknown-over-invalid
+   precedence.
+5. **Complete.** Implement word-wide `VitalMemoryTable` matching with exact
+   control, data, address, transition, steady, don't-care, implicit-read, and
+   first-row semantics. The common transition mask and flag matcher covers all
+   legal input symbols, default retention, invalid-symbol termination, and
+   arbitrary-width corruption masks.
+6. **Complete.** Implement enabled subword `VitalMemoryTable` behavior with
+   declared bit ordering, partial writes, per-enable port flags, and exact
+   corruption masks. Each subword independently matches vector-enable slices,
+   derives its data transition state, and produces clipped partial-word masks,
+   including a final short subword.
+7. **Complete.** Implement read, write, read-not-write, high-impedance,
+   no-change, transfer, retention, and whole/word/bit corruption actions across
+   all public memory-table symbols. Data actions execute before memory actions
+   for read-during-write behavior; targeted and enumerated tests cover every
+   public action, conditional corruption, constants, exact Z, and scheduling
+   suppression.
+8. **Complete.** Preserve current/previous memory and data port state,
+   output-disable state, previous controls/data/address/enables, and per-call
+   table identity across delta cycles. Persistent word/subword evaluators retain
+   all buses and independent port flags, recognize transitioned addresses, and
+   suppress fully redundant calls only after current/previous states converge.
+9. **Complete.** Implement both `VitalMemoryCrossPorts` profiles for read
+   forwarding, read/write contention, multiple-write contention, read/read
+   contention, unrelated addresses, disabled ports, and deterministic port
+   order. Focused tests cover every mode, per-subword flags, address-local
+   pairwise writes, exact-Z disabling, invalid ports, and dimension failures.
+10. **Complete.** Implement both `VitalMemoryViolation` profiles, including
+   scalar/vector violation flags, sized corruption masks, port-type behavior,
+   data retention, and X/report/severity controls. Lookup aggregates sized
+   vector chunks, expands selected subwords, rejects malformed tables
+   transactionally, preserves invalid addresses, and separates action from
+   message selection; read, write, and read/write gating reuse the table action
+   engine.
+11. **Complete.** Implement the vector VITAL memory setup/hold timing profiles
+    for scalar/vector references, element delays, enabled checks, exact edge
+    matching, per-pair state, and violation aggregation. Cross, parallel, and
+    subword arcs use deterministic pair maps, checked broadcast/exact profiles,
+    independent X/message controls, and the common scalar timing kernel.
+12. **Complete.** Implement VITAL memory period/pulse checks over vector signals
+    with per-element delay, threshold, persistent state, message-format, X,
+    report, and severity behavior. Focused runtime tests cover enabled and
+    disabled elements, high-pulse and period failures, quiet reporting, vector
+    aggregation, subword geometry, and dimension rejection.
+13. **Complete.** Implement every `VitalMemoryInitPathDelay` profile for scalar
+    and vector output candidates, stable schedule records, subword geometry,
+    retain behavior, and output maps. The normalized runtime initializes one
+    checked record per bit, advances matured scheduled values, resets each
+    selection pass, and accepts null output ranges.
+14. **Complete.** Implement every `VitalMemoryAddPathDelay` profile for scalar
+    and vector input events, scalar/vector single/01/01Z/01XZ delays,
+    conditions, shortest-path selection, checked time arithmetic, and null
+    ranges. One normalized core covers all 24 public overloads, cross,
+    parallel, and subword indexing, simultaneous inputs, condition expansion,
+    and bit/word retain event grouping.
+15. **Complete.** Implement every `VitalMemorySchedulePathDelay` profile using
+    the common projected-waveform scheduler, including output-retain pulses,
+    bit/word corruption, high impedance, simultaneous paths, and delta-cycle
+    ordering. Focused tests cover mapped values, scalar/per-bit/subword port
+    gating, retained X-before-data waveforms, overflow, and transport waveform
+    handoff through the kernel-owned execution context.
+16. **Complete.** Preserve arbitrarily sized but resource-governed memory
+    geometry and sparse access without hard semantic depth/width caps, while
+    diagnosing overflow, malformed tables, inconsistent subwords, and
+    unavailable load files transactionally. Small memories remain contiguous;
+    large logical depths use an explicit default word plus bounded sparse
+    materialization. Loads validate completely before mutation, whole-memory
+    actions update the sparse default, and only one materialized word is
+    subject to the common 256 MiB owning-storage budget. Focused runtime plus
+    VITAL package/delay application tests pass after an eight-worker build.
+17. **Complete.** Compile and execute representative clean-room vendor-style
+    VITAL cell and memory models using common VITAL attributes, guarded timing
+    generics, component configurations, escaped identifiers, pragmas, and
+    zero-width/null compatibility idioms without vendor-name special cases.
+    Entity, architecture, and generated declarative regions now accept static
+    user-defined attribute declarations/specifications. A configured vendor
+    cell executes guarded VITAL delay behavior through an extended identifier;
+    a configured vendor memory declares generic-sized storage, and the same
+    fixture retains null path ranges and synthesis pragma idioms. Interpreter,
+    LLVM O0/O2 cold/warm cache, debugger, VCD, and artifact coverage pass.
+18. **Complete.** Preserve memory objects, table state, cross-port state, timing
+    state, path schedules, loaded contents, and selected provenance through
+    project/non-project compilation, `.fsimobj`, `.fsimdesign`, relocation,
+    standalone simulation, interpreter, LLVM O0/O2, cold/warm cache, debugger,
+    callbacks, and VCD. Static `VitalDeclareMemory` load files are validated and
+    embedded in SimIR, included in the native cache key, serialized through the
+    generic artifact codec, and used by interpreter and LLVM callbacks; dynamic
+    paths retain the confined runtime file service. The relocated artifact test
+    deletes the original load file before standalone execution. The native
+    cache advances to v78, while focused runtime, package integration, vendor
+    cell/memory, runtime-state round trip, `.fsimobj`, relocated `.fsimdesign`,
+    debugger, callback, and VCD evidence pass.
+19. **Complete.** Add positive/negative differentials and update architecture,
+    language support, diagnostics, feature matrix, inventories, VITAL/vendor
+    compatibility notes, and restart evidence; leave SDF annotation to its
+    later dedicated roadmap batch. The focused runtime, VITAL application,
+    diagnostic-catalog, source-budget, IEEE-package, and inventory gates pass.
+20. **Complete.** Run exact-LLVM Debug and Release plus source, catalog,
+    inventory, installed-public-contract, Windows ABI, differential, and
+    release gates after eight-worker builds, then commit and push once. Debug
+    and Release each pass 111/111 tests in 133.33 and 104.39 seconds. The
+    reviewed baselines are 1,692 diagnostics, 479 bounded sources, 569
+    SPDX-owned artifacts, 200 test/control files, 1,101 execute rows, 4,404
+    evidence cells, 346 evidence paths, and 100 runtime owners. Batch 143 is
+    not a CI boundary and ran no sanitizer or hosted CI-monitoring gate.
+
 ## Forward priority order
 
 1. **Completed in Batch 136:** read-only out-of-tree `.fsimlib` directory
@@ -821,11 +950,9 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
 3. **Completed in Batch 138:** separate incremental SystemC compilation and
    linking.
 4. **In progress:** complete VHDL-2008/VITAL, followed by Verilog-2005,
-   SystemVerilog-2017 classes/UVM, VPI, DPI, and VHPI. Batch 139 supplied the
-   signal timing/driver substrate; Batch 140 completed VITAL public types and
-   combinational functions, Batch 141 completed timing checks/state tables,
-   Batch 142 completed path/wire delays and pulse rejection, and Batch 143 owns
-   VITAL memory models plus vendor-library compatibility closure.
+   SystemVerilog-2017 classes/UVM, VPI, DPI, and VHPI. Batches 139-143 complete
+   the clean-room VITAL timing, primitive, path, memory, and vendor-model
+   compatibility surface; the next batch begins Verilog-2005 closure.
 5. Older VHDL, Verilog, and SystemVerilog standard modes.
 6. Full SDF annotation with 2.1/3.0 compatibility and VITAL integration.
 7. FST tracing for every value exposed through the trace model.

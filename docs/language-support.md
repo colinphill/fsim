@@ -1141,7 +1141,17 @@ fast/negative preemption, and distinct `OnEvent`, `OnDetect`, `VitalInertial`,
 and `VitalTransport` pulse behavior. Per-call glitch state, X/report/severity
 controls, interpreter/LLVM O0/O2/debug execution, cold/warm cache reuse,
 relocatable artifacts, callbacks, and VCD use the common scheduler. VITAL
-memories/vendor profiles and SDF annotation remain in subsequent v2 batches.
+memory declarations, arbitrary-depth sparse storage, text/binary initialization,
+word/subword action tables, port contention, violations, vector timing checks,
+and scalar/vector memory path initialization/selection/scheduling now share the
+same interpreter/LLVM state model. Cross, parallel, and subword arcs cover all
+single/01/01Z/01ZX delay shapes, retain corruption, output maps, conditions,
+port gating, and checked time arithmetic. Static load contents survive runtime
+state, object/design artifacts, and relocation independently of the source
+file. Representative configured vendor-style cell and memory models accept
+VITAL_LEVEL metadata, timing generics, extended identifiers, pragmas, and null
+path idioms without proprietary-name handling. SDF annotation remains in its
+subsequent dedicated v2 batch.
 
 ## v1 target
 
@@ -1159,8 +1169,8 @@ Required for v1:
 - inertial, transport, and reject delays; and
 - reviewed Apache-2.0 IEEE logic, numeric, fixed, and floating-point packages.
 
-Deferred beyond v1: PSL, VHPI, VHDL-AMS, remaining VITAL timing/SDF, and proprietary
-package or pragma semantics.
+Deferred beyond v1: PSL, VHPI, VHDL-AMS, SDF, and proprietary package or pragma
+semantics beyond the reviewed compatibility surface.
 
 ### Verilog-2005 and SystemVerilog-2017
 

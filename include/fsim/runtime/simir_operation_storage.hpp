@@ -57,6 +57,7 @@ using ContainerOperationGroup =
                    ContainerReduction, OrderContainer, LocateContainer,
                    ContainerRead, ContainerWrite, DeleteContainer,
                    ContainerExists, TraverseContainer, LoadMemory,
+                   VitalMemoryDeclare,
                    PushContainer, PopContainer>;
 
 using FileOperationGroup =
@@ -183,7 +184,7 @@ static_assert(
         + std::variant_size_v<SchedulingOperationGroup::Storage>
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
-    == 122);
+    == 123);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept {
