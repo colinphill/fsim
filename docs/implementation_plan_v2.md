@@ -669,9 +669,14 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     unit, relocation, state round-trip, and HDL design publication before
     aborting at the first published-HDL-object relocation. The current repair
     makes only the two read-only object roots writable, performs labeled
-    error-code renames, and diagnoses embedded HDL design loading. It passes
+    error-code renames, and diagnoses embedded HDL design loading. Focused run
+    `30921845380` reports exact Windows error 5 at the first object-directory
+    rename after both permission changes succeed. The portable-unit input stream
+    still holds a child file open, so Windows locks the containing directory;
+    close that stream immediately after reading it. The pre-close repair passes
     exact-LLVM Debug and Release locally in 21.90 and 20.87 seconds. Re-run the
-    focused workflow, then remove it before broad monitoring resumes.
+    focused workflow with the close, then remove it before broad monitoring
+    resumes.
 
 ## Forward priority order
 

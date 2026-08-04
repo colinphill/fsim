@@ -465,7 +465,11 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   publication before aborting at the first published-HDL-object relocation.
   Those object roots are also read-only on Windows. The current repair makes
   only the two roots writable, performs labeled error-code renames, and prints
-  embedded HDL design-load diagnostics. It passes exact-LLVM Debug and Release
-  locally in 21.90 and 20.87 seconds. Re-run the focused workflow, remove it
-  once the case is green, and only then resume the full monitoring loop or mark
-  Change 20 and Batch 140 complete.
+  embedded HDL design-load diagnostics. Focused run `30921845380` reports
+  Windows error 5 at the first directory rename after both permission changes
+  succeed. The earlier portable-unit input stream still holds a child file open,
+  so Windows locks the containing directory; close the stream immediately after
+  reading it. The pre-close repair passes exact-LLVM Debug and Release locally
+  in 21.90 and 20.87 seconds. Re-run the focused workflow with the close, remove
+  it once the case is green, and only then resume the full monitoring loop or
+  mark Change 20 and Batch 140 complete.

@@ -465,6 +465,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
       std::istreambuf_iterator<char>{unit_input},
       std::istreambuf_iterator<char>{}};
   assert(!unit_input.bad());
+  unit_input.close();
+  assert(!unit_input.is_open());
   diagnostic::Engine unit_diagnostics;
   const auto unit = library::deserialize_portable_unit(
       unit_bytes, support::path_to_utf8(indexed_unit.artifact), unit_diagnostics);
