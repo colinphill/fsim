@@ -566,12 +566,19 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
 
   const auto hidden_object = directory / "unit.fsimobj.producer-hidden";
   const auto hidden_extra_object = directory / "extra.fsimobj.producer-hidden";
-  std::filesystem::rename(object, hidden_object);
-  std::filesystem::rename(extra_object, hidden_extra_object);
+  make_writable(object, "HDL object permissions");
+  make_writable(extra_object, "extra HDL object permissions");
+  rename_producer(object, hidden_object, "HDL object rename");
+  rename_producer(extra_object, hidden_extra_object, "extra HDL object rename");
+  std::cerr << "non-project cli: loading embedded HDL design\n";
   diagnostic::Engine design_load_diagnostics;
   auto loaded_design = app::load_design_artifact(
       design, design_load_diagnostics);
+  if (!loaded_design) {
+    diagnostic::print_text(std::cerr, design_load_diagnostics);
+  }
   assert(loaded_design && !design_load_diagnostics.has_error());
+  std::cerr << "non-project cli: embedded HDL design loaded\n";
   assert(loaded_design->design_ir.valid(loaded_design->semantics));
   assert(loaded_design->artifact_identity
       == published_design_metadata->design_digest);

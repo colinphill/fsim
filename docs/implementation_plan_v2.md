@@ -664,8 +664,14 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     runs only `^fsim.application$` verbosely, avoiding another full matrix while
     diagnosing this case. The expanded test remains warning-clean after
     eight-worker exact-LLVM builds and passes locally in 20.01 and 19.49
-    seconds. Use the focused Windows result to correct the demonstrated cause,
-    then remove the temporary workflow before broad monitoring resumes.
+    seconds. Focused run `30920656747` reports correct embedded SystemC status,
+    three callbacks, and value `00000101`, then passes object metadata, portable
+    unit, relocation, state round-trip, and HDL design publication before
+    aborting at the first published-HDL-object relocation. The current repair
+    makes only the two read-only object roots writable, performs labeled
+    error-code renames, and diagnoses embedded HDL design loading. It passes
+    exact-LLVM Debug and Release locally in 21.90 and 20.87 seconds. Re-run the
+    focused workflow, then remove it before broad monitoring resumes.
 
 ## Forward priority order
 

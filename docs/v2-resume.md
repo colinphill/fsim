@@ -459,6 +459,13 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   `fsim_application_tests` with four hosted workers and runs only
   `^fsim.application$` verbosely. The expanded test builds warning-clean with
   eight local workers and passes exact-LLVM Debug and Release in 20.01 and
-  19.49 seconds. Use that focused hosted result to fix the demonstrated cause,
-  remove the temporary workflow, and only then resume the full monitoring loop
-  or mark Change 20 and Batch 140 complete.
+  19.49 seconds. Focused run `30920656747` reports correct embedded SystemC
+  status, three callbacks, and value `00000101`, then validates object metadata,
+  the portable unit, relocated objects, state round-trip, and HDL design
+  publication before aborting at the first published-HDL-object relocation.
+  Those object roots are also read-only on Windows. The current repair makes
+  only the two roots writable, performs labeled error-code renames, and prints
+  embedded HDL design-load diagnostics. It passes exact-LLVM Debug and Release
+  locally in 21.90 and 20.87 seconds. Re-run the focused workflow, remove it
+  once the case is green, and only then resume the full monitoring loop or mark
+  Change 20 and Batch 140 complete.
