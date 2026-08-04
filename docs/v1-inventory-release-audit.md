@@ -75,3 +75,16 @@ Six incremental diagnostics advance the reviewed totals to 1,659 diagnostics,
 test/control inventory advances to 197 through the new focused source. The C
 ABI, conformance expectation, third-party, and provenance inventories remain
 unchanged.
+
+v2 Batch 139 adds five SPDX-owned C++ artifacts for the VHDL transaction,
+driver, stable/quiet, and delayed signal substrate plus focused execution.
+Eight diagnostics advance the totals to 1,667 diagnostics, 468 bounded C/C++
+sources, 558 authored artifacts, and 198 authored test/control files.
+
+v2 Batch 140 adds the clean-room VITAL intrinsic lowerer as one SPDX-owned
+bounded C++ source. Nine cataloged VITAL diagnostics advance the reviewed
+totals to 1,676 diagnostics, 469 bounded C/C++ sources, and 559 authored
+artifacts. Existing focused integration and artifact-phase owners carry the
+new positive and negative cases, so the test/control count remains 198. The
+conformance expectation, reviewed IEEE third-party snapshot, and provenance
+inventories remain unchanged because no external VITAL source is imported.

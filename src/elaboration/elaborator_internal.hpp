@@ -190,12 +190,11 @@ std::optional<PackedLogic4> static_vhdl_value(
 
 std::optional<std::int64_t> vhdl_physical_literal_value(
     const Expression&, const frontend::Type&, std::string& error);
-
 struct ConstantTypeInfo {
     frontend::ValueDomain domain{frontend::ValueDomain::Unknown};
     bool vhdl_enumeration{};
     std::string nominal_type;
-
+    std::optional<Expression> vhdl_composite_value;
     ConstantTypeInfo();
     ConstantTypeInfo(frontend::ValueDomain value);
     ConstantTypeInfo(
@@ -1226,6 +1225,7 @@ private:
         std::size_t expected_width,
         const frontend::Type* expected_type);
     ExpressionAttempt lower_vhdl_logic_function_expression(const Expression&, std::size_t, const frontend::Type*);
+    ExpressionAttempt lower_vhdl_vital_expression(const Expression&, std::size_t, const frontend::Type*);
     ExpressionAttempt lower_vhdl_fixed_function_expression(const Expression&, std::size_t, const frontend::Type*);
     ExpressionAttempt lower_vhdl_float_function_expression(const Expression&, std::size_t, const frontend::Type*);
     ExpressionAttempt lower_vhdl_numeric_function_expression(const Expression&, std::size_t, const frontend::Type*);

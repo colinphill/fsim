@@ -1147,6 +1147,7 @@ void Lowerer::validate_read_only_signal_writes(
         if (!disconnect
             && language_ == frontend::Language::Vhdl2008
             && target_domain == frontend::ValueDomain::Integer
+            && (target_type == nullptr || !target_type->vhdl_array)
             && !has_selected_offset
             && !dynamic_selection
             && !dynamic_part_selection) {

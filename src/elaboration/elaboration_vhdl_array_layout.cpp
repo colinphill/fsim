@@ -31,7 +31,6 @@ bool substitute_vhdl_array_layout(
   const auto element_width = element.width();
   if (!element_width || *element_width == 0
       || element.domain == frontend::ValueDomain::Unknown
-      || element.domain == frontend::ValueDomain::Integer
       || element.domain == frontend::ValueDomain::String) {
     diagnostics.push_back({
         "FSIM-ELAB-VHARRAY-001",

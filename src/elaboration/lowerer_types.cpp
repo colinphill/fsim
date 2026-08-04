@@ -244,6 +244,32 @@ using namespace elaboration_detail;
             if (name == "is_x") {
                 return std::size_t{1};
             }
+            if (name == "vitalextendtofilldelay") {
+                return std::size_t{384};
+            }
+            if (name == "vitalcalcdelay") {
+                return std::size_t{64};
+            }
+            if (name == "vitalbuf" || name == "vitalinv"
+                || name == "vitalident" || name == "vitalbufif0"
+                || name == "vitalbufif1" || name == "vitalinvif0"
+                || name == "vitalinvif1" || name == "vitaland"
+                || name == "vitalor" || name == "vitalxor"
+                || name == "vitalnand" || name == "vitalnor"
+                || name == "vitalxnor" || name == "vitaland2"
+                || name == "vitalor2" || name == "vitalxor2"
+                || name == "vitalnand2" || name == "vitalnor2"
+                || name == "vitalxnor2" || name == "vitaland3"
+                || name == "vitalor3" || name == "vitalxor3"
+                || name == "vitalnand3" || name == "vitalnor3"
+                || name == "vitalxnor3" || name == "vitaland4"
+                || name == "vitalor4" || name == "vitalxor4"
+                || name == "vitalnand4" || name == "vitalnor4"
+                || name == "vitalxnor4" || name == "vitalmux"
+                || name == "vitalmux2" || name == "vitalmux4"
+                || name == "vitalmux8") {
+                return std::size_t{1};
+            }
             if ((name == "to_ufixed" || name == "to_sfixed"
                  || name == "resize")
                 && expression.operands.size() == 3) {
@@ -913,6 +939,9 @@ using namespace elaboration_detail;
                 const auto name = std::string_view{expression.text}.substr(
                     separator == std::string::npos ? 0 : separator + 1);
                 if (name == "to_integer") {
+                    return true;
+                }
+                if (name == "vitalcalcdelay") {
                     return true;
                 }
             }

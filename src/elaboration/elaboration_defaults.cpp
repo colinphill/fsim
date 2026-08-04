@@ -39,12 +39,6 @@ PackedLogic4 default_packed_value(
   if (type.domain == frontend::ValueDomain::Logic9) {
     result.fill(runtime::Logic9::u);
   }
-  if (type.domain == frontend::ValueDomain::Integer && width != 0) {
-    return integer_value(
-        type.integer_range
-            ? type.integer_range->left
-            : std::numeric_limits<std::int32_t>::min());
-  }
   if (type.vhdl_array
       && !type.vhdl_array->element_types.empty()) {
     const auto& element = type.vhdl_array->element_types.front();
@@ -59,6 +53,14 @@ PackedLogic4 default_packed_value(
       }
     }
     return result;
+  }
+  if (type.domain == frontend::ValueDomain::Integer && width != 0) {
+    return unsigned_value(
+        static_cast<std::uint64_t>(
+            type.integer_range
+                ? type.integer_range->left
+                : std::numeric_limits<std::int32_t>::min()),
+        width);
   }
   for (const auto& member : type.packed_members) {
     const auto member_width = member.width();

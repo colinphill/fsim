@@ -115,7 +115,8 @@ std::optional<PackedLogic4> static_vhdl_value(
                     expression, {}, evaluation_error)) {
             return normalize(
                 type.domain == frontend::ValueDomain::Integer
-                    ? integer_value(*value)
+                    ? unsigned_value(
+                          static_cast<std::uint64_t>(*value), width)
                     : unsigned_value(
                           static_cast<std::uint64_t>(*value),
                           width));
@@ -250,16 +251,29 @@ std::optional<PackedLogic4> static_vhdl_value(
 
     if (type.packed_range) {
         frontend::Type element_type;
-        element_type.domain = type.vhdl_array
-            ? type.vhdl_array->element_domain
-            : type.domain;
-        element_type.spelling = type.vhdl_array
-            ? type.vhdl_array->element_spelling
-            : type.spelling;
-        element_type.named_type = type.vhdl_array
-            ? type.vhdl_array->element_named_type
-            : std::string{};
-        std::vector<bool> assigned(width);
+        if (type.vhdl_array
+            && !type.vhdl_array->element_types.empty()) {
+            element_type = type.vhdl_array->element_types.front();
+        } else {
+            element_type.domain = type.vhdl_array
+                ? type.vhdl_array->element_domain
+                : type.domain;
+            element_type.spelling = type.vhdl_array
+                ? type.vhdl_array->element_spelling
+                : type.spelling;
+            element_type.named_type = type.vhdl_array
+                ? type.vhdl_array->element_named_type
+                : std::string{};
+        }
+        const auto element_width_value = element_type.width().value_or(1);
+        if (element_width_value == 0 || width % element_width_value != 0) {
+            error = "array aggregate element width does not divide its layout";
+            return std::nullopt;
+        }
+        const auto element_width = static_cast<std::size_t>(
+            element_width_value);
+        const auto element_count = width / element_width;
+        std::vector<bool> assigned(element_count);
         std::optional<std::size_t> others;
         std::size_t positional = 0;
         const auto assign_offset =
@@ -274,13 +288,13 @@ std::optional<PackedLogic4> static_vhdl_value(
               auto element =
                   static_vhdl_value(
                       value, element_type, error);
-              if (!element || element->width() != 1) {
+              if (!element || element->width() != element_width) {
                   if (error.empty()) {
-                      error = "array aggregate element is not scalar";
+                      error = "array aggregate element has the wrong width";
                   }
                   return false;
               }
-              insert(*element, offset);
+              insert(*element, offset * element_width);
               assigned[offset] = true;
               return true;
             };
@@ -307,8 +321,14 @@ std::optional<PackedLogic4> static_vhdl_value(
                 expression.aggregate_choice_expressions[
                     association];
             if (choices.empty()) {
-                if (!assign_offset(
-                        positional++,
+                const auto source_index =
+                    type.packed_range->left
+                    + (type.packed_range->descending
+                           ? -static_cast<std::int64_t>(positional)
+                           : static_cast<std::int64_t>(positional));
+                ++positional;
+                if (!assign_index(
+                        source_index,
                         expression.operands[association])) {
                     return std::nullopt;
                 }

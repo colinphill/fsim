@@ -7,11 +7,10 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
-- Current unit: Batch 139, exactly 20 changes, complete. Its authoritative
-  timing/driver-attribute contract, per-change status, and gate evidence are
-  recorded in `implementation_plan_v2.md`. Batch 138 was committed and pushed
-  once as `83dd339`; Batch 139 was accumulated from that clean synchronized
-  baseline and committed and pushed once at closeout.
+- Current unit: Batch 140, exactly 20 changes, in progress. Its authoritative
+  VITAL package/primitives contract and per-change status are recorded in
+  `implementation_plan_v2.md`. Batch 139 was committed and pushed once as
+  `e4de752`; begin Batch 140 from that clean synchronized baseline.
 - Completed work: Batch 133 implements parent-library inference for HDL-to-HDL,
   HDL-to-SystemC, and SystemC-proxy-to-HDL boundaries, including resolver-only
   bindings, deterministic ambiguity, multiple logical-library SystemC
@@ -339,3 +338,53 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
   artifacts, 198 test/control files, 1,092 execute rows, 4,368 evidence cells,
   335 evidence paths, and 97 runtime owners. No sanitizer or CI monitoring ran
   because Batch 139 is not a scheduled boundary.
+
+- Batch 140 starts from clean pushed commit `e4de752`. It is the scheduled
+  CI-monitoring boundary and introduces clean-room compiler-supplied
+  `ieee.vital_timing` and `ieee.vital_primitives` interfaces, their public
+  static types/constants, delay calculation helpers, result maps, logic,
+  tri-state, mux, decoder, and truth-table function families. It does not copy
+  upstream VITAL package text whose redistribution terms are not established.
+  Later Batch 141 owns timing checks/state tables, Batch 142 owns path/wire
+  delay and pulse rejection, and Batch 143 owns memory models and vendor-model
+  compatibility closure. Preserve one accumulated worktree through Changes
+  1-19. Change 20 alone owns the LLVM-disabled ASan/UBSan regression, full
+  exact-LLVM Debug/Release gates, documentation closeout, one commit, one push,
+  and inspection/repair of every non-documentation GitHub Actions job.
+  Changes 2-19 are complete and Change 20 is current. Direct and
+  context-expanded imports lazily inject both clean-room packages after
+  `std_logic_1164`, reject collisions, and retain virtual source digests plus
+  the `ieee-vital:2000:fsim-clean-room-v1` revision. Typed package metadata
+  exposes the 12 transition literals, 01/01Z/01ZX physical-time arrays,
+  unconstrained delay-array families, fixed logic vectors, output/result maps,
+  table-symbol subtypes, and two-dimensional truth/state tables without
+  flattening their nominal identities. Integer-element VHDL array layout is
+  now legal, so `VitalDelayType01` retains its exact 128-bit two-time shape.
+  Composite zero/default constants and nonzero TIME-array/map generics now
+  retain exact wide values and deterministic specialization identities. The
+  common VITAL lowerer executes delay extension/calculation, output/result
+  maps, BUF/INV/IDENT, all four tri-state gates, arbitrary-width and fixed
+  2/3/4 logic, MUX/MUX2/4/8, DECODER/2/4/8, and both static truth-table result
+  profiles. The focused exact-LLVM Debug differential passes after eight-worker
+  builds with all nine states, weak inputs, custom maps, ascending/descending,
+  65-element, singleton and null reductions, pessimistic unknown selectors,
+  first-row truth matching, nonnegative physical delays, O0/O2 interpreter/JIT
+  parity, cold/warm cache, debugger locals, callbacks, and VCD. The existing
+  explicit compile/object/elaborate/design/standalone simulation test now
+  carries a VITAL consumer through `.fsimobj` and `.fsimdesign` in both engines
+  and its trace. Cataloged `FSIM-ELAB-VITAL-001` through `009` diagnostics and
+  negative profile/dimension/map/delay/dynamic-table/symbol cases pass. The
+  architecture, language support, diagnostic catalog, feature matrix, and test
+  inventory describe the exact Batch 140 boundary and reserve timing/state
+  tables, path/wire delays, pulse rejection, and memory/vendor closure for
+  Batches 141-143. Change 20's exact-LLVM Debug regression passes 110/110 in
+  137.92 seconds and Release passes 110/110 in 115.48 seconds, including all
+  source, diagnostic-catalog, inventory, installed-public-contract, and release
+  gates. The current inventory is 1,676 diagnostics, 469 bounded sources, 559
+  SPDX-owned artifacts, 1,095 execute rows, 4,380 evidence cells, 337 evidence
+  paths, and 97 runtime owners. The LLVM-disabled ASan/UBSan regression passes
+  107/107 in 291.02 seconds with leak detection disabled because the managed
+  runner executes under ptrace. That gate repaired strict incremental SystemC
+  plug-in linking of sanitizer-instrumented support code and corrected
+  LLVM-disabled native-cache assertions. No commit, push, or CI inspection has
+  run yet.

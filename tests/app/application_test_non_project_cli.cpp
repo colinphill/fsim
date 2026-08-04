@@ -16,6 +16,15 @@
 #include <sstream>
 #include <vector>
 
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define FSIM_TEST_ASAN_ENABLED 1
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) && !defined(FSIM_TEST_ASAN_ENABLED)
+#define FSIM_TEST_ASAN_ENABLED 1
+#endif
+
 namespace fsim::test {
 namespace {
 
@@ -174,7 +183,11 @@ void ApplicationTestFixture::test_non_project_cli() {
   const std::vector<const char*> systemc_link_arguments{
       "fsim", "systemc", "link", "--object",
       systemc_object_text.c_str(), "--library", "vendor", "--link-option",
-      "-Wl,--no-undefined", "--output", systemc_plugin_text.c_str()};
+      "-Wl,--no-undefined",
+#if defined(FSIM_TEST_ASAN_ENABLED)
+      "--link-option", "-fsanitize=address,undefined",
+#endif
+      "--output", systemc_plugin_text.c_str()};
   diagnostic::Engine systemc_link_diagnostics;
   const auto systemc_link = cli::parse_arguments(
       static_cast<int>(systemc_link_arguments.size()),
@@ -275,10 +288,14 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   assert(error.str().empty());
   output.str({});
   error.str({});
-  assert(cli::run(
+  const auto systemc_link_status = cli::run(
       static_cast<int>(systemc_link_arguments.size()),
       systemc_link_arguments.data(), production_services,
-      output, error) == 0);
+      output, error);
+  if (systemc_link_status != 0) {
+    std::cerr << error.str();
+  }
+  assert(systemc_link_status == 0);
   assert(error.str().empty());
   diagnostic::Engine systemc_object_inspection_diagnostics;
   const auto systemc_object_inspection = app::inspect_artifact(
@@ -513,7 +530,11 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
       != std::string::npos);
   assert(std::filesystem::is_regular_file(trace));
   assert(read_binary_file(trace).find("primary") != std::string::npos);
+#if defined(FSIM_HAS_LLVM)
   assert(std::filesystem::is_directory(consumer_cache / "llvm-native"));
+#else
+  assert(!std::filesystem::exists(consumer_cache / "llvm-native"));
+#endif
   assert(!std::filesystem::exists(design / "llvm-native"));
   assert(!std::filesystem::exists(design / "phase.vcd"));
 
@@ -566,9 +587,15 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   app::Simulation cold_simulation{
       std::move(*cold_design), 1000, app::SimulationEngine::compiled};
   const auto cold_cache = cold_simulation.native_cache_statistics();
+#if defined(FSIM_HAS_LLVM)
   assert(cold_simulation.compiled_process_count() != 0);
   assert(cold_cache.misses != 0);
   assert(cold_cache.stores != 0);
+#else
+  assert(cold_simulation.compiled_process_count() == 0);
+  assert(cold_cache.hits == 0 && cold_cache.misses == 0);
+  assert(cold_cache.stores == 0);
+#endif
 
   diagnostic::Engine warm_design_diagnostics;
   auto warm_design = app::load_design_artifact(
@@ -578,7 +605,12 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   app::Simulation warm_simulation{
       std::move(*warm_design), 1000, app::SimulationEngine::compiled};
   const auto warm_cache = warm_simulation.native_cache_statistics();
+#if defined(FSIM_HAS_LLVM)
   assert(warm_cache.hits != 0);
+#else
+  assert(warm_cache.hits == 0 && warm_cache.misses == 0);
+  assert(warm_cache.stores == 0);
+#endif
 
   diagnostic::Engine debug_design_diagnostics;
   auto debug_design = app::load_design_artifact(
@@ -588,8 +620,13 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   app::Simulation debug_simulation{
       std::move(*debug_design), 1000, app::SimulationEngine::debug};
   const auto debug_cache = debug_simulation.native_cache_statistics();
+#if defined(FSIM_HAS_LLVM)
   assert(debug_cache.misses != 0);
   assert(debug_cache.stores != 0);
+#else
+  assert(debug_cache.hits == 0 && debug_cache.misses == 0);
+  assert(debug_cache.stores == 0);
+#endif
 
   const auto alternate_design = directory / "alternate.fsimdesign";
   copy_tree(design, alternate_design);
@@ -619,8 +656,13 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
   app::Simulation alternate_simulation{
       std::move(*alternate_loaded), 1000, app::SimulationEngine::compiled};
   const auto alternate_cache = alternate_simulation.native_cache_statistics();
+#if defined(FSIM_HAS_LLVM)
   assert(alternate_cache.misses != 0);
   assert(alternate_cache.stores != 0);
+#else
+  assert(alternate_cache.hits == 0 && alternate_cache.misses == 0);
+  assert(alternate_cache.stores == 0);
+#endif
 
   const auto corrupt_design = directory / "corrupt.fsimdesign";
   copy_tree(design, corrupt_design);

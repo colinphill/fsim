@@ -549,8 +549,6 @@ using namespace elaboration_detail;
                 if (((!width || *width == 0)
                      && !deferred_composite_layout)
                     || element.domain
-                        == frontend::ValueDomain::Integer
-                    || element.domain
                         == frontend::ValueDomain::String
                     || element.domain
                         == frontend::ValueDomain::Unknown) {

@@ -80,6 +80,8 @@ context phase_context is
   library ieee;
   use ieee.std_logic_1164.all;
   use ieee.numeric_std.all;
+  use ieee.vital_timing.all;
+  use ieee.vital_primitives.all;
   library work;
   use work.phase_values.all;
 end context;
@@ -96,7 +98,9 @@ end entity;
 architecture rtl of phase_counter is
   signal attribute_source : std_logic;
   signal stable_probe : boolean;
+  signal vital_probe : std_logic;
 begin
+  vital_probe <= VitalMUX2('H', '1', 'X');
   process (clk)
   begin
     if rising_edge(clk) then
@@ -247,7 +251,9 @@ end architecture;
     const auto watch = simulation.find_signal("observer.watched");
     const auto stable_probe =
         simulation.find_signal("main.counter.stable_probe");
-    assert(counter && watch && stable_probe);
+    const auto vital_probe =
+        simulation.find_signal("main.counter.vital_probe");
+    assert(counter && watch && stable_probe && vital_probe);
     std::size_t callbacks{};
     simulation.set_signal_change_hook(
         [&](runtime::simir::SignalId, const runtime::PackedLogic4&,
@@ -257,6 +263,7 @@ end architecture;
     assert(result.time == 6);
     assert(callbacks != 0);
     assert(simulation.read_signal(*stable_probe).to_msb_string() == "1");
+    assert(simulation.read_signal(*vital_probe).to_msb_string() == "1");
     std::ostringstream debugger_output;
     std::ostringstream debugger_error;
     app::DebuggerControl debugger{
@@ -294,6 +301,7 @@ end architecture;
   assert(trace_bytes.find("main") != std::string::npos);
   assert(trace_bytes.find("observer") != std::string::npos);
   assert(trace_bytes.find("stable_probe") != std::string::npos);
+  assert(trace_bytes.find("vital_probe") != std::string::npos);
   assert(
       trace_bytes.find("attribute_source'stable(1)")
       != std::string::npos);

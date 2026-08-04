@@ -1421,6 +1421,15 @@ are therefore excluded.
 | `FSIM-ELAB-VHENUMRANGE-004` | error | A locally static value assigned to a constrained VHDL enumeration object lies outside the subtype range. |
 | `FSIM-ELAB-VHPORT-001` | error | A VHDL input-port expression is not a supported locally static value for its contextual formal type. |
 | `FSIM-ELAB-VHPORT-002` | error | A VHDL output, buffer, or inout port is associated with an expression that is not a writable signal name. |
+| `FSIM-ELAB-VITAL-001` | error | A compiler-supplied VITAL constant is used without its exact concrete delay or map context. |
+| `FSIM-ELAB-VITAL-002` | error | A scalar VITAL primitive is used in a nonscalar result context. |
+| `FSIM-ELAB-VITAL-003` | error | A VITAL function call has a missing, excessive, duplicate, unknown, or misplaced actual. |
+| `FSIM-ELAB-VITAL-004` | error | A VITAL primitive data, select, or enable actual is not a compatible standard-logic scalar or vector. |
+| `FSIM-ELAB-VITAL-005` | error | A caller-supplied VITAL result, result-Z, or output map has the wrong type or layout. |
+| `FSIM-ELAB-VITAL-006` | error | A VITAL delay function has an unsupported, unconstrained, or incompatible delay profile or cannot recover its TIME element type. |
+| `FSIM-ELAB-VITAL-007` | error | A VITAL mux or decoder has null, incompatible, non-power-of-two, or select-space-exceeding dimensions. |
+| `FSIM-ELAB-VITAL-008` | error | A VITAL truth table is dynamic, empty, dimensionally inconsistent, or lacks a concrete input/result layout. |
+| `FSIM-ELAB-VITAL-009` | error | A VITAL truth-table row contains a symbol that is illegal in its input or output portion. |
 | `FSIM-ELAB-SVENUM-001` | error | An enum base width is unsupported or an enumerator value does not fit it. |
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-SVCONST-001` | error | A SystemVerilog parameter value cannot be converted to its declared bounded integral type without losing X/Z state or valid width metadata. |
@@ -1612,7 +1621,7 @@ are therefore excluded.
 | `FSIM-ELAB-GENERIC-007` | error | A generic-dependent packed range width overflows the supported range. |
 | `FSIM-ELAB-GENERIC-008` | error | A generic value violates its bounded scalar subtype constraint. |
 | `FSIM-ELAB-GENERIC-009` | error | An architecture signal conflicts with an entity generic. |
-| `FSIM-ELAB-GENERIC-010` | error | A bounded subtype-typed VHDL generic resolves outside the supported scalar, physical-time, or up-to-64-bit packed value set. |
+| `FSIM-ELAB-GENERIC-010` | error | A bounded subtype-typed VHDL generic resolves outside the supported scalar, physical-time, packed, or statically constrained composite value set. |
 | `FSIM-ELAB-GENTYPE-001` | error | A required VHDL interface type generic has no associated subtype indication. |
 | `FSIM-ELAB-GENTYPE-002` | error | A VHDL interface type generic actual is not syntactically a subtype indication. |
 | `FSIM-ELAB-GENTYPE-003` | error | A VHDL interface type generic actual names a type that is not visible at the association. |

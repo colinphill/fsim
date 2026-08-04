@@ -309,6 +309,12 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         const std::size_t expected_width,
         const frontend::Type* expected_type) {
 
+        auto vital = lower_vhdl_vital_expression(
+            expression, expected_width, expected_type);
+        if (vital.handled) {
+            return vital;
+        }
+
         auto vhdl_physical = lower_vhdl_physical_expression(
             expression, expected_width, expected_type);
         if (vhdl_physical.handled) {

@@ -462,6 +462,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_vhdl_attributes.cpp
       src/elaboration/lowerer_vhdl_matching.cpp
       src/elaboration/lowerer_vhdl_logic.cpp
+      src/elaboration/lowerer_vhdl_vital.cpp
       src/elaboration/lowerer_vhdl_numeric.cpp
       src/elaboration/lowerer_vhdl_fixed.cpp
       src/elaboration/lowerer_vhdl_float.cpp

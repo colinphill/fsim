@@ -79,6 +79,69 @@ bool parameter_name_matches(
 
 namespace {
 
+bool vhdl_composite_constant_type(const frontend::Type& type) {
+    return type.vhdl_array.has_value() || !type.packed_members.empty();
+}
+
+std::optional<frontend::Expression> vital_constant_expression(
+    const frontend::Expression& expression,
+    const frontend::Type& type) {
+    if (expression.kind != frontend::ExpressionKind::Identifier) {
+        return std::nullopt;
+    }
+    const auto separator = expression.text.find_last_of('.');
+    const auto name = std::string_view{expression.text}.substr(
+        separator == std::string::npos ? 0 : separator + 1);
+    std::optional<std::string_view> map;
+    if (name == "vitaldefaultoutputmap") {
+        map = "UX01ZWLH-";
+    } else if (name == "vitaldefaultresultmap") {
+        map = "UX01";
+    } else if (name == "vitaldefaultresultzmap") {
+        map = "UX01Z";
+    }
+    if (map) {
+        return frontend::Expression{
+            frontend::ExpressionKind::StringLiteral,
+            "\"" + std::string{*map} + "\"", {}, expression.span};
+    }
+    if (name != "vitalzerodelay" && name != "vitalzerodelay01"
+        && name != "vitalzerodelay01z"
+        && name != "vitalzerodelay01zx" && name != "vitaldefdelay01"
+        && name != "vitaldefdelay01z") {
+        return std::nullopt;
+    }
+    if (!type.vhdl_array) {
+        return frontend::Expression{
+            frontend::ExpressionKind::IntegerLiteral,
+            "0", {}, expression.span};
+    }
+    const auto total_width = type.width();
+    const auto element_width = type.vhdl_array->element_types.empty()
+        ? std::optional<std::uint64_t>{}
+        : type.vhdl_array->element_types.front().width();
+    if (!total_width || !element_width || *element_width == 0
+        || *total_width % *element_width != 0) {
+        return std::nullopt;
+    }
+    const auto count = static_cast<std::size_t>(
+        *total_width / *element_width);
+    std::vector<frontend::Expression> elements;
+    elements.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        elements.emplace_back(
+            frontend::ExpressionKind::IntegerLiteral,
+            "0", std::vector<frontend::Expression>{}, expression.span);
+    }
+    return frontend::Expression{
+        frontend::ExpressionKind::Aggregate,
+        "vhdl-aggregate",
+        std::move(elements),
+        expression.span,
+        std::vector<std::string>(count),
+        std::vector<std::vector<frontend::Expression>>(count)};
+}
+
 std::optional<std::int64_t> packed_vhdl_static_value(
     const frontend::Expression& expression,
     const frontend::Type& type,
@@ -306,6 +369,8 @@ SpecializedUnit specialize_unit(
     }
     std::vector<std::optional<std::int64_t>> actuals(
         overridable.size());
+    std::vector<std::optional<frontend::Expression>>
+        vhdl_composite_actuals(overridable.size());
     std::vector<std::optional<SystemVerilogConstantValue>>
         systemverilog_actuals(overridable.size());
     std::vector<std::optional<SystemVerilogStringValue>>
@@ -510,6 +575,39 @@ SpecializedUnit specialize_unit(
                     override.span});
                 continue;
             }
+            if (is_vhdl
+                && vhdl_composite_constant_type(
+                    overridable[*actual_index]->type)) {
+                if (const auto intrinsic = vital_constant_expression(
+                        actual_expression,
+                        overridable[*actual_index]->type)) {
+                    actual_expression = *intrinsic;
+                }
+                const auto packed = static_vhdl_value(
+                    actual_expression,
+                    overridable[*actual_index]->type,
+                    error);
+                if (!packed) {
+                    diagnostics.push_back({
+                        code(SpecializationDiagnostic::actual_evaluation),
+                        "cannot evaluate " + std::string{object_kind}
+                            + " actual: " + error,
+                        override.span});
+                    continue;
+                }
+                if (vhdl_composite_actuals[*actual_index]) {
+                    diagnostics.push_back({
+                        code(SpecializationDiagnostic::duplicate_actual),
+                        "duplicate " + std::string{object_kind}
+                            + " actual for '"
+                            + overridable[*actual_index]->name + "'",
+                        override.span});
+                } else {
+                    vhdl_composite_actuals[*actual_index] =
+                        std::move(actual_expression);
+                }
+                continue;
+            }
             auto value = is_vhdl
                 ? packed_vhdl_static_value(
                       actual_expression,
@@ -590,6 +688,9 @@ SpecializedUnit specialize_unit(
             systemverilog_value;
         std::optional<SystemVerilogStringValue>
             systemverilog_string_value;
+        const bool vhdl_composite_parameter = is_vhdl
+            && vhdl_composite_constant_type(parameter_type);
+        std::optional<frontend::Expression> vhdl_composite_value;
         std::optional<std::int64_t> value;
         if (!parameter.local) {
             if (is_verilog) {
@@ -602,9 +703,61 @@ SpecializedUnit specialize_unit(
                         systemverilog_actuals.at(
                             overridable_index++);
                 }
+            } else if (vhdl_composite_parameter) {
+                vhdl_composite_value =
+                    vhdl_composite_actuals.at(overridable_index++);
             } else {
                 value = actuals.at(overridable_index++);
             }
+        }
+        if (vhdl_composite_parameter) {
+            if (!vhdl_composite_value) {
+                if (parameter.default_value.kind
+                    == ExpressionKind::Invalid) {
+                    diagnostics.push_back({
+                        code(SpecializationDiagnostic::invalid_actual),
+                        std::string{object_kind} + " '" + parameter.name
+                            + "' requires an actual because it has no default",
+                        parameter.span});
+                    continue;
+                }
+                vhdl_composite_value = parameter.default_value;
+                substitute_parameters(
+                    *vhdl_composite_value,
+                    result.environment,
+                    domains,
+                    source.language);
+            }
+            if (const auto intrinsic = vital_constant_expression(
+                    *vhdl_composite_value, parameter_type)) {
+                vhdl_composite_value = *intrinsic;
+            }
+            std::string error;
+            const auto packed = static_vhdl_value(
+                *vhdl_composite_value, parameter_type, error);
+            if (!packed) {
+                diagnostics.push_back({
+                    code(SpecializationDiagnostic::default_evaluation),
+                    "cannot evaluate " + std::string{object_kind} + " '"
+                        + parameter.name + "': " + error,
+                    parameter.span});
+                continue;
+            }
+            auto info = ConstantTypeInfo{
+                parameter_type.domain,
+                false,
+                parameter_type.nominal_type};
+            info.vhdl_composite_value = *vhdl_composite_value;
+            domains[parameter.name] = std::move(info);
+            result.values.emplace_back(
+                parameter.name, packed->to_msb_string());
+            result.identity_values.emplace_back(
+                parameter.name,
+                "vhdlcomposite-v1;type=" + parameter_type.nominal_type
+                    + ";width="
+                    + std::to_string(parameter_type.width().value_or(0))
+                    + ";value=" + packed->to_msb_string());
+            continue;
         }
         if (is_verilog
             && parameter_type.spelling == "string") {

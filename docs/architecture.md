@@ -326,6 +326,19 @@ profiles fail before SimIR emission. The declaration-only
 `std_logic_textio` compatibility package records its dependency and aliases
 without duplicating the common TextIO runtime.
 
+The v2 VITAL stage uses a separate clean-room intrinsic revision,
+`ieee-vital:2000:fsim-clean-room-v1`. Direct or context-expanded use of
+`ieee.vital_timing` and `ieee.vital_primitives` injects fsim-owned virtual
+package sources after `std_logic_1164`; no externally licensed VITAL body is
+copied into the distribution. Typed package metadata supplies exact transition,
+delay, map, fixed-vector, and truth-table declarations. Static composite
+constants and generics retain their complete packed value and nominal identity
+in specialization/cache provenance. Combinational VITAL calls lower to
+ordinary wide packed SimIR operations, so interpreter, LLVM, artifacts,
+debugging, callbacks, and tracing share one execution path. Timing checks,
+state tables, path/wire delays, pulse rejection, and memory models remain in
+Batches 141-143.
+
 Executable VHDL units and package declarations may also name a constant as
 `package.constant` in their own library or
 `library.package.constant` explicitly. Elaboration collects those qualified

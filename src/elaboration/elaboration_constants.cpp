@@ -1115,6 +1115,14 @@ void substitute_parameters(
     const ConstantDomainEnvironment& domains,
     const frontend::Language language) {
     if (expression.kind == ExpressionKind::Identifier) {
+        if (const auto domain = domains.find(expression.text);
+            domain != domains.end()
+            && domain->second.vhdl_composite_value) {
+            const auto use_span = expression.span;
+            expression = *domain->second.vhdl_composite_value;
+            expression.span = use_span;
+            return;
+        }
         if (const auto found = environment.find(expression.text);
             found != environment.end()) {
             const auto domain = domains.find(expression.text);

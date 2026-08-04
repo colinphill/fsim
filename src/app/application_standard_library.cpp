@@ -13,6 +13,30 @@ struct PackageSource {
   std::string_view body_hash;
 };
 
+constexpr std::string_view kIeeePackageRevision =
+    "ieee-p1076:1076-2019:16a012320947d378611cc7457f64ed76cb52bac4";
+constexpr std::string_view kVitalPackageRevision =
+    "ieee-vital:2000:fsim-clean-room-v1";
+
+constexpr std::string_view kVitalTimingSource = R"vhdl(-- SPDX-License-Identifier: Apache-2.0
+library ieee;
+use ieee.std_logic_1164.all;
+package vital_timing is
+  -- The public clean-room interface is represented by fsim's typed intrinsic
+  -- package metadata. No third-party VITAL package body is redistributed.
+end package vital_timing;
+)vhdl";
+
+constexpr std::string_view kVitalPrimitivesSource = R"vhdl(-- SPDX-License-Identifier: Apache-2.0
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.vital_timing.all;
+package vital_primitives is
+  -- The public clean-room interface is represented by fsim's typed intrinsic
+  -- package metadata. No third-party VITAL package body is redistributed.
+end package vital_primitives;
+)vhdl";
+
 constexpr std::array kPackages{
     PackageSource{
         "std_logic_1164",
@@ -171,7 +195,8 @@ std::optional<std::vector<frontend::DesignUnit>> projected_units(
     const std::string_view package,
     const std::filesystem::path& declaration_path,
     const std::filesystem::path& body_path,
-    diagnostic::Engine& diagnostics) {
+    diagnostic::Engine& diagnostics,
+    const std::string_view revision = kIeeePackageRevision) {
   std::vector<frontend::DesignUnit> units;
   std::string dependency;
   if (package == "numeric_std" || package == "std_logic_textio") {
@@ -190,6 +215,12 @@ std::optional<std::vector<frontend::DesignUnit>> projected_units(
         "use ieee.fixed_float_types.all;\nuse ieee.fixed_pkg.all;\n";
   } else if (package == "float_pkg") {
     dependency = "library ieee;\nuse ieee.float_generic_pkg.all;\n";
+  } else if (package == "vital_timing") {
+    dependency = "library ieee;\nuse ieee.std_logic_1164.all;\n";
+  } else if (package == "vital_primitives") {
+    dependency =
+        "library ieee;\nuse ieee.std_logic_1164.all;\n"
+        "use ieee.vital_timing.all;\n";
   }
   const auto declaration_projection = dependency
       + "package " + std::string{package} + " is\n"
@@ -217,8 +248,7 @@ std::optional<std::vector<frontend::DesignUnit>> projected_units(
     }
     auto unit = std::move(parsed.design.units.front());
     unit.library = "ieee";
-    unit.standard_package_revision =
-        "ieee-p1076:1076-2019:16a012320947d378611cc7457f64ed76cb52bac4";
+    unit.standard_package_revision = std::string{revision};
     if (unit.primary_name.empty() && package == "std_logic_1164") {
       unit.standard_package_declarations = {
           "std_ulogic", "std_ulogic_vector", "std_logic",
@@ -258,6 +288,38 @@ std::optional<std::vector<frontend::DesignUnit>> projected_units(
           "subtract", "multiply", "divide", "sqrt", "eq", "ne",
           "lt", "le", "gt", "ge",
       };
+    } else if (unit.primary_name.empty() && package == "vital_timing") {
+      unit.standard_package_declarations = {
+          "vitaltransitiontype", "vitaldelaytype", "vitaldelaytype01",
+          "vitaldelaytype01z", "vitaldelaytype01zx",
+          "vitaldelayarraytype", "vitaldelayarraytype01",
+          "vitaldelayarraytype01z", "vitaldelayarraytype01zx",
+          "vitalzerodelay", "vitalzerodelay01", "vitalzerodelay01z",
+          "vitalzerodelay01zx", "vitaloutputmaptype",
+          "vitalresultmaptype", "vitalresultzmaptype",
+          "vitaldefaultoutputmap", "vitaldefaultresultmap",
+          "vitaldefaultresultzmap", "vitaltablesymboltype",
+          "vitaledgesymboltype", "vitalextendtofilldelay",
+          "vitalcalcdelay",
+      };
+    } else if (unit.primary_name.empty()
+               && package == "vital_primitives") {
+      unit.standard_package_declarations = {
+          "vitaltruthsymboltype", "vitalstatesymboltype",
+          "vitaltruthtabletype", "vitalstatetabletype",
+          "vitaldefdelay01", "vitaldefdelay01z", "vitaland",
+          "vitalor", "vitalxor", "vitalnand", "vitalnor",
+          "vitalxnor", "vitaland2", "vitalor2", "vitalxor2",
+          "vitalnand2", "vitalnor2", "vitalxnor2", "vitaland3",
+          "vitalor3", "vitalxor3", "vitalnand3", "vitalnor3",
+          "vitalxnor3", "vitaland4", "vitalor4", "vitalxor4",
+          "vitalnand4", "vitalnor4", "vitalxnor4", "vitalbuf",
+          "vitalbufif0", "vitalbufif1", "vitalident", "vitalinv",
+          "vitalinvif0", "vitalinvif1", "vitalmux", "vitalmux2",
+          "vitalmux4", "vitalmux8", "vitaldecoder",
+          "vitaldecoder2", "vitaldecoder4", "vitaldecoder8",
+          "vitaltruthtable",
+      };
     } else if (unit.primary_name.empty()) {
       unit.standard_package_declarations = {
           "signed", "unsigned", "abs", "+", "-", "*", "/", "mod",
@@ -273,11 +335,270 @@ std::optional<std::vector<frontend::DesignUnit>> projected_units(
   return units;
 }
 
+frontend::Type vital_scalar_type(
+    const std::string_view spelling,
+    const frontend::ValueDomain domain,
+    const frontend::SourceSpan& span) {
+  frontend::Type type;
+  type.spelling = std::string{spelling};
+  type.domain = domain;
+  type.named_type_span = span;
+  if (domain == frontend::ValueDomain::Integer) {
+    type.is_signed = true;
+    type.packed_range = frontend::PackedRange{63, 0, true};
+    type.integer_range = frontend::IntegerRange{
+        0, std::numeric_limits<std::int64_t>::max(), false};
+    type.nominal_type = "@builtin:time";
+    type.vhdl_type_declaration = type.nominal_type;
+  }
+  return type;
+}
+
+frontend::Type vital_enumeration_type(
+    const std::string_view name,
+    std::vector<std::string> literals,
+    const frontend::SourceSpan& span) {
+  frontend::Type type;
+  type.spelling = std::string{name};
+  type.domain = frontend::ValueDomain::Bit2;
+  type.nominal_type = "@fsim-vital:" + std::string{name};
+  type.vhdl_type_declaration = type.nominal_type;
+  type.named_type_span = span;
+  type.enumeration_literals = std::move(literals);
+  std::uint64_t width = 1;
+  auto maximum = type.enumeration_literals.empty()
+      ? std::uint64_t{0}
+      : static_cast<std::uint64_t>(type.enumeration_literals.size() - 1U);
+  while (maximum > 1U) {
+    ++width;
+    maximum >>= 1U;
+  }
+  type.packed_range = frontend::PackedRange{
+      static_cast<std::int64_t>(width - 1U), 0, true};
+  type.enumeration_range = frontend::EnumerationRange{
+      0,
+      static_cast<std::int64_t>(type.enumeration_literals.size() - 1U),
+      false};
+  return type;
+}
+
+frontend::Type vital_array_type(
+    const std::string_view name,
+    const std::string_view index_subtype,
+    const std::optional<std::size_t> element_count,
+    frontend::Type element,
+    const frontend::SourceSpan& span,
+    const std::optional<frontend::IntegerRange> index_base = std::nullopt) {
+  frontend::Type type;
+  type.spelling = std::string{name};
+  type.domain = element.domain;
+  type.nominal_type = "@fsim-vital:" + std::string{name};
+  type.vhdl_type_declaration = type.nominal_type;
+  type.named_type_span = span;
+  frontend::VhdlArrayDimension dimension;
+  dimension.index_subtype = std::string{index_subtype};
+  dimension.index_span = span;
+  dimension.index_base_range = index_base;
+  dimension.unconstrained = !element_count.has_value();
+  frontend::VhdlArrayInfo array;
+  array.index_subtype = dimension.index_subtype;
+  array.index_span = span;
+  array.index_base_range = index_base;
+  array.element_spelling = element.spelling;
+  array.element_span = span;
+  array.element_domain = element.domain;
+  array.unconstrained = dimension.unconstrained;
+  const auto element_width = element.width();
+  if (element_count) {
+    const auto last = static_cast<std::int64_t>(*element_count - 1U);
+    dimension.range = frontend::IntegerRange{0, last, false};
+    dimension.stride = element_width.value_or(0);
+    array.flat_width = element_width
+        ? std::optional<std::uint64_t>{
+              *element_width * static_cast<std::uint64_t>(*element_count)}
+        : std::nullopt;
+    type.packed_range = frontend::PackedRange{0, last, false};
+  }
+  array.dimensions.push_back(std::move(dimension));
+  array.element_types.push_back(std::move(element));
+  type.vhdl_array = std::move(array);
+  return type;
+}
+
+frontend::Type vital_two_dimensional_table_type(
+    const std::string_view name,
+    frontend::Type element,
+    const frontend::SourceSpan& span) {
+  auto type = vital_array_type(
+      name, "natural", std::nullopt, std::move(element), span,
+      frontend::IntegerRange{
+          0, std::numeric_limits<std::int32_t>::max(), false});
+  auto& array = *type.vhdl_array;
+  array.dimensions.push_back(array.dimensions.front());
+  return type;
+}
+
+void add_vital_alias(
+    frontend::DesignUnit& unit,
+    const std::string_view name,
+    frontend::Type type,
+    const frontend::TypeDeclarationKind kind) {
+  std::vector<frontend::EnumLiteralDeclaration> literals;
+  if (!type.enumeration_literals.empty()) {
+    literals.reserve(type.enumeration_literals.size());
+    for (std::size_t index = 0;
+         index < type.enumeration_literals.size(); ++index) {
+      literals.push_back(frontend::EnumLiteralDeclaration{
+          type.enumeration_literals[index],
+          frontend::Expression{
+              frontend::ExpressionKind::IntegerLiteral,
+              std::to_string(index), {}, unit.span},
+          unit.span});
+    }
+  }
+  unit.type_aliases.push_back(frontend::TypeAliasDeclaration{
+      std::string{name}, std::move(type), unit.span, std::move(literals), kind});
+}
+
+void materialize_vital_types(frontend::DesignUnit& unit) {
+  if (!unit.primary_name.empty()) {
+    return;
+  }
+  const auto logic = vital_scalar_type(
+      "std_ulogic", frontend::ValueDomain::Logic9, unit.span);
+  const auto time = vital_scalar_type(
+      "vitaldelaytype", frontend::ValueDomain::Integer, unit.span);
+  const auto natural_base = frontend::IntegerRange{
+      0, std::numeric_limits<std::int32_t>::max(), false};
+  if (unit.name == "vital_timing") {
+    auto transition = vital_enumeration_type(
+        "vitaltransitiontype",
+        {"tr01", "tr10", "tr0z", "trz1", "tr1z", "trz0",
+         "tr0x", "trx1", "tr1x", "trx0", "trxz", "trzx"},
+        unit.span);
+    add_vital_alias(
+        unit, "vitaltransitiontype", transition,
+        frontend::TypeDeclarationKind::VhdlEnumeration);
+    add_vital_alias(
+        unit, "vitaldelaytype", time,
+        frontend::TypeDeclarationKind::VhdlSubtype);
+    const auto delay01 = vital_array_type(
+        "vitaldelaytype01", "vitaltransitiontype", 2, time, unit.span,
+        frontend::IntegerRange{0, 11, false});
+    const auto delay01z = vital_array_type(
+        "vitaldelaytype01z", "vitaltransitiontype", 6, time, unit.span,
+        frontend::IntegerRange{0, 11, false});
+    const auto delay01zx = vital_array_type(
+        "vitaldelaytype01zx", "vitaltransitiontype", 12, time, unit.span,
+        frontend::IntegerRange{0, 11, false});
+    add_vital_alias(
+        unit, "vitaldelaytype01", delay01,
+        frontend::TypeDeclarationKind::VhdlArray);
+    add_vital_alias(
+        unit, "vitaldelaytype01z", delay01z,
+        frontend::TypeDeclarationKind::VhdlArray);
+    add_vital_alias(
+        unit, "vitaldelaytype01zx", delay01zx,
+        frontend::TypeDeclarationKind::VhdlArray);
+    for (auto [name, element] : {
+             std::pair{"vitaldelayarraytype", time},
+             std::pair{"vitaldelayarraytype01", delay01},
+             std::pair{"vitaldelayarraytype01z", delay01z},
+             std::pair{"vitaldelayarraytype01zx", delay01zx}}) {
+      add_vital_alias(
+          unit, name,
+          vital_array_type(
+              name, "natural", std::nullopt, std::move(element),
+              unit.span, natural_base),
+          frontend::TypeDeclarationKind::VhdlArray);
+    }
+    for (const auto& [name, count] : {
+             std::pair{"std_logic_vector2", std::size_t{2}},
+             std::pair{"std_logic_vector3", std::size_t{3}},
+             std::pair{"std_logic_vector4", std::size_t{4}},
+             std::pair{"std_logic_vector8", std::size_t{8}}}) {
+      auto vector = vital_array_type(
+          name, "natural", count, logic, unit.span, natural_base);
+      vector.nominal_type.clear();
+      vector.vhdl_type_declaration = "@builtin:std_logic_vector";
+      vector.packed_range = frontend::PackedRange{
+          static_cast<std::int64_t>(count - 1U), 0, true};
+      vector.vhdl_array->dimensions.front().range = frontend::IntegerRange{
+          static_cast<std::int64_t>(count - 1U), 0, true};
+      add_vital_alias(
+          unit, name, std::move(vector),
+          frontend::TypeDeclarationKind::VhdlSubtype);
+    }
+    for (const auto& [name, count] : {
+             std::pair{"vitaloutputmaptype", std::size_t{9}},
+             std::pair{"vitalresultmaptype", std::size_t{4}},
+             std::pair{"vitalresultzmaptype", std::size_t{5}}}) {
+      add_vital_alias(
+          unit, name,
+          vital_array_type(
+              name, "std_ulogic", count, logic, unit.span,
+              frontend::IntegerRange{0, 8, false}),
+          frontend::TypeDeclarationKind::VhdlArray);
+    }
+    add_vital_alias(
+        unit, "vitaltablesymboltype",
+        vital_enumeration_type(
+            "vitaltablesymboltype",
+            {"'/'", "'\\'", "'P'", "'N'", "'r'", "'f'", "'p'",
+             "'n'", "'R'", "'F'", "'^'", "'v'", "'E'", "'A'",
+             "'D'", "'*'", "'X'", "'0'", "'1'", "'-'", "'B'",
+             "'Z'", "'S'"},
+            unit.span),
+        frontend::TypeDeclarationKind::VhdlEnumeration);
+    auto edge = unit.type_aliases.back().type;
+    edge.spelling = "vitaledgesymboltype";
+    edge.enumeration_range = frontend::EnumerationRange{0, 15, false};
+    add_vital_alias(
+        unit, "vitaledgesymboltype", std::move(edge),
+        frontend::TypeDeclarationKind::VhdlSubtype);
+    return;
+  }
+  if (unit.name == "vital_primitives") {
+    auto table = vital_enumeration_type(
+        "vitaltablesymboltype",
+        {"'/'", "'\\'", "'P'", "'N'", "'r'", "'f'", "'p'",
+         "'n'", "'R'", "'F'", "'^'", "'v'", "'E'", "'A'", "'D'",
+         "'*'", "'X'", "'0'", "'1'", "'-'", "'B'", "'Z'", "'S'"},
+        unit.span);
+    auto truth = table;
+    truth.spelling = "vitaltruthsymboltype";
+    truth.enumeration_range = frontend::EnumerationRange{16, 21, false};
+    add_vital_alias(
+        unit, "vitaltruthsymboltype", truth,
+        frontend::TypeDeclarationKind::VhdlSubtype);
+    auto state = table;
+    state.spelling = "vitalstatesymboltype";
+    state.enumeration_range = frontend::EnumerationRange{16, 22, false};
+    add_vital_alias(
+        unit, "vitalstatesymboltype", state,
+        frontend::TypeDeclarationKind::VhdlSubtype);
+    add_vital_alias(
+        unit, "vitaltruthtabletype",
+        vital_two_dimensional_table_type(
+            "vitaltruthtabletype", truth, unit.span),
+        frontend::TypeDeclarationKind::VhdlArray);
+    add_vital_alias(
+        unit, "vitalstatetabletype",
+        vital_two_dimensional_table_type(
+            "vitalstatetabletype", state, unit.span),
+        frontend::TypeDeclarationKind::VhdlArray);
+  }
+}
+
 }  // namespace
 
 void inject_vhdl_standard_libraries(
     CheckedProject& checked,
     diagnostic::Engine& diagnostics) {
+  const bool vital_primitives =
+      uses_package(checked.parsed, "vital_primitives");
+  const bool vital_timing = vital_primitives
+      || uses_package(checked.parsed, "vital_timing");
   const bool numeric_bit = uses_package(checked.parsed, "numeric_bit");
   const bool float_pkg = uses_package(checked.parsed, "float_pkg");
   const bool float_generic = float_pkg
@@ -293,11 +614,12 @@ void inject_vhdl_standard_libraries(
       || uses_package(checked.parsed, "numeric_std");
   const bool logic_textio =
       uses_package(checked.parsed, "std_logic_textio");
-  const bool std_logic = numeric_std || logic_textio
+  const bool std_logic = vital_timing || numeric_std || logic_textio
       || uses_package(checked.parsed, "std_logic_1164");
   if (!std_logic && !logic_textio && !numeric_bit && !numeric_std
       && !math_real && !fixed_types && !fixed_generic && !fixed_pkg
-      && !float_generic && !float_pkg) {
+      && !float_generic && !float_pkg && !vital_timing
+      && !vital_primitives) {
     return;
   }
   const auto root = library_root();
@@ -367,6 +689,47 @@ void inject_vhdl_standard_libraries(
         units.end(),
         std::make_move_iterator(package_units->begin()),
         std::make_move_iterator(package_units->end()));
+  }
+  const auto inject_vital = [&](const std::string_view package,
+                                const std::string_view source_text) {
+    const bool conflict = std::ranges::any_of(
+        checked.parsed.units,
+        [&](const frontend::DesignUnit& unit) {
+          return unit.language == frontend::Language::Vhdl2008
+              && unit.kind == frontend::UnitKind::VhdlPackage
+              && unit.library == "ieee" && unit.name == package;
+        });
+    if (conflict) {
+      diagnostics.error(
+          "FSIM-FE-VHSTD-004",
+          "the compiler-supplied ieee." + std::string{package}
+              + " package cannot be redeclared by a project source");
+      return false;
+    }
+    const auto path = std::filesystem::path{"fsim-standard"} / "ieee"
+        / (std::string{package} + ".vhdl");
+    auto package_units = projected_units(
+        package, path, {}, diagnostics, kVitalPackageRevision);
+    if (!package_units) {
+      return false;
+    }
+    for (auto& unit : *package_units) {
+      materialize_vital_types(unit);
+    }
+    sources.push_back(checked_source(path, source_text));
+    units.insert(
+        units.end(),
+        std::make_move_iterator(package_units->begin()),
+        std::make_move_iterator(package_units->end()));
+    return true;
+  };
+  if (vital_timing
+      && !inject_vital("vital_timing", kVitalTimingSource)) {
+    return;
+  }
+  if (vital_primitives
+      && !inject_vital("vital_primitives", kVitalPrimitivesSource)) {
+    return;
   }
   checked.standard_sources.insert(
       checked.standard_sources.end(),

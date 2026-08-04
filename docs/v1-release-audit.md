@@ -9,7 +9,7 @@ remains the final Task 10 boundary.
 
 ## Matrix baseline
 
-The current matrix contains exactly 1,092 required rows. Every row is classified
+The current matrix contains exactly 1,095 required rows. Every row is classified
 `execute`, has nonempty positive parse, negative diagnostic, elaboration, and
 runtime evidence, and names evidence paths that exist in the checkout.
 
@@ -17,7 +17,7 @@ runtime evidence, and names evidence paths that exist in the checkout.
 |---|---|---:|---:|
 | SystemVerilog language | `SV` | 671 | Task 2 |
 | SystemVerilog release contract | `V1-SV` | 9 | Task 2 |
-| VHDL language | `VH` | 252 | Task 3 |
+| VHDL language | `VH` | 255 | Task 3 plus v2 Batch 140 |
 | VHDL release contract | `V1-VH` | 8 | Task 3 |
 | Mixed-language behavior | `ML` | 17 | Task 4 plus v2 Batch 134 |
 | SystemC behavior | `SC` | 28 | Task 4 |
@@ -25,7 +25,7 @@ runtime evidence, and names evidence paths that exist in the checkout.
 | Common release contract | `V1-CM` | 10 | Tasks 5 through 9 |
 
 The Task 1 baseline matrix digest is
-`e2f701ce10dd42811569b87485ed38b9b90e84aabe692b8f1cf8266f0134a6a5`.
+`21c465ed3ee657cb7e66eff79f6a62e3fa60cd16ff771b9a2cc9b6afbecf8100`.
 Changing any row requires an intentional audit update and the owning focused
 gate; the digest is evidence of review, not a substitute for semantic tests.
 Corrective Batch 131 re-reviewed the affected container rows after replacing
@@ -42,9 +42,9 @@ and advance the required-row count and matrix digest together.
 
 The composed local gates currently establish:
 
-- 1,667 production diagnostics are cataloged;
-- 468 authored C/C++ sources remain within the 2,000-line limit;
-- all 1,092 required matrix rows are executable with no explicit evidence gap;
+- 1,676 production diagnostics are cataloged;
+- 469 authored C/C++ sources remain within the 2,000-line limit;
+- all 1,095 required matrix rows are executable with no explicit evidence gap;
 - 105 independently authored conformance expectations in 28 fixtures are
   owned by 27 CTests;
 - 20 exact portability rows cover Debug/Release, interpreter/LLVM O0/O2,
@@ -63,7 +63,7 @@ release gates and hosted proof.
 | Queue ID | Task | Surface | Required closure |
 |---|---:|---|---|
 | `B130-T2-SV` | 2 | **Closed.** 671 `SV` plus 9 `V1-SV` rows | All 680 rows pass the strict owner audit with 48 distinct runtime evidence files; stale expression, triple-delay, and classic-callable evidence was repaired and its focused executable gate passes |
-| `B130-T3-VHDL` | 3 | **Closed.** 252 `VH` plus 8 `V1-VH` rows | All 260 rows pass the strict owner audit with 40 distinct runtime evidence files; the complete VHDL-labeled Debug slice passes without a stale or unowned row |
+| `B130-T3-VHDL` | 3 | **Closed.** 255 `VH` plus 8 `V1-VH` rows | All 263 rows pass the strict owner audit with 40 distinct runtime evidence files; the complete VHDL-labeled Debug slice passes without a stale or unowned row; v2 Batch 140 added three VITAL rows without changing that owner set |
 | `B130-T4-MIXED-SYSTEMC` | 4 | **Closed.** 17 `ML` plus 28 `SC` rows | All 45 rows pass the strict owner audit with 14 distinct runtime evidence files; the complete mixed/SystemC focused slice passes across facade, compiler/cache, lifecycle, scheduling, datatypes, conversions, and typed boundaries |
 | `B130-T5-DIFFERENTIAL` | 5 | **Closed.** Interpreter, LLVM, cache, debugger, VCD, scheduling, and failures | The composed audit freezes 95 runtime evidence files, 36 corpus CTests, all required differential modes, and exact overlapping claim counts; the 19 unique portability owners plus the new gate pass locally |
 | `B130-T6-PUBLIC` | 6 | **Closed.** CLI, C/C++ API, ABI, Tcl, runtime, installed/package use | The static public audit and fresh Unicode-prefix staged install protect all five commands, five header groups, two libraries, exact API/ABI version 1, CLI status 0/1/2/3, native path/environment seams, and installed command behavior; all 11 focused owners pass locally |

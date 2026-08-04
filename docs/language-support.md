@@ -1114,12 +1114,21 @@ nine-state; fixed and floating default generic-package instances coexist with
 their transitive logic, numeric, math, and utility dependencies. No host VHDL
 package installation participates in analysis.
 
-The VITAL dependency baseline now includes transaction-aware
+The VITAL dependency baseline includes transaction-aware
 `'last_active`/`'quiet`/`'transaction`, time-qualified `'stable`, typed
-`'delayed`, and per-driver `'driving`/`'driving_value`. This is not yet VITAL
-support: the reviewed VITAL packages, path-delay and timing-check procedures,
-pulse rejection semantics, wire delays, SDF annotation, and conformance
-fixtures remain in subsequent v2 batches.
+`'delayed`, and per-driver `'driving`/`'driving_value`. Explicit or
+context-expanded `ieee.vital_timing`/`ieee.vital_primitives` use now activates
+clean-room compiler-supplied interfaces and exact transition, TIME-delay, map,
+fixed-vector, and truth-table metadata. Zero/default constants and constrained
+composite generics retain full values and cache identity.
+`VitalExtendToFillDelay`, `VitalCalcDelay`, maps, BUF/INV/IDENT, tri-state
+gates, arbitrary-width reductions, fixed 2/3/4 gates, MUX/MUX2/4/8,
+DECODER/2/4/8, and both static `VitalTruthTable` result profiles execute in
+the interpreter and LLVM O0/O2, including wide/null vectors, weak/unknown
+states, pessimistic selection, artifact phases, callbacks, debugging, and VCD.
+Dynamic truth tables are rejected. Timing checks and state tables, path/wire
+delays and pulse rejection, VITAL memories/vendor profiles, and SDF annotation
+remain in subsequent v2 batches.
 
 ## v1 target
 
@@ -1137,7 +1146,7 @@ Required for v1:
 - inertial, transport, and reject delays; and
 - reviewed Apache-2.0 IEEE logic, numeric, fixed, and floating-point packages.
 
-Deferred beyond v1: PSL, VHPI, VHDL-AMS, VITAL/SDF timing, and proprietary
+Deferred beyond v1: PSL, VHPI, VHDL-AMS, remaining VITAL timing/SDF, and proprietary
 package or pragma semantics.
 
 ### Verilog-2005 and SystemVerilog-2017

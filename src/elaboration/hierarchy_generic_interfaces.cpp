@@ -16,17 +16,35 @@ void HierarchyBuilder::validate_vhdl_generic_type(
         generic.type.nominal_type == "@builtin:time"
         && generic.type.domain == frontend::ValueDomain::Integer
         && generic.type.width().value_or(0) == 64;
+    const bool supported_composite =
+        (generic.type.vhdl_array
+         || !generic.type.packed_members.empty())
+        && generic.type.width().value_or(0) != 0;
     if ((generic.type.packed_range
-         && !supported_packed && !supported_time)
-        || !generic.type.packed_members.empty()
+         && !supported_packed && !supported_time
+         && !supported_composite)
+        || (!generic.type.packed_range
+            && (generic.type.vhdl_array
+                || !generic.type.packed_members.empty())
+            && !supported_composite)
         || (generic.type.named_type.empty()
+            && !supported_packed
+            && !supported_time
+            && !supported_composite
             && generic.type.domain != frontend::ValueDomain::Integer
             && generic.type.domain != frontend::ValueDomain::Boolean
             && generic.type.domain != frontend::ValueDomain::Bit2)) {
         report(
             "FSIM-ELAB-GENERIC-010",
-            "a bounded VHDL generic subtype must resolve to a supported "
-            "scalar, physical-time, or up-to-64-bit packed type",
+            "VHDL generic '" + generic.name
+                + "' must resolve to a supported "
+            "scalar, physical-time, packed, or statically constrained "
+            "composite type (resolved type '" + generic.type.spelling
+                + "', width "
+                + std::to_string(generic.type.width().value_or(0))
+                + ", domain "
+                + std::to_string(static_cast<unsigned>(generic.type.domain))
+                + ")",
             generic.span);
     }
 }

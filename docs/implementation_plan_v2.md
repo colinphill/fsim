@@ -533,6 +533,81 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     test/control files, 1,092 execute rows, 4,368 evidence cells, 335 evidence
     paths, and 97 runtime owners.
 
+## Batch 140 - VITAL package types and combinational primitives - In progress
+
+1. **Complete.** Start from clean pushed Batch 139 commit `e4de752`, record
+   this exact 20-change monitoring-batch contract, and synchronize the restart
+   handoff before implementation changes.
+2. **Complete.** Add clean-room compiler-supplied `ieee.vital_timing` and
+   `ieee.vital_primitives` interfaces with an fsim-owned revision identity;
+   do not copy or redistribute source whose license is not established.
+3. **Complete.** Activate each VITAL package lazily from direct/context-expanded
+   `use` clauses, inject its `std_logic_1164` dependency in deterministic
+   order, reject project redeclarations, and retain source/cache provenance.
+4. **Complete.** Materialize VITAL transition, delay, output/result-map,
+   table-symbol, truth-table, and fixed-vector public types with their exact
+   directions, nominal identities, and locally static constraints.
+5. **Complete.** Publish the standard zero-delay, default-delay, default-map,
+   and table constants and preserve their values through named constants,
+   generic actuals, package visibility, and specialization identity.
+6. **Complete.** Implement all `VitalExtendToFillDelay` overloads for scalar,
+   01, 01Z, and 01ZX transition sets without truncating physical time.
+7. **Complete.** Implement `VitalCalcDelay` overloads with exact nine-state old
+   and new values, strongest applicable transition selection, unknown
+   propagation, and checked nonnegative time results.
+8. **Complete.** Implement default and caller-supplied `VitalResultMapType`,
+   `VitalResultZMapType`, and `VitalOutputMapType` mapping with exact U/X/0/1/Z,
+   weak-state, and don't-care handling.
+9. **Complete.** Implement the scalar `VitalBUF`, `VitalINV`, and `VitalIDENT`
+   function forms with exact result-map behavior.
+10. **Complete.** Implement `VitalBUFIF0`, `VitalBUFIF1`, `VitalINVIF0`, and
+    `VitalINVIF1`, including disabled Z and indeterminate-enable results.
+11. **Complete.** Implement unconstrained-vector `VitalAND`, `VitalOR`,
+    `VitalXOR`, `VitalNAND`, `VitalNOR`, and `VitalXNOR` reductions across
+    ascending, descending, singleton, and null input ranges.
+12. **Complete.** Implement the complete two-, three-, and four-input fixed-arity
+    logical function family as profile-compatible wrappers over the common
+    nine-state reduction semantics.
+13. **Complete.** Implement `VitalMUX`, `VitalMUX2`, `VitalMUX4`, and `VitalMUX8`
+    with direction-independent data/select indexing and pessimistic merging
+    for unknown selectors.
+14. **Complete.** Implement `VitalDECODER`, `VitalDECODER2`, `VitalDECODER4`,
+    and `VitalDECODER8` with exact enable, output direction, and result-map
+    behavior.
+15. **Complete.** Implement both `VitalTruthTable` function profiles, including
+    table symbols, first-matching-row order, X when no row matches, and the
+    standard rejection of `'-'` as a truth-table output (retention belongs to
+    the state-table API scheduled for Batch 141).
+16. **Complete.** Preserve VITAL package/type/call provenance and results through
+    project and non-project compilation, `.fsimobj`, `.fsimdesign`, standalone
+    simulation, native-cache cold/warm reuse, debugger, callbacks, and VCD.
+17. **Complete.** Add cataloged diagnostics and negative tests for malformed
+    package profiles, delay/map/table dimensions, invalid symbols, unsupported
+    dynamic composites, negative delays, empty required inputs, and ambiguous
+    or missing VITAL declarations.
+18. **Complete.** Add interpreter and LLVM O0/O2 differentials covering every
+    function family, all nine logic states, custom maps, direction changes,
+    hierarchy, contexts, cold/warm cache, and standalone artifact execution.
+19. **Complete.** Update architecture, language support, diagnostics, feature
+    matrix, inventories, VITAL compatibility notes, and restart evidence; keep
+    timing checks, path/wire delays, pulse rejection, and VITAL memory models
+    assigned explicitly to subsequent batches.
+20. **In progress.** Run the LLVM-disabled ASan/UBSan regression immediately
+    before commit, then exact-LLVM Debug/Release and all source, catalog,
+    inventory, installed-public-contract, and release gates with at least eight
+    workers; commit and push once, inspect every non-documentation GitHub
+    Actions job, and repair any failure before completing this monitoring
+    batch. The final exact-LLVM Debug regression passes 110/110 in 137.92
+    seconds and Release passes 110/110 in 115.48 seconds. Their composed gates
+    confirm 1,676 diagnostics, 469 bounded sources, 559 SPDX-owned artifacts,
+    1,095 execute rows, 4,380 evidence cells, 337 evidence paths, and 97 runtime
+    owners. The LLVM-disabled ASan/UBSan regression passes 107/107 in 291.02
+    seconds with leak detection disabled because the managed runner executes
+    under ptrace. The gate also repaired strict incremental SystemC plug-in
+    linking of sanitizer-instrumented support code and made native-cache
+    assertions reflect LLVM-disabled builds. Commit, push, and hosted
+    inspection remain current.
+
 ## Forward priority order
 
 1. **Completed in Batch 136:** read-only out-of-tree `.fsimlib` directory
@@ -541,11 +616,12 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
    simulate artifact phases.
 3. **Completed in Batch 138:** separate incremental SystemC compilation and
    linking.
-4. **Started in completed Batch 139; continuing in Batch 140:** complete
-   VHDL-2008/VITAL, followed by Verilog-2005, SystemVerilog-2017 classes/UVM,
-   VPI, DPI, and VHPI. Batch 139 supplies the remaining timing and driver
-   attribute foundation required by later VITAL timing-check and path-delay
-   work.
+4. **In progress:** complete VHDL-2008/VITAL, followed by Verilog-2005,
+   SystemVerilog-2017 classes/UVM, VPI, DPI, and VHPI. Batch 139 supplied the
+   signal timing/driver substrate; Batch 140 owns VITAL public types and
+   combinational functions, Batch 141 owns timing checks/state tables, Batch
+   142 owns path/wire delays and pulse rejection, and Batch 143 owns VITAL
+   memory models plus vendor-library compatibility closure.
 5. Older VHDL, Verilog, and SystemVerilog standard modes.
 6. Full SDF annotation with 2.1/3.0 compatibility and VITAL integration.
 7. FST tracing for every value exposed through the trace model.
