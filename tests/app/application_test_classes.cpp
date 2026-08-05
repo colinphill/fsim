@@ -662,10 +662,13 @@ void ApplicationTestFixture::test_class_simulation_integration() {
   assert(warm_cache.hits == 0 && warm_cache.misses == 0);
   assert(warm_cache.stores == 0);
 #endif
-  std::ifstream original_input(class_source, std::ios::binary);
-  const std::string original_source{
-      std::istreambuf_iterator<char>{original_input},
-      std::istreambuf_iterator<char>{}};
+  const auto original_source = [&] {
+    std::ifstream input(class_source, std::ios::binary);
+    assert(input);
+    return std::string{
+        std::istreambuf_iterator<char>{input},
+        std::istreambuf_iterator<char>{}};
+  }();
   auto edited_source = original_source;
   const auto edited_delay = edited_source.find("#3 $finish;");
   assert(edited_delay != std::string::npos);

@@ -356,7 +356,11 @@ scope.
   seven policy/release gates 8/8. Pre-change hosted run `31049629546` satisfies
   the requested wait boundary with Linux and clang-cl Windows test-suite
   failures; both Windows configurations fail-fast after entering class
-  integration, so bounded subphase traces are included in the pending push.
+  integration, so bounded subphase traces were included in the first repair
+  push. They localized `0xc0000409` after artifact creation to renaming the
+  class source while its input stream remained alive. The input stream is now
+  destroyed before the Windows rename boundary; exact-LLVM Debug/Release
+  `fsim.application` pass locally in 29.33/28.18 seconds.
 - Completed unit: Batch 149, exactly 20 changes, complete after pushed Batch
   148 closeout `dce6c36`. Its authoritative SystemVerilog constraint-solving
   and randomization contract is recorded in `implementation_plan_v2.md`.

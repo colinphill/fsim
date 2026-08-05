@@ -2280,7 +2280,12 @@ carry an explicit evidence-backed scope disposition approved by the user.
     8/8 after the portability repairs. Pre-change hosted run `31049629546`
     reached and failed Linux test suites and both clang-cl Windows test suites;
     the Windows application host fail-fast entered class integration without
-    further diagnostics, so the next push carries bounded class subphase traces.
+    further diagnostics, so the next push carried bounded class subphase traces.
+    Those traces localized `0xc0000409` after artifact creation: the test kept
+    its class-source input stream alive until function exit and then renamed
+    that still-open file, which POSIX accepts but Windows rejects. The stream is
+    now destroyed before the artifact rename; exact-LLVM Debug and Release
+    `fsim.application` pass locally in 29.33 and 28.18 seconds.
 
 ### Batch 151 - Arbitrary-width packed values and aggregate closure
 
