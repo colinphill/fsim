@@ -1094,7 +1094,10 @@ void add_container_type_key(
             add_key_u64(builder, "origin", value.origin);
             add_key_u64(builder, "kind",
                 static_cast<std::uint8_t>(value.kind));
-          } else if constexpr (std::is_same_v<OperationType, FileFlush>) {
+          }
+          // Keep this as a second independent constexpr chain. MSVC counts an
+          // else-if chain as nested blocks and rejects more than 128 levels.
+          if constexpr (std::is_same_v<OperationType, FileFlush>) {
             builder.add("operation", "FileFlush");
             add_key_u64(builder, "handle", value.handle);
             add_key_u64(builder, "all", value.all ? 1U : 0U);
@@ -1900,6 +1903,27 @@ void add_container_type_key(
             builder.add("operation", "Stop");
           } else if constexpr (std::is_same_v<OperationType, Halt>) {
             builder.add("operation", "Halt");
+          } else if constexpr (
+              std::is_same_v<OperationType, LoadConstant>
+              || std::is_same_v<OperationType, CopyRegister>
+              || std::is_same_v<OperationType, ReadSignal>
+              || std::is_same_v<OperationType, SignalEvent>
+              || std::is_same_v<OperationType, SignalLastValue>
+              || std::is_same_v<OperationType, SignalLastEvent>
+              || std::is_same_v<OperationType, ReadSimulationTime>
+              || std::is_same_v<OperationType, VitalTimingCheck>
+              || std::is_same_v<OperationType, VitalDelay>
+              || std::is_same_v<OperationType, SignalActive>
+              || std::is_same_v<OperationType, SignalLastActive>
+              || std::is_same_v<OperationType, SignalDriving>
+              || std::is_same_v<OperationType, SignalDrivingValue>
+              || runtime::simir::operation_group_contains_v<
+                  OperationType, runtime::simir::StringOperationGroup>
+              || runtime::simir::operation_group_contains_v<
+                  OperationType, runtime::simir::ContainerOperationGroup>
+              || runtime::simir::operation_group_contains_v<
+                  OperationType, runtime::simir::FileOperationGroup>) {
+            // These alternatives were handled by the first constexpr chain.
           } else {
             llvm_unreachable(
                 "unsupported operations were rejected before cache keying");
