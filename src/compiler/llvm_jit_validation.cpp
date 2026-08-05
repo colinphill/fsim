@@ -856,7 +856,10 @@ using runtime::Logic9; using namespace runtime::simir;
               else record_use(value.id, index);
               constrain_width(value.id, value.width, index);
             }
-          } else if constexpr (std::is_same_v<OperationType, FileFlush>) {
+          }
+          // Keep validation in independent constexpr chains so MSVC does not
+          // count all operation alternatives as one deeply nested block.
+          if constexpr (std::is_same_v<OperationType, FileFlush>) {
             result.uses_files = true;
             if (!operation.all) {
               record_use(operation.handle, index);
