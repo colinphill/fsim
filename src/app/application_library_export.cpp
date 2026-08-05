@@ -390,13 +390,34 @@ bool export_library(
       udp_declarations.push_back(&declaration);
     }
   }
+  std::map<std::string, library::PortableSystemVerilogClassUnit> class_units;
+  for (const auto& declaration : checked->parsed.systemverilog_classes) {
+    const auto library_name = declaration.library.empty()
+        ? std::string_view{"work"} : std::string_view{declaration.library};
+    if (library_name != logical_library) continue;
+    auto& unit = class_units[declaration.compilation_unit_identity];
+    unit.library = std::string{library_name};
+    unit.compilation_unit_identity = declaration.compilation_unit_identity;
+    unit.declarations.push_back(declaration);
+  }
+  for (const auto& method :
+       checked->parsed.systemverilog_class_method_definitions) {
+    const auto library_name = method.library.empty()
+        ? std::string_view{"work"} : std::string_view{method.library};
+    if (library_name != logical_library) continue;
+    auto& unit = class_units[method.compilation_unit_identity];
+    unit.library = std::string{library_name};
+    unit.compilation_unit_identity = method.compilation_unit_identity;
+    unit.method_definitions.push_back(method);
+  }
   const bool has_systemc = std::ranges::any_of(
       config.source_sets,
       [&](const auto& source_set) {
         return source_set.library == logical_library
             && source_set.language == project::Language::systemc;
       });
-  if (units.empty() && udp_declarations.empty() && !has_systemc) {
+  if (units.empty() && udp_declarations.empty() && class_units.empty()
+      && !has_systemc) {
     diagnostics.error(
         "FSIM-LIB-0007",
         "project contains no exportable units or sources in logical library '"
@@ -412,7 +433,7 @@ bool export_library(
   library::Metadata metadata;
   metadata.library = std::string{logical_library};
   metadata.producer = std::string{"fsim "} + std::string{version};
-  metadata.runtime_schema = 1;
+  metadata.runtime_schema = 2;
   std::set<std::pair<std::string, std::string>> standards;
   for (const auto& source_set : config.source_sets) {
     if (source_set.library == logical_library) {
@@ -554,6 +575,30 @@ bool export_library(
         declaration.language == frontend::Language::Verilog2005
             ? "verilog" : "systemverilog",
         "primitive", declaration.name, {}, {}, artifact, checksum});
+    payloads.push_back({artifact, std::move(*bytes)});
+  }
+  std::size_t class_index{};
+  for (auto& [identity, class_unit] : class_units) {
+    if (identity.empty()
+        || !library::relocate_class_unit_sources(
+            class_unit, source_mappings, diagnostics)) {
+      if (identity.empty()) {
+        diagnostics.error(
+            "FSIM-LIB-0006",
+            "class declaration has no compilation-unit identity");
+      }
+      return false;
+    }
+    auto bytes = library::serialize_portable_class_unit(
+        class_unit, diagnostics);
+    if (!bytes) return false;
+    const auto artifact = indexed_path(
+        "units", units.size() + udp_declarations.size() + class_index++,
+        ".fsimclass");
+    const auto checksum = support::Sha256::hex(
+        support::Sha256::digest(*bytes));
+    metadata.units.push_back({
+        "systemverilog", "class-unit", identity, {}, {}, artifact, checksum});
     payloads.push_back({artifact, std::move(*bytes)});
   }
   if (!append_systemc_native_artifact(

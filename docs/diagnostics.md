@@ -722,6 +722,20 @@ are therefore excluded.
 | `FSIM-SV-PARSE-251` | error | Expected a closing parenthesis after a single pull strength. |
 | `FSIM-SV-PARSE-252` | error | Expected a colon in a switch-instance array range. |
 | `FSIM-SV-PARSE-253` | error | Expected a closing bracket after a switch-instance array range. |
+| `FSIM-SV-PARSE-254` | error | A `virtual` class qualifier does not introduce a class declaration or method. |
+| `FSIM-SV-PARSE-255` | error | An `interface` class qualifier does not introduce an interface class declaration. |
+| `FSIM-SV-PARSE-256` | error | A class forward declaration omits the `class` keyword. |
+| `FSIM-SV-PARSE-257` | error | A class forward declaration omits its terminating semicolon. |
+| `FSIM-SV-PARSE-258` | error | A class header omits its terminating semicolon. |
+| `FSIM-SV-PARSE-259` | error | A class declaration omits `endclass`. |
+| `FSIM-SV-PARSE-260` | error | Class property qualifiers are not followed by a data type. |
+| `FSIM-SV-PARSE-261` | error | A class property declaration omits its terminating semicolon. |
+| `FSIM-SV-PARSE-262` | error | A qualified class method declaration omits `function` or `task`. |
+| `FSIM-SV-PARSE-263` | error | A pure or extern class constraint prototype omits its terminating semicolon. |
+| `FSIM-SV-PARSE-264` | error | A class constraint body omits its opening brace. |
+| `FSIM-SV-PARSE-265` | error | A class constraint expression omits its terminating semicolon. |
+| `FSIM-SV-PARSE-266` | error | A class constraint body omits its closing brace. |
+| `FSIM-SV-PARSE-267` | error | A qualified class constraint declaration omits the `constraint` keyword. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -921,6 +935,43 @@ are therefore excluded.
 | `FSIM-SV-SEM-164` | error | A specify block is used outside a module or a module path has an unsupported transition-delay arity. |
 | `FSIM-SV-SEM-165` | error | A module repeats a `specparam` declaration name across its specify blocks. |
 | `FSIM-SV-SEM-166` | error | A `$width` timing check omits its threshold while supplying a later optional argument. |
+| `FSIM-SV-SEM-167` | error | A scope contains more than one defining declaration of the same SystemVerilog class. |
+| `FSIM-SV-SEM-168` | error | The identifier following `endclass` does not match the class name. |
+| `FSIM-SV-SEM-169` | error | A class property is qualified with both `rand` and `randc`. |
+| `FSIM-SV-SEM-170` | error | A class repeats a property declaration name. |
+| `FSIM-SV-SEM-171` | error | A pure class method is not also declared virtual. |
+| `FSIM-SV-SEM-172` | error | A compilation-unit class method definition lacks a class-qualified name. |
+| `FSIM-SV-SEM-173` | error | A class repeats a constraint declaration name. |
+| `FSIM-SV-CLASS-001` | error | A class forward declaration has no defining declaration. |
+| `FSIM-SV-CLASS-002` | error | A named base class is not visible from the declaring class scope. |
+| `FSIM-SV-CLASS-003` | error | A named base class is ambiguous in lexical or import scope. |
+| `FSIM-SV-CLASS-004` | error | A class-handle type name is ambiguous in lexical or import scope. |
+| `FSIM-SV-CLASS-005` | error | More than one declaration resolves to the same canonical class identity. |
+| `FSIM-SV-CLASS-006` | error | An out-of-block class method owner is missing or ambiguous. |
+| `FSIM-SV-CLASS-007` | error | An out-of-block class method definition has no matching extern prototype. |
+| `FSIM-SV-CLASS-008` | error | A class method has more than one out-of-block definition. |
+| `FSIM-SV-CLASS-009` | error | An implemented interface-class name is not visible from the declaring class scope. |
+| `FSIM-SV-CLASS-010` | error | An implemented interface-class name is ambiguous in lexical or import scope. |
+| `FSIM-SV-CLASS-INHERIT-001` | error | The class inheritance graph contains a cycle. |
+| `FSIM-SV-CLASS-INHERIT-002` | error | A class contains duplicate method profiles. |
+| `FSIM-SV-CLASS-INHERIT-003` | error | A concrete class contains a pure method declaration. |
+| `FSIM-SV-CLASS-INHERIT-004` | error | A final class method is not virtual. |
+| `FSIM-SV-CLASS-INHERIT-005` | error | An `implements` selection does not name an interface class. |
+| `FSIM-SV-CLASS-INHERIT-006` | error | An overriding method has an incompatible result type, including a noncovariant class-handle result. |
+| `FSIM-SV-CLASS-INHERIT-007` | error | A class overrides an inherited final method. |
+| `FSIM-SV-CLASS-INHERIT-008` | error | An override changes whether the inherited method is static. |
+| `FSIM-SV-CLASS-INHERIT-009` | error | A concrete class leaves an inherited pure method unimplemented. |
+| `FSIM-SV-CLASS-SPEC-001` | error | A class parameter actual names no formal or exceeds the positional formal count. |
+| `FSIM-SV-CLASS-SPEC-002` | error | A class parameter formal receives more than one actual. |
+| `FSIM-SV-CLASS-SPEC-003` | error | A class type parameter receives a value rather than a data-type actual. |
+| `FSIM-SV-CLASS-SPEC-004` | error | A class value-parameter actual is not locally constant. |
+| `FSIM-SV-CLASS-SPEC-005` | error | Named and positional class parameter actuals are mixed. |
+| `FSIM-SV-CLASS-SPEC-006` | error | A class type parameter has neither an actual nor a default. |
+| `FSIM-SV-CLASS-SPEC-007` | error | A class value-parameter default is not locally constant. |
+| `FSIM-SV-CLASS-SPEC-008` | error | Class specialization recursively requires itself. |
+| `FSIM-SV-CLASS-SPEC-009` | error | A specialized class property has no finite materializable layout. |
+| `FSIM-SV-CLASS-SPEC-010` | error | A class instance layout exceeds host-addressable storage. |
+| `FSIM-SV-CLASS-SPEC-011` | error | The stable virtual-method slot domain is exhausted. |
 | `FSIM-ELAB-SVIFACE-006` | error | A process writes through a read-only input port or modport input member. |
 | `FSIM-ELAB-SVIFACE-007` | error | A retained interface callable cannot be materialized at its same-language module boundary. |
 | `FSIM-ELAB-SVIFACE-008` | error | An interface callable is visible more than once through the same module port. |
@@ -1024,6 +1075,7 @@ are therefore excluded.
 | `FSIM-SV-UNSUPPORTED-042` | error | A bounded `case matches` item uses a deferred variable-binding, tagged, or structured pattern. |
 | `FSIM-SV-UNSUPPORTED-043` | error | A bounded `case matches` item uses a deferred `&&&` guard. |
 | `FSIM-SV-UNSUPPORTED-044` | error | A modport uses a deferred ref, clocking, or callable import/export member instead of a bounded signal direction. |
+| `FSIM-SV-UNSUPPORTED-045` | error | A class member is outside the current property, method, constraint, typedef, or nested-class foundation. |
 
 ## Elaboration and SimIR lowering
 

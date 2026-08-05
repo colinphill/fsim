@@ -138,3 +138,13 @@ sources, 591 authored artifacts, and 208 authored test/control files. Module
 paths, pulse controls, timing checks, fixtures, and documentation are
 clean-room code; no external Verilog timing model, SDF file, third-party
 artifact, or provenance entry is imported.
+
+v2 Batch 147 adds class resolution, inheritance, specialization, heap,
+container, method, and static-state owners plus focused frontend, runtime, and
+application tests as 17 SPDX-owned bounded C++ sources. Fifty-two parser,
+semantic, resolution, inheritance, specialization, and unsupported-member
+diagnostics advance the reviewed totals to 1,829 diagnostics, 518 bounded
+C/C++ sources, 608 authored artifacts, and 211 authored test/control files.
+The class object model and fixtures are clean-room code; no UVM source,
+constraint solver, external class library, third-party artifact, or provenance
+entry is imported.

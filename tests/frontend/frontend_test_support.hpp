@@ -59,6 +59,7 @@ void test_vhdl_package_generics();
 void test_systemverilog_function_declarations();
 void test_systemverilog_task_declarations();
 void test_systemverilog_callable_closure_declarations();
+void test_systemverilog_class_declarations();
 void test_immediate_assertions();
 void test_vhdl_literal_report();
 void test_process_variable_declarations();

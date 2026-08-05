@@ -59,6 +59,22 @@ namespace {
   return result;
 }
 
+[[nodiscard]] std::string format_class_property(
+    const runtime::SystemVerilogClassPropertyValue& value) {
+  if (value.packed.width() != 0) return value.packed.to_msb_string();
+  if (value.kind == runtime::SystemVerilogClassPropertyKind::String) {
+    return escaped_string(value.string);
+  }
+  if (value.kind == runtime::SystemVerilogClassPropertyKind::ClassHandle) {
+    return value.handle == 0 ? "null" : std::to_string(value.handle);
+  }
+  if (value.handle_container) {
+    return "<class-handle-container size="
+        + std::to_string(value.handle_container->size()) + ">";
+  }
+  return "<uninitialized>";
+}
+
 [[nodiscard]] std::vector<std::pair<std::string, SignalId>>
 design_signal_paths(const Simulation& simulation) {
   std::vector<std::pair<std::string, SignalId>> result;
@@ -219,6 +235,49 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
     }
     if (command[0] == "locals" && command.size() == 1) {
       show_locals();
+      return;
+    }
+    if (command[0] == "classes" && command.size() == 1) {
+      const auto handles = simulation_.class_heap().live_handles();
+      if (handles.empty()) {
+        output_ << "(no class objects)\n";
+      }
+      for (const auto handle : handles) {
+        const auto& object = simulation_.class_heap().object(handle);
+        output_ << handle << " " << object.dynamic_type
+                << " [" << object.specialization_identity << "]\n";
+      }
+      return;
+    }
+    if (command[0] == "class"
+        && (command.size() == 2 || command.size() == 3)) {
+      std::uint64_t handle{};
+      const auto converted = std::from_chars(
+          command[1].data(), command[1].data() + command[1].size(), handle);
+      if (converted.ec != std::errc{}
+          || converted.ptr != command[1].data() + command[1].size()) {
+        output_ << "usage: class HANDLE [PROPERTY]\n";
+        return;
+      }
+      try {
+        const auto& object = simulation_.class_heap().object(handle);
+        if (command.size() == 3) {
+          output_ << command[2] << " = "
+                  << format_class_property(
+                         simulation_.read_class_property(handle, command[2]))
+                  << '\n';
+        } else {
+          output_ << object.dynamic_type << " ["
+                  << object.specialization_identity << "]\n";
+          for (std::size_t index = 0;
+               index < object.properties.size(); ++index) {
+            output_ << "  " << object.property_names[index] << " = "
+                    << format_class_property(object.properties[index]) << '\n';
+          }
+        }
+      } catch (const std::exception& exception) {
+        output_ << exception.what() << '\n';
+      }
       return;
     }
     if (command[0] == "scope") {

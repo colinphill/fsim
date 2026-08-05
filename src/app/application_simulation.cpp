@@ -4,6 +4,76 @@
 namespace fsim::app {
 using namespace application_detail;
 
+namespace {
+
+[[nodiscard]] runtime::SystemVerilogClassPropertyDescriptor
+class_property_descriptor(
+    const frontend::SystemVerilogClassPropertyLayout& property,
+    const bool qualified_name = false) {
+  runtime::SystemVerilogClassPropertyDescriptor result;
+  result.name = qualified_name
+      ? property.owner_identity + "::" + property.name
+      : property.name;
+  if (!property.type.systemverilog_class_declaration.empty()) {
+    result.kind = runtime::SystemVerilogClassPropertyKind::ClassHandle;
+    result.width = 64;
+    return result;
+  }
+  if (property.type.systemverilog_container) {
+    result.kind = runtime::SystemVerilogClassPropertyKind::Container;
+    result.width = 0;
+    return result;
+  }
+  switch (property.type.domain) {
+    case frontend::ValueDomain::Bit2:
+    case frontend::ValueDomain::Boolean:
+      result.kind = runtime::SystemVerilogClassPropertyKind::Bit2;
+      break;
+    case frontend::ValueDomain::Logic9:
+      result.kind = runtime::SystemVerilogClassPropertyKind::Logic9;
+      break;
+    case frontend::ValueDomain::Integer:
+      result.kind = runtime::SystemVerilogClassPropertyKind::Integer;
+      break;
+    case frontend::ValueDomain::String:
+      result.kind = runtime::SystemVerilogClassPropertyKind::String;
+      break;
+    default:
+      result.kind = runtime::SystemVerilogClassPropertyKind::Logic4;
+      break;
+  }
+  const auto width = property.type.width();
+  if (width && *width > std::numeric_limits<std::size_t>::max()) {
+    throw std::length_error{"class property width exceeds host storage"};
+  }
+  result.width = width ? static_cast<std::size_t>(*width) : 1U;
+  if (property.initializer) {
+    if (property.initializer->kind
+        == frontend::ExpressionKind::IntegerLiteral) {
+      std::int64_t value{};
+      const auto* begin = property.initializer->text.data();
+      const auto* end = begin + property.initializer->text.size();
+      const auto converted = std::from_chars(begin, end, value, 10);
+      if (converted.ec == std::errc{} && converted.ptr == end) {
+        const auto initial_width =
+            result.kind == runtime::SystemVerilogClassPropertyKind::Integer
+            ? std::size_t{64}
+            : result.width;
+        result.initial_packed = runtime::PackedLogic4::from_aval_bval(
+            initial_width, static_cast<std::uint64_t>(value), 0);
+      }
+    } else if (
+        property.initializer->kind
+            == frontend::ExpressionKind::StringLiteral
+        && property.initializer->decoded_string) {
+      result.initial_string = *property.initializer->decoded_string;
+    }
+  }
+  return result;
+}
+
+}  // namespace
+
 struct Simulation::Impl {
   enum class Lifecycle {
     ready,
@@ -16,9 +86,36 @@ struct Simulation::Impl {
       const std::uint64_t max_deltas,
       const SimulationEngine engine)
       : built(std::move(project)),
+        class_methods(class_heap, {}, &class_static_store),
         interpreter(built.design.create_interpreter(
             runtime::SchedulerOptions{max_deltas, 32},
             built.seed)) {
+    std::map<std::string, std::size_t> declaration_counts;
+    for (const auto& specialization :
+         built.systemverilog_class_specializations) {
+      ++declaration_counts[specialization.declaration_identity];
+    }
+    for (const auto& specialization :
+         built.systemverilog_class_specializations) {
+      runtime::SystemVerilogClassStaticDescriptor descriptor;
+      descriptor.specialization_identity =
+          specialization.specialization_identity;
+      descriptor.base_specialization_identity =
+          specialization.base_specialization_identity;
+      if (declaration_counts[specialization.declaration_identity] == 1
+          && specialization.declaration_identity
+              != specialization.specialization_identity) {
+        descriptor.aliases.push_back(specialization.declaration_identity);
+      }
+      for (const auto& property : specialization.properties) {
+        if (property.is_static) {
+          descriptor.properties.push_back(
+              class_property_descriptor(property));
+        }
+      }
+      class_static_store.register_specialization(std::move(descriptor));
+    }
+    class_static_store.initialize_all();
     interpreter->set_file_root(built.file_root);
     const auto has_systemc_process = std::ranges::any_of(
         built.design_ir.boundaries(), [](const auto& boundary) {
@@ -249,6 +346,97 @@ struct Simulation::Impl {
     }
   }
 
+  [[nodiscard]] const frontend::SystemVerilogClassSpecialization&
+  class_specialization(const std::string_view identity) const {
+    const auto found = std::ranges::find(
+        built.systemverilog_class_specializations,
+        identity,
+        &frontend::SystemVerilogClassSpecialization::specialization_identity);
+    if (found == built.systemverilog_class_specializations.end()) {
+      throw std::out_of_range{
+          "SystemVerilog class specialization '" + std::string{identity}
+          + "' is not available in this simulation"};
+    }
+    return *found;
+  }
+
+  [[nodiscard]] runtime::SystemVerilogClassHandle allocate_class(
+      const std::string_view specialization_identity,
+      const std::string_view declared_type) {
+    const auto& specialization = class_specialization(
+        specialization_identity);
+    runtime::SystemVerilogClassDescriptor descriptor;
+    descriptor.dynamic_type = specialization.declaration_identity;
+    descriptor.declared_type = declared_type.empty()
+        ? descriptor.dynamic_type
+        : std::string{declared_type};
+    descriptor.specialization_identity =
+        specialization.specialization_identity;
+    const auto* current = &specialization;
+    while (current != nullptr) {
+      descriptor.assignable_declared_types.push_back(
+          current->declaration_identity);
+      if (current->base_specialization_identity.empty()) break;
+      current = &class_specialization(
+          current->base_specialization_identity);
+    }
+    for (const auto& property : specialization.properties) {
+      if (!property.is_static) {
+        descriptor.properties.push_back(
+            class_property_descriptor(property, true));
+      }
+    }
+    return class_heap.allocate(descriptor);
+  }
+
+  using PackedSnapshot = std::map<
+      std::pair<runtime::SystemVerilogClassHandle, std::string>,
+      runtime::PackedLogic4>;
+
+  [[nodiscard]] PackedSnapshot packed_class_snapshot() const {
+    PackedSnapshot result;
+    for (const auto handle : class_heap.live_handles()) {
+      const auto& object = class_heap.object(handle);
+      for (std::size_t index = 0; index < object.properties.size(); ++index) {
+        const auto& property = object.properties[index];
+        if (property.packed.width() != 0) {
+          result.emplace(
+              std::pair{handle, object.property_names[index]},
+              property.packed);
+        }
+      }
+    }
+    return result;
+  }
+
+  void notify_class_changes(const PackedSnapshot& before) {
+    if (!class_property_change_hook) return;
+    const auto after = packed_class_snapshot();
+    for (const auto& [identity, value] : after) {
+      const auto prior = before.find(identity);
+      if (prior == before.end() || prior->second != value) {
+        class_property_change_hook(
+            identity.first, identity.second, value,
+            interpreter->scheduler().now(),
+            interpreter->scheduler().delta());
+      }
+    }
+  }
+
+  [[nodiscard]] runtime::SystemVerilogClassInvocationResult
+  invoke_class_method(
+      const std::string_view canonical_method,
+      const runtime::SystemVerilogClassHandle this_handle,
+      std::vector<runtime::SystemVerilogClassMethodValue>& actuals,
+      const std::optional<std::uint32_t> virtual_slot) {
+    const auto before = packed_class_snapshot();
+    auto result = virtual_slot
+        ? class_methods.invoke_virtual(*virtual_slot, this_handle, actuals)
+        : class_methods.invoke(canonical_method, this_handle, actuals);
+    notify_class_changes(before);
+    return result;
+  }
+
   ~Impl() {
     if (systemc_start_attempted && !systemc_ended) {
       try {
@@ -299,6 +487,9 @@ struct Simulation::Impl {
   }
 
   BuiltProject built;
+  runtime::SystemVerilogClassHeap class_heap;
+  runtime::SystemVerilogClassStaticStore class_static_store;
+  runtime::SystemVerilogClassMethodRuntime class_methods;
 #if defined(FSIM_HAS_LLVM)
   // Shared by every compiled executor. It is fully populated before executor
   // installation and outlives the interpreter that owns those executors.
@@ -320,6 +511,7 @@ struct Simulation::Impl {
   std::uint64_t next_safe_point_observer{1};
   OutputHook output_hook;
   ReportHook report_hook;
+  ClassPropertyChangeHook class_property_change_hook;
   Lifecycle lifecycle{Lifecycle::ready};
   bool systemc_start_attempted{};
   bool systemc_ended{};
@@ -417,6 +609,121 @@ const runtime::simir::ContainerValue&
 Simulation::read_container_object(
     const runtime::simir::ContainerObjectId object) const {
   return impl_->interpreter->container_object_value(object);
+}
+
+const std::vector<frontend::SystemVerilogClassSpecialization>&
+Simulation::class_specializations() const noexcept {
+  return impl_->built.systemverilog_class_specializations;
+}
+
+runtime::SystemVerilogClassHeap& Simulation::class_heap() noexcept {
+  return impl_->class_heap;
+}
+
+const runtime::SystemVerilogClassHeap&
+Simulation::class_heap() const noexcept {
+  return impl_->class_heap;
+}
+
+runtime::SystemVerilogClassStaticStore&
+Simulation::class_static_store() noexcept {
+  return impl_->class_static_store;
+}
+
+runtime::SystemVerilogClassMethodRuntime&
+Simulation::class_methods() noexcept {
+  return impl_->class_methods;
+}
+
+runtime::SystemVerilogClassHandle Simulation::allocate_class(
+    const std::string_view specialization_identity,
+    const std::string_view declared_type) {
+  if (impl_->lifecycle == Impl::Lifecycle::finished
+      || impl_->lifecycle == Impl::Lifecycle::poisoned) {
+    throw std::logic_error{"simulation class heap is no longer mutable"};
+  }
+  return impl_->allocate_class(specialization_identity, declared_type);
+}
+
+const runtime::SystemVerilogClassPropertyValue&
+Simulation::read_class_property(
+    const runtime::SystemVerilogClassHandle handle,
+    const std::string_view property) const {
+  return impl_->class_heap.property(handle, property);
+}
+
+void Simulation::deposit_class_property(
+    const runtime::SystemVerilogClassHandle handle,
+    const std::string_view property,
+    runtime::PackedLogic4 value) {
+  if (impl_->lifecycle == Impl::Lifecycle::finished
+      || impl_->lifecycle == Impl::Lifecycle::poisoned) {
+    throw std::logic_error{"simulation class heap is no longer mutable"};
+  }
+  auto& destination = impl_->class_heap.property(handle, property);
+  if (destination.packed.width() == 0
+      || destination.packed.width() != value.width()) {
+    throw std::invalid_argument{
+        "class property deposit requires an equal-width packed property"};
+  }
+  if (destination.kind == runtime::SystemVerilogClassPropertyKind::Bit2) {
+    for (std::size_t bit = 0; bit < value.width(); ++bit) {
+      if (value.get(bit) != runtime::Logic4::zero
+          && value.get(bit) != runtime::Logic4::one) {
+        throw std::invalid_argument{
+            "class property deposit would place X/Z into two-state storage"};
+      }
+    }
+  }
+  destination.packed = std::move(value);
+  if (impl_->class_property_change_hook) {
+    impl_->class_property_change_hook(
+        handle, property, destination.packed,
+        impl_->interpreter->scheduler().now(),
+        impl_->interpreter->scheduler().delta());
+  }
+}
+
+runtime::SystemVerilogClassInvocationResult
+Simulation::invoke_class_method(
+    const std::string_view canonical_method,
+    const runtime::SystemVerilogClassHandle this_handle,
+    std::vector<runtime::SystemVerilogClassMethodValue>& actuals,
+    const std::optional<std::uint32_t> virtual_slot) {
+  if (impl_->lifecycle == Impl::Lifecycle::finished
+      || impl_->lifecycle == Impl::Lifecycle::poisoned) {
+    throw std::logic_error{"simulation class methods are no longer mutable"};
+  }
+  return impl_->invoke_class_method(
+      canonical_method, this_handle, actuals, virtual_slot);
+}
+
+void Simulation::schedule_class_method(
+    const runtime::SimulationTick time,
+    const runtime::StableOrder stable_order,
+    std::string canonical_method,
+    const runtime::SystemVerilogClassHandle this_handle,
+    std::vector<runtime::SystemVerilogClassMethodValue> actuals,
+    const std::optional<std::uint32_t> virtual_slot,
+    ClassMethodCompletion completion) {
+  if (impl_->lifecycle != Impl::Lifecycle::ready) {
+    throw std::logic_error{
+        "class methods may only be scheduled on a ready simulation"};
+  }
+  impl_->interpreter->scheduler().schedule_at(
+      time,
+      runtime::SchedulerPhase::active,
+      stable_order,
+      [implementation = impl_.get(),
+       canonical_method = std::move(canonical_method),
+       this_handle,
+       actuals = std::move(actuals),
+       virtual_slot,
+       completion = std::move(completion)](runtime::Scheduler&) mutable {
+        const auto result = implementation->invoke_class_method(
+            canonical_method, this_handle, actuals, virtual_slot);
+        if (completion) completion(result, actuals);
+      });
 }
 
 void Simulation::deposit_string_object(
@@ -602,6 +909,11 @@ void Simulation::set_output_hook(OutputHook hook) {
 
 void Simulation::set_report_hook(ReportHook hook) {
   impl_->report_hook = std::move(hook);
+}
+
+void Simulation::set_class_property_change_hook(
+    ClassPropertyChangeHook hook) {
+  impl_->class_property_change_hook = std::move(hook);
 }
 
 

@@ -7,7 +7,95 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
-- Current unit: Batch 146, exactly 20 changes, complete after pushed Batch
+- Current unit: Batch 147, exactly 20 changes, complete after pushed Batch
+  146 closeout `eafadad`. Its authoritative SystemVerilog class object-model
+  contract and per-change status are recorded in `implementation_plan_v2.md`.
+  Changes 1-20 are complete. The owning HIR and focused
+  frontend proof retain compilation-unit, package, module, interface, and
+  nested class declarations, forward-definition merging, lifetime and class
+  kinds, parameterized base selections, closing names, canonical lexical
+  identities, and duplicate diagnostics without adding a top-selectable unit
+  kind. Declaration-ordered properties retain visibility, static/const/random
+  qualifiers, strings, multidimensional containers, aggregate typedefs, and
+  class-handle spellings. Constructors, instance/static/virtual methods,
+  `this`/`super` selected names, pure and extern prototypes, defaults,
+  constraints, and qualified out-of-block definitions are also source-owned
+  and warning-clean in the focused frontend test. The project merge now
+  preserves compilation-unit classes and out-of-block definitions with their
+  source order, logical library, and compilation-unit digest. A central
+  case-sensitive resolver assigns canonical lexical/package identities,
+  resolves nested, imported, package-qualified, and compilation-unit class
+  handles and bases, completes matching extern definitions transactionally,
+  and diagnoses incomplete forwards, missing/ambiguous bases, ambiguous handle
+  types, and invalid out-of-block ownership. Default and referenced value/type
+  parameterizations now materialize deterministic identities, inherited
+  specializations, finite instance/static property layouts, method profiles,
+  and transitive source provenance with storage-derived overflow checks. A
+  separate legality pass rejects inheritance/interface cycles, duplicate
+  profiles, pure methods on concrete declarations, nonvirtual final methods,
+  non-interface implementations, incompatible/static-changing/final
+  overrides, and unfulfilled pure obligations while excluding local base
+  members from inherited lookup. The scheduler-facing class heap uses null
+  handle zero, generation-safe slot identities, deterministic lowest-slot
+  reuse, declared/dynamic/specialization metadata, language-default property
+  storage, and caller-supplied live/storage budgets. Transactional construction
+  runs ordered base-to-derived steps; opaque handle assignment, equality,
+  argument/return alias transfer, named property access, checked type views,
+  cleanup, and null/stale/downcast/budget failures pass the focused runtime
+  test without exposing host pointers. A resource-governed method runtime owns
+  `this`, arguments, automatic locals, recursion depth, suspended task frames,
+  and deterministic copy-in/copy-out; compiler-assigned stable virtual slots
+  retain inherited override identity, dispatch on the heap object's dynamic
+  type, preserve explicit nonvirtual base calls, and reject pure calls. A
+  simulation-wide per-specialization static store initializes base state
+  before derived state, resolves class and import/root aliases to one value,
+  supports implicit and qualified static-method access, and enforces caller
+  property/storage budgets. Opaque handles also flow through bounded fixed and
+  dynamic arrays, queues, associative arrays, and unpacked aggregates embedded
+  in class properties; edits preserve aliases, validate declared element
+  types, reject illegal packed placement, and use caller-derived capacities.
+  Checked specializations now survive into each built project; one simulation-
+  wide heap, static store, and method dispatcher serves every hierarchy root.
+  Source-derived static integer initialization, inherited object layout,
+  deterministic scheduled virtual calls, exact time/delta packed-property
+  callbacks, and opaque-object debugger inspection pass the application case
+  under interpreter, LLVM compiled, and debugger engines. The added class
+  lookahead also preserves parameterized module instances in generate bodies.
+  Owning-unit schema 5, portable-library schema 4, runtime-state schema 5, and
+  class-state schema 1 preserve compilation-unit class declarations and
+  out-of-block methods in `.fsimobj`/mapped `.fsimlib`, and preserve specialized
+  layouts, initializers, inherited ownership, virtual slots, and provenance in
+  `.fsimdesign`. The focused artifact proof hides both producer source and
+  object before standalone execution and also rebuilds from the relocated
+  mapped library. Its interpreter, LLVM O2, and debugger/O0 runs agree on
+  construction, base-handle aliases, hidden base/derived properties, explicit
+  base versus virtual override dispatch, shared static state, scheduled
+  callbacks, debugger reads, and artifact-restored state; runtime coverage adds
+  task suspension and every handle-container shape.
+  Transactional negative coverage now fixes the malformed-header,
+  qualifier-conflict, duplicate-member/constraint, pure-method,
+  out-of-block-ownership, parameter-type/value, inheritance/override,
+  null/stale/downcast, heap/static/container budget, static-cycle,
+  host-layout-overflow, class-state schema/trailing-byte, and artifact checksum
+  diagnostics. Architecture, language-support, diagnostic, feature-matrix,
+  evidence-inventory, and class/UVM boundary documentation now describe the
+  implemented object-model foundation without claiming constraint solving or
+  UVM closure. The catalog covers 1,829 production codes, the source gate
+  covers 518 bounded files, and the reviewed inventory covers 608 SPDX-owned
+  artifacts and 211 test/control files. The exact-LLVM Debug and Release
+  suites pass 112/112 in 137.41 and 105.90 seconds. Their accumulated source,
+  catalog, inventory, installed-public-contract, Windows ABI/plan,
+  differential, legality, and release-candidate gates are green; the latter
+  covers 1,137 executable rows, 4,548 evidence cells, 372 exact paths, and 108
+  runtime owners. The batch remains one accumulated implementation commit and
+  one push. Batch 147 is not a CI-monitoring batch and ran no sanitizer or
+  hosted CI inspection. The batch establishes owning class HIR,
+  parsing and name/type resolution, parameterized inheritance, a checked
+  opaque-handle heap, construction and handle semantics, instance/static and
+  virtual methods, container integration, hierarchy/debug/artifact/cache
+  behavior, negatives, and release evidence. Constraints/randomization and
+  UVM behavior remain assigned to subsequent class-closure batches.
+- Batch 146, exactly 20 changes, is complete after pushed Batch
   145 closeout `9b771eb`. Its authoritative Verilog-2005 specify-timing
   contract and per-change status are recorded in `implementation_plan_v2.md`.
   Changes 1-20 are complete. The warning-clean focused

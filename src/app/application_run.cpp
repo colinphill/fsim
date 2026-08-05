@@ -973,6 +973,7 @@ void print_debug_help(std::ostream& output)  {
       << "          delete ID, clear, scope [PATH], scopes [PATH], "
          "signals [PATH],\n"
       << "          show SIGNAL,\n"
+      << "          classes, class HANDLE [PROPERTY],\n"
       << "          deposit SIGNAL VALUE, force SIGNAL VALUE, release SIGNAL,\n"
       << "          trace add|remove SIGNAL, trace all|clear|list,\n"
       << "          locals, where, help, quit\n";

@@ -8,6 +8,8 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <ranges>
+#include <set>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -75,7 +77,10 @@ auto archive_fields(T& value) {
       value.integer_base_range_expression, value.discrete_range_expression,
       value.vhdl_array, value.vhdl_access, value.vhdl_file,
       value.vhdl_physical, value.vhdl_protected,
-      value.vhdl_array_constraints, value.systemverilog_container);
+      value.vhdl_array_constraints, value.systemverilog_container,
+      value.systemverilog_class_name,
+      value.systemverilog_class_declaration,
+      value.systemverilog_class_parameter_actuals);
 }
 
 template <typename T>
@@ -567,6 +572,30 @@ bool portable_semantics(
   return true;
 }
 
+bool valid_class_state(
+    const std::vector<frontend::SystemVerilogClassSpecialization>& classes) {
+  std::set<std::string> identities;
+  for (const auto& specialization : classes) {
+    if (specialization.declaration_identity.empty()
+        || specialization.specialization_identity.empty()
+        || !identities.insert(
+                specialization.specialization_identity).second) {
+      return false;
+    }
+    for (const auto& method : specialization.methods) {
+      if (method.name.empty() || method.canonical_identity.empty()
+          || method.profile_identity.empty()) {
+        return false;
+      }
+    }
+  }
+  return std::ranges::all_of(classes, [&](const auto& specialization) {
+    return specialization.base_specialization_identity.empty()
+        || identities.contains(
+            specialization.base_specialization_identity);
+  });
+}
+
 }  // namespace
 
 std::optional<std::string> serialize_runtime_state(
@@ -594,6 +623,36 @@ std::optional<elaboration::ElaboratedDesign> deserialize_runtime_state(
     return std::nullopt;
   }
   return design;
+}
+
+std::optional<std::string> serialize_class_state(
+    const std::span<const frontend::SystemVerilogClassSpecialization> classes,
+    diagnostic::Engine& diagnostics) {
+  std::vector<frontend::SystemVerilogClassSpecialization> owning{
+      classes.begin(), classes.end()};
+  if (!valid_class_state(owning)) {
+    diagnostics.error(std::string{kCode}, "class state is structurally invalid");
+    return std::nullopt;
+  }
+  return serialize("FSIMCLS1", kClassStateSchema, owning, diagnostics);
+}
+
+std::optional<std::vector<frontend::SystemVerilogClassSpecialization>>
+deserialize_class_state(
+    const std::string_view bytes,
+    std::string source_name,
+    diagnostic::Engine& diagnostics) {
+  auto classes = deserialize<std::vector<
+      frontend::SystemVerilogClassSpecialization>>(
+      "FSIMCLS1", kClassStateSchema, bytes, std::move(source_name),
+      diagnostics);
+  if (!classes || !valid_class_state(*classes)) {
+    if (classes && !diagnostics.has_error()) {
+      diagnostics.error(std::string{kCode}, "class state is structurally invalid");
+    }
+    return std::nullopt;
+  }
+  return classes;
 }
 
 std::optional<std::string> serialize_semantic_state(

@@ -703,7 +703,8 @@ end architecture;
     std::filesystem::copy_file(
         artifact / "fsim-design.bin", relocated / "fsim-design.bin");
     for (const std::string_view payload : {
-             "runtime.bin", "semantics.bin", "design-ir.bin"}) {
+             "runtime.bin", "semantics.bin", "design-ir.bin",
+             "classes.bin"}) {
       std::filesystem::copy_file(
           artifact / "state" / payload,
           relocated / "state" / payload);

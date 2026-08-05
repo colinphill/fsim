@@ -13,9 +13,10 @@
 
 namespace fsim::app {
 
-inline constexpr std::uint32_t kRuntimeStateSchema = 4;
+inline constexpr std::uint32_t kRuntimeStateSchema = 5;
 inline constexpr std::uint32_t kSemanticStateSchema = 1;
 inline constexpr std::uint32_t kDesignIrStateSchema = 1;
+inline constexpr std::uint32_t kClassStateSchema = 1;
 
 [[nodiscard]] std::optional<std::string> serialize_runtime_state(
     const elaboration::ElaboratedDesign& design,
@@ -39,6 +40,16 @@ deserialize_runtime_state(
     diagnostic::Engine& diagnostics);
 [[nodiscard]] std::optional<semantic::design::DesignIr>
 deserialize_design_ir_state(
+    std::string_view bytes,
+    std::string source_name,
+    diagnostic::Engine& diagnostics);
+
+[[nodiscard]] std::optional<std::string> serialize_class_state(
+    std::span<const frontend::SystemVerilogClassSpecialization> classes,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<std::vector<
+    frontend::SystemVerilogClassSpecialization>>
+deserialize_class_state(
     std::string_view bytes,
     std::string source_name,
     diagnostic::Engine& diagnostics);

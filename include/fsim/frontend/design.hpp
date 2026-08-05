@@ -410,6 +410,13 @@ struct SystemVerilogContainerInfo {
   SourceSpan span;
 };
 
+struct SystemVerilogClassTypeActual {
+  std::optional<std::string> name;
+  Expression value;
+  std::shared_ptr<Type> type_actual;
+  SourceSpan span;
+};
+
 enum class PackedAggregateKind {
   None,
   Struct,
@@ -499,6 +506,11 @@ struct Type {
   // Present only for a SystemVerilog dynamic array, queue, or associative
   // array. All scalar fields above describe one element, not the container.
   std::optional<SystemVerilogContainerInfo> systemverilog_container;
+  // Resolved SystemVerilog class handles are nullable and never host pointers.
+  std::string systemverilog_class_name;
+  std::string systemverilog_class_declaration;
+  std::vector<SystemVerilogClassTypeActual>
+      systemverilog_class_parameter_actuals;
 
   Type() = default;
   Type(
@@ -1371,6 +1383,130 @@ struct TaskDeclaration {
   SourceSpan span;
 };
 
+enum class SystemVerilogClassLifetime : std::uint8_t {
+  Inherited,
+  Static,
+  Automatic,
+};
+
+enum class SystemVerilogClassVisibility : std::uint8_t {
+  Public,
+  Protected,
+  Local,
+};
+
+enum class SystemVerilogClassMethodKind : std::uint8_t {
+  Constructor,
+  Function,
+  Task,
+};
+
+/// One value or type actual in a parameterized class base selection.
+///
+/// Exactly one of value/type_actual is populated after successful parsing.
+/// Keeping type actuals separate prevents a type spelling from being folded
+/// through the value-expression machinery.
+struct SystemVerilogClassParameterActual {
+  std::string name;
+  Expression value;
+  std::optional<Type> type_actual;
+  SourceSpan span;
+};
+
+struct SystemVerilogClassBase {
+  std::string name;
+  std::vector<SystemVerilogClassParameterActual> parameter_actuals;
+  SourceSpan span;
+  // Populated by class-name resolution. This is a canonical declaration
+  // identity, not a source-level selected-name spelling.
+  std::string declaration_identity;
+};
+
+struct SystemVerilogClassProperty {
+  VariableDeclaration declaration;
+  SystemVerilogClassVisibility visibility{
+      SystemVerilogClassVisibility::Public};
+  bool is_static{};
+  bool is_const{};
+  bool is_rand{};
+  bool is_randc{};
+  SourceSpan span;
+};
+
+/// A source-level class method or prototype.
+///
+/// Constructors have kind Constructor and an Unknown return type. Tasks and
+/// functions share the same argument representation so default values and
+/// reference directions remain source ordered. Extern declarations retain no
+/// body; an out-of-block definition is linked by canonical_identity during
+/// semantic analysis.
+struct SystemVerilogClassMethod {
+  std::string name;
+  std::string canonical_identity;
+  std::string library;
+  std::string compilation_unit_identity;
+  SystemVerilogClassMethodKind kind{
+      SystemVerilogClassMethodKind::Function};
+  Type return_type;
+  std::vector<FunctionArgument> arguments;
+  std::vector<VariableDeclaration> variables;
+  std::vector<Statement> statements;
+  SystemVerilogClassVisibility visibility{
+      SystemVerilogClassVisibility::Public};
+  SystemVerilogClassLifetime lifetime{
+      SystemVerilogClassLifetime::Inherited};
+  bool is_static{};
+  bool is_virtual{};
+  bool is_pure{};
+  bool is_final{};
+  bool is_extern{};
+  bool out_of_block_definition{};
+  bool defined{true};
+  SourceSpan span;
+};
+
+struct SystemVerilogClassConstraint {
+  std::string name;
+  std::string canonical_identity;
+  std::vector<Expression> expressions;
+  bool is_static{};
+  bool is_pure{};
+  bool is_extern{};
+  bool defined{true};
+  SourceSpan span;
+};
+
+/// Owning HIR for one SystemVerilog class declaration.
+///
+/// Classes remain declarations within compilation-unit, package, module,
+/// interface, or class scopes and deliberately are not UnitKind values. This
+/// makes them impossible to select as simulation tops. Nested declarations
+/// are recursively owned by their lexical parent; semantic passes populate
+/// canonical_identity and the resolved base declaration without replacing
+/// source spellings.
+struct SystemVerilogClassDeclaration {
+  std::string name;
+  std::string canonical_identity;
+  std::string enclosing_scope;
+  std::string library;
+  std::string compilation_unit_identity;
+  std::vector<ParameterDeclaration> parameters;
+  std::optional<SystemVerilogClassBase> base;
+  std::vector<SystemVerilogClassBase> implemented_interfaces;
+  std::vector<TypeAliasDeclaration> type_aliases;
+  std::vector<SystemVerilogClassProperty> properties;
+  std::vector<SystemVerilogClassMethod> methods;
+  std::vector<SystemVerilogClassConstraint> constraints;
+  std::vector<SystemVerilogClassDeclaration> nested_classes;
+  SystemVerilogClassLifetime lifetime{
+      SystemVerilogClassLifetime::Inherited};
+  bool is_virtual{};
+  bool is_interface{};
+  bool is_forward_declaration{};
+  std::optional<std::string> end_name;
+  SourceSpan span;
+};
+
 /// Typed source-level VHDL procedure.
 ///
 /// Procedures are retained independently from functions and SystemVerilog
@@ -1798,6 +1934,12 @@ struct DesignUnit {
   // Package export/re-export declarations and interface modport views.
   std::vector<SystemVerilogExport> systemverilog_exports;
   std::vector<SystemVerilogModport> systemverilog_modports;
+  // Package, module, and interface class declarations in lexical order.
+  // Compilation-unit declarations instead live on ParsedDesign.
+  std::vector<SystemVerilogClassDeclaration> systemverilog_classes;
+  // Qualified definitions linked to extern class prototypes.
+  std::vector<SystemVerilogClassMethod>
+      systemverilog_class_method_definitions;
   // Bounded SystemVerilog packed integral typedef declarations.
   std::vector<TypeAliasDeclaration> type_aliases;
   std::vector<ParameterDeclaration> parameters;
@@ -1845,6 +1987,10 @@ struct DesignUnit {
 struct ParsedDesign {
   std::vector<DesignUnit> units;
   std::vector<VerilogUdpDeclaration> udp_declarations;
+  // Compilation-unit classes remain non-top-selectable declarations.
+  std::vector<SystemVerilogClassDeclaration> systemverilog_classes;
+  std::vector<SystemVerilogClassMethod>
+      systemverilog_class_method_definitions;
 
   [[nodiscard]] const DesignUnit* find(UnitKind kind,
                                        std::string_view name) const noexcept;

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/frontend/class_resolution.hpp"
+#include "fsim/frontend/class_inheritance.hpp"
 #include "fsim/support/path.hpp"
 
 namespace fsim::app {
@@ -179,8 +181,20 @@ std::optional<CheckedProject> check_project(
     std::size_t declaration_order{};
     frontend::VerilogUdpDeclaration declaration;
   };
+  struct OrderedClass {
+    std::size_t source_order{};
+    std::size_t declaration_order{};
+    frontend::SystemVerilogClassDeclaration declaration;
+  };
+  struct OrderedClassMethod {
+    std::size_t source_order{};
+    std::size_t declaration_order{};
+    frontend::SystemVerilogClassMethod method;
+  };
   std::vector<OrderedUnit> ordered_units;
   std::vector<OrderedUdp> ordered_udps;
+  std::vector<OrderedClass> ordered_classes;
+  std::vector<OrderedClassMethod> ordered_class_methods;
   for (std::size_t input_index = 0;
        input_index < parsed_inputs.size(); ++input_index) {
     if (parse_failures[input_index]) {
@@ -250,6 +264,29 @@ std::optional<CheckedProject> check_project(
           udp_index,
           std::move(result.design.udp_declarations[udp_index])});
     }
+    for (std::size_t class_index = 0;
+         class_index < result.design.systemverilog_classes.size();
+         ++class_index) {
+      ordered_classes.push_back({
+          class_index < snapshot.class_source_orders.size()
+              ? snapshot.class_source_orders[class_index]
+              : std::size_t{},
+          class_index,
+          std::move(result.design.systemverilog_classes[class_index])});
+    }
+    for (std::size_t method_index = 0;
+         method_index
+             < result.design.systemverilog_class_method_definitions.size();
+         ++method_index) {
+      ordered_class_methods.push_back({
+          method_index < snapshot.class_method_source_orders.size()
+              ? snapshot.class_method_source_orders[method_index]
+              : std::size_t{},
+          method_index,
+          std::move(
+              result.design.systemverilog_class_method_definitions[
+                  method_index])});
+    }
   }
   std::sort(
       checked_sources.begin(),
@@ -273,6 +310,21 @@ std::optional<CheckedProject> check_project(
       ordered_udps.begin(),
       ordered_udps.end(),
       [](const OrderedUdp& left, const OrderedUdp& right) {
+        return std::tie(left.source_order, left.declaration_order)
+            < std::tie(right.source_order, right.declaration_order);
+      });
+  std::stable_sort(
+      ordered_classes.begin(),
+      ordered_classes.end(),
+      [](const OrderedClass& left, const OrderedClass& right) {
+        return std::tie(left.source_order, left.declaration_order)
+            < std::tie(right.source_order, right.declaration_order);
+      });
+  std::stable_sort(
+      ordered_class_methods.begin(),
+      ordered_class_methods.end(),
+      [](const OrderedClassMethod& left,
+         const OrderedClassMethod& right) {
         return std::tie(left.source_order, left.declaration_order)
             < std::tie(right.source_order, right.declaration_order);
       });
@@ -307,11 +359,23 @@ std::optional<CheckedProject> check_project(
           std::move(ordered.declaration));
     }
   }
+  checked.parsed.systemverilog_classes.reserve(ordered_classes.size());
+  for (auto& ordered : ordered_classes) {
+    checked.parsed.systemverilog_classes.push_back(
+        std::move(ordered.declaration));
+  }
+  checked.parsed.systemverilog_class_method_definitions.reserve(
+      ordered_class_methods.size());
+  for (auto& ordered : ordered_class_methods) {
+    checked.parsed.systemverilog_class_method_definitions.push_back(
+        std::move(ordered.method));
+  }
   if (!load_required_mapped_libraries(config, checked, diagnostics)) {
     return std::nullopt;
   }
   if (checked.parsed.units.empty()
       && checked.parsed.udp_declarations.empty()
+      && checked.parsed.systemverilog_classes.empty()
       && checked.systemc_sources.empty()
       && checked.mapped_libraries.empty() && !diagnostics.has_error()) {
     diagnostics.error(
@@ -321,6 +385,25 @@ std::optional<CheckedProject> check_project(
   }
   inject_vhdl_standard_libraries(checked, diagnostics);
   validate_vhdl_analysis_order(checked.parsed.units, diagnostics);
+  std::vector<frontend::Diagnostic> class_diagnostics;
+  (void)frontend::resolve_systemverilog_classes(
+      checked.parsed, class_diagnostics);
+  for (const auto& diagnostic : class_diagnostics) {
+    import_diagnostic(diagnostics, diagnostic);
+  }
+  std::vector<frontend::Diagnostic> inheritance_diagnostics;
+  (void)frontend::validate_systemverilog_class_inheritance(
+      checked.parsed, inheritance_diagnostics);
+  for (const auto& diagnostic : inheritance_diagnostics) {
+    import_diagnostic(diagnostics, diagnostic);
+  }
+  auto class_specializations =
+      frontend::specialize_systemverilog_classes(checked.parsed);
+  for (const auto& diagnostic : class_specializations.diagnostics) {
+    import_diagnostic(diagnostics, diagnostic);
+  }
+  checked.systemverilog_class_specializations =
+      std::move(class_specializations.specializations);
   if (diagnostics.has_error()) {
     return std::nullopt;
   }

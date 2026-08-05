@@ -22,6 +22,7 @@ namespace {
 
 constexpr std::string_view kMagic = "FSIMUNIT";
 constexpr std::string_view kUdpMagic = "FSIMUDPD";
+constexpr std::string_view kClassMagic = "FSIMCLSU";
 constexpr std::string_view kCode = "FSIM-LIB-0006";
 constexpr std::size_t kMaximumArchiveNesting = 512;
 
@@ -64,7 +65,10 @@ auto archive_fields(T& value) {
       value.integer_base_range_expression, value.discrete_range_expression,
       value.vhdl_array, value.vhdl_access, value.vhdl_file,
       value.vhdl_physical, value.vhdl_protected,
-      value.vhdl_array_constraints, value.systemverilog_container);
+      value.vhdl_array_constraints, value.systemverilog_container,
+      value.systemverilog_class_name,
+      value.systemverilog_class_declaration,
+      value.systemverilog_class_parameter_actuals);
 }
 
 template <typename T>
@@ -658,6 +662,29 @@ bool relocate_udp_sources(
   return true;
 }
 
+bool relocate_class_unit_sources(
+    PortableSystemVerilogClassUnit& unit,
+    const std::span<const SourceNameMapping> mappings,
+    diagnostic::Engine& diagnostics) {
+  std::unordered_set<const void*> visited;
+  std::string missing;
+  if (!remap_spans(unit, mappings, visited, missing)) {
+    diagnostics.error(
+        std::string{kCode},
+        "no relocatable source identity was supplied for producer path '"
+            + missing + "'");
+    return false;
+  }
+  visited.clear();
+  if (has_absolute_span(unit, visited)) {
+    diagnostics.error(
+        std::string{kCode},
+        "source relocation left a producer-absolute path in the class unit");
+    return false;
+  }
+  return true;
+}
+
 std::optional<std::string> serialize_portable_unit(
     const frontend::DesignUnit& unit,
     diagnostic::Engine& diagnostics) {
@@ -709,6 +736,35 @@ std::optional<std::string> serialize_portable_udp(
   auto schema = kUdpDeclarationSchemaVersion;
   writer.write(schema);
   auto owning = declaration;
+  writer.write(owning);
+  if (!writer.failure().empty()) {
+    diagnostics.error(std::string{kCode}, writer.failure());
+    return std::nullopt;
+  }
+  return std::move(writer).finish();
+}
+
+std::optional<std::string> serialize_portable_class_unit(
+    const PortableSystemVerilogClassUnit& unit,
+    diagnostic::Engine& diagnostics) {
+  if (unit.library.empty() || unit.compilation_unit_identity.empty()
+      || (unit.declarations.empty() && unit.method_definitions.empty())) {
+    diagnostics.error(
+        std::string{kCode}, "portable class unit is empty or unidentified");
+    return std::nullopt;
+  }
+  std::unordered_set<const void*> visited;
+  if (has_absolute_span(unit, visited)) {
+    diagnostics.error(
+        std::string{kCode},
+        "portable class unit contains a producer-absolute source path");
+    return std::nullopt;
+  }
+  Writer writer;
+  writer.raw(kClassMagic);
+  auto schema = kOwningUnitSchemaVersion;
+  writer.write(schema);
+  auto owning = unit;
   writer.write(owning);
   if (!writer.failure().empty()) {
     diagnostics.error(std::string{kCode}, writer.failure());
@@ -772,6 +828,36 @@ std::optional<frontend::VerilogUdpDeclaration> deserialize_portable_udp(
     return std::nullopt;
   }
   return declaration;
+}
+
+std::optional<PortableSystemVerilogClassUnit>
+deserialize_portable_class_unit(
+    const std::string_view bytes,
+    std::string source_name,
+    diagnostic::Engine& diagnostics) {
+  Reader reader(bytes);
+  std::uint32_t schema{};
+  PortableSystemVerilogClassUnit unit;
+  if (!reader.raw(kClassMagic) || !reader.read(schema)
+      || schema != kOwningUnitSchemaVersion || !reader.read(unit)
+      || reader.remaining() != 0 || unit.library.empty()
+      || unit.compilation_unit_identity.empty()
+      || (unit.declarations.empty() && unit.method_definitions.empty())) {
+    auto message = reader.failure();
+    if (message.empty() && schema != kOwningUnitSchemaVersion) {
+      message = "unsupported portable class-unit schema "
+          + std::to_string(schema);
+    } else if (message.empty() && reader.remaining() != 0) {
+      message = "portable class unit contains trailing bytes";
+    } else if (message.empty()) {
+      message = "portable class unit is empty or unidentified";
+    }
+    diagnostics.error(
+        std::string{kCode}, std::move(message),
+        {std::move(source_name), {1, 1, 0}, {1, 1, 0}});
+    return std::nullopt;
+  }
+  return unit;
 }
 
 }  // namespace fsim::library

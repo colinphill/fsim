@@ -256,6 +256,48 @@ bool compile_object(
         "primitive", declaration.name, {}, {}, path, checksum});
     payloads.push_back({path, std::move(*bytes)});
   }
+  std::map<std::string, library::PortableSystemVerilogClassUnit> class_units;
+  for (const auto& declaration : checked->parsed.systemverilog_classes) {
+    const auto declaration_library = declaration.library.empty()
+        ? std::string_view{"work"} : std::string_view{declaration.library};
+    if (declaration_library != source_set.library) continue;
+    auto& unit = class_units[declaration.compilation_unit_identity];
+    unit.library = std::string{declaration_library};
+    unit.compilation_unit_identity = declaration.compilation_unit_identity;
+    unit.declarations.push_back(declaration);
+  }
+  for (const auto& method :
+       checked->parsed.systemverilog_class_method_definitions) {
+    const auto method_library = method.library.empty()
+        ? std::string_view{"work"} : std::string_view{method.library};
+    if (method_library != source_set.library) continue;
+    auto& unit = class_units[method.compilation_unit_identity];
+    unit.library = std::string{method_library};
+    unit.compilation_unit_identity = method.compilation_unit_identity;
+    unit.method_definitions.push_back(method);
+  }
+  for (auto& [identity, class_unit] : class_units) {
+    if (identity.empty()
+        || !library::relocate_class_unit_sources(
+            class_unit, source_mappings, diagnostics)) {
+      if (identity.empty()) {
+        diagnostics.error(
+            "FSIM-ART-0004",
+            "class declaration has no compilation-unit identity");
+      }
+      return false;
+    }
+    auto bytes = library::serialize_portable_class_unit(
+        class_unit, diagnostics);
+    if (!bytes) return false;
+    const auto path = std::filesystem::path{indexed_path(
+        "units", unit_index++, ".fsimclass")};
+    const auto checksum = support::Sha256::hex(
+        support::Sha256::digest(*bytes));
+    metadata.units.push_back({
+        "systemverilog", "class-unit", identity, {}, {}, path, checksum});
+    payloads.push_back({path, std::move(*bytes)});
+  }
   if (metadata.units.empty()) {
     diagnostics.error(
         "FSIM-ART-0004",

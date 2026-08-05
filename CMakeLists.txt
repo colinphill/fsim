@@ -358,11 +358,15 @@ fsim_configure_library(fsim_semantic)
 set(
   FSIM_FRONTEND_SOURCES
   "${PROJECT_SOURCE_DIR}/src/frontend/common.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/class_resolution.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/class_inheritance.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/class_specialization.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/lexer.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/parser.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_preprocessor.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_core.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_classes.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_declarations.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_switch.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_specify.cpp"
@@ -394,6 +398,10 @@ target_link_libraries(fsim_frontend PUBLIC fsim_semantic)
 add_library(
   fsim_runtime
   STATIC
+    src/runtime/class_heap.cpp
+    src/runtime/class_containers.cpp
+    src/runtime/class_methods.cpp
+    src/runtime/class_static.cpp
     src/runtime/packed_value.cpp
     src/runtime/scheduler.cpp
     src/runtime/simir.cpp

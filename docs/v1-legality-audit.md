@@ -56,7 +56,11 @@ closed row became `execute` with complete positive, negative, elaboration, and
 direct runtime evidence. Task 4 closed the other 120 non-execute status rows
 plus every pre-existing execute-status evidence gap. The legality gate now
 requires all 697 SystemVerilog rows to remain `execute` with complete P+, P-,
-E, and R evidence; there is no remaining SystemVerilog legality queue.
+E, and R evidence; there is no remaining v1 SystemVerilog legality queue. V2
+Batch 147 adds ten executable class-foundation rows, `SV-698` through
+`SV-707`, with complete owning-HIR, negative, runtime, engine, debugger, and
+artifact evidence. The current gate therefore requires all 707 SystemVerilog
+rows and 1,137 total matrix rows to remain executable with no evidence gaps.
 
 ## Mixed-language and SystemC queues — Batch 127 Tasks 7 and 8
 

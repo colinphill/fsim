@@ -164,7 +164,9 @@ Delay VerilogParser::parse_verilog_delay(
 }
 
 Expression VerilogParser::parse_lvalue() {
-  const auto name = expect_identifier("assignment target");
+  const auto name = keyword("this") || keyword("super")
+      ? advance()
+      : expect_identifier("assignment target");
   Expression expression{ExpressionKind::Identifier, name.text, {},
                         name.span};
   for (;;) {
@@ -747,7 +749,9 @@ Expression VerilogParser::parse_postfix(Expression expression) {
   for (;;) {
     if (match(TokenKind::Dot)) {
       auto member = current();
-      if (member.kind == TokenKind::Identifier
+      if (keyword("new")) {
+        member = advance();
+      } else if (member.kind == TokenKind::Identifier
           && (member.text == "and"
               || member.text == "or"
               || member.text == "xor"

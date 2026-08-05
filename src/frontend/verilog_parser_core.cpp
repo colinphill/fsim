@@ -25,7 +25,56 @@ ParseResult VerilogParser::run() {
       design.units.push_back(parse_module(previous()));
     } else if (match_keyword("interface")) {
       compilation_unit_has_design_item_ = true;
-      design.units.push_back(parse_module(previous(), true));
+      const auto interface_token = previous();
+      if (match_keyword("class")) {
+        add_class_declaration(
+            design.systemverilog_classes,
+            parse_class(previous(), "$unit", false, true),
+            interface_token);
+      } else {
+        design.units.push_back(parse_module(interface_token, true));
+      }
+    } else if (match_keyword("virtual")) {
+      compilation_unit_has_design_item_ = true;
+      const auto qualifier = previous();
+      if (match_keyword("class")) {
+        add_class_declaration(
+            design.systemverilog_classes,
+            parse_class(previous(), "$unit", true),
+            qualifier);
+      } else {
+        error(
+            qualifier,
+            "FSIM-SV-PARSE-254",
+            "compilation-unit 'virtual' must introduce a class");
+        skip_to_semicolon();
+      }
+    } else if (match_keyword("class")) {
+      compilation_unit_has_design_item_ = true;
+      const auto declaration = previous();
+      add_class_declaration(
+          design.systemverilog_classes,
+          parse_class(declaration, "$unit"),
+          declaration);
+    } else if (keyword("typedef") && keyword("class", 1)) {
+      compilation_unit_has_design_item_ = true;
+      const auto declaration = advance();
+      add_class_declaration(
+          design.systemverilog_classes,
+          parse_class_forward_declaration(declaration, "$unit"),
+          declaration);
+    } else if (match_keyword("function")) {
+      compilation_unit_has_design_item_ = true;
+      const auto declaration = previous();
+      design.systemverilog_class_method_definitions.push_back(
+          parse_class_out_of_block_method(
+              declaration, SystemVerilogClassMethodKind::Function));
+    } else if (match_keyword("task")) {
+      compilation_unit_has_design_item_ = true;
+      const auto declaration = previous();
+      design.systemverilog_class_method_definitions.push_back(
+          parse_class_out_of_block_method(
+              declaration, SystemVerilogClassMethodKind::Task));
     } else if (match_keyword("primitive")) {
       compilation_unit_has_design_item_ = true;
       auto declaration = parse_udp_declaration(previous());
@@ -890,7 +939,52 @@ DesignUnit VerilogParser::parse_module(
           unit.systemverilog_imports;
     } else if (match_keyword("typedef")) {
       module_has_non_time_item_ = true;
-      parse_typedef(unit, previous());
+      const auto declaration = previous();
+      if (keyword("class")) {
+        add_class_declaration(
+            unit.systemverilog_classes,
+            parse_class_forward_declaration(declaration, unit.name),
+            declaration);
+      } else {
+        parse_typedef(unit, declaration);
+      }
+    } else if (match_keyword("virtual")) {
+      module_has_non_time_item_ = true;
+      const auto qualifier = previous();
+      if (match_keyword("class")) {
+        add_class_declaration(
+            unit.systemverilog_classes,
+            parse_class(previous(), unit.name, true),
+            qualifier);
+      } else {
+        error(
+            qualifier,
+            "FSIM-SV-PARSE-254",
+            "module or interface 'virtual' must introduce a class");
+        skip_to_semicolon();
+      }
+    } else if (match_keyword("interface")) {
+      module_has_non_time_item_ = true;
+      const auto qualifier = previous();
+      if (match_keyword("class")) {
+        add_class_declaration(
+            unit.systemverilog_classes,
+            parse_class(previous(), unit.name, false, true),
+            qualifier);
+      } else {
+        error(
+            qualifier,
+            "FSIM-SV-PARSE-255",
+            "a nested interface declaration must be an interface class");
+        skip_to_semicolon();
+      }
+    } else if (match_keyword("class")) {
+      module_has_non_time_item_ = true;
+      const auto declaration = previous();
+      add_class_declaration(
+          unit.systemverilog_classes,
+          parse_class(declaration, unit.name),
+          declaration);
     } else if (match_keyword("modport")) {
       module_has_non_time_item_ = true;
       if (!interface_unit) {

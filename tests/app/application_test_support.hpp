@@ -62,6 +62,7 @@ class ApplicationTestFixture {
   void test_systemc_integration();
   void test_systemc_scheduling_matrix();
   void test_simulation_semantics();
+  void test_class_simulation_integration();
   void test_specialization_and_packages();
   void test_mixed_language_and_generate();
   void test_multiple_roots();
@@ -91,6 +92,7 @@ class ApplicationTestFixture {
   std::filesystem::path directory;
   std::filesystem::path source;
   std::filesystem::path scheduled_source;
+  std::filesystem::path class_source;
   std::filesystem::path sensitivity_source;
   std::filesystem::path vhdl_wait_source;
   std::filesystem::path wildcard_source;

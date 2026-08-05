@@ -451,6 +451,9 @@ void VerilogParser::require_default_port_net_type(
           current(offset).text)) {
     return false;
   }
+  if (at(TokenKind::Hash, offset + 1)) {
+    return true;
+  }
   if (at(TokenKind::Scope, offset + 1)) {
     return at(TokenKind::Identifier, offset + 2)
         && at(TokenKind::Identifier, offset + 3);
@@ -465,7 +468,7 @@ Type VerilogParser::parse_named_type() {
       expect_identifier("SystemVerilog type name");
   std::string name = first.text;
   auto span = first.span;
-  if (match(TokenKind::Scope)) {
+  while (match(TokenKind::Scope)) {
     const auto selected =
         expect_identifier("package type name");
     name += "::";
@@ -479,6 +482,24 @@ Type VerilogParser::parse_named_type() {
       false};
   type.named_type = name;
   type.named_type_span = span;
+  if (match(TokenKind::Hash)) {
+    const auto hash = previous();
+    Instance actual_owner;
+    parse_parameter_overrides(actual_owner, hash);
+    for (auto& actual : actual_owner.parameter_overrides) {
+      SystemVerilogClassTypeActual retained;
+      retained.name = std::move(actual.name);
+      retained.value = std::move(actual.value);
+      if (actual.type_value) {
+        retained.type_actual = std::make_shared<Type>(
+            std::move(*actual.type_value));
+      }
+      retained.span = std::move(actual.span);
+      type.systemverilog_class_parameter_actuals.push_back(
+          std::move(retained));
+    }
+    type.named_type_span = cover(type.named_type_span, previous().span);
+  }
   return type;
 }
 

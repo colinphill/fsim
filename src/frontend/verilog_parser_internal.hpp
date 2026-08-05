@@ -415,6 +415,47 @@ class VerilogParser final : private detail::ParserBase {
 
   DesignUnit parse_package(const Token& start);
 
+  SystemVerilogClassDeclaration parse_class(
+      const Token& start,
+      std::string enclosing_scope,
+      bool virtual_class = false,
+      bool interface_class = false);
+
+  SystemVerilogClassDeclaration parse_class_forward_declaration(
+      const Token& start,
+      std::string enclosing_scope);
+
+  void add_class_declaration(
+      std::vector<SystemVerilogClassDeclaration>& declarations,
+      SystemVerilogClassDeclaration declaration,
+      const Token& location);
+
+  bool parse_class_property(
+      SystemVerilogClassDeclaration& declaration,
+      const Token& start);
+
+  SystemVerilogClassMethod parse_class_method(
+      const Token& start,
+      SystemVerilogClassMethodKind kind,
+      SystemVerilogClassVisibility visibility,
+      bool is_static,
+      bool is_virtual,
+      bool is_pure,
+      bool is_final,
+      bool is_extern,
+      std::string_view owner_identity);
+
+  SystemVerilogClassMethod parse_class_out_of_block_method(
+      const Token& start,
+      SystemVerilogClassMethodKind kind);
+
+  SystemVerilogClassConstraint parse_class_constraint(
+      const Token& start,
+      std::string_view owner_identity,
+      bool is_static,
+      bool is_pure,
+      bool is_extern);
+
   VerilogUdpDeclaration parse_udp_declaration(const Token& start);
 
   VerilogSpecifyBlock parse_specify_block(const Token& start);
@@ -449,13 +490,17 @@ class VerilogParser final : private detail::ParserBase {
   std::optional<VerilogUdpOutputSymbol> parse_udp_output_symbol(
       bool allow_no_change);
 
-  FunctionDeclaration parse_function(const Token& start);
+  FunctionDeclaration parse_function(
+      const Token& start,
+      bool prototype = false);
 
   void validate_function_body(
       const FunctionDeclaration& function,
       const Token& start);
 
-  TaskDeclaration parse_task(const Token& start);
+  TaskDeclaration parse_task(
+      const Token& start,
+      bool prototype = false);
 
   void validate_task_body(
       const TaskDeclaration& task,

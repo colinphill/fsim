@@ -405,7 +405,9 @@ bool publish_design_artifact(
   auto runtime = serialize_runtime_state(project.design, diagnostics);
   auto semantics = serialize_semantic_state(project.semantics, diagnostics);
   auto design_ir = serialize_design_ir_state(project.design_ir, diagnostics);
-  if (!runtime || !semantics || !design_ir) {
+  auto classes = serialize_class_state(
+      project.systemverilog_class_specializations, diagnostics);
+  if (!runtime || !semantics || !design_ir || !classes) {
     return false;
   }
 
@@ -450,10 +452,12 @@ bool publish_design_artifact(
   add_payload("runtime", "state/runtime.bin", *runtime);
   add_payload("semantics", "state/semantics.bin", *semantics);
   add_payload("design-ir", "state/design-ir.bin", *design_ir);
+  add_payload("classes", "state/classes.bin", *classes);
   std::vector<library::PortablePayload> payloads{
       {metadata.payloads[0].artifact, std::move(*runtime)},
       {metadata.payloads[1].artifact, std::move(*semantics)},
-      {metadata.payloads[2].artifact, std::move(*design_ir)}};
+      {metadata.payloads[2].artifact, std::move(*design_ir)},
+      {metadata.payloads[3].artifact, std::move(*classes)}};
   std::set<std::string> selected_plugin_libraries;
   for (const auto& instance : project.design.systemc_instances()) {
     if (const auto target = systemc_target(instance.target)) {
@@ -553,8 +557,9 @@ std::optional<BuiltProject> load_design_artifact(
   const auto* runtime_index = payload_by_kind(*metadata, "runtime");
   const auto* semantic_index = payload_by_kind(*metadata, "semantics");
   const auto* design_ir_index = payload_by_kind(*metadata, "design-ir");
+  const auto* class_index = payload_by_kind(*metadata, "classes");
   if (runtime_index == nullptr || semantic_index == nullptr
-      || design_ir_index == nullptr) {
+      || design_ir_index == nullptr || class_index == nullptr) {
     diagnostics.error(
         "FSIM-ART-0014", ".fsimdesign is missing a required state payload");
     return std::nullopt;
@@ -568,7 +573,10 @@ std::optional<BuiltProject> load_design_artifact(
   auto design_ir_bytes = read_design_payload(
       directory / design_ir_index->artifact, design_ir_index->checksum,
       diagnostics);
-  if (!runtime_bytes || !semantic_bytes || !design_ir_bytes) {
+  auto class_bytes = read_design_payload(
+      directory / class_index->artifact, class_index->checksum,
+      diagnostics);
+  if (!runtime_bytes || !semantic_bytes || !design_ir_bytes || !class_bytes) {
     return std::nullopt;
   }
   auto runtime = deserialize_runtime_state(
@@ -580,7 +588,10 @@ std::optional<BuiltProject> load_design_artifact(
   auto design_ir = deserialize_design_ir_state(
       *design_ir_bytes, support::path_to_utf8(design_ir_index->artifact),
       diagnostics);
-  if (!runtime || !semantics || !design_ir
+  auto classes = deserialize_class_state(
+      *class_bytes, support::path_to_utf8(class_index->artifact),
+      diagnostics);
+  if (!runtime || !semantics || !design_ir || !classes
       || !design_ir->valid(*semantics)
       || !application_detail::valid_runtime_projection(*design_ir, *runtime)) {
     if (!diagnostics.has_error()) {
@@ -637,7 +648,7 @@ std::optional<BuiltProject> load_design_artifact(
       std::move(primary_hierarchy), std::move(live_systemc->roots),
       metadata->seed, metadata->entropy_seed, false,
       directory.parent_path(), std::move(live_systemc->registries), {},
-      std::move(objects), metadata->design_digest};
+      std::move(objects), metadata->design_digest, std::move(*classes)};
 }
 
 bool elaborate_artifact(

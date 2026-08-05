@@ -405,6 +405,42 @@ bool load_required_mapped_libraries(
       if (!bytes.has_value()) {
         return false;
       }
+      if (entry.kind == "class-unit") {
+        auto unit = library::deserialize_portable_class_unit(
+            *bytes,
+            support::path_to_utf8(
+                mapping->second->path / entry.artifact),
+            diagnostics);
+        if (!unit || unit->library != library_name
+            || entry.language != "systemverilog"
+            || entry.name != unit->compilation_unit_identity) {
+          diagnostics.error(
+              "FSIM-LIB-0008",
+              "mapped class-unit identity does not match its metadata index");
+          return false;
+        }
+        for (auto& declaration : unit->declarations) {
+          const auto duplicate = std::ranges::find(
+              checked.parsed.systemverilog_classes,
+              declaration.canonical_identity,
+              &frontend::SystemVerilogClassDeclaration::canonical_identity);
+          if (duplicate != checked.parsed.systemverilog_classes.end()) {
+            diagnostics.error(
+                "FSIM-LIB-0008",
+                "mapped class collides with an already loaded declaration '"
+                    + declaration.canonical_identity + "'");
+            return false;
+          }
+          checked.parsed.systemverilog_classes.push_back(
+              std::move(declaration));
+        }
+        for (auto& method : unit->method_definitions) {
+          checked.parsed.systemverilog_class_method_definitions.push_back(
+              std::move(method));
+        }
+        provenance.unit_checksums.push_back(entry.checksum);
+        continue;
+      }
       if (entry.kind == "primitive") {
         auto declaration = library::deserialize_portable_udp(
             *bytes,

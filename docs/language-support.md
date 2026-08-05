@@ -1187,6 +1187,32 @@ VITAL_LEVEL metadata, timing generics, extended identifiers, pragmas, and null
 path idioms without proprietary-name handling. SDF annotation remains in its
 subsequent dedicated v2 batch.
 
+### SystemVerilog class foundation in v2
+
+The current v2 slice owns and resolves compilation-unit, package, module,
+interface, and nested class declarations. It supports forward typedefs,
+value/type parameters, parameterized bases, properties with visibility and
+static/const/random qualifiers, constructors, functions, tasks, extern and
+pure-virtual prototypes, out-of-block definitions, constraints as retained
+HIR, single inheritance, interface implementation, hiding, checked overrides,
+covariant class-handle returns, and stable virtual dispatch slots.
+
+Executable support includes opaque nullable/generation-safe handles,
+base-to-derived construction, property access, assignment/equality and checked
+casts, instance/static methods, automatic frames, recursion guards, task
+suspension, one static store across multiple roots and import aliases, and
+bounded handle elements in fixed/dynamic arrays, queues, associative arrays,
+unpacked aggregates, and class properties. Packed properties participate in
+callbacks and debugger reads, and class state/provenance survives portable
+objects, standalone designs, mapped libraries, relocation, and native-cache
+reuse. Resource rejection is based on caller budgets and checked materialized
+storage, not an arbitrary class/container element limit.
+
+This is the object-model foundation, not full class closure. Constraint bodies
+are retained but not solved; `randomize`/`std::randomize`, complete method-body
+lowering, covergroups, UVM library/runtime behavior, DPI, and VPI remain for
+subsequent v2 batches.
+
 ## v1 target
 
 ### VHDL-2008

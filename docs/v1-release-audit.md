@@ -9,15 +9,15 @@ remains the final Task 10 boundary.
 
 ## Matrix baseline
 
-The current matrix contains exactly 1,097 required rows. Every row is classified
+The current matrix contains exactly 1,137 required rows. Every row is classified
 `execute`, has nonempty positive parse, negative diagnostic, elaboration, and
 runtime evidence, and names evidence paths that exist in the checkout.
 
 | Surface | Prefix | Required rows | Final review owner |
 |---|---|---:|---:|
-| SystemVerilog language | `SV` | 671 | Task 2 |
+| SystemVerilog language | `SV` | 707 | Task 2 plus v2 Batches 144-147 |
 | SystemVerilog release contract | `V1-SV` | 9 | Task 2 |
-| VHDL language | `VH` | 265 | Task 3 plus v2 Batches 140-141 |
+| VHDL language | `VH` | 269 | Task 3 plus v2 Batches 140-143 |
 | VHDL release contract | `V1-VH` | 8 | Task 3 |
 | Mixed-language behavior | `ML` | 17 | Task 4 plus v2 Batch 134 |
 | SystemC behavior | `SC` | 28 | Task 4 |
@@ -25,7 +25,7 @@ runtime evidence, and names evidence paths that exist in the checkout.
 | Common release contract | `V1-CM` | 10 | Tasks 5 through 9 |
 
 The Task 1 baseline matrix digest is
-`1c2c01848554301a8f251764fa7fc1b9ea8aaa6ba305ca9942999705ef014b08`.
+`db5b905fb2a81857a9acf5ad499d270ad8db75e1f0f26415fbb8df1ef1db848f`.
 Changing any row requires an intentional audit update and the owning focused
 gate; the digest is evidence of review, not a substitute for semantic tests.
 Corrective Batch 131 re-reviewed the affected container rows after replacing
@@ -37,6 +37,10 @@ counts remain unchanged.
 v2 Batches 137-138 add the reviewed CM-088 non-project artifact-phase contract,
 CM-089 incremental SystemC compile/link and standalone-native design contract,
 and advance the required-row count and matrix digest together.
+V2 Batch 147 adds `SV-698` through `SV-707` for the class object-model
+foundation, including owning HIR, resolution, specialization, inheritance,
+opaque handles, methods/static state, containers, scheduler/debugger behavior,
+and portable artifacts; the ten rows and reviewed digest advance together.
 
 ## Existing release evidence
 

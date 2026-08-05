@@ -52,10 +52,10 @@ debugger rows, 128 VCD rows, 411 scheduling rows, and 93 failure rows; the
 reviewed 36-CTest corpus inventory remains unchanged.
 
 Batch 146's six specify rows advance the reviewed differential inventory to
-1,127 required rows and 107 runtime owners. The linked evidence covers every
+1,137 required rows and 108 runtime owners. The linked evidence covers every
 module-path delay arity and timing-check family through frontend, elaboration,
 runtime, portable artifacts, interpreter, LLVM O0/O2, debugger, callbacks,
-VCD, and cache paths. The linked totals are 462 interpreter rows, 381 LLVM
-rows, 255 cache rows, 99 debugger rows, 129 VCD rows, 411 scheduling rows, and
-94 failure rows. The reviewed 36-CTest corpus adds the dedicated
+VCD, and cache paths. The linked totals are 463 interpreter rows, 381 LLVM
+rows, 255 cache rows, 101 debugger rows, 129 VCD rows, 414 scheduling rows, and
+95 failure rows. The reviewed 36-CTest corpus adds the dedicated
 `fsim.application.specify` owner.

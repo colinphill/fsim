@@ -346,7 +346,8 @@ endprimitive
   assert(!fsim::library::deserialize_portable_unit(
       trailing_unit, "trailing.fsimir", trailing_diagnostics));
   auto future_unit = *unit_bytes;
-  future_unit[8] = '\5';
+  future_unit[8] = static_cast<char>(
+      fsim::library::kOwningUnitSchemaVersion + 1U);
   fsim::diagnostic::Engine future_diagnostics;
   assert(!fsim::library::deserialize_portable_unit(
       future_unit, "future.fsimir", future_diagnostics));

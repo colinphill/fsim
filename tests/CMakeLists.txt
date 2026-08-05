@@ -45,6 +45,7 @@ add_executable(
   frontend/frontend_interface_tests.cpp
   frontend/frontend_package_tests.cpp
   frontend/frontend_callable_tests.cpp
+  frontend/frontend_class_tests.cpp
   frontend/frontend_vhdl_subprogram_tests.cpp
   frontend/frontend_vhdl_generic_subprogram_tests.cpp
   frontend/frontend_vhdl_component_tests.cpp
@@ -859,6 +860,7 @@ if(TARGET fsim_application)
         app/application_test_multiple_roots.cpp
         app/application_test_non_project_cli.cpp
         app/application_test_simulation.cpp
+        app/application_test_classes.cpp
         app/application_test_source_updates.cpp
         app/application_test_sources_common.cpp
         app/application_test_sources_mixed.cpp
@@ -2167,6 +2169,7 @@ set_tests_properties(
     app/application_test_multiple_roots.cpp
     app/application_test_non_project_cli.cpp
     app/application_test_simulation.cpp
+    app/application_test_classes.cpp
     app/application_test_source_updates.cpp
     app/application_test_sources_common.cpp
     app/application_test_sources_mixed.cpp

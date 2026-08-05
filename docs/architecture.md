@@ -743,6 +743,48 @@ after canonicalization. The constructed ports are then connected and checked,
 so parameter-dependent SystemC interfaces never pass through a mismatched
 default construction.
 
+### SystemVerilog class object model
+
+SystemVerilog classes are owning semantic declarations, not hierarchy design
+units. The frontend retains compilation-unit, package, module, interface, and
+nested declarations with canonical case-sensitive identities, forward
+declarations, value/type parameters, bases and implemented interfaces,
+declaration-ordered properties, methods, constraints, source spans, and
+out-of-block definitions. A separate resolver completes visible class marks
+and extern prototypes transactionally. Inheritance validation then checks the
+single-base graph, interface use, member visibility, hiding, pure/final rules,
+override profiles, and covariant class-handle returns before specialization.
+
+Specialization evaluates class and base actuals, owns inherited and declared
+property layouts, assigns stable virtual slots, and contributes all transitive
+source and parameter identity to project and native-cache provenance. There is
+no language-level object-count or container-length ceiling. Layout arithmetic
+is checked against host-addressable storage; runtime heap, static-state,
+container, recursion, and suspension limits are caller-supplied resource
+budgets derived from materialized storage.
+
+Each simulation owns one opaque class heap, one per-specialization static
+store, and one method dispatcher shared by every root. Handle zero is `null`;
+live handles encode a slot generation so stale identities cannot alias reused
+storage. Construction publishes only after ordered base-to-derived steps
+succeed. Object properties preserve declared and dynamic types, hidden base
+members retain owner-qualified storage, and virtual calls select compiler-
+assigned slots from the dynamic specialization. Method frames own `this`,
+copy-in/copy-out actuals, automatic locals, guarded recursion, and resumable
+task continuations. Fixed/dynamic arrays, queues, associative arrays, and
+unpacked aggregates may contain checked opaque handles while packed placement
+is rejected.
+
+The application exposes packed-property callbacks and debugger inspection
+without exposing host pointers, and schedules class methods through the common
+time/delta scheduler. Versioned class owning-unit and runtime-state payloads
+preserve declarations, specializations, initial static state, virtual slots,
+and provenance through `.fsimobj`, `.fsimdesign`, and relocatable `.fsimlib`
+artifacts. The current foundation does not implement constraint solving,
+randomization execution, UVM library behavior, or the complete expression and
+statement surface inside methods; those remain in following class-closure
+batches.
+
 ## Runtime values
 
 The runtime distinguishes three logic domains:

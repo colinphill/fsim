@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Final SystemVerilog v1 release audit
 
-This is the accumulated release inspection record for all 697 `SV` rows and all
+This is the accumulated release inspection record for all 707 `SV` rows and all
 9 `V1-SV` release-contract rows in the
 [feature matrix](feature-matrix.md). It narrows evidence claims; it does not
 broaden the v1 subset.
@@ -16,7 +16,7 @@ broaden the v1 subset.
 | `B130-T2-SV-NATIVE` | Interpreter, LLVM O0/O2, cache, debugger, VCD, runtime ABI, and source edits | Differential claims remain owned by their exact application/compiler/runtime tests and do not rely on parser acceptance |
 | `B130-T2-SV-RELEASE` | Nine `V1-SV` rows | The complete language promise remains executable with positive, negative, elaboration, and runtime ownership |
 
-The machine gate composes the final release audit, then parses all 706 rows
+The machine gate composes the final release audit, then parses all 716 rows
 independently. It requires `execute`, rejects empty or em-dash evidence cells,
 requires checked test-or-implementation ownership for P+, test/catalog/checked
 rejection ownership for P-, implementation-or-test ownership for E, and
@@ -35,5 +35,7 @@ now name executable assignment, gate, and named-event delay differentials; the
 gate fixture covers `min:typ:max` selection in all three modes and the event
 fixture covers a typical-branch nonblocking notification. Classic callable
 headers now have atomic missing, extra, duplicate, delimiter, and end-name
-diagnostics. The strict audit covers all 706 rows and 56 distinct runtime
-evidence files.
+diagnostics. V2 Batch 147 adds the ten class-foundation rows with focused
+frontend, runtime, application, debugger, engine, and portable-artifact
+owners. The strict audit covers all 716 rows; the runtime evidence-file count
+is frozen by the release-candidate gate.

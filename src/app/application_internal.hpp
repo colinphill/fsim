@@ -710,6 +710,8 @@ struct ParsedSnapshot {
   std::vector<CheckedSource> sources;
   std::vector<std::size_t> unit_source_orders;
   std::vector<std::size_t> udp_source_orders;
+  std::vector<std::size_t> class_source_orders;
+  std::vector<std::size_t> class_method_source_orders;
 };
 
 bool same_source_path(

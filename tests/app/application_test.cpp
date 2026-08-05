@@ -18,6 +18,8 @@ int main() {
 #endif
   checkpoint("simulation semantics");
   fixture.test_simulation_semantics();
+  checkpoint("class simulation integration");
+  fixture.test_class_simulation_integration();
   checkpoint("specialization and packages");
   fixture.test_specialization_and_packages();
   checkpoint("mixed language and generate");

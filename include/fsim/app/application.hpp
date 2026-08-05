@@ -4,8 +4,10 @@
 #include "fsim/cli/driver.hpp"
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/frontend/design.hpp"
+#include "fsim/frontend/class_specialization.hpp"
 #include "fsim/project/project.hpp"
 #include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/class_methods.hpp"
 #include "fsim/semantic/model.hpp"
 #include "fsim/semantic/design_ir.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
@@ -69,6 +71,8 @@ struct CheckedProject {
     std::vector<std::filesystem::path> systemc_sources;
   };
   frontend::ParsedDesign parsed;
+  std::vector<frontend::SystemVerilogClassSpecialization>
+      systemverilog_class_specializations;
   /// Parser-independent semantic identities and owned source provenance in
   /// deterministic manifest/declaration order. No record retains an address
   /// into `parsed`.
@@ -130,6 +134,10 @@ struct BuiltProject {
   /// Content-only identity of a loaded standalone design artifact. Project
   /// builds leave this empty; standalone native-cache keys include it.
   std::string artifact_identity;
+  /// Owning class specialization metadata used to construct the shared
+  /// simulation heap, static state, and method-dispatch services.
+  std::vector<frontend::SystemVerilogClassSpecialization>
+      systemverilog_class_specializations;
 };
 
 /// Parse all HDL source files in deterministic manifest order. Independent
@@ -221,6 +229,15 @@ class Simulation final {
   using OutputHook = runtime::simir::Interpreter::OutputHook;
   using ReportHook = runtime::simir::Interpreter::ReportHook;
   using SafePointHook = runtime::Scheduler::SafePointHook;
+  using ClassPropertyChangeHook = std::function<void(
+      runtime::SystemVerilogClassHandle,
+      std::string_view,
+      const runtime::PackedLogic4&,
+      runtime::SimulationTick,
+      std::uint64_t)>;
+  using ClassMethodCompletion = std::function<void(
+      const runtime::SystemVerilogClassInvocationResult&,
+      const std::vector<runtime::SystemVerilogClassMethodValue>&)>;
 
   Simulation(
       BuiltProject project,
@@ -261,6 +278,41 @@ class Simulation final {
   [[nodiscard]] const runtime::simir::ContainerValue&
   read_container_object(
       runtime::simir::ContainerObjectId object) const;
+  [[nodiscard]] const std::vector<
+      frontend::SystemVerilogClassSpecialization>&
+  class_specializations() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogClassHeap& class_heap() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogClassHeap&
+  class_heap() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogClassStaticStore&
+  class_static_store() noexcept;
+  [[nodiscard]] runtime::SystemVerilogClassMethodRuntime&
+  class_methods() noexcept;
+  [[nodiscard]] runtime::SystemVerilogClassHandle allocate_class(
+      std::string_view specialization_identity,
+      std::string_view declared_type = {});
+  [[nodiscard]] const runtime::SystemVerilogClassPropertyValue&
+  read_class_property(
+      runtime::SystemVerilogClassHandle handle,
+      std::string_view property) const;
+  void deposit_class_property(
+      runtime::SystemVerilogClassHandle handle,
+      std::string_view property,
+      runtime::PackedLogic4 value);
+  [[nodiscard]] runtime::SystemVerilogClassInvocationResult
+  invoke_class_method(
+      std::string_view canonical_method,
+      runtime::SystemVerilogClassHandle this_handle,
+      std::vector<runtime::SystemVerilogClassMethodValue>& actuals,
+      std::optional<std::uint32_t> virtual_slot = std::nullopt);
+  void schedule_class_method(
+      runtime::SimulationTick time,
+      runtime::StableOrder stable_order,
+      std::string canonical_method,
+      runtime::SystemVerilogClassHandle this_handle,
+      std::vector<runtime::SystemVerilogClassMethodValue> actuals,
+      std::optional<std::uint32_t> virtual_slot = std::nullopt,
+      ClassMethodCompletion completion = {});
   void deposit_string_object(
       runtime::simir::StringObjectId object, std::string_view value);
   void deposit_container_object(
@@ -311,6 +363,7 @@ class Simulation final {
   void set_execution_point_hook(ExecutionPointHook hook);
   void set_output_hook(OutputHook hook);
   void set_report_hook(ReportHook hook);
+  void set_class_property_change_hook(ClassPropertyChangeHook hook);
 
  private:
   struct Impl;

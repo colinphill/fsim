@@ -52,6 +52,33 @@ module scheduled_overflow;
 endmodule
 )";
 }
+class_source = directory / "classes.sv";
+{
+  std::ofstream output(class_source);
+  output << R"(
+class AppBase;
+  static int shared = 2;
+  logic [7:0] value;
+  virtual function int bump(input int amount);
+    value = value + amount;
+    return value;
+  endfunction
+endclass
+
+class AppDerived extends AppBase;
+  logic [7:0] value;
+  logic [3:0] generated_value;
+  function int bump(input int amount);
+    value = value + amount + 1;
+    return value;
+  endfunction
+endclass
+
+module class_top;
+  initial #3 $finish;
+endmodule
+)";
+}
 sensitivity_source = directory / "sensitivity.sv";
 {
   std::ofstream output(sensitivity_source);

@@ -1569,7 +1569,9 @@ std::optional<Statement> VerilogParser::parse_statement() {
       }
       if (match(TokenKind::Dot)) {
         name += ".";
-        name += expect_identifier("interface task name").text;
+        name += keyword("new")
+            ? advance().text
+            : expect_identifier("interface task name").text;
       }
       Statement statement;
       statement.kind = StatementKind::TaskCall;

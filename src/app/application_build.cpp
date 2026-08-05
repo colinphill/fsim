@@ -406,7 +406,8 @@ std::optional<BuiltProject> build_checked_project(
       config.base_directory,
       std::move(systemc_hierarchies),
       std::move(mapped_libraries),
-      std::move(checked->objects), {}};
+      std::move(checked->objects), {},
+      std::move(checked->systemverilog_class_specializations)};
 }
 
 std::optional<BuiltProject> build_project(

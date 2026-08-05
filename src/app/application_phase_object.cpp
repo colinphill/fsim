@@ -2,6 +2,8 @@
 #include "application_internal.hpp"
 
 #include "fsim/artifact/object.hpp"
+#include "fsim/frontend/class_inheritance.hpp"
+#include "fsim/frontend/class_resolution.hpp"
 #include "fsim/library/portable_unit.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
@@ -204,6 +206,42 @@ std::optional<CheckedProject> load_objects(
       if (!bytes.has_value()) {
         return std::nullopt;
       }
+      if (indexed.kind == "class-unit") {
+        auto unit = library::deserialize_portable_class_unit(
+            *bytes,
+            support::path_to_utf8(object / indexed.artifact),
+            diagnostics);
+        if (!unit || unit->library != metadata->library
+            || indexed.language != "systemverilog"
+            || indexed.name != unit->compilation_unit_identity) {
+          diagnostics.error(
+              "FSIM-ART-0005",
+              ".fsimobj class-unit identity does not match its index");
+          return std::nullopt;
+        }
+        if (!library::relocate_class_unit_sources(
+                *unit, source_mappings, diagnostics)) {
+          return std::nullopt;
+        }
+        for (auto& declaration : unit->declarations) {
+          const auto key = "class:" + declaration.canonical_identity;
+          if (!known_units.insert(key).second) {
+            diagnostics.error(
+                "FSIM-ART-0005",
+                "object class declaration collides with an earlier input: '"
+                    + key + "'");
+            return std::nullopt;
+          }
+          checked.parsed.systemverilog_classes.push_back(
+              std::move(declaration));
+        }
+        for (auto& method : unit->method_definitions) {
+          checked.parsed.systemverilog_class_method_definitions.push_back(
+              std::move(method));
+        }
+        provenance.unit_checksums.push_back(indexed.checksum);
+        continue;
+      }
       if (indexed.kind == "primitive") {
         auto declaration = library::deserialize_portable_udp(
             *bytes,
@@ -274,6 +312,25 @@ std::optional<CheckedProject> load_objects(
   application_detail::inject_vhdl_standard_libraries(checked, diagnostics);
   application_detail::validate_vhdl_analysis_order(
       checked.parsed.units, diagnostics);
+  std::vector<frontend::Diagnostic> class_diagnostics;
+  (void)frontend::resolve_systemverilog_classes(
+      checked.parsed, class_diagnostics);
+  for (const auto& diagnostic : class_diagnostics) {
+    application_detail::import_diagnostic(diagnostics, diagnostic);
+  }
+  class_diagnostics.clear();
+  (void)frontend::validate_systemverilog_class_inheritance(
+      checked.parsed, class_diagnostics);
+  for (const auto& diagnostic : class_diagnostics) {
+    application_detail::import_diagnostic(diagnostics, diagnostic);
+  }
+  auto class_specializations =
+      frontend::specialize_systemverilog_classes(checked.parsed);
+  for (const auto& diagnostic : class_specializations.diagnostics) {
+    application_detail::import_diagnostic(diagnostics, diagnostic);
+  }
+  checked.systemverilog_class_specializations =
+      std::move(class_specializations.specializations);
   if (diagnostics.has_error()) {
     return std::nullopt;
   }

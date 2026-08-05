@@ -40,6 +40,8 @@ void test_simir_nested_calls();
 void test_simir_mutable_strings();
 void test_simir_text_files();
 void test_simir_containers();
+void test_systemverilog_class_heap();
+void test_systemverilog_class_methods();
 void test_simir_alternate_executor_scheduled_word_writes();
 void test_simir_alternate_executor_zero_delay_and_frame();
 void test_simir_alternate_executor_cpp_exception_containment();

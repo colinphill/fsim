@@ -1229,6 +1229,79 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     Batch 146 is not a CI boundary and ran no sanitizer or hosted CI-monitoring
     gate.
 
+## Batch 147 - SystemVerilog class object-model foundation - Complete
+
+1. **Complete.** Start from pushed Batch 146 closeout `eafadad`, record this
+   exact 20-change contract, and synchronize the restart handoff before source
+   changes. Keep Changes 1-19 in one recoverable accumulated worktree; Change
+   20 alone owns full gates, one commit, and one push.
+2. **Complete.** Add source-spanned owning HIR for class declarations,
+   forward declarations, parameters, base selections, properties, methods,
+   constraints, qualifiers, and canonical declaration identities without
+   treating classes as top-selectable design units.
+3. **Complete.** Parse compilation-unit, package, module, interface, and nested
+   class declarations with optional lifetime, parameters, `extends`, closing
+   names, forward typedefs, and deterministic recovery/duplicate diagnostics.
+4. **Complete.** Parse declaration-ordered class properties with packed,
+   string, container, class-handle, and bounded aggregate types plus
+   `local`/`protected`, `static`, `const`, `rand`, and `randc` qualifiers.
+5. **Complete.** Parse constructors, functions, tasks, extern prototypes,
+   out-of-block definitions, pure virtual methods, default arguments, and
+   method/property selected-name expressions including `this` and `super`.
+6. **Complete.** Resolve class and forward-declared type names through lexical,
+   import, package-qualified, nested, and parameterized scopes with canonical
+   case-sensitive identities and cycle-safe provenance.
+7. **Complete.** Specialize value/type class parameters, base-class actuals,
+   property layouts, method profiles, static state, and complete transitive
+   source/cache identity before executable lowering.
+8. **Complete.** Enforce inheritance legality, single-base acyclicity, override
+   profile compatibility, final/pure requirements, visibility, hiding, and
+   unambiguous inherited member lookup.
+9. **Complete.** Add a resource-governed runtime class heap with nullable opaque
+   handles, generation-safe object identity, declared-class metadata, dynamic
+   type, deterministic allocation/default initialization, and cleanup.
+10. **Complete.** Execute `null`, `new`, constructor calls, handle assignment,
+    equality/inequality, argument/return transfer, property reads/writes, and
+    checked null/stale/downcast failures with alias-preserving semantics.
+11. **Complete.** Execute instance methods with `this`, implicit member access,
+    base-constructor ordering, `super` calls, automatic locals, recursion
+    guards, task suspension, and deterministic copy-in/copy-out.
+12. **Complete.** Implement virtual method slots and dynamic dispatch across
+    base handles, explicit nonvirtual base calls, covariant class-handle
+    returns where legal, pure-call rejection, and stable call/debug identity.
+13. **Complete.** Implement per-specialization static properties and methods,
+    class-qualified access, initialization order, inheritance visibility, and
+    one common state across aliased roots and package import paths.
+14. **Complete.** Support bounded class handles as direct elements of fixed and
+    dynamic arrays, queues, associative arrays, packed-aggregate members where
+    legal, and class properties, preserving aliases through container edits.
+15. **Complete.** Integrate class construction and methods with processes,
+    functions/tasks, generate specialization, multiple roots, recursive mixed
+    hierarchy wrappers, reports/callbacks, debugger scopes, and traceable
+    packed properties without exposing host pointers.
+16. **Complete.** Preserve class declarations, specializations, heap state,
+    handles, virtual slots, static members, and provenance through `.fsimobj`,
+    `.fsimdesign`, mapped `.fsimlib`, relocation, standalone execution, and
+    cold/warm/edit native caches with checked schema evolution.
+17. **Complete.** Add interpreter and LLVM O0/O2 positive differentials for
+    construction, aliases, inheritance, override dispatch, static state,
+    method suspension, containers, debugger access, callbacks, and artifacts.
+18. **Complete.** Add transactional syntax, type, visibility, inheritance,
+    override, null/stale handle, allocation-budget, invalid-native-HIR,
+    corrupt-artifact, and excessive-materialization negatives with cataloged
+    diagnostics and storage-derived limits.
+19. **Complete.** Update architecture, language support, diagnostics, feature
+    matrix, inventories, class/UVM compatibility notes, and restart evidence;
+    retain constraints/randomization and UVM library behavior for the next
+    class-closure batches.
+20. **Complete.** Run exact-LLVM Debug and Release plus source, catalog,
+    inventory, installed-public-contract, Windows ABI, differential, and
+    release gates after eight-worker builds, then commit and push once. The
+    exact-LLVM Debug and Release suites pass 112/112 in 137.41 and 105.90
+    seconds. The release-candidate evidence covers 1,137 executable rows,
+    4,548 evidence cells, 372 exact paths, and 108 runtime owners. Batch 147 is
+    not a CI boundary and ran no sanitizer or hosted CI-monitoring gate.
+
 ## Forward priority order
 
 1. **Completed in Batch 136:** read-only out-of-tree `.fsimlib` directory

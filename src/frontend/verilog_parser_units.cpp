@@ -127,7 +127,52 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
           unit.systemverilog_exports, previous());
     } else if (match_keyword("typedef")) {
       module_has_non_time_item_ = true;
-      parse_typedef(unit, previous());
+      const auto declaration = previous();
+      if (keyword("class")) {
+        add_class_declaration(
+            unit.systemverilog_classes,
+            parse_class_forward_declaration(declaration, unit.name),
+            declaration);
+      } else {
+        parse_typedef(unit, declaration);
+      }
+    } else if (match_keyword("virtual")) {
+      module_has_non_time_item_ = true;
+      const auto qualifier = previous();
+      if (match_keyword("class")) {
+        add_class_declaration(
+            unit.systemverilog_classes,
+            parse_class(previous(), unit.name, true),
+            qualifier);
+      } else {
+        error(
+            qualifier,
+            "FSIM-SV-PARSE-254",
+            "package 'virtual' must introduce a class");
+        skip_to_semicolon();
+      }
+    } else if (match_keyword("interface")) {
+      module_has_non_time_item_ = true;
+      const auto qualifier = previous();
+      if (match_keyword("class")) {
+        add_class_declaration(
+            unit.systemverilog_classes,
+            parse_class(previous(), unit.name, false, true),
+            qualifier);
+      } else {
+        error(
+            qualifier,
+            "FSIM-SV-PARSE-255",
+            "package 'interface' must introduce a class");
+        skip_to_semicolon();
+      }
+    } else if (match_keyword("class")) {
+      module_has_non_time_item_ = true;
+      const auto declaration = previous();
+      add_class_declaration(
+          unit.systemverilog_classes,
+          parse_class(declaration, unit.name),
+          declaration);
     } else if (match_keyword("function")) {
       module_has_non_time_item_ = true;
       auto function = parse_function(previous());
@@ -308,7 +353,7 @@ void VerilogParser::parse_generate_region(
           parse_final());
       continue;
     }
-    if (is_declaration_start()) {
+    if (is_declaration_start() && !instance_start()) {
       parse_generate_declaration(
           direct_region.then_body,
           direct_local_names);
@@ -622,7 +667,7 @@ void VerilogParser::parse_generate_branch(
             && at(TokenKind::Identifier)
             && current().text == "final")) {
       body.processes.push_back(parse_final());
-    } else if (is_declaration_start()) {
+    } else if (is_declaration_start() && !instance_start()) {
       parse_generate_declaration(body, local_names);
     } else if (match_keyword("parameter")) {
       parse_generated_parameter_group(

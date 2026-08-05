@@ -6,7 +6,9 @@
 
 namespace fsim::frontend {
 
-FunctionDeclaration VerilogParser::parse_function(const Token& start) {
+FunctionDeclaration VerilogParser::parse_function(
+    const Token& start,
+    const bool prototype) {
   FunctionDeclaration function;
   if (match_keyword("automatic")) {
     function.automatic = true;
@@ -20,6 +22,8 @@ FunctionDeclaration VerilogParser::parse_function(const Token& start) {
   // A user-defined return type is followed by the function name and then
   // '('. The general declaration lookahead deliberately treats that shape
   // as a possible instance, but inside a function header it is unambiguous.
+  const bool constructor = keyword("new");
+  const bool void_result = keyword("void");
   const bool builtin_return_type =
       keyword("string") || keyword("byte")
       || keyword("shortint") || keyword("longint")
@@ -27,13 +31,29 @@ FunctionDeclaration VerilogParser::parse_function(const Token& start) {
       || keyword("logic") || keyword("reg") || keyword("bit")
       || keyword("signed") || keyword("unsigned")
       || at(TokenKind::LeftBracket);
-  function.return_type =
-      !builtin_return_type && at(TokenKind::Identifier)
-          && at(TokenKind::Identifier, 1)
-          ? parse_named_type()
-          : parse_parameter_type();
-  const auto name = expect_identifier("function name");
-  function.name = name.text;
+  if (constructor) {
+    const auto name = advance();
+    function.name = name.text;
+    function.return_type.spelling = "constructor";
+  } else {
+    if (void_result) {
+      const auto result = advance();
+      function.return_type.spelling = result.text;
+      function.return_type.named_type_span = result.span;
+    } else {
+      function.return_type =
+          !builtin_return_type && at(TokenKind::Identifier)
+              && at(TokenKind::Identifier, 1)
+              ? parse_named_type()
+              : parse_parameter_type();
+    }
+    const auto name = expect_identifier("function name");
+    function.name = name.text;
+    while (match(TokenKind::Scope)) {
+      function.name += "::";
+      function.name += expect_identifier("selected function name").text;
+    }
+  }
   (void)parse_optional_container_dimension(
       function.return_type);
 
@@ -139,6 +159,16 @@ FunctionDeclaration VerilogParser::parse_function(const Token& start) {
       "';' after function header",
       "FSIM-SV-PARSE-141");
 
+  if (prototype) {
+    function.defined = false;
+    function.span = span_from(start, previous());
+    current_procedural_names_ = std::move(saved_names);
+    current_function_arguments_ = std::move(saved_arguments);
+    current_function_name_ = std::move(saved_function_name);
+    in_function_ = saved_in_function;
+    return function;
+  }
+
   Statement body;
   body.kind = StatementKind::Block;
   while (!at_end() && !keyword("endfunction")) {
@@ -203,8 +233,9 @@ FunctionDeclaration VerilogParser::parse_function(const Token& start) {
   expect_keyword(
       "endfunction", false, "FSIM-SV-PARSE-142");
   if (match(TokenKind::Colon)) {
-    const auto end_name =
-        expect_identifier("function name after endfunction");
+    const auto end_name = constructor && keyword("new")
+        ? advance()
+        : expect_identifier("function name after endfunction");
     if (end_name.text != function.name) {
       error(
           end_name,
@@ -244,7 +275,9 @@ FunctionDeclaration VerilogParser::parse_function(const Token& start) {
     function.arguments = std::move(ordered);
   }
   function.span = span_from(start, previous());
-  validate_function_body(function, start);
+  if (!constructor && function.return_type.spelling != "void") {
+    validate_function_body(function, start);
+  }
 
   current_procedural_names_ = std::move(saved_names);
   current_function_arguments_ = std::move(saved_arguments);
@@ -411,7 +444,9 @@ void VerilogParser::validate_function_body(
   }
 }
 
-TaskDeclaration VerilogParser::parse_task(const Token& start) {
+TaskDeclaration VerilogParser::parse_task(
+    const Token& start,
+    const bool prototype) {
   TaskDeclaration task;
   if (match_keyword("automatic")) {
     task.automatic = true;
@@ -424,6 +459,10 @@ TaskDeclaration VerilogParser::parse_task(const Token& start) {
 
   const auto name = expect_identifier("task name");
   task.name = name.text;
+  while (match(TokenKind::Scope)) {
+    task.name += "::";
+    task.name += expect_identifier("selected task name").text;
+  }
 
   auto saved_names = std::move(current_procedural_names_);
   const bool saved_in_task = in_task_;
@@ -506,6 +545,13 @@ TaskDeclaration VerilogParser::parse_task(const Token& start) {
            "FSIM-SV-PARSE-143");
   }
   expect(TokenKind::Semicolon, "';' after task header", "FSIM-SV-PARSE-144");
+
+  if (prototype) {
+    task.span = span_from(start, previous());
+    current_procedural_names_ = std::move(saved_names);
+    in_task_ = saved_in_task;
+    return task;
+  }
 
   Statement body;
   body.kind = StatementKind::Block;
