@@ -108,12 +108,13 @@ SystemVerilogScalarResult scan_real(
   }
   if constexpr (std::is_same_v<Number, float>) {
     return {SystemVerilogScalarValue::shortreal(number), {}};
+  } else {
+    return target == SystemVerilogScalarKind::Realtime
+        ? SystemVerilogScalarResult{
+              SystemVerilogScalarValue::realtime(number), {}}
+        : SystemVerilogScalarResult{
+              SystemVerilogScalarValue::real(number), {}};
   }
-  return target == SystemVerilogScalarKind::Realtime
-      ? SystemVerilogScalarResult{
-            SystemVerilogScalarValue::realtime(number), {}}
-      : SystemVerilogScalarResult{
-            SystemVerilogScalarValue::real(number), {}};
 }
 
 SystemVerilogScalarResult scan_integer(
