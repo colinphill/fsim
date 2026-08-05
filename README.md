@@ -542,11 +542,13 @@ cmake --build --preset windows-msvc
 ctest --test-dir build\windows-msvc -C Release --output-on-failure
 ```
 
-The `ci-sanitizers` preset runs the non-LLVM suite with GCC ASan/UBSan. The
-`ci-fuzz` preset additionally requires Clang and its libFuzzer/compiler-rt
-development package; it recompiles an isolated instrumented copy of the
-frontend, so fuzzers and ordinary tests may be enabled in the same build
-without adding a libFuzzer entry point to normal executables.
+The `ci-sanitizers` preset runs the non-LLVM suite locally with GCC ASan/UBSan
+at each scheduled ten-batch boundary; the hosted CI workflow excludes
+sanitizer instrumentation. The `ci-fuzz` preset additionally requires Clang
+and its libFuzzer/compiler-rt development package; it recompiles an isolated
+coverage-instrumented copy of the frontend without ASan or UBSan, so fuzzers
+and ordinary tests may be enabled in the same build without adding a
+libFuzzer entry point to normal executables.
 
 ## Command-line use
 

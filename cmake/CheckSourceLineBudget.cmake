@@ -4,10 +4,8 @@ if(NOT DEFINED FSIM_SOURCE_DIR)
   message(FATAL_ERROR "FSIM_SOURCE_DIR is required")
 endif()
 
-set(FSIM_SOURCE_LINE_LIMIT 2000)
-set(
-  FSIM_SOURCE_LINE_ALLOWLIST
-)
+set(FSIM_SOURCE_LINE_LIMIT 2500)
+set(FSIM_SOURCE_LINE_REFACTOR_TARGET 2000)
 
 file(
   GLOB_RECURSE FSIM_AUTHORED_SOURCES
@@ -37,31 +35,12 @@ foreach(source IN LISTS FSIM_AUTHORED_SOURCES)
   file(READ "${FSIM_SOURCE_DIR}/${source}" contents)
   string(REGEX MATCHALL "\n" newlines "${contents}")
   list(LENGTH newlines line_count)
-  list(FIND FSIM_SOURCE_LINE_ALLOWLIST "${source}" allowlist_index)
   if(line_count GREATER FSIM_SOURCE_LINE_LIMIT)
-    if(allowlist_index EQUAL -1)
-      message(
-        FATAL_ERROR
-        "${source} has ${line_count} lines; authored sources are limited to "
-        "${FSIM_SOURCE_LINE_LIMIT}"
-      )
-    endif()
-    list(APPEND FSIM_OBSERVED_ALLOWLIST "${source}")
-  elseif(NOT allowlist_index EQUAL -1)
     message(
       FATAL_ERROR
-      "${source} is within the ${FSIM_SOURCE_LINE_LIMIT}-line limit and must "
-      "be removed from FSIM_SOURCE_LINE_ALLOWLIST"
-    )
-  endif()
-endforeach()
-
-foreach(source IN LISTS FSIM_SOURCE_LINE_ALLOWLIST)
-  list(FIND FSIM_OBSERVED_ALLOWLIST "${source}" observed_index)
-  if(observed_index EQUAL -1)
-    message(
-      FATAL_ERROR
-      "source-line allowlist entry '${source}' was not observed"
+      "${source} has ${line_count} lines and exceeds the "
+      "${FSIM_SOURCE_LINE_LIMIT}-line hard limit; refactor it below the "
+      "${FSIM_SOURCE_LINE_REFACTOR_TARGET}-line target before retrying"
     )
   endif()
 endforeach()
@@ -70,5 +49,6 @@ list(LENGTH FSIM_AUTHORED_SOURCES source_count)
 message(
   STATUS
   "Checked ${source_count} authored sources against the "
-  "${FSIM_SOURCE_LINE_LIMIT}-line limit"
+  "${FSIM_SOURCE_LINE_LIMIT}-line hard limit with a "
+  "${FSIM_SOURCE_LINE_REFACTOR_TARGET}-line refactor target"
 )

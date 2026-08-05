@@ -19,6 +19,7 @@
 namespace fsim::test {
 
 void ApplicationTestFixture::test_class_simulation_integration() {
+  std::cerr << "application classes: configure\n";
   auto config = base_config();
   config.project.name = "class-simulation-integration";
   config.project.top = "sv:work.class_top";
@@ -41,6 +42,8 @@ void ApplicationTestFixture::test_class_simulation_integration() {
            fsim::app::SimulationEngine::interpreter,
            fsim::app::SimulationEngine::compiled,
            fsim::app::SimulationEngine::debug}) {
+    std::cerr << "application classes: engine "
+              << static_cast<unsigned>(engine) << " build\n";
     fsim::diagnostic::Engine diagnostics;
     auto built = fsim::app::build_project(config, diagnostics);
     if (!built) {
@@ -152,6 +155,8 @@ void ApplicationTestFixture::test_class_simulation_integration() {
 
     fsim::app::Simulation simulation(
         std::move(*built), config.run.max_deltas, engine);
+    std::cerr << "application classes: engine "
+              << static_cast<unsigned>(engine) << " execute\n";
     const auto handle = simulation.allocate_class(
         derived_specialization,
         base_identity);
@@ -620,6 +625,8 @@ void ApplicationTestFixture::test_class_simulation_integration() {
         source_random_sample,
         simulation.class_heap().live_objects(),
         trace_values.size());
+    std::cerr << "application classes: engine "
+              << static_cast<unsigned>(engine) << " complete\n";
   }
   assert(engine_snapshots.size() == 3);
   assert(std::ranges::all_of(
@@ -627,6 +634,7 @@ void ApplicationTestFixture::test_class_simulation_integration() {
       [&](const auto& snapshot) { return snapshot == engine_snapshots.front(); }));
 
   auto cache_config = config;
+  std::cerr << "application classes: native cache\n";
   cache_config.project.name = "class-native-cache";
   cache_config.build.cache_path = directory / "class-native-cache";
   const auto cached_run = [&]() {
@@ -681,6 +689,7 @@ void ApplicationTestFixture::test_class_simulation_integration() {
   }
 
   const auto object = directory / "class-object.fsimobj";
+  std::cerr << "application classes: artifacts\n";
   const auto library = directory / "class-library.fsimlib";
   const auto design = directory / "class-design.fsimdesign";
   fsim::diagnostic::Engine artifact_diagnostics;
@@ -807,6 +816,7 @@ void ApplicationTestFixture::test_class_simulation_integration() {
               .packed.low_word().aval == 7);
 
   auto mapped_config = config;
+  std::cerr << "application classes: relocated library\n";
   mapped_config.project.name = "mapped-class-simulation";
   mapped_config.source_sets.clear();
   mapped_config.library_mappings = {{"work", relocated_library}};
@@ -830,6 +840,7 @@ void ApplicationTestFixture::test_class_simulation_integration() {
       && mapped_simulation.read_signal(*mapped_property).low_word().aval == 18);
 
   auto multiple = config;
+  std::cerr << "application classes: multiple roots\n";
   multiple.project.name = "multi-root-class-simulation";
   multiple.project.top.clear();
   multiple.project.tops = {

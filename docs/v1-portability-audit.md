@@ -13,23 +13,25 @@ remains assigned to the mandatory Batch 130 CI boundary.
 ## Supported host and toolchain contract
 
 The checked build rejects non-Linux/non-Windows systems, non-x86-64 processors,
-and non-64-bit pointers. The release matrix covers these twelve hosted
-configurations:
+and non-64-bit pointers. The release matrix covers eleven hosted
+configurations plus one scheduled local sanitizer configuration:
 
 | Matrix ID | Host/compiler/backend | Configurations | Current purpose |
 |---|---|---|---|
 | `PORT-CI-LINUX-GCC` | Ubuntu, GCC, LLVM disabled | Debug and Release | Strict portable C++20 build plus interpreter/runtime behavior |
 | `PORT-CI-LINUX-LLVM` | Ubuntu 24.04, GCC, LLVM 22.1.8 | Debug and Release | Required JIT O0/O2, object cache, debugger, and source-map behavior |
-| `PORT-CI-SANITIZERS` | Ubuntu, GCC, LLVM disabled, ASan/UBSan | Debug | Memory, lifetime, integer, and undefined-behavior containment |
+| `PORT-CI-SANITIZERS` | Local Linux, GCC, LLVM disabled, ASan/UBSan | Debug | Ten-batch memory, lifetime, integer, and undefined-behavior containment |
 | `PORT-CI-FUZZ` | Ubuntu 24.04, Clang/libFuzzer | RelWithDebInfo | Deterministic frontend lexer/parser smoke corpus |
 | `PORT-CI-WINDOWS-MSVC` | Windows Server 2022, MSVC, LLVM disabled | Debug and Release | Native Windows frontend/elaboration/interpreter/runtime/tool behavior |
 | `PORT-CI-WINDOWS-LLVM` | Windows Server 2022, MSVC or clang-cl, LLVM 22.1.8 | Debug and Release for each compiler | PE/COFF JIT, MSVC ABI, cache, plug-in, debugger, and optimized behavior |
 
 Every hosted build step uses `--parallel 4`. Local builds use at least eight
 workers, and Ninja link/archive concurrency is bounded by the default
-`FSIM_LINK_POOL_SIZE=8`. The ordinary hosted jobs retain 45-minute budgets;
-the complete ASan/UBSan job retains 70 minutes. Every MSVC-compatible Windows
-test executable receives an 8 MiB stack reserve, while scoped locals retains a
+`FSIM_LINK_POOL_SIZE=8`. Hosted CI excludes sanitizer instrumentation,
+including from its libFuzzer smoke target; the scheduled local ASan/UBSan run
+remains part of every ten-batch boundary.
+The ordinary hosted jobs retain 45-minute budgets. Every MSVC-compatible
+Windows test executable receives an 8 MiB stack reserve, while scoped locals retains a
 60-second test bound and the two deliberately large application/container
 hosts retain explicit longer bounds.
 
@@ -92,7 +94,7 @@ implementation repair needed by that evidence.
 | `B129-T5-WINLLVM` | 5 | **Closed.** PE/COFF JIT, symbols, MSVC ABI, stack/unwind, DLL ownership, native cache, source maps, and clang-cl | The application cache now names the complete x64 ABI environment; a static contract protects native target/data-layout/CPU/features, strict C layouts, safe DLL lookup/lifetime, atomic Windows cache replacement, and the MSVC/clang-cl matrix while shared executable fixtures prove O0/O2 cold/warm/edit/debug behavior. Hosted proof remains in Batch 130 |
 | `B129-T6-SYSTEMC` | 6 | **Closed.** Facade and strict C ABI, compiler command plans, Windows quoting/response files, dependency discovery, CRT, loader lifetime, threads, and lifecycle | A fingerprinted test launcher carries required parent compiler discovery options without weakening cache reuse; Clang and GCC+LLVM compiler/cache/lifecycle matrices pass, and a static contract protects GNU/MSVC commands, Windows process execution, ABI checks, exception containment, and loader ownership |
 | `B129-T7-TOOLS` | 7 | **Closed.** Public API, CLI, Tcl, debugger, VCD, file/memory I/O, Unicode paths, environment, callbacks, failures, and exit status | One UTF-8/native-path seam now serves API, CLI, project/application/cache, Tcl, and runtime file paths; Windows uses UTF-16 argv/environment APIs, while Unicode API/direct-source fixtures and existing callback, binary I/O, debugger/VCD, Tcl, and exit-status checks pass on GCC+LLVM and Clang |
-| `B129-T8-RESOURCES` | 8 | **Closed.** Four-worker hosted builds, eight-worker local builds/link pool, executable stack, memory, timeouts, fixture isolation, and phase traces | A static gate counts exactly six four-worker hosted build steps and protects the eight-link pool, compact Debug objects, common 8 MiB Windows stack, explicit 60/120/600/1200-second bounds, and scoped/SystemC phases; clang-cl now receives the same aggregate Windows timeout policy as MSVC |
+| `B129-T8-RESOURCES` | 8 | **Closed.** Four-worker hosted builds, eight-worker local builds/link pool, executable stack, memory, timeouts, fixture isolation, and phase traces | A static gate counts exactly five four-worker hosted build steps and protects the eight-link pool, compact Debug objects, common 8 MiB Windows stack, explicit 60/120/600/1200-second bounds, and scoped/SystemC phases; clang-cl now receives the same aggregate Windows timeout policy as MSVC |
 | `B129-T9-DIFFERENTIAL` | 9 | **Closed.** Complete Debug/Release, interpreter/LLVM O0/O2, cold/warm/edit, API/ABI, plug-in, debugger/VCD, path/newline matrix | `docs/v1-portability-corpus.txt` provides 20 exact ID/surface/mode/CTest/evidence/marker rows; its gate rejects missing IDs, modes, registrations, files, or source markers, and all 20 unique owning/gate CTests pass locally. Hosted execution remains Batch 130's mandatory CI boundary |
 
 Task 10 completed the accumulated sanitizer, source/catalog, and full local

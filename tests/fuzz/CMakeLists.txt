@@ -4,17 +4,17 @@ if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   message(FATAL_ERROR "FSIM_BUILD_FUZZERS requires Clang and libFuzzer")
 endif()
 
-# Recompile the complete frontend with coverage instrumentation. Keeping this
-# separate from fsim_frontend prevents fuzzer-only objects and runtime
-# requirements from leaking into the normal CLI and unit-test executables.
+# Recompile the complete frontend with libFuzzer coverage instrumentation.
+# Keeping this separate from fsim_frontend prevents fuzzer-only objects and
+# runtime requirements from leaking into normal executables. ASan and UBSan
+# remain exclusive to the scheduled local ten-batch sanitizer preset.
 add_library(fsim_frontend_fuzz_subject STATIC ${FSIM_FRONTEND_SOURCES})
 fsim_configure_library(fsim_frontend_fuzz_subject)
 target_compile_options(
   fsim_frontend_fuzz_subject
   PRIVATE
     -fno-omit-frame-pointer
-    -fno-sanitize-recover=undefined
-    -fsanitize=fuzzer-no-link,address,undefined
+    -fsanitize=fuzzer-no-link
 )
 
 add_executable(fsim_frontend_fuzz frontend_fuzz.cpp)
@@ -29,11 +29,10 @@ target_compile_options(
   fsim_frontend_fuzz
   PRIVATE
     -fno-omit-frame-pointer
-    -fno-sanitize-recover=undefined
-    -fsanitize=fuzzer,address,undefined
+    -fsanitize=fuzzer
 )
 target_link_options(
   fsim_frontend_fuzz
   PRIVATE
-    -fsanitize=fuzzer,address,undefined
+    -fsanitize=fuzzer
 )

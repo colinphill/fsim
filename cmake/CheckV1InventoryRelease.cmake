@@ -45,7 +45,7 @@ endforeach()
 
 foreach(FSIM_EXACT_OUTPUT IN ITEMS
     "diagnostic catalog covers 1876 production codes"
-    "Checked 559 authored sources against the 2000-line limit"
+    "Checked 559 authored sources against the 2500-line hard limit with a 2000-line refactor target"
     "v1 conformance audit: 217 authored test/control files, 10 reviewed source IDs, 6 excluded source IDs, 8 coverage queues"
     "v1 conformance corpus: 105 expectations, 28 fixtures, 27 CTests, 49f5754862e3785fa964621b770f202d1d1ad5fb21bd4144b016b7ceb47dd5dd")
   string(FIND

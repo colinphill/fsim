@@ -31,9 +31,9 @@ file(READ "${FSIM_SYSTEMC}" FSIM_SYSTEMC_CONTENTS)
 
 string(REGEX MATCHALL "--parallel 4" FSIM_PARALLEL_STEPS "${FSIM_WORKFLOW_CONTENTS}")
 list(LENGTH FSIM_PARALLEL_STEPS FSIM_PARALLEL_COUNT)
-if(NOT FSIM_PARALLEL_COUNT EQUAL 6)
+if(NOT FSIM_PARALLEL_COUNT EQUAL 5)
   message(FATAL_ERROR
-    "expected six four-worker hosted build steps, found ${FSIM_PARALLEL_COUNT}")
+    "expected five four-worker hosted build steps, found ${FSIM_PARALLEL_COUNT}")
 endif()
 string(REGEX MATCH "--parallel ([^4]|4[^[:space:]\r\n])" FSIM_OTHER_PARALLEL "${FSIM_WORKFLOW_CONTENTS}")
 if(FSIM_OTHER_PARALLEL)
@@ -110,6 +110,6 @@ if(FSIM_REGISTRATION_INDEX EQUAL -1)
 endif()
 
 message(STATUS
-  "resource portability contract: six four-worker hosted builds, eight-link "
+  "resource portability contract: five four-worker hosted builds, eight-link "
   "pool, compact Debug objects, 8 MiB Windows stacks, bounded large-test "
   "timeouts, and scoped/SystemC phase traces are present")

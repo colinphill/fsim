@@ -8,11 +8,13 @@ set(FSIM_AUDIT "${FSIM_SOURCE_DIR}/docs/v1-portability-audit.md")
 set(FSIM_WORKFLOW "${FSIM_SOURCE_DIR}/.github/workflows/ci.yml")
 set(FSIM_PRESETS "${FSIM_SOURCE_DIR}/CMakePresets.json")
 set(FSIM_ROOT_CMAKE "${FSIM_SOURCE_DIR}/CMakeLists.txt")
+set(FSIM_FUZZ_CMAKE "${FSIM_SOURCE_DIR}/tests/fuzz/CMakeLists.txt")
 foreach(FSIM_INPUT IN ITEMS
     "${FSIM_AUDIT}"
     "${FSIM_WORKFLOW}"
     "${FSIM_PRESETS}"
-    "${FSIM_ROOT_CMAKE}")
+    "${FSIM_ROOT_CMAKE}"
+    "${FSIM_FUZZ_CMAKE}")
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR "v1 portability audit input not found: ${FSIM_INPUT}")
   endif()
@@ -22,6 +24,7 @@ file(READ "${FSIM_AUDIT}" FSIM_AUDIT_CONTENTS)
 file(READ "${FSIM_WORKFLOW}" FSIM_WORKFLOW_CONTENTS)
 file(READ "${FSIM_PRESETS}" FSIM_PRESET_CONTENTS)
 file(READ "${FSIM_ROOT_CMAKE}" FSIM_ROOT_CMAKE_CONTENTS)
+file(READ "${FSIM_FUZZ_CMAKE}" FSIM_FUZZ_CMAKE_CONTENTS)
 
 set(FSIM_MATRIX_IDS
   PORT-CI-LINUX-GCC
@@ -49,10 +52,25 @@ foreach(FSIM_ID IN LISTS FSIM_MATRIX_IDS FSIM_QUEUE_IDS)
   endif()
 endforeach()
 
+foreach(FSIM_HOSTED_SANITIZER_MARKER IN ITEMS
+    "ci-sanitizers"
+    "ASAN_OPTIONS"
+    "UBSAN_OPTIONS")
+  string(FIND "${FSIM_WORKFLOW_CONTENTS}"
+    "${FSIM_HOSTED_SANITIZER_MARKER}" FSIM_SANITIZER_INDEX)
+  if(NOT FSIM_SANITIZER_INDEX EQUAL -1)
+    message(FATAL_ERROR
+      "hosted CI contains sanitizer marker: ${FSIM_HOSTED_SANITIZER_MARKER}")
+  endif()
+endforeach()
+if(FSIM_FUZZ_CMAKE_CONTENTS MATCHES
+    "-fsanitize=[^\r\n]*(address|undefined)")
+  message(FATAL_ERROR "hosted libFuzzer target contains ASan/UBSan instrumentation")
+endif()
+
 set(FSIM_WORKFLOW_JOBS
   linux-gcc
   linux-llvm22
-  linux-sanitizers
   linux-fuzz
   windows-msvc
   windows-llvm22
@@ -67,9 +85,9 @@ endforeach()
 string(REGEX MATCHALL "--parallel 4" FSIM_CI_PARALLEL_MATCHES
   "${FSIM_WORKFLOW_CONTENTS}")
 list(LENGTH FSIM_CI_PARALLEL_MATCHES FSIM_CI_PARALLEL_COUNT)
-if(NOT FSIM_CI_PARALLEL_COUNT EQUAL 6)
+if(NOT FSIM_CI_PARALLEL_COUNT EQUAL 5)
   message(FATAL_ERROR
-    "expected six four-worker CI build steps, found ${FSIM_CI_PARALLEL_COUNT}")
+    "expected five four-worker CI build steps, found ${FSIM_CI_PARALLEL_COUNT}")
 endif()
 string(REGEX MATCH "--parallel ([0-35-9]|[1-9][0-9]+)" FSIM_OTHER_PARALLEL
   "${FSIM_WORKFLOW_CONTENTS}")
@@ -153,6 +171,6 @@ foreach(FSIM_INVARIANT IN ITEMS
 endforeach()
 
 message(STATUS
-  "v1 portability audit: 12 hosted configurations, "
+  "v1 portability audit: 11 hosted configurations plus one local sanitizer configuration, "
   "${FSIM_CI_PARALLEL_COUNT} four-worker build steps, "
   "${FSIM_PLATFORM_FILE_COUNT} explicit platform files, 8 repair queues")

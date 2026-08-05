@@ -13,8 +13,9 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
 - Change 20 owns the full exact-LLVM Debug and Release regressions,
   documentation, one commit, and one push.
 - Local builds use at least eight workers.
-- Sanitizers run only immediately before committing a scheduled CI-monitoring
-  batch. Ordinary batches do not configure, build, or run sanitizer targets.
+- The LLVM-disabled sanitizer suite runs locally only, immediately before
+  committing every tenth batch. Ordinary batches do not configure, build, or
+  run sanitizer targets, and hosted CI excludes sanitizer instrumentation.
 - Every tenth numbered batch is a non-documentation CI-monitoring boundary;
   Batch 150 is the next boundary. Documentation-only runs are not monitored.
 
@@ -1895,8 +1896,8 @@ remain one recoverable accumulated worktree and Change 20 owns full gates,
 documentation, one commit, and one push. Local builds use at least eight
 workers. GitHub
 Actions uses four. Only Batches 150, 160, and 170 run the LLVM-disabled
-sanitizer immediately before commit and then monitor and repair every
-non-documentation CI failure.
+sanitizer locally immediately before commit and then monitor and repair every
+non-documentation CI failure; hosted CI excludes sanitizer instrumentation.
 
 For this roadmap, “language closure” means the standardized digital surfaces
 of VHDL-2008 plus embedded PSL, Verilog-2005, SystemVerilog-2017, VITAL, UVM
@@ -2268,7 +2269,18 @@ carry an explicit evidence-backed scope disposition approved by the user.
     replaced two synthesized-port aggregate constructions with explicit
     default-initialized declarations to avoid GCC 13's `-O3` false-positive
     move warning for a disengaged recursive optional delay. The accumulated
-    commit/push and hosted non-documentation CI inspection remain.
+    commit/push and hosted non-documentation CI inspection remain. The project
+    source-size policy now uses a 2,500-line hard limit and requires any file
+    that exceeds it to be refactored below 2,000 lines. The local ten-batch
+    sanitizer cadence remains mandatory, while hosted CI excludes sanitizer
+    instrumentation, including ASan/UBSan from its libFuzzer smoke target.
+    The sanitizer-free Clang 22 libFuzzer target builds with eight workers and
+    completes the exact 20,000-run hosted smoke command locally. Exact-LLVM
+    Debug and Release each pass the application plus seven policy/release gates
+    8/8 after the portability repairs. Pre-change hosted run `31049629546`
+    reached and failed Linux test suites and both clang-cl Windows test suites;
+    the Windows application host fail-fast entered class integration without
+    further diagnostics, so the next push carries bounded class subphase traces.
 
 ### Batch 151 - Arbitrary-width packed values and aggregate closure
 

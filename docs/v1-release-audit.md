@@ -51,7 +51,8 @@ recursive values, file I/O, artifacts, and transactional differential closure.
 The composed local gates currently establish:
 
 - 1,876 production diagnostics are cataloged;
-- 559 authored C/C++ sources remain within the 2,000-line limit;
+- 559 authored C/C++ sources remain within the 2,500-line hard limit; any file
+  that exceeds it must be refactored below the 2,000-line target;
 - all 1,162 required matrix rows are executable with no explicit evidence gap;
 - 105 independently authored conformance expectations in 28 fixtures are
   owned by 27 CTests;
@@ -76,7 +77,7 @@ release gates and hosted proof.
 | `B130-T5-DIFFERENTIAL` | 5 | **Closed.** Interpreter, LLVM, cache, debugger, VCD, scheduling, and failures | The composed audit freezes 95 runtime evidence files, 36 corpus CTests, all required differential modes, and exact overlapping claim counts; the 19 unique portability owners plus the new gate pass locally |
 | `B130-T6-PUBLIC` | 6 | **Closed.** CLI, C/C++ API, ABI, Tcl, runtime, installed/package use | The static public audit and fresh Unicode-prefix staged install protect all five commands, five header groups, two libraries, exact API/ABI version 1, CLI status 0/1/2/3, native path/environment seams, and installed command behavior; all 11 focused owners pass locally |
 | `B130-T7-INVENTORIES` | 7 | **Closed.** Diagnostics, source size, licenses, conformance, and provenance | The composed gate covers 1,643 diagnostics, 445 bounded sources, 534 SPDX-owned artifacts, the 31-file/26-VHDL IEEE snapshot, 105 conformance expectations in 28 fixtures owned by 27 CTests, and 10 reviewed plus 6 excluded provenance identities; v2 Batch 136 owns the current increase |
-| `B130-T8-RESOURCES` | 8 | **Closed.** Linux/Windows Debug/Release build and test bounds | The composed static audit freezes 12 hosted configurations, six four-worker CI build steps, an eight-link local pool, compact Debug objects, 8 MiB stacks, bounded job/test timeouts, phase traces, 14 platform files, and 20 portability rows; all 11 focused owners pass locally |
+| `B130-T8-RESOURCES` | 8 | **Closed.** Linux/Windows Debug/Release build and test bounds | The composed static audit freezes 11 hosted configurations plus one scheduled local sanitizer configuration, five four-worker CI build steps, an eight-link local pool, compact Debug objects, 8 MiB stacks, bounded job/test timeouts, phase traces, 14 platform files, and 20 portability rows; all 11 focused owners pass locally |
 | `B130-T9-RECLASSIFICATION` | 9 | **Closed.** Final feature matrix and release corpus | All 1,082 required rows are `execute`; all 4,328 P+/P-/E/R cells link to checked-in owners; the 326-path evidence identity (161 test, 149 production, 16 release/build paths), 95 runtime files, and 36 corpus CTests are exact and digest-pinned |
 
 No queue is evidence of a confirmed defect. A queue closes only after its

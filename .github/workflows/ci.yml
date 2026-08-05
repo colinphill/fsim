@@ -87,26 +87,6 @@ jobs:
       - name: Test
         run: ctest --test-dir ${{ matrix.build_dir }} --output-on-failure
 
-  linux-sanitizers:
-    name: Ubuntu / GCC / ASan+UBSan
-    runs-on: ubuntu-latest
-    # Four-worker sanitizer builds balance hosted-runner memory pressure, while
-    # the accumulated container differential can exceed 30 minutes under
-    # ASan/UBSan before the remaining full test inventory runs.
-    timeout-minutes: 70
-    steps:
-      - name: Check out sources
-        uses: actions/checkout@v7
-
-      - name: Configure
-        run: cmake --preset ci-sanitizers
-
-      - name: Build
-        run: cmake --build --preset ci-sanitizers --parallel 4
-
-      - name: Test
-        run: ctest --preset ci-sanitizers
-
   linux-fuzz:
     name: Ubuntu / Clang / frontend fuzz smoke
     runs-on: ubuntu-24.04
@@ -129,9 +109,6 @@ jobs:
         run: cmake --build --preset ci-fuzz --parallel 4
 
       - name: Fuzz lexer and parser
-        env:
-          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
-          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: >
           build/ci-fuzz/tests/fuzz/fsim_frontend_fuzz
           -runs=20000

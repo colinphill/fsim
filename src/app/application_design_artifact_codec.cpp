@@ -66,8 +66,9 @@ constexpr bool valid_archive_enum(const T value) noexcept {
       std::same_as<T, frontend::SystemVerilogDecimalLiteralKind>) {
     return value >= frontend::SystemVerilogDecimalLiteralKind::Real
         && value <= frontend::SystemVerilogDecimalLiteralKind::Time;
+  } else {
+    return true;
   }
-  return true;
 }
 
 template <typename T>

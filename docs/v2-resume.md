@@ -250,9 +250,11 @@ The complete remaining release roadmap is locked through Batch 175:
   release-candidate packaging/documentation, and final `v2.0.0` qualification.
 
 Batches 150, 160, and 170 are the only remaining CI-monitoring boundaries.
-Only their Change 20 runs the LLVM-disabled sanitizer immediately before the
-single commit, then pushes and monitors/repairs all non-documentation GitHub
-Actions jobs. All other batches run no sanitizer and no hosted CI inspection.
+Only their Change 20 runs the LLVM-disabled sanitizer locally immediately
+before the single commit, then pushes and monitors/repairs all
+non-documentation GitHub Actions jobs. Hosted CI excludes sanitizer
+instrumentation. All other batches run no sanitizer and no hosted CI
+inspection.
 The v2 language-closure boundary is the standardized digital surface recorded
 in the official plan; VHDL-AMS, proprietary semantics, full Accellera SystemC
 kernel/TLM/AMS/CCI compatibility, GUI/reverse/parallel simulation, standalone
@@ -344,7 +346,17 @@ scope.
   109/109 in 760.62 seconds and exact LLVM 22.1.8 Debug/Release 112/112 in
   349.47/304.22 seconds after repairing LLVM-disabled cache expectations and a
   GCC 13 Release warning in synthesized no-delay ports. The accumulated commit,
-  push, and hosted non-documentation CI inspection remain.
+  push, and hosted non-documentation CI inspection remain. The source-size
+  policy now enforces a 2,500-line hard limit with a mandatory below-2,000
+  refactor whenever that limit is exceeded. Sanitizers remain local at the
+  ten-batch cadence and are excluded from the hosted workflow, including its
+  libFuzzer smoke target.
+  The sanitizer-free Clang 22 fuzz target passes the exact 20,000-run hosted
+  command locally. Exact-LLVM Debug and Release each pass the application plus
+  seven policy/release gates 8/8. Pre-change hosted run `31049629546` satisfies
+  the requested wait boundary with Linux and clang-cl Windows test-suite
+  failures; both Windows configurations fail-fast after entering class
+  integration, so bounded subphase traces are included in the pending push.
 - Completed unit: Batch 149, exactly 20 changes, complete after pushed Batch
   148 closeout `dce6c36`. Its authoritative SystemVerilog constraint-solving
   and randomization contract is recorded in `implementation_plan_v2.md`.

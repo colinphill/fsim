@@ -70,7 +70,7 @@
     },
     {
       "name": "ci-sanitizers",
-      "displayName": "CI Linux ASan and UBSan",
+      "displayName": "Scheduled local Linux ASan and UBSan",
       "inherits": "ci-linux",
       "binaryDir": "${sourceDir}/build/ci-sanitizers",
       "cacheVariables": {

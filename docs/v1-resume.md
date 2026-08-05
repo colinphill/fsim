@@ -32,9 +32,9 @@ risky structural transition that needs a durable boundary.
   gates pass.
   Verify live Git state before resuming; do not discard a newer intentional
   checkpoint.
-- The source-size refactor is complete: all 424 authored C/C++ source, header,
-  and test files are at or below the 2,000-line hard limit; the allowlist is
-  empty and the maximum is 2,000 lines.
+- The source-size gate has a 2,500-line hard limit. If a file exceeds it, the
+  required repair target is below 2,000 lines; exceptions and allowlists are
+  not permitted.
 - The post-Batch-110 Debug-footprint repair partitions the 116-alternative
   SimIR `Operation` into eight semantic storage groups while retaining flat
   construction, query, and visitation helpers. Five large visitors now use a
