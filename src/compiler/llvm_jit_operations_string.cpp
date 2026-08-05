@@ -242,12 +242,12 @@ void StringOperationLowerer::lower(
       operation.destination,
       {builder.CreateZExt(value, i64),
        constant_i64(context, 0),
-       8});
+       32});
   branch_to_next();
 }
 
 void StringOperationLowerer::lower(
-    const runtime::simir::StringReplaceByte& operation) {
+    const runtime::simir::StringReplaceCodePoint& operation) {
   const auto index = load_register(builder, registers, operation.index);
   const auto source = load_register(builder, registers, operation.source);
   check(

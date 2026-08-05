@@ -2,6 +2,7 @@
 #pragma once
 #include "fsim/compiler/llvm_jit.hpp"
 #include "fsim/compiler/object_cache.hpp"
+#include "fsim/runtime/systemverilog_string.hpp"
 
 #include <algorithm>
 #include <array>
@@ -778,7 +779,9 @@ extern "C" inline std::uint32_t compare_strings(
     const std::uint32_t not_equal,
     std::uint32_t* result) {
   auto& runtime = *static_cast<TestRuntime*>(opaque);
-  *result = (runtime.strings.at(lhs) == runtime.strings.at(rhs))
+  *result = (fsim::runtime::systemverilog_string_compare(
+                 runtime.strings.at(lhs), runtime.strings.at(rhs))
+             == 0)
           != (not_equal != 0);
   return 0;
 }
@@ -789,7 +792,8 @@ extern "C" inline std::uint32_t string_length(
     std::uint32_t* result) {
   auto& runtime = *static_cast<TestRuntime*>(opaque);
   *result = static_cast<std::uint32_t>(
-      runtime.strings.at(source).size());
+      fsim::runtime::systemverilog_string_length(
+          runtime.strings.at(source)));
   return 0;
 }
 
@@ -809,15 +813,16 @@ extern "C" inline std::uint32_t string_index(
       : static_cast<std::int64_t>(raw);
   if (index_bval != 0 || index < 0
       || static_cast<std::uint64_t>(index)
-          >= runtime.strings.at(source).size()) {
+          >= fsim::runtime::systemverilog_string_length(
+              runtime.strings.at(source))) {
     return 1;
   }
-  *result = static_cast<unsigned char>(
-      runtime.strings.at(source).at(index));
+  *result = fsim::runtime::systemverilog_string_at(
+      runtime.strings.at(source), static_cast<std::size_t>(index));
   return 0;
 }
 
-extern "C" inline std::uint32_t string_replace_byte(
+extern "C" inline std::uint32_t string_replace_code_point(
     void* opaque,
     const std::uint32_t process,
     const std::uint32_t instruction,
@@ -847,8 +852,9 @@ extern "C" inline std::uint32_t string_replace_byte(
             static_cast<std::int32_t>(index_aval))
       : static_cast<std::size_t>(
             static_cast<std::uint32_t>(index_aval));
-  runtime.strings.at(target).at(index) =
-      static_cast<char>(source_aval & UINT64_C(0xff));
+  fsim::runtime::systemverilog_string_replace(
+      runtime.strings.at(target), index,
+      static_cast<std::uint32_t>(source_aval), maximum_string_bytes);
   return 0;
 }
 
@@ -940,7 +946,7 @@ extern "C" inline std::uint32_t write_string_output(
   result.compare_strings = &compare_strings;
   result.string_length = &string_length;
   result.string_index = &string_index;
-  result.string_replace_byte = &string_replace_byte;
+  result.string_replace_code_point = &string_replace_code_point;
   result.write_string_output = &write_string_output;
   return result;
 }
@@ -1127,6 +1133,9 @@ void test_signal_waits_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
 void test_scalar_truth_tables_and_64_bits();
+void test_systemverilog_scalar_transport_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
 void test_wildcard_case_matching_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);

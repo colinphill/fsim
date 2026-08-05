@@ -734,7 +734,8 @@ void Lowerer::lower_procedure_body(
             {},
             {},
             value_kind(argument.type.domain),
-            argument.type.enumeration_literals});
+            argument.type.enumeration_literals,
+            argument.type.systemverilog_scalar});
         if (argument.type.integer_range) {
             const auto [lower, upper] =
                 integer_bounds(argument.type.integer_range);

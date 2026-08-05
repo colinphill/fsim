@@ -443,6 +443,15 @@ Lowerer::ExpressionAttempt Lowerer::lower_class_expression(
     return destination;
   }
   if (expression.text == "@sv-null") {
+    if (expected_width == 64 && expected_type != nullptr
+        && expected_type->systemverilog_scalar
+            == frontend::SystemVerilogScalarKind::Chandle) {
+      const auto destination = allocate_register(
+          64, frontend::ValueDomain::Bit2);
+      process_.operations.emplace_back(LoadConstant{
+          destination, PackedLogic4::from_aval_bval(64, 0, 0)});
+      return destination;
+    }
     if (expected_width != 64
         || ((expected_type == nullptr
              || expected_type->systemverilog_class_declaration.empty())

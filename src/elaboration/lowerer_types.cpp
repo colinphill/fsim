@@ -228,9 +228,10 @@ using namespace elaboration_detail;
                 || expression.text == ".atoi"
                 || expression.text == ".atohex"
                 || expression.text == ".atooct"
-                || expression.text == ".atobin")) {
-            return expression.text == ".getc"
-                ? std::size_t{8} : std::size_t{32};
+                || expression.text == ".atobin"
+                || expression.text == ".atoreal")) {
+            return expression.text == ".atoreal"
+                ? std::size_t{64} : std::size_t{32};
         }
         if (expression.kind == ExpressionKind::Call
             && expression.text == "$isunknown") {
@@ -1556,7 +1557,8 @@ using namespace elaboration_detail;
                     {},
                     {},
                     ValueKind::logic4,
-                    {}});
+                    {},
+                    frontend::SystemVerilogScalarKind::None});
                 process_.operations.emplace_back(
                     LoadConstant{handle, unsigned_value(0, 32)});
                 if (!variable.initializer) {
@@ -1744,7 +1746,8 @@ using namespace elaboration_detail;
                     {},
                     {},
                     value_kind(variable.type.domain),
-                    {}});
+                    {},
+                    variable.type.systemverilog_scalar});
                 if (variable.type.integer_range) {
                     const auto [lower, upper] =
                         integer_bounds(variable.type.integer_range);

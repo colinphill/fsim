@@ -4,6 +4,7 @@
 #include "fsim/frontend/frontend.hpp"
 
 #include <algorithm>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -1269,8 +1270,6 @@ endmodule
       R"(
 module container_invalid;
   int fixed[3];
-  int nested[][];
-  string strings[];
   int wildcard[*];
   int string_key[string];
   int queue[$];
@@ -1286,14 +1285,27 @@ module container_invalid;
 endmodule
 )",
       Language::SystemVerilog2017);
+  if (invalid.ok()
+      || !has_code(invalid, "FSIM-SV-SEM-078")
+      || !has_code(invalid, "FSIM-SV-SEM-082")
+      || !has_code(invalid, "FSIM-SV-SEM-081")
+      || !has_code(invalid, "FSIM-SV-SEM-092")
+      || !has_code(invalid, "FSIM-SV-SEM-093")
+      || !has_code(invalid, "FSIM-SV-SEM-094")) {
+    for (const auto& diagnostic : invalid.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
   require(
       !invalid.ok()
           && has_code(invalid, "FSIM-SV-SEM-078")
-          && has_code(invalid, "FSIM-SV-SEM-079")
-          && has_code(invalid, "FSIM-SV-SEM-080")
           && has_code(invalid, "FSIM-SV-SEM-082")
-          && has_code(invalid, "FSIM-SV-SEM-081"),
-      "unsupported dimensions, elements, and method arities diagnose");
+          && has_code(invalid, "FSIM-SV-SEM-081")
+          && has_code(invalid, "FSIM-SV-SEM-092")
+          && has_code(invalid, "FSIM-SV-SEM-093")
+          && has_code(invalid, "FSIM-SV-SEM-094"),
+      "unsupported dimensions, indices, and method arities diagnose");
 
   const auto reduction_with = parse_text(
       "container-reduction-with.sv",
@@ -1564,6 +1576,47 @@ endmodule
               == 2,
       "aggregate element type references and multidimensional bounds remain "
       "typed");
+
+  const auto composite_elements = parse_text(
+      "composite-container-elements.sv",
+      R"(
+module composite_elements;
+  typedef struct {
+    real weight;
+    time ticks[1:0];
+    string label;
+    chandle cookie;
+  } record_t;
+  real samples[1:0];
+  time timeline[];
+  string names[$];
+  chandle handles[int];
+  string nested[1:0][];
+  record_t records[1:0];
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      composite_elements.ok(),
+      "real, time, string, chandle, nested-container, and unpacked-struct "
+      "container element types parse");
+  const auto* composite_unit = composite_elements.design.find(
+      UnitKind::VerilogModule, "composite_elements");
+  const auto has_record = composite_unit != nullptr
+      && std::ranges::any_of(
+          composite_unit->type_aliases,
+          [](const auto& alias) { return alias.name == "record_t"; });
+  require(
+      composite_unit != nullptr
+          && composite_unit->variables.size() == 6
+          && composite_unit->variables[4].type.systemverilog_container
+          && composite_unit->variables[4].type.systemverilog_container
+                 ->element_types.size() == 1
+          && composite_unit->variables[4].type.systemverilog_container
+                 ->element_types.front().systemverilog_container
+          && has_record,
+      "recursive container element profiles and aggregate member types are "
+      "retained in frontend HIR");
 
   const auto malformed_pattern = parse_text(
       "container-pattern-invalid.sv",

@@ -8,7 +8,7 @@ using namespace elaboration_detail;
 Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
         const Expression& expression,
         const std::size_t expected_width,
-        const frontend::Type*) {
+        const frontend::Type* expected_type) {
         auto container_query =
             lower_container_query(expression);
         if (container_query.handled) {
@@ -90,6 +90,37 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
             && expression.operands.size() == 1
             && (expression.text == "+"
                 || expression.text == "-")) {
+            if (language_ == frontend::Language::SystemVerilog2017
+                && expected_type != nullptr
+                && expected_type->systemverilog_scalar
+                    != frontend::SystemVerilogScalarKind::None) {
+                std::string error;
+                const auto evaluated =
+                    frontend::evaluate_systemverilog_scalar_constant(
+                        expression, {}, {}, error);
+                if (evaluated) {
+                    const auto converted =
+                        frontend::convert_systemverilog_scalar_constant(
+                            *evaluated,
+                            expected_type->systemverilog_scalar,
+                            error);
+                    if (!converted) {
+                        report(
+                            "FSIM-ELAB-SVSCALAR-001",
+                            "cannot convert scalar expression '"
+                                + expression.text + "': " + error,
+                            expression.span);
+                        return std::nullopt;
+                    }
+                    const auto destination = allocate_register(
+                        expected_width, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(LoadConstant{
+                        destination,
+                        PackedLogic4::from_aval_bval(
+                            expected_width, converted->bits, 0)});
+                    return destination;
+                }
+            }
             if (language_ == frontend::Language::Vhdl2008
                 && expression.operands[0].kind
                     == ExpressionKind::IntegerLiteral) {

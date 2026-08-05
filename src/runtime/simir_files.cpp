@@ -526,7 +526,8 @@ void Interpreter::Impl::execute_file(
             operation.suppress_leading_zero,
             operation.minimum_width,
             operation.left_justify,
-            operation.zero_pad),
+            operation.zero_pad,
+            operation.scalar_kind),
         operation.newline);
     ++process.pc;
   } catch (const InterpreterError&) {

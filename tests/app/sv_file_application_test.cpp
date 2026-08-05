@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/design_artifact.hpp"
 #include "path_test_support.hpp"
 
 #include <algorithm>
@@ -98,6 +99,16 @@ Capture run_once(
     }
   }
   assert(project);
+  fsim::diagnostic::Engine artifact_diagnostics;
+  const auto encoded = fsim::app::serialize_runtime_state(
+      project->design, artifact_diagnostics);
+  assert(encoded && !artifact_diagnostics.has_error());
+  auto restored = fsim::app::deserialize_runtime_state(
+      *encoded, "sv-file-runtime", artifact_diagnostics);
+  assert(restored && !artifact_diagnostics.has_error());
+  assert(fsim::app::serialize_runtime_state(
+      *restored, artifact_diagnostics) == encoded);
+  project->design = std::move(*restored);
   Capture capture;
   capture.keys = project->specialization_cache_keys;
   fsim::app::Simulation simulation{
@@ -206,7 +217,10 @@ void verify_suspension(
       read_text(config.base_directory / "output.txt")
       == "value=7\ntail|chars=97/81/81/90/0/-1/1\n"
          "scan=2/13/alpha/2/42/done\n"
-         "binary=4/305419896/4/0/2/22136/0/2/18/52\n");
+         "scalar=1.25/17/0/3\n"
+         "formatted=1.25/17/0\n"
+         "binary=4/305419896/4/0/2/22136/0/2/18/52\n"
+         "binary_scalar=1.25/23/0/8/8/8\n");
 }
 
 void verify_bad_path(
@@ -351,6 +365,7 @@ int main() {
   const auto input = directory.path / "input.txt";
   const auto scan_input = directory.path / "scan.txt";
   const auto binary_input = directory.path / "binary.bin";
+  const auto scalar_binary_input = directory.path / "scalar.bin";
   const auto packet_input = directory.path / "packets.hex";
   const auto vhdl_source = directory.path / "vhdl_file.vhd";
   write_text(
@@ -475,11 +490,15 @@ end architecture;
             << "  integer scan_count;\n"
             << "  integer scan_value;\n"
             << "  integer string_scan_count;\n"
+            << "  integer scalar_scan_count;\n"
             << "  integer scan_hex;\n"
             << "  integer binary_reader;\n"
             << "  integer packed_count;\n"
             << "  integer memory_count;\n"
             << "  integer packet_count;\n"
+            << "  integer binary_real_count;\n"
+            << "  integer binary_time_count;\n"
+            << "  integer binary_handle_count;\n"
             << "  integer position;\n"
             << "  integer seek_status;\n"
             << "  integer positioned_count;\n"
@@ -492,11 +511,18 @@ end architecture;
             << "    logic [3:0] data;\n"
             << "  } packet_t;\n"
             << "  packet_t packet_memory [1:0];\n"
+            << "  real scan_real_value;\n"
+            << "  time scan_time_value;\n"
+            << "  chandle scan_handle_value;\n"
+            << "  real binary_real_value;\n"
+            << "  time binary_time_value;\n"
+            << "  chandle binary_handle_value;\n"
             << "  string line;\n"
             << "  string saved;\n"
             << "  string error;\n"
             << "  string scan_word;\n"
             << "  string string_word;\n"
+            << "  string scalar_formatted;\n"
             << "  task automatic read_one(\n"
             << "      input integer file_handle,\n"
             << "      output string value,\n"
@@ -530,6 +556,8 @@ end architecture;
             << "    scan_count = $fscanf(scan_reader, \"%d %s\", scan_value, scan_word);\n"
             << "    $fclose(scan_reader);\n"
             << "    string_scan_count = $sscanf(\"h=2a word=done\", \"h=%h word=%s\", scan_hex, string_word);\n"
+            << "    scalar_scan_count = $sscanf(\"real=1.25 time=17 handle=0\", \"real=%g time=%d handle=%h\", scan_real_value, scan_time_value, scan_handle_value);\n"
+            << "    scalar_formatted = $sformatf(\"formatted=%g/%d/%0h\", scan_real_value, scan_time_value, scan_handle_value);\n"
             << "    binary_reader = $fopen(\"binary.bin\", \"rb\");\n"
             << "    packed_count = $fread(binary_word, binary_reader);\n"
             << "    position = $ftell(binary_reader);\n"
@@ -539,6 +567,11 @@ end architecture;
             << "    memory_count = $fread(binary_memory, binary_reader, 2, 2);\n"
             << "    rewind_status = $rewind(binary_reader);\n"
             << "    packet_count = $fread(packet_memory, binary_reader, 1, 2);\n"
+            << "    $fclose(binary_reader);\n"
+            << "    binary_reader = $fopen(\"scalar.bin\", \"rb\");\n"
+            << "    binary_real_count = $fread(binary_real_value, binary_reader);\n"
+            << "    binary_time_count = $fread(binary_time_value, binary_reader);\n"
+            << "    binary_handle_count = $fread(binary_handle_value, binary_reader);\n"
             << "    $fclose(binary_reader);\n"
             << "    $writememh(\"dump.hex\", binary_memory);\n"
             << "    $writememb(\"dump.bin\", binary_memory, 2, 1);\n"
@@ -558,6 +591,11 @@ end architecture;
             << "    $fwrite(writer, \"/%0d\", string_scan_count);\n"
             << "    $fwrite(writer, \"/%0d\", scan_hex);\n"
             << "    $fdisplay(writer, \"/%s\", string_word);\n"
+            << "    $fwrite(writer, \"scalar=%g\", scan_real_value);\n"
+            << "    $fwrite(writer, \"/%t\", scan_time_value);\n"
+            << "    $fwrite(writer, \"/%0h\", scan_handle_value);\n"
+            << "    $fdisplay(writer, \"/%0d\", scalar_scan_count);\n"
+            << "    $fdisplay(writer, \"%s\", scalar_formatted);\n"
             << "    $fwrite(writer, \"binary=%0d\", packed_count);\n"
             << "    $fwrite(writer, \"/%0d\", binary_word);\n"
             << "    $fwrite(writer, \"/%0d\", position);\n"
@@ -568,6 +606,12 @@ end architecture;
             << "    $fwrite(writer, \"/%0d\", memory_count);\n"
             << "    $fwrite(writer, \"/%0d\", binary_memory[2]);\n"
             << "    $fdisplay(writer, \"/%0d\", binary_memory[1]);\n"
+            << "    $fwrite(writer, \"binary_scalar=%g\", binary_real_value);\n"
+            << "    $fwrite(writer, \"/%t\", binary_time_value);\n"
+            << "    $fwrite(writer, \"/%0h\", binary_handle_value);\n"
+            << "    $fwrite(writer, \"/%0d\", binary_real_count);\n"
+            << "    $fwrite(writer, \"/%0d\", binary_time_count);\n"
+            << "    $fdisplay(writer, \"/%0d\", binary_handle_count);\n"
             << "    $fflush(writer);\n"
             << "    $fflush();\n"
             << "    $fclose(writer);\n"
@@ -583,6 +627,13 @@ end architecture;
     write_text(input, "alpha\n");
     write_text(scan_input, "13 alpha\n");
     write_text(binary_input, std::string{"\x12\x34\x56\x78\x9a\xbc", 6});
+    write_text(
+        scalar_binary_input,
+        std::string{
+            "\x3f\xf4\x00\x00\x00\x00\x00\x00"
+            "\x00\x00\x00\x00\x00\x00\x00\x17"
+            "\x00\x00\x00\x00\x00\x00\x00\x00",
+            24});
     write_text(packet_input, "a1\nb2\n");
     const auto config =
         make_config(directory.path, stable, source, optimization);
@@ -598,7 +649,10 @@ end architecture;
     assert(reference.output_file
            == "value=7\ntail|chars=97/81/81/90/0/-1/1\n"
               "scan=2/13/alpha/2/42/done\n"
-              "binary=4/305419896/4/0/2/22136/0/2/18/52\n");
+              "scalar=1.25/17/0/3\n"
+              "formatted=1.25/17/0\n"
+              "binary=4/305419896/4/0/2/22136/0/2/18/52\n"
+              "binary_scalar=1.25/23/0/8/8/8\n");
     assert(reference.saved_line == "Zlpha\n");
     assert(reference.binary_word
            == "00010010001101000101011001111000");
@@ -664,7 +718,10 @@ end architecture;
     assert(changed_input.output_file
            == "value=7\ntail|chars=98/81/81/90/0/-1/1\n"
               "scan=2/21/beta/2/42/done\n"
-              "binary=4/558065031/4/0/2/25991/0/2/33/67\n");
+              "scalar=1.25/17/0/3\n"
+              "formatted=1.25/17/0\n"
+              "binary=4/558065031/4/0/2/25991/0/2/33/67\n"
+              "binary_scalar=1.25/23/0/8/8/8\n");
     assert(changed_input.binary_word
            == "00100001010000110110010110000111");
     assert(changed_input.positioned_word == "0110010110000111");
@@ -690,7 +747,10 @@ end architecture;
     assert(changed_source.output_file
            == "changed=7\ntail|chars=98/81/81/90/0/-1/1\n"
               "scan=2/21/beta/2/42/done\n"
-              "binary=4/558065031/4/0/2/25991/0/2/33/67\n");
+              "scalar=1.25/17/0/3\n"
+              "formatted=1.25/17/0\n"
+              "binary=4/558065031/4/0/2/25991/0/2/33/67\n"
+              "binary_scalar=1.25/23/0/8/8/8\n");
     assert(changed_source.keys != changed_input.keys);
 #if defined(FSIM_HAS_LLVM)
     assert(changed_source.cache.hits == 1);

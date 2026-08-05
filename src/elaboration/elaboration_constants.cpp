@@ -1164,6 +1164,29 @@ void substitute_parameters(
     const ConstantDomainEnvironment& domains,
     std::vector<Diagnostic>& diagnostics,
     const frontend::Language language) {
+    if (type.systemverilog_container) {
+        auto& container = *type.systemverilog_container;
+        for (auto& element : container.element_types) {
+            substitute_parameters(
+                element, environment, domains, diagnostics, language);
+        }
+        if (container.associative_index_type) {
+            substitute_parameters(
+                *container.associative_index_type,
+                environment, domains, diagnostics, language);
+        }
+        if (container.queue_maximum) {
+            substitute_parameters(
+                *container.queue_maximum,
+                environment, domains, language);
+        }
+        for (auto& range : container.static_range_expressions) {
+            substitute_parameters(
+                range.left, environment, domains, language);
+            substitute_parameters(
+                range.right, environment, domains, language);
+        }
+    }
     if (type.vhdl_physical) {
         auto& physical = *type.vhdl_physical;
         if (physical.range) {
@@ -1500,6 +1523,49 @@ void substitute_parameters(
             language == frontend::Language::Vhdl2008
             && type.packed_aggregate
                 == frontend::PackedAggregateKind::Struct;
+        const bool heterogeneous_unpacked =
+            type.packed_aggregate
+                == frontend::PackedAggregateKind::UnpackedStruct
+            && std::ranges::any_of(
+                type.packed_members,
+                [](const frontend::PackedMember& member) {
+                  if (member.nested_types.size() != 1) return true;
+                  const auto& nested = member.nested_types.front();
+                  return nested.domain == frontend::ValueDomain::String
+                      || nested.systemverilog_scalar
+                          != frontend::SystemVerilogScalarKind::None
+                      || nested.systemverilog_container.has_value()
+                      || nested.packed_aggregate
+                          == frontend::PackedAggregateKind::UnpackedStruct;
+                });
+        if (heterogeneous_unpacked) {
+            for (auto& member : type.packed_members) {
+                if (member.nested_types.size() != 1) {
+                    diagnostics.push_back({
+                        "FSIM-ELAB-SVSTRUCT-001",
+                        "unpacked struct member '" + member.name
+                            + "' does not retain one complete type",
+                        member.span});
+                    continue;
+                }
+                substitute_parameters(
+                    member.nested_types.front(),
+                    environment,
+                    domains,
+                    diagnostics,
+                    language);
+                const auto& nested = member.nested_types.front();
+                member.domain = nested.domain;
+                member.spelling = nested.spelling;
+                member.packed_range = nested.packed_range;
+                member.packed_range_expression =
+                    nested.packed_range_expression;
+                member.is_signed = nested.is_signed;
+            }
+            type.packed_range.reset();
+            type.packed_range_expression.reset();
+            return;
+        }
         std::uint64_t total_width = 0;
         std::optional<std::uint64_t> union_width;
         bool valid = true;

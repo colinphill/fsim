@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "llvm_jit_internal.hpp"
 #include "llvm_jit_validation_class.hpp"
+#include "fsim/runtime/systemverilog_string.hpp"
 #include <algorithm>
 #include <limits>
 #include <optional>
@@ -367,12 +368,10 @@ using runtime::Logic9; using namespace runtime::simir;
             result.uses_strings = true;
             validate_string_register(
                 operation.destination, index, "destination");
-            if (operation.value.size() > maximum_string_bytes) {
-              reject(
-                  process,
-                  index,
-                  "LoadStringConstant exceeds the byte limit");
-            }
+            if (operation.value.size() > maximum_string_bytes)
+              reject(process, index, "LoadStringConstant exceeds the byte limit");
+            if (!runtime::systemverilog_string_is_valid(operation.value))
+              reject(process, index, "LoadStringConstant is not strict UTF-8");
           } else if constexpr (std::is_same_v<OperationType, CopyStringRegister>) {
             result.uses_strings = true;
             validate_string_register(
@@ -391,40 +390,35 @@ using runtime::Logic9; using namespace runtime::simir;
             result.uses_strings = true;
             validate_string_register(
                 operation.destination, index, "destination");
-            for (const auto operand : operation.operands) {
-              validate_string_register(
-                  operand, index, "source");
-            }
+            for (const auto operand : operation.operands)
+              validate_string_register(operand, index, "source");
           } else if constexpr (std::is_same_v<OperationType, CompareStrings>) {
             result.uses_strings = true;
-            validate_string_register(
-                operation.lhs, index, "left");
-            validate_string_register(
-                operation.rhs, index, "right");
+            validate_string_register(operation.lhs, index, "left");
+            validate_string_register(operation.rhs, index, "right");
             record_definition(operation.destination, index);
             constrain_width(operation.destination, 1U, index);
           } else if constexpr (std::is_same_v<OperationType, StringLength>) {
             result.uses_strings = true;
-            validate_string_register(
-                operation.source, index, "source");
+            validate_string_register(operation.source, index, "source");
             record_definition(operation.destination, index);
             constrain_width(operation.destination, 32U, index);
           } else if constexpr (std::is_same_v<OperationType, StringIndex>) {
             result.uses_strings = true;
-            validate_string_register(
-                operation.source, index, "source");
+            validate_string_register(operation.source, index, "source");
             record_use(operation.index, index);
             constrain_width(operation.index, 32U, index);
             record_definition(operation.destination, index);
-            constrain_width(operation.destination, 8U, index);
-          } else if constexpr (std::is_same_v<OperationType, StringReplaceByte>) {
+            constrain_width(operation.destination, 32U, index);
+          } else if constexpr (
+              std::is_same_v<OperationType, StringReplaceCodePoint>) {
             result.uses_strings = true;
             validate_string_register(
                 operation.target, index, "target");
             record_use(operation.index, index);
             record_use(operation.source, index);
             constrain_width(operation.index, 32U, index);
-            constrain_width(operation.source, 8U, index);
+            constrain_width(operation.source, 32U, index);
           } else if constexpr (std::is_same_v<OperationType, StringMethod>) {
             result.uses_strings = true;
             std::vector<PackedRegisterValidation> registers;
@@ -435,6 +429,13 @@ using runtime::Logic9; using namespace runtime::simir;
               else record_use(value.id, index);
               if (value.width != 0) constrain_width(value.id, value.width, index);
             }
+          } else if constexpr (std::is_same_v<OperationType,
+                                              SystemVerilogScalarBinary>) {
+            result.uses_containers = true; std::vector<PackedRegisterValidation> registers;
+            if (const auto error = validate_scalar_binary_metadata(operation, registers)) reject(process, index, *error);
+            for (const auto& value : registers) {
+              if (value.definition) record_definition(value.id, index); else record_use(value.id, index);
+              constrain_width(value.id, value.width, index); }
           } else if constexpr (std::is_same_v<OperationType, ResizeContainer>) {
             result.uses_containers = true;
             validate_container_register(operation.target, index, "target");
@@ -763,15 +764,9 @@ using runtime::Logic9; using namespace runtime::simir;
             constrain_width(operation.handle, 32U, index);
           } else if constexpr (std::is_same_v<OperationType, FileWriteFormatted>) {
             result.uses_files = true;
-            if (operation.width == 0 || operation.width > 64) {
-              reject(
-                  process, index,
-                  "FileWriteFormatted width must be in [1, 64]");
-            }
-            record_use(operation.handle, index);
-            constrain_width(operation.handle, 32U, index);
-            record_use(operation.source, index);
-            constrain_width(operation.source, operation.width, index);
+            std::vector<PackedRegisterValidation> registers;
+            if (const auto error = validate_file_write_metadata(operation, registers)) reject(process, index, *error);
+            for (const auto& value : registers) { record_use(value.id, index); constrain_width(value.id, value.width, index); }
           } else if constexpr (std::is_same_v<OperationType, FileWriteString>) {
             result.uses_files = true;
             result.uses_strings = true;
@@ -1184,14 +1179,19 @@ using runtime::Logic9; using namespace runtime::simir;
             }
           } else if constexpr (std::is_same_v<OperationType, FormatDisplay>) {
             record_use(operation.source, index);
+            const auto width = formatted_value_width(operation.format, operation.scalar_kind);
+            if (!width) reject(process, index, "FormatDisplay scalar metadata is inconsistent");
+            if (*width != 0) constrain_width(operation.source, *width, index);
             result.uses_formatted_output = true;
           } else if constexpr (std::is_same_v<OperationType, TimeDisplay>) {
             result.uses_time_output = true;
           } else if constexpr (std::is_same_v<OperationType, MonitorInstall>) {
             for (const auto& value : operation.values) {
               if (value.kind == MonitorValueKind::signal) {
-                (void)signal_width(value.signal, index);
-              }
+                const auto signal_value_width = signal_width(value.signal, index);
+                const auto width = formatted_value_width(value.format, value.scalar_kind);
+                if (!width || (*width != 0 && *width != signal_value_width)) reject(process, index, "MonitorInstall scalar metadata is inconsistent");
+              } else if (value.kind != MonitorValueKind::time) reject(process, index, "MonitorInstall value kind is invalid");
             }
             result.uses_monitor_install = true;
           } else if constexpr (std::is_same_v<OperationType, MonitorControl>) { result.uses_monitor_control = true;

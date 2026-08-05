@@ -373,6 +373,8 @@ SpecializedUnit specialize_unit(
         vhdl_composite_actuals(overridable.size());
     std::vector<std::optional<SystemVerilogConstantValue>>
         systemverilog_actuals(overridable.size());
+    std::vector<std::optional<SystemVerilogScalarConstant>>
+        systemverilog_scalar_actuals(overridable.size());
     std::vector<std::optional<SystemVerilogStringValue>>
         systemverilog_string_actuals(overridable.size());
     std::vector<bool> explicitly_associated(overridable.size());
@@ -496,6 +498,27 @@ SpecializedUnit specialize_unit(
                     } else {
                         systemverilog_string_actuals[
                             *actual_index] = *value;
+                    }
+                    continue;
+                }
+                bool scalar_applicable{};
+                const auto scalar_value =
+                    evaluate_systemverilog_scalar_parameter(
+                        actual_expression,
+                        overridable[*actual_index]->type,
+                        {}, {}, parent_environment,
+                        systemverilog_scalar_evaluation_context(source),
+                        scalar_applicable, error);
+                if (scalar_applicable) {
+                    if (!scalar_value) {
+                        diagnostics.push_back({
+                            code(SpecializationDiagnostic::actual_evaluation),
+                            "cannot evaluate " + std::string{object_kind}
+                                + " actual: " + error,
+                            override.span});
+                    } else {
+                        systemverilog_scalar_actuals[*actual_index] =
+                            *scalar_value;
                     }
                     continue;
                 }
@@ -667,6 +690,10 @@ SpecializedUnit specialize_unit(
     std::size_t overridable_index = 0;
     ConstantDomainEnvironment domains;
     SystemVerilogConstantEnvironment systemverilog_environment;
+    SystemVerilogScalarConstantEnvironment
+        systemverilog_scalar_environment;
+    const auto scalar_context =
+        systemverilog_scalar_evaluation_context(source);
     SystemVerilogStringEnvironment
         systemverilog_string_environment;
     for (std::size_t parameter_index = 0;
@@ -686,6 +713,8 @@ SpecializedUnit specialize_unit(
             specialized_parameter.type;
         std::optional<SystemVerilogConstantValue>
             systemverilog_value;
+        std::optional<SystemVerilogScalarConstant>
+            systemverilog_scalar_value;
         std::optional<SystemVerilogStringValue>
             systemverilog_string_value;
         const bool vhdl_composite_parameter = is_vhdl
@@ -699,9 +728,13 @@ SpecializedUnit specialize_unit(
                         systemverilog_string_actuals.at(
                             overridable_index++);
                 } else {
-                    systemverilog_value =
-                        systemverilog_actuals.at(
-                            overridable_index++);
+                    const auto actual_index = overridable_index++;
+                    systemverilog_scalar_value =
+                        systemverilog_scalar_actuals.at(actual_index);
+                    if (!systemverilog_scalar_value) {
+                        systemverilog_value =
+                            systemverilog_actuals.at(actual_index);
+                    }
                 }
             } else if (vhdl_composite_parameter) {
                 vhdl_composite_value =
@@ -810,6 +843,53 @@ SpecializedUnit specialize_unit(
             result.identity_values.emplace_back(
                 parameter.name,
                 systemverilog_string_value->canonical());
+            continue;
+        }
+        if (is_verilog && !systemverilog_scalar_value
+            && parameter.default_value.kind != ExpressionKind::Invalid) {
+            bool scalar_applicable{};
+            std::string scalar_error;
+            systemverilog_scalar_value =
+                evaluate_systemverilog_scalar_parameter(
+                    parameter.default_value, parameter_type,
+                    systemverilog_scalar_environment,
+                    systemverilog_environment, result.environment,
+                    scalar_context, scalar_applicable, scalar_error);
+            if (scalar_applicable && !systemverilog_scalar_value) {
+                diagnostics.push_back({
+                    code(SpecializationDiagnostic::default_evaluation),
+                    "cannot evaluate default for " + std::string{object_kind}
+                        + " '" + parameter.name + "': " + scalar_error,
+                    parameter.span});
+                const auto kind = parameter_type.systemverilog_scalar
+                        == frontend::SystemVerilogScalarKind::None
+                    ? frontend::SystemVerilogScalarKind::Real
+                    : parameter_type.systemverilog_scalar;
+                systemverilog_scalar_value =
+                    SystemVerilogScalarConstant{kind, 0};
+            }
+        }
+        if (is_verilog && !systemverilog_scalar_value
+            && parameter_type.systemverilog_scalar
+                != frontend::SystemVerilogScalarKind::None
+            && parameter.default_value.kind == ExpressionKind::Invalid) {
+            diagnostics.push_back({
+                code(SpecializationDiagnostic::invalid_actual),
+                std::string{object_kind} + " '" + parameter.name
+                    + "' requires an actual because it has no default",
+                parameter.span});
+            systemverilog_scalar_value = SystemVerilogScalarConstant{
+                parameter_type.systemverilog_scalar, 0};
+        }
+        if (is_verilog && systemverilog_scalar_value) {
+            systemverilog_scalar_environment[parameter.name] =
+                *systemverilog_scalar_value;
+            specialized_parameter.default_value =
+                systemverilog_scalar_value->expression(parameter.span);
+            result.values.emplace_back(
+                parameter.name, systemverilog_scalar_value->display());
+            result.identity_values.emplace_back(
+                parameter.name, systemverilog_scalar_value->canonical());
             continue;
         }
         if (is_verilog && !systemverilog_value) {
@@ -1141,6 +1221,10 @@ SpecializedUnit specialize_unit(
     }
 
     if (is_verilog) {
+        prepare_systemverilog_scalar_callable_profiles(
+            result.unit, systemverilog_scalar_environment);
+        substitute_systemverilog_scalar_parameter_sites(
+            result.unit, systemverilog_scalar_environment);
         const auto specialize_specparam_expression =
             [&](frontend::Expression& expression,
                 const frontend::SourceSpan& span,
@@ -1227,6 +1311,8 @@ SpecializedUnit specialize_unit(
             diagnostics);
         result.string_environment =
             std::move(systemverilog_string_environment);
+        result.scalar_environment =
+            std::move(systemverilog_scalar_environment);
     } else if (is_vhdl) {
         fold_vhdl_static_type_expressions(
             result.unit, result.environment, diagnostics);
@@ -1802,157 +1888,5 @@ void expand_specialized_unit_generates(
 }
 
 
-
-bool valid_systemc_construction_value(
-    const fsim_sc_construction_type_v1 type,
-    const std::int64_t value) {
-    switch (type) {
-    case FSIM_SC_CONSTRUCTION_INTEGER:
-        return true;
-    case FSIM_SC_CONSTRUCTION_NATURAL:
-        return value >= 0;
-    case FSIM_SC_CONSTRUCTION_POSITIVE:
-        return value > 0;
-    case FSIM_SC_CONSTRUCTION_BOOLEAN:
-    case FSIM_SC_CONSTRUCTION_BIT:
-        return value == 0 || value == 1;
-    }
-    return false;
-}
-
-
-
-std::optional<std::vector<std::pair<std::string, std::int64_t>>>
-specialize_systemc_construction(
-    const std::vector<SystemCConstructionParameter>& schema,
-    const std::vector<frontend::ParameterOverride>& overrides,
-    const ConstantEnvironment& parent_environment,
-    const frontend::Language association_language,
-    std::vector<Diagnostic>& diagnostics) {
-    const auto initial_diagnostic_count = diagnostics.size();
-    const bool vhdl_association =
-        association_language == frontend::Language::Vhdl2008;
-    std::vector<std::optional<std::int64_t>> actuals(schema.size());
-    std::size_t next_positional = 0;
-    bool saw_named = false;
-    bool saw_positional = false;
-    for (const auto& override : overrides) {
-        std::string evaluation_error;
-        const auto value = evaluate_constant_expression(
-            override.value, parent_environment, evaluation_error);
-        if (!value) {
-            diagnostics.push_back({
-                "FSIM-ELAB-SC-PARAM-004",
-                "cannot evaluate SystemC construction actual: "
-                    + evaluation_error,
-                override.span});
-            continue;
-        }
-        std::optional<std::size_t> index;
-        if (override.name) {
-            saw_named = true;
-            std::vector<std::size_t> matches;
-            for (std::size_t candidate = 0;
-                 candidate < schema.size();
-                 ++candidate) {
-                const auto matches_name =
-                    vhdl_association
-                    ? parameter_name_matches(
-                          schema[candidate].name,
-                          *override.name,
-                          frontend::Language::SystemVerilog2017,
-                          association_language)
-                    : schema[candidate].name == *override.name;
-                if (matches_name) {
-                    matches.push_back(candidate);
-                }
-            }
-            if (matches.size() > 1) {
-                diagnostics.push_back({
-                    "FSIM-ELAB-SC-PARAM-006",
-                    "VHDL generic name '" + *override.name
-                        + "' ambiguously matches multiple case-sensitive "
-                          "SystemC construction parameters",
-                    override.span});
-                continue;
-            }
-            if (matches.empty()) {
-                diagnostics.push_back({
-                    "FSIM-ELAB-SC-PARAM-001",
-                    "unknown SystemC construction parameter '"
-                        + *override.name + "'",
-                    override.span});
-                continue;
-            }
-            index = matches.front();
-        } else {
-            saw_positional = true;
-            if (vhdl_association && saw_named) {
-                diagnostics.push_back({
-                    "FSIM-ELAB-SC-PARAM-003",
-                    "a positional SystemC construction actual cannot "
-                    "follow a named VHDL actual",
-                    override.span});
-            }
-            if (next_positional >= schema.size()) {
-                diagnostics.push_back({
-                    "FSIM-ELAB-SC-PARAM-001",
-                    "too many positional SystemC construction actuals",
-                    override.span});
-                continue;
-            }
-            index = next_positional++;
-        }
-        if (actuals[*index]) {
-            diagnostics.push_back({
-                "FSIM-ELAB-SC-PARAM-002",
-                "duplicate SystemC construction actual for '"
-                    + schema[*index].name + "'",
-                override.span});
-        } else {
-            actuals[*index] = *value;
-        }
-    }
-    if (!vhdl_association && saw_named && saw_positional) {
-        diagnostics.push_back({
-            "FSIM-ELAB-SC-PARAM-003",
-            "named and positional SystemC construction actuals cannot "
-            "be mixed",
-            overrides.empty() ? frontend::SourceSpan{}
-                              : overrides.front().span});
-    }
-
-    std::vector<std::pair<std::string, std::int64_t>> values;
-    values.reserve(schema.size());
-    for (std::size_t index = 0; index < schema.size(); ++index) {
-        const auto value =
-            actuals[index].has_value()
-            ? actuals[index]
-            : schema[index].default_value;
-        if (!value) {
-            diagnostics.push_back({
-                "FSIM-ELAB-SC-PARAM-001",
-                "SystemC construction parameter '"
-                    + schema[index].name + "' requires an actual",
-                {}});
-            continue;
-        }
-        if (!valid_systemc_construction_value(
-                schema[index].type, *value)) {
-            diagnostics.push_back({
-                "FSIM-ELAB-SC-PARAM-005",
-                "SystemC construction parameter '"
-                    + schema[index].name
-                    + "' violates its declared scalar subtype",
-                {}});
-            continue;
-        }
-        values.emplace_back(schema[index].name, *value);
-    }
-    if (diagnostics.size() != initial_diagnostic_count) {
-        return std::nullopt;
-    }
-    return values;
-}
 
 } // namespace fsim::elaboration::elaboration_detail

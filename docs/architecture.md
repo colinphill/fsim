@@ -820,6 +820,56 @@ designs; `.fsimobj` and mapped-library flows reconstruct the same graph from
 portable owning units. Covergroups and UVM library/runtime behavior remain in
 following closure batches.
 
+### SystemVerilog scalar and Unicode value model
+
+SystemVerilog `shortreal`, `real`, `realtime`, `time`, and `chandle` are
+distinct semantic and runtime kinds rather than aliases of the packed integer
+plane. Decimal literals retain canonical spelling, literal family, and time-
+unit metadata until contextual conversion. A shared folding service performs
+deterministic IEC 559 binary32/binary64 conversion, exact tick scaling,
+checked integral conversion, and kind propagation for dependent constants,
+package imports, overrides, ports, callables, class members, and multiple-root
+specializations.
+
+The runtime scalar plane stores canonical binary32/binary64 payloads and exact
+unsigned ticks. It owns checked arithmetic, comparison, classification,
+rounding, formatting, scanning, and delay conversion; conversions publish no
+partial result on overflow, nonfinite rejection, unsupported operations, or
+resource exhaustion. Interpreter execution and LLVM O0/O2 both use the same
+typed scalar services. Debugger mutation, callbacks, snapshots, and VCD use
+the declared kind: real-family values use VCD real declarations while exact
+time and opaque-handle identities use 64-bit vectors.
+
+`chandle` is a nonnumeric, simulation-owned opaque identity. A generation-safe
+registry publishes no host pointers and detects null, stale, and foreign
+identities. Creation, aliasing, cleanup callbacks, storage accounting, and
+debugger updates are transactional; cleanup runs at most once. Only null,
+equality, inequality, and checked same-kind transport are executable until
+the later DPI/VPI/VHPI batches attach standardized foreign ownership.
+
+Mutable SystemVerilog strings use one strict UTF-8 service and index Unicode
+scalar values, not encoded bytes. Length, iteration, slicing, replacement,
+comparison, case conversion, substring search, integer conversion, and
+real conversion share that representation and bounded allocation policy.
+Invalid UTF-8, invalid Unicode scalar values, invalid indices, and expanding
+operations that exceed a resource budget leave the prior value unchanged.
+The same scalar/string/chandle profiles recurse through the supported static,
+dynamic, queue, associative, packed-aggregate, and unpacked-aggregate value
+shapes and through bounded scalar file I/O.
+
+Portable owning-unit schema 8 and portable-library schema 5 preserve scalar
+type identity, canonical literal payloads, and negative contextual operands.
+The design-state codec preserves the corresponding executable signal,
+callable, container, aggregate, string, and chandle state. Both codecs reject
+invalid scalar enumeration values before publishing an artifact. Standalone
+`.fsimdesign`, relocated mapped `.fsimlib`, and cold/warm/edited native-cache
+flows therefore share producer-independent canonical identities.
+
+This closes the scalar substrate needed by later language work, but it is not
+UVM closure. Arbitrary-width packed values, remaining aggregate/procedural
+surface, SVA, covergroups, DPI/VPI/VHPI, and the UVM library/runtime are owned
+by locked Batches 151-162.
+
 ## Runtime values
 
 The runtime distinguishes three logic domains:

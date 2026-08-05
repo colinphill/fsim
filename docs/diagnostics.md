@@ -111,7 +111,7 @@ are therefore excluded.
 | `FSIM-LIB-0003` | error | Metadata contains an unsafe, incomplete, mismatched, duplicate, or otherwise invalid value. |
 | `FSIM-LIB-0004` | error | Mapped-library metadata cannot be opened or read. |
 | `FSIM-LIB-0005` | error | Transactional publication, payload validation, permissions, or atomic installation failed. |
-| `FSIM-LIB-0006` | error | A portable owning unit is malformed, incompatible, truncated, cyclic, excessively nested, or retains unmapped producer-absolute source provenance. |
+| `FSIM-LIB-0006` | error | A portable owning unit is malformed, incompatible, truncated, cyclic, excessively nested, contains an invalid scalar enumeration, or retains unmapped producer-absolute source provenance. |
 | `FSIM-LIB-0007` | error | Project-library export cannot revalidate a source, serialize a unit, reproduce a portable SystemC build, compile/read a native variant, or complete publication. |
 | `FSIM-LIB-0008` | error | A lazily selected mapped library, dependency, payload, unit identity, checksum, native admission, or consumer-cache installation failed. |
 
@@ -749,6 +749,8 @@ are therefore excluded.
 | `FSIM-SV-PARSE-278` | error | A constraint `foreach` selection omits the closing parenthesis. |
 | `FSIM-SV-PARSE-279` | error | A solve-order constraint omits `before`. |
 | `FSIM-SV-PARSE-280` | error | A solve-before constraint omits its terminating semicolon. |
+| `FSIM-SV-PARSE-281` | error | A SystemVerilog real/time literal has a malformed mantissa or an unrepresentable source exponent. |
+| `FSIM-SV-PARSE-282` | error | A decimal real literal is immediately followed by an unrecognized time-unit spelling. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -955,6 +957,8 @@ are therefore excluded.
 | `FSIM-SV-SEM-171` | error | A pure class method is not also declared virtual. |
 | `FSIM-SV-SEM-172` | error | A compilation-unit class method definition lacks a class-qualified name. |
 | `FSIM-SV-SEM-173` | error | A class repeats a constraint declaration name. |
+| `FSIM-SV-SEM-174` | error | A `chandle` assignment or cast has a numeric, aggregate, or otherwise incompatible source or destination. |
+| `FSIM-SV-SEM-175` | error | A `chandle` is used for arithmetic or logical truth, or compared with a non-`chandle` value. |
 | `FSIM-SV-CLASS-001` | error | A class forward declaration has no defining declaration. |
 | `FSIM-SV-CLASS-002` | error | A named base class is not visible from the declaring class scope. |
 | `FSIM-SV-CLASS-003` | error | A named base class is ambiguous in lexical or import scope. |
@@ -1066,7 +1070,6 @@ are therefore excluded.
 | `FSIM-SV-SEM-077` | error | A dynamic array, queue, or associative array is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-078` | error | An unpacked declaration has an unsupported dimension or associative index type. |
 | `FSIM-SV-SEM-079` | error | A bounded container has an unsupported nonintegral element type. |
-| `FSIM-SV-SEM-080` | error | A bounded SystemVerilog container declares more than one unpacked dimension. |
 | `FSIM-SV-SEM-081` | error | A supported container method has the wrong argument count. |
 | `FSIM-SV-SEM-082` | error | An associative array uses a string index type. |
 | `FSIM-SV-SEM-083` | error | A `$readmem*` or `$writemem*` task is used outside SystemVerilog-2017. |
@@ -1296,7 +1299,7 @@ are therefore excluded.
 | `FSIM-ELAB-SVFUNC-010` | error | Function actual association metadata is inconsistent, positional ordering is illegal, a name is unknown or duplicated, or a required actual/default is missing. |
 | `FSIM-ELAB-SVFUNC-011` | error | Malformed HIR presents a nonintegral writable function formal to the bounded execution path. |
 | `FSIM-ELAB-SVFUNC-012` | error | A bounded `ref` function actual is not a direct caller-local variable or the function is not automatic. |
-| `FSIM-ELAB-SVFUNC-013` | error | A static or implicit-lifetime function local is not a bounded packed integral value. |
+| `FSIM-ELAB-SVFUNC-013` | error | A static or implicit-lifetime function local is not a bounded packed/scalar or string value. |
 | `FSIM-ELAB-VHFUNC-001` | error | An interface-function generic has no retained profile in HIR. |
 | `FSIM-ELAB-VHFUNC-002` | error | An interface-function association or selected actual is not same-language VHDL. |
 | `FSIM-ELAB-VHFUNC-003` | error | An interface-function actual is not a simple visible function name. |
@@ -1447,7 +1450,7 @@ are therefore excluded.
 | `FSIM-ELAB-SVTASK-012` | error | Task actual association metadata is inconsistent, positional ordering is illegal, a name is unknown or duplicated, or a required actual/default is missing. |
 | `FSIM-ELAB-SVTASK-013` | error | A bounded `ref` task call is not automatic and nonsuspending or its actual is not a direct caller-local variable. |
 | `FSIM-ELAB-SVTASK-014` | error | A static or implicit-lifetime task may suspend directly or transitively. |
-| `FSIM-ELAB-SVTASK-015` | error | A static or implicit-lifetime task local is not a bounded packed integral value. |
+| `FSIM-ELAB-SVTASK-015` | error | A static or implicit-lifetime task local is not a bounded packed/scalar or string value. |
 | `FSIM-ELAB-VHTYPE-001` | error | A bounded VHDL named type is not visible in the design unit where it is used. |
 | `FSIM-ELAB-VHTYPE-002` | error | Bounded VHDL named type aliases contain a cycle. |
 | `FSIM-ELAB-VHTYPE-003` | error | The same VHDL type name is directly visible from multiple packages. |
@@ -1651,6 +1654,7 @@ are therefore excluded.
 | `FSIM-ELAB-SVCONTAINER-021` | error | `delete()` is used to clear a fixed static unpacked array. |
 | `FSIM-ELAB-SVCONTAINER-022` | error | A mutating container method is applied to a temporary or another non-object receiver. |
 | `FSIM-ELAB-SVCONTAINER-023` | error | A dynamic-array `new[size](initializer)` value is not an exactly compatible dynamic array. |
+| `FSIM-ELAB-SVCONTAINER-024` | error | Selected assignment targets a string, nested-container, or unpacked-aggregate element without a typed composite element operation. |
 | `FSIM-ELAB-SVCOND-001` | error | A container conditional has invalid arity or is used outside SystemVerilog. |
 | `FSIM-ELAB-SVCOND-002` | error | Container conditional alternatives do not have an exactly compatible kind and profile. |
 | `FSIM-ELAB-SVCOND-003` | error | An associative-array conditional value is used outside the bounded consumer subset. |
@@ -1741,6 +1745,8 @@ are therefore excluded.
 | `FSIM-ELAB-SVPORT-010` | error | A mutable string module port is unconnected, crosses a language boundary, or does not use a direct same-language string object actual. |
 | `FSIM-ELAB-SVPORT-011` | error | A mutable string input port is written directly or through a descendant output/inout port. |
 | `FSIM-ELAB-SVPORT-012` | error | Sibling output/inout mutable string ports drive the same object. |
+| `FSIM-ELAB-SVSCALAR-001` | error | A contextual SystemVerilog scalar literal cannot be converted to its required scalar kind. |
+| `FSIM-ELAB-SVSCALAR-002` | error | A runtime real/time/chandle expression uses an operator outside the executable arithmetic/comparison subset. |
 | `FSIM-ELAB-SVSTRING-001` | error | A SystemVerilog string parameter/localparam default is not a supported immutable constant-string expression. |
 | `FSIM-ELAB-SVSTRING-002` | error | A SystemVerilog parameter actual crosses the bounded integral/string type boundary or is not a supported constant string. |
 | `FSIM-ELAB-SVSTRING-003` | error | A bounded output/report message position contains a string expression that is not constant after specialization. |
@@ -1930,7 +1936,7 @@ are therefore excluded.
 | `FSIM-ART-0010` | error | `.fsimdesign` metadata has an unsupported, truncated, trailing, or runtime-ABI-incompatible encoding. |
 | `FSIM-ART-0011` | error | `.fsimdesign` metadata has invalid roots, bindings, paths, checksums, object provenance, counts, or design digest. |
 | `FSIM-ART-0012` | error | `.fsimdesign` publication/loading failed, including overwrite, staging, permissions, or exact-payload-set failures. |
-| `FSIM-ART-0013` | error | A runtime, semantic, or DesignIR state payload is malformed, excessive, structurally invalid, or contains a producer-absolute source path. |
+| `FSIM-ART-0013` | error | A runtime, semantic, or DesignIR state payload is malformed, excessive, structurally invalid, contains an invalid scalar enumeration, or contains a producer-absolute source path. |
 | `FSIM-ART-0014` | error | Standalone design publication, inspection, loading, projection validation, fixed-delay compatibility, or required-payload verification failed. |
 
 ## SystemC source compiler and plug-in validation

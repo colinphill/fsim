@@ -58,21 +58,38 @@ template <typename T>
 struct IsSharedPtr<std::shared_ptr<T>> : std::true_type {};
 
 template <typename T>
+constexpr bool valid_archive_enum(const T value) noexcept {
+  if constexpr (std::same_as<T, frontend::SystemVerilogScalarKind>) {
+    return value >= frontend::SystemVerilogScalarKind::None
+        && value <= frontend::SystemVerilogScalarKind::Chandle;
+  } else if constexpr (
+      std::same_as<T, frontend::SystemVerilogDecimalLiteralKind>) {
+    return value >= frontend::SystemVerilogDecimalLiteralKind::Real
+        && value <= frontend::SystemVerilogDecimalLiteralKind::Time;
+  }
+  return true;
+}
+
+template <typename T>
   requires std::same_as<std::remove_cv_t<T>, frontend::Expression>
 auto archive_fields(T& value) {
   return std::tie(
       value.kind, value.text, value.operands, value.span,
       value.aggregate_choices, value.aggregate_choice_expressions,
-      value.nominal_type, value.decoded_string, value.call_argument_names,
+      value.nominal_type, value.decoded_string,
+      value.systemverilog_decimal_literal,
+      value.call_argument_names,
       value.call_argument_directions, value.call_result_width,
-      value.call_result_domain, value.call_result_signed);
+      value.call_result_domain, value.call_result_signed,
+      value.systemverilog_scalar_kind);
 }
 
 template <typename T>
   requires std::same_as<std::remove_cv_t<T>, frontend::Type>
 auto archive_fields(T& value) {
   return std::tie(
-      value.domain, value.spelling, value.packed_range, value.is_signed,
+      value.domain, value.spelling, value.systemverilog_scalar,
+      value.systemverilog_net_type, value.packed_range, value.is_signed,
       value.packed_range_expression, value.named_type, value.named_type_span,
       value.nominal_type, value.vhdl_type_declaration,
       value.vhdl_resolution_function, value.enumeration_literals,
@@ -87,6 +104,18 @@ auto archive_fields(T& value) {
       value.systemverilog_class_name,
       value.systemverilog_class_declaration,
       value.systemverilog_class_parameter_actuals);
+}
+
+template <typename T>
+  requires std::same_as<
+      std::remove_cv_t<T>, runtime::simir::ContainerValue>
+auto archive_fields(T& value) {
+  return std::tie(
+      value.type,
+      value.elements,
+      value.string_elements,
+      value.nested_elements,
+      value.keys);
 }
 
 template <typename T>
@@ -106,7 +135,8 @@ auto archive_fields(T& value) {
   return std::tie(
       value.name, value.initial_value, value.resolution, value.value_kind,
       value.implicit_driver, value.implicit_drive_strength,
-      value.charge_strength, value.charge_decay);
+      value.charge_strength, value.charge_decay,
+      value.systemverilog_scalar);
 }
 
 template <typename T>
@@ -228,6 +258,11 @@ class Writer {
     if constexpr (std::same_as<Value, bool>) {
       bytes_.push_back(value ? '\1' : '\0');
     } else if constexpr (std::is_enum_v<Value>) {
+      if (!valid_archive_enum(value)) {
+        failure_ = "design state contains an invalid scalar enumeration";
+        --depth_;
+        return;
+      }
       write(static_cast<std::underlying_type_t<Value>>(value));
     } else if constexpr (std::is_integral_v<Value>) {
       if constexpr (std::is_signed_v<Value>) {
@@ -355,7 +390,8 @@ class Reader {
           return false;
         }
         value = static_cast<Value>(decoded);
-        return true;
+        return valid_archive_enum(value)
+            || fail("design state contains an invalid scalar enumeration");
       } else if constexpr (std::is_integral_v<Value>) {
         std::uint64_t encoded{};
         if (!u64(encoded)) {

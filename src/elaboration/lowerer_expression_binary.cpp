@@ -374,6 +374,102 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             const frontend::Type* rhs_object_type =
                 expression_object_type(
                     expression.operands[1]);
+            const auto scalar_type = [&](const Expression& operand)
+                -> const frontend::Type* {
+              if (const auto* direct = expression_object_type(operand);
+                  direct != nullptr
+                  && direct->systemverilog_scalar
+                      != frontend::SystemVerilogScalarKind::None) {
+                return direct;
+              }
+              if (operand.kind == ExpressionKind::Call) {
+                const auto* function = visible_function(operand.text);
+                if (function != nullptr
+                    && function->return_type.systemverilog_scalar
+                        != frontend::SystemVerilogScalarKind::None) {
+                  return &function->return_type;
+                }
+              }
+              return nullptr;
+            };
+            const auto* lhs_scalar_type = scalar_type(expression.operands[0]);
+            const auto* rhs_scalar_type = scalar_type(expression.operands[1]);
+            const auto* scalar_context =
+                expected_type != nullptr
+                        && expected_type->systemverilog_scalar
+                            != frontend::SystemVerilogScalarKind::None
+                    ? expected_type
+                    : lhs_scalar_type != nullptr
+                        ? lhs_scalar_type : rhs_scalar_type;
+            if (language_ == frontend::Language::SystemVerilog2017
+                && scalar_context != nullptr) {
+              using ScalarOperator =
+                  runtime::SystemVerilogScalarBinaryOperator;
+              std::optional<ScalarOperator> scalar_operation;
+              if (expression.text == "+") scalar_operation = ScalarOperator::Add;
+              else if (expression.text == "-") scalar_operation = ScalarOperator::Subtract;
+              else if (expression.text == "*") scalar_operation = ScalarOperator::Multiply;
+              else if (expression.text == "/") scalar_operation = ScalarOperator::Divide;
+              else if (expression.text == "==" || expression.text == "===") {
+                scalar_operation = ScalarOperator::Equal;
+              } else if (expression.text == "!=" || expression.text == "!==") {
+                scalar_operation = ScalarOperator::NotEqual;
+              } else if (expression.text == "<") scalar_operation = ScalarOperator::Less;
+              else if (expression.text == "<=") scalar_operation = ScalarOperator::LessEqual;
+              else if (expression.text == ">") scalar_operation = ScalarOperator::Greater;
+              else if (expression.text == ">=") scalar_operation = ScalarOperator::GreaterEqual;
+              if (!scalar_operation) {
+                report(
+                    "FSIM-ELAB-SVSCALAR-002",
+                    "runtime scalar operator '" + expression.text
+                        + "' is outside the executable arithmetic and "
+                          "comparison subset",
+                    expression.span);
+                return std::nullopt;
+              }
+              const auto kind = [&](const Expression& operand,
+                                    const frontend::Type* type) {
+                return type != nullptr
+                    ? type->systemverilog_scalar
+                    : operand.systemverilog_scalar_kind
+                          != frontend::SystemVerilogScalarKind::None
+                        ? operand.systemverilog_scalar_kind
+                        : scalar_context->systemverilog_scalar;
+              };
+              const auto lhs_kind = kind(
+                  expression.operands[0], lhs_scalar_type);
+              const auto rhs_kind = kind(
+                  expression.operands[1], rhs_scalar_type);
+              const auto width = [](const auto selected) {
+                return selected == frontend::SystemVerilogScalarKind::ShortReal
+                    ? std::size_t{32} : std::size_t{64};
+              };
+              auto lhs = lower_expression(
+                  expression.operands[0], width(lhs_kind),
+                  lhs_scalar_type != nullptr
+                      ? lhs_scalar_type : scalar_context);
+              auto rhs = lower_expression(
+                  expression.operands[1], width(rhs_kind),
+                  rhs_scalar_type != nullptr
+                      ? rhs_scalar_type : scalar_context);
+              if (!lhs || !rhs) return std::nullopt;
+              const bool comparison = *scalar_operation >= ScalarOperator::Equal;
+              auto result_kind = expression.systemverilog_scalar_kind;
+              if (!comparison
+                  && result_kind == frontend::SystemVerilogScalarKind::None) {
+                result_kind = scalar_context->systemverilog_scalar;
+              }
+              const auto destination = allocate_register(
+                  comparison ? 1U : width(result_kind),
+                  frontend::ValueDomain::Bit2);
+              process_.operations.emplace_back(SystemVerilogScalarBinary{
+                  *scalar_operation, destination, *lhs, *rhs,
+                  lhs_kind, rhs_kind,
+                  comparison
+                      ? frontend::SystemVerilogScalarKind::None
+                      : result_kind});
+              return destination;
+            }
             if (language_ == frontend::Language::Vhdl2008) {
                 const auto* physical_context =
                     expected_type != nullptr

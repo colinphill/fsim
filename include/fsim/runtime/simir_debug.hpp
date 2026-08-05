@@ -11,6 +11,8 @@ struct DebugLocal {
   std::optional<std::int32_t> integer_upper;
   ValueKind value_kind{ValueKind::logic4};
   std::vector<std::string> enumeration_literals;
+  SystemVerilogScalarKind systemverilog_scalar{
+      SystemVerilogScalarKind::None};
 };
 
 struct DebugStringLocal {

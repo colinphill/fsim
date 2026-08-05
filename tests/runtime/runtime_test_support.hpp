@@ -5,6 +5,11 @@ namespace fsim::tests::runtime {
 
 void test_logic();
 void test_packed_values();
+void test_systemverilog_scalar_values();
+void test_systemverilog_scalar_text_and_time();
+void test_systemverilog_scalar_execution_surfaces();
+void test_systemverilog_chandle_registry();
+void test_systemverilog_unicode_strings();
 void test_scheduler_phase_order();
 void test_scheduler_stop_resume();
 void test_scheduler_time_limit_before_future_event();

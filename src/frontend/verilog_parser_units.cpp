@@ -1014,6 +1014,28 @@ Type VerilogParser::parse_parameter_type() {
     type.is_signed = false;
     return type;
   }
+  if (keyword("chandle")) {
+    const auto token = advance();
+    type.spelling = token.text;
+    type.domain = ValueDomain::Unknown;
+    type.is_signed = false;
+    type.systemverilog_scalar = SystemVerilogScalarKind::Chandle;
+    return type;
+  }
+  if (keyword("shortreal") || keyword("real")
+      || keyword("realtime")) {
+    const auto token = advance();
+    type.spelling = token.text;
+    type.domain = ValueDomain::Unknown;
+    type.is_signed = true;
+    type.systemverilog_scalar =
+        token.text == "shortreal"
+            ? SystemVerilogScalarKind::ShortReal
+        : token.text == "real"
+            ? SystemVerilogScalarKind::Real
+            : SystemVerilogScalarKind::Realtime;
+    return type;
+  }
   if (keyword("byte") || keyword("shortint")
       || keyword("longint") || keyword("time")) {
     const auto token = advance();
@@ -1031,6 +1053,9 @@ Type VerilogParser::parse_parameter_type() {
             : std::int64_t{64};
     type.packed_range = PackedRange{
         width - 1, 0, true};
+    if (token.text == "time") {
+      type.systemverilog_scalar = SystemVerilogScalarKind::Time;
+    }
   } else if (keyword("integer") || keyword("int")) {
     const auto token = advance();
     type.spelling = token.text;
@@ -1078,8 +1103,13 @@ Type VerilogParser::parse_type_parameter_actual() {
         "parameter actual");
     return {};
   }
+  if (keyword("chandle")) {
+    return parse_parameter_type();
+  }
   if (keyword("byte") || keyword("shortint")
       || keyword("longint") || keyword("time")
+      || keyword("shortreal") || keyword("real")
+      || keyword("realtime")
       || keyword("integer") || keyword("int")
       || keyword("logic") || keyword("reg") || keyword("bit")
       || keyword("signed") || keyword("unsigned")

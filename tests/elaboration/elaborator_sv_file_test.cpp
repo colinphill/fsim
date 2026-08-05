@@ -22,6 +22,9 @@ module file_lowering;
   string line;
   string error;
   logic [31:0] bits;
+  real real_value;
+  time time_value;
+  chandle handle_value;
   logic [7:0] memory [3:0];
   typedef struct packed {
     logic [3:0] tag;
@@ -39,6 +42,11 @@ module file_lowering;
   initial begin
     handle = $fopen(path, "w+");
     $fdisplay(handle, "value=%0d", 7);
+    $fwrite(handle, " scalar=%g", real_value);
+    $fwrite(handle, " sci=%e", real_value);
+    $fwrite(handle, " fixed=%f", real_value);
+    $fwrite(handle, "/%t", time_value);
+    $fwrite(handle, "/%0h", handle_value);
     $fwrite(handle, "%s", path);
     read_one(handle, line, count);
     status = $fgetc(handle);
@@ -47,7 +55,13 @@ module file_lowering;
     status = $ferror(handle, error);
     status = $fscanf(handle, "%d", count);
     status = $sscanf("value=2a name=ok", "value=%h name=%s", count, line);
+    status = $sscanf("real=1.25 time=17 handle=0",
+                     "real=%g time=%d handle=%h",
+                     real_value, time_value, handle_value);
     status = $fread(bits, handle);
+    status = $fread(real_value, handle);
+    status = $fread(time_value, handle);
+    status = $fread(handle_value, handle);
     status = $fread(memory, handle, 2, 2);
     status = $fread(packet_memory, handle, 1, 1);
     status = $ftell(handle);
@@ -88,13 +102,13 @@ endmodule
             });
       };
   assert(count(FileOpen{}) == 1);
-  assert(count(FileWriteFormatted{}) == 1);
+  assert(count(FileWriteFormatted{}) == 6);
   assert(count(FileWriteString{}) == 1);
   assert(count(FileReadLine{}) == 3);
   assert(count(FileEndOfFile{}) == 1);
   assert(count(FileErrorStatus{}) == 1);
-  assert(count(FileScan{}) == 2);
-  assert(count(FileBinaryRead{}) == 3);
+  assert(count(FileScan{}) == 3);
+  assert(count(FileBinaryRead{}) == 6);
   assert(count(FilePosition{}) == 3);
   assert(count(FileFlush{}) == 2);
   assert(count(LoadMemory{}) == 4);
@@ -109,6 +123,25 @@ endmodule
             && value->format == OutputFormat::decimal
             && value->prefix == "value="
             && value->newline;
+      }));
+  assert(std::ranges::count_if(
+      operations,
+      [](const auto& operation) {
+        const auto* value =
+            fsim::runtime::simir::operation_get_if<FileWriteFormatted>(&operation);
+        return value != nullptr
+            && value->format >= OutputFormat::real_scientific
+            && value->format <= OutputFormat::real_general
+            && value->scalar_kind == fsim::runtime::SystemVerilogScalarKind::Real;
+      }) == 3);
+  assert(std::ranges::any_of(
+      operations,
+      [](const auto& operation) {
+        const auto* value =
+            fsim::runtime::simir::operation_get_if<FileWriteFormatted>(&operation);
+        return value != nullptr && value->format == OutputFormat::real_general
+            && value->width == 64
+            && value->scalar_kind == fsim::runtime::SystemVerilogScalarKind::Real;
       }));
   assert(std::ranges::count_if(
       operations,
@@ -131,11 +164,35 @@ endmodule
   assert(std::ranges::any_of(
       operations,
       [](const auto& operation) {
+        const auto* value = fsim::runtime::simir::operation_get_if<FileScan>(&operation);
+        return value != nullptr && value->string_source
+            && value->conversions.size() == 3
+            && value->conversions[0].format == InputScanFormat::real
+            && value->conversions[0].target.scalar_kind
+                == fsim::runtime::SystemVerilogScalarKind::Real
+            && value->conversions[1].target.scalar_kind
+                == fsim::runtime::SystemVerilogScalarKind::Time
+            && value->conversions[2].target.scalar_kind
+                == fsim::runtime::SystemVerilogScalarKind::Chandle;
+      }));
+  assert(std::ranges::any_of(
+      operations,
+      [](const auto& operation) {
         const auto* value = fsim::runtime::simir::operation_get_if<FileBinaryRead>(&operation);
         return value != nullptr
             && value->target_kind
                 == FileBinaryTargetKind::packed_signal
             && value->width == 32 && !value->has_start;
+      }));
+  assert(std::ranges::any_of(
+      operations,
+      [](const auto& operation) {
+        const auto* value = fsim::runtime::simir::operation_get_if<FileBinaryRead>(&operation);
+        return value != nullptr
+            && value->target_kind == FileBinaryTargetKind::packed_signal
+            && value->scalar_kind
+                == fsim::runtime::SystemVerilogScalarKind::Chandle
+            && value->width == 64 && value->two_state;
       }));
   assert(std::ranges::any_of(
       operations,
@@ -174,6 +231,7 @@ module file_invalid;
   integer handle;
   integer result;
   string value;
+  real real_value;
   logic [7:0] bits;
   logic [7:0] memory [3:0];
   logic [7:0] matrix [1:0][0:1];
@@ -185,6 +243,8 @@ module file_invalid;
     result = $fscanf(value, "%d", result);
     result = $sscanf(value, "%d", value);
     result = $sscanf(value, "%q", result);
+    $fdisplay(handle, "%g", result);
+    result = $sscanf("1", "%d", real_value);
     result = $fread(value, handle);
     result = $fread(bits, handle, 0);
     result = $fread(memory, value, 0, 1);

@@ -18,16 +18,18 @@ void test_strings_at_level(
       .container_register_types = {},
       .static_sensitivity = {},
       .operations = {
-          LoadStringConstant{0, "fsim"},
-          LoadStringConstant{1, "-v1"},
+          LoadStringConstant{0, "A\xcf\x80"},
+          LoadStringConstant{1, "\xf0\x9f\x98\x80"},
           ConcatenateStrings{2, {0, 1}},
           LoadConstant{
-              0, PackedLogic4::from_aval_bval(32, 0, 0)},
+              0, PackedLogic4::from_aval_bval(32, 1, 0)},
           LoadConstant{
-              1, PackedLogic4::from_aval_bval(8, 'F', 0)},
-          StringReplaceByte{2, 0, 1, true},
+              1, PackedLogic4::from_aval_bval(32, 0x1f642, 0)},
+          StringReplaceCodePoint{2, 0, 1, true},
           StringLength{2, 2},
-          LoadStringConstant{3, "Fsim-v1"},
+          StringIndex{0, 2, 0, true},
+          LoadStringConstant{
+              3, "A\xf0\x9f\x99\x82\xf0\x9f\x98\x80"},
           CompareStrings{3, 2, 3, false},
           WriteStringObject{0, 2},
           ReadStringObject{0, 0},
@@ -60,9 +62,29 @@ void test_strings_at_level(
   TestRuntime state;
   auto runtime = abi(state);
   assert(jit.execute(handle, runtime) == JitExecutionStatus::completed);
-  assert(state.string_objects[0] == "Fsim-v1");
-  assert(state.strings[0] == "Fsim-v1");
-  assert(state.output == std::vector<std::string>{"[Fsim-v1]"});
+  assert(
+      state.string_objects[0]
+      == "A\xf0\x9f\x99\x82\xf0\x9f\x98\x80");
+  assert(state.strings[0] == state.string_objects[0]);
+  assert(
+      state.output
+      == std::vector<std::string>{
+          "[A\xf0\x9f\x99\x82\xf0\x9f\x98\x80]"});
+
+  Process invalid;
+  invalid.id = 1;
+  invalid.name = "invalid_utf8";
+  invalid.string_register_count = 1;
+  invalid.operations = {
+      LoadStringConstant{0, "\xc0\x80"}, Halt{}};
+  try {
+    jit.add_process(std::string{symbol} + "_invalid", invalid, {});
+    assert(false && "invalid UTF-8 JIT literal was accepted");
+  } catch (const LlvmJitError& error) {
+    assert(
+        std::string_view{error.what()}.find("strict UTF-8")
+        != std::string_view::npos);
+  }
 }
 
 }  // namespace fsim::tests::compiler

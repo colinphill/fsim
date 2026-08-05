@@ -641,9 +641,19 @@ void ApplicationTestFixture::test_class_simulation_integration() {
     return simulation.native_cache_statistics();
   };
   const auto cold_cache = cached_run();
+#if defined(FSIM_HAS_LLVM)
   assert(cold_cache.misses != 0 && cold_cache.stores != 0);
+#else
+  assert(cold_cache.hits == 0 && cold_cache.misses == 0);
+  assert(cold_cache.stores == 0);
+#endif
   const auto warm_cache = cached_run();
+#if defined(FSIM_HAS_LLVM)
   assert(warm_cache.hits != 0 && warm_cache.misses == 0);
+#else
+  assert(warm_cache.hits == 0 && warm_cache.misses == 0);
+  assert(warm_cache.stores == 0);
+#endif
   std::ifstream original_input(class_source, std::ios::binary);
   const std::string original_source{
       std::istreambuf_iterator<char>{original_input},
@@ -658,7 +668,12 @@ void ApplicationTestFixture::test_class_simulation_integration() {
     edited_output << edited_source;
   }
   const auto edited_cache = cached_run();
+#if defined(FSIM_HAS_LLVM)
   assert(edited_cache.misses != 0 && edited_cache.stores != 0);
+#else
+  assert(edited_cache.hits == 0 && edited_cache.misses == 0);
+  assert(edited_cache.stores == 0);
+#endif
   {
     std::ofstream restored_output(
         class_source, std::ios::binary | std::ios::trunc);

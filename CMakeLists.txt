@@ -389,6 +389,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_events.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_fork.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_units.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/systemverilog_scalar_folding.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_udp.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_concurrent.cpp"
@@ -419,9 +420,14 @@ add_library(
     src/runtime/packed_value.cpp
     src/runtime/scheduler.cpp
     src/runtime/scope_randomize.cpp
+    src/runtime/systemverilog_scalar.cpp
+    src/runtime/systemverilog_scalar_text.cpp
+    src/runtime/systemverilog_chandle.cpp
+    src/runtime/systemverilog_string.cpp
     src/runtime/simir.cpp
     src/runtime/simir_arithmetic.cpp
     src/runtime/simir_containers.cpp
+    src/runtime/simir_container_values.cpp
     src/runtime/simir_execution.cpp
     src/runtime/simir_file_binary.cpp
     src/runtime/simir_file_scanning.cpp
@@ -452,16 +458,19 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/elaboration_defaults.cpp
       src/elaboration/elaboration_vhdl_array_layout.cpp
       src/elaboration/elaboration_literals.cpp
-      src/elaboration/elaboration_specialization.cpp
+  src/elaboration/elaboration_specialization.cpp
+  src/elaboration/elaboration_systemc_specialization.cpp
       src/elaboration/elaboration_vhdl_static.cpp
       src/elaboration/elaboration_vhdl_values.cpp
       src/elaboration/elaboration_vhdl_blocks.cpp
       src/elaboration/elaboration_vhdl_generate_choice.cpp
       src/elaboration/elaboration_vhdl_local.cpp
-      src/elaboration/elaboration_sv_constants.cpp
+  src/elaboration/elaboration_sv_constants.cpp
+  src/elaboration/elaboration_sv_scalars.cpp
       src/elaboration/elaboration_sv_functions.cpp
       src/elaboration/elaboration_sv_generate.cpp
       src/elaboration/elaboration_sv_strings.cpp
+      src/elaboration/elaboration_sv_container_type.cpp
       src/elaboration/elaboration_sv_type_parameters.cpp
       src/elaboration/elaboration_type_generics.cpp
       src/elaboration/elaboration_vhdl_components.cpp

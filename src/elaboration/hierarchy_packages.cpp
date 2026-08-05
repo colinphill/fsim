@@ -103,8 +103,6 @@ using namespace elaboration_detail;
         finish();
     }
 
-
-
     std::vector<std::string> HierarchyBuilder::selected_name_parts(
         const std::string_view name) {
         std::vector<std::string> result;
@@ -124,8 +122,6 @@ using namespace elaboration_detail;
         }
         return result;
     }
-
-
 
     void HierarchyBuilder::expand_vhdl_context_references(
         DesignUnit& unit,
@@ -250,8 +246,6 @@ using namespace elaboration_detail;
             }
         }
     }
-
-
 
     void HierarchyBuilder::import_vhdl_package_constants(
         DesignUnit& unit,
@@ -718,8 +712,6 @@ using namespace elaboration_detail;
         unit.vhdl_component_declarations =
             std::move(component_imports);
     }
-
-
 
     std::optional<SpecializedUnit> HierarchyBuilder::specialize_vhdl_package(
         const DesignUnit& package,
@@ -1809,16 +1801,23 @@ using namespace elaboration_detail;
                     }
                     imported_value =
                         value->second.expression(declaration.span);
+                } else if (const auto value =
+                               specialized_package->scalar_environment.find(
+                                   declaration.name);
+                           value != specialized_package
+                                        ->scalar_environment.end()) {
+                    imported_value =
+                        value->second.expression(declaration.span);
                 } else {
-                    const auto value =
+                    const auto integral_value =
                         specialized_package->environment.find(
                             declaration.name);
-                    if (value
+                    if (integral_value
                         == specialized_package->environment.end()) {
                         continue;
                     }
                     imported_value = constant_expression(
-                        value->second,
+                        integral_value->second,
                         declaration.span,
                         imported_type.domain,
                         frontend::Language::

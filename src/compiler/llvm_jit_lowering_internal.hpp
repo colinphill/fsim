@@ -209,7 +209,7 @@ struct StringOperationLowerer {
   void lower(const runtime::simir::CompareStrings& operation);
   void lower(const runtime::simir::StringLength& operation);
   void lower(const runtime::simir::StringIndex& operation);
-  void lower(const runtime::simir::StringReplaceByte& operation);
+  void lower(const runtime::simir::StringReplaceCodePoint& operation);
   void lower(const runtime::simir::StringDisplay& operation);
 
 private:
@@ -313,6 +313,7 @@ struct ContainerOperationLowerer {
       std::function<void()>);
 
   void lower(const runtime::simir::ResizeContainer&);
+  void lower(const runtime::simir::SystemVerilogScalarBinary&);
   void lower(const runtime::simir::CopyContainerRegister&);
   void lower(const runtime::simir::ConditionalContainerSelect&);
   void lower(const runtime::simir::CompareContainers&);

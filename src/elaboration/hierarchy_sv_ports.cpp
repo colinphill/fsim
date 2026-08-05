@@ -676,6 +676,22 @@ void HierarchyBuilder::validate_boundary_type(
       [](const frontend::ValueDomain domain) {
         return domain == frontend::ValueDomain::Unknown;
       };
+  const bool scalar_boundary =
+      port.type.systemverilog_scalar
+          != frontend::SystemVerilogScalarKind::None
+      || actual.systemverilog_scalar
+          != frontend::SystemVerilogScalarKind::None;
+  if (scalar_boundary) {
+    if (cross_language
+        || port.type.systemverilog_scalar != actual.systemverilog_scalar) {
+      report(
+          "FSIM-ELAB-BIND-019",
+          "real/time boundary '" + path + "." + port.name
+              + "' requires an exact same-language scalar profile",
+          source);
+    }
+    return;
+  }
   if (unsupported_domain(port.type.domain)
       || unsupported_domain(actual.source_domain)) {
     report(
@@ -983,23 +999,23 @@ HierarchyBuilder::PortAliases HierarchyBuilder::connect_instance(
 frontend::SignalDeclaration
 HierarchyBuilder::external_port_declaration(
     const ExternalPort& port) {
-  return {
-      port.name,
-      port.type,
-      port.direction,
-      true,
-      {}};
+  frontend::SignalDeclaration declaration;
+  declaration.name = port.name;
+  declaration.type = port.type;
+  declaration.direction = port.direction;
+  declaration.is_port = true;
+  return declaration;
 }
 
 frontend::SignalDeclaration
 HierarchyBuilder::foreign_port_declaration(
     const ForeignPort& port) {
-  return {
-      port.name,
-      port.type,
-      port.direction,
-      true,
-      {}};
+  frontend::SignalDeclaration declaration;
+  declaration.name = port.name;
+  declaration.type = port.type;
+  declaration.direction = port.direction;
+  declaration.is_port = true;
+  return declaration;
 }
 
 }  // namespace fsim::elaboration

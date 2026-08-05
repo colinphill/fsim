@@ -32,7 +32,9 @@ namespace {
 [[nodiscard]] bool same_element_profile(
     const ContainerType& lhs,
     const ContainerType& rhs) {
-  return lhs.element_width == rhs.element_width
+  return lhs.element_kind == rhs.element_kind
+      && lhs.scalar_kind == rhs.scalar_kind
+      && lhs.element_width == rhs.element_width
       && lhs.two_state == rhs.two_state
       && lhs.signed_elements == rhs.signed_elements;
 }
@@ -95,6 +97,15 @@ Lowerer::static_container_slice(
     report(
         "FSIM-ELAB-SVSLICE-001",
         "unpacked slicing is limited to one-dimensional static arrays",
+        expression.span);
+    return std::nullopt;
+  }
+  if (base_type->element_kind != ContainerElementKind::Packed
+      && base_type->element_kind != ContainerElementKind::Scalar) {
+    report(
+        "FSIM-ELAB-SVSLICE-006",
+        "static-array slicing requires a packed or scalar element "
+        "profile",
         expression.span);
     return std::nullopt;
   }

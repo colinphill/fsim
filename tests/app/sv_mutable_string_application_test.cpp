@@ -219,11 +219,22 @@ module mutable_child;
     return {value, ")"
            << suffix << R"("};
   endfunction
+  function static string accumulate(input string value);
+    string retained = "seed";
+    retained = {retained, value};
+    return retained;
+  endfunction
   task automatic remember(input string value, output string copied);
     string temporary;
     temporary = {value, "!"};
     #1;
     copied = temporary;
+  endtask
+  task static remember_static(
+      input string value, output string copied);
+    string retained = "task";
+    retained = {retained, value};
+    copied = retained;
   endtask
   initial begin : worker
     string copy;
@@ -238,6 +249,13 @@ module mutable_child;
     string formatted;
     string written;
     string functional;
+    string unicode;
+    real parsed_real;
+    string real_text;
+    string static_first;
+    string static_second;
+    string task_first;
+    string task_second;
     remember(decorate(title), copy);
     copy[0] = "F";
     if (copy.len() == 8 && copy != "")
@@ -255,6 +273,14 @@ module mutable_child;
       formatted, "fmt=%0d/%s/%m/%04t", 42, mutated);
     $swrite(written, "%s:%02h", lower, 8'h0a);
     functional = $sformatf("%-5s|%b|%%", middle, 4'b0011);
+    unicode = "Aπ😀";
+    unicode[1] = "🙂";
+    parsed_real = "1_2.5".atoreal();
+    real_text.realtoa(parsed_real);
+    static_first = accumulate("A");
+    static_second = accumulate("B");
+    remember_static("A", task_first);
+    remember_static("B", task_second);
     $display(
       "%s|%s|%s|%s|%s|%s|%s|%s|%s|%0d|%0d|%0d|%0d|%0d|%0d|%0d|%0d",
       title, upper, lower, middle, mutated,
@@ -264,6 +290,12 @@ module mutable_child;
       "12_3".atoi(), "ff".atohex(), "17".atooct(), "101".atobin());
     $display("|%s|%s|%s", formatted, written, functional);
     $display("|%s|%s", port_sink, port_shared);
+    $display(
+      "%s|%0d|%0d|%s",
+      unicode, unicode.len(), unicode[1], unicode.substr(1, 2));
+    $display("|%s", real_text);
+    $display("|%s|%s", static_first, static_second);
+    $display("|%s|%s", task_first, task_second);
   end
 endmodule
 module mutable_top;
@@ -295,7 +327,9 @@ endmodule
         "|0", "|0", "|70", "|0", "|123", "|255", "|15", "|5"};
     const auto formatted_expected = std::vector<std::string>{
         "|fmt=42/Sim/mutable_top.worker/0001",
-        "|fsim-v1!:0a", "|sim  |0011|%", "|input:port", "|Shared"};
+        "|fsim-v1!:0a", "|sim  |0011|%", "|input:port", "|Shared",
+        "A🙂😀", "|3", "|128578", "|🙂😀", "|12.5",
+        "|seedA", "|seedAB", "|taskA", "|taskAB"};
     expected.insert(
         expected.end(), formatted_expected.begin(), formatted_expected.end());
     if (reference.output != expected) {
@@ -342,7 +376,9 @@ endmodule
        "|Sim", "|-42", "|ff", "|11", "|101",
        "|0", "|0", "|70", "|0", "|123", "|255", "|15", "|5",
        "|fmt=42/Sim/mutable_top.worker/0001",
-       "|fsim-v2!:0a", "|sim  |0011|%", "|input:port", "|Shared"}));
+       "|fsim-v2!:0a", "|sim  |0011|%", "|input:port", "|Shared",
+       "A🙂😀", "|3", "|128578", "|🙂😀", "|12.5",
+       "|seedA", "|seedAB", "|taskA", "|taskAB"}));
   assert(changed.keys != baseline.keys);
 #if defined(FSIM_HAS_LLVM)
   assert(changed.cache.hits == 1);

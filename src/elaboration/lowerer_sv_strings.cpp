@@ -460,7 +460,7 @@ bool Lowerer::lower_string_method_statement(
   if (call.kind != ExpressionKind::Call
       || (call.text != ".putc" && call.text != ".itoa"
           && call.text != ".hextoa" && call.text != ".octtoa"
-          && call.text != ".bintoa")) {
+          && call.text != ".bintoa" && call.text != ".realtoa")) {
     return false;
   }
   if (language_ != frontend::Language::SystemVerilog2017
@@ -493,33 +493,36 @@ bool Lowerer::lower_string_method_statement(
     return true;
   }
   const auto target = lower_string_expression(call.operands.front());
-  auto first = lower_expression(call.operands[1], 32);
+  const auto first_width = call.text == ".realtoa" ? 64U : 32U;
+  auto first = lower_expression(call.operands[1], first_width);
   if (!target || !first) {
     report(
         "FSIM-ELAB-SVSTRING-018",
-        "mutating string method argument must be a 32-bit integral value",
+        call.text == ".realtoa"
+            ? "realtoa argument must be a 64-bit real value"
+            : "mutating string method argument must be a 32-bit integral value",
         call.operands[1].span);
     return true;
   }
-  if (register_width(*first) != 32) {
+  if (register_width(*first) != first_width) {
     *first = resize_register(
-        *first, 32, is_signed_expression(call.operands[1]));
+        *first, first_width, is_signed_expression(call.operands[1]));
   }
   StringMethod method;
   method.source = *target;
   method.first = *first;
   if (call.text == ".putc") {
-    auto character = lower_expression(call.operands[2], 8);
+    auto character = lower_expression(call.operands[2], 32);
     if (!character) {
       report(
           "FSIM-ELAB-SVSTRING-018",
-          "putc character must be an 8-bit integral value",
+          "putc character must be a 32-bit Unicode scalar value",
           call.operands[2].span);
       return true;
     }
-    if (register_width(*character) != 8) {
+    if (register_width(*character) != 32) {
       *character = resize_register(
-          *character, 8,
+          *character, 32,
           is_signed_expression(call.operands[2]));
     }
     method.operation = StringMethodOperator::putc;
@@ -532,7 +535,9 @@ bool Lowerer::lower_string_method_statement(
                   ? StringMethodOperator::hextoa
                   : call.text == ".octtoa"
                         ? StringMethodOperator::octtoa
-                        : StringMethodOperator::bintoa;
+                        : call.text == ".bintoa"
+                              ? StringMethodOperator::bintoa
+                              : StringMethodOperator::realtoa;
   }
   process_.operations.emplace_back(method);
   if (const auto object =

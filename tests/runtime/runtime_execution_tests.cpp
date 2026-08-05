@@ -1640,26 +1640,26 @@ void test_simir_mutable_strings() {
           "length", "int", 1, 32, {}, {}, {},
           ValueKind::logic4, {}},
       DebugLocal{
-          "first", "byte", 3, 8, {}, {}, {},
+          "first", "int", 3, 32, {}, {}, {},
           ValueKind::logic4, {}},
   };
   process.debug_string_locals = {
       DebugStringLocal{"copy", 3, {}},
   };
   process.operations = {
-      LoadStringConstant{0, "fsim"},
-      LoadStringConstant{1, "-v1"},
+      LoadStringConstant{0, "f\xcf\x80"},
+      LoadStringConstant{1, "\xf0\x9f\x98\x80"},
       ConcatenateStrings{2, {0, 1}},
       WriteStringObject{object, 2},
       ReadStringObject{3, object},
       CompareStrings{0, 2, 3, false},
       StringLength{1, 3},
       LoadConstant{
-          2, PackedLogic4::from_aval_bval(32, 0, 0)},
+          2, PackedLogic4::from_aval_bval(32, 1, 0)},
       StringIndex{3, 3, 2, true},
       LoadConstant{
-          4, PackedLogic4::from_aval_bval(8, 'F', 0)},
-      StringReplaceByte{3, 2, 4, true},
+          4, PackedLogic4::from_aval_bval(32, 0x1f642, 0)},
+      StringReplaceCodePoint{3, 2, 4, true},
       WriteStringObject{object, 3},
       Halt{},
   };
@@ -1667,14 +1667,16 @@ void test_simir_mutable_strings() {
   const auto result = interpreter.run();
   require(
       result.status == RunStatus::completed
-          && interpreter.string_object_value(object) == "Fsim-v1",
+          && interpreter.string_object_value(object)
+              == "f\xf0\x9f\x99\x82\xf0\x9f\x98\x80",
       "mutable string object read, value-copy, concatenation, index, and "
       "replacement");
   require(
       interpreter.read_debug_local(0, 0).to_msb_string() == "1"
-          && interpreter.read_debug_local(0, 1).low_word().aval == 7
-          && interpreter.read_debug_local(0, 2).low_word().aval == 'f'
-          && interpreter.read_debug_string_local(0, 0) == "Fsim-v1",
+          && interpreter.read_debug_local(0, 1).low_word().aval == 3
+          && interpreter.read_debug_local(0, 2).low_word().aval == 0x03c0
+          && interpreter.read_debug_string_local(0, 0)
+              == "f\xf0\x9f\x99\x82\xf0\x9f\x98\x80",
       "mutable string comparison, length, indexing, and debugger values");
 
   try {
@@ -1710,7 +1712,7 @@ void test_simir_mutable_strings() {
     throw std::runtime_error{"out-of-range string index was accepted"};
   } catch (const InterpreterError& error) {
     require(
-        std::string_view{error.what()}.find("outside the byte range")
+        std::string_view{error.what()}.find("outside the code-point range")
             != std::string_view::npos,
         "out-of-range string index diagnostic");
   }

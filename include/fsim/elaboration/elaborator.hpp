@@ -236,6 +236,9 @@ struct SignalInfo {
     std::size_t width{};
     std::string type_name;
     frontend::ValueDomain source_domain{frontend::ValueDomain::Unknown};
+    frontend::SystemVerilogScalarKind systemverilog_scalar{
+        frontend::SystemVerilogScalarKind::None};
+    std::string systemverilog_net_type;
     bool is_signed{};
     std::optional<frontend::PackedRange> packed_range;
     std::optional<frontend::VhdlArrayInfo> vhdl_array;

@@ -23,8 +23,15 @@ namespace {
     return runtime::simir::OutputFormat::character;
   case frontend::OutputFormat::String:
     return runtime::simir::OutputFormat::string;
-  case frontend::OutputFormat::Hierarchy:
+  case frontend::OutputFormat::RealScientific:
+    return runtime::simir::OutputFormat::real_scientific;
+  case frontend::OutputFormat::RealFixed:
+    return runtime::simir::OutputFormat::real_fixed;
+  case frontend::OutputFormat::RealGeneral:
+    return runtime::simir::OutputFormat::real_general;
   case frontend::OutputFormat::Time:
+    return runtime::simir::OutputFormat::time;
+  case frontend::OutputFormat::Hierarchy:
     break;
   }
   throw std::logic_error{"invalid frontend output format"};
@@ -1109,6 +1116,44 @@ bool Lowerer::report_unsupported_cross_root_reference(
                 }
                 break;
             }
+            const auto* output_type = statement.value.kind
+                    == frontend::ExpressionKind::Identifier
+                ? object_type(statement.value.text) : nullptr;
+            const auto scalar_kind = output_type != nullptr
+                ? output_type->systemverilog_scalar
+                : statement.value.systemverilog_scalar_kind;
+            const bool real_kind =
+                scalar_kind == frontend::SystemVerilogScalarKind::ShortReal
+                || scalar_kind == frontend::SystemVerilogScalarKind::Real
+                || scalar_kind
+                    == frontend::SystemVerilogScalarKind::Realtime;
+            const bool real_format =
+                *statement.output_format
+                    == frontend::OutputFormat::RealScientific
+                || *statement.output_format
+                    == frontend::OutputFormat::RealFixed
+                || *statement.output_format
+                    == frontend::OutputFormat::RealGeneral;
+            const bool scalar_format_matches =
+                real_kind ? real_format
+                : scalar_kind == frontend::SystemVerilogScalarKind::Time
+                    ? *statement.output_format
+                            == frontend::OutputFormat::Time
+                        || *statement.output_format
+                            == frontend::OutputFormat::Decimal
+                : scalar_kind == frontend::SystemVerilogScalarKind::Chandle
+                    ? *statement.output_format
+                        == frontend::OutputFormat::Hexadecimal
+                    : !real_format
+                        && *statement.output_format
+                            != frontend::OutputFormat::Time;
+            if (!scalar_format_matches) {
+                report(
+                    "FSIM-ELAB-SVFILE-007",
+                    "formatted file conversion is incompatible with the value type",
+                    statement.value.span);
+                break;
+            }
             const auto width =
                 infer_width(statement.value).value_or(
                     std::size_t{32});
@@ -1137,7 +1182,8 @@ bool Lowerer::report_unsupported_cross_root_reference(
                     statement.output_suppress_leading_zero,
                     statement.output_minimum_width,
                     statement.output_left_justify,
-                    statement.output_zero_pad});
+                    statement.output_zero_pad,
+                    scalar_kind});
             break;
         }
         case StatementKind::MemoryLoad: {
@@ -1257,6 +1303,32 @@ bool Lowerer::report_unsupported_cross_root_reference(
             break;
         }
         case StatementKind::Display: {
+            const auto scalar_kind_of = [&](const Expression& value) {
+                const auto* type = value.kind == ExpressionKind::Identifier
+                    ? object_type(value.text) : nullptr;
+                return type != nullptr
+                    ? type->systemverilog_scalar
+                    : value.systemverilog_scalar_kind;
+            };
+            const auto scalar_format_matches = [&](
+                const Expression& value,
+                const frontend::OutputFormat format) {
+                const auto scalar = scalar_kind_of(value);
+                const bool real_scalar =
+                    scalar == frontend::SystemVerilogScalarKind::ShortReal
+                    || scalar == frontend::SystemVerilogScalarKind::Real
+                    || scalar == frontend::SystemVerilogScalarKind::Realtime;
+                const bool real_format =
+                    format == frontend::OutputFormat::RealScientific
+                    || format == frontend::OutputFormat::RealFixed
+                    || format == frontend::OutputFormat::RealGeneral;
+                return real_scalar ? real_format
+                    : scalar == frontend::SystemVerilogScalarKind::Time
+                        ? format == frontend::OutputFormat::Decimal
+                    : scalar == frontend::SystemVerilogScalarKind::Chandle
+                        ? format == frontend::OutputFormat::Hexadecimal
+                        : !real_format;
+            };
             if (statement.output_monitor
                 || statement.output_postponed) {
                 if (statement.output_values.empty()
@@ -1297,6 +1369,14 @@ bool Lowerer::report_unsupported_cross_root_reference(
                             == frontend::OutputFormat::Time) {
                             value.kind = MonitorValueKind::time;
                         } else {
+                            if (!scalar_format_matches(
+                                    output.value, output.format)) {
+                                report(
+                                    "FSIM-ELAB-102",
+                                    "formatted output conversion is incompatible with the value type",
+                                    output.value.span);
+                                return;
+                            }
                             if (output.value.kind
                                 != frontend::ExpressionKind::Identifier) {
                                 report(
@@ -1325,6 +1405,8 @@ bool Lowerer::report_unsupported_cross_root_reference(
                             value.signal = signal->second;
                             value.format =
                                 runtime_output_format(output.format);
+                            value.scalar_kind =
+                                scalar_kind_of(output.value);
                             value.signed_decimal =
                                 value.format
                                         == runtime::simir::OutputFormat::
@@ -1413,6 +1495,14 @@ bool Lowerer::report_unsupported_cross_root_reference(
                                 statement.output_postponed});
                         continue;
                     }
+                    if (!scalar_format_matches(
+                            output.value, output.format)) {
+                        report(
+                            "FSIM-ELAB-102",
+                            "formatted output conversion is incompatible with the value type",
+                            output.value.span);
+                        continue;
+                    }
                     const auto width =
                         infer_width(output.value)
                             .value_or(std::size_t{32});
@@ -1443,7 +1533,8 @@ bool Lowerer::report_unsupported_cross_root_reference(
                             output.suppress_leading_zero,
                             output.minimum_width,
                             output.left_justify,
-                            output.zero_pad});
+                            output.zero_pad,
+                            scalar_kind_of(output.value)});
                 }
                 break;
             }
@@ -1462,6 +1553,14 @@ bool Lowerer::report_unsupported_cross_root_reference(
                                 statement.output_newline,
                                 statement.output_postponed});
                     }
+                    break;
+                }
+                if (!scalar_format_matches(
+                        statement.value, *statement.output_format)) {
+                    report(
+                        "FSIM-ELAB-102",
+                        "formatted output conversion is incompatible with the value type",
+                        statement.value.span);
                     break;
                 }
                 const auto width =
@@ -1491,7 +1590,8 @@ bool Lowerer::report_unsupported_cross_root_reference(
                         statement.output_suppress_leading_zero,
                         statement.output_minimum_width,
                         statement.output_left_justify,
-                        statement.output_zero_pad});
+                        statement.output_zero_pad,
+                        scalar_kind_of(statement.value)});
             } else {
                 process_.operations.emplace_back(
                     Display{

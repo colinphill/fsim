@@ -629,7 +629,8 @@ void Lowerer::lower_task_body(const std::size_t task_index) {
             {},
             {},
             value_kind(argument.type.domain),
-            argument.type.enumeration_literals});
+            argument.type.enumeration_literals,
+            argument.type.systemverilog_scalar});
         if (argument.type.integer_range) {
             const auto [lower, upper] =
                 integer_bounds(argument.type.integer_range);

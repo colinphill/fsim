@@ -508,6 +508,12 @@ Lowerer::lower_container_pattern(
         expression.span);
     return std::nullopt;
   }
+  const auto* source_element_type = &source_type;
+  if (source_type.systemverilog_container
+      && source_type.systemverilog_container->element_types.size() == 1) {
+    source_element_type =
+        &source_type.systemverilog_container->element_types.front();
+  }
   if (runtime_type.fixed && runtime_type.dimensions.size() > 1) {
     return lower_multidimensional_container_pattern(
         expression, source_type, runtime_type);
@@ -634,7 +640,7 @@ Lowerer::lower_container_pattern(
       const auto value = lower_expression(
           expression.operands[member],
           runtime_type.element_width,
-          &source_type);
+          source_element_type);
       if (!value) {
         return std::nullopt;
       }
@@ -749,7 +755,7 @@ Lowerer::lower_container_pattern(
       const auto value = lower_expression(
           expression.operands[element],
           runtime_type.element_width,
-          &source_type);
+          source_element_type);
       if (!value) {
         return std::nullopt;
       }
@@ -839,7 +845,7 @@ Lowerer::lower_container_pattern(
     const auto value = lower_expression(
         expression.operands[element],
         runtime_type.element_width,
-        &source_type);
+        source_element_type);
     if (!value) {
       return std::nullopt;
     }
@@ -1359,6 +1365,15 @@ bool Lowerer::lower_container_locator(
         expression.span);
     return false;
   }
+  if (source_type->element_kind != ContainerElementKind::Packed) {
+    report(
+        predicate_locator
+            ? "FSIM-ELAB-SVFIND-008"
+            : "FSIM-ELAB-SVLOCATOR-008",
+        "container locators require packed integral elements",
+        expression.span);
+    return false;
+  }
   const auto iterator_key = std::string{iterator_name};
   const bool iterator_collision =
       explicit_iterator
@@ -1651,10 +1666,22 @@ void Lowerer::lower_container_method(
   if (!target || type == nullptr) {
     return;
   }
-  const auto width = type->width();
   const auto runtime_type =
       container_type(*type, call.span);
-  if (!width || !runtime_type) {
+  if (!runtime_type) {
+    return;
+  }
+  if (ordering_method
+      && runtime_type->element_kind
+          != ContainerElementKind::Packed) {
+    report(
+        "FSIM-ELAB-SVORDER-008",
+        "container ordering requires packed integral elements",
+        call.span);
+    return;
+  }
+  const auto width = type->width();
+  if (!width) {
     return;
   }
   if (call.text == ".delete") {

@@ -150,9 +150,13 @@ std::optional<std::string> validate_string_method_metadata(
     return "StringMethod source string register is out of range";
   if (kind > StringMethodOperator::format_time)
     return "StringMethod kind is invalid";
-  if (kind == StringMethodOperator::format_packed
-      && operation.format > OutputFormat::string)
-    return "StringMethod format is invalid";
+  const auto formatted_width = formatted_value_width(
+      operation.format, operation.scalar_kind);
+  if (kind == StringMethodOperator::format_packed && !formatted_width)
+    return "StringMethod format metadata is inconsistent";
+  if (kind != StringMethodOperator::format_packed
+      && operation.scalar_kind != runtime::SystemVerilogScalarKind::None)
+    return "StringMethod scalar metadata is unexpected";
   const bool string_result = kind == StringMethodOperator::toupper
       || kind == StringMethodOperator::tolower
       || kind == StringMethodOperator::substr;
@@ -164,15 +168,19 @@ std::optional<std::string> validate_string_method_metadata(
   if (string_result && !string_register(operation.string_destination))
     return "StringMethod destination string register is out of range";
   if (integer_result)
-    registers.push_back({operation.destination,
-        kind == StringMethodOperator::getc ? 8U : 32U, true});
+    registers.push_back({operation.destination, 32U, true});
+  if (kind == StringMethodOperator::atoreal)
+    registers.push_back({operation.destination, 64U, true});
   if (kind == StringMethodOperator::getc || kind == StringMethodOperator::putc
       || kind == StringMethodOperator::substr
       || kind == StringMethodOperator::format_packed
       || (kind >= StringMethodOperator::itoa
-          && kind <= StringMethodOperator::bintoa))
+          && kind <= StringMethodOperator::realtoa))
     registers.push_back({operation.first,
-        kind == StringMethodOperator::format_packed ? 0U : 32U, false});
+        kind == StringMethodOperator::format_packed
+                ? *formatted_width
+                : kind == StringMethodOperator::realtoa ? 64U : 32U,
+        false});
   if (kind == StringMethodOperator::compare
       || kind == StringMethodOperator::icompare
       || kind == StringMethodOperator::format_string) {
@@ -181,8 +189,38 @@ std::optional<std::string> validate_string_method_metadata(
   }
   if (kind == StringMethodOperator::putc || kind == StringMethodOperator::substr
       || kind == StringMethodOperator::format_packed)
-    registers.push_back({operation.second,
-        kind == StringMethodOperator::putc ? 8U : 32U, false});
+    registers.push_back({operation.second, 32U, false});
+  return std::nullopt;
+}
+
+std::optional<std::string> validate_scalar_binary_metadata(
+    const runtime::simir::SystemVerilogScalarBinary& operation,
+    std::vector<PackedRegisterValidation>& registers) {
+  const auto valid_kind = [](const auto kind) {
+    return kind >= runtime::SystemVerilogScalarKind::ShortReal
+        && kind <= runtime::SystemVerilogScalarKind::Chandle;
+  };
+  if (operation.operation
+          > runtime::SystemVerilogScalarBinaryOperator::GreaterEqual
+      || !valid_kind(operation.lhs_kind)
+      || !valid_kind(operation.rhs_kind))
+    return "SystemVerilogScalarBinary metadata is invalid";
+  const bool comparison = operation.operation
+      >= runtime::SystemVerilogScalarBinaryOperator::Equal;
+  if ((!comparison && !valid_kind(operation.result_kind))
+      || (comparison
+          && operation.result_kind
+              != runtime::SystemVerilogScalarKind::None))
+    return "SystemVerilogScalarBinary result kind is invalid";
+  const auto width = [](const auto kind) {
+    return kind == runtime::SystemVerilogScalarKind::ShortReal ? 32U : 64U;
+  };
+  registers.push_back({operation.lhs, width(operation.lhs_kind), false});
+  registers.push_back({operation.rhs, width(operation.rhs_kind), false});
+  registers.push_back({
+      operation.destination,
+      comparison ? 1U : width(operation.result_kind),
+      true});
   return std::nullopt;
 }
 
@@ -199,7 +237,7 @@ std::optional<std::string> validate_file_scan_metadata(
       || operation.trailing_text.size() > maximum_string_bytes)
     return "FileScan format metadata is empty or oversized";
   for (const auto& conversion : operation.conversions) {
-    if (conversion.format > InputScanFormat::boolean_value
+    if (conversion.format > InputScanFormat::real
         || conversion.prefix.size() > maximum_string_bytes
         || conversion.maximum_characters > maximum_string_bytes)
       return "FileScan conversion metadata is invalid or oversized";
@@ -209,8 +247,30 @@ std::optional<std::string> validate_file_scan_metadata(
         || conversion.target.kind == InputScanTargetKind::string_object;
     const bool text_format = conversion.format == InputScanFormat::character
         || conversion.format == InputScanFormat::string;
+    const auto scalar = conversion.target.scalar_kind;
+    const bool real_scalar = scalar == runtime::SystemVerilogScalarKind::ShortReal
+        || scalar == runtime::SystemVerilogScalarKind::Real
+        || scalar == runtime::SystemVerilogScalarKind::Realtime;
+    const auto scalar_width = scalar == runtime::SystemVerilogScalarKind::ShortReal
+        ? 32U : 64U;
+    const bool scalar_format = scalar == runtime::SystemVerilogScalarKind::None
+            ? conversion.format != InputScanFormat::real
+        : real_scalar ? conversion.format == InputScanFormat::real
+        : scalar == runtime::SystemVerilogScalarKind::Time
+            ? conversion.format == InputScanFormat::decimal
+                || conversion.format == InputScanFormat::unsigned_decimal
+                || conversion.format == InputScanFormat::real
+        : scalar == runtime::SystemVerilogScalarKind::Chandle
+            && conversion.format == InputScanFormat::hexadecimal;
+    if (scalar > runtime::SystemVerilogScalarKind::Chandle || !scalar_format
+        || (scalar != runtime::SystemVerilogScalarKind::None
+            && (!conversion.target.two_state
+                || conversion.target.width != scalar_width)))
+      return "FileScan scalar target metadata is inconsistent";
     if (string_target && !text_format)
       return "FileScan numeric conversion has a string target";
+    if (string_target && scalar != runtime::SystemVerilogScalarKind::None)
+      return "FileScan string target has scalar metadata";
     if (conversion.target.kind > InputScanTargetKind::string_object
         || conversion.target.width == 0 || conversion.target.width > 64)
       return "FileScan target metadata is invalid";
@@ -251,6 +311,13 @@ std::optional<std::string> validate_file_binary_metadata(
       || operation.width == 0 || operation.width > 64
       || (operation.has_count && !operation.has_start))
     return "FileBinaryRead metadata is invalid";
+  const auto scalar = operation.scalar_kind;
+  const auto scalar_width = scalar == runtime::SystemVerilogScalarKind::ShortReal
+      ? 32U : 64U;
+  if (scalar > runtime::SystemVerilogScalarKind::Chandle
+      || (scalar != runtime::SystemVerilogScalarKind::None
+          && (!operation.two_state || operation.width != scalar_width)))
+    return "FileBinaryRead scalar target metadata is inconsistent";
   registers.push_back({operation.handle, 32U, false});
   registers.push_back({operation.destination, 32U, true});
   if (operation.has_start) registers.push_back({operation.start, 32U, false});
@@ -272,9 +339,49 @@ std::optional<std::string> validate_file_binary_metadata(
     const auto& type = process.container_register_types[operation.target];
     if (!type.fixed || type.dimensions.size() != 1U
         || type.element_width != operation.width
-        || type.two_state != operation.two_state)
+        || type.two_state != operation.two_state
+        || type.scalar_kind != operation.scalar_kind)
       return "FileBinaryRead container target profile is invalid";
   }
+  return std::nullopt;
+}
+
+std::optional<std::uint32_t> formatted_value_width(
+    const runtime::simir::OutputFormat format,
+    const runtime::SystemVerilogScalarKind scalar_kind) noexcept {
+  using runtime::SystemVerilogScalarKind;
+  using runtime::simir::OutputFormat;
+  if (scalar_kind == SystemVerilogScalarKind::None)
+    return format <= OutputFormat::string
+        ? std::optional<std::uint32_t>{0U} : std::nullopt;
+  const bool real_format = format >= OutputFormat::real_scientific
+      && format <= OutputFormat::real_general;
+  if (scalar_kind == SystemVerilogScalarKind::ShortReal)
+    return real_format ? std::optional<std::uint32_t>{32U} : std::nullopt;
+  if (scalar_kind == SystemVerilogScalarKind::Real
+      || scalar_kind == SystemVerilogScalarKind::Realtime)
+    return real_format ? std::optional<std::uint32_t>{64U} : std::nullopt;
+  if (scalar_kind == SystemVerilogScalarKind::Time)
+    return format == OutputFormat::decimal || format == OutputFormat::time
+        ? std::optional<std::uint32_t>{64U} : std::nullopt;
+  if (scalar_kind == SystemVerilogScalarKind::Chandle)
+    return format == OutputFormat::hexadecimal
+        ? std::optional<std::uint32_t>{64U} : std::nullopt;
+  return std::nullopt;
+}
+
+std::optional<std::string> validate_file_write_metadata(
+    const runtime::simir::FileWriteFormatted& operation,
+    std::vector<PackedRegisterValidation>& registers) {
+  const auto scalar_width = formatted_value_width(
+      operation.format, operation.scalar_kind);
+  if (operation.width == 0 || operation.width > 64)
+    return "FileWriteFormatted width must be in [1, 64]";
+  if (!scalar_width
+      || (*scalar_width != 0 && *scalar_width != operation.width))
+    return "FileWriteFormatted scalar metadata is inconsistent";
+  registers.push_back({operation.handle, 32U, false});
+  registers.push_back({operation.source, operation.width, false});
   return std::nullopt;
 }
 

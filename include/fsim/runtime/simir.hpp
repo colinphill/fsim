@@ -3,7 +3,8 @@
 #include "fsim/runtime/file_operations.hpp"
 #include "fsim/runtime/packed_value.hpp"
 #include "fsim/runtime/scheduler.hpp"
-
+#include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -44,73 +45,9 @@ struct CopyRegister {
 };
 
 inline constexpr std::size_t maximum_string_bytes = 4096;
-/// Owning storage budget for one materialized unpacked container.
-///
-/// This is a host-resource guard, not a SystemVerilog size restriction.
-/// Element capacity is derived from the actual in-memory representation, and
-/// associative arrays account for both their key and value storage. Language-
-/// defined bounded queues retain their independent declared maximum.
-inline constexpr std::size_t maximum_container_storage_bytes =
-    256U * 1024U * 1024U;
 inline constexpr std::size_t maximum_container_predicate_nodes = 64;
 inline constexpr std::size_t maximum_memory_file_bytes =
     1024U * 1024U;
-
-using ContainerDimension = std::pair<std::int32_t, std::int32_t>;
-struct ContainerType {
-  std::uint32_t element_width{1};
-  bool two_state{};
-  bool signed_elements{};
-  bool queue{};
-  bool associative{};
-  bool fixed{};
-  std::uint32_t index_width{32};
-  bool two_state_indices{};
-  bool signed_indices{true};
-  std::int32_t index_left{};
-  std::int32_t index_right{};
-  std::optional<std::uint64_t> maximum_elements;
-  std::vector<ContainerDimension> dimensions;
-  std::string element_nominal_type;
-  friend bool operator==(const ContainerType&,
-                         const ContainerType&) = default;
-};
-struct ContainerValue {
-  ContainerType type;
-  std::vector<PackedLogic4> elements;
-  // Associative-array keys are kept in canonical numeric order and are
-  // positionally paired with elements. Other container kinds keep this empty.
-  std::vector<PackedLogic4> keys;
-  friend bool operator==(const ContainerValue&,
-                         const ContainerValue&) = default;
-};
-
-[[nodiscard]] inline constexpr std::size_t
-maximum_container_elements(const ContainerType& type) noexcept {
-  const auto bytes_per_element = sizeof(PackedLogic4)
-      * (type.associative ? 2U : 1U);
-  return maximum_container_storage_bytes / bytes_per_element;
-}
-
-/// Construct the language-defined initial value for a container type. Fixed
-/// unpacked arrays are materialized densely in declared-index order.
-[[nodiscard]] ContainerValue
-default_container_value(const ContainerType& type);
-
-/// Apply SystemVerilog four-state conditional selection to exactly
-/// compatible bounded container values.
-void select_container_value(
-    ContainerValue& destination,
-    const PackedLogic4& condition,
-    const ContainerValue& when_true,
-    const ContainerValue& when_false);
-
-/// Compare exactly compatible bounded containers with SystemVerilog logical
-/// or case-equality semantics.
-[[nodiscard]] PackedLogic4 compare_container_values(
-    const ContainerValue& lhs,
-    const ContainerValue& rhs,
-    bool case_equal);
 
 struct LoadStringConstant {
   StringRegisterId destination{};
@@ -140,6 +77,17 @@ struct CompareStrings {
   bool not_equal{};
 };
 
+struct SystemVerilogScalarBinary {
+  SystemVerilogScalarBinaryOperator operation{
+      SystemVerilogScalarBinaryOperator::Add};
+  RegisterId destination{};
+  RegisterId lhs{};
+  RegisterId rhs{};
+  SystemVerilogScalarKind lhs_kind{SystemVerilogScalarKind::None};
+  SystemVerilogScalarKind rhs_kind{SystemVerilogScalarKind::None};
+  SystemVerilogScalarKind result_kind{SystemVerilogScalarKind::None};
+};
+
 struct StringLength {
   RegisterId destination{};
   StringRegisterId source{};
@@ -152,7 +100,7 @@ struct StringIndex {
   bool signed_index{true};
 };
 
-struct StringReplaceByte {
+struct StringReplaceCodePoint {
   StringRegisterId target{};
   RegisterId index{};
   RegisterId source{};
@@ -160,13 +108,14 @@ struct StringReplaceByte {
 };
 enum class StringMethodOperator : std::uint8_t {
   getc, putc, toupper, tolower, compare, icompare, substr, atoi, atohex,
-  atooct, atobin, itoa, hextoa, octtoa, bintoa, format_packed, format_string,
-  format_time};
+  atooct, atobin, atoreal, itoa, hextoa, octtoa, bintoa, realtoa,
+  format_packed, format_string, format_time};
 struct StringMethod {
   StringMethodOperator operation{}; RegisterId destination{}, first{}, second{};
   StringRegisterId string_destination{}, source{}, argument{};
   OutputFormat format{}; std::uint32_t minimum_width{};
   bool signed_decimal{}, suppress_leading_zero{}, left_justify{}, zero_pad{};
+  SystemVerilogScalarKind scalar_kind{SystemVerilogScalarKind::None};
 };
 struct ResizeContainer {
   ContainerRegisterId target{};
@@ -1058,6 +1007,10 @@ enum class OutputFormat : std::uint8_t {
   decimal,
   character,
   string,
+  real_scientific,
+  real_fixed,
+  real_general,
+  time,
 };
 
 /// Format one runtime value between literal prefix/suffix text.
@@ -1073,6 +1026,7 @@ struct FormatDisplay {
   std::uint32_t minimum_width{};
   bool left_justify{};
   bool zero_pad{};
+  SystemVerilogScalarKind scalar_kind{SystemVerilogScalarKind::None};
 };
 
 struct StringDisplay {
@@ -1110,6 +1064,7 @@ struct MonitorValue {
   std::uint32_t minimum_width{};
   bool left_justify{};
   bool zero_pad{};
+  SystemVerilogScalarKind scalar_kind{SystemVerilogScalarKind::None};
 };
 
 /// Replace the global Verilog/SystemVerilog monitor registration and publish
@@ -1305,7 +1260,8 @@ public:
       bool,
       std::uint32_t,
       bool,
-      bool) {
+      bool,
+      SystemVerilogScalarKind = SystemVerilogScalarKind::None) {
     throw std::logic_error{
         "alternate process executor does not support formatted file writes"};
   }
@@ -1650,7 +1606,8 @@ public:
       bool,
       std::uint32_t,
       bool,
-      bool) {}
+      bool,
+      SystemVerilogScalarKind = SystemVerilogScalarKind::None) {}
   virtual void display_time(
       std::string_view,
       std::string_view,
@@ -1978,6 +1935,7 @@ public:
   [[nodiscard]] Scheduler &scheduler() noexcept;
   [[nodiscard]] const Scheduler &scheduler() const noexcept;
   void set_signal_change_hook(SignalChangeHook hook);
+#include "fsim/runtime/simir_scalar_interpreter.hpp"
   void set_execution_point_hook(ExecutionPointHook hook);
   void set_output_hook(OutputHook hook);
   void set_report_hook(ReportHook hook);

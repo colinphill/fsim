@@ -51,6 +51,8 @@ fsim::library::Metadata example_metadata() {
 }  // namespace
 
 int main() {
+  static_assert(fsim::library::kOwningUnitSchemaVersion == 8);
+  static_assert(fsim::library::kPortableSchemaVersion == 5);
   const auto expected = example_metadata();
   const auto serialized = fsim::library::serialize_metadata(expected);
   assert(serialized.starts_with(
@@ -137,6 +139,11 @@ int main() {
   wire switch_left, switch_right;
   trireg (large) #2 retained;
   reg notifier;
+  real real_value;
+  shortreal short_value;
+  realtime realtime_value;
+  time tick_value;
+  chandle handle_value;
   specify
     (value[0] => result[0]) = (1:2:3);
     $setup(posedge value[0], posedge clock, 2, notifier);
@@ -150,6 +157,13 @@ int main() {
   always_comb begin
     packet = '{default: '0};
     result = invert(value);
+  end
+  initial begin
+    real_value = 1.25;
+    short_value = -2.5;
+    realtime_value = 3.75;
+    tick_value = 64'd9007199254740993;
+    handle_value = null;
   end
 endmodule
 )sv",
@@ -175,6 +189,61 @@ endmodule
   assert(restored_unit->name == "stage");
   assert(restored_unit->parameters.size() == 1);
   assert(restored_unit->functions.size() == 1);
+  const auto scalar_type = [&](const std::string_view name)
+      -> const fsim::frontend::Type* {
+    const auto variable = std::ranges::find_if(
+        restored_unit->variables,
+        [&](const auto& candidate) { return candidate.name == name; });
+    if (variable != restored_unit->variables.end()) return &variable->type;
+    const auto signal = std::ranges::find_if(
+        restored_unit->signals,
+        [&](const auto& candidate) { return candidate.name == name; });
+    return signal == restored_unit->signals.end() ? nullptr : &signal->type;
+  };
+  assert(
+      scalar_type("real_value") != nullptr
+      && scalar_type("real_value")->systemverilog_scalar
+          == fsim::frontend::SystemVerilogScalarKind::Real);
+  assert(
+      scalar_type("short_value") != nullptr
+      && scalar_type("short_value")->systemverilog_scalar
+          == fsim::frontend::SystemVerilogScalarKind::ShortReal);
+  assert(
+      scalar_type("realtime_value") != nullptr
+      && scalar_type("realtime_value")->systemverilog_scalar
+          == fsim::frontend::SystemVerilogScalarKind::Realtime);
+  assert(
+      scalar_type("tick_value") != nullptr
+      && scalar_type("tick_value")->systemverilog_scalar
+          == fsim::frontend::SystemVerilogScalarKind::Time);
+  assert(
+      scalar_type("handle_value") != nullptr
+      && scalar_type("handle_value")->systemverilog_scalar
+          == fsim::frontend::SystemVerilogScalarKind::Chandle);
+  const auto scalar_process = std::ranges::find_if(
+      restored_unit->processes, [](const auto& process) {
+        return std::ranges::any_of(
+            process.statements, [](const auto& statement) {
+              return statement.target.text == "short_value";
+            });
+      });
+  assert(scalar_process != restored_unit->processes.end());
+  const auto negative_shortreal = std::ranges::find_if(
+      scalar_process->statements, [](const auto& statement) {
+        return statement.target.text == "short_value";
+      });
+  assert(
+      negative_shortreal != scalar_process->statements.end()
+      && negative_shortreal->value.operands.size() == 1
+      && negative_shortreal->value.operands.front()
+             .systemverilog_scalar_kind
+          == fsim::frontend::SystemVerilogScalarKind::Real
+      && negative_shortreal->value.operands.front()
+             .systemverilog_decimal_literal.has_value()
+      && negative_shortreal->value.operands.front()
+             .systemverilog_decimal_literal->digits == "25"
+      && negative_shortreal->value.operands.front()
+             .systemverilog_decimal_literal->decimal_exponent == -1);
   assert(restored_unit->verilog_specify_blocks.size() == 1);
   assert(restored_unit->verilog_specify_blocks.front().module_paths.size()
          == 1);
@@ -207,6 +276,33 @@ endmodule
   fsim::diagnostic::Engine repeat_diagnostics;
   assert(fsim::library::serialize_portable_unit(
       *restored_unit, repeat_diagnostics) == unit_bytes);
+  auto invalid_scalar_unit = *restored_unit;
+  fsim::frontend::Type* invalid_scalar_type = nullptr;
+  const auto invalid_scalar_variable = std::ranges::find_if(
+      invalid_scalar_unit.variables, [](const auto& variable) {
+        return variable.name == "real_value";
+      });
+  if (invalid_scalar_variable != invalid_scalar_unit.variables.end()) {
+    invalid_scalar_type = &invalid_scalar_variable->type;
+  } else {
+    const auto invalid_scalar_signal = std::ranges::find_if(
+        invalid_scalar_unit.signals, [](const auto& signal) {
+          return signal.name == "real_value";
+        });
+    assert(invalid_scalar_signal != invalid_scalar_unit.signals.end());
+    invalid_scalar_type = &invalid_scalar_signal->type;
+  }
+  invalid_scalar_type->systemverilog_scalar =
+      static_cast<fsim::frontend::SystemVerilogScalarKind>(255);
+  fsim::diagnostic::Engine invalid_scalar_diagnostics;
+  assert(!fsim::library::serialize_portable_unit(
+      invalid_scalar_unit, invalid_scalar_diagnostics));
+  assert(std::ranges::any_of(
+      invalid_scalar_diagnostics.diagnostics(), [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-LIB-0006"
+            && diagnostic.message.find("invalid scalar enumeration")
+                != std::string::npos;
+      }));
   auto invalid_specify_unit = *restored_unit;
   invalid_specify_unit.verilog_specify_blocks.front()
       .module_paths.front().kind =

@@ -519,6 +519,12 @@ class SystemVerilogExecutableBuilder final {
         return sv::OutputFormat::character;
       case frontend::OutputFormat::String:
         return sv::OutputFormat::string;
+      case frontend::OutputFormat::RealScientific:
+        return sv::OutputFormat::real_scientific;
+      case frontend::OutputFormat::RealFixed:
+        return sv::OutputFormat::real_fixed;
+      case frontend::OutputFormat::RealGeneral:
+        return sv::OutputFormat::real_general;
       case frontend::OutputFormat::Hierarchy:
         return sv::OutputFormat::hierarchy;
       case frontend::OutputFormat::Time:

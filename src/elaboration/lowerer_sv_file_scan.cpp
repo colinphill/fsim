@@ -21,6 +21,7 @@ namespace {
   case frontend::InputScanFormat::Character:
     return InputScanFormat::character;
   case frontend::InputScanFormat::String: return InputScanFormat::string;
+  case frontend::InputScanFormat::Real: return InputScanFormat::real;
   }
   throw std::logic_error{"invalid input scan format"};
 }
@@ -128,6 +129,36 @@ Lowerer::ExpressionAttempt Lowerer::lower_file_scan(
           target.span);
       return std::nullopt;
     }
+    const auto* target_type = object_type(target.text);
+    const auto scalar_kind = target_type == nullptr
+        ? frontend::SystemVerilogScalarKind::None
+        : target_type->systemverilog_scalar;
+    const bool real_target =
+        scalar_kind == frontend::SystemVerilogScalarKind::ShortReal
+        || scalar_kind == frontend::SystemVerilogScalarKind::Real
+        || scalar_kind == frontend::SystemVerilogScalarKind::Realtime;
+    const bool scalar_format_matches =
+        scalar_kind == frontend::SystemVerilogScalarKind::None
+            ? parsed_conversion.format != frontend::InputScanFormat::Real
+        : real_target
+            ? parsed_conversion.format == frontend::InputScanFormat::Real
+        : scalar_kind == frontend::SystemVerilogScalarKind::Time
+            ? parsed_conversion.format == frontend::InputScanFormat::Decimal
+                || parsed_conversion.format
+                    == frontend::InputScanFormat::UnsignedDecimal
+                || parsed_conversion.format
+                    == frontend::InputScanFormat::Real
+        : scalar_kind == frontend::SystemVerilogScalarKind::Chandle
+            ? parsed_conversion.format
+                == frontend::InputScanFormat::Hexadecimal
+            : false;
+    if (!scalar_format_matches) {
+      report(
+          "FSIM-ELAB-SVFILE-012",
+          "scan conversion is incompatible with the scalar target type",
+          target.span);
+      return std::nullopt;
+    }
     if (const auto local = string_locals_.find(target.text);
         local != string_locals_.end()) {
       if (!text_format(parsed_conversion.format)) {
@@ -170,7 +201,9 @@ Lowerer::ExpressionAttempt Lowerer::lower_file_scan(
       conversion.target = {
           InputScanTargetKind::packed_register, packed_local->second,
           static_cast<std::uint32_t>(width),
-          is_two_state_domain(register_domain(packed_local->second))};
+          scalar_kind != frontend::SystemVerilogScalarKind::None
+              || is_two_state_domain(register_domain(packed_local->second)),
+          scalar_kind};
     } else if (const auto signal = signals_.find(target.text);
                signal != signals_.end()
                && !read_only_signals_.contains(signal->second)) {
@@ -186,7 +219,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_file_scan(
       conversion.target = {
           InputScanTargetKind::packed_signal, signal->second,
           static_cast<std::uint32_t>(width),
-          is_two_state_domain(type->domain)};
+          scalar_kind != frontend::SystemVerilogScalarKind::None
+              || is_two_state_domain(type->domain), scalar_kind};
     } else {
       report(
           "FSIM-ELAB-SVFILE-012",

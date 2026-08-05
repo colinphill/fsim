@@ -623,6 +623,12 @@ std::unique_ptr<TraceState> attach_trace(
             trace->stream, scale->timescale);
     trace->handles.resize(simulation.runtime_adapter().signals().size());
     trace->enabled.resize(simulation.runtime_adapter().signals().size());
+    trace->scalar_kinds.resize(
+        simulation.runtime_adapter().signals().size(),
+        runtime::SystemVerilogScalarKind::None);
+    for (const auto& signal : simulation.runtime_adapter().signals()) {
+      trace->scalar_kinds[signal.id] = signal.systemverilog_scalar;
+    }
     for (const auto& object : simulation.design_ir().objects()) {
       if (!design_object_is_signal_bearing(object)
           || object.runtime_index
@@ -638,7 +644,11 @@ std::unique_ptr<TraceState> attach_trace(
           trace->enabled[signal.id] || (selected && signal.width != 0);
       if (signal.width != 0 && (dynamic_selection || selected)) {
         trace->handles[signal.id].push_back(
-            trace->writer->declare_signal(object.path, signal.width));
+            signal.systemverilog_scalar
+                    == runtime::SystemVerilogScalarKind::None
+                ? trace->writer->declare_signal(object.path, signal.width)
+                : trace->writer->declare_systemverilog_scalar(
+                      object.path, signal.systemverilog_scalar));
       }
     }
     if (simulation.now()
@@ -649,9 +659,9 @@ std::unique_ptr<TraceState> attach_trace(
     trace->writer->begin(simulation.now() * trace->tick_multiplier);
     for (const auto& signal : simulation.runtime_adapter().signals()) {
       if (trace->enabled[signal.id]) {
-        for (const auto handle : trace->handles[signal.id]) {
-          trace->writer->change(
-              handle, simulation.read_signal(signal.id));
+        if (!trace->handles[signal.id].empty()) {
+          write_trace_signal_value(
+              *trace, signal.id, simulation.read_signal(signal.id));
         }
       }
     }
@@ -671,9 +681,7 @@ std::unique_ptr<TraceState> attach_trace(
               throw std::overflow_error{"VCD timestamp scaling overflow"};
             }
             state->writer->set_time(time * state->tick_multiplier);
-            for (const auto handle : state->handles[signal]) {
-              state->writer->change(handle, value);
-            }
+            write_trace_signal_value(*state, signal, value);
           }
         });
   } catch (const std::exception& error) {
@@ -681,6 +689,31 @@ std::unique_ptr<TraceState> attach_trace(
     return nullptr;
   }
   return trace;
+}
+
+void write_trace_signal_value(
+    TraceState& state,
+    const runtime::simir::SignalId signal,
+    const runtime::PackedLogic4& value) {
+  if (signal >= state.handles.size()
+      || signal >= state.scalar_kinds.size()) {
+    throw std::out_of_range{"trace signal is outside declared storage"};
+  }
+  const auto kind = state.scalar_kinds[signal];
+  if (kind == runtime::SystemVerilogScalarKind::None) {
+    for (const auto handle : state.handles[signal]) {
+      state.writer->change(handle, value);
+    }
+    return;
+  }
+  const auto decoded = runtime::decode_systemverilog_scalar_payload(
+      value, kind);
+  if (!decoded) {
+    throw std::invalid_argument{"trace observed an invalid scalar payload"};
+  }
+  for (const auto handle : state.handles[signal]) {
+    state.writer->change(handle, decoded.value);
+  }
 }
 
 std::optional<SimulationTick> configured_duration(
@@ -973,7 +1006,8 @@ void print_debug_help(std::ostream& output)  {
       << "          delete ID, clear, scope [PATH], scopes [PATH], "
          "signals [PATH],\n"
       << "          show SIGNAL,\n"
-      << "          classes, class HANDLE [PROPERTY],\n"
+      << "          classes, class HANDLE [PROPERTY], chandles, "
+         "chandle HANDLE,\n"
       << "          deposit SIGNAL VALUE, force SIGNAL VALUE, release SIGNAL,\n"
       << "          trace add|remove SIGNAL, trace all|clear|list,\n"
       << "          locals, where, help, quit\n";

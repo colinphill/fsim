@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
 
+#include <algorithm>
 #include <array>
 #include <string>
 
@@ -70,6 +71,114 @@ endmodule
     const auto repeated_result = elaborate_roots(parsed.design, repeated);
     assert(repeated_result.ok());
     assert(repeated_result.design->specializations().size() == 2);
+
+    auto scalar_roots = fsim::frontend::parse_text(
+        "multiple-root-scalars.sv",
+        R"(
+package scalar_root_pkg;
+  parameter string PREFIX = "pkg";
+  function automatic string decorate(input string value);
+    return {PREFIX, value};
+  endfunction
+endpackage
+module scalar_leaf #(
+    parameter real FACTOR = 2.0,
+    parameter time TICKS = 11,
+    parameter string SUFFIX = ":default");
+  import scalar_root_pkg::*;
+  logic [7:0] checks;
+  function automatic real scaled(input real value);
+    return value * FACTOR;
+  endfunction
+  function automatic real reset_local(input real value);
+    real scratch = 1.0;
+    scratch = scratch + value;
+    return scratch;
+  endfunction
+  function static time accumulate_time(input time value);
+    time retained = 1;
+    retained = retained + value;
+    return retained;
+  endfunction
+  function automatic string label_value(input string value);
+    return {decorate(value), SUFFIX};
+  endfunction
+  task automatic transfer(
+      input real real_in, output real real_out,
+      input time time_in, output time time_out,
+      input string string_in, output string string_out,
+      input chandle handle_in, output chandle handle_out);
+    real_out = real_in;
+    time_out = time_in;
+    string_out = string_in;
+    handle_out = handle_in;
+  endtask
+  initial begin
+    real real_out;
+    time time_out;
+    string string_out;
+    chandle handle_out;
+    checks = 0;
+    checks[0] = scaled(1.5) == 1.5 * FACTOR;
+    checks[1] = reset_local(FACTOR) == 1.0 + FACTOR;
+    checks[2] = reset_local(FACTOR) == 1.0 + FACTOR;
+    checks[3] = accumulate_time(TICKS) == 1 + TICKS;
+    checks[4] = accumulate_time(TICKS) == 1 + TICKS + TICKS;
+    checks[5] = label_value("-") == {"pkg-", SUFFIX};
+    transfer(FACTOR, real_out, TICKS, time_out,
+             SUFFIX, string_out, null, handle_out);
+    checks[6] = real_out == FACTOR && time_out == TICKS;
+    checks[7] = string_out == SUFFIX && handle_out == null;
+  end
+endmodule
+module scalar_root_a;
+  scalar_leaf #(.FACTOR(2.0), .TICKS(11), .SUFFIX(":a")) leaf();
+endmodule
+module scalar_root_b;
+  scalar_leaf #(.FACTOR(3.0), .TICKS(22), .SUFFIX(":b")) leaf();
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    if (!scalar_roots.ok()) {
+        for (const auto& diagnostic : scalar_roots.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(scalar_roots.ok());
+    const std::array scalar_root_selection{
+        Root{"scalar_root_a", "first"},
+        Root{"scalar_root_b", "second"}};
+    const auto scalar_result = elaborate_roots(
+        scalar_roots.design, scalar_root_selection);
+    if (!scalar_result.ok()) {
+        for (const auto& diagnostic : scalar_result.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(scalar_result.ok());
+    const auto first_checks =
+        scalar_result.design->find_signal("first.leaf.checks");
+    const auto second_checks =
+        scalar_result.design->find_signal("second.leaf.checks");
+    assert(first_checks && second_checks && *first_checks != *second_checks);
+    auto scalar_interpreter = scalar_result.design->create_interpreter();
+    assert(
+        scalar_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        scalar_interpreter->signal_value(*first_checks).to_msb_string()
+        == "11111111");
+    assert(
+        scalar_interpreter->signal_value(*second_checks).to_msb_string()
+        == "11111111");
+    const auto leaf_specializations = std::ranges::count_if(
+        scalar_result.design->specializations(),
+        [](const auto& specialization) {
+          return specialization.unit == "sv:work.scalar_leaf";
+        });
+    assert(leaf_specializations == 2);
 
     const std::array missing{
         Root{"producer", "valid"},

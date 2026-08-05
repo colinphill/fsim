@@ -227,36 +227,52 @@ void Lowerer::lower_callable_copy_out(
     lower_assignment(copy_out);
 }
 
-std::vector<RegisterId>
+std::vector<Lowerer::CallableVariableRegister>
 Lowerer::allocate_static_callable_variables(
     const std::vector<frontend::VariableDeclaration>& variables,
     const std::string_view diagnostic_code,
     const std::string_view callable_kind) {
-    std::vector<RegisterId> registers;
+    std::vector<CallableVariableRegister> registers;
     registers.reserve(variables.size());
     for (const auto& variable : variables) {
+        CallableVariableRegister storage;
+        if (variable.type.domain == frontend::ValueDomain::String) {
+            storage.is_string = true;
+            storage.string = allocate_string_register();
+            const auto initial = variable.initializer
+                ? lower_string_expression(*variable.initializer)
+                : std::optional<StringRegisterId>{};
+            if (initial) {
+                process_.operations.emplace_back(
+                    CopyStringRegister{storage.string, *initial});
+            } else {
+                process_.operations.emplace_back(
+                    LoadStringConstant{storage.string, {}});
+            }
+            registers.push_back(storage);
+            continue;
+        }
         const auto width = variable.type.width();
-        if (variable.type.domain == frontend::ValueDomain::String
-            || variable.type.systemverilog_container
+        if (variable.type.systemverilog_container
             || !width || *width == 0 || *width > 64) {
             report(
                 std::string{diagnostic_code},
                 "static or implicit-lifetime "
                     + std::string{callable_kind}
-                    + " locals require a bounded packed integral type",
+                    + " locals require a bounded packed or string type",
                 variable.span);
-            registers.push_back(allocate_register(
-                1, frontend::ValueDomain::Bit2));
+            storage.packed = allocate_register(
+                1, frontend::ValueDomain::Bit2);
             process_.operations.emplace_back(LoadConstant{
-                registers.back(), unsigned_value(0, 1)});
+                storage.packed, unsigned_value(0, 1)});
+            registers.push_back(storage);
             continue;
         }
-        const auto register_id = allocate_register(
+        storage.packed = allocate_register(
             static_cast<std::size_t>(*width),
             variable.type.domain);
-        registers.push_back(register_id);
         process_.operations.emplace_back(LoadConstant{
-            register_id,
+            storage.packed,
             default_packed_value(variable.type, *width)});
         if (variable.initializer) {
             auto value = lower_expression(
@@ -271,19 +287,32 @@ Lowerer::allocate_static_callable_variables(
                         is_signed_expression(*variable.initializer));
                 }
                 process_.operations.emplace_back(
-                    CopyRegister{register_id, *value});
+                    CopyRegister{storage.packed, *value});
             }
         }
+        registers.push_back(storage);
     }
     return registers;
 }
 
 void Lowerer::bind_static_callable_variables(
     const std::vector<frontend::VariableDeclaration>& variables,
-    const std::vector<RegisterId>& registers) {
+    const std::vector<CallableVariableRegister>& registers) {
     for (std::size_t index = 0; index < variables.size(); ++index) {
         const auto& variable = variables[index];
-        const auto register_id = registers[index];
+        const auto& storage = registers[index];
+        if (storage.is_string) {
+            string_locals_.insert_or_assign(variable.name, storage.string);
+            local_types_.insert_or_assign(variable.name, &variable.type);
+            process_.debug_string_locals.push_back(DebugStringLocal{
+                scoped_local_name(variable.name), storage.string,
+                SourceLocation{
+                    variable.span.source_name,
+                    static_cast<std::uint32_t>(variable.span.begin.line),
+                    static_cast<std::uint32_t>(variable.span.begin.column)}});
+            continue;
+        }
+        const auto register_id = storage.packed;
         locals_.insert_or_assign(variable.name, register_id);
         local_signed_.insert_or_assign(
             variable.name, variable.type.is_signed);
@@ -312,7 +341,8 @@ void Lowerer::bind_static_callable_variables(
             {},
             {},
             value_kind(variable.type.domain),
-            variable.type.enumeration_literals});
+            variable.type.enumeration_literals,
+            variable.type.systemverilog_scalar});
         if (variable.type.integer_range) {
             const auto [lower, upper] =
                 integer_bounds(variable.type.integer_range);

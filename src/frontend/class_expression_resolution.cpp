@@ -57,6 +57,19 @@ struct MethodMatch {
   return type;
 }
 
+[[nodiscard]] Type chandle_type() {
+  Type type;
+  type.spelling = "chandle";
+  type.domain = ValueDomain::Unknown;
+  type.systemverilog_scalar = SystemVerilogScalarKind::Chandle;
+  return type;
+}
+
+[[nodiscard]] bool chandle(const std::optional<Type>& type) {
+  return type
+      && type->systemverilog_scalar == SystemVerilogScalarKind::Chandle;
+}
+
 void diagnose(
     std::vector<Diagnostic>& diagnostics,
     std::string code,
@@ -102,13 +115,14 @@ class Resolver final {
           effective_library(unit.library) + "::" + unit.name,
           nullptr,
           {}};
+      add_objects(scope, unit.parameters);
       add_objects(scope, unit.ports);
       add_objects(scope, unit.signals);
       add_objects(scope, unit.variables);
       for (auto& variable : unit.variables) {
         if (variable.initializer) {
-          resolve_expression(
-              *variable.initializer, scope, class_identity(variable.type));
+          resolve_typed_expression(
+              *variable.initializer, scope, variable.type);
         }
       }
       for (auto& declaration : unit.systemverilog_classes) {
@@ -126,10 +140,8 @@ class Resolver final {
         add_objects(process_scope, process.variables);
         for (auto& variable : process.variables) {
           if (variable.initializer) {
-            resolve_expression(
-                *variable.initializer,
-                process_scope,
-                class_identity(variable.type));
+            resolve_typed_expression(
+                *variable.initializer, process_scope, variable.type);
           }
         }
         for (auto& function : process.functions) {
@@ -169,8 +181,8 @@ class Resolver final {
     add_objects(scope, body.variables);
     for (auto& variable : body.variables) {
       if (variable.initializer) {
-        resolve_expression(
-            *variable.initializer, scope, class_identity(variable.type));
+        resolve_typed_expression(
+            *variable.initializer, scope, variable.type);
       }
     }
     for (auto& function : body.functions) {
@@ -182,10 +194,8 @@ class Resolver final {
       add_objects(process_scope, process.variables);
       for (auto& variable : process.variables) {
         if (variable.initializer) {
-          resolve_expression(
-              *variable.initializer,
-              process_scope,
-              class_identity(variable.type));
+          resolve_typed_expression(
+              *variable.initializer, process_scope, variable.type);
         }
       }
       for (auto& function : process.functions) {
@@ -323,6 +333,7 @@ class Resolver final {
     expression.call_result_width = type.width().value_or(0);
     expression.call_result_domain = type.domain;
     expression.call_result_signed = type.is_signed;
+    expression.systemverilog_scalar_kind = type.systemverilog_scalar;
   }
 
   [[nodiscard]] std::vector<MethodMatch> find_methods(
@@ -370,6 +381,8 @@ class Resolver final {
       if (const auto identity = class_identity(found->second)) {
         expression.nominal_type = *identity;
       }
+      expression.systemverilog_scalar_kind =
+          found->second.systemverilog_scalar;
       return found->second;
     }
 
@@ -545,13 +558,53 @@ class Resolver final {
   [[nodiscard]] std::optional<Type> resolve_call(
       Expression& expression,
       const Scope& scope,
-      const std::optional<std::string>& expected_class) {
+      const std::optional<std::string>& expected_class,
+      const SystemVerilogScalarKind expected_scalar) {
     if (expression.text == "@sv-null") {
+      if (expected_scalar == SystemVerilogScalarKind::Chandle) {
+        expression.systemverilog_scalar_kind =
+            SystemVerilogScalarKind::Chandle;
+        return chandle_type();
+      }
       expression.nominal_type = expected_class.value_or(std::string{});
       if (expected_class) {
         if (const auto declaration = find_class(*expected_class)) {
           return class_type(*declaration);
         }
+      }
+      return std::nullopt;
+    }
+    if (expression.text == "@sv-cast:chandle") {
+      if (expression.operands.size() != 1U) {
+        diagnose(
+            diagnostics_, "FSIM-SV-SEM-174",
+            "a chandle cast requires exactly one chandle or null operand",
+            expression.span);
+        return std::nullopt;
+      }
+      const auto operand = resolve_expression(
+          expression.operands.front(), scope, std::nullopt,
+          SystemVerilogScalarKind::Chandle);
+      if (!chandle(operand)) {
+        diagnose(
+            diagnostics_, "FSIM-SV-SEM-174",
+            "a chandle cast requires a chandle or null operand",
+            expression.span);
+        return std::nullopt;
+      }
+      expression.systemverilog_scalar_kind =
+          SystemVerilogScalarKind::Chandle;
+      return chandle_type();
+    }
+    if (expression.text.starts_with("@sv-cast:")
+        && expression.operands.size() == 1U) {
+      const auto operand = resolve_expression(
+          expression.operands.front(), scope);
+      if (chandle(operand)) {
+        diagnose(
+            diagnostics_, "FSIM-SV-SEM-174",
+            "chandle cannot be cast to a numeric or aggregate type",
+            expression.span);
       }
       return std::nullopt;
     }
@@ -786,10 +839,14 @@ class Resolver final {
           + match->method->canonical_identity;
       retain_call_profile(expression, *match->method, true);
       for (std::size_t index = 1; index < expression.operands.size(); ++index) {
-        const auto expected = index - 1U < match->method->arguments.size()
-            ? class_identity(match->method->arguments[index - 1U].type)
-            : std::nullopt;
-        resolve_expression(expression.operands[index], scope, expected);
+        const auto formal = index - 1U < match->method->arguments.size()
+            ? &match->method->arguments[index - 1U] : nullptr;
+        if (formal) {
+          resolve_typed_expression(
+              expression.operands[index], scope, formal->type);
+        } else {
+          resolve_expression(expression.operands[index], scope);
+        }
       }
       if (const auto identity = class_identity(match->method->return_type)) {
         expression.nominal_type = *identity;
@@ -813,8 +870,16 @@ class Resolver final {
           expression.text = "@sv-static-method:"
               + match->method->canonical_identity;
           retain_call_profile(expression, *match->method, false);
-          for (auto& operand : expression.operands) {
-            resolve_expression(operand, scope);
+          for (std::size_t index = 0;
+               index < expression.operands.size(); ++index) {
+            const auto formal = index < match->method->arguments.size()
+                ? &match->method->arguments[index] : nullptr;
+            if (formal) {
+              resolve_typed_expression(
+                  expression.operands[index], scope, formal->type);
+            } else {
+              resolve_expression(expression.operands[index], scope);
+            }
           }
           if (const auto identity = class_identity(match->method->return_type)) {
             expression.nominal_type = *identity;
@@ -857,6 +922,19 @@ class Resolver final {
         }
         retain_call_profile(
             expression, *match->method, !match->method->is_static);
+        const std::size_t first = match->method->is_static ? 0U : 1U;
+        for (std::size_t index = first;
+             index < expression.operands.size(); ++index) {
+          const auto formal_index = index - first;
+          const auto formal = formal_index < match->method->arguments.size()
+              ? &match->method->arguments[formal_index] : nullptr;
+          if (formal) {
+            resolve_typed_expression(
+                expression.operands[index], scope, formal->type);
+          } else {
+            resolve_expression(expression.operands[index], scope);
+          }
+        }
         if (const auto identity = class_identity(match->method->return_type)) {
           expression.nominal_type = *identity;
         }
@@ -873,13 +951,16 @@ class Resolver final {
   std::optional<Type> resolve_expression(
       Expression& expression,
       const Scope& scope,
-      const std::optional<std::string>& expected_class = std::nullopt) {
+      const std::optional<std::string>& expected_class = std::nullopt,
+      const SystemVerilogScalarKind expected_scalar =
+          SystemVerilogScalarKind::None) {
     if (!expression.valid()) return std::nullopt;
     if (expression.kind == ExpressionKind::Identifier) {
       return resolve_identifier(expression, scope);
     }
     if (expression.kind == ExpressionKind::Call) {
-      return resolve_call(expression, scope, expected_class);
+      return resolve_call(
+          expression, scope, expected_class, expected_scalar);
     }
     if (expression.kind == ExpressionKind::Index
         && expression.operands.size() == 2U) {
@@ -913,10 +994,34 @@ class Resolver final {
       auto left = resolve_expression(expression.operands[0], scope);
       auto right = resolve_expression(
           expression.operands[1], scope,
-          left ? class_identity(*left) : std::nullopt);
+          left ? class_identity(*left) : std::nullopt,
+          chandle(left) ? SystemVerilogScalarKind::Chandle
+                         : SystemVerilogScalarKind::None);
       if (!left && right && class_identity(*right)) {
         left = resolve_expression(
             expression.operands[0], scope, class_identity(*right));
+      }
+      if (!left && chandle(right)) {
+        left = resolve_expression(
+            expression.operands[0], scope, std::nullopt,
+            SystemVerilogScalarKind::Chandle);
+      }
+      if (chandle(left) || chandle(right)) {
+        const bool equality = expression.text == "=="
+            || expression.text == "!=" || expression.text == "==="
+            || expression.text == "!==";
+        if (!chandle(left) || !chandle(right) || !equality) {
+          diagnose(
+              diagnostics_, "FSIM-SV-SEM-175",
+              "chandle only supports equality and inequality with chandle "
+              "or null",
+              expression.span);
+          return std::nullopt;
+        }
+        expression.systemverilog_scalar_kind =
+            SystemVerilogScalarKind::None;
+        return Type{
+            ValueDomain::Bit2, "bit", PackedRange{0, 0, true}, false};
       }
       return std::nullopt;
     }
@@ -927,6 +1032,26 @@ class Resolver final {
       for (auto& choice : choices) resolve_expression(choice, scope);
     }
     return std::nullopt;
+  }
+
+  std::optional<Type> resolve_typed_expression(
+      Expression& expression,
+      const Scope& scope,
+      const Type& expected) {
+    const auto resolved = resolve_expression(
+        expression, scope, class_identity(expected),
+        expected.systemverilog_scalar);
+    const bool expected_chandle =
+        expected.systemverilog_scalar == SystemVerilogScalarKind::Chandle;
+    if ((expected_chandle && resolved && !chandle(resolved))
+        || (!expected_chandle && chandle(resolved))) {
+      diagnose(
+          diagnostics_, "FSIM-SV-SEM-174",
+          "chandle assignment requires a chandle or null value and a "
+          "chandle destination",
+          expression.span);
+    }
+    return resolved;
   }
 
   void resolve_task_call(Statement& statement, const Scope& scope) {
@@ -1058,25 +1183,48 @@ class Resolver final {
   void resolve_statement(
       Statement& statement,
       const Scope& inherited_scope,
-      const std::optional<std::string>& return_class) {
+      const std::optional<std::string>& return_class,
+      const SystemVerilogScalarKind return_scalar =
+          SystemVerilogScalarKind::None) {
     auto scope = inherited_scope;
     for (auto& declaration : statement.declarations) {
       if (declaration.initializer) {
-        resolve_expression(
-            *declaration.initializer,
-            scope,
-            class_identity(declaration.type));
+        resolve_typed_expression(
+            *declaration.initializer, scope, declaration.type);
       }
       scope.objects[declaration.name] = declaration.type;
     }
     auto target_type = resolve_expression(statement.target, scope);
-    resolve_expression(
-        statement.value,
-        scope,
-        statement.kind == StatementKind::Return
-            ? return_class
-            : target_type ? class_identity(*target_type) : std::nullopt);
-    resolve_expression(statement.condition, scope);
+    const auto expected_class = statement.kind == StatementKind::Return
+        ? return_class
+        : target_type ? class_identity(*target_type) : std::nullopt;
+    const auto expected_scalar = statement.kind == StatementKind::Return
+        ? return_scalar
+        : target_type ? target_type->systemverilog_scalar
+                      : SystemVerilogScalarKind::None;
+    const auto value_type = resolve_expression(
+        statement.value, scope, expected_class, expected_scalar);
+    const bool typed_assignment = statement.kind == StatementKind::Assignment
+        || statement.kind == StatementKind::Force
+        || statement.kind == StatementKind::Return;
+    const bool expected_chandle =
+        expected_scalar == SystemVerilogScalarKind::Chandle;
+    if (typed_assignment && statement.value.valid()
+        && ((expected_chandle && value_type && !chandle(value_type))
+            || (!expected_chandle && chandle(value_type)))) {
+      diagnose(
+          diagnostics_, "FSIM-SV-SEM-174",
+          "chandle assignment requires a chandle or null value and a "
+          "chandle destination",
+          statement.value.span);
+    }
+    const auto condition_type = resolve_expression(statement.condition, scope);
+    if (chandle(condition_type)) {
+      diagnose(
+          diagnostics_, "FSIM-SV-SEM-175",
+          "chandle does not provide logical truth; compare it with null",
+          statement.condition.span);
+    }
     resolve_expression(statement.loop_initial, scope);
     resolve_expression(statement.loop_limit, scope);
     for (auto& output : statement.output_values) {
@@ -1089,17 +1237,17 @@ class Resolver final {
       resolve_task_call(statement, scope);
     }
     for (auto& child : statement.statements) {
-      resolve_statement(child, scope, return_class);
+      resolve_statement(child, scope, return_class, return_scalar);
     }
     for (auto& child : statement.else_statements) {
-      resolve_statement(child, scope, return_class);
+      resolve_statement(child, scope, return_class, return_scalar);
     }
     for (auto& alternative : statement.case_alternatives) {
       for (auto& choice : alternative.choices) {
         resolve_expression(choice, scope);
       }
       for (auto& child : alternative.statements) {
-        resolve_statement(child, scope, return_class);
+        resolve_statement(child, scope, return_class, return_scalar);
       }
     }
   }
@@ -1109,13 +1257,14 @@ class Resolver final {
     add_objects(scope, function.variables);
     for (auto& variable : function.variables) {
       if (variable.initializer) {
-        resolve_expression(
-            *variable.initializer, scope, class_identity(variable.type));
+        resolve_typed_expression(
+            *variable.initializer, scope, variable.type);
       }
     }
     const auto return_class = class_identity(function.return_type);
+    const auto return_scalar = function.return_type.systemverilog_scalar;
     for (auto& statement : function.statements) {
-      resolve_statement(statement, scope, return_class);
+      resolve_statement(statement, scope, return_class, return_scalar);
     }
     for (auto& nested : function.functions) resolve_function(nested, scope);
   }
@@ -1125,8 +1274,8 @@ class Resolver final {
     add_objects(scope, task.variables);
     for (auto& variable : task.variables) {
       if (variable.initializer) {
-        resolve_expression(
-            *variable.initializer, scope, class_identity(variable.type));
+        resolve_typed_expression(
+            *variable.initializer, scope, variable.type);
       }
     }
     for (auto& statement : task.statements) {
@@ -1139,10 +1288,10 @@ class Resolver final {
     scope.lexical_identity = declaration.canonical_identity;
     for (auto& property : declaration.properties) {
       if (property.declaration.initializer) {
-        resolve_expression(
+        resolve_typed_expression(
             *property.declaration.initializer,
             scope,
-            class_identity(property.declaration.type));
+            property.declaration.type);
       }
     }
     for (auto& method : declaration.methods) {
@@ -1151,15 +1300,15 @@ class Resolver final {
       add_objects(method_scope, method.variables);
       for (auto& variable : method.variables) {
         if (variable.initializer) {
-          resolve_expression(
-              *variable.initializer,
-              method_scope,
-              class_identity(variable.type));
+          resolve_typed_expression(
+              *variable.initializer, method_scope, variable.type);
         }
       }
       const auto return_class = class_identity(method.return_type);
+      const auto return_scalar = method.return_type.systemverilog_scalar;
       for (auto& statement : method.statements) {
-        resolve_statement(statement, method_scope, return_class);
+        resolve_statement(
+            statement, method_scope, return_class, return_scalar);
       }
     }
     for (auto& nested : declaration.nested_classes) {

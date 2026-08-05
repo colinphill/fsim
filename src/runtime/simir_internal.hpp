@@ -17,6 +17,8 @@
 
 namespace fsim::runtime::simir {
 
+void validate_container_value(const ContainerValue& value);
+
 
 [[nodiscard]] std::string error_text(ProcessId process,
                                      InstructionIndex instruction,
@@ -40,7 +42,8 @@ namespace fsim::runtime::simir {
     const bool suppress_leading_zero,
     const std::uint32_t minimum_width,
     const bool left_justify,
-    const bool zero_pad);
+    const bool zero_pad,
+    SystemVerilogScalarKind scalar_kind = SystemVerilogScalarKind::None);
 
 [[nodiscard]] std::string make_time_output(
     const std::string_view prefix,
@@ -422,6 +425,7 @@ struct Interpreter::Impl {
       ProjectedDriverKeyHash> projected_drivers;
   std::uint64_t next_projected_transaction_id{1};
   SignalChangeHook signal_change_hook;
+  ScalarSignalChangeHook scalar_signal_change_hook;
   ExecutionPointHook execution_point_hook;
   OutputHook output_hook;
   ReportHook report_hook;

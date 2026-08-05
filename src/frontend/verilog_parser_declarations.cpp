@@ -15,6 +15,8 @@ void VerilogParser::parse_parameter_overrides(
   const auto begins_unambiguous_type_actual = [&]() {
     return keyword("byte") || keyword("shortint")
         || keyword("longint") || keyword("time")
+        || keyword("shortreal") || keyword("real")
+        || keyword("realtime") || keyword("chandle")
         || keyword("integer") || keyword("int")
         || keyword("logic") || keyword("reg") || keyword("bit")
         || keyword("signed") || keyword("unsigned")
@@ -140,12 +142,13 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
       if (is_direction_keyword()) {
         spec.direction = parse_direction();
         spec.type = default_port_net_type();
+        const bool explicit_variable = match_keyword("var");
         declared_here = true;
         const bool explicit_type =
-            is_net_type_keyword()
-            || keyword("string")
+            explicit_variable || is_net_type_keyword()
+            || keyword("string") || keyword("chandle")
             || is_named_type_reference_start();
-        if (keyword("string")) {
+        if (keyword("string") || keyword("chandle")) {
           spec.type = parse_parameter_type();
         } else if (is_named_type_reference_start()) {
           spec.type = parse_named_type();
@@ -437,7 +440,8 @@ void VerilogParser::require_default_port_net_type(
       "wire", "tri", "tri0", "tri1", "wand", "triand", "wor",
       "trior", "trireg", "uwire", "supply0", "supply1",
       "reg", "logic", "bit", "byte",
-      "shortint", "int", "longint", "integer", "time"});
+      "shortint", "int", "longint", "integer", "time",
+      "shortreal", "real", "realtime"});
 }
 
 [[nodiscard]] bool VerilogParser::is_named_type_reference_start(
@@ -551,7 +555,9 @@ void VerilogParser::parse_typedef(
     while (!at_end() && !at(TokenKind::RightBrace)) {
       const auto member_start = current();
       Type member_type;
-      if (keyword("logic") || keyword("reg")
+      if (!packed && !is_union) {
+        member_type = parse_parameter_type();
+      } else if (keyword("logic") || keyword("reg")
           || keyword("bit")) {
         const auto type_token = advance();
         member_type.spelling = type_token.text;
@@ -567,22 +573,27 @@ void VerilogParser::parse_typedef(
         error(
             current(),
             "FSIM-SV-UNSUPPORTED-028",
-            "bounded aggregate members require a packed integral or visible "
-            "aggregate/enum type");
+            "bounded aggregate members require an executable built-in or "
+            "visible named type");
         skip_to_semicolon();
         continue;
       }
       for (;;) {
         const auto member =
             expect_identifier("packed aggregate member name");
+        auto declarator_type = member_type;
         if (at(TokenKind::LeftBracket)) {
-          error(
-              current(),
-              "FSIM-SV-UNSUPPORTED-029",
-              "unpacked aggregate member dimensions are not implemented");
-          skip_balanced(
-              TokenKind::LeftBracket,
-              TokenKind::RightBracket);
+          if (packed || is_union) {
+            error(
+                current(),
+                "FSIM-SV-UNSUPPORTED-029",
+                "packed aggregate members cannot have unpacked dimensions");
+            skip_balanced(
+                TokenKind::LeftBracket,
+                TokenKind::RightBracket);
+          } else {
+            (void)parse_optional_container_dimension(declarator_type);
+          }
         }
         if (match(TokenKind::Assign)) {
           (void)parse_expression();
@@ -600,19 +611,19 @@ void VerilogParser::parse_typedef(
         } else {
           auto packed_member = PackedMember{
               member.text,
-              member_type.domain,
-              member_type.spelling,
-              member_type.packed_range,
-              member_type.is_signed,
-              member_type.packed_range_expression,
+              declarator_type.domain,
+              declarator_type.spelling,
+              declarator_type.packed_range,
+              declarator_type.is_signed,
+              declarator_type.packed_range_expression,
               0,
               cover(member_start.span, previous().span),
               {}};
-          if (!member_type.named_type.empty()) {
-            packed_member.nested_types.push_back(member_type);
+          if (!packed || !declarator_type.named_type.empty()) {
+            packed_member.nested_types.push_back(declarator_type);
           }
           type.packed_members.push_back(std::move(packed_member));
-          if (member_type.domain == ValueDomain::Logic4) {
+          if (declarator_type.domain == ValueDomain::Logic4) {
             type.domain = ValueDomain::Logic4;
           }
         }
@@ -754,6 +765,10 @@ void VerilogParser::parse_typedef(
         TokenKind::RightBrace,
         "'}' after enum literals",
         "FSIM-SV-PARSE-084");
+  } else if (keyword("shortreal") || keyword("real")
+      || keyword("realtime") || keyword("time")
+      || keyword("chandle")) {
+    type = parse_parameter_type();
   } else if (keyword("logic") || keyword("reg")
       || keyword("bit") || keyword("integer")
       || keyword("int")) {
@@ -846,6 +861,16 @@ void VerilogParser::parse_optional_net_type(Type& type) {
     return;
   }
   const auto keyword_token = advance();
+  if (contains_word(
+          {"wire", "tri", "tri0", "tri1", "wand", "triand", "wor",
+           "trior", "trireg", "uwire"},
+          keyword_token.text)
+      && (keyword("shortreal") || keyword("real")
+          || keyword("realtime") || keyword("time"))) {
+    type.systemverilog_net_type = keyword_token.text;
+    parse_optional_net_type(type);
+    return;
+  }
   type.spelling = keyword_token.text;
   if (keyword_token.text == "bit") {
     type.domain = ValueDomain::Bit2;
@@ -867,10 +892,22 @@ void VerilogParser::parse_optional_net_type(Type& type) {
             : std::int64_t{32};
     type.packed_range = PackedRange{
         width - 1, 0, true};
+  } else if (keyword_token.text == "shortreal"
+             || keyword_token.text == "real"
+             || keyword_token.text == "realtime") {
+    type.domain = ValueDomain::Unknown;
+    type.is_signed = true;
+    type.systemverilog_scalar =
+        keyword_token.text == "shortreal"
+            ? SystemVerilogScalarKind::ShortReal
+        : keyword_token.text == "real"
+            ? SystemVerilogScalarKind::Real
+            : SystemVerilogScalarKind::Realtime;
   } else if (keyword_token.text == "time") {
     type.domain = ValueDomain::Bit2;
     type.is_signed = false;
     type.packed_range = PackedRange{63, 0, true};
+    type.systemverilog_scalar = SystemVerilogScalarKind::Time;
   } else {
     type.domain = ValueDomain::Logic4;
   }
@@ -911,6 +948,8 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
     return false;
   }
   const auto start = previous();
+  auto element_type = type;
+  element_type.systemverilog_container.reset();
   SystemVerilogContainerInfo container;
   if (match(TokenKind::RightBracket)) {
     container.kind =
@@ -1026,29 +1065,30 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
         "arrays require SystemVerilog-2017");
   }
   if (type.spelling == "wire"
-      || type.domain == ValueDomain::String
       || (type.domain == ValueDomain::Unknown
-          && type.named_type.empty())) {
+          && type.named_type.empty()
+          && type.systemverilog_scalar
+              == SystemVerilogScalarKind::None)) {
     error(
         start,
         "FSIM-SV-SEM-079",
-        "bounded containers require a packed integral variable element "
-        "type");
+        "bounded containers require a resolved variable element type");
   }
-  if (at(TokenKind::LeftBracket)
-      && container.kind
-          != SystemVerilogContainerKind::StaticArray) {
-    error(
-        current(),
-        "FSIM-SV-SEM-080",
-        "multidimensional dynamic, queue, and associative containers are "
-        "not supported");
-    while (match(TokenKind::LeftBracket)) {
-      while (!at_end() && !at(TokenKind::RightBracket)) {
-        (void)advance();
-      }
-      (void)match(TokenKind::RightBracket);
+  const auto next_dimension_is_nonstatic = [&]() {
+    if (!at(TokenKind::LeftBracket)) return false;
+    if (at(TokenKind::RightBracket, 1)
+        || at(TokenKind::Star, 1)
+        || keyword("$", 1)) {
+      return true;
     }
+    return at(TokenKind::Identifier, 1)
+        && at(TokenKind::RightBracket, 2);
+  };
+  if (at(TokenKind::LeftBracket)
+      && (container.kind
+              != SystemVerilogContainerKind::StaticArray
+          || next_dimension_is_nonstatic())) {
+    (void)parse_optional_container_dimension(element_type);
   } else {
     while (match(TokenKind::LeftBracket)) {
       const auto dimension_start = previous();
@@ -1077,6 +1117,7 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
       }
     }
   }
+  container.element_types.push_back(std::move(element_type));
   container.span = cover(start.span, previous().span);
   type.systemverilog_container = std::move(container);
   return true;
@@ -1084,7 +1125,8 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
 
 [[nodiscard]] bool VerilogParser::is_declaration_start() const  {
   return is_direction_keyword() || is_net_type_keyword()
-      || keyword("string") || is_named_type_reference_start();
+      || keyword("string") || keyword("chandle")
+      || is_named_type_reference_start();
 }
 
 void VerilogParser::parse_event_declaration(
@@ -1141,11 +1183,12 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
   if (is_direction_keyword()) {
     spec.direction = parse_direction();
     spec.type = default_port_net_type();
+    const bool explicit_variable = match_keyword("var");
     const bool explicit_type =
-        is_net_type_keyword()
-        || keyword("string")
+        explicit_variable || is_net_type_keyword()
+        || keyword("string") || keyword("chandle")
         || is_named_type_reference_start();
-    if (keyword("string")) {
+    if (keyword("string") || keyword("chandle")) {
       spec.type = parse_parameter_type();
     } else if (is_named_type_reference_start()) {
       spec.type = parse_named_type();
@@ -1153,7 +1196,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
       parse_optional_net_type(spec.type);
     }
     require_default_port_net_type(current(), explicit_type);
-  } else if (keyword("string")) {
+  } else if (keyword("string") || keyword("chandle")) {
     spec.type = parse_parameter_type();
   } else if (is_named_type_reference_start()) {
     spec.type = parse_named_type();
@@ -1164,8 +1207,9 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
   auto charge_strength = parse_verilog_charge_strength("net declaration");
   if (drive_strength
       && contains_word(
-          {"reg", "logic", "bit", "byte", "shortint", "int",
-           "longint", "integer", "time"},
+      {"reg", "logic", "bit", "byte", "shortint", "int",
+           "longint", "integer", "time", "shortreal", "real",
+           "realtime"},
           spec.type.spelling)) {
     error(
         start,
@@ -1194,6 +1238,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
       net_delay = std::move(parsed_delay);
     }
     if (spec.type.spelling != "wire"
+        && spec.type.systemverilog_net_type != "wire"
         && spec.type.spelling != "trireg") {
       error(
           start,
@@ -1213,7 +1258,8 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     if (initializer
         && declaration_type.domain != ValueDomain::String
         && !declaration_type.systemverilog_container
-        && spec.type.spelling != "wire") {
+        && spec.type.spelling != "wire"
+        && spec.type.systemverilog_net_type != "wire") {
       error(
           name,
           "FSIM-SV-UNSUPPORTED-011",
@@ -1362,7 +1408,9 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
         unit.signals.push_back(std::move(declaration));
       }
     }
-    if (initializer && spec.type.spelling == "wire"
+    if (initializer
+        && (spec.type.spelling == "wire"
+            || spec.type.systemverilog_net_type == "wire")
         && spec.direction == PortDirection::Unknown) {
       Statement driver;
       driver.kind = StatementKind::Assignment;
@@ -1385,7 +1433,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
 void VerilogParser::parse_procedural_declaration(Statement& block) {
   const auto start = current();
   Type type = default_verilog_type();
-  if (keyword("string")) {
+  if (keyword("string") || keyword("chandle")) {
     type = parse_parameter_type();
   } else if (is_named_type_reference_start()) {
     type = parse_named_type();
@@ -1949,5 +1997,4 @@ Process VerilogParser::parse_always() {
   current_procedural_names_.clear();
   return process;
 }
-
 }  // namespace fsim::frontend

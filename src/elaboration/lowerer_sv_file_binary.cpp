@@ -46,6 +46,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_file_binary_read(
     operation.target = local->second;
     operation.width = type.element_width;
     operation.two_state = type.two_state;
+    operation.scalar_kind = type.scalar_kind;
   } else if (const auto object = container_objects_.find(target.text);
              object != container_objects_.end()
              && !read_only_container_objects_.contains(target.text)) {
@@ -63,6 +64,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_file_binary_read(
     operation.target = object->second;
     operation.width = type->element_width;
     operation.two_state = type->two_state;
+    operation.scalar_kind = type->scalar_kind;
   } else if (const auto packed_local = locals_.find(target.text);
              packed_local != locals_.end()) {
     const auto width = register_width(packed_local->second);
@@ -78,6 +80,12 @@ Lowerer::ExpressionAttempt Lowerer::lower_file_binary_read(
     operation.width = static_cast<std::uint32_t>(width);
     operation.two_state =
         is_two_state_domain(register_domain(packed_local->second));
+    if (const auto* type = object_type(target.text); type != nullptr) {
+      operation.scalar_kind = type->systemverilog_scalar;
+      operation.two_state = operation.scalar_kind
+              != frontend::SystemVerilogScalarKind::None
+          || operation.two_state;
+    }
   } else if (const auto signal = signals_.find(target.text);
              signal != signals_.end()
              && !read_only_signals_.contains(signal->second)) {
@@ -95,6 +103,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_file_binary_read(
     operation.target = signal->second;
     operation.width = static_cast<std::uint32_t>(width);
     operation.two_state = is_two_state_domain(type->domain);
+    operation.scalar_kind = type->systemverilog_scalar;
+    operation.two_state = operation.scalar_kind
+            != frontend::SystemVerilogScalarKind::None
+        || operation.two_state;
   } else {
     report(
         "FSIM-ELAB-SVFILE-014",

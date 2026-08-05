@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "runtime_test_support.hpp"
 
+#include "fsim/runtime/file_binary.hpp"
+#include "fsim/runtime/file_scanning.hpp"
 #include "fsim/runtime/simir.hpp"
 
 #include <chrono>
@@ -180,6 +182,86 @@ void test_simir_text_files() {
   require(
       scanner.string_object_value(scanned_text) == "alpha",
       "formatted string scan stores bounded text");
+
+  FileScan scalar_scan;
+  scalar_scan.string_source = true;
+  scalar_scan.conversions = {
+      {"real=", InputScanFormat::real, 0, false,
+       {InputScanTargetKind::packed_register, 0, 64, true,
+        SystemVerilogScalarKind::Real}},
+      {" time=", InputScanFormat::decimal, 0, false,
+       {InputScanTargetKind::packed_register, 1, 64, true,
+        SystemVerilogScalarKind::Time}},
+      {" handle=", InputScanFormat::hexadecimal, 0, false,
+       {InputScanTargetKind::packed_register, 2, 64, true,
+        SystemVerilogScalarKind::Chandle}},
+  };
+  const auto scalar_values = scan_formatted_string(
+      scalar_scan, "real=1.2_5 time=1_7 handle=0");
+  require(
+      scalar_values.assignments == 3
+          && scalar_values.values[0] && scalar_values.values[1]
+          && scalar_values.values[2],
+      "scalar scan stages every successful conversion");
+  const auto decoded_real = decode_systemverilog_scalar_payload(
+      scalar_values.values[0]->packed, SystemVerilogScalarKind::Real);
+  const auto decoded_time = decode_systemverilog_scalar_payload(
+      scalar_values.values[1]->packed, SystemVerilogScalarKind::Time);
+  require(
+      decoded_real && decoded_real.value.as_real() == 1.25
+          && decoded_time && decoded_time.value.as_time() == 17
+          && scalar_values.values[2]->packed.low_word().aval == 0,
+      "scalar scan preserves real, time, and null chandle payloads");
+
+  const auto overflowing = scan_formatted_string(
+      FileScan{0, 0, 0, true,
+          {{"", InputScanFormat::real, 0, false,
+            {InputScanTargetKind::packed_register, 0, 64, true,
+             SystemVerilogScalarKind::Real}}}},
+      "1e9999");
+  require(
+      overflowing.assignments == 0 && !overflowing.values[0],
+      "overflowing real scan leaves its target transaction uncommitted");
+  const auto partial_scalar = scan_formatted_string(
+      FileScan{0, 0, 0, true,
+          {{"real=", InputScanFormat::real, 0, false,
+            {InputScanTargetKind::packed_register, 0, 64, true,
+             SystemVerilogScalarKind::Real}},
+           {" time=", InputScanFormat::decimal, 0, false,
+            {InputScanTargetKind::packed_register, 1, 64, true,
+             SystemVerilogScalarKind::Time}}}},
+      "real=2.5 time=oops");
+  require(
+      partial_scalar.assignments == 1 && partial_scalar.values[0]
+          && !partial_scalar.values[1],
+      "failed later conversion preserves only prior staged copy-outs");
+  const auto nonnull_chandle = scan_formatted_string(
+      FileScan{0, 0, 0, true,
+          {{"", InputScanFormat::hexadecimal, 0, false,
+            {InputScanTargetKind::packed_register, 0, 64, true,
+             SystemVerilogScalarKind::Chandle}}}},
+      "1");
+  require(
+      nonnull_chandle.assignments == 0 && !nonnull_chandle.values[0],
+      "text input cannot fabricate a non-null chandle identity");
+  std::size_t chandle_byte{};
+  bool rejected_binary_chandle{};
+  try {
+    static_cast<void>(read_binary_file(
+        FileBinaryRead{0, 0, 0, FileBinaryTargetKind::packed_register,
+            64, true, 0, 0, false, false,
+            SystemVerilogScalarKind::Chandle},
+        std::nullopt, std::nullopt, std::nullopt,
+        [&]() -> std::int32_t {
+          return chandle_byte++ == 7U ? 1 : 0;
+        }));
+  } catch (const std::invalid_argument& error) {
+    rejected_binary_chandle = std::string_view{error.what()}.find(
+        "null handle") != std::string_view::npos;
+  }
+  require(
+      rejected_binary_chandle,
+      "binary input cannot fabricate a non-null chandle identity");
 
   {
     std::ofstream binary(

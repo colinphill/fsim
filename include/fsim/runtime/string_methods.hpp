@@ -14,14 +14,15 @@ enum class StringMethodOperator : std::uint8_t;
 struct StringMethod;
 struct StringMethodResult {
   std::optional<std::uint32_t> integer;
+  std::optional<std::uint64_t> scalar_bits;
   std::optional<std::string> string;
 };
 
-[[nodiscard]] std::uint8_t string_getc(
-    std::string_view value, std::optional<std::int32_t> index) noexcept;
+[[nodiscard]] std::uint32_t string_getc(
+    std::string_view value, std::optional<std::int32_t> index);
 [[nodiscard]] std::int32_t string_compare(
     std::string_view lhs, std::string_view rhs,
-    bool case_insensitive) noexcept;
+    bool case_insensitive);
 [[nodiscard]] std::string string_change_case(
     std::string_view value, bool uppercase);
 [[nodiscard]] std::string string_substr(
@@ -31,9 +32,9 @@ struct StringMethodResult {
 void string_putc(
     std::string& value,
     std::optional<std::int32_t> index,
-    std::optional<std::uint8_t> character) noexcept;
+    std::optional<std::uint32_t> character);
 [[nodiscard]] std::int32_t string_to_integer(
-    std::string_view value, unsigned radix) noexcept;
+    std::string_view value, unsigned radix);
 [[nodiscard]] std::string string_from_integer(
     std::int32_t value, unsigned radix);
 [[nodiscard]] StringMethodResult execute_string_method(
@@ -41,7 +42,8 @@ void string_putc(
     std::string& source,
     std::string_view argument,
     std::optional<std::int32_t> first,
-    std::optional<std::int32_t> second);
+    std::optional<std::int32_t> second,
+    std::optional<std::uint64_t> first_bits = std::nullopt);
 void execute_string_format(
     const StringMethod& operation,
     std::string& destination,

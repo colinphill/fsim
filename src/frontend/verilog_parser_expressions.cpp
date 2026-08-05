@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
 
+#include <algorithm>
+#include <limits>
+
 namespace fsim::frontend {
 
 DelayAlternative VerilogParser::parse_verilog_delay_alternative() {
@@ -480,10 +483,41 @@ Expression VerilogParser::parse_primary() {
   }
   if (at(TokenKind::Number)) {
     const auto token = advance();
+    const bool decimal_form =
+        token.text.find('.') != std::string::npos
+        || token.text.find_first_of("eE") != std::string::npos;
+    std::optional<Token> time_unit;
+    if (at(TokenKind::Identifier)
+        && time_unit_femtoseconds(current().text)) {
+      time_unit = advance();
+    } else if (decimal_form && at(TokenKind::Identifier)
+               && token.span.end.offset == current().span.begin.offset) {
+      const auto invalid_unit = advance();
+      error(
+          invalid_unit,
+          "FSIM-SV-PARSE-282",
+          "unrecognized SystemVerilog time-literal unit '"
+              + invalid_unit.text + "'");
+    }
     const auto kind = token.text.find('\'') == std::string::npos
                           ? ExpressionKind::IntegerLiteral
                           : ExpressionKind::LogicLiteral;
-    return Expression{kind, token.text, {}, token.span};
+    auto expression = Expression{
+        kind,
+        token.text + (time_unit ? time_unit->text : std::string{}),
+        {},
+        time_unit ? cover(token.span, time_unit->span) : token.span};
+    if (kind == ExpressionKind::IntegerLiteral
+        && (decimal_form || time_unit)) {
+      expression.systemverilog_decimal_literal =
+          parse_systemverilog_decimal_literal(token, time_unit);
+      if (expression.systemverilog_decimal_literal) {
+        expression.systemverilog_scalar_kind = time_unit
+            ? SystemVerilogScalarKind::Realtime
+            : SystemVerilogScalarKind::Real;
+      }
+    }
+    return expression;
   }
   if (at(TokenKind::StringLiteral)) {
     const auto token = advance();
@@ -758,6 +792,137 @@ Expression VerilogParser::parse_primary() {
                     invalid.span};
 }
 
+std::optional<SystemVerilogDecimalLiteral>
+VerilogParser::parse_systemverilog_decimal_literal(
+    const Token& number,
+    const std::optional<Token>& unit) {
+  std::string compact;
+  compact.reserve(number.text.size());
+  for (const char character : number.text) {
+    if (character != '_') {
+      compact.push_back(character);
+    }
+  }
+
+  const auto exponent_position = compact.find_first_of("eE");
+  if (exponent_position != std::string::npos
+      && compact.find_first_of("eE", exponent_position + 1)
+          != std::string::npos) {
+    error(
+        number,
+        "FSIM-SV-PARSE-281",
+        "malformed SystemVerilog real/time literal '" + number.text + "'");
+    return std::nullopt;
+  }
+  const auto mantissa =
+      std::string_view{compact}.substr(0, exponent_position);
+  auto exponent_text =
+      exponent_position == std::string::npos
+          ? std::string_view{}
+          : std::string_view{compact}.substr(exponent_position + 1);
+  bool negative_exponent = false;
+  if (!exponent_text.empty()
+      && (exponent_text.front() == '+'
+          || exponent_text.front() == '-')) {
+    negative_exponent = exponent_text.front() == '-';
+    exponent_text.remove_prefix(1);
+  }
+  std::int64_t explicit_exponent{};
+  if (exponent_position != std::string::npos) {
+    const auto parsed = decimal_i64(exponent_text, negative_exponent);
+    if (!parsed) {
+      error(
+          number,
+          "FSIM-SV-PARSE-281",
+          "malformed or excessive SystemVerilog real/time exponent in '"
+              + number.text + "'");
+      return std::nullopt;
+    }
+    explicit_exponent = *parsed;
+  }
+
+  std::string digits;
+  digits.reserve(mantissa.size());
+  bool saw_decimal = false;
+  std::size_t fractional_digits{};
+  for (const char character : mantissa) {
+    if (character == '.') {
+      if (saw_decimal || digits.empty()) {
+        error(
+            number,
+            "FSIM-SV-PARSE-281",
+            "malformed SystemVerilog real/time mantissa '"
+                + number.text + "'");
+        return std::nullopt;
+      }
+      saw_decimal = true;
+      continue;
+    }
+    if (character < '0' || character > '9') {
+      error(
+          number,
+          "FSIM-SV-PARSE-281",
+          "malformed SystemVerilog real/time literal '" + number.text + "'");
+      return std::nullopt;
+    }
+    digits.push_back(character);
+    if (saw_decimal) {
+      ++fractional_digits;
+    }
+  }
+  if (digits.empty() || (saw_decimal && fractional_digits == 0)) {
+    error(
+        number,
+        "FSIM-SV-PARSE-281",
+        "malformed SystemVerilog real/time mantissa '" + number.text + "'");
+    return std::nullopt;
+  }
+  if (fractional_digits
+      > static_cast<std::size_t>(
+          std::numeric_limits<std::int64_t>::max())) {
+    error(
+        number,
+        "FSIM-SV-PARSE-281",
+        "SystemVerilog real/time literal exceeds the source representation");
+    return std::nullopt;
+  }
+  const auto fractional =
+      static_cast<std::int64_t>(fractional_digits);
+  if (explicit_exponent
+      < std::numeric_limits<std::int64_t>::min() + fractional) {
+    error(
+        number,
+        "FSIM-SV-PARSE-281",
+        "SystemVerilog real/time exponent exceeds the source representation");
+    return std::nullopt;
+  }
+  auto canonical_exponent = explicit_exponent - fractional;
+  const auto first_nonzero = digits.find_first_not_of('0');
+  if (first_nonzero == std::string::npos) {
+    digits = "0";
+    canonical_exponent = 0;
+  } else {
+    digits.erase(0, first_nonzero);
+    while (digits.size() > 1 && digits.back() == '0') {
+      if (canonical_exponent == std::numeric_limits<std::int64_t>::max()) {
+        error(
+            number,
+            "FSIM-SV-PARSE-281",
+            "SystemVerilog real/time exponent exceeds the source representation");
+        return std::nullopt;
+      }
+      digits.pop_back();
+      ++canonical_exponent;
+    }
+  }
+  return SystemVerilogDecimalLiteral{
+      unit ? SystemVerilogDecimalLiteralKind::Time
+           : SystemVerilogDecimalLiteralKind::Real,
+      std::move(digits),
+      canonical_exponent,
+      unit ? unit->text : std::string{}};
+}
+
 Expression VerilogParser::parse_postfix(Expression expression) {
   for (;;) {
     if (match(TokenKind::Dot)) {
@@ -868,6 +1033,7 @@ Expression VerilogParser::parse_postfix(Expression expression) {
                     || member.text == "hextoa"
                     || member.text == "octtoa"
                     || member.text == "bintoa"
+                    || member.text == "realtoa"
                 ? std::optional<std::size_t>{1}
             : member.text == "size"
                     || member.text == "pop_front"
@@ -880,6 +1046,7 @@ Expression VerilogParser::parse_postfix(Expression expression) {
                     || member.text == "atohex"
                     || member.text == "atooct"
                     || member.text == "atobin"
+                    || member.text == "atoreal"
                     || unsupported_shuffle
                 ? std::optional<std::size_t>{0}
             : member.text == "substr"
@@ -899,8 +1066,10 @@ Expression VerilogParser::parse_postfix(Expression expression) {
               || member.text == "substr" || member.text == "putc"
               || member.text == "atoi" || member.text == "atohex"
               || member.text == "atooct" || member.text == "atobin"
+              || member.text == "atoreal"
               || member.text == "itoa" || member.text == "hextoa"
-              || member.text == "octtoa" || member.text == "bintoa";
+              || member.text == "octtoa" || member.text == "bintoa"
+              || member.text == "realtoa";
           error(
               member,
               string_method ? "FSIM-SV-SEM-127" : "FSIM-SV-SEM-081",
@@ -1175,6 +1344,12 @@ Expression VerilogParser::parse_postfix(Expression expression) {
             std::move(operands),
             cover(receiver_span, previous().span)};
         expression.call_argument_names = std::move(argument_names);
+        if (member.text == "atoreal") {
+          expression.call_result_width = 64;
+          expression.call_result_domain = ValueDomain::Bit2;
+          expression.systemverilog_scalar_kind =
+              SystemVerilogScalarKind::Real;
+        }
         continue;
       }
       expression.text += '.';

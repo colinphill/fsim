@@ -448,7 +448,7 @@ typedef struct fsim_jit_runtime_v1 {
       uint64_t index_bval,
       uint32_t signed_index,
       uint32_t* result);
-  uint32_t (*string_replace_byte)(
+  uint32_t (*string_replace_code_point)(
       void* context,
       uint32_t process,
       uint32_t instruction,

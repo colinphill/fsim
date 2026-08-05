@@ -37,6 +37,15 @@ namespace {
           : static_cast<std::int64_t>(index) - type.index_left);
 }
 
+void require_safe_chandle(
+    const FileBinaryRead& operation, const std::uint64_t value) {
+  if (operation.scalar_kind == SystemVerilogScalarKind::Chandle
+      && value != 0) {
+    throw std::invalid_argument{
+        "$fread chandle input accepts only the null handle"};
+  }
+}
+
 }  // namespace
 
 FileBinaryReadResult read_binary_file(
@@ -55,6 +64,7 @@ FileBinaryReadResult read_binary_file(
           "$fread start/count arguments require a fixed unpacked memory"};
     }
     const auto [value, consumed] = read_word(operation.width, read);
+    require_safe_chandle(operation, value);
     result.bytes = consumed;
     result.packed = PackedLogic4::from_aval_bval(operation.width, value, 0);
     return result;
@@ -78,6 +88,7 @@ FileBinaryReadResult read_binary_file(
     if (offset >= container->elements.size()) break;
     const auto [value, consumed] = read_word(operation.width, read);
     if (consumed == 0) break;
+    require_safe_chandle(operation, value);
     if (result.bytes > maximum_memory_file_bytes - consumed) {
       throw std::length_error{"$fread exceeds the bounded file byte limit"};
     }

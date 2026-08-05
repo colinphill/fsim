@@ -713,6 +713,11 @@ class VerilogParser final : private detail::ParserBase {
 
   Expression parse_expression(int minimum_precedence = 0);
 
+  std::optional<SystemVerilogDecimalLiteral>
+      parse_systemverilog_decimal_literal(
+          const Token& number,
+          const std::optional<Token>& unit);
+
   Expression parse_unary();
 
   Expression parse_primary();

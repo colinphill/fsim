@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
+#include "fsim/runtime/systemverilog_string.hpp"
 
 namespace fsim::runtime::simir {
 
@@ -65,6 +66,24 @@ SignalId Interpreter::add_signal(Signal signal) {
           && !valid_strength(*signal.charge_strength))) {
     throw std::invalid_argument{"invalid SimIR signal strength metadata"};
   }
+  if (signal.systemverilog_scalar != SystemVerilogScalarKind::None) {
+    const auto scalar = decode_systemverilog_scalar_payload(
+        signal.initial_value, signal.systemverilog_scalar);
+    const auto classification = scalar
+        ? classify_systemverilog_scalar(scalar.value)
+        : SystemVerilogScalarClassification{
+              .error = SystemVerilogScalarError::InvalidKind};
+    const bool valid_value = scalar
+        && (signal.systemverilog_scalar == SystemVerilogScalarKind::Chandle
+            || (classification && classification.finite));
+    if (!valid_value
+        || signal.resolution != ResolutionKind::none
+        || signal.implicit_driver || signal.charge_strength
+        || signal.charge_decay) {
+      throw std::invalid_argument{
+          "invalid SimIR SystemVerilog scalar signal metadata"};
+    }
+  }
   impl_->driven_values.push_back(signal.initial_value);
   impl_->driver_values.emplace_back();
   impl_->driver_strengths.emplace_back();
@@ -95,6 +114,7 @@ StringObjectId Interpreter::add_string_object(StringObject object) {
   if (object.initial_value.size() > maximum_string_bytes) {
     throw std::length_error{"SimIR string object exceeds byte limit"};
   }
+  (void)systemverilog_string_length(object.initial_value);
   const auto id =
       static_cast<StringObjectId>(impl_->string_objects.size());
   if (static_cast<std::size_t>(id)
@@ -245,6 +265,24 @@ ProcessId Interpreter::add_process(Process process) {
     if (local.name.empty()
         || local.register_id >= process.register_count) {
       throw std::invalid_argument{"invalid SimIR debug-local metadata"};
+    }
+    if (local.systemverilog_scalar != SystemVerilogScalarKind::None) {
+      const auto expected_width = local.systemverilog_scalar
+                  == SystemVerilogScalarKind::ShortReal
+          ? 32U
+          : local.systemverilog_scalar == SystemVerilogScalarKind::Real
+                  || local.systemverilog_scalar
+                      == SystemVerilogScalarKind::Realtime
+                  || local.systemverilog_scalar
+                      == SystemVerilogScalarKind::Time
+                  || local.systemverilog_scalar
+                      == SystemVerilogScalarKind::Chandle
+              ? 64U : 0U;
+      if (local.width != expected_width
+          || local.value_kind != ValueKind::logic4) {
+        throw std::invalid_argument{
+            "invalid SimIR scalar debug-local metadata"};
+      }
     }
     if (!local_names.insert(local.name).second) {
       throw std::invalid_argument{"duplicate SimIR debug-local name"};
@@ -565,12 +603,40 @@ void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value) {
   impl_->commit(signal, std::move(value));
 }
 
+void Interpreter::deposit_scalar_signal(
+    const SignalId signal,
+    const SystemVerilogScalarValue value) {
+  const auto& stored = impl_->get_signal(signal);
+  if (stored.systemverilog_scalar != value.kind) {
+    throw std::invalid_argument{"SimIR scalar signal kind mismatch"};
+  }
+  const auto encoded = encode_systemverilog_scalar_payload(value);
+  if (!encoded) {
+    throw std::invalid_argument{"invalid SimIR scalar signal value"};
+  }
+  deposit_signal(signal, encoded.value);
+}
+
 void Interpreter::force_signal(SignalId signal, PackedLogic4 value) {
   const auto width = impl_->get_signal(signal).initial_value.width();
   if (width != value.width()) {
     throw std::invalid_argument("SimIR signal force width mismatch");
   }
   impl_->force_slice(signal, std::move(value), 0);
+}
+
+void Interpreter::force_scalar_signal(
+    const SignalId signal,
+    const SystemVerilogScalarValue value) {
+  const auto& stored = impl_->get_signal(signal);
+  if (stored.systemverilog_scalar != value.kind) {
+    throw std::invalid_argument{"SimIR scalar signal kind mismatch"};
+  }
+  const auto encoded = encode_systemverilog_scalar_payload(value);
+  if (!encoded) {
+    throw std::invalid_argument{"invalid SimIR scalar signal value"};
+  }
+  force_signal(signal, encoded.value);
 }
 
 void Interpreter::release_signal(SignalId signal) {
@@ -611,6 +677,22 @@ void Interpreter::schedule_signal_at(SignalId signal, PackedLogic4 value,
       });
 }
 
+void Interpreter::schedule_scalar_signal_at(
+    const SignalId signal,
+    const SystemVerilogScalarValue value,
+    const SimulationTick time,
+    const StableOrder order) {
+  const auto& stored = impl_->get_signal(signal);
+  if (stored.systemverilog_scalar != value.kind) {
+    throw std::invalid_argument{"SimIR scalar signal kind mismatch"};
+  }
+  const auto encoded = encode_systemverilog_scalar_payload(value);
+  if (!encoded) {
+    throw std::invalid_argument{"invalid SimIR scalar signal value"};
+  }
+  schedule_signal_at(signal, encoded.value, time, order);
+}
+
 void Interpreter::schedule_signal_after(SignalId signal, PackedLogic4 value,
                                         SimulationTick delay,
                                         StableOrder order) {
@@ -622,8 +704,47 @@ void Interpreter::schedule_signal_after(SignalId signal, PackedLogic4 value,
                      order);
 }
 
+void Interpreter::schedule_scalar_signal_after(
+    const SignalId signal,
+    const SystemVerilogScalarValue value,
+    const SimulationTick delay,
+    const StableOrder order) {
+  if (delay
+      > std::numeric_limits<SimulationTick>::max()
+          - impl_->scheduler.now()) {
+    throw std::overflow_error{"simulation time overflow scheduling signal"};
+  }
+  schedule_scalar_signal_at(
+      signal, value, impl_->scheduler.now() + delay, order);
+}
+
 const PackedLogic4 &Interpreter::signal_value(SignalId signal) const {
   return impl_->get_signal(signal).initial_value;
+}
+
+SystemVerilogScalarValue Interpreter::scalar_signal_value(
+    const SignalId signal) const {
+  const auto& stored = impl_->get_signal(signal);
+  const auto decoded = decode_systemverilog_scalar_payload(
+      stored.initial_value, stored.systemverilog_scalar);
+  if (!decoded) {
+    throw std::logic_error{"SimIR signal is not a valid scalar value"};
+  }
+  return decoded.value;
+}
+
+std::vector<SystemVerilogScalarSignalSnapshot>
+Interpreter::scalar_signal_snapshots() const {
+  std::vector<SystemVerilogScalarSignalSnapshot> result;
+  for (std::size_t index = 0; index < impl_->signals.size(); ++index) {
+    const auto signal = static_cast<SignalId>(index);
+    const auto& stored = impl_->signals[index];
+    if (stored.systemverilog_scalar == SystemVerilogScalarKind::None) {
+      continue;
+    }
+    result.push_back({signal, stored.name, scalar_signal_value(signal)});
+  }
+  return result;
 }
 
 const std::string& Interpreter::string_object_value(
@@ -638,6 +759,7 @@ void Interpreter::deposit_string_object(
     throw std::length_error{
         "SimIR string object exceeds byte limit"};
   }
+  (void)systemverilog_string_length(value);
   impl_->get_string_object(object).initial_value = value;
 }
 
@@ -676,6 +798,45 @@ PackedLogic4 Interpreter::read_debug_local(
     throw std::logic_error{"SimIR debug local has not been initialized"};
   }
   return value;
+}
+
+SystemVerilogScalarValue Interpreter::read_debug_scalar_local(
+    const ProcessId process,
+    const std::size_t local_index) const {
+  auto& state = impl_->get_process(process);
+  if (local_index >= state.program.debug_locals.size()) {
+    throw std::out_of_range{"invalid SimIR debug-local index"};
+  }
+  const auto& local = state.program.debug_locals[local_index];
+  if (local.systemverilog_scalar == SystemVerilogScalarKind::None) {
+    throw std::logic_error{"SimIR debug local is not a scalar value"};
+  }
+  const auto packed = read_debug_local(process, local_index);
+  const auto decoded = decode_systemverilog_scalar_payload(
+      packed, local.systemverilog_scalar);
+  if (!decoded) {
+    throw std::logic_error{"SimIR scalar debug local is not initialized"};
+  }
+  return decoded.value;
+}
+
+void Interpreter::write_debug_scalar_local(
+    const ProcessId process,
+    const std::size_t local_index,
+    const SystemVerilogScalarValue value) {
+  auto& state = impl_->get_process(process);
+  if (local_index >= state.program.debug_locals.size()) {
+    throw std::out_of_range{"invalid SimIR debug-local index"};
+  }
+  const auto& local = state.program.debug_locals[local_index];
+  if (value.kind != local.systemverilog_scalar) {
+    throw std::invalid_argument{"SimIR scalar debug-local kind mismatch"};
+  }
+  const auto encoded = encode_systemverilog_scalar_payload(value);
+  if (!encoded || encoded.value.width() != local.width) {
+    throw std::invalid_argument{"invalid SimIR scalar debug-local payload"};
+  }
+  impl_->write_process_register(state, local.register_id, encoded.value);
 }
 
 std::string Interpreter::read_debug_string_local(
@@ -720,6 +881,11 @@ const Scheduler &Interpreter::scheduler() const noexcept {
 
 void Interpreter::set_signal_change_hook(SignalChangeHook hook) {
   impl_->signal_change_hook = std::move(hook);
+}
+
+void Interpreter::set_scalar_signal_change_hook(
+    ScalarSignalChangeHook hook) {
+  impl_->scalar_signal_change_hook = std::move(hook);
 }
 
 void Interpreter::set_execution_point_hook(ExecutionPointHook hook) {

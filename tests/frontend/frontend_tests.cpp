@@ -85,6 +85,8 @@ int main() {
     test_vhdl_configurations();
     test_vhdl_package_generics();
     test_systemverilog_function_declarations();
+    test_systemverilog_real_time_declarations();
+    test_systemverilog_chandle_declarations();
     test_systemverilog_task_declarations();
     test_systemverilog_callable_closure_declarations();
     test_systemverilog_class_declarations();

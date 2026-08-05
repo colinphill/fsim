@@ -5,14 +5,15 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
-## Completed Batch 149 checkpoint - 2026-08-05
+## Batch 150 start checkpoint - 2026-08-05
 
-1. Start in `/home/colin/projects/fsim` and read this file plus the Batch 149
-   and locked Batches 150-175 sections of `implementation_plan_v2.md`.
+1. Start in `/home/colin/projects/fsim` and read this file plus the expanded
+   Batch 150 and locked Batches 151-175 sections of
+   `implementation_plan_v2.md`.
 2. Run `git status --short --branch`, `git rev-parse HEAD`,
    `git rev-parse origin/codex/v2`, and `git log -1 --oneline`. The branch and
-   origin revisions must match the pushed Batch 149 closeout unless the user
-   has intentionally advanced the branch. Its central
+   origin revisions must match pushed Batch 149 closeout `6279f0b` unless the
+   user has intentionally advanced the branch. Batch 149's central
    edits are the semantic class/constraint HIR, application projection and
    call sites, class resolution, deterministic runtime random streams, the
    resource-governed finite-domain solver, exact typed constraint-expression
@@ -27,14 +28,104 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
    `380a29f6b83cda3d19c97ecaddaff1b44f177baba71bd22e8598eeb71968b7c7` when
    `git show --format= -- CMakeLists.txt cmake/CheckMsvcDebugContract.cmake` is
    piped to `sha256sum`.
-5. Changes 1 through 20 are complete. Exact LLVM 22.1.8 Debug passes 112/112 in
+5. Batch 150 is expanded into exactly 20 numbered changes without changing its
+   locked allocation. Change 1 is complete: focused scalar metadata owns exact
+   shortreal/real/realtime/time identities and canonical decimal/time literals;
+   declarations, ports, callables, class properties, typedefs, and type actuals
+   parse them with complete spans and stable malformed exponent/unit
+   diagnostics. Change 2 is complete: the central scalar service propagates
+   exact kinds and folds locale-independent IEC 559 real/time arithmetic,
+   comparisons, conditions, casts, conversions, truth, and mixed integral
+   operands with checked pure-integral overflow. Change 3 is complete: a typed
+   scalar environment preserves real/time parameters, localparams, imported
+   package values, dependent defaults, canonical specialization identities,
+   child overrides, exact time contexts, and declaration-order dependency
+   rejection independently of four-state integral constants. Change 4 is
+   complete: exact scalar identities and net/variable provenance cross module
+   ports, callable arguments/returns/defaults/directions/ref profiles, and
+   full-profile interface export matching. Change 5 is complete: an
+   engine-neutral canonical binary32/binary64/tick arena and checked shared
+   arithmetic kernel enforce value/byte/work budgets, finite results, exact
+   tick bounds, and nearest-rounding host admission. Change 6 is complete:
+   exact comparisons, finite truth, checked signed/time/real conversions, four
+   rounding modes, source-format IEEE classification, X/Z rejection, and
+   destination overflow checks share that kernel. Change 7 is complete: one
+   bounded locale-independent scalar text service owns display/scan/text-file
+   conversion; exact time contexts own declared-precision delay scaling,
+   checked target scheduling, and `$time`/`$stime`/`$realtime` behavior. Change
+   8 is complete: typed SimIR/application transport, interpreter and compiled
+   O0/O2 signal loads/stores, debugger mutation/inspection, independent
+   callbacks, snapshots, and scalar-aware VCD preserve canonical raw payloads;
+   real-family values use VCD real declarations while exact `time` remains a
+   64-bit vector. Change 9 is complete: the nonnumeric opaque `chandle` type is
+   retained through declarations, typedefs, parameters, ports, callables, and
+   class/procedural scopes; contextual null, assignment, cast, equality, and
+   inequality resolution is exact, while numeric use rejects through stable
+   diagnostics. Change 10 is complete: the simulation-owned registry issues
+   generation-qualified opaque identities, validates null/live/stale alias
+   transfer, owns one-shot cleanup and resource limits, and exposes pointer-free
+   callbacks, debugger views, snapshots, and exact-vector traces through typed
+   interpreter and compiled O0/O2 application paths. Change 11 is complete:
+   strict UTF-8 storage and one shared Unicode-scalar iterator now own length,
+   indexing, inclusive slicing, indexed assignment, comparison, mutation, and
+   conversion across interpreter and native O0/O2 execution, with malformed
+   input and expanding replacements rejected transactionally. Change 12 is
+   complete: the full standard string method set uses code-point-aware ASCII
+   case/compare/substring behavior, deterministic radix conversion, and the
+   shared locale-independent scalar scanner/formatter for `atoreal`/`realtoa`,
+   with source interpreter/O0/O2 and cache differentials. Change 13 is complete:
+   recursive container profiles and value-owned storage now cover scalar,
+   string, nested-container, and heterogeneous unpacked-aggregate elements;
+   real/time/chandle assignment patterns plus recursive default/resize/copy/
+   comparison, debugger, object, and cache paths pass focused gates. Change 14
+   is complete: recursive scalar/string constant substitution now reaches
+   imported and local callables, typed runtime scalar arithmetic/comparison
+   executes through interpreter and native paths, static/automatic locals and
+   four-family task copy-out are covered, and two independently specialized
+   roots retain isolated parameter values and static state. Bounded recursive
+   call graphs continue to reject through the stable function/task diagnostics.
+   Change 15 is complete: bounded scalar text/binary file I/O, formatting,
+   scanning, descriptor behavior, and transactional copy-out now pass focused
+   interpreter/compiled and artifact/cache differentials. Change 16 is
+   complete: owning-unit schema 8 and portable-library schema 5 retain exact
+   scalar expression/type fields, deterministic portable round trips cover all
+   five scalar identities and negative decimal payloads, and context-typed
+   unary constants survive object reload. The artifact matrix passes object-to-
+   design, standalone trace, relocated mapped-library, interpreter/LLVM O0/O2
+   cold/warm, and edited-source native-key differentials. Focused library/
+   object/design artifact, application, catalog, and 559-file source gates
+   pass. Change 17 is complete: stable parse/semantic/elaboration codes cover
+   malformed literals, incompatible profiles/conversions, and unsupported
+   operators; runtime proof covers overflow/resources, invalid Unicode,
+   stale/null handles, and rollback; both scalar-aware artifact codecs reject
+   invalid enumeration state before publication. Change 18 is complete: direct
+   canonical payload/callback comparison spans interpreter and LLVM O0/O2,
+   scheduling and VCD match across cold/warm caches, and the combined debugger,
+   trace, multiple-root, string/file/aggregate, artifact/relocation, and edited-
+   cache positive gates pass. Change 19 is complete: architecture and language
+   support now own the scalar/Unicode/chandle/artifact model and the explicit
+   Batches 151-162 UVM-readiness boundary; diagnostics cover malformed scalar
+   artifact enumerations; feature rows `SV-723` through `SV-732` remove the
+   completed real/chandle/Unicode surface from the deferred data-model row.
+   The reviewed baselines are 1,876 diagnostics, 559 bounded sources, 649
+   SPDX-owned artifacts, 217 test/control files, 1,162 executable rows, 4,648
+   evidence cells, 409 exact paths, and 110 runtime owners. Inventory and
+   release-candidate gates pass. Change 20 local qualification is complete:
+   LLVM-disabled ASan/UBSan passes 109/109 in 760.62 seconds with leak detection
+   disabled under the managed ptrace runner, exact LLVM 22.1.8 Debug passes
+   112/112 in 349.47 seconds, and Release passes 112/112 in 304.22 seconds. The
+   boundary repairs LLVM-disabled class-cache expectations and a GCC 13 `-O3`
+   false-positive move warning for synthesized ports with no recursive delay.
+   Preserve the accumulated dirty worktree until the single Batch 150 commit,
+   then push and inspect/repair every non-documentation hosted CI job.
+6. Batch 149 Changes 1 through 20 are complete. Exact LLVM 22.1.8 Debug passes 112/112 in
    139.03 seconds and Release passes 112/112 in 114.29 seconds after
    eight-worker builds. Source, catalog, inventory, installed-public-contract,
    Windows ABI/plan, legality, differential, resource, and release-candidate
    gates are green. Batch 149 is not a monitoring boundary, so no sanitizer or
    hosted CI inspection was run. Resume by expanding Batch 150's locked compact
    allocation into 20 numbered changes without altering scope or priority.
-6. Change 2 defines owning canonical class/property/constraint HIR with base
+7. Change 2 defines owning canonical class/property/constraint HIR with base
    ownership, exact qualifiers, source spans, and normalized expression trees.
    Change 3 attaches typed canonical bindings for every exact specialization,
    including derived/base selections, local-access properties, parameters, and
@@ -137,10 +228,10 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
    passing `fsim.frontend`, `fsim.application.systemverilog_hir`,
    `fsim.runtime`, `fsim.application`, `fsim.library.artifact`, and
    `fsim.source-line-budget` tests. `git diff --check` is clean.
-7. Use `cmake --build build/llvm22-ninja-debug --parallel 8` or another local
-   build with at least eight workers. Batch 149 is not a CI boundary: do not
-   configure/run a sanitizer and do not inspect hosted CI. GitHub Actions stays
-   at four-way parallelism.
+8. Use `cmake --build build/llvm22-ninja-debug --parallel 8` or another local
+   build with at least eight workers. Batch 150 is a CI-monitoring boundary,
+   but its sanitizer and hosted inspection remain Change 20 work. GitHub
+   Actions stays at four-way parallelism.
 
 The complete remaining release roadmap is locked through Batch 175:
 
@@ -170,7 +261,91 @@ scope.
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
-- Current unit: Batch 149, exactly 20 changes, complete after pushed Batch
+- Current unit: Batch 150, exactly 20 expanded changes, in progress after pushed
+  Batch 149 closeout `6279f0b`. Change 1 is complete: exact scalar identities,
+  canonical decimal/time literal payloads, declaration/port/callable/class/type
+  parsing, spans, and stable malformed literal diagnostics pass the frontend,
+  semantic-HIR, catalog, and 538-file source gates after an eight-worker Debug
+  build. Change 2 adds centralized kind propagation and deterministic IEC 559
+  constant folding/conversion with exact time scaling and checked integral
+  arithmetic; frontend/catalog and 540-file source gates pass. Change 3 adds a
+  separate typed scalar environment for dependent module/package constants,
+  canonical IEEE/tick specialization identity, imported values, child
+  overrides, and checked declaration ordering; elaboration/catalog and
+  542-file source gates pass. Change 4 preserves explicit net/variable scalar
+  ports and exact module/interface callable profiles with full
+  kind/direction/ref/default matching; frontend/elaboration/semantic-HIR,
+  catalog, and 542-file source gates pass. Change 5 adds canonical
+  binary32/binary64/tick storage, checked shared arithmetic, and bounded
+  value/byte/operation materialization; runtime/catalog and 544-file source
+  gates pass. Change 6 adds exact comparison/truth, checked packed and scalar
+  conversions, four rounding modes, source-format IEEE classification, and
+  explicit unknown/overflow results; runtime/catalog and 544-file source gates
+  pass. Change 7 adds bounded locale-independent real/time formatting and
+  scanning, exact integer text beyond 2^53, declared-precision delay scaling,
+  checked event targets, and `$time`/`$stime`/`$realtime`; runtime/catalog and
+  546-file source gates pass. Change 8 adds typed interpreter/application
+  transport, O0/O2 and source-level signal-load/store differentials, debugger
+  mutation/inspection, callbacks, snapshots, and scalar-aware VCD; runtime,
+  LLVM, application-time, catalog, and 548-file source gates pass. Change 9
+  adds nonnumeric opaque `chandle` ownership through declarations, typedefs,
+  parameters, ports, callable profiles, contextual null/assignment/cast, and
+  equality/inequality, with stable rejection of numeric use; frontend,
+  elaboration, SystemVerilog-HIR application, catalog, and 549-file source
+  gates pass. Change 10 adds a generation-safe simulation registry with
+  pointer-free identity, transactional creation, alias/stale validation,
+  one-shot cleanup, bounded callbacks, typed interpreter/application transport,
+  debugger mutation and inspection, and exact-vector tracing; runtime,
+  application-time, catalog, and 552-file source gates pass. Change 11 replaces
+  byte indexing with one strict UTF-8/Unicode-scalar service used by length,
+  iteration, indexing, slicing, assignment, comparison, methods, and numeric
+  conversion. Interpreter, LLVM O0/O2, mutable-string cold/warm/edit,
+  catalog, and 555-file source gates pass. Change 12 completes the standard
+  string method set, including code-point-aware ASCII case/compare/substring,
+  deterministic integer conversions, `atoreal`/`realtoa` through the shared
+  scalar text service, and source/cache parity across interpreter and LLVM
+  O0/O2; frontend, elaboration, runtime, LLVM, application, catalog, and source
+  gates pass. Change 13 completes recursive scalar/string/container/aggregate
+  element profiles, owned default/resize/copy/conditional/comparison behavior,
+  real/time/chandle assignment patterns, exact recursive debugger output,
+  object/artifact/cache transport, and explicit rejection of packed-only
+  operations on composite elements. Frontend, elaboration, dedicated composite-
+  container elaboration, runtime, LLVM, time/string/aggregate application,
+  catalog, and 559-file source gates pass after eight-worker Debug builds;
+  `git diff --check` is clean. Change 14 completes package/import and recursive
+  callable constant substitution, exact scalar binary execution, full-width
+  canonical casts, static/automatic local behavior, four-family task copy-out,
+  stable recursive-call rejection, and isolated multi-root parameterized
+  specializations. Frontend, elaboration, runtime, LLVM, time/string/aggregate
+  application, catalog, and 559-file source gates pass after eight-worker Debug
+  builds; `git diff --check` is clean. Change 15 completes bounded scalar text/
+  binary file I/O, descriptor errors, scanning/formatting, null-only chandle
+  input, transactional copy-out, schema/cache invalidation, and interpreter/
+  compiled artifact parity. Change 16 completes owning-unit schema 8,
+  portable-library schema 5, exact scalar expression/type round trips,
+  context-typed negative scalar constants after object reload, standalone and
+  mapped-library relocation, and interpreter/LLVM O0/O2 cold/warm/edit cache
+  parity. Focused library/object/design artifact, application, catalog, and
+  source gates pass. Change 17 completes the cataloged parse/type/profile/
+  conversion and unsupported-operator matrix, runtime overflow/resource/
+  invalid-Unicode/stale-null negatives, explicit transactional rollback, and
+  malformed scalar-enum rejection in both artifact codecs. Change 18 completes
+  direct canonical payload and callback comparison across interpreter and LLVM
+  O0/O2 plus scheduling, debugger, trace, multiple-root, string/file/aggregate,
+  artifact/relocation, cold/warm, and edited-cache positive differentials; its
+  combined focused gate passes 9/9. Change 19 synchronizes architecture,
+  language support, artifact diagnostics, feature rows `SV-723` through
+  `SV-732`, deferred boundaries, inventories, UVM readiness, and this restart
+  record. Its reviewed baselines are 1,876 diagnostics, 559 bounded sources,
+  649 SPDX-owned artifacts, 217 test/control files, 1,162 executable rows,
+  4,648 evidence cells, 409 exact paths, and 110 runtime owners; inventory and
+  release-candidate gates pass. Changes 1-19 accumulate in one recoverable
+  worktree. Change 20 local qualification passes LLVM-disabled ASan/UBSan
+  109/109 in 760.62 seconds and exact LLVM 22.1.8 Debug/Release 112/112 in
+  349.47/304.22 seconds after repairing LLVM-disabled cache expectations and a
+  GCC 13 Release warning in synthesized no-delay ports. The accumulated commit,
+  push, and hosted non-documentation CI inspection remain.
+- Completed unit: Batch 149, exactly 20 changes, complete after pushed Batch
   148 closeout `dce6c36`. Its authoritative SystemVerilog constraint-solving
   and randomization contract is recorded in `implementation_plan_v2.md`.
   Changes 1 through 20 are complete. The root CMake

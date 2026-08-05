@@ -169,3 +169,14 @@ files. The constraint solver, deterministic stream/cycle algorithms, source
 fixtures, and documentation are clean-room code; no UVM source, external
 solver/RNG library, third-party constraint corpus, or provenance entry is
 imported.
+
+v2 Batch 150 adds canonical scalar folding, scalar/string/chandle runtime
+services, recursive scalar-container ownership, SystemC specialization
+partitioning, scalar interpreter/application adapters, and focused frontend,
+elaboration, runtime, and application owners as twenty-two SPDX-owned bounded
+C++ sources. Six scalar parse/elaboration diagnostics advance the reviewed
+totals to 1,876 diagnostics, 559 bounded C/C++ sources, 649 authored artifacts,
+and 217 authored test/control files. The real/time/string/chandle algorithms,
+fixtures, artifact payloads, and documentation are clean-room code; no UVM
+source, foreign runtime, external Unicode/number library, third-party scalar
+corpus, or provenance entry is imported.

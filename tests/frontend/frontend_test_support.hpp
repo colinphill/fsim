@@ -57,6 +57,8 @@ void test_vhdl_component_declarations();
 void test_vhdl_configurations();
 void test_vhdl_package_generics();
 void test_systemverilog_function_declarations();
+void test_systemverilog_real_time_declarations();
+void test_systemverilog_chandle_declarations();
 void test_systemverilog_task_declarations();
 void test_systemverilog_callable_closure_declarations();
 void test_systemverilog_class_declarations();

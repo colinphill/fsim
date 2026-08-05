@@ -146,10 +146,26 @@ Interpreter::Impl::get_container_object(
 [[nodiscard]] PackedLogic4 Interpreter::Impl::normalize_signal_value(
     const SignalId signal,
     PackedLogic4 value) const  {
-    return coerce_value_kind(
+    auto normalized = coerce_value_kind(
         std::move(value),
         get_signal(signal).value_kind);
-  }
+    const auto kind = get_signal(signal).systemverilog_scalar;
+    if (kind != SystemVerilogScalarKind::None) {
+      const auto decoded = decode_systemverilog_scalar_payload(
+          normalized, kind);
+      if (!decoded) {
+        throw std::invalid_argument{
+            "SimIR scalar signal has an invalid encoded payload"};
+      }
+      const auto classification = classify_systemverilog_scalar(decoded.value);
+      if (kind != SystemVerilogScalarKind::Chandle
+          && (!classification || !classification.finite)) {
+        throw std::invalid_argument{
+            "SimIR scalar signal requires a finite value"};
+      }
+    }
+    return normalized;
+}
 
 void Interpreter::Impl::remove_dynamic_wait(ProcessState &process)  {
     if (!process.waiting_on_signal) {
@@ -571,7 +587,8 @@ void Interpreter::Impl::notify_execution_point(
             value.suppress_leading_zero,
             value.minimum_width,
             value.left_justify,
-            value.zero_pad);
+            value.zero_pad,
+            value.scalar_kind);
       }
     }
     text += registration.trailing_text;
@@ -750,6 +767,7 @@ void Interpreter::Impl::publish(SignalId signal_id, PackedLogic4 value)  {
     if (signal.initial_value.width() != value.width()) {
       throw std::invalid_argument("SimIR signal assignment width mismatch");
     }
+    value = normalize_signal_value(signal_id, std::move(value));
     signal_transactions[signal_id] =
         std::pair{scheduler.now(), scheduler.delta() + 1};
     for (const auto& sensitivity : static_fanout[signal_id]) {
@@ -773,6 +791,16 @@ void Interpreter::Impl::publish(SignalId signal_id, PackedLogic4 value)  {
     evaluate_module_timing_checks(signal_id, old_value, signal.initial_value);
     if (signal_change_hook) {
       signal_change_hook(signal_id, signal.initial_value, scheduler.now());
+    }
+    if (scalar_signal_change_hook
+        && signal.systemverilog_scalar != SystemVerilogScalarKind::None) {
+      const auto scalar = decode_systemverilog_scalar_payload(
+          signal.initial_value, signal.systemverilog_scalar);
+      if (!scalar) {
+        throw std::logic_error{
+            "SimIR scalar signal published an invalid payload"};
+      }
+      scalar_signal_change_hook(signal_id, scalar.value, scheduler.now());
     }
     if (monitor_watches(signal_id)) {
       schedule_monitor_publication();

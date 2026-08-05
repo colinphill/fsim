@@ -46,6 +46,8 @@ struct Signal {
       StrengthRank::pull, StrengthRank::pull};
   std::optional<StrengthRank> charge_strength;
   std::optional<SimulationTick> charge_decay;
+  SystemVerilogScalarKind systemverilog_scalar{
+      SystemVerilogScalarKind::None};
 
   Signal() = default;
   Signal(
@@ -57,7 +59,9 @@ struct Signal {
       DriveStrength signal_implicit_drive_strength = {
           StrengthRank::pull, StrengthRank::pull},
       std::optional<StrengthRank> signal_charge_strength = std::nullopt,
-      std::optional<SimulationTick> signal_charge_decay = std::nullopt)
+      std::optional<SimulationTick> signal_charge_decay = std::nullopt,
+      SystemVerilogScalarKind signal_systemverilog_scalar =
+          SystemVerilogScalarKind::None)
       : name(std::move(signal_name)),
         initial_value(std::move(signal_initial_value)),
         resolution(signal_resolution),
@@ -65,5 +69,12 @@ struct Signal {
         implicit_driver(signal_implicit_driver),
         implicit_drive_strength(signal_implicit_drive_strength),
         charge_strength(signal_charge_strength),
-        charge_decay(signal_charge_decay) {}
+        charge_decay(signal_charge_decay),
+        systemverilog_scalar(signal_systemverilog_scalar) {}
+};
+
+struct SystemVerilogScalarSignalSnapshot {
+  SignalId signal{};
+  std::string name;
+  SystemVerilogScalarValue value;
 };

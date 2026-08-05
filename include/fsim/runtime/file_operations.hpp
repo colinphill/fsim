@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "fsim/runtime/systemverilog_scalar.hpp"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -42,6 +44,7 @@ struct FileWriteFormatted {
   bool newline{true}, signed_decimal{}, suppress_leading_zero{};
   std::uint32_t minimum_width{};
   bool left_justify{}, zero_pad{};
+  SystemVerilogScalarKind scalar_kind{SystemVerilogScalarKind::None};
 };
 struct FileWriteString {
   std::uint32_t handle{}, source{};
@@ -70,7 +73,7 @@ struct FileErrorStatus {
 
 enum class InputScanFormat : std::uint8_t {
   binary, octal, decimal, unsigned_decimal, hexadecimal, character, string,
-  boolean_value
+  boolean_value, real
 };
 enum class InputScanTargetKind : std::uint8_t {
   packed_register, packed_signal, string_register, string_object
@@ -79,6 +82,7 @@ struct InputScanTarget {
   InputScanTargetKind kind{InputScanTargetKind::packed_register};
   std::uint32_t id{}, width{1};
   bool two_state{};
+  SystemVerilogScalarKind scalar_kind{SystemVerilogScalarKind::None};
 };
 struct InputScanConversion {
   std::string prefix;
@@ -123,6 +127,7 @@ struct FileBinaryRead {
   bool two_state{};
   std::uint32_t start{}, count{};
   bool has_start{}, has_count{};
+  SystemVerilogScalarKind scalar_kind{SystemVerilogScalarKind::None};
 };
 
 enum class FilePositionKind : std::uint8_t { seek, tell, rewind };

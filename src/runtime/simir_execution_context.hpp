@@ -27,6 +27,7 @@ struct Interpreter::Impl::ExecutionContext final
       throw std::length_error{
           "SimIR string object exceeds byte limit"};
     }
+    (void)systemverilog_string_length(value);
     owner.get_string_object(object).initial_value = value;
   }
   [[nodiscard]] ContainerValue read_container_object(
@@ -62,7 +63,8 @@ struct Interpreter::Impl::ExecutionContext final
       const bool suppress_leading_zero,
       const std::uint32_t minimum_width,
       const bool left_justify,
-      const bool zero_pad) override {
+      const bool zero_pad,
+      const SystemVerilogScalarKind scalar_kind) override {
     owner.write_file(
         process,
         handle,
@@ -75,7 +77,8 @@ struct Interpreter::Impl::ExecutionContext final
             suppress_leading_zero,
             minimum_width,
             left_justify,
-            zero_pad),
+            zero_pad,
+            scalar_kind),
         false);
   }
   [[nodiscard]] std::string read_file_line(
@@ -483,7 +486,8 @@ struct Interpreter::Impl::ExecutionContext final
       const bool suppress_leading_zero,
       const std::uint32_t minimum_width,
       const bool left_justify,
-      const bool zero_pad) override {
+      const bool zero_pad,
+      const SystemVerilogScalarKind scalar_kind) override {
     auto text =
         make_formatted_output(
             prefix,
@@ -494,7 +498,8 @@ struct Interpreter::Impl::ExecutionContext final
             suppress_leading_zero,
             minimum_width,
             left_justify,
-            zero_pad);
+            zero_pad,
+            scalar_kind);
     if (postponed) {
       owner.scheduler.schedule(
           SchedulerPhase::postponed,

@@ -1153,8 +1153,7 @@ std::optional<Statement> VerilogParser::parse_statement() {
       }
       const auto consumes_value =
           [](const OutputFormat format) {
-            return format != OutputFormat::Hierarchy
-                && format != OutputFormat::Time;
+            return format != OutputFormat::Hierarchy;
           };
       const auto required_values =
           static_cast<std::size_t>(std::ranges::count_if(
@@ -1166,8 +1165,7 @@ std::optional<Statement> VerilogParser::parse_statement() {
           std::ranges::any_of(
               parsed_format.conversions,
               [](const auto& conversion) {
-                return conversion.format == OutputFormat::Hierarchy
-                    || conversion.format == OutputFormat::Time;
+                return conversion.format == OutputFormat::Hierarchy;
               });
       if (!parsed_format.valid || unsupported_conversion
           || parsed_format.conversions.size() > 1
@@ -1177,7 +1175,7 @@ std::optional<Statement> VerilogParser::parse_statement() {
             format_token,
             "FSIM-SV-SEM-076",
             task_name
-                + " supports a literal or one %b/%h/%o/%d/%c/%s "
+                + " supports a literal or one %b/%h/%o/%d/%c/%s/%e/%f/%g/%t "
                   "conversion with exactly one value");
       } else if (parsed_format.conversions.empty()) {
         statement.output_text =
@@ -1289,7 +1287,7 @@ std::optional<Statement> VerilogParser::parse_statement() {
                 format_token,
                 "FSIM-SV-SEM-042",
                 "the current formatted-output slice supports "
-                "%b, %h/%x, %o, %d, %c, %s, %m, or %t "
+                "%b, %h/%x, %o, %d, %c, %s, %e/%f/%g, %m, or %t "
                 "conversion, field width, left/zero padding, "
                 "and %%");
           } else if (values.size() < required_values) {
@@ -1529,7 +1527,7 @@ std::optional<Statement> VerilogParser::parse_statement() {
                "find", "find_index", "find_first",
                "find_first_index", "find_last",
                "find_last_index", "putc", "itoa",
-               "hextoa", "octtoa", "bintoa"},
+               "hextoa", "octtoa", "bintoa", "realtoa"},
               current(lookahead + 1U).text)) {
         container_method_statement = true;
         break;

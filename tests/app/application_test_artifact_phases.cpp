@@ -10,7 +10,9 @@
 #include <cassert>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <sstream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -67,6 +69,27 @@ module phase_watch;
   initial begin
     watched = 1'b0;
     #2 watched = 1'b1;
+  end
+endmodule
+
+module scalar_artifact;
+  real r;
+  shortreal s;
+  realtime rt;
+  time ticks;
+  chandle handle;
+  logic [4:0] checks;
+  initial begin
+    r = 1.25;
+    s = -2.5;
+    rt = 3.75;
+    ticks = 64'd9007199254740993;
+    handle = null;
+    checks[0] = r == 1.25;
+    checks[1] = s == -2.5;
+    checks[2] = rt == 3.75;
+    checks[3] = ticks == 64'd9007199254740993;
+    checks[4] = handle == null;
   end
 endmodule
 )";
@@ -193,6 +216,7 @@ end architecture;
       "fsim", "elaborate", "--object", vhdl_object_text.c_str(),
       "--object", sv_object_text.c_str(), "--top",
       "main=sv:work.phase_tb", "--top", "observer=sv:work.phase_watch",
+      "--top", "scalar=sv:work.scalar_artifact",
       "--output", design_text.c_str(), "--seed", "23"};
   const auto elaborate_result = cli::run(
       static_cast<int>(elaborate.size()), elaborate.data(), services,
@@ -210,7 +234,7 @@ end architecture;
   assert(design_inspection->compatible);
   assert(design_inspection->runtime_abi == runtime_abi_version);
   assert(design_inspection->roots
-      == std::vector<std::string>({"main", "observer"}));
+      == std::vector<std::string>({"main", "observer", "scalar"}));
   assert(design_inspection->process_count != 0);
   auto active_design = design;
 
@@ -246,7 +270,7 @@ end architecture;
     auto built = app::load_design_artifact(active_design, diagnostics);
     assert(built && !diagnostics.has_error());
     assert(built->design.roots()
-        == std::vector<std::string>({"main", "observer"}));
+        == std::vector<std::string>({"main", "observer", "scalar"}));
     assert(built->semantics.source_files().size() >= 2);
     assert(built->design.verilog_specify_paths().size() == 1);
     assert(built->design.verilog_timing_checks().size() == 1);
@@ -262,7 +286,15 @@ end architecture;
         simulation.find_signal("main.counter.stable_probe");
     const auto vital_probe =
         simulation.find_signal("main.counter.vital_probe");
-    assert(counter && watch && stable_probe && vital_probe);
+    const auto scalar_checks = simulation.find_signal("scalar.checks");
+    const auto scalar_real = simulation.find_signal("scalar.r");
+    const auto scalar_short = simulation.find_signal("scalar.s");
+    const auto scalar_realtime = simulation.find_signal("scalar.rt");
+    const auto scalar_time = simulation.find_signal("scalar.ticks");
+    const auto scalar_handle = simulation.find_signal("scalar.handle");
+    assert(counter && watch && stable_probe && vital_probe && scalar_checks
+        && scalar_real && scalar_short && scalar_realtime && scalar_time
+        && scalar_handle);
     std::size_t callbacks{};
     simulation.set_signal_change_hook(
         [&](runtime::simir::SignalId, const runtime::PackedLogic4&,
@@ -273,6 +305,13 @@ end architecture;
     assert(callbacks != 0);
     assert(simulation.read_signal(*stable_probe).to_msb_string() == "1");
     assert(simulation.read_signal(*vital_probe).to_msb_string() == "1");
+    assert(simulation.read_signal(*scalar_checks).to_msb_string() == "11111");
+    assert(simulation.read_scalar_signal(*scalar_real).as_real() == 1.25);
+    assert(simulation.read_scalar_signal(*scalar_short).as_shortreal() == -2.5F);
+    assert(simulation.read_scalar_signal(*scalar_realtime).as_real() == 3.75);
+    assert(simulation.read_scalar_signal(*scalar_time).as_time()
+        == UINT64_C(9007199254740993));
+    assert(simulation.read_scalar_signal(*scalar_handle).as_chandle() == 0);
     std::ostringstream debugger_output;
     std::ostringstream debugger_error;
     app::DebuggerControl debugger{
@@ -287,7 +326,9 @@ end architecture;
   };
   const auto interpreted = run_engine(app::SimulationEngine::interpreter);
   const auto compiled = run_engine(app::SimulationEngine::compiled);
+  const auto compiled_warm = run_engine(app::SimulationEngine::compiled);
   assert(interpreted == compiled);
+  assert(compiled == compiled_warm);
   assert(interpreted.first == "00000001");
   assert(interpreted.second == "1");
 
@@ -303,7 +344,8 @@ end architecture;
   const std::vector<const char*> simulate{
       "fsim", "simulate", "--design", active_design_text.c_str(), "--engine",
       "compiled", "--trace", trace_text.c_str(), "--trace-filter",
-      "main.*", "--trace-filter", "observer.*"};
+      "main.*", "--trace-filter", "observer.*", "--trace-filter",
+      "scalar.*"};
   assert(cli::run(
       static_cast<int>(simulate.size()), simulate.data(), services,
       output, error) == 0);
@@ -318,6 +360,9 @@ end architecture;
   assert(trace_bytes.find("observer") != std::string::npos);
   assert(trace_bytes.find("stable_probe") != std::string::npos);
   assert(trace_bytes.find("vital_probe") != std::string::npos);
+  assert(trace_bytes.find("scalar") != std::string::npos);
+  assert(trace_bytes.find("ticks") != std::string::npos);
+  assert(trace_bytes.find("handle") != std::string::npos);
   assert(
       trace_bytes.find("attribute_source'stable(1)")
       != std::string::npos);
@@ -376,10 +421,151 @@ end architecture;
       api_elaborate_diagnostics));
   assert(!api_elaborate_diagnostics.has_error());
   diagnostic::Engine api_load_diagnostics;
-  const auto api_loaded = app::load_design_artifact(
+  auto api_loaded = app::load_design_artifact(
       api_design, api_load_diagnostics);
   assert(api_loaded && !api_load_diagnostics.has_error());
   assert(api_loaded->design.roots() == std::vector<std::string>{"api"});
+  auto& malformed_scalar_signals =
+      const_cast<std::vector<elaboration::SignalInfo>&>(
+          api_loaded->design.signals());
+  assert(!malformed_scalar_signals.empty());
+  malformed_scalar_signals.front().systemverilog_scalar =
+      static_cast<frontend::SystemVerilogScalarKind>(255);
+  diagnostic::Engine malformed_scalar_artifact_diagnostics;
+  assert(!app::serialize_runtime_state(
+      api_loaded->design, malformed_scalar_artifact_diagnostics));
+  assert(std::ranges::any_of(
+      malformed_scalar_artifact_diagnostics.diagnostics(),
+      [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-ART-0013"
+            && diagnostic.message.find("invalid scalar enumeration")
+                != std::string::npos;
+      }));
+
+  auto scalar_export_config = api_compile_config;
+  scalar_export_config.project.name = "scalar-artifact-library";
+  scalar_export_config.project.top = "sv:work.scalar_artifact";
+  scalar_export_config.project.time_resolution = "1ns";
+  scalar_export_config.build.cache_path = directory / "scalar-export-cache";
+  auto scalar_library = directory / "scalar-artifact.fsimlib";
+  diagnostic::Engine scalar_export_diagnostics;
+  assert(app::export_library(
+      scalar_export_config, "work", scalar_library,
+      scalar_export_diagnostics));
+  assert(!scalar_export_diagnostics.has_error());
+  struct ScalarLibraryCapture {
+    std::string checks;
+    std::array<std::uint64_t, 5> payloads{};
+    std::vector<std::string> keys;
+    app::NativeCacheStatistics cache;
+    std::size_t compiled_processes{};
+  };
+  ScalarLibraryCapture scalar_o2_reference;
+  const auto run_scalar_library = [&](
+      const project::Optimization optimization,
+      const app::SimulationEngine engine) {
+    project::Config mapped;
+    mapped.base_directory = directory;
+    mapped.project.name = "scalar-artifact-consumer";
+    mapped.project.top = "sv:work.scalar_artifact";
+    mapped.project.time_resolution = "1ns";
+    mapped.build.optimization = optimization;
+    mapped.build.cache_path = directory
+        / (optimization == project::Optimization::o0
+               ? "scalar-mapped-o0" : "scalar-mapped-o2");
+    mapped.library_mappings.push_back({"work", scalar_library});
+    diagnostic::Engine diagnostics;
+    auto built = app::build_project(mapped, diagnostics);
+    if (!built) diagnostic::print_text(std::cerr, diagnostics);
+    assert(built && built->mapped_libraries.size() == 1);
+    ScalarLibraryCapture capture;
+    capture.keys = built->specialization_cache_keys;
+    app::Simulation simulation{std::move(*built), 1000, engine};
+    capture.cache = simulation.native_cache_statistics();
+    capture.compiled_processes = simulation.compiled_process_count();
+    const auto checks = simulation.find_signal("scalar_artifact.checks");
+    const std::array signals{
+        simulation.find_signal("scalar_artifact.r"),
+        simulation.find_signal("scalar_artifact.s"),
+        simulation.find_signal("scalar_artifact.rt"),
+        simulation.find_signal("scalar_artifact.ticks"),
+        simulation.find_signal("scalar_artifact.handle")};
+    assert(checks && std::ranges::all_of(
+        signals, [](const auto& signal) { return signal.has_value(); }));
+    assert(simulation.run().status == runtime::RunStatus::completed);
+    capture.checks = simulation.read_signal(*checks).to_msb_string();
+    for (std::size_t index = 0; index < signals.size(); ++index) {
+      capture.payloads[index] =
+          simulation.read_scalar_signal(*signals[index]).bits;
+    }
+    return capture;
+  };
+  for (const auto optimization :
+       {project::Optimization::o0, project::Optimization::o2}) {
+    const auto scalar_interpreted = run_scalar_library(
+        optimization, app::SimulationEngine::interpreter);
+    const auto scalar_cold = run_scalar_library(
+        optimization, app::SimulationEngine::compiled);
+    const auto scalar_warm = run_scalar_library(
+        optimization, app::SimulationEngine::compiled);
+    assert(scalar_interpreted.checks == "11111");
+    assert(scalar_interpreted.payloads == scalar_cold.payloads
+        && scalar_cold.payloads == scalar_warm.payloads);
+    assert(scalar_interpreted.keys == scalar_cold.keys
+        && scalar_cold.keys == scalar_warm.keys);
+#if defined(FSIM_HAS_LLVM)
+    assert(scalar_cold.compiled_processes == 1);
+    assert(scalar_warm.cache.hits == 1);
+#endif
+    if (optimization == project::Optimization::o2) {
+      scalar_o2_reference = scalar_warm;
+    }
+  }
+  const auto relocated_scalar_library =
+      directory / "relocated-scalar-artifact.fsimlib";
+  std::filesystem::rename(scalar_library, relocated_scalar_library);
+  scalar_library = relocated_scalar_library;
+  const auto relocated_scalar = run_scalar_library(
+      project::Optimization::o2, app::SimulationEngine::compiled);
+  assert(
+      relocated_scalar.checks == "11111"
+      && relocated_scalar.payloads == scalar_o2_reference.payloads
+      && relocated_scalar.keys == scalar_o2_reference.keys);
+#if defined(FSIM_HAS_LLVM)
+  assert(relocated_scalar.cache.hits == 1);
+#endif
+
+  std::ifstream scalar_source_input(sv_source, std::ios::binary);
+  std::string edited_scalar_source{
+      std::istreambuf_iterator<char>{scalar_source_input}, {}};
+  assert(scalar_source_input.good() || scalar_source_input.eof());
+  const auto scalar_assignment = edited_scalar_source.find("r = 1.25;");
+  assert(scalar_assignment != std::string::npos);
+  edited_scalar_source.replace(
+      scalar_assignment, std::string{"r = 1.25;"}.size(), "r = 1.5;");
+  {
+    std::ofstream scalar_source_output(
+        sv_source, std::ios::binary | std::ios::trunc);
+    scalar_source_output << edited_scalar_source;
+    assert(scalar_source_output.good());
+  }
+  scalar_library = directory / "edited-scalar-artifact.fsimlib";
+  diagnostic::Engine edited_scalar_export_diagnostics;
+  assert(app::export_library(
+      scalar_export_config, "work", scalar_library,
+      edited_scalar_export_diagnostics));
+  assert(!edited_scalar_export_diagnostics.has_error());
+  const auto edited_scalar = run_scalar_library(
+      project::Optimization::o2, app::SimulationEngine::compiled);
+  assert(
+      edited_scalar.checks == "11110"
+      && edited_scalar.payloads != scalar_o2_reference.payloads
+      && edited_scalar.keys != scalar_o2_reference.keys);
+#if defined(FSIM_HAS_LLVM)
+  assert(
+      edited_scalar.compiled_processes == 1
+      && edited_scalar.cache.hits + edited_scalar.cache.misses == 1);
+#endif
 
   const auto verilog_source = directory / "artifact_phase.v";
   const auto verilog_object = directory / "artifact-verilog.fsimobj";

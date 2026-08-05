@@ -81,6 +81,16 @@ private:
     std::string token,
     const InputScanFormat format,
     const InputScanTarget& target) {
+  if (target.scalar_kind != SystemVerilogScalarKind::None
+      && target.scalar_kind != SystemVerilogScalarKind::Chandle) {
+    token.erase(std::remove(token.begin(), token.end(), '_'), token.end());
+    const auto scalar = scan_systemverilog_scalar(
+        token, target.scalar_kind);
+    if (!scalar) return std::nullopt;
+    auto packed = encode_systemverilog_scalar_payload(scalar.value);
+    if (!packed) return std::nullopt;
+    return InputScanValue{std::move(packed.value), {}, false};
+  }
   if (format == InputScanFormat::boolean_value) {
     std::ranges::transform(token, token.begin(), [](const char character) {
       return static_cast<char>(std::tolower(
@@ -105,8 +115,11 @@ private:
   }
   if (digits.empty()) return std::nullopt;
 
-  const auto make = [&](std::uint64_t aval, std::uint64_t bval) {
+  const auto make = [&](std::uint64_t aval, std::uint64_t bval)
+      -> std::optional<InputScanValue> {
     if (negative && bval == 0) aval = 0U - aval;
+    if (target.scalar_kind == SystemVerilogScalarKind::Chandle
+        && (aval != 0 || bval != 0)) return std::nullopt;
     if (target.two_state) {
       aval &= ~bval;
       bval = 0;
@@ -203,6 +216,11 @@ private:
     return (character >= 'a' && character <= 'z')
         || (character >= 'A' && character <= 'Z');
   }
+  if (format == InputScanFormat::real) {
+    return (character >= '0' && character <= '9') || character == '.'
+        || character == 'e' || character == 'E'
+        || character == '+' || character == '-' || character == '_';
+  }
   if (first && (character == '+' || character == '-')) return true;
   if (character == '_' || character == '?' || character == 'x'
       || character == 'X' || character == 'z' || character == 'Z') return true;
@@ -273,6 +291,7 @@ InputScanResult scan_formatted_input(
       result.consumed = scanner.consumed();
       return result;
     }
+    if (conversion.suppress) continue;
     std::optional<InputScanValue> value;
     const bool text_format = conversion.format == InputScanFormat::character
         || conversion.format == InputScanFormat::string;
@@ -290,10 +309,8 @@ InputScanResult scan_formatted_input(
       result.consumed = scanner.consumed();
       return result;
     }
-    if (!conversion.suppress) {
-      result.values[index] = std::move(value);
-      ++result.assignments;
-    }
+    result.values[index] = std::move(value);
+    ++result.assignments;
   }
   (void)scanner.match(operation.trailing_text);
   result.consumed = scanner.consumed();

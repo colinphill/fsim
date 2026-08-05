@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/frontend.hpp"
+#include "fsim/frontend/systemverilog_scalar_folding.hpp"
 
 #include <algorithm>
 #include <array>
@@ -814,6 +815,195 @@ endmodule
           && has_code("FSIM-SV-SEM-064"),
       "function default, ref lifetime, type, input-write, and timing "
       "diagnostics");
+}
+
+void test_systemverilog_real_time_declarations() {
+  const auto parsed = parse_text(
+      "real-time-declarations.sv",
+      R"(
+module real_time_types(
+    input shortreal sample,
+    output real result,
+    input realtime delay_value,
+    input time tick_value);
+  function automatic real convert(
+      input shortreal argument,
+      input realtime offset);
+    real exact_decimal = 1.2500;
+    shortreal exponent_decimal = 6.02e+2;
+    realtime physical_delay = 250ps;
+    time fractional_tick = 1.5ns;
+    convert = argument;
+  endfunction
+endmodule
+
+class scalar_owner;
+  real gain = 2.5;
+  shortreal ratio = 5e-1;
+  realtime deadline = 10us;
+endclass
+)",
+      Language::SystemVerilog2017);
+  require(parsed.ok(), "SystemVerilog real/time declarations must parse");
+  const auto& unit = parsed.design.units.front();
+  require(
+      unit.ports.size() == 4
+          && unit.ports[0].type.systemverilog_scalar
+              == SystemVerilogScalarKind::ShortReal
+          && unit.ports[0].type.width() == 32
+          && unit.ports[1].type.systemverilog_scalar
+              == SystemVerilogScalarKind::Real
+          && unit.ports[1].type.width() == 64
+          && unit.ports[2].type.systemverilog_scalar
+              == SystemVerilogScalarKind::Realtime
+          && unit.ports[3].type.systemverilog_scalar
+              == SystemVerilogScalarKind::Time,
+      "ports retain exact shortreal/real/realtime/time kinds");
+  const auto& function = unit.functions.front();
+  require(
+      function.return_type.systemverilog_scalar
+              == SystemVerilogScalarKind::Real
+          && function.arguments.size() == 2
+          && function.arguments[0].type.systemverilog_scalar
+              == SystemVerilogScalarKind::ShortReal
+          && function.arguments[1].type.systemverilog_scalar
+              == SystemVerilogScalarKind::Realtime
+          && function.variables.size() == 4,
+      "callable profiles and locals retain exact scalar kinds");
+
+  const auto& exact = *function.variables[0].initializer;
+  const auto& exponent = *function.variables[1].initializer;
+  const auto& physical = *function.variables[2].initializer;
+  const auto& fractional = *function.variables[3].initializer;
+  require(
+      exact.systemverilog_decimal_literal
+          && exact.systemverilog_decimal_literal->kind
+              == SystemVerilogDecimalLiteralKind::Real
+          && exact.systemverilog_decimal_literal->digits == "125"
+          && exact.systemverilog_decimal_literal->decimal_exponent == -2
+          && exponent.systemverilog_decimal_literal
+          && exponent.systemverilog_decimal_literal->digits == "602"
+          && exponent.systemverilog_decimal_literal->decimal_exponent == 0,
+      "real literals retain canonical exact digits and decimal exponents");
+  require(
+      physical.systemverilog_decimal_literal
+          && physical.systemverilog_decimal_literal->kind
+              == SystemVerilogDecimalLiteralKind::Time
+          && physical.systemverilog_decimal_literal->digits == "25"
+          && physical.systemverilog_decimal_literal->decimal_exponent == 1
+          && physical.systemverilog_decimal_literal->time_unit == "ps"
+          && fractional.systemverilog_decimal_literal
+          && fractional.systemverilog_decimal_literal->digits == "15"
+          && fractional.systemverilog_decimal_literal->decimal_exponent == -1
+          && fractional.systemverilog_decimal_literal->time_unit == "ns"
+          && fractional.span.end.offset - fractional.span.begin.offset == 5,
+      "time literals retain canonical magnitude, unit, and complete span");
+
+  auto arithmetic = Expression{
+      ExpressionKind::Binary, "+", {exact, exponent}, exact.span};
+  std::string scalar_error;
+  require(
+      propagate_systemverilog_scalar_types(arithmetic, {}, scalar_error)
+          && arithmetic.systemverilog_scalar_kind
+              == SystemVerilogScalarKind::Real,
+      "mixed real expression propagation retains the dominant exact kind");
+  const auto arithmetic_value = evaluate_systemverilog_scalar_constant(
+      arithmetic, {}, {}, scalar_error);
+  require(
+      arithmetic_value && arithmetic_value->real()
+          && *arithmetic_value->real() == 603.25,
+      "real constant arithmetic folds to deterministic IEEE-754 bits");
+
+  auto condition = Expression{
+      ExpressionKind::Binary, "<", {exact, exponent}, exact.span};
+  auto conditional = Expression{
+      ExpressionKind::Call, "?:", {condition, exact, exponent}, exact.span};
+  require(
+      propagate_systemverilog_scalar_types(conditional, {}, scalar_error)
+          && conditional.systemverilog_scalar_kind
+              == SystemVerilogScalarKind::Real,
+      "conditional expressions merge real-family branch types");
+  const auto conditional_value = evaluate_systemverilog_scalar_constant(
+      conditional, {}, {}, scalar_error);
+  require(
+      conditional_value && conditional_value->real()
+          && *conditional_value->real() == 1.25,
+      "real comparisons and conditional truth fold deterministically");
+
+  auto cast = Expression{
+      ExpressionKind::Call, "@sv-cast:shortreal", {exact}, exact.span};
+  require(
+      propagate_systemverilog_scalar_types(cast, {}, scalar_error)
+          && cast.systemverilog_scalar_kind
+              == SystemVerilogScalarKind::ShortReal,
+      "explicit real-family casts propagate their exact result kind");
+  const auto cast_value = evaluate_systemverilog_scalar_constant(
+      cast, {}, {}, scalar_error);
+  require(
+      cast_value && cast_value->kind == SystemVerilogScalarKind::ShortReal
+          && cast_value->real() && *cast_value->real() == 1.25,
+      "real-to-shortreal constant conversion uses binary32 rounding");
+
+  auto time_expression = physical;
+  require(
+      propagate_systemverilog_scalar_types(time_expression, {}, scalar_error)
+          && time_expression.systemverilog_scalar_kind
+              == SystemVerilogScalarKind::Realtime,
+      "time literals propagate as realtime expressions before integral casts");
+  const auto time_value = evaluate_systemverilog_scalar_constant(
+      time_expression,
+      {},
+      SystemVerilogScalarEvaluationContext{1'000, 1'000},
+      scalar_error);
+  require(
+      time_value && time_value->real() && *time_value->real() == 250.0,
+      "time literal folding applies the exact evaluation time unit");
+  const auto rounded_time = convert_systemverilog_scalar_constant(
+      *evaluate_systemverilog_scalar_constant(exact, {}, {}, scalar_error),
+      SystemVerilogScalarKind::Time,
+      scalar_error);
+  require(
+      rounded_time && rounded_time->integral()
+          && *rounded_time->integral() == 1,
+      "real-to-time conversion uses deterministic nearest rounding");
+
+  require(
+      parsed.design.systemverilog_classes.size() == 1
+          && parsed.design.systemverilog_classes.front().properties.size()
+              == 3
+          && parsed.design.systemverilog_classes.front().properties[0]
+                 .declaration.type.systemverilog_scalar
+              == SystemVerilogScalarKind::Real
+          && parsed.design.systemverilog_classes.front().properties[1]
+                 .declaration.type.systemverilog_scalar
+              == SystemVerilogScalarKind::ShortReal
+          && parsed.design.systemverilog_classes.front().properties[2]
+                 .declaration.type.systemverilog_scalar
+              == SystemVerilogScalarKind::Realtime,
+      "class properties own exact real-family kinds");
+
+  const auto malformed = parse_text(
+      "malformed-real-time.sv",
+      R"(
+module malformed_real_time;
+  real missing_exponent = 1e+;
+  realtime invalid_unit = 1.25fortnights;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(!malformed.ok(), "malformed real/time literals must reject");
+  require(
+      std::ranges::any_of(
+          malformed.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-281";
+          })
+          && std::ranges::any_of(
+              malformed.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-282";
+              }),
+      "malformed exponent and time unit receive stable diagnostics");
 }
 
 void test_vhdl_function_declarations() {

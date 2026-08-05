@@ -1911,21 +1911,364 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 150 - SystemVerilog real, time, string, and foreign scalar closure
 
-- **Changes 1-4:** complete `shortreal`, `real`, `realtime`, real/time literals,
-  exact type propagation, constant folding, parameters, ports, and callable
-  profiles.
-- **Changes 5-8:** add deterministic IEEE-754 runtime storage, arithmetic,
-  comparison, conversion, formatting, scheduling, debugger, callback, and
-  trace behavior.
-- **Changes 9-12:** implement `chandle`, `null`/equality/casts, host-safe opaque
-  identity, Unicode code-point string semantics, and remaining standard string
-  methods.
-- **Changes 13-16:** close real/time/string/chandle aggregate, container,
-  package, function/task, file-I/O, artifact, relocation, and cache behavior.
-- **Changes 17-19:** add transactional negatives, cross-engine differentials,
-  documentation, diagnostics, feature rows, inventories, and restart evidence.
-- **Change 20:** run the monitoring-batch sanitizer, full Debug/Release and
-  release gates, commit/push once, then inspect and repair all non-doc CI jobs.
+1. **Complete.** Own and parse `shortreal`, `real`, and `realtime` declarations
+   plus decimal/exponent, time-unit, and special real/time literal forms with
+   exact source spans and stable diagnostics. A focused scalar header now owns
+   distinct shortreal/real/realtime/time type identities and exact canonical
+   decimal payloads as digits times a signed power of ten, with source time
+   units retained before semantic conversion. Module ports/variables, function
+   returns/arguments/locals, tasks, class properties, typedefs, and type actuals
+   recognize the scalar families. Literal spans cover unit suffixes;
+   `FSIM-SV-PARSE-281` and `282` reject malformed/excessive exponents and
+   lexically adjacent invalid units without consuming a whitespace-separated
+   delay target. The complete frontend, semantic-HIR, catalog, and source gates
+   pass after an eight-worker Debug build; the source gate covers 538 files.
+2. **Complete.** Resolve exact real/time type propagation and conversions and
+   implement deterministic constant folding for literals, unary/binary
+   expressions, conditions, casts, and mixed integral operands. A centralized
+   scalar folding service propagates shortreal/real/realtime/time kinds through
+   identifiers, promotion, predicates, conditionals, and explicit casts. It
+   converts the Change 1 exact decimal representation with locale-independent
+   `from_chars`, requires IEC 559 binary32/binary64, retains canonical bits,
+   applies exact source time-unit scaling, and uses checked signed arithmetic
+   for pure integral operands. Constant proof covers real arithmetic and
+   comparison, conditional branch typing, binary32 casts, nearest integral/time
+   conversion, truth, and physical time scaling. Exact-LLVM Debug frontend,
+   catalog, and 540-file source gates pass after eight-worker builds.
+3. **Complete.** Preserve real/time constants, parameters, localparams, package
+   values, defaults, specialization identity, and checked dependency ordering.
+   A dedicated scalar environment now remains separate from the existing
+   width/four-state integral and string environments. It evaluates typed and
+   inferred scalar actuals/defaults in declaration order under each unit's
+   exact timeunit/timeprecision context, applies declared conversion once,
+   reconstructs source-independent typed expressions, and keys specialization
+   identity from canonical kind plus IEEE/tick bits. Specialized package values
+   import without host-integer loss, and parent values propagate through child
+   overrides and generate parameter sites. Focused proof covers dependent
+   real/localparam values, package real/realtime constants, nearest time
+   conversion, distinct override identities, and rejected forward dependency.
+   The SystemC construction-specialization tail was split into its own source
+   to retain the 2,000-line contract. Exact-LLVM Debug elaboration, catalog,
+   and 542-file source gates pass after eight-worker builds.
+4. **Complete.** Close real/time net/variable ports and function/task argument,
+   return, default, direction, overload, and cross-boundary profiles. Explicit
+   `var` ports plus composite `wire`/`tri` real/time net declarations now retain
+   net provenance independently from the scalar data type. Elaborated signal
+   profiles carry shortreal/real/realtime/time identity; exact same-language
+   module boundaries accept input/output/inout profiles while mismatched or
+   mixed-language scalar profiles fail before packed adaptation. Specialized
+   callable and port defaults receive scalar substitution/type propagation,
+   and interface exports match complete return, formal kind, direction, and
+   ref profiles rather than names alone. Proof covers `input var real`, `output
+   var shortreal`, `inout wire time`, real/time nets and variables, real return
+   plus realtime/time defaults, ref task formals, exact interface exports, and
+   rejected scalar port/export mismatches. Exact-LLVM Debug frontend,
+   elaboration, semantic-HIR, catalog, and 542-file source gates pass after
+   eight-worker builds.
+5. **Complete.** Add portable deterministic IEEE-754 `shortreal`/`real` and
+   exact-tick `time`/`realtime` runtime storage plus arithmetic kernels and
+   checked materialization budgets. The engine-neutral runtime value owns raw
+   binary32, binary64, or unsigned tick bits with canonical kind identities.
+   One shared add/subtract/multiply/divide kernel applies deterministic scalar
+   promotion, binary32 result rounding, binary64 operations, and checked exact
+   tick arithmetic; it rejects zero divisors, tick overflow/underflow,
+   nonfinite values/results, invalid kinds, and non-nearest host rounding
+   modes. The scalar arena uses stable 16-byte canonical accounting and
+   independent value, byte, and operation ceilings with checked 32-bit IDs,
+   load/store, and result materialization. Runtime proof covers negative zero,
+   exact payloads for binary32 and binary64 arithmetic, realtime/tick
+   promotion, every checked arithmetic failure, invalid IDs, nonfinite values,
+   and exhausted storage/work budgets. Exact-LLVM Debug runtime, catalog, and
+   544-file source gates pass after eight-worker builds.
+6. **Complete.** Implement runtime comparison, logical truth, integral/real/time
+   conversion, rounding, classification, and unknown/overflow behavior. The
+   shared scalar kernel compares signed integral and unsigned time values
+   exactly beyond binary64 precision, applies IEEE predicates to real-family
+   values, and defines finite-only logical truth. Checked conversions cover
+   signed integral, unsigned ticks, shortreal, real, and realtime with explicit
+   nearest-away, truncation, floor, and ceiling modes plus binary32 narrowing.
+   Packed ingress retains declared signedness and rejects X/Z as
+   `UnknownValue`; packed egress rounds once and proves destination width/range
+   before materialization. Classification distinguishes zero/sign, normal,
+   subnormal, infinity, and NaN in the source binary32 or binary64 format.
+   Proof covers exact large-tick and mixed-sign comparisons, negative zero,
+   IEEE NaN equality/inequality, every rounding mode, signed/time overflow,
+   real narrowing, known and unknown packed inputs, width overflow, and both
+   float/double subnormal categories. Exact-LLVM Debug runtime, catalog, and
+   544-file source gates pass after eight-worker builds.
+7. **Complete.** Close real/time formatting, display/scan/file conversion,
+   delay scaling, event scheduling, and time-system-function behavior. A shared
+   engine-neutral text/time service formats canonical binary32, binary64,
+   signed-integral, and exact unsigned-tick values with general/fixed/
+   scientific/decimal/time modes, explicit precision/width/padding/suffix
+   controls, locale-independent `to_chars`, and bounded output. Its matching
+   bounded scanner trims only defined ASCII whitespace, consumes complete
+   inputs, preserves integer text beyond binary64 precision, rounds decimal
+   conversions once under an explicit policy, and distinguishes malformed,
+   nonfinite, overflowing, and resource-exhausted input. Descriptor-level
+   transactional file plumbing remains deliberately owned by Change 15; all
+   display, scan, and text-file paths now have one conversion contract to call.
+   Exact time contexts validate timeunit/timeprecision/project-resolution
+   divisibility. Integral delays scale without floating-point conversion;
+   real/realtime delays round half away from zero exactly once at declared
+   precision before checked project-tick multiplication, and scheduling rejects
+   negative values and target-tick overflow. `$time` rounds exact project ticks
+   into local units, `$stime` applies its 32-bit unsigned result width, and
+   `$realtime` returns local-unit binary64 under nearest host rounding. Focused
+   proof covers locale-independent padded/suffixed output, exact values beyond
+   2^53, signed/real scans, malformed/nonfinite/capped input, half-quantum
+   delays, negative/context/arithmetic failures, scheduling overflow, every
+   time function, and host-rounding rejection. Exact-LLVM Debug runtime,
+   catalog, and 546-file source gates pass after eight-worker builds.
+8. **Complete.** Expose real/time values consistently through interpreter,
+   LLVM O0/O2, debugger mutation/inspection, callbacks, trace snapshots, and
+   VCD policy. SimIR signals and debug locals now retain their exact scalar
+   kind while a known packed carrier holds only the canonical raw binary32,
+   binary64, or tick payload; scalar arithmetic and conversion never acquire
+   packed semantics. Typed interpreter and application APIs own checked
+   deposit, force, scheduling, inspection, snapshots, debug-local mutation,
+   and independent change observers. Partial scalar updates, resolution,
+   strength/charge behavior, unknown carriers, kind/width mismatches, and
+   nonfinite ingress reject before publication. The debugger formats and scans
+   these values through the shared Change 7 service. Trace state retains scalar
+   kinds: real, shortreal, and realtime emit VCD real declarations/changes,
+   including negative zero, while `time` remains an exact 64-bit vector so
+   values beyond 2^53 cannot round through binary64. Runtime proof covers
+   transport, callbacks, snapshots, debug locals, rejection, and VCD policy;
+   LLVM and source-application differentials exercise the same raw payloads in
+   interpreter, compiled O0, and compiled O2 modes, including signal
+   load/store. Exact-LLVM Debug runtime, LLVM, application-time, catalog, and
+   548-file source gates pass after eight-worker builds.
+9. **Complete.** Own and resolve `chandle` declarations, `null`, equality,
+   inequality, assignments, casts, parameters, ports, and callable profiles.
+   The frontend now admits the opaque 64-bit identity as a variable data type
+   in module, procedural, class, typedef, value/type-actual, port, function,
+   and task positions without admitting it as a net or numeric type. Contextual
+   resolution types `null`, assignments, returns, formal actuals, and
+   `chandle` casts; only equality and inequality with another `chandle` or
+   `null` produce an integral predicate. Arithmetic, logical truth,
+   numeric/aggregate casts, and incompatible assignments reject through stable
+   `FSIM-SV-SEM-174`/`175` diagnostics. The constant layer keeps null handles
+   nonnumeric while preserving canonical specialization identity, dependent
+   aliases, predicates, casts, and rejecting numeric parameter actuals.
+   Same-language port and interface callable profiles require exact `chandle`
+   identity, including return, direction, `ref`, and default-null formals.
+   Non-null host identity, generation/lifetime checks, alias execution,
+   debugger display, and callbacks remain exclusively Change 10 scope. Focused
+   exact-LLVM Debug frontend, elaboration, SystemVerilog-HIR application,
+   catalog, and 549-file source gates pass after eight-worker builds.
+10. **Complete.** Implement host-safe opaque `chandle` identity, null/stale
+    checks, alias transfer, lifetime policy, debugger display, and callbacks
+    without serializing or exposing host pointers. A simulation-owned registry
+    now issues generation-qualified 64-bit slot identities with zero reserved
+    for `null`; neither snapshots, callbacks, traces, nor debugger output carry
+    a host address or cleanup closure. Nonowning alias transfer preserves exact
+    identity and publishes bounded metadata, while explicit release, clear, or
+    registry destruction stales every alias and invokes foreign cleanup once.
+    Checked live-handle, metadata-byte, observer, slot, generation, and alias
+    budgets reject before publication. Cleanup failure cannot resurrect an
+    identity, observer failure cannot roll back a published operation, and
+    creation metadata allocation is transactional. Typed SimIR and application
+    deposit/force paths validate live identities; interpreter and compiled
+    O0/O2 signal access, independent scalar and registry callbacks, snapshots,
+    debugger list/inspect/mutation, and VCD exact-vector output retain only the
+    simulator identity. Focused proof covers null/live/stale states, reuse,
+    equality, alias counts, one-shot and throwing cleanup, observer containment,
+    resource exhaustion, public/debugger stale rejection, trace policy, and
+    source execution in all three engines. Exact-LLVM Debug runtime,
+    application-time, catalog, and 552-file source gates pass after an
+    eight-worker build.
+11. **Complete.** Replace byte-oriented SystemVerilog string execution with
+    deterministic Unicode code-point indexing, length, slicing, assignment,
+    comparison, iteration, and conversion semantics. One engine-neutral strict
+    UTF-8 service now decodes only Unicode scalar values, rejects overlong,
+    truncated, surrogate, bad-continuation, and above-U+10FFFF encodings, and
+    exposes stable source-order code-point values plus byte spans. Length,
+    inclusive slice, indexed read/replacement, equality/ordering, `getc`,
+    `putc`, `substr`, case-insensitive ASCII folding over Unicode iteration,
+    and numeric conversion all share that service. Indexed reads and mutation
+    now use 32-bit scalar values; replacement re-encodes one complete code
+    point transactionally and enforces the existing 4,096-byte storage bound.
+    String-object ingress validates strict UTF-8, native validation rejects an
+    invalid literal before compilation, and the renamed code-point SimIR/JIT
+    operation invalidates byte-semantic native cache identities. Runtime proof
+    covers one- through four-byte scalars, offsets, length/index/slice,
+    expansion, scalar ordering, iteration, conversions, every malformed class,
+    rollback, and resource exhaustion. Exact-LLVM Debug interpreter, LLVM
+    O0/O2, mutable-string source application cold/warm/edit, catalog, and
+    555-file source gates pass after eight-worker builds.
+12. **Complete.** Implement the remaining standard string methods, including
+    case conversion, comparison, substring/search, numeric conversion, and
+    formatting, with locale-independent behavior. `toupper`/`tolower` now
+    validate and traverse strict Unicode storage while applying only the
+    language-defined ASCII mapping; non-ASCII scalar values remain unchanged.
+    `compare`/`icompare`, inclusive `substr`, `getc`/`putc`, and indexed string
+    expressions share Change 11 code-point order and 32-bit scalar results.
+    Decimal, hexadecimal, octal, and binary parse/format methods retain exact
+    32-bit wrap/sign behavior, underscore handling, and ASCII-only radix rules.
+    The missing `atoreal` and `realtoa` methods now use the Change 7 scanner and
+    formatter: binary64 payloads cross interpreter and native fallback without
+    decimal or host-locale round trips, malformed real text returns the defined
+    zero value, and canonical finite/nonfinite output is bounded. Parser arity,
+    result kind/width, SimIR validation, native register transport, method
+    mutation, and cache identity all include the completed method set. The
+    mutable-string source matrix exercises every standard method plus
+    `$sformat`/`$swrite`/`$sformatf`, Unicode substring/index behavior, real
+    conversion, cold/warm/edit caches, and interpreter/LLVM O0/O2 equivalence.
+    Exact-LLVM Debug frontend, elaboration, runtime, LLVM, application,
+    catalog, and 555-file source gates pass after eight-worker builds.
+13. **Complete.** Close real/time/string/chandle members, assignment patterns,
+    fixed/dynamic arrays, queues, associative arrays, and nested unpacked
+    aggregate/container copy and comparison behavior. Container HIR now retains
+    one complete recursive element type, including heterogeneous named
+    unpacked-struct members, while shared elaboration materializes exact
+    packed, scalar, string, nested-container, and aggregate runtime profiles.
+    Value-owned runtime storage, initialization, resize, resource accounting,
+    copy, conditional selection, and logical/case equality recurse through
+    strings, nested containers, and aggregate member boxes; real comparison is
+    numeric, time/chandle comparison preserves exact raw identity, and strings
+    use validated UTF-8 byte identity. Scalar assignment patterns and selected
+    writes cover real/time/chandle carriers; whole string and recursive
+    composite values support default construction, resize, independent copy,
+    comparison, debugger formatting, object transport, and native-cache
+    round trips. Packed-only slice, reduction, locator, ordering, and selected
+    composite mutation paths reject before emitting unsafe operations through
+    cataloged diagnostics. Focused frontend, elaboration, dedicated composite-
+    container elaboration, runtime, LLVM, time/string/aggregate application,
+    diagnostic-catalog, and 559-file source gates pass after eight-worker Debug
+    builds; `git diff --check` is clean.
+14. **Complete.** Close package, import, parameterized specialization,
+    function/task, recursion, static/automatic lifetime, and multi-root behavior
+    for all four scalar families. Scalar and string parameter substitution now
+    traverses callable defaults, locals, nested statements, outputs, task
+    actuals, and return expressions, so imported package functions and each
+    parameterized child receive their exact specialized real/time/string/
+    chandle constants. Built-in scalar cast marks are visible even in a child
+    whose scalar types occur only in callables; canonical real/time casts keep
+    their full 32/64-bit payload width. A typed scalar-binary SimIR operation
+    and shared payload service execute arithmetic and comparisons in callable
+    bodies through interpreter and native O0/O2 paths with validated register
+    kinds, artifact/cache identity, exact chandle equality, and checked runtime
+    errors. Static packed/scalar and string callable locals persist, automatic
+    locals reinitialize, and automatic task copy-in/out covers real, time,
+    string, and chandle values. Two independently selected roots instantiate
+    distinct real/time/string specializations and static state while importing
+    a package string function; both finish with all callable/lifetime checks
+    set. Direct and indirect recursion retain their bounded deterministic
+    `FSIM-ELAB-SVFUNC-006`/`FSIM-ELAB-SVTASK-008` rejection contract. Focused
+    exact-LLVM Debug frontend, elaboration, runtime, LLVM, time/string/
+    aggregate application, diagnostic-catalog, and 559-file source gates pass
+    after eight-worker builds; `git diff --check` is clean.
+15. **Complete.** Close bounded text/binary file I/O, scanning, formatting,
+    descriptor/error behavior, and transactional copy-out for real/time/string/
+    chandle values. `%e`/`%f`/`%g` scans and outputs now carry an exact scalar
+    kind through file, display/monitor, and `$sformat*` SimIR; real/shortreal/
+    realtime payloads use the shared locale-independent text service, and
+    `time` accepts checked decimal or real text plus exact `%d`/`%t` output.
+    `$fread` stages canonical 32/64-bit scalar payloads and scalar container
+    elements before copy-out, while failed/overflowing scans leave the failed
+    destination untouched and retain the standard prior-assignment count.
+    Opaque chandle output preserves its exact hexadecimal identity, but text
+    and binary input may restore only null so external bytes cannot fabricate
+    a live or stale registry identity. Existing manifest confinement, handle
+    ownership, close/EOF/error, seek, flush, lookahead, UTF-8, and byte/storage
+    budgets remain shared by interpreter and compiled execution. Native
+    validation and cache keys cover every format, target kind, width, two-state
+    flag, and scalar discriminator; runtime artifact schema 9, constraint-HIR
+    schema 2, native object schema 84, and scalar-file semantic revision 32
+    invalidate older layouts. Focused proof covers e/f/g/t lowering, real/time/
+    string/null-chandle text and binary round trips, underscore input,
+    overflow and partial-conversion rollback, non-null chandle rejection,
+    descriptor failures, runtime-state round trips, and O0/O2 interpreter,
+    cold/warm, and edited-source parity. Exact-LLVM Debug frontend,
+    elaboration, runtime, LLVM, scalar-file application, artifact, catalog,
+    source-budget, and diff-whitespace gates pass after eight-worker builds.
+16. **Complete.** Preserve every scalar family through `.fsimobj`, standalone
+    `.fsimdesign`, relocated mapped `.fsimlib`, interpreter/LLVM service
+    boundaries, and cold/warm/edit native caches with versioned schemas. The
+    portable owning-unit codec now archives exact SystemVerilog decimal
+    payloads, expression scalar identities, data-type scalar identities, and
+    net provenance in the same canonical order as the standalone design codec.
+    Owning-unit schema 8 and portable-library schema 5 reject older layouts,
+    while deterministic round-trip proof covers real, shortreal, realtime,
+    time, chandle, and negative decimal operands. Context-typed unary scalar
+    constants convert once into the destination shortreal/real/realtime/time
+    representation after object reload. The artifact-phase matrix now carries
+    all five scalar carriers from source through object and standalone design,
+    scalar-aware trace output, mapped-library export, physical relocation, and
+    interpreter plus native O0/O2 cold/warm execution. Relocation preserves
+    payloads and specialization keys, while an edited producer source changes
+    both the executable payload and native key without reusing the prior
+    semantic entry. Exact-LLVM Debug library/object/design artifact,
+    application, diagnostic-catalog, and 559-file source gates pass after
+    eight-worker builds; `git diff --check` is clean.
+17. **Complete.** Add cataloged parse/type/profile/conversion, unsupported form,
+    overflow/resource, invalid Unicode, stale/null, malformed artifact, and
+    transactional rollback negatives. The focused frontend/elaboration matrix
+    now proves malformed decimal/unit parsing, incompatible chandle semantics,
+    parameter and full scalar-profile mismatches, finite-conversion overflow,
+    and unsupported runtime scalar operators through stable
+    `FSIM-SV-PARSE-281`/`282`, `FSIM-SV-SEM-174`/`175`, parameter/binding, and
+    `FSIM-ELAB-SVSCALAR-001`/`002` diagnostics. Runtime negatives cover checked
+    arithmetic/conversion/delay overflow, divide-by-zero, unknown packed input,
+    text and work/storage limits, all malformed UTF-8 classes, null/stale handle
+    alias/release behavior, callback/cleanup failure, and registry budgets.
+    Failed scalar stores, expanding Unicode replacements, and resource-rejected
+    chandle creation now explicitly prove unchanged prior state and zero partial
+    publication. Both the portable owning-unit and standalone design-state
+    codecs validate scalar-kind and exact-decimal enumeration ranges during
+    write and read; malformed internal state rejects through cataloged
+    `FSIM-LIB-0006` or `FSIM-ART-0013` before an artifact is published. Exact-
+    LLVM Debug frontend/elaboration, runtime, library/application artifact,
+    diagnostic-catalog, and 559-file source gates pass after eight-worker
+    builds; `git diff --check` is clean.
+18. **Complete.** Add complete cross-engine, optimization, debugger/callback/
+    trace, scheduling, multiple-root, artifact/relocation, and cache positive
+    differentials for all Batch 150 surfaces. The scalar-surface application
+    now compares canonical real, shortreal, realtime, time, chandle, callable,
+    and derived-result payloads plus callback counts directly across the
+    interpreter and LLVM O0/O2. Its debugger exercises typed show/deposit/
+    force/release, live and stale chandle inspection, snapshots, and independent
+    scalar/registry observers, while VCD proof distinguishes real-family
+    declarations from exact 64-bit time/chandle vectors. The time matrix compares
+    rounded scheduling timestamps and byte-identical VCD output across engines
+    and O0/O2 cold/warm caches. Existing focused matrices add strict-Unicode
+    strings and methods with edited caches, scalar file I/O, recursive aggregate
+    and independently specialized multiple-root state, standalone/object and
+    relocated mapped-library artifacts, and edited semantic/native keys. Exact-
+    LLVM Debug runtime, LLVM, application/artifact, time, mutable-string, scalar-
+    file, aggregate/multiple-root, diagnostic-catalog, and 559-file source gates
+    pass 9/9 in 34.15 seconds after eight-worker builds; `git diff --check` is
+    clean.
+19. **Complete.** Synchronize architecture, language support, diagnostics,
+    feature rows, deferred boundaries, inventories, UVM readiness, and restart
+    evidence. Architecture and language support now own the distinct real/time
+    scalar plane, strict Unicode-scalar strings, generation-safe chandles,
+    recursive composite/file transport, artifact schemas, and the explicit
+    Batches 151-162 boundary through arbitrary-width, SVA/coverage, foreign
+    interfaces, and UVM closure. Feature rows `SV-723` through `SV-732` own the
+    positive, negative, implementation, and differential evidence; completed
+    real-family/chandle/Unicode work is removed from the deferred data-model
+    row. Artifact diagnostics explicitly cover invalid scalar enumerations.
+    The reviewed baselines are 1,876 diagnostics, 559 bounded sources, 649
+    SPDX-owned artifacts, 217 test/control files, 1,162 executable rows, 4,648
+    evidence cells, 409 exact paths, and 110 runtime owners. Inventory and
+    release-candidate gates pass, with the evidence matrix and sorted path set
+    frozen by reviewed SHA-256 digests.
+20. **In progress.** Run the LLVM-disabled sanitizer, exact-LLVM Debug and
+    Release, source/catalog/inventory/installed-public/Windows ABI/differential/
+    release gates after eight-worker builds, commit and push once, then inspect
+    and repair every non-documentation hosted CI job. Local qualification is
+    complete: the LLVM-disabled ASan/UBSan suite passes 109/109 in 760.62
+    seconds with leak detection disabled because the managed runner executes
+    under ptrace; address and undefined-behavior checks remain enabled. Exact
+    LLVM 22.1.8 Debug passes 112/112 in 349.47 seconds and Release passes
+    112/112 in 304.22 seconds. The boundary repaired one LLVM-disabled class-
+    cache assertion so fallback execution requires zero cache activity, and
+    replaced two synthesized-port aggregate constructions with explicit
+    default-initialized declarations to avoid GCC 13's `-O3` false-positive
+    move warning for a disengaged recursive optional delay. The accumulated
+    commit/push and hosted non-documentation CI inspection remain.
 
 ### Batch 151 - Arbitrary-width packed values and aggregate closure
 

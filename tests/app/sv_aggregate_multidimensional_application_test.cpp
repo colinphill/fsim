@@ -26,7 +26,7 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 7> values;
+  std::array<std::string, 8> values;
   std::string vcd;
   std::string debugger;
   std::size_t compiled{};
@@ -61,6 +61,12 @@ package aggregate_types;
     logic [3:0] tag;
     logic [3:0] data;
   } packet_t;
+  typedef struct {
+    real weight;
+    time ticks;
+    string label;
+    chandle cookie;
+  } state_t;
 endpackage
 
 module matrix_child(
@@ -111,6 +117,19 @@ module aggregate_multidimensional_top #(
   PACKET_T pending_packets[$:3];
   logic [63:0] container_observed;
   logic [7:0] packet_child_observed;
+  real real_values[1:0];
+  real real_copy[1:0];
+  time time_values[];
+  time time_copy[];
+  chandle handle_values[$];
+  chandle handle_copy[$];
+  string string_values[];
+  string string_copy[];
+  string nested_strings[1:0][];
+  string nested_copy[1:0][];
+  state_t states[1:0];
+  state_t state_copy[1:0];
+  logic [7:0] scalar_container_observed;
   int row;
   int column;
 
@@ -217,6 +236,28 @@ module aggregate_multidimensional_top #(
       packet_pick(packet_matrix, 0, 1),
       dynamic_packets[0], pending_packets[0]
     };
+    real_values = '{0.0, 0.0};
+    real_copy = real_values;
+    assert (real_copy == real_values);
+    real_copy[0] = 1.5;
+    assert (real_copy != real_values);
+    time_values = '{7, 9};
+    time_copy = new[3](time_values);
+    assert (time_copy[0] == 7);
+    assert (time_copy[1] == 9);
+    assert (time_copy[2] == 0);
+    handle_values = '{0, 0};
+    handle_copy = handle_values;
+    assert (handle_copy == handle_values);
+    string_values = new[2];
+    string_copy = string_values;
+    assert (string_copy == string_values);
+    assert (string_copy.size() == 2);
+    nested_copy = nested_strings;
+    assert (nested_copy == nested_strings);
+    state_copy = states;
+    assert (state_copy == states);
+    scalar_container_observed = 8'ha5;
     #2 $finish;
   end
 endmodule
@@ -269,14 +310,15 @@ Capture execute(
   Capture capture;
   capture.compiled = simulation.compiled_process_count();
   capture.cache = simulation.native_cache_statistics();
-  constexpr std::array<std::string_view, 7> names{
+  constexpr std::array<std::string_view, 8> names{
       "aggregate_multidimensional_top.aggregate_observed",
       "aggregate_multidimensional_top.matrix_observed",
       "aggregate_multidimensional_top.dynamic_observed",
       "aggregate_multidimensional_top.child_observed",
       "aggregate_multidimensional_top.aggregate_child_observed",
       "aggregate_multidimensional_top.container_observed",
-      "aggregate_multidimensional_top.packet_child_observed"};
+      "aggregate_multidimensional_top.packet_child_observed",
+      "aggregate_multidimensional_top.scalar_container_observed"};
   std::array<fsim::runtime::simir::SignalId, names.size()> signals{};
   std::array<fsim::runtime::VcdSignal, names.size()> traces{};
   std::ostringstream vcd_text;
@@ -316,6 +358,9 @@ Capture execute(
       simulation, debugger_output, debugger_error};
   debugger.execute({"show", "matrix"});
   debugger.execute({"show", "packet_matrix"});
+  debugger.execute({"show", "string_copy"});
+  debugger.execute({"show", "nested_copy"});
+  debugger.execute({"show", "state_copy"});
   assert(debugger_error.str().empty());
   capture.debugger = debugger_output.str();
   return capture;
@@ -345,9 +390,19 @@ void verify(
       capture.values[5]
       == "0001001000110101010001100101011101101000011111101000101011001101");
   assert(capture.values[6] == "01111110");
+  assert(capture.values[7] == "10100101");
   assert(capture.vcd.find("#1") != std::string::npos);
   assert(capture.debugger.find("matrix = [") != std::string::npos);
   assert(capture.debugger.find("packet_matrix = [") != std::string::npos);
+  assert(
+      capture.debugger.find("string_copy = [\"\", \"\"]")
+          != std::string::npos);
+  assert(
+      capture.debugger.find("nested_copy = [1:[], 0:[]]")
+          != std::string::npos);
+  assert(
+      capture.debugger.find("state_copy = [1:{weight=0")
+          != std::string::npos);
 }
 
 } // namespace

@@ -248,6 +248,12 @@ namespace fsim::runtime::simir {
     }
     return text;
   }
+  case OutputFormat::real_scientific:
+  case OutputFormat::real_fixed:
+  case OutputFormat::real_general:
+  case OutputFormat::time:
+    throw std::logic_error{
+        "scalar formatted-output conversion has no scalar metadata"};
   }
   throw std::logic_error{"invalid formatted-output conversion"};
 }
@@ -261,7 +267,35 @@ namespace fsim::runtime::simir {
     const bool suppress_leading_zero,
     const std::uint32_t minimum_width,
     const bool left_justify,
-    const bool zero_pad) {
+    const bool zero_pad,
+    const SystemVerilogScalarKind scalar_kind) {
+  const bool scalar_text = scalar_kind != SystemVerilogScalarKind::None
+      && scalar_kind != SystemVerilogScalarKind::Chandle
+      && (format == OutputFormat::real_scientific
+          || format == OutputFormat::real_fixed
+          || format == OutputFormat::real_general
+          || format == OutputFormat::time
+          || format == OutputFormat::decimal);
+  if (scalar_text) {
+    const auto decoded = decode_systemverilog_scalar_payload(value, scalar_kind);
+    if (!decoded) throw std::runtime_error{"invalid scalar formatted payload"};
+    SystemVerilogScalarFormatOptions options;
+    options.format = format == OutputFormat::real_scientific
+        ? SystemVerilogScalarTextFormat::Scientific
+        : format == OutputFormat::real_fixed
+            ? SystemVerilogScalarTextFormat::Fixed
+        : format == OutputFormat::time
+            ? SystemVerilogScalarTextFormat::Time
+        : scalar_kind == SystemVerilogScalarKind::Time
+            ? SystemVerilogScalarTextFormat::Decimal
+            : SystemVerilogScalarTextFormat::General;
+    options.minimum_width = minimum_width;
+    options.left_justify = left_justify;
+    options.padding = zero_pad ? '0' : ' ';
+    const auto formatted = format_systemverilog_scalar(decoded.value, options);
+    if (!formatted) throw std::runtime_error{"scalar formatting failed"};
+    return std::string{prefix} + formatted.text + std::string{suffix};
+  }
   auto formatted =
       format_output_value(
           value, format, signed_decimal, suppress_leading_zero);

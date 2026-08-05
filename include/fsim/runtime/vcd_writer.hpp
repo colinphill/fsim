@@ -4,6 +4,7 @@
 #include "fsim/runtime/logic.hpp"
 #include "fsim/runtime/packed_value.hpp"
 #include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -35,6 +36,11 @@ public:
 
   [[nodiscard]] VcdSignal declare_signal(std::string_view hierarchical_name,
                                          std::size_t width);
+  /// Real-family values use VCD `real`; exact `time` and opaque `chandle`
+  /// values remain 64-bit vectors so their identities are never rounded.
+  [[nodiscard]] VcdSignal declare_systemverilog_scalar(
+      std::string_view hierarchical_name,
+      SystemVerilogScalarKind kind);
 
   /// Emit the header and position the dump at initial_time.
   void begin(SimulationTick initial_time = 0);
@@ -44,6 +50,9 @@ public:
   void change(VcdSignal signal, const PackedBit2 &value);
   void change(VcdSignal signal, const PackedLogic4 &value);
   void change(VcdSignal signal, const PackedLogic9 &value);
+  void change(
+      VcdSignal signal,
+      const SystemVerilogScalarValue& value);
 
   /// Advance the output timestamp. Time may remain equal but never decrease.
   void set_time(SimulationTick time);

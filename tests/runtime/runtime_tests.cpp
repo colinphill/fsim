@@ -14,6 +14,11 @@ int main() {
     // FSIM-CONFORMANCE CF-COMMON-VCD-001 source=SRC-COCOTB expectation=execute
     test_logic();
     test_packed_values();
+    test_systemverilog_scalar_values();
+    test_systemverilog_scalar_text_and_time();
+    test_systemverilog_scalar_execution_surfaces();
+    test_systemverilog_chandle_registry();
+    test_systemverilog_unicode_strings();
     test_scheduler_phase_order();
     test_scheduler_stop_resume();
     test_scheduler_time_limit_before_future_event();

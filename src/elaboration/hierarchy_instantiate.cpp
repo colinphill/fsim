@@ -189,12 +189,59 @@ void adapt_vhdl_array_port_shapes(
             frontend::ValueDomain::Boolean, "boolean");
         static const auto builtin_bit = builtin_scalar(
             frontend::ValueDomain::Bit2, "bit");
+        const auto builtin_systemverilog_scalar = [](
+            const std::string_view spelling,
+            const frontend::SystemVerilogScalarKind kind,
+            const frontend::ValueDomain domain,
+            const bool is_signed) {
+          frontend::Type type;
+          type.spelling = spelling;
+          type.systemverilog_scalar = kind;
+          type.domain = domain;
+          type.is_signed = is_signed;
+          return type;
+        };
+        static const auto builtin_shortreal =
+            builtin_systemverilog_scalar(
+                "shortreal",
+                frontend::SystemVerilogScalarKind::ShortReal,
+                frontend::ValueDomain::Unknown,
+                true);
+        static const auto builtin_real = builtin_systemverilog_scalar(
+            "real",
+            frontend::SystemVerilogScalarKind::Real,
+            frontend::ValueDomain::Unknown,
+            true);
+        static const auto builtin_realtime =
+            builtin_systemverilog_scalar(
+                "realtime",
+                frontend::SystemVerilogScalarKind::Realtime,
+                frontend::ValueDomain::Unknown,
+                true);
+        static const auto builtin_time = builtin_systemverilog_scalar(
+            "time",
+            frontend::SystemVerilogScalarKind::Time,
+            frontend::ValueDomain::Bit2,
+            false);
+        static const auto builtin_chandle = builtin_systemverilog_scalar(
+            "chandle",
+            frontend::SystemVerilogScalarKind::Chandle,
+            frontend::ValueDomain::Unknown,
+            false);
         if (unit.language == frontend::Language::Vhdl2008) {
           visible_type_marks.emplace("integer", &builtin_integer);
           visible_type_marks.emplace("natural", &builtin_natural);
           visible_type_marks.emplace("positive", &builtin_positive);
           visible_type_marks.emplace("boolean", &builtin_boolean);
           visible_type_marks.emplace("bit", &builtin_bit);
+        } else if (
+            unit.language
+            == frontend::Language::SystemVerilog2017) {
+          visible_type_marks.emplace("shortreal", &builtin_shortreal);
+          visible_type_marks.emplace("real", &builtin_real);
+          visible_type_marks.emplace("realtime", &builtin_realtime);
+          visible_type_marks.emplace("time", &builtin_time);
+          visible_type_marks.emplace("chandle", &builtin_chandle);
         }
         const auto expose_type_mark =
             [&](const std::string_view name,
@@ -515,173 +562,31 @@ void adapt_vhdl_array_port_shapes(
                 continue;
             }
             if (variable.type.systemverilog_container) {
-                const auto width = variable.type.width();
-                if (!width || *width == 0 || *width > 64
-                    || variable.type.packed_aggregate
-                        == frontend::PackedAggregateKind::UnpackedStruct
-                    || variable.type.domain
-                        == frontend::ValueDomain::String) {
-                    report(
-                        "FSIM-ELAB-SVCONTAINER-003",
-                        "container elements must be bounded integral, enum, "
-                        "or packed aggregate values with an executable "
-                        "width in 1..64",
-                        variable.span);
-                    continue;
-                }
-                ContainerType type;
-                type.element_width =
-                    static_cast<std::uint32_t>(*width);
-                type.element_nominal_type =
-                    variable.type.nominal_type;
-                type.two_state =
-                    is_two_state_domain(variable.type.domain);
-                type.signed_elements = variable.type.is_signed;
-                type.queue =
-                    variable.type.systemverilog_container->kind
-                    == frontend::SystemVerilogContainerKind::Queue;
-                type.associative =
-                    variable.type.systemverilog_container->kind
-                    == frontend::SystemVerilogContainerKind::
-                        AssociativeArray;
-                type.fixed =
-                    variable.type.systemverilog_container->kind
-                    == frontend::SystemVerilogContainerKind::
-                        StaticArray;
-                if (type.associative) {
-                    const auto& index_type =
-                        variable.type.systemverilog_container
-                            ->associative_index_type;
-                    const auto index_width =
-                        index_type ? index_type->width()
-                                   : std::nullopt;
-                    if (!index_type || !index_width
-                        || *index_width == 0
-                        || *index_width > 64
-                        || index_type->domain
-                            == frontend::ValueDomain::String
-                        || index_type->domain
-                            == frontend::ValueDomain::Unknown
-                        || !index_type->packed_members.empty()
-                        || index_type->vhdl_array) {
-                        report(
-                            "FSIM-ELAB-SVCONTAINER-013",
-                            "associative-array indices require a resolved "
-                            "integral scalar type with width in 1..64",
-                            variable.type.systemverilog_container->span);
-                        continue;
-                    }
-                    type.index_width =
-                        static_cast<std::uint32_t>(*index_width);
-                    type.two_state_indices =
-                        is_two_state_domain(index_type->domain);
-                    type.signed_indices = index_type->is_signed;
-                }
-                if (variable.type.systemverilog_container
-                        ->queue_maximum) {
-                    std::string error;
-                    const auto maximum =
-                        evaluate_systemverilog_constant_expression(
-                            *variable.type.systemverilog_container
-                                 ->queue_maximum,
-                            {},
-                            parameter_environment,
-                            error);
-                    const auto maximum_index =
-                        maximum
-                            ? maximum->integer_value()
-                            : std::nullopt;
-                    if (!maximum_index
-                        || *maximum_index < 0) {
-                        report(
-                            "FSIM-ELAB-SVCONTAINER-004",
-                            "bounded queue maximum index must specialize "
-                            "to a known nonnegative value",
-                            variable.type.systemverilog_container
-                                ->queue_maximum->span);
-                        continue;
-                    }
-                    type.maximum_elements =
-                        static_cast<std::uint64_t>(
-                            *maximum_index) + 1U;
-                }
-                if (type.fixed) {
-                    const auto& ranges =
-                        variable.type.systemverilog_container
-                            ->static_range_expressions;
-                    const auto in_int32 =
-                        [](const std::int64_t value) {
-                          return value
-                                  >= std::numeric_limits<
-                                      std::int32_t>::min()
-                              && value
-                                  <= std::numeric_limits<
-                                      std::int32_t>::max();
-                        };
-                    std::uint64_t total = 1;
-                    bool valid_dimensions = !ranges.empty();
-                    for (const auto& range : ranges) {
-                        std::string left_error;
-                        std::string right_error;
-                        const auto left_value =
-                            evaluate_systemverilog_constant_expression(
-                                range.left, {}, parameter_environment,
-                                left_error);
-                        const auto right_value =
-                            evaluate_systemverilog_constant_expression(
-                                range.right, {}, parameter_environment,
-                                right_error);
-                        std::int64_t left{};
-                        std::int64_t right{};
-                        bool has_left{};
-                        bool has_right{};
-                        if (left_value) {
-                            if (const auto converted =
-                                    left_value->integer_value()) {
-                                left = *converted;
-                                has_left = true;
-                            }
-                        }
-                        if (right_value) {
-                            if (const auto converted =
-                                    right_value->integer_value()) {
-                                right = *converted;
-                                has_right = true;
-                            }
-                        }
-                        if (!has_left || !has_right || !in_int32(left)
-                            || !in_int32(right)) {
-                            valid_dimensions = false;
-                            break;
-                        }
-                        const auto count = static_cast<std::uint64_t>(
-                            left >= right
-                                ? left - right
-                                : right - left) + 1U;
-                        const auto storage_limit =
-                            maximum_container_elements(type);
-                        if (count > storage_limit
-                            || total > storage_limit / count) {
-                            valid_dimensions = false;
-                            break;
-                        }
-                        total *= count;
-                        type.dimensions.push_back(ContainerDimension{
-                            static_cast<std::int32_t>(left),
-                            static_cast<std::int32_t>(right)});
-                    }
-                    if (!valid_dimensions) {
-                        report(
-                            "FSIM-ELAB-SVCONTAINER-020",
-                            "static unpacked-array dimensions must "
-                            "specialize to 32-bit ranges within the "
-                            "per-container owning-storage budget",
-                            variable.type.systemverilog_container->span);
-                        continue;
-                    }
-                    type.index_left = type.dimensions.front().first;
-                    type.index_right = type.dimensions.front().second;
-                }
+                const auto evaluate_container_constant =
+                    [&](const frontend::Expression& expression) {
+                      std::string error;
+                      const auto value =
+                          evaluate_systemverilog_constant_expression(
+                              expression, {}, parameter_environment,
+                              error);
+                      return value ? value->integer_value()
+                                   : std::optional<std::int64_t>{};
+                    };
+                auto materialized =
+                    materialize_systemverilog_container_type(
+                        variable.type,
+                        variable.span,
+                        evaluate_container_constant,
+                        [&](std::string code,
+                            std::string message,
+                            frontend::SourceSpan source) {
+                          report(
+                              std::move(code),
+                              std::move(message),
+                              std::move(source));
+                        });
+                if (!materialized) continue;
+                auto type = std::move(*materialized);
                 if (variable.initializer) {
                     report(
                         "FSIM-ELAB-SVCONTAINER-012",
@@ -739,6 +644,17 @@ void adapt_vhdl_array_port_shapes(
                     design_.signals_[*signal].initial_value =
                         PackedLogic4::from_aval_bval(64, 0, 0);
                 }
+                continue;
+            }
+            if (variable.type.systemverilog_scalar
+                != frontend::SystemVerilogScalarKind::None) {
+                const frontend::SignalDeclaration declaration{
+                    variable.name,
+                    variable.type,
+                    frontend::PortDirection::Unknown,
+                    false,
+                    variable.span};
+                (void)add_owned_signal(declaration, path, local);
                 continue;
             }
             if (variable.type.domain

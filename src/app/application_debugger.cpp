@@ -34,9 +34,64 @@ namespace {
 }
 
 [[nodiscard]] std::string format_container(
+    const runtime::simir::ContainerValue& value);
+
+[[nodiscard]] std::string format_container_element(
+    const runtime::simir::ContainerValue& value,
+    const std::size_t index) {
+  using runtime::simir::ContainerElementKind;
+  switch (value.type.element_kind) {
+  case ContainerElementKind::Packed:
+    return value.elements[index].to_msb_string();
+  case ContainerElementKind::Scalar: {
+    const auto scalar = runtime::decode_systemverilog_scalar_payload(
+        value.elements[index], value.type.scalar_kind);
+    if (!scalar) return "<invalid scalar>";
+    if (scalar.value.kind == runtime::SystemVerilogScalarKind::Chandle) {
+      return scalar.value.bits == 0
+          ? "null"
+          : "chandle(" + std::to_string(scalar.value.bits) + ")";
+    }
+    const auto formatted = runtime::format_systemverilog_scalar(
+        scalar.value);
+    return formatted ? formatted.text : "<invalid scalar>";
+  }
+  case ContainerElementKind::String:
+    return escaped_string(value.string_elements[index]);
+  case ContainerElementKind::Container:
+  case ContainerElementKind::Aggregate:
+    return format_container(value.nested_elements[index]);
+  }
+  return "<invalid element>";
+}
+
+[[nodiscard]] std::string format_container(
     const runtime::simir::ContainerValue& value) {
+  const bool aggregate_value =
+      value.type.element_kind
+          == runtime::simir::ContainerElementKind::Aggregate
+      && !value.type.fixed && !value.type.queue
+      && !value.type.associative;
+  if (aggregate_value) {
+    std::string result{"{"};
+    for (std::size_t index = 0;
+         index < value.nested_elements.size(); ++index) {
+      if (index != 0) result += ", ";
+      if (index < value.type.member_names.size()) {
+        result += value.type.member_names[index] + "=";
+      }
+      const auto& member = value.nested_elements[index];
+      result += member.type.fixed
+              && runtime::simir::container_value_size(member) == 1
+          ? format_container_element(member, 0)
+          : format_container(member);
+    }
+    result += "}";
+    return result;
+  }
   std::string result{"["};
-  for (std::size_t index = 0; index < value.elements.size(); ++index) {
+  const auto size = runtime::simir::container_value_size(value);
+  for (std::size_t index = 0; index < size; ++index) {
     if (index != 0) {
       result += ", ";
     }
@@ -53,7 +108,7 @@ namespace {
       result += std::to_string(declared_index);
       result += ":";
     }
-    result += value.elements[index].to_msb_string();
+    result += format_container_element(value, index);
   }
   result += "]";
   return result;
@@ -103,6 +158,16 @@ namespace {
   const auto& object = simulation.class_heap().object(word.aval);
   return "handle " + std::to_string(word.aval) + " declared "
       + *declared + " dynamic " + object.dynamic_type;
+}
+
+[[nodiscard]] std::string format_scalar_local(
+    const Simulation& simulation,
+    const runtime::SystemVerilogScalarValue& value) {
+  if (value.kind == runtime::SystemVerilogScalarKind::Chandle) {
+    return simulation.chandle_registry().format(value.bits);
+  }
+  const auto formatted = runtime::format_systemverilog_scalar(value);
+  return formatted ? formatted.text : "<invalid scalar>";
 }
 
 [[nodiscard]] std::vector<std::pair<std::string, SignalId>>
@@ -282,6 +347,27 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
       }
       return;
     }
+    if (command[0] == "chandles" && command.size() == 1) {
+      const auto values = simulation_.chandle_registry().snapshots();
+      if (values.empty()) output_ << "(no live chandles)\n";
+      for (const auto& value : values) {
+        output_ << simulation_.chandle_registry().format(value.handle)
+                << " aliases " << value.alias_transfers << '\n';
+      }
+      return;
+    }
+    if (command[0] == "chandle" && command.size() == 2) {
+      std::uint64_t handle{};
+      const auto converted = std::from_chars(
+          command[1].data(), command[1].data() + command[1].size(), handle);
+      if (converted.ec != std::errc{}
+          || converted.ptr != command[1].data() + command[1].size()) {
+        output_ << "usage: chandle HANDLE\n";
+      } else {
+        output_ << simulation_.chandle_registry().format(handle) << '\n';
+      }
+      return;
+    }
     if (command[0] == "class" && command.size() == 2
         && command[1] == "statics") {
       for (const auto& state : simulation_.class_static_store().snapshots()) {
@@ -416,6 +502,11 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
             simulation_.runtime_adapter().signals().at(signal->second);
         const auto& value = simulation_.read_signal(signal->second);
         output_ << signal->first << " = ";
+        if (info.systemverilog_scalar
+            != runtime::SystemVerilogScalarKind::None) {
+          output_ << format_scalar_local(
+              simulation_, simulation_.read_scalar_signal(signal->second));
+        } else {
         const auto* object = design_signal_object(
             simulation_, signal->second);
         if (object != nullptr) {
@@ -427,6 +518,7 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
           }
         } else {
           output_ << format_value(value, info.enumeration_literals);
+        }
         }
         if (simulation_.signal_is_forced(signal->second)) {
           output_ << " (forced)";
@@ -828,10 +920,15 @@ void DebuggerSession::signals_command(const std::vector<std::string>& command)  
       found = true;
       const auto& info =
           simulation_.runtime_adapter().signals().at(signal);
-      output_ << path << " = "
-              << format_value(
-                     simulation_.read_signal(signal),
-                     info.enumeration_literals);
+      output_ << path << " = ";
+      if (info.systemverilog_scalar
+          != runtime::SystemVerilogScalarKind::None) {
+        output_ << format_scalar_local(
+            simulation_, simulation_.read_scalar_signal(signal));
+      } else {
+        output_ << format_value(
+            simulation_.read_signal(signal), info.enumeration_literals);
+      }
       if (simulation_.signal_is_forced(signal)) {
         output_ << " (forced)";
       }
@@ -850,6 +947,43 @@ void DebuggerSession::modify_signal(const std::vector<std::string>& command)  {
     const auto* info = design_signal_object(simulation_, signal->second);
     if (info == nullptr) {
       throw std::logic_error{"signal lacks its DesignIR runtime adapter"};
+    }
+    const auto& runtime_info =
+        simulation_.runtime_adapter().signals().at(signal->second);
+    if (runtime_info.systemverilog_scalar
+        != runtime::SystemVerilogScalarKind::None) {
+      if (runtime_info.systemverilog_scalar
+          == runtime::SystemVerilogScalarKind::Chandle) {
+        runtime::SystemVerilogChandle handle{};
+        if (command[2] != "null") {
+          const auto converted = std::from_chars(
+              command[2].data(), command[2].data() + command[2].size(),
+              handle);
+          if (converted.ec != std::errc{}
+              || converted.ptr != command[2].data() + command[2].size()
+              || !simulation_.chandle_registry().contains(handle)) {
+            output_ << "invalid or stale chandle value\n";
+            return;
+          }
+        }
+        const auto value = runtime::SystemVerilogScalarValue::chandle(handle);
+        if (command[0] == "deposit") {
+          simulation_.deposit_scalar_signal(signal->second, value);
+        } else {
+          simulation_.force_scalar_signal(signal->second, value);
+        }
+        return;
+      }
+      const auto value = runtime::scan_systemverilog_scalar(
+          command[2], runtime_info.systemverilog_scalar);
+      if (!value) {
+        output_ << "invalid scalar value\n";
+      } else if (command[0] == "deposit") {
+        simulation_.deposit_scalar_signal(signal->second, value.value);
+      } else {
+        simulation_.force_scalar_signal(signal->second, value.value);
+      }
+      return;
     }
     std::string value_error;
     auto value = parse_value(command[2], info->width, value_error);
@@ -882,6 +1016,14 @@ void DebuggerSession::show_locals()  {
       const auto& local = process.debug_locals[index];
       output_ << local.name << " = ";
       try {
+        if (local.systemverilog_scalar
+            != runtime::SystemVerilogScalarKind::None) {
+          output_ << format_scalar_local(
+              simulation_,
+              simulation_.read_process_scalar_local(process_id, index));
+          output_ << '\n';
+          continue;
+        }
         const auto value = simulation_.read_process_local(process_id, index);
         if (const auto handle = format_class_local(
                 simulation_, local.type_name, value)) {
@@ -994,9 +1136,9 @@ void DebuggerSession::set_trace_enabled(const SignalId signal, const bool enable
     }
     trace_->writer->set_time(
         simulation_.now() * trace_->tick_multiplier);
-    for (const auto handle : trace_->handles[signal]) {
-      trace_->writer->change(
-          handle, simulation_.read_signal(signal));
+    if (!trace_->handles[signal].empty()) {
+      write_trace_signal_value(
+          *trace_, signal, simulation_.read_signal(signal));
     }
   }
 

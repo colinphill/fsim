@@ -1155,7 +1155,7 @@ LlvmJit::resume(const JitProcessHandle process,
         || runtime.compare_strings == nullptr
         || runtime.string_length == nullptr
         || runtime.string_index == nullptr
-        || runtime.string_replace_byte == nullptr
+        || runtime.string_replace_code_point == nullptr
         || runtime.write_string_output == nullptr) {
       throw LlvmJitError(
           "JIT runtime ABI requires mutable-string callbacks for this "

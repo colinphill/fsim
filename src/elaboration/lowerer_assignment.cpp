@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
+#include "fsim/runtime/systemverilog_string.hpp"
 
 namespace fsim::elaboration {
 using namespace runtime::simir;
@@ -195,10 +196,17 @@ void Lowerer::validate_read_only_signal_writes(
             }
             const auto runtime_type =
                 container_type(*source_type, statement.target.span);
-            const auto element_width = source_type->width();
-            if (!runtime_type || !element_width) {
+            if (!runtime_type) {
                 return;
             }
+            const auto element_width =
+                runtime_type->element_kind
+                            == ContainerElementKind::Packed
+                        || runtime_type->element_kind
+                            == ContainerElementKind::Scalar
+                    ? std::optional<std::size_t>{
+                          runtime_type->element_width}
+                    : std::nullopt;
             ContainerRegisterId target{};
             if (container_local != container_locals_.end()) {
                 target = container_local->second;
@@ -280,6 +288,15 @@ void Lowerer::validate_read_only_signal_writes(
             } else if (
                 statement.target.kind == ExpressionKind::Index
                 && statement.target.operands.size() == 2) {
+                if (!element_width) {
+                    report(
+                        "FSIM-ELAB-SVCONTAINER-024",
+                        "selected string, nested-container, and unpacked "
+                        "aggregate element assignment requires a typed "
+                        "container element operation",
+                        statement.target.span);
+                    return;
+                }
                 const auto index_width =
                     runtime_type->associative
                         ? static_cast<std::size_t>(
@@ -299,7 +316,14 @@ void Lowerer::validate_read_only_signal_writes(
                     index_width,
                     index_type);
                 auto element_type = *source_type;
-                element_type.systemverilog_container.reset();
+                if (source_type->systemverilog_container
+                    && source_type->systemverilog_container
+                           ->element_types.size() == 1) {
+                    element_type = source_type->systemverilog_container
+                                       ->element_types.front();
+                } else {
+                    element_type.systemverilog_container.reset();
+                }
                 auto value = lower_expression(
                     statement.value, *element_width, &element_type);
                 if (!index || !value) {
@@ -426,31 +450,32 @@ void Lowerer::validate_read_only_signal_writes(
                 lower_expression(
                     statement.target.operands[1],
                     index_width);
-            std::optional<RegisterId> byte;
+            std::optional<RegisterId> code_point;
             if (statement.value.kind
                     == ExpressionKind::StringLiteral
-                && statement.value.decoded_string
-                && statement.value.decoded_string->size() == 1) {
-                byte = allocate_register(
-                    8, frontend::ValueDomain::Bit2);
+                && statement.value.decoded_string) {
+              const auto points = runtime::systemverilog_string_code_points(
+                  *statement.value.decoded_string);
+              if (points.size() == 1) {
+                code_point = allocate_register(
+                    32, frontend::ValueDomain::Bit2);
                 process_.operations.emplace_back(
                     LoadConstant{
-                        *byte,
-                        unsigned_value(
-                            static_cast<unsigned char>(
-                                statement.value.decoded_string->front()),
-                            8)});
-            } else {
-                byte = lower_expression(statement.value, 8);
+                        *code_point,
+                        unsigned_value(points.front().value, 32)});
+              }
             }
-            if (!index || !byte) {
+            if (!code_point) {
+              code_point = lower_expression(statement.value, 32);
+            }
+            if (!index || !code_point) {
                 return;
             }
             process_.operations.emplace_back(
-                StringReplaceByte{
+                StringReplaceCodePoint{
                     target,
                     *index,
-                    *byte,
+                    *code_point,
                     is_signed_expression(
                         statement.target.operands[1])});
             if (string_object != string_objects_.end()) {
@@ -766,7 +791,10 @@ void Lowerer::validate_read_only_signal_writes(
                     register_domain(local->second));
             if (is_two_state_domain(target_domain)
                 && !is_two_state_domain(
-                    register_domain(*value))) {
+                    register_domain(*value))
+                && (contextual_target_type == nullptr
+                    || contextual_target_type->systemverilog_scalar
+                        == frontend::SystemVerilogScalarKind::None)) {
                 report(
                     "FSIM-ELAB-058",
                     "assignment to two-state local variable '"

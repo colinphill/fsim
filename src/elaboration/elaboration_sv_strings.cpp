@@ -358,6 +358,37 @@ void substitute_body(
         diagnostics);
 }
 
+template <typename Callable>
+void substitute_callable(
+    Callable& callable,
+    const SystemVerilogStringEnvironment& environment,
+    const ConstantEnvironment& integer_environment,
+    std::vector<Diagnostic>& diagnostics) {
+    if constexpr (requires { callable.return_type; }) {
+        substitute_type(
+            callable.return_type, environment, integer_environment);
+    }
+    for (auto& argument : callable.arguments) {
+        substitute_type(
+            argument.type, environment, integer_environment);
+        if (argument.default_value) {
+            substitute_expression(
+                *argument.default_value,
+                environment,
+                integer_environment);
+        }
+    }
+    for (auto& variable : callable.variables) {
+        substitute_variable(
+            variable, environment, integer_environment);
+    }
+    substitute_statements(
+        callable.statements,
+        environment,
+        integer_environment,
+        diagnostics);
+}
+
 } // namespace
 
 std::string SystemVerilogStringValue::display() const {
@@ -511,6 +542,14 @@ void substitute_systemverilog_strings(
             environment,
             integer_environment,
             diagnostics);
+    }
+    for (auto& function : unit.functions) {
+        substitute_callable(
+            function, environment, integer_environment, diagnostics);
+    }
+    for (auto& task : unit.tasks) {
+        substitute_callable(
+            task, environment, integer_environment, diagnostics);
     }
     for (auto& instance : unit.instances) {
         for (auto& override : instance.parameter_overrides) {

@@ -107,6 +107,7 @@ struct VcdWriter::Impl {
     std::string reference;
     std::string identifier;
     std::size_t width{};
+    SystemVerilogScalarKind scalar_kind{SystemVerilogScalarKind::None};
     std::string last_value;
     bool has_value{};
   };
@@ -168,7 +169,11 @@ struct VcdWriter::Impl {
 
     for (const auto index : scope.declarations) {
       const auto &declaration = declarations[index];
-      append("$var wire ");
+      const bool real = declaration.scalar_kind
+                  == SystemVerilogScalarKind::ShortReal
+          || declaration.scalar_kind == SystemVerilogScalarKind::Real
+          || declaration.scalar_kind == SystemVerilogScalarKind::Realtime;
+      append(real ? "$var real " : "$var wire ");
       append(std::to_string(declaration.width));
       append(" ");
       append(declaration.identifier);
@@ -188,6 +193,12 @@ struct VcdWriter::Impl {
     if (!started) {
       throw std::logic_error("VCD writer has not begun");
     }
+    if (declaration.scalar_kind == SystemVerilogScalarKind::ShortReal
+        || declaration.scalar_kind == SystemVerilogScalarKind::Real
+        || declaration.scalar_kind == SystemVerilogScalarKind::Realtime) {
+      throw std::invalid_argument(
+          "VCD real declarations require typed scalar changes");
+    }
     if (value.size() != declaration.width) {
       throw std::invalid_argument("VCD value width does not match declaration");
     }
@@ -204,6 +215,20 @@ struct VcdWriter::Impl {
       return;
     }
     append('b');
+    append(declaration.last_value);
+    append(' ');
+    append(declaration.identifier);
+    append('\n');
+  }
+
+  void write_real(Declaration& declaration, std::string value) {
+    if (!started) {
+      throw std::logic_error("VCD writer has not begun");
+    }
+    if (declaration.has_value && declaration.last_value == value) return;
+    declaration.last_value = std::move(value);
+    declaration.has_value = true;
+    append('r');
     append(declaration.last_value);
     append(' ');
     append(declaration.identifier);
@@ -254,8 +279,24 @@ VcdSignal VcdWriter::declare_signal(std::string_view hierarchical_name,
   }
   impl_->declarations.push_back(
       {std::string(hierarchical_name), std::string(reference),
-       make_identifier(index), width, {}, false});
+       make_identifier(index), width, SystemVerilogScalarKind::None, {}, false});
   return VcdSignal{index};
+}
+
+VcdSignal VcdWriter::declare_systemverilog_scalar(
+    const std::string_view hierarchical_name,
+    const SystemVerilogScalarKind kind) {
+  const bool real = kind == SystemVerilogScalarKind::ShortReal
+      || kind == SystemVerilogScalarKind::Real
+      || kind == SystemVerilogScalarKind::Realtime;
+  if (!real && kind != SystemVerilogScalarKind::Time
+      && kind != SystemVerilogScalarKind::Chandle) {
+    throw std::invalid_argument("unsupported SystemVerilog VCD scalar kind");
+  }
+  const auto signal = declare_signal(
+      hierarchical_name, real ? 1U : 64U);
+  impl_->declarations[signal.index].scalar_kind = kind;
+  return signal;
 }
 
 void VcdWriter::begin(SimulationTick initial_time) {
@@ -335,6 +376,29 @@ void VcdWriter::change(VcdSignal signal, const PackedLogic9 &value) {
     encoded[value.width() - index - 1] = vcd_char(value.get(index));
   }
   impl_->write_value(declaration, std::move(encoded));
+}
+
+void VcdWriter::change(
+    const VcdSignal signal,
+    const SystemVerilogScalarValue& value) {
+  auto& declaration = impl_->get(signal);
+  if (declaration.scalar_kind != value.kind) {
+    throw std::invalid_argument("VCD scalar kind does not match declaration");
+  }
+  if (value.kind == SystemVerilogScalarKind::Time
+      || value.kind == SystemVerilogScalarKind::Chandle) {
+    const auto encoded = encode_systemverilog_scalar_payload(value);
+    if (!encoded) {
+      throw std::invalid_argument("invalid VCD exact scalar payload");
+    }
+    change(signal, encoded.value);
+    return;
+  }
+  const auto formatted = format_systemverilog_scalar(value);
+  if (!formatted) {
+    throw std::invalid_argument("invalid VCD real payload");
+  }
+  impl_->write_real(declaration, formatted.text);
 }
 
 void VcdWriter::set_time(SimulationTick time) {

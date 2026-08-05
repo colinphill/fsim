@@ -385,7 +385,8 @@ std::uint32_t LlvmProcessExecutor::file_write(
           formatted->suppress_leading_zero,
           formatted->minimum_width,
           formatted->left_justify,
-          formatted->zero_pad);
+          formatted->zero_pad,
+          formatted->scalar_kind);
       if (formatted->newline) {
         state.context->write_file(handle, {}, true);
       }
@@ -650,9 +651,17 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     method->argument)}
               : std::string_view{},
           signed32(input0_aval, input0_bval),
-          signed32(input1_aval, input1_bval));
+          signed32(input1_aval, input1_bval),
+          method->operation
+                  == runtime::simir::StringMethodOperator::realtoa
+                  && input0_bval == 0
+              ? std::optional<std::uint64_t>{input0_aval}
+              : std::nullopt);
       if (result.integer) {
         *result_aval = *result.integer;
+      }
+      if (result.scalar_bits) {
+        *result_aval = *result.scalar_bits;
       }
       if (result.string) {
         state.executor->write_string_register(
@@ -944,7 +953,31 @@ std::uint32_t LlvmProcessExecutor::container_operation(
           return left.low_word().aval
               == right.low_word().aval;
         };
-    if (const auto* resize =
+    if (const auto* scalar =
+            fsim::runtime::simir::operation_get_if<
+                runtime::simir::SystemVerilogScalarBinary>(&operation)) {
+      const auto width = [](const auto kind) {
+        return kind == runtime::SystemVerilogScalarKind::ShortReal
+            ? 32U : 64U;
+      };
+      const auto value = runtime::systemverilog_scalar_binary_payload(
+          scalar->operation,
+          PackedLogic4::from_aval_bval(
+              width(scalar->lhs_kind), input0_aval, input0_bval),
+          scalar->lhs_kind,
+          PackedLogic4::from_aval_bval(
+              width(scalar->rhs_kind), input1_aval, input1_bval),
+          scalar->rhs_kind,
+          scalar->result_kind);
+      if (!value) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "SystemVerilog scalar binary operation failed"};
+      }
+      const auto word = value.value.low_word();
+      *result_aval = word.aval;
+      *result_bval = word.bval;
+    } else if (const auto* resize =
             fsim::runtime::simir::operation_get_if<runtime::simir::ResizeContainer>(
                 &operation)) {
       auto& target = registers.at(resize->target);
@@ -961,29 +994,14 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       const auto size = index(
           input0_aval, input0_bval, false,
           "dynamic-array size");
-      if (size > runtime::simir::maximum_container_elements(target.type)) {
-        throw runtime::simir::InterpreterError{
-            process, instruction,
-            "dynamic-array size exceeds the per-container "
-            "owning-storage budget"};
-      }
-      std::vector<PackedLogic4> preserved;
+      const runtime::simir::ContainerValue* initializer{};
       if (resize->initializer) {
         const auto& source = registers.at(*resize->initializer);
         require_same(target, source);
-        preserved = source.elements;
+        initializer = &source;
       }
-      const auto initial = target.type.two_state
-          ? PackedLogic4::from_aval_bval(
-                target.type.element_width, 0, 0)
-          : PackedLogic4{
-                target.type.element_width,
-                runtime::Logic4::x};
-      target.elements.assign(
-          size, initial);
-      std::ranges::copy_n(
-          preserved.begin(), std::min(size, preserved.size()),
-          target.elements.begin());
+      runtime::simir::resize_container_value(
+          target, size, initializer);
     } else if (const auto* copy =
                    fsim::runtime::simir::operation_get_if<
                        runtime::simir::CopyContainerRegister>(
@@ -991,8 +1009,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       auto& target = registers.at(copy->destination);
       const auto& source = registers.at(copy->source);
       require_same(target, source);
-      target.elements = source.elements;
-      target.keys = source.keys;
+      target = source;
     } else if (const auto* conditional =
                    fsim::runtime::simir::operation_get_if<
                        runtime::simir::ConditionalContainerSelect>(
@@ -1024,8 +1041,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       const auto source =
           state.context->read_container_object(read_object->object);
       require_same(target, source);
-      target.elements = source.elements;
-      target.keys = source.keys;
+      target = source;
     } else if (const auto* write_object =
                    fsim::runtime::simir::operation_get_if<
                        runtime::simir::WriteContainerObject>(
@@ -1036,7 +1052,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
     } else if (const auto* size =
                    fsim::runtime::simir::operation_get_if<runtime::simir::ContainerSize>(
                        &operation)) {
-      *result_aval = registers.at(size->source).elements.size();
+      *result_aval = runtime::simir::container_value_size(
+          registers.at(size->source));
     } else if (const auto* reduction =
                    fsim::runtime::simir::operation_get_if<runtime::simir::ContainerReduction>(
                        &operation)) {

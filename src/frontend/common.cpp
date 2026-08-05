@@ -96,6 +96,15 @@ std::optional<std::uint64_t> PackedMember::width() const noexcept {
 }
 
 std::optional<std::uint64_t> Type::width() const noexcept {
+  if (systemverilog_scalar == SystemVerilogScalarKind::ShortReal) {
+    return 32;
+  }
+  if (systemverilog_scalar == SystemVerilogScalarKind::Real
+      || systemverilog_scalar == SystemVerilogScalarKind::Realtime
+      || systemverilog_scalar == SystemVerilogScalarKind::Time
+      || systemverilog_scalar == SystemVerilogScalarKind::Chandle) {
+    return 64;
+  }
   if (!systemverilog_class_declaration.empty()) {
     return 64;
   }

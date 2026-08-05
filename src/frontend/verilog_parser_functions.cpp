@@ -29,6 +29,8 @@ FunctionDeclaration VerilogParser::parse_function(
   const bool builtin_return_type =
       keyword("string") || keyword("byte")
       || keyword("shortint") || keyword("longint")
+      || keyword("shortreal") || keyword("real")
+      || keyword("realtime") || keyword("chandle")
       || keyword("time") || keyword("integer") || keyword("int")
       || keyword("logic") || keyword("reg") || keyword("bit")
       || keyword("signed") || keyword("unsigned")
@@ -109,7 +111,10 @@ FunctionDeclaration VerilogParser::parse_function(
       const bool explicit_type =
           keyword("string") || keyword("byte")
           || keyword("shortint") || keyword("longint")
-          || keyword("time") || keyword("integer")
+          || keyword("time") || keyword("shortreal")
+          || keyword("real") || keyword("realtime")
+          || keyword("chandle")
+          || keyword("integer")
           || keyword("int") || keyword("logic")
           || keyword("reg") || keyword("bit")
           || keyword("signed") || keyword("unsigned")
@@ -516,7 +521,8 @@ TaskDeclaration VerilogParser::parse_task(
 
       const bool explicit_type =
           keyword("string") || keyword("byte") || keyword("shortint") ||
-          keyword("longint") || keyword("time") || keyword("integer") ||
+          keyword("longint") || keyword("time") || keyword("shortreal") ||
+          keyword("real") || keyword("realtime") || keyword("chandle") || keyword("integer") ||
           keyword("int") || keyword("logic") || keyword("reg") ||
           keyword("bit") || keyword("signed") || keyword("unsigned") ||
           at(TokenKind::LeftBracket) || is_named_type_reference_start();

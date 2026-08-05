@@ -71,6 +71,140 @@ void test_simir_containers() {
                  reduction_values, unequal_size, true)
               == value(1, 0),
       "container logical and case equality preserve shape and X policy");
+
+  const auto fixed_type = [](ContainerType type,
+                             const std::int32_t left,
+                             const std::int32_t right) {
+    type.fixed = true;
+    type.index_left = left;
+    type.index_right = right;
+    type.dimensions = {{left, right}};
+    return type;
+  };
+  ContainerType real_element_type;
+  real_element_type.element_kind = ContainerElementKind::Scalar;
+  real_element_type.scalar_kind = SystemVerilogScalarKind::Real;
+  real_element_type.element_width = 64;
+  auto real_array_type = fixed_type(real_element_type, 1, 0);
+  auto positive_zero_reals = default_container_value(real_array_type);
+  auto negative_zero_reals = default_container_value(real_array_type);
+  const auto positive_zero = encode_systemverilog_scalar_payload(
+      SystemVerilogScalarValue::real(0.0));
+  const auto negative_zero = encode_systemverilog_scalar_payload(
+      SystemVerilogScalarValue::real(-0.0));
+  const auto not_a_number = encode_systemverilog_scalar_payload(
+      SystemVerilogScalarValue::real(
+          std::numeric_limits<double>::quiet_NaN()));
+  require(positive_zero && negative_zero && not_a_number,
+          "real container fixtures encode exactly");
+  positive_zero_reals.elements[0] = positive_zero.value;
+  negative_zero_reals.elements[0] = negative_zero.value;
+  require(
+      compare_container_values(
+          positive_zero_reals, negative_zero_reals, false)
+          == value(1, 1),
+      "real container equality is numeric rather than payload-bit equality");
+  negative_zero_reals.elements[0] = not_a_number.value;
+  require(
+      compare_container_values(
+          positive_zero_reals, negative_zero_reals, false)
+          == value(1, 0)
+          && compare_container_values(
+                 positive_zero_reals, negative_zero_reals, true)
+              == value(1, 0),
+      "real container logical and case equality retain IEEE NaN behavior");
+
+  ContainerType time_element_type;
+  time_element_type.element_kind = ContainerElementKind::Scalar;
+  time_element_type.scalar_kind = SystemVerilogScalarKind::Time;
+  time_element_type.element_width = 64;
+  auto times = default_container_value(
+      fixed_type(time_element_type, 0, 0));
+  times.elements[0] = encode_systemverilog_scalar_payload(
+      SystemVerilogScalarValue::time(42)).value;
+  auto time_copy = times;
+  require(
+      compare_container_values(times, time_copy, true) == value(1, 1),
+      "time container copy and equality retain exact ticks");
+
+  ContainerType chandle_element_type;
+  chandle_element_type.element_kind = ContainerElementKind::Scalar;
+  chandle_element_type.scalar_kind = SystemVerilogScalarKind::Chandle;
+  chandle_element_type.element_width = 64;
+  auto chandles = default_container_value(
+      fixed_type(chandle_element_type, 0, 0));
+  chandles.elements[0] = encode_systemverilog_scalar_payload(
+      SystemVerilogScalarValue::chandle(UINT64_C(0x100000001))).value;
+  auto distinct_chandles = chandles;
+  distinct_chandles.elements[0] = encode_systemverilog_scalar_payload(
+      SystemVerilogScalarValue::chandle(UINT64_C(0x200000001))).value;
+  require(
+      compare_container_values(chandles, distinct_chandles, true)
+          == value(1, 0),
+      "chandle container equality uses the complete opaque identity");
+
+  ContainerType string_element_type;
+  string_element_type.element_kind = ContainerElementKind::String;
+  string_element_type.element_width = 0;
+  auto strings = default_container_value(
+      fixed_type(string_element_type, 1, 0));
+  strings.string_elements = {"alpha", "\xcf\x80"};
+  auto string_copy = strings;
+  strings.string_elements[0] = "changed";
+  require(
+      string_copy.string_elements[0] == "alpha"
+          && compare_container_values(string_copy, string_copy, false)
+              == value(1, 1)
+          && compare_container_values(strings, string_copy, false)
+              == value(1, 0),
+      "string container copies own strict UTF-8 values independently");
+
+  ContainerType nested_string_type;
+  nested_string_type.element_kind = ContainerElementKind::Container;
+  nested_string_type.element_width = 0;
+  nested_string_type.element_types = {
+      fixed_type(string_element_type, 0, 0)};
+  auto nested_strings = default_container_value(
+      fixed_type(nested_string_type, 1, 0));
+  nested_strings.nested_elements[0].string_elements[0] = "inner";
+  auto nested_copy = nested_strings;
+  nested_strings.nested_elements[0].string_elements[0] = "mutated";
+  require(
+      nested_copy.nested_elements[0].string_elements[0] == "inner"
+          && container_value_size(nested_copy) == 2,
+      "nested unpacked container copies recursively own their elements");
+
+  ContainerType aggregate_type;
+  aggregate_type.element_kind = ContainerElementKind::Aggregate;
+  aggregate_type.element_width = 0;
+  aggregate_type.element_nominal_type = "record_t";
+  aggregate_type.element_types = {
+      fixed_type(real_element_type, 0, 0),
+      fixed_type(string_element_type, 0, 0),
+      fixed_type(chandle_element_type, 0, 0)};
+  aggregate_type.member_names = {"weight", "label", "cookie"};
+  auto records = default_container_value(
+      fixed_type(aggregate_type, 1, 0));
+  require(
+      records.nested_elements.size() == 2
+          && records.nested_elements[0].nested_elements.size() == 3
+          && records.nested_elements[0].nested_elements[1]
+                 .string_elements.size() == 1
+          && compare_container_values(records, records, true)
+              == value(1, 1),
+      "unpacked aggregate container defaults retain ordered heterogeneous "
+      "member profiles");
+
+  auto dynamic_strings = default_container_value(string_element_type);
+  resize_container_value(dynamic_strings, 3);
+  dynamic_strings.string_elements[1] = "kept";
+  const auto dynamic_initializer = dynamic_strings;
+  resize_container_value(dynamic_strings, 4, &dynamic_initializer);
+  require(
+      dynamic_strings.string_elements.size() == 4
+          && dynamic_strings.string_elements[1] == "kept"
+          && dynamic_strings.string_elements[3].empty(),
+      "dynamic string arrays preserve initializer prefixes and default tails");
   try {
     auto distinct_type = queue_type;
     distinct_type.element_nominal_type = "other_packet_t";

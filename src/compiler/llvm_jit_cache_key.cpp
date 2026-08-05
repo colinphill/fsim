@@ -103,7 +103,7 @@ using runtime::simir::StringReport;
 using runtime::simir::StringIndex;
 using runtime::simir::StringLength;
 using runtime::simir::StringMethod;
-using runtime::simir::StringReplaceByte;
+using runtime::simir::StringReplaceCodePoint;
 using runtime::simir::TimeDisplay;
 using runtime::simir::UnaryNot;
 using runtime::simir::UnknownBranchPolicy;
@@ -151,7 +151,7 @@ using runtime::simir::ClassStaticPropertyWrite;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v81";
+    "fsim-llvm-native-object-v84";
 
 void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
                  const std::uint64_t value) {
@@ -201,6 +201,65 @@ void add_dynamic_part_index_key(
       selection.source_descending ? 1U : 0U);
 }
 
+void add_container_type_key(
+    CacheKeyBuilder& builder,
+    const runtime::simir::ContainerType& type) {
+  add_key_u64(
+      builder, "container-element-kind",
+      static_cast<std::underlying_type_t<
+          runtime::simir::ContainerElementKind>>(type.element_kind));
+  add_key_u64(
+      builder, "container-scalar-kind",
+      static_cast<std::underlying_type_t<
+          runtime::SystemVerilogScalarKind>>(type.scalar_kind));
+  add_key_u64(builder, "container-element-width", type.element_width);
+  builder.add("container-element-nominal-type", type.element_nominal_type);
+  add_key_u64(builder, "container-two-state", type.two_state ? 1U : 0U);
+  add_key_u64(
+      builder, "container-signed", type.signed_elements ? 1U : 0U);
+  add_key_u64(builder, "container-queue", type.queue ? 1U : 0U);
+  add_key_u64(
+      builder, "container-associative", type.associative ? 1U : 0U);
+  add_key_u64(builder, "container-fixed", type.fixed ? 1U : 0U);
+  add_key_u64(builder, "container-index-width", type.index_width);
+  add_key_u64(
+      builder, "container-index-two-state",
+      type.two_state_indices ? 1U : 0U);
+  add_key_u64(
+      builder, "container-index-signed", type.signed_indices ? 1U : 0U);
+  add_key_u64(
+      builder, "container-index-left",
+      static_cast<std::uint32_t>(type.index_left));
+  add_key_u64(
+      builder, "container-index-right",
+      static_cast<std::uint32_t>(type.index_right));
+  add_key_u64(
+      builder, "container-dimension-count", type.dimensions.size());
+  for (const auto& dimension : type.dimensions) {
+    add_key_u64(
+        builder, "container-dimension-left",
+        static_cast<std::uint32_t>(dimension.first));
+    add_key_u64(
+        builder, "container-dimension-right",
+        static_cast<std::uint32_t>(dimension.second));
+  }
+  add_key_u64(
+      builder, "container-has-maximum",
+      type.maximum_elements ? 1U : 0U);
+  add_key_u64(
+      builder, "container-maximum", type.maximum_elements.value_or(0));
+  add_key_u64(
+      builder, "container-member-name-count", type.member_names.size());
+  for (const auto& name : type.member_names) {
+    builder.add("container-member-name", name);
+  }
+  add_key_u64(
+      builder, "container-child-type-count", type.element_types.size());
+  for (const auto& child : type.element_types) {
+    add_container_type_key(builder, child);
+  }
+}
+
 [[nodiscard]] std::string make_native_object_cache_key(
     const std::string_view symbol, const Process &process,
     const std::span<const std::uint32_t> signal_widths,
@@ -244,51 +303,11 @@ void add_dynamic_part_index_key(
       builder, "container-register-count",
       process.container_register_count);
   for (const auto& type : process.container_register_types) {
-    add_key_u64(builder, "container-element-width", type.element_width);
-    builder.add("container-element-nominal-type", type.element_nominal_type);
-    add_key_u64(builder, "container-two-state", type.two_state ? 1U : 0U);
-    add_key_u64(
-        builder, "container-signed", type.signed_elements ? 1U : 0U);
-    add_key_u64(builder, "container-queue", type.queue ? 1U : 0U);
-    add_key_u64(
-        builder, "container-associative",
-        type.associative ? 1U : 0U);
-    add_key_u64(
-        builder, "container-fixed", type.fixed ? 1U : 0U);
-    add_key_u64(
-        builder, "container-index-width", type.index_width);
-    add_key_u64(
-        builder, "container-index-two-state",
-        type.two_state_indices ? 1U : 0U);
-    add_key_u64(
-        builder, "container-index-signed",
-        type.signed_indices ? 1U : 0U);
-    add_key_u64(
-        builder, "container-index-left",
-        static_cast<std::uint32_t>(type.index_left));
-    add_key_u64(
-        builder, "container-index-right",
-        static_cast<std::uint32_t>(type.index_right));
-    add_key_u64(
-        builder, "container-dimension-count", type.dimensions.size());
-    for (const auto& dimension : type.dimensions) {
-      add_key_u64(
-          builder, "container-dimension-left",
-          static_cast<std::uint32_t>(dimension.first));
-      add_key_u64(
-          builder, "container-dimension-right",
-          static_cast<std::uint32_t>(dimension.second));
-    }
-    add_key_u64(
-        builder, "container-has-maximum",
-        type.maximum_elements ? 1U : 0U);
-    add_key_u64(
-        builder, "container-maximum",
-        type.maximum_elements.value_or(0));
+    add_container_type_key(builder, type);
   }
   builder.add(
       "container-semantics",
-      "resource-budgeted-static-associative-v29-aggregate-elements");
+      "resource-budgeted-recursive-composite-scalar-file-io-v32");
   add_key_u64(
       builder,
       "container-storage-byte-budget",
@@ -298,7 +317,7 @@ void add_dynamic_part_index_key(
       "read-memory-byte-limit",
       runtime::simir::maximum_memory_file_bytes);
   builder.add("mutable-string-semantics", "simir-string-layout-v1");
-  builder.add("text-file-semantics", "simir-text-file-v3-position-flush");
+  builder.add("text-file-semantics", "simir-text-file-v4-scalar-io");
   add_key_u64(
       builder,
       "mutable-string-byte-limit",
@@ -587,8 +606,9 @@ void add_dynamic_part_index_key(
                 builder,
                 "signed-index",
                 value.signed_index ? 1U : 0U);
-          } else if constexpr (std::is_same_v<OperationType, StringReplaceByte>) {
-            builder.add("operation", "StringReplaceByte");
+          } else if constexpr (
+              std::is_same_v<OperationType, StringReplaceCodePoint>) {
+            builder.add("operation", "StringReplaceCodePoint");
             add_key_u64(builder, "target", value.target);
             add_key_u64(builder, "index", value.index);
             add_key_u64(builder, "source", value.source);
@@ -625,6 +645,30 @@ void add_dynamic_part_index_key(
                 value.left_justify ? 1U : 0U);
             add_key_u64(
                 builder, "zero-pad", value.zero_pad ? 1U : 0U);
+            add_key_u64(builder, "scalar-kind",
+                static_cast<std::uint8_t>(value.scalar_kind));
+          } else if constexpr (std::is_same_v<OperationType, runtime::simir::SystemVerilogScalarBinary>) {
+            builder.add("operation", "SystemVerilogScalarBinary");
+            add_key_u64(
+                builder, "scalar-operator",
+                static_cast<std::underlying_type_t<
+                    runtime::SystemVerilogScalarBinaryOperator>>(
+                    value.operation));
+            add_key_u64(builder, "destination", value.destination);
+            add_key_u64(builder, "lhs", value.lhs);
+            add_key_u64(builder, "rhs", value.rhs);
+            add_key_u64(
+                builder, "lhs-kind",
+                static_cast<std::underlying_type_t<
+                    runtime::SystemVerilogScalarKind>>(value.lhs_kind));
+            add_key_u64(
+                builder, "rhs-kind",
+                static_cast<std::underlying_type_t<
+                    runtime::SystemVerilogScalarKind>>(value.rhs_kind));
+            add_key_u64(
+                builder, "result-kind",
+                static_cast<std::underlying_type_t<
+                    runtime::SystemVerilogScalarKind>>(value.result_kind));
           } else if constexpr (std::is_same_v<OperationType, runtime::simir::ResizeContainer>) {
             builder.add("operation", "ResizeContainer");
             add_key_u64(builder, "target", value.target);
@@ -951,6 +995,8 @@ void add_dynamic_part_index_key(
                 value.left_justify ? 1U : 0U);
             add_key_u64(
                 builder, "zero-pad", value.zero_pad ? 1U : 0U);
+            add_key_u64(builder, "scalar-kind",
+                static_cast<std::uint8_t>(value.scalar_kind));
           } else if constexpr (std::is_same_v<OperationType, FileWriteString>) {
             builder.add("operation", "FileWriteString");
             add_key_u64(builder, "handle", value.handle);
@@ -1007,6 +1053,9 @@ void add_dynamic_part_index_key(
                   builder, "scan-target-width", conversion.target.width);
               add_key_u64(builder, "scan-target-two-state",
                   conversion.target.two_state ? 1U : 0U);
+              add_key_u64(builder, "scan-target-scalar-kind",
+                  static_cast<std::uint8_t>(
+                      conversion.target.scalar_kind));
             }
             builder.add("scan-trailing", value.trailing_text);
             add_key_u64(
@@ -1035,6 +1084,8 @@ void add_dynamic_part_index_key(
             add_key_u64(builder, "count", value.count);
             add_key_u64(builder, "has-start", value.has_start ? 1U : 0U);
             add_key_u64(builder, "has-count", value.has_count ? 1U : 0U);
+            add_key_u64(builder, "scalar-kind",
+                static_cast<std::uint8_t>(value.scalar_kind));
           } else if constexpr (std::is_same_v<OperationType, FilePosition>) {
             builder.add("operation", "FilePosition");
             add_key_u64(builder, "destination", value.destination);
@@ -1491,6 +1542,8 @@ void add_dynamic_part_index_key(
                 builder,
                 "zero-pad",
                 value.zero_pad ? 1U : 0U);
+            add_key_u64(builder, "scalar-kind",
+                static_cast<std::uint8_t>(value.scalar_kind));
           } else if constexpr (std::is_same_v<OperationType, TimeDisplay>) {
             builder.add("operation", "TimeDisplay");
             builder.add("prefix", value.prefix);
@@ -1553,6 +1606,8 @@ void add_dynamic_part_index_key(
                   key + "format",
                   static_cast<std::underlying_type_t<
                       runtime::simir::OutputFormat>>(item.format));
+              add_key_u64(builder, key + "scalar-kind",
+                  static_cast<std::uint8_t>(item.scalar_kind));
               builder.add(key + "prefix", item.prefix);
               add_key_u64(
                   builder,

@@ -89,6 +89,74 @@ endmodule
            "FSIM-ELAB-SVIFACE-008"}) {
     assert(has_diagnostic(malformed_result, code));
   }
+
+  const auto scalar_callable = fsim::frontend::parse_text(
+      "scalar-interface-callable.sv",
+      R"(
+interface scalar_service_if;
+  function automatic real convert(input real value);
+    return value;
+  endfunction
+  function automatic chandle retain(
+      input chandle value,
+      input chandle fallback = null);
+    return chandle'(value);
+  endfunction
+  modport provider(export function convert, export function retain);
+endinterface
+module scalar_service_user(scalar_service_if.provider service);
+  function automatic real convert(input real value);
+    return value;
+  endfunction
+  function automatic chandle retain(
+      input chandle value,
+      input chandle fallback = null);
+    return value;
+  endfunction
+endmodule
+module scalar_service_top;
+  scalar_service_if service();
+  scalar_service_user user(service);
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(scalar_callable.ok());
+  const auto scalar_callable_result = fsim::elaboration::elaborate(
+      scalar_callable.design, "sv:work.scalar_service_top");
+  assert(scalar_callable_result.ok());
+
+  const auto mismatched_scalar_callable = fsim::frontend::parse_text(
+      "scalar-interface-callable-mismatch.sv",
+      R"(
+interface scalar_mismatch_if;
+  function automatic real convert(input real value);
+    return value;
+  endfunction
+  function automatic chandle retain(input chandle value);
+    return value;
+  endfunction
+  modport provider(export function convert, export function retain);
+endinterface
+module scalar_mismatch_user(scalar_mismatch_if.provider service);
+  function automatic shortreal convert(input real value);
+    return value;
+  endfunction
+  function automatic real retain(input chandle value);
+    return 0.0;
+  endfunction
+endmodule
+module scalar_mismatch_top;
+  scalar_mismatch_if service();
+  scalar_mismatch_user user(service);
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(mismatched_scalar_callable.ok());
+  const auto mismatched_scalar_result = fsim::elaboration::elaborate(
+      mismatched_scalar_callable.design, "sv:work.scalar_mismatch_top");
+  assert(!mismatched_scalar_result.ok());
+  assert(has_diagnostic(
+      mismatched_scalar_result, "FSIM-ELAB-SVIFACE-009"));
 }
 
 }  // namespace fsim::tests::elaboration

@@ -188,7 +188,25 @@ void test_display_at_level(
             jit.lookup(symbol), short_random_descriptor);
       },
       "random_value");
+
+  Process invalid_scalar_format;
+  invalid_scalar_format.id = 14;
+  invalid_scalar_format.name = "invalid_scalar_format";
+  invalid_scalar_format.register_count = 1;
+  invalid_scalar_format.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("0")},
+      FormatDisplay{0, OutputFormat::binary, {}, {}, true, false,
+          false, false, 0, false, false,
+          runtime::SystemVerilogScalarKind::Real},
+      Halt{}};
+  const std::array<std::uint32_t, 0> no_signals{};
+  expect_error(
+      [&] {
+        jit.add_process(
+            std::string{symbol} + "_invalid_scalar",
+            invalid_scalar_format, no_signals);
+      },
+      "FormatDisplay scalar metadata is inconsistent");
 }
 
 } // namespace fsim::tests::compiler
-

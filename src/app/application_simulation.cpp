@@ -277,6 +277,26 @@ struct Simulation::Impl {
             }
           }
         });
+    interpreter->set_scalar_signal_change_hook(
+        [this](
+            const SignalId signal,
+            const runtime::SystemVerilogScalarValue& value,
+            const SimulationTick time) {
+          if (scalar_signal_change_hook) {
+            scalar_signal_change_hook(
+                signal, value, time, interpreter->scheduler().delta());
+          }
+          std::vector<ScalarSignalChangeHook> callbacks;
+          callbacks.reserve(scalar_signal_observers.size());
+          for (const auto& [token, callback] : scalar_signal_observers) {
+            (void)token;
+            callbacks.push_back(callback);
+          }
+          for (const auto& callback : callbacks) {
+            callback(
+                signal, value, time, interpreter->scheduler().delta());
+          }
+        });
     interpreter->set_output_hook(
         [this](
             const runtime::simir::ProcessId process,
@@ -1544,6 +1564,7 @@ struct Simulation::Impl {
 
   BuiltProject built;
   runtime::SystemVerilogClassHeap class_heap;
+  runtime::SystemVerilogChandleRegistry chandle_registry;
   runtime::SystemVerilogClassStaticStore class_static_store;
   runtime::SystemVerilogClassMethodRuntime class_methods;
 #if defined(FSIM_HAS_LLVM)
@@ -1562,6 +1583,9 @@ struct Simulation::Impl {
   SignalChangeHook signal_change_hook;
   std::map<std::uint64_t, SignalChangeHook> signal_observers;
   std::uint64_t next_signal_observer{1};
+  ScalarSignalChangeHook scalar_signal_change_hook;
+  std::map<std::uint64_t, ScalarSignalChangeHook> scalar_signal_observers;
+  std::uint64_t next_scalar_signal_observer{1};
   SafePointHook safe_point_hook;
   std::map<std::uint64_t, SafePointHook> safe_point_observers;
   std::uint64_t next_safe_point_observer{1};
@@ -1628,20 +1652,10 @@ std::optional<SignalId> Simulation::find_signal(
             static_cast<SignalId>(found->runtime_index)};
 }
 
-const PackedLogic4& Simulation::read_signal(const SignalId signal) const {
-  return impl_->interpreter->signal_value(signal);
-}
-
 const PackedLogic4& Simulation::read_driver(
     const runtime::simir::ProcessId process,
     const SignalId signal) const {
   return impl_->interpreter->driver_value(process, signal);
-}
-
-PackedLogic4 Simulation::read_process_local(
-    const runtime::simir::ProcessId process,
-    const std::size_t local_index) const {
-  return impl_->interpreter->read_debug_local(process, local_index);
 }
 
 std::string Simulation::read_process_string_local(
@@ -1808,20 +1822,6 @@ void Simulation::deposit_container_object(
       object, std::move(value));
 }
 
-void Simulation::deposit_signal(
-    const SignalId signal,
-    PackedLogic4 value) {
-  impl_->validate_external_value(signal, value, "deposit");
-  impl_->interpreter->deposit_signal(signal, std::move(value));
-}
-
-void Simulation::force_signal(
-    const SignalId signal,
-    PackedLogic4 value) {
-  impl_->validate_external_value(signal, value, "force");
-  impl_->interpreter->force_signal(signal, std::move(value));
-}
-
 void Simulation::release_signal(const SignalId signal) {
   impl_->interpreter->release_signal(signal);
 }
@@ -1928,25 +1928,7 @@ NativeCacheStatistics Simulation::native_cache_statistics() const noexcept {
   return {};
 }
 
-void Simulation::set_signal_change_hook(SignalChangeHook hook) {
-  impl_->signal_change_hook = std::move(hook);
-}
-
-std::uint64_t Simulation::add_signal_change_hook(SignalChangeHook hook) {
-  if (!hook) {
-    throw std::invalid_argument("signal change observer cannot be empty");
-  }
-  if (impl_->next_signal_observer == 0) {
-    throw std::overflow_error("signal change observer token space exhausted");
-  }
-  const auto token = impl_->next_signal_observer++;
-  impl_->signal_observers.emplace(token, std::move(hook));
-  return token;
-}
-
-void Simulation::remove_signal_change_hook(const std::uint64_t token) noexcept {
-  impl_->signal_observers.erase(token);
-}
+#include "application_simulation_scalar.tpp"
 
 void Simulation::set_safe_point_hook(SafePointHook hook) {
   impl_->safe_point_hook = std::move(hook);

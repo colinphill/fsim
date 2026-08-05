@@ -8,49 +8,85 @@ namespace fsim::runtime::simir {
 
 namespace {
 
+[[nodiscard]] bool aggregate_box(
+    const ContainerType& type) noexcept {
+  return type.element_kind == ContainerElementKind::Aggregate
+      && !type.queue && !type.associative && !type.fixed;
+}
+
+[[nodiscard]] ContainerType aggregate_element_type(
+    const ContainerType& type) {
+  auto result = type;
+  result.queue = false;
+  result.associative = false;
+  result.fixed = false;
+  result.maximum_elements.reset();
+  result.dimensions.clear();
+  result.index_left = 0;
+  result.index_right = 0;
+  return result;
+}
+
+[[nodiscard]] PackedLogic4 initial_packed_element(
+    const ContainerType& type) {
+  if (type.element_kind == ContainerElementKind::Scalar) {
+    return PackedLogic4::from_aval_bval(type.element_width, 0, 0);
+  }
+  return type.two_state
+      ? PackedLogic4::from_aval_bval(type.element_width, 0, 0)
+      : PackedLogic4{type.element_width, Logic4::x};
+}
+
+void append_default_element(ContainerValue& value) {
+  switch (value.type.element_kind) {
+  case ContainerElementKind::Packed:
+  case ContainerElementKind::Scalar:
+    value.elements.push_back(initial_packed_element(value.type));
+    return;
+  case ContainerElementKind::String:
+    value.string_elements.emplace_back();
+    return;
+  case ContainerElementKind::Container:
+    value.nested_elements.push_back(
+        default_container_value(value.type.element_types.front()));
+    return;
+  case ContainerElementKind::Aggregate:
+    value.nested_elements.push_back(
+        default_container_value(aggregate_element_type(value.type)));
+    return;
+  }
+}
+
+void copy_element_prefix(
+    ContainerValue& target,
+    const ContainerValue& source,
+    const std::size_t count) {
+  switch (target.type.element_kind) {
+  case ContainerElementKind::Packed:
+  case ContainerElementKind::Scalar:
+    std::ranges::copy_n(
+        source.elements.begin(), count, target.elements.begin());
+    return;
+  case ContainerElementKind::String:
+    std::ranges::copy_n(
+        source.string_elements.begin(), count,
+        target.string_elements.begin());
+    return;
+  case ContainerElementKind::Container:
+  case ContainerElementKind::Aggregate:
+    std::ranges::copy_n(
+        source.nested_elements.begin(), count,
+        target.nested_elements.begin());
+    return;
+  }
+}
+
 template <typename Container>
 [[nodiscard]] auto iterator_at(
     Container& container,
     const std::size_t offset) {
   using Difference = typename Container::difference_type;
   return container.begin() + static_cast<Difference>(offset);
-}
-
-[[nodiscard]] std::size_t fixed_element_count(
-    const ContainerType& type) {
-  const auto storage_limit = maximum_container_elements(type);
-  if (!type.dimensions.empty()) {
-    std::size_t count = 1;
-    for (const auto& dimension : type.dimensions) {
-      const auto distance =
-          dimension.first >= dimension.second
-              ? static_cast<std::int64_t>(dimension.first)
-                    - dimension.second
-              : static_cast<std::int64_t>(dimension.second)
-                    - dimension.first;
-      const auto dimension_count =
-          static_cast<std::size_t>(distance + 1);
-      if (dimension_count > storage_limit
-          || count > storage_limit / dimension_count) {
-        throw std::length_error{
-            "SimIR static array exceeds its owning-storage budget"};
-      }
-      count *= dimension_count;
-    }
-    return count;
-  }
-  const auto distance =
-      type.index_left >= type.index_right
-          ? static_cast<std::int64_t>(type.index_left)
-                - type.index_right
-          : static_cast<std::int64_t>(type.index_right)
-                - type.index_left;
-  const auto count = static_cast<std::size_t>(distance + 1);
-  if (count > storage_limit) {
-    throw std::length_error{
-        "SimIR static array exceeds its owning-storage budget"};
-  }
-  return count;
 }
 
 [[nodiscard]] std::size_t fixed_offset(
@@ -428,80 +464,6 @@ void require_associative(
 
 }  // namespace
 
-void validate_container_value(const ContainerValue& value) {
-  if (value.type.element_width == 0
-      || value.type.element_width > 64) {
-    throw std::invalid_argument{
-        "SimIR container element width must be in 1..64"};
-  }
-  if (value.elements.size() > maximum_container_elements(value.type)
-      || (value.type.maximum_elements
-          && value.elements.size()
-              > *value.type.maximum_elements)) {
-    throw std::length_error{
-        "SimIR container exceeds its owning-storage or declared queue limit"};
-  }
-  if (!value.type.queue && value.type.maximum_elements) {
-    throw std::invalid_argument{
-        "a non-queue container cannot have a queue bound"};
-  }
-  if (static_cast<unsigned>(value.type.queue)
-          + static_cast<unsigned>(value.type.associative)
-          + static_cast<unsigned>(value.type.fixed)
-      > 1U) {
-    throw std::invalid_argument{
-        "a SimIR container kind must be unambiguous"};
-  }
-  if (value.type.fixed) {
-    const auto count = fixed_element_count(value.type);
-    if (count == 0) {
-      throw std::length_error{
-          "SimIR static array has no materialized elements"};
-    }
-    if (value.elements.size() != count) {
-      throw std::invalid_argument{
-          "SimIR static-array storage does not match its declared range"};
-    }
-  }
-  if (value.type.associative) {
-    if (value.type.index_width == 0
-        || value.type.index_width > 64) {
-      throw std::invalid_argument{
-          "SimIR associative-array index width must be in 1..64"};
-    }
-    if (value.keys.size() != value.elements.size()) {
-      throw std::invalid_argument{
-          "SimIR associative-array keys and elements must be paired"};
-    }
-    for (std::size_t index = 0; index < value.keys.size(); ++index) {
-      const auto& key = value.keys[index];
-      if (key.width() != value.type.index_width
-          || key.is_logic9()
-          || key.low_word().bval != 0) {
-        throw std::invalid_argument{
-            "SimIR associative-array key does not match its type"};
-      }
-      if (index != 0
-          && !key_less(value.type, value.keys[index - 1], key)) {
-        throw std::invalid_argument{
-            "SimIR associative-array keys must be unique and ordered"};
-      }
-    }
-  } else if (!value.keys.empty()) {
-    throw std::invalid_argument{
-        "non-associative SimIR containers cannot contain keys"};
-  }
-  for (const auto& element : value.elements) {
-    if (element.width() != value.type.element_width
-        || element.is_logic9()
-        || (value.type.two_state
-            && element.low_word().bval != 0)) {
-      throw std::invalid_argument{
-          "SimIR container element does not match its type"};
-    }
-  }
-}
-
 const ContainerValue&
 Interpreter::Impl::read_container_object_value(
     const ContainerObjectId id) {
@@ -574,25 +536,52 @@ PackedLogic4 default_container_element(
       type.element_width, 0, 0);
 }
 
-ContainerValue default_container_value(
-    const ContainerType& type) {
-  ContainerValue result;
-  result.type = type;
-  if (type.fixed) {
-    const auto count = fixed_element_count(type);
-    if (type.element_width == 0
-        || type.element_width > 64) {
-      throw std::invalid_argument{
-          "SimIR container element width must be in 1..64"};
-    }
-    const auto initial =
-        type.two_state
-            ? default_container_element(type)
-            : PackedLogic4{type.element_width, Logic4::x};
-    result.elements.assign(count, initial);
+void resize_container_value(
+    ContainerValue& target,
+    const std::size_t size,
+    const ContainerValue* initializer) {
+  validate_container_value(target);
+  if (target.type.queue || target.type.associative
+      || target.type.fixed || aggregate_box(target.type)) {
+    throw std::invalid_argument{
+        "only a dynamic array may be resized"};
   }
-  validate_container_value(result);
-  return result;
+  if (size > maximum_container_elements(target.type)) {
+    throw std::length_error{
+        "dynamic array exceeds its owning-storage budget"};
+  }
+  if (initializer) {
+    validate_container_value(*initializer);
+    if (initializer->type != target.type) {
+      throw std::invalid_argument{
+          "dynamic-array initializer type mismatch"};
+    }
+  }
+  const auto preserved = initializer ? container_value_size(*initializer) : 0;
+  ContainerValue replacement;
+  replacement.type = target.type;
+  switch (target.type.element_kind) {
+  case ContainerElementKind::Packed:
+  case ContainerElementKind::Scalar:
+    replacement.elements.assign(size, initial_packed_element(target.type));
+    break;
+  case ContainerElementKind::String:
+    replacement.string_elements.resize(size);
+    break;
+  case ContainerElementKind::Container:
+  case ContainerElementKind::Aggregate:
+    replacement.nested_elements.reserve(size);
+    for (std::size_t index = 0; index < size; ++index) {
+      append_default_element(replacement);
+    }
+    break;
+  }
+  if (initializer) {
+    copy_element_prefix(
+        replacement, *initializer, std::min(size, preserved));
+  }
+  validate_container_value(replacement);
+  target = std::move(replacement);
 }
 
 void select_container_value(
@@ -617,9 +606,16 @@ void select_container_value(
     destination = state == Logic4::one ? when_true : when_false;
     return;
   }
-  if (when_true.elements.size() != when_false.elements.size()
+  if (container_value_size(when_true)
+          != container_value_size(when_false)
       || when_true.keys != when_false.keys) {
     destination = default_container_value(destination.type);
+    return;
+  }
+  if (destination.type.element_kind != ContainerElementKind::Packed) {
+    destination = when_true == when_false
+        ? when_true
+        : default_container_value(destination.type);
     return;
   }
   destination.keys = when_true.keys;
@@ -652,9 +648,55 @@ PackedLogic4 compare_container_values(
     throw std::invalid_argument{
         "container equality profiles differ"};
   }
-  if (lhs.elements.size() != rhs.elements.size()
+  if (container_value_size(lhs) != container_value_size(rhs)
       || lhs.keys != rhs.keys) {
     return PackedLogic4(1, Logic4::zero);
+  }
+  if (lhs.type.element_kind == ContainerElementKind::String) {
+    return PackedLogic4(
+        1, lhs.string_elements == rhs.string_elements
+               ? Logic4::one : Logic4::zero);
+  }
+  if (lhs.type.element_kind == ContainerElementKind::Container
+      || lhs.type.element_kind == ContainerElementKind::Aggregate) {
+    bool unknown{};
+    for (std::size_t index = 0;
+         index < lhs.nested_elements.size(); ++index) {
+      const auto compared = compare_container_values(
+          lhs.nested_elements[index], rhs.nested_elements[index], case_equal);
+      const auto state = compared.get(0);
+      if (state == Logic4::zero) {
+        return PackedLogic4(1, Logic4::zero);
+      }
+      unknown |= state != Logic4::one;
+    }
+    return PackedLogic4(1, unknown ? Logic4::x : Logic4::one);
+  }
+  if (lhs.type.element_kind == ContainerElementKind::Scalar) {
+    for (std::size_t index = 0; index < lhs.elements.size(); ++index) {
+      const auto& left = lhs.elements[index];
+      const auto& right = rhs.elements[index];
+      bool equal{};
+      if (lhs.type.scalar_kind == SystemVerilogScalarKind::Chandle
+          || lhs.type.scalar_kind == SystemVerilogScalarKind::Time) {
+        equal = left.low_word().aval == right.low_word().aval;
+      } else {
+        const auto left_scalar = decode_systemverilog_scalar_payload(
+            left, lhs.type.scalar_kind);
+        const auto right_scalar = decode_systemverilog_scalar_payload(
+            right, rhs.type.scalar_kind);
+        if (!left_scalar || !right_scalar) {
+          throw std::invalid_argument{
+              "SimIR scalar container payload is invalid"};
+        }
+        const auto compared = systemverilog_scalar_compare(
+            SystemVerilogScalarComparison::Equal,
+            left_scalar.value, right_scalar.value);
+        equal = compared && compared.value;
+      }
+      if (!equal) return PackedLogic4(1, Logic4::zero);
+    }
+    return PackedLogic4(1, Logic4::one);
   }
   bool unknown{};
   for (std::size_t element = 0;
@@ -1300,13 +1342,7 @@ void Interpreter::Impl::execute_container(
       process.program.id, process.pc,
       get_register(process, operation.size),
       false, "dynamic-array size");
-  if (size > maximum_container_elements(target.type)) {
-    container_error(
-        process.program.id, process.pc,
-        "dynamic-array size exceeds the per-container "
-        "owning-storage budget");
-  }
-  std::vector<PackedLogic4> preserved;
+  const ContainerValue* initializer{};
   if (operation.initializer) {
     const auto& source =
         get_container_register(process, *operation.initializer);
@@ -1315,17 +1351,14 @@ void Interpreter::Impl::execute_container(
           process.program.id, process.pc,
           "dynamic-array initializer type mismatch");
     }
-    preserved = source.elements;
+    initializer = &source;
   }
-  const auto initial = target.type.two_state
-      ? default_container_element(target.type)
-      : PackedLogic4{target.type.element_width, Logic4::x};
-  target.elements.assign(
-      size, initial);
-  const auto preserved_count = std::min(size, preserved.size());
-  std::ranges::copy(
-      preserved.begin(), iterator_at(preserved, preserved_count),
-      target.elements.begin());
+  try {
+    resize_container_value(target, size, initializer);
+  } catch (const std::exception& error) {
+    container_error(
+        process.program.id, process.pc, error.what());
+  }
   ++process.pc;
 }
 
@@ -1339,8 +1372,7 @@ void Interpreter::Impl::execute_container(
   require_same_type(
       process.program.id, process.pc,
       destination.type, source.type);
-  destination.elements = source.elements;
-  destination.keys = source.keys;
+  destination = source;
   ++process.pc;
 }
 
@@ -1391,8 +1423,7 @@ void Interpreter::Impl::execute_container(
   require_same_type(
       process.program.id, process.pc,
       destination.type, source.type);
-  destination.elements = source.elements;
-  destination.keys = source.keys;
+  destination = source;
   ++process.pc;
 }
 
@@ -1414,8 +1445,8 @@ void Interpreter::Impl::execute_container(
 void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ContainerSize& operation) {
-  const auto size = get_container_register(
-      process, operation.source).elements.size();
+  const auto size = container_value_size(get_container_register(
+      process, operation.source));
   get_register(process, operation.destination) =
       PackedLogic4::from_aval_bval(32, size, 0);
   ++process.pc;

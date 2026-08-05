@@ -136,6 +136,15 @@ struct PackedRegisterValidation {
     const runtime::simir::StringMethod& operation,
     const runtime::simir::Process& process,
     std::vector<PackedRegisterValidation>& registers);
+[[nodiscard]] std::optional<std::string> validate_scalar_binary_metadata(
+    const runtime::simir::SystemVerilogScalarBinary& operation,
+    std::vector<PackedRegisterValidation>& registers);
+[[nodiscard]] std::optional<std::uint32_t> formatted_value_width(
+    runtime::simir::OutputFormat format,
+    runtime::SystemVerilogScalarKind scalar_kind) noexcept;
+[[nodiscard]] std::optional<std::string> validate_file_write_metadata(
+    const runtime::simir::FileWriteFormatted& operation,
+    std::vector<PackedRegisterValidation>& registers);
 [[nodiscard]] std::optional<std::string> validate_file_scan_metadata(
     const runtime::simir::FileScan& operation,
     const runtime::simir::Process& process,

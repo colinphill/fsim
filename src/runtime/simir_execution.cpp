@@ -3,6 +3,7 @@
 #include "fsim/runtime/scope_randomize.hpp"
 #include "simir_signal_attributes.hpp"
 #include "fsim/runtime/string_methods.hpp"
+#include "fsim/runtime/systemverilog_string.hpp"
 #include "simir_execution_context.hpp"
 
 namespace {
@@ -538,7 +539,7 @@ void Interpreter::Impl::execute(ProcessId id) {
             fail(process, "string index is negative");
           }
           if (word.aval >= size) {
-            fail(process, "string index is outside the byte range");
+            fail(process, "string index is outside the code-point range");
           }
           return static_cast<std::size_t>(word.aval);
         };
@@ -754,6 +755,11 @@ void Interpreter::Impl::execute(ProcessId id) {
             if (op.value.size() > maximum_string_bytes) {
               fail(process, "string literal exceeds 4096-byte limit");
             }
+            try {
+              (void)systemverilog_string_length(op.value);
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
             get_string_register(process, op.destination) = op.value;
             ++process.pc;
           } else if constexpr (std::is_same_v<OperationType, CopyStringRegister>) {
@@ -785,9 +791,15 @@ void Interpreter::Impl::execute(ProcessId id) {
                 std::move(result);
             ++process.pc;
           } else if constexpr (std::is_same_v<OperationType, CompareStrings>) {
-            const bool equal =
-                get_string_register(process, op.lhs)
-                == get_string_register(process, op.rhs);
+            bool equal{};
+            try {
+              equal = systemverilog_string_compare(
+                          get_string_register(process, op.lhs),
+                          get_string_register(process, op.rhs))
+                  == 0;
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
             get_register(process, op.destination) =
                 PackedLogic4{
                     1,
@@ -796,8 +808,13 @@ void Interpreter::Impl::execute(ProcessId id) {
                         : Logic4::zero};
             ++process.pc;
           } else if constexpr (std::is_same_v<OperationType, StringLength>) {
-            const auto size =
-                get_string_register(process, op.source).size();
+            std::size_t size{};
+            try {
+              size = systemverilog_string_length(
+                  get_string_register(process, op.source));
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
             get_register(process, op.destination) =
                 PackedLogic4::from_aval_bval(
                     32, static_cast<std::uint32_t>(size), 0);
@@ -805,28 +822,51 @@ void Interpreter::Impl::execute(ProcessId id) {
           } else if constexpr (std::is_same_v<OperationType, StringIndex>) {
             auto& source =
                 get_string_register(process, op.source);
+            std::size_t size{};
+            try {
+              size = systemverilog_string_length(source);
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
             const auto index =
                 known_string_index(
-                    op.index, op.signed_index, source.size());
+                    op.index, op.signed_index, size);
+            std::uint32_t code_point{};
+            try {
+              code_point = systemverilog_string_at(source, index);
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
             get_register(process, op.destination) =
                 PackedLogic4::from_aval_bval(
-                    8,
-                    static_cast<unsigned char>(source[index]),
-                    0);
+                    32, code_point, 0);
             ++process.pc;
-          } else if constexpr (std::is_same_v<OperationType, StringReplaceByte>) {
+          } else if constexpr (
+              std::is_same_v<OperationType, StringReplaceCodePoint>) {
             auto& target =
                 get_string_register(process, op.target);
+            std::size_t size{};
+            try {
+              size = systemverilog_string_length(target);
+            } catch (const std::invalid_argument& error) {
+              fail(process, error.what());
+            }
             const auto index =
                 known_string_index(
-                    op.index, op.signed_index, target.size());
-            const auto byte =
+                    op.index, op.signed_index, size);
+            const auto code_point =
                 get_register(process, op.source).low_word();
-            if (byte.bval != 0) {
-              fail(process, "string replacement byte contains X or Z");
+            if (code_point.bval != 0) {
+              fail(process, "string replacement code point contains X or Z");
             }
-            target[index] =
-                static_cast<char>(byte.aval & UINT64_C(0xff));
+            try {
+              systemverilog_string_replace(
+                  target, index,
+                  static_cast<std::uint32_t>(code_point.aval),
+                  maximum_string_bytes);
+            } catch (const std::exception& error) {
+              fail(process, error.what());
+            }
             ++process.pc;
           } else if constexpr (std::is_same_v<OperationType, StringMethod>) {
             execute_string(process, op);
@@ -960,6 +1000,26 @@ void Interpreter::Impl::execute(ProcessId id) {
             } catch (const std::invalid_argument& error) {
               fail(process, error.what());
             }
+            ++process.pc;
+          } else if constexpr (
+              std::is_same_v<OperationType, SystemVerilogScalarBinary>) {
+            const auto result = systemverilog_scalar_binary_payload(
+                op.operation,
+                get_register(process, op.lhs), op.lhs_kind,
+                get_register(process, op.rhs), op.rhs_kind,
+                op.result_kind);
+            if (!result) {
+              fail(
+                  process,
+                  "SystemVerilog scalar binary operation failed (error "
+                      + std::to_string(static_cast<unsigned>(result.error))
+                      + ", lhs kind "
+                      + std::to_string(static_cast<unsigned>(op.lhs_kind))
+                      + ", rhs kind "
+                      + std::to_string(static_cast<unsigned>(op.rhs_kind))
+                      + ")");
+            }
+            get_register(process, op.destination) = result.value;
             ++process.pc;
           } else if constexpr (std::is_same_v<OperationType, Binary>) {
             try {
@@ -1467,7 +1527,8 @@ void Interpreter::Impl::execute(ProcessId id) {
                 op.suppress_leading_zero,
                 op.minimum_width,
                 op.left_justify,
-                op.zero_pad);
+                op.zero_pad,
+                op.scalar_kind);
             if (op.postponed) {
               scheduler.schedule(
                   SchedulerPhase::postponed,

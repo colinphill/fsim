@@ -23,6 +23,10 @@ int main() {
   run_at_level(JitOptimizationLevel::o0, "arithmetic_o0");
   run_at_level(JitOptimizationLevel::o2, "arithmetic_o2");
   test_scalar_truth_tables_and_64_bits();
+  test_systemverilog_scalar_transport_at_level(
+      JitOptimizationLevel::o0, "systemverilog_scalar_o0");
+  test_systemverilog_scalar_transport_at_level(
+      JitOptimizationLevel::o2, "systemverilog_scalar_o2");
   test_conditional_select_at_level(
       JitOptimizationLevel::o0, "conditional_select_o0");
   test_conditional_select_at_level(

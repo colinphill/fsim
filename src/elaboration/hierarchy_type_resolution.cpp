@@ -346,6 +346,14 @@ using namespace elaboration_detail;
                          ->associative_index_type)) {
                 return false;
             }
+            if (type.systemverilog_container) {
+                for (auto& element :
+                     type.systemverilog_container->element_types) {
+                    if (!resolve_type(element)) {
+                        return false;
+                    }
+                }
+            }
             if (type.vhdl_access) {
                 auto& access = *type.vhdl_access;
                 if (access.designated_types.size() != 1) {

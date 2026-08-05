@@ -23,6 +23,12 @@ namespace {
     return OutputFormat::character;
   case frontend::OutputFormat::String:
     return OutputFormat::string;
+  case frontend::OutputFormat::RealScientific:
+    return OutputFormat::real_scientific;
+  case frontend::OutputFormat::RealFixed:
+    return OutputFormat::real_fixed;
+  case frontend::OutputFormat::RealGeneral:
+    return OutputFormat::real_general;
   case frontend::OutputFormat::Hierarchy:
   case frontend::OutputFormat::Time:
     break;
@@ -128,6 +134,31 @@ std::optional<StringRegisterId> Lowerer::lower_string_format(
       return true;
     }
     const auto width = infer_width(*value).value_or(std::size_t{32});
+    const auto* value_type = value->kind == ExpressionKind::Identifier
+        ? object_type(value->text) : nullptr;
+    const auto scalar_kind = value_type != nullptr
+        ? value_type->systemverilog_scalar
+        : value->systemverilog_scalar_kind;
+    const bool real_scalar =
+        scalar_kind == frontend::SystemVerilogScalarKind::ShortReal
+        || scalar_kind == frontend::SystemVerilogScalarKind::Real
+        || scalar_kind == frontend::SystemVerilogScalarKind::Realtime;
+    const bool real_format =
+        conversion.format == frontend::OutputFormat::RealScientific
+        || conversion.format == frontend::OutputFormat::RealFixed
+        || conversion.format == frontend::OutputFormat::RealGeneral;
+    if ((real_scalar && !real_format)
+        || (!real_scalar && real_format)
+        || (scalar_kind == frontend::SystemVerilogScalarKind::Time
+            && conversion.format != frontend::OutputFormat::Decimal)
+        || (scalar_kind == frontend::SystemVerilogScalarKind::Chandle
+            && conversion.format != frontend::OutputFormat::Hexadecimal)) {
+      report(
+          "FSIM-ELAB-SVSTRING-019",
+          "formatted string conversion is incompatible with the value type",
+          value->span);
+      return false;
+    }
     const auto source = lower_expression(*value, width);
     if (!source || width == 0 || width > 64) {
       report(
@@ -144,6 +175,7 @@ std::optional<StringRegisterId> Lowerer::lower_string_format(
     operation.first = *source;
     operation.second = width_register;
     operation.format = runtime_format(conversion.format);
+    operation.scalar_kind = scalar_kind;
     operation.signed_decimal =
         operation.format == OutputFormat::decimal
         && is_signed_expression(*value);

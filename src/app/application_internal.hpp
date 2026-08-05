@@ -289,7 +289,7 @@ class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
       void*, std::uint32_t, std::uint32_t, std::uint32_t,
       std::uint64_t, std::uint64_t, std::uint32_t,
       std::uint32_t*) noexcept;
-  static std::uint32_t string_replace_byte(
+  static std::uint32_t string_replace_code_point(
       void*, std::uint32_t, std::uint32_t, std::uint32_t,
       std::uint64_t, std::uint64_t, std::uint32_t,
       std::uint64_t, std::uint64_t) noexcept;
@@ -959,8 +959,14 @@ struct TraceState {
   std::unique_ptr<runtime::VcdWriter> writer;
   std::vector<std::vector<runtime::VcdSignal>> handles;
   std::vector<bool> enabled;
+  std::vector<runtime::SystemVerilogScalarKind> scalar_kinds;
   SimulationTick tick_multiplier{1};
 };
+
+void write_trace_signal_value(
+    TraceState& state,
+    runtime::simir::SignalId signal,
+    const runtime::PackedLogic4& value);
 
 std::unique_ptr<TraceState> attach_trace(
     Simulation& simulation,

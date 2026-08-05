@@ -3,6 +3,83 @@
 
 namespace fsim::tests::compiler {
 
+void test_systemverilog_scalar_transport_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol) {
+  using fsim::runtime::SystemVerilogScalarKind;
+  using fsim::runtime::SystemVerilogScalarValue;
+
+  const auto short_value = SystemVerilogScalarValue::shortreal(-1.25F);
+  const auto real_value = SystemVerilogScalarValue::real(-0.0);
+  const auto time_value = SystemVerilogScalarValue::time(
+      UINT64_C(9007199254740993));
+  const auto short_payload =
+      fsim::runtime::encode_systemverilog_scalar_payload(short_value);
+  const auto real_payload =
+      fsim::runtime::encode_systemverilog_scalar_payload(real_value);
+  const auto time_payload =
+      fsim::runtime::encode_systemverilog_scalar_payload(time_value);
+  assert(short_payload && real_payload && time_payload);
+
+  Process process;
+  process.id = 0;
+  process.name = "systemverilog_scalar_transport";
+  process.register_count = 3;
+  process.operations = {
+      LoadConstant{0, short_payload.value},
+      WriteBlocking{0, 0},
+      LoadConstant{1, real_payload.value},
+      WriteBlocking{1, 1},
+      LoadConstant{2, time_payload.value},
+      WriteBlocking{2, 2},
+      Halt{}};
+  const std::array<std::uint32_t, 3> widths{32, 64, 64};
+  LlvmJit jit{LlvmJitOptions{optimization, {}}};
+  jit.add_process(symbol, process, widths);
+
+  TestRuntime runtime;
+  auto descriptor = abi(runtime);
+  assert(jit.execute(jit.lookup(symbol), descriptor)
+         == JitExecutionStatus::completed);
+  assert((runtime.signals[0]
+          == EncodedSignal{short_value.bits, 0}));
+  assert((runtime.signals[1]
+          == EncodedSignal{real_value.bits, 0}));
+  assert((runtime.signals[2]
+          == EncodedSignal{time_value.bits, 0}));
+  const auto decoded = fsim::runtime::decode_systemverilog_scalar_payload(
+      PackedLogic4::from_aval_bval(
+          64, runtime.signals[2].aval, runtime.signals[2].bval),
+      SystemVerilogScalarKind::Time);
+  assert(decoded && decoded.value == time_value);
+
+  const auto factor = fsim::runtime::encode_systemverilog_scalar_payload(
+      SystemVerilogScalarValue::real(1.5));
+  const auto multiplier = fsim::runtime::encode_systemverilog_scalar_payload(
+      SystemVerilogScalarValue::real(2.0));
+  assert(factor && multiplier);
+  Process scalar_binary;
+  scalar_binary.id = 1;
+  scalar_binary.name = "systemverilog_scalar_binary";
+  scalar_binary.register_count = 3;
+  scalar_binary.operations = {
+      LoadConstant{0, factor.value},
+      LoadConstant{1, multiplier.value},
+      SystemVerilogScalarBinary{
+          fsim::runtime::SystemVerilogScalarBinaryOperator::Multiply,
+          2, 0, 1,
+          SystemVerilogScalarKind::Real,
+          SystemVerilogScalarKind::Real,
+          SystemVerilogScalarKind::Real},
+      Halt{}};
+  const auto binary_symbol = std::string{symbol} + "_binary";
+  jit.add_process(
+      binary_symbol,
+      scalar_binary,
+      std::array<std::uint32_t, 3>{64, 64, 64});
+  (void)jit.lookup(binary_symbol);
+}
+
 void test_scalar_truth_tables_and_64_bits() {
   LlvmJit jit;
   Process scalar;

@@ -8,6 +8,7 @@
 #include "fsim/project/project.hpp"
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/class_methods.hpp"
+#include "fsim/runtime/systemverilog_chandle.hpp"
 #include "fsim/semantic/model.hpp"
 #include "fsim/semantic/design_ir.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
@@ -250,6 +251,11 @@ class Simulation final {
       const runtime::PackedLogic4&,
       runtime::SimulationTick,
       std::uint64_t)>;
+  using ScalarSignalChangeHook = std::function<void(
+      runtime::simir::SignalId,
+      const runtime::SystemVerilogScalarValue&,
+      runtime::SimulationTick,
+      std::uint64_t)>;
   using ExecutionPointHook =
       runtime::simir::Interpreter::ExecutionPointHook;
   using OutputHook = runtime::simir::Interpreter::OutputHook;
@@ -295,10 +301,16 @@ class Simulation final {
       std::string_view path) const noexcept;
   [[nodiscard]] const runtime::PackedLogic4& read_signal(
       runtime::simir::SignalId signal) const;
+  [[nodiscard]] runtime::SystemVerilogScalarValue read_scalar_signal(
+      runtime::simir::SignalId signal) const;
+  [[nodiscard]] std::vector<runtime::simir::SystemVerilogScalarSignalSnapshot>
+  scalar_signal_snapshots() const;
   [[nodiscard]] const runtime::PackedLogic4& read_driver(
       runtime::simir::ProcessId process,
       runtime::simir::SignalId signal) const;
   [[nodiscard]] runtime::PackedLogic4 read_process_local(
+      runtime::simir::ProcessId process, std::size_t local_index) const;
+  [[nodiscard]] runtime::SystemVerilogScalarValue read_process_scalar_local(
       runtime::simir::ProcessId process, std::size_t local_index) const;
   [[nodiscard]] std::string read_process_string_local(
       runtime::simir::ProcessId process, std::size_t local_index) const;
@@ -316,6 +328,10 @@ class Simulation final {
   [[nodiscard]] runtime::SystemVerilogClassHeap& class_heap() noexcept;
   [[nodiscard]] const runtime::SystemVerilogClassHeap&
   class_heap() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogChandleRegistry&
+  chandle_registry() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogChandleRegistry&
+  chandle_registry() const noexcept;
   [[nodiscard]] runtime::SystemVerilogClassStaticStore&
   class_static_store() noexcept;
   [[nodiscard]] const runtime::SystemVerilogClassStaticStore&
@@ -365,9 +381,15 @@ class Simulation final {
   void deposit_signal(
       runtime::simir::SignalId signal,
       runtime::PackedLogic4 value);
+  void deposit_scalar_signal(
+      runtime::simir::SignalId signal,
+      runtime::SystemVerilogScalarValue value);
   void force_signal(
       runtime::simir::SignalId signal,
       runtime::PackedLogic4 value);
+  void force_scalar_signal(
+      runtime::simir::SignalId signal,
+      runtime::SystemVerilogScalarValue value);
   void release_signal(runtime::simir::SignalId signal);
   [[nodiscard]] bool signal_is_forced(
       runtime::simir::SignalId signal) const;
@@ -399,6 +421,10 @@ class Simulation final {
   /// The returned token remains valid until removed or the Simulation dies.
   [[nodiscard]] std::uint64_t add_signal_change_hook(SignalChangeHook hook);
   void remove_signal_change_hook(std::uint64_t token) noexcept;
+  void set_scalar_signal_change_hook(ScalarSignalChangeHook hook);
+  [[nodiscard]] std::uint64_t add_scalar_signal_change_hook(
+      ScalarSignalChangeHook hook);
+  void remove_scalar_signal_change_hook(std::uint64_t token) noexcept;
   void set_safe_point_hook(SafePointHook hook);
   /// Add an independent scheduler safe-point observer without replacing the
   /// debugger, interrupt, or API control hook.

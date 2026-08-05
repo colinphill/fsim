@@ -1932,6 +1932,7 @@ end architecture;
   assert(!mixed_dynamic_rejected.ok());
   assert(has_diagnostic(
       mixed_dynamic_rejected, "FSIM-ELAB-SVPORT-004"));
+
 }
 
 }  // namespace fsim::tests::elaboration

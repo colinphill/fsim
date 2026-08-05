@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/runtime/systemverilog_string.hpp"
 
 namespace fsim::app::application_detail {
 
@@ -96,7 +97,7 @@ namespace fsim::app::application_detail {
     runtime.compare_strings = compare_strings;
     runtime.string_length = string_length;
     runtime.string_index = string_index;
-    runtime.string_replace_byte = string_replace_byte;
+    runtime.string_replace_code_point = string_replace_code_point;
     runtime.write_string_output = write_string_output;
     runtime.file_open = file_open;
     runtime.file_close = file_close;
@@ -459,6 +460,8 @@ std::uint32_t LlvmProcessExecutor::load_string(
         || (byte_count != 0 && bytes == nullptr)) {
       throw std::logic_error{"invalid generated string-load callback"};
     }
+    (void)runtime::systemverilog_string_length(
+        std::string_view{bytes, static_cast<std::size_t>(byte_count)});
     state.executor->write_string_register(
         destination,
         std::string_view{bytes, static_cast<std::size_t>(byte_count)});
@@ -576,9 +579,10 @@ std::uint32_t LlvmProcessExecutor::compare_strings(
     if (result == nullptr || not_equal > 1) {
       throw std::logic_error{"invalid generated string-compare callback"};
     }
-    const bool equal =
-        state.executor->read_string_register(lhs)
-        == state.executor->read_string_register(rhs);
+    const bool equal = runtime::systemverilog_string_compare(
+                           state.executor->read_string_register(lhs),
+                           state.executor->read_string_register(rhs))
+        == 0;
     *result = equal != (not_equal != 0) ? 1U : 0U;
     return 0;
   } catch (...) {
@@ -600,7 +604,8 @@ std::uint32_t LlvmProcessExecutor::string_length(
       throw std::logic_error{"invalid generated string-length callback"};
     }
     *result = static_cast<std::uint32_t>(
-        state.executor->read_string_register(source).size());
+        runtime::systemverilog_string_length(
+            state.executor->read_string_register(source)));
     return 0;
   } catch (...) {
     capture_failure(state);
@@ -634,15 +639,16 @@ std::uint32_t LlvmProcessExecutor::string_index(
     const auto index = signed_index != 0
         ? static_cast<std::int64_t>(static_cast<std::int32_t>(raw))
         : static_cast<std::int64_t>(raw);
+    const auto length = runtime::systemverilog_string_length(value);
     if (index < 0
-        || static_cast<std::uint64_t>(index) >= value.size()) {
+        || static_cast<std::uint64_t>(index) >= length) {
       throw runtime::simir::InterpreterError(
           state.process->id,
           instruction,
-          "string index is outside the current byte range");
+          "string index is outside the current code-point range");
     }
-    *result = static_cast<unsigned char>(
-        value[static_cast<std::size_t>(index)]);
+    *result = runtime::systemverilog_string_at(
+        value, static_cast<std::size_t>(index));
     return 0;
   } catch (...) {
     capture_failure(state);
@@ -650,7 +656,7 @@ std::uint32_t LlvmProcessExecutor::string_index(
   }
 }
 
-std::uint32_t LlvmProcessExecutor::string_replace_byte(
+std::uint32_t LlvmProcessExecutor::string_replace_code_point(
     void* context,
     const std::uint32_t process,
     const std::uint32_t instruction,
@@ -677,21 +683,25 @@ std::uint32_t LlvmProcessExecutor::string_replace_byte(
     const auto selected = signed_index != 0
         ? static_cast<std::int64_t>(static_cast<std::int32_t>(raw))
         : static_cast<std::int64_t>(raw);
+    const auto length = runtime::systemverilog_string_length(value);
     if (selected < 0
-        || static_cast<std::uint64_t>(selected) >= value.size()) {
+        || static_cast<std::uint64_t>(selected) >= length) {
       throw runtime::simir::InterpreterError(
           state.process->id,
           instruction,
-          "string index is outside the current byte range");
+          "string index is outside the current code-point range");
     }
     if (source_bval != 0) {
       throw runtime::simir::InterpreterError(
           state.process->id,
           instruction,
-          "string replacement byte contains X or Z");
+          "string replacement code point contains X or Z");
     }
-    value[static_cast<std::size_t>(selected)] =
-        static_cast<char>(source_aval & UINT64_C(0xff));
+    runtime::systemverilog_string_replace(
+        value,
+        static_cast<std::size_t>(selected),
+        static_cast<std::uint32_t>(source_aval),
+        runtime::simir::maximum_string_bytes);
     return 0;
   } catch (...) {
     capture_failure(state);
@@ -1758,7 +1768,8 @@ void LlvmProcessExecutor::write_formatted(
           operation->suppress_leading_zero,
           operation->minimum_width,
           operation->left_justify,
-          operation->zero_pad);
+          operation->zero_pad,
+          operation->scalar_kind);
     } catch (...) {
       capture_failure(state);
     }
@@ -1811,7 +1822,8 @@ void LlvmProcessExecutor::write_formatted_logic9(
           operation->suppress_leading_zero,
           operation->minimum_width,
           operation->left_justify,
-          operation->zero_pad);
+          operation->zero_pad,
+          operation->scalar_kind);
     } catch (...) {
       capture_failure(state);
     }

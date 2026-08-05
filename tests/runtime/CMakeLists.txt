@@ -7,7 +7,10 @@ add_executable(
   fsim_runtime_tests
   runtime_tests.cpp
   runtime_value_tests.cpp
-    runtime_execution_tests.cpp
+  runtime_scalar_text_tests.cpp
+  runtime_chandle_tests.cpp
+  runtime_unicode_string_tests.cpp
+  runtime_execution_tests.cpp
   runtime_file_tests.cpp
   runtime_container_tests.cpp
   runtime_class_heap_tests.cpp

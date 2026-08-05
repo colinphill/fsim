@@ -3,10 +3,13 @@
 #include "fsim/runtime/packed_value.hpp"
 #include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cfenv>
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
@@ -237,6 +240,262 @@ void test_packed_values() {
               .to_msb_string()
           == "HLXW",
       "packed common values must use exact std_logic resolution");
+}
+
+void test_systemverilog_scalar_values() {
+  using namespace fsim::runtime;
+  using Arithmetic = SystemVerilogScalarArithmetic;
+  using Comparison = SystemVerilogScalarComparison;
+  using Error = SystemVerilogScalarError;
+  using Rounding = SystemVerilogScalarRounding;
+
+  const auto negative_zero = SystemVerilogScalarValue::real(-0.0);
+  require(
+      negative_zero.bits == UINT64_C(0x8000000000000000)
+          && negative_zero.canonical()
+              == "svruntime-scalar-v1:k=2:b=8000000000000000",
+      "runtime real storage must retain canonical negative-zero bits");
+  const auto short_product = systemverilog_scalar_arithmetic(
+      Arithmetic::Multiply,
+      SystemVerilogScalarValue::shortreal(1.5F),
+      SystemVerilogScalarValue::shortreal(2.0F));
+  require(
+      short_product
+          && short_product.value.kind == SystemVerilogScalarKind::ShortReal
+          && short_product.value.bits
+              == std::bit_cast<std::uint32_t>(3.0F),
+      "shortreal arithmetic must round into canonical binary32 storage");
+  const auto real_sum = systemverilog_scalar_arithmetic(
+      Arithmetic::Add,
+      SystemVerilogScalarValue::real(0.1),
+      SystemVerilogScalarValue::real(0.2));
+  require(
+      real_sum
+          && real_sum.value.bits == UINT64_C(0x3fd3333333333334),
+      "real arithmetic must retain the deterministic binary64 result");
+  const auto mixed_time = systemverilog_scalar_arithmetic(
+      Arithmetic::Add,
+      SystemVerilogScalarValue::realtime(2.5),
+      SystemVerilogScalarValue::time(2));
+  require(
+      mixed_time
+          && mixed_time.value.kind == SystemVerilogScalarKind::Realtime
+          && mixed_time.value.as_real() == 4.5,
+      "realtime arithmetic must promote exact ticks deterministically");
+  require(
+      systemverilog_scalar_arithmetic(
+          Arithmetic::Add,
+          SystemVerilogScalarValue::time(
+              std::numeric_limits<std::uint64_t>::max()),
+          SystemVerilogScalarValue::time(1)).error == Error::Overflow,
+      "time addition must reject tick overflow");
+  require(
+      systemverilog_scalar_arithmetic(
+          Arithmetic::Subtract,
+          SystemVerilogScalarValue::time(10),
+          SystemVerilogScalarValue::time(11)).error == Error::Overflow,
+      "time subtraction must reject tick underflow");
+  require(
+      systemverilog_scalar_arithmetic(
+          Arithmetic::Divide,
+          SystemVerilogScalarValue::time(10),
+          SystemVerilogScalarValue::time(0)).error == Error::DivideByZero,
+      "time division must reject zero divisors");
+  const auto previous_rounding = std::fegetround();
+  if (std::fesetround(FE_DOWNWARD) == 0) {
+    const auto rejected_rounding = systemverilog_scalar_arithmetic(
+        Arithmetic::Add,
+        SystemVerilogScalarValue::real(1.0),
+        SystemVerilogScalarValue::real(2.0));
+    (void)std::fesetround(previous_rounding);
+    require(
+        rejected_rounding.error == Error::UnsupportedRoundingMode,
+        "real arithmetic must reject a non-nearest host rounding mode");
+  }
+
+  SystemVerilogScalarStorage bounded{{2, 32, 4}};
+  const auto first = bounded.materialize(SystemVerilogScalarValue::real(1.0));
+  const auto second = bounded.materialize(SystemVerilogScalarValue::time(2));
+  require(
+      first && second && first.id == 0 && second.id == 1
+          && bounded.materialized_bytes() == 32,
+      "scalar storage must use canonical resource accounting");
+  require(
+      bounded.materialize(SystemVerilogScalarValue::real(3.0)).error
+          == Error::ResourceLimit,
+      "scalar materialization must enforce value and byte limits");
+  require(
+      bounded.materialize(SystemVerilogScalarValue::real(
+          std::numeric_limits<double>::infinity())).error
+          == Error::Nonfinite,
+      "scalar storage must reject nonfinite IEEE values");
+  require(
+      bounded.store(99, SystemVerilogScalarValue::real(0.0))
+          == Error::InvalidId,
+      "scalar storage must reject invalid identifiers");
+  require(
+      bounded.store(
+          first.id,
+          SystemVerilogScalarValue::real(
+              std::numeric_limits<double>::infinity()))
+              == Error::Nonfinite
+          && bounded.load(first.id)->as_real() == 1.0,
+      "rejected scalar stores leave the prior value unchanged");
+
+  SystemVerilogScalarStorage operations{{4, 64, 1}};
+  const auto lhs = operations.materialize(SystemVerilogScalarValue::time(7));
+  const auto rhs = operations.materialize(SystemVerilogScalarValue::time(5));
+  const auto total = operations.arithmetic(Arithmetic::Add, lhs.id, rhs.id);
+  require(
+      total && operations.load(total.id)->as_time() == 12
+          && operations.operations() == 1,
+      "scalar storage arithmetic must materialize exact tick results");
+  require(
+      operations.arithmetic(Arithmetic::Add, lhs.id, rhs.id).error
+          == Error::ResourceLimit,
+      "scalar arithmetic must enforce the deterministic work budget");
+
+  const auto exact_left = SystemVerilogScalarValue::time(
+      UINT64_C(9007199254740993));
+  const auto exact_right = SystemVerilogScalarValue::time(
+      UINT64_C(9007199254740992));
+  require(
+      systemverilog_scalar_compare(
+          Comparison::Greater, exact_left, exact_right).value,
+      "tick comparisons must remain exact beyond binary64 integer precision");
+  require(
+      systemverilog_scalar_compare(
+          Comparison::Less,
+          SystemVerilogScalarValue::integral(-1),
+          SystemVerilogScalarValue::time(0)).value,
+      "signed-integral and unsigned-time comparison must retain sign");
+  require(
+      !systemverilog_scalar_truth(SystemVerilogScalarValue::real(-0.0)).value
+          && systemverilog_scalar_truth(
+                 SystemVerilogScalarValue::shortreal(-1.0F)).value,
+      "real logical truth must distinguish zero from nonzero values");
+  const auto nan = SystemVerilogScalarValue::real(
+      std::numeric_limits<double>::quiet_NaN());
+  require(
+      !systemverilog_scalar_compare(
+          Comparison::Equal, nan, nan).value
+          && systemverilog_scalar_compare(
+                 Comparison::NotEqual, nan, nan).value
+          && systemverilog_scalar_truth(nan).error == Error::Nonfinite,
+      "NaN predicates and logical truth must have explicit IEEE behavior");
+  const auto payload_left = encode_systemverilog_scalar_payload(
+      SystemVerilogScalarValue::real(1.5));
+  const auto payload_right = encode_systemverilog_scalar_payload(
+      SystemVerilogScalarValue::real(2.0));
+  require(payload_left && payload_right, "scalar binary payload fixtures");
+  const auto payload_product = systemverilog_scalar_binary_payload(
+      SystemVerilogScalarBinaryOperator::Multiply,
+      payload_left.value,
+      SystemVerilogScalarKind::Real,
+      payload_right.value,
+      SystemVerilogScalarKind::Real,
+      SystemVerilogScalarKind::Real);
+  const auto payload_greater = systemverilog_scalar_binary_payload(
+      SystemVerilogScalarBinaryOperator::Greater,
+      payload_product.value,
+      SystemVerilogScalarKind::Real,
+      payload_right.value,
+      SystemVerilogScalarKind::Real,
+      SystemVerilogScalarKind::None);
+  require(
+      payload_product && payload_greater
+          && decode_systemverilog_scalar_payload(
+                 payload_product.value,
+                 SystemVerilogScalarKind::Real).value.as_real() == 3.0
+          && payload_greater.value.to_msb_string() == "1",
+      "scalar binary payload service must preserve typed arithmetic and predicates");
+
+  const auto nearest = convert_systemverilog_scalar(
+      SystemVerilogScalarValue::real(2.5),
+      SystemVerilogScalarKind::None,
+      Rounding::NearestAwayFromZero);
+  const auto negative_nearest = convert_systemverilog_scalar(
+      SystemVerilogScalarValue::real(-2.5),
+      SystemVerilogScalarKind::None,
+      Rounding::NearestAwayFromZero);
+  const auto truncated = convert_systemverilog_scalar(
+      SystemVerilogScalarValue::real(-2.9),
+      SystemVerilogScalarKind::None,
+      Rounding::TowardZero);
+  const auto floored = convert_systemverilog_scalar(
+      SystemVerilogScalarValue::real(-2.1),
+      SystemVerilogScalarKind::None,
+      Rounding::Floor);
+  const auto ceiled = convert_systemverilog_scalar(
+      SystemVerilogScalarValue::real(-2.9),
+      SystemVerilogScalarKind::None,
+      Rounding::Ceil);
+  require(
+      nearest.value.as_integral() == 3
+          && negative_nearest.value.as_integral() == -3
+          && truncated.value.as_integral() == -2
+          && floored.value.as_integral() == -3
+          && ceiled.value.as_integral() == -2,
+      "scalar conversions must implement every explicit rounding mode");
+  require(
+      convert_systemverilog_scalar(
+          SystemVerilogScalarValue::integral(-1),
+          SystemVerilogScalarKind::Time).error == Error::Overflow
+          && convert_systemverilog_scalar(
+                 SystemVerilogScalarValue::time(
+                     std::numeric_limits<std::uint64_t>::max()),
+                 SystemVerilogScalarKind::None).error == Error::Overflow,
+      "integral/time conversions must reject signed and unsigned overflow");
+  const auto narrowed_real = convert_systemverilog_scalar(
+      SystemVerilogScalarValue::real(1.25),
+      SystemVerilogScalarKind::ShortReal);
+  require(
+      narrowed_real && narrowed_real.value.as_shortreal() == 1.25F,
+      "real-to-shortreal conversion must materialize binary32");
+
+  const auto signed_packed = systemverilog_scalar_from_packed(
+      PackedLogic4::from_msb_string("11111111"), true,
+      SystemVerilogScalarKind::Real);
+  const auto unsigned_packed = systemverilog_scalar_from_packed(
+      PackedLogic4::from_msb_string("11111111"), false,
+      SystemVerilogScalarKind::Real);
+  require(
+      signed_packed.value.as_real() == -1.0
+          && unsigned_packed.value.as_real() == 255.0,
+      "packed-to-real conversion must retain declared signedness");
+  require(
+      systemverilog_scalar_from_packed(
+          PackedLogic4::from_msb_string("10X1"), false,
+          SystemVerilogScalarKind::Real).error == Error::UnknownValue,
+      "packed X/Z values must not fabricate a real payload");
+  const auto packed_rounded = systemverilog_scalar_to_packed(
+      SystemVerilogScalarValue::real(3.5), 8, false);
+  require(
+      packed_rounded
+          && packed_rounded.value.to_msb_string() == "00000100",
+      "real-to-packed conversion must round before checked materialization");
+  require(
+      systemverilog_scalar_to_packed(
+          SystemVerilogScalarValue::real(200.0), 8, true).error
+          == Error::Overflow,
+      "real-to-packed conversion must reject destination-width overflow");
+
+  const auto subnormal = classify_systemverilog_scalar(
+      SystemVerilogScalarValue::real(
+          std::numeric_limits<double>::denorm_min()));
+  const auto short_subnormal = classify_systemverilog_scalar(
+      SystemVerilogScalarValue::shortreal(
+          std::numeric_limits<float>::denorm_min()));
+  const auto infinite = classify_systemverilog_scalar(
+      SystemVerilogScalarValue::real(
+          std::numeric_limits<double>::infinity()));
+  const auto classified_nan = classify_systemverilog_scalar(nan);
+  require(
+      subnormal.subnormal && subnormal.finite && !subnormal.normal
+          && short_subnormal.subnormal && short_subnormal.finite
+          && infinite.infinite && !infinite.finite
+          && classified_nan.nan && !classified_nan.finite,
+      "runtime scalar classification must expose IEEE categories exactly");
 }
 
 void test_scheduler_phase_order() {

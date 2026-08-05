@@ -386,10 +386,11 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     expression.span);
                 return std::nullopt;
             }
-            const auto source_width = infer_width(
-                expression.operands.front()).value_or(*cast_width);
+            const auto source_width = cast_type->systemverilog_scalar
+                    != frontend::SystemVerilogScalarKind::None
+                ? *cast_width : infer_width(expression.operands.front()).value_or(*cast_width);
             auto source = lower_expression(
-                expression.operands.front(), source_width);
+                expression.operands.front(), source_width, cast_type);
             if (!source) {
                 return std::nullopt;
             }
@@ -583,10 +584,6 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     expression.span);
                 return std::nullopt;
             }
-            const auto width = type->width();
-            if (!width) {
-                return std::nullopt;
-            }
             const auto runtime_type =
                 container_expression_runtime_type(
                     source_expression);
@@ -594,6 +591,16 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 return std::nullopt;
             }
             if (container_reduction) {
+                if (runtime_type->element_kind
+                        != ContainerElementKind::Packed) {
+                    report(
+                        "FSIM-ELAB-SVREDUCE-006",
+                        "container reductions require packed integral elements",
+                        expression.span);
+                    return std::nullopt;
+                }
+                const auto width = type->width();
+                if (!width) return std::nullopt;
                 const bool explicit_iterator =
                     expression.operands.size() == 3;
                 const bool has_transformation =
@@ -682,6 +689,8 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                         std::move(transformation)});
                 return destination;
             }
+            const auto width = type->width();
+            if (!width) return std::nullopt;
             if (expression.kind == ExpressionKind::Call
                 && (expression.text == ".exists"
                     || expression.text == ".first"
@@ -868,14 +877,16 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 || expression.text == ".atoi"
                 || expression.text == ".atohex"
                 || expression.text == ".atooct"
-                || expression.text == ".atobin")
+                || expression.text == ".atobin"
+                || expression.text == ".atoreal")
             && !expression.operands.empty()
             && is_string_expression(expression.operands.front())) {
             const bool conversion =
                 expression.text == ".atoi"
                 || expression.text == ".atohex"
                 || expression.text == ".atooct"
-                || expression.text == ".atobin";
+                || expression.text == ".atobin"
+                || expression.text == ".atoreal";
             if (expression.operands.size() != (conversion ? 1U : 2U)) {
                 report(
                     "FSIM-ELAB-SVSTRING-018",
@@ -894,7 +905,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
             StringMethod method;
             method.source = *source;
             method.destination = allocate_register(
-                expression.text == ".getc" ? 8U : 32U,
+                expression.text == ".atoreal" ? 64U : 32U,
                 expression.text == ".getc"
                     ? frontend::ValueDomain::Bit2
                     : frontend::ValueDomain::Integer);
@@ -906,7 +917,9 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                               ? StringMethodOperator::atohex
                               : expression.text == ".atooct"
                                     ? StringMethodOperator::atooct
-                                    : StringMethodOperator::atobin;
+                                    : expression.text == ".atobin"
+                                          ? StringMethodOperator::atobin
+                                          : StringMethodOperator::atoreal;
             } else if (expression.text == ".getc") {
                 auto index = lower_expression(
                     expression.operands[1], 32);
@@ -962,7 +975,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
             }
             const auto destination =
                 allocate_register(
-                    8, frontend::ValueDomain::Bit2);
+                    32, frontend::ValueDomain::Bit2);
             process_.operations.emplace_back(
                 StringIndex{
                     destination,
@@ -1502,6 +1515,36 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
             || expression.kind == ExpressionKind::BooleanLiteral
             || expression.kind == ExpressionKind::LogicLiteral
             || expression.kind == ExpressionKind::StringLiteral) {
+            if (expected_type != nullptr
+                && expected_type->systemverilog_scalar
+                    != frontend::SystemVerilogScalarKind::None
+                && expression.systemverilog_decimal_literal) {
+                std::string error;
+                const auto evaluated =
+                    frontend::evaluate_systemverilog_scalar_constant(
+                        expression, {}, {}, error);
+                const auto converted = evaluated
+                    ? frontend::convert_systemverilog_scalar_constant(
+                          *evaluated,
+                          expected_type->systemverilog_scalar,
+                          error)
+                    : std::nullopt;
+                if (!converted) {
+                    report(
+                        "FSIM-ELAB-SVSCALAR-001",
+                        "cannot convert scalar literal '"
+                            + expression.text + "': " + error,
+                        expression.span);
+                    return std::nullopt;
+                }
+                const auto destination = allocate_register(
+                    expected_width, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(LoadConstant{
+                    destination,
+                    PackedLogic4::from_aval_bval(
+                        expected_width, converted->bits, 0)});
+                return destination;
+            }
             if (language_ == frontend::Language::Vhdl2008
                 && expected_type != nullptr
                 && !expected_type->enumeration_literals.empty()) {

@@ -78,7 +78,8 @@ parse_output_format(const std::string_view text) {
     if (conversion != 'b' && conversion != 'h'
         && conversion != 'x' && conversion != 'o'
         && conversion != 'd' && conversion != 'c'
-        && conversion != 's' && conversion != 'm'
+        && conversion != 's' && conversion != 'e'
+        && conversion != 'f' && conversion != 'g' && conversion != 'm'
         && conversion != 't') {
       result.valid = false;
       return result;
@@ -114,6 +115,9 @@ parse_output_format(const std::string_view text) {
             : conversion == 'd' ? OutputFormat::Decimal
             : conversion == 'c' ? OutputFormat::Character
             : conversion == 's' ? OutputFormat::String
+            : conversion == 'e' ? OutputFormat::RealScientific
+            : conversion == 'f' ? OutputFormat::RealFixed
+            : conversion == 'g' ? OutputFormat::RealGeneral
             : conversion == 'm' ? OutputFormat::Hierarchy
                                 : OutputFormat::Time;
     result.conversions.push_back(std::move(parsed));

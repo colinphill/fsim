@@ -101,6 +101,10 @@ void ContainerOperationLowerer::lower(
   invoke(value.size, std::nullopt, std::nullopt, "container.resize");
 }
 void ContainerOperationLowerer::lower(
+    const runtime::simir::SystemVerilogScalarBinary& value) {
+  invoke(value.lhs, value.rhs, value.destination, "scalar.binary");
+}
+void ContainerOperationLowerer::lower(
     const runtime::simir::CopyContainerRegister&) {
   invoke(std::nullopt, std::nullopt, std::nullopt, "container.copy");
 }
@@ -162,7 +166,7 @@ void ContainerOperationLowerer::lower(
               || value.operation == StringMethodOperator::putc
               || value.operation == StringMethodOperator::substr
               || (value.operation >= StringMethodOperator::itoa
-                  && value.operation <= StringMethodOperator::bintoa)
+                  && value.operation <= StringMethodOperator::realtoa)
               || value.operation == StringMethodOperator::format_packed
           ? std::optional{value.first} : std::nullopt;
   const auto second =
@@ -172,6 +176,7 @@ void ContainerOperationLowerer::lower(
       ? std::optional{value.second} : std::nullopt;
   const auto destination =
       value.operation == StringMethodOperator::getc
+              || value.operation == StringMethodOperator::atoreal
               || value.operation == StringMethodOperator::compare
               || value.operation == StringMethodOperator::icompare
               || (value.operation >= StringMethodOperator::atoi

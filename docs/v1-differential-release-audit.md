@@ -69,3 +69,13 @@ debugger, callbacks, trace, relocation, and cache evidence. The linked totals
 are 470 interpreter rows, 387 LLVM rows, 256 cache rows, 106 debugger rows, 132
 VCD/trace rows, 414 scheduling rows, and 100 failure rows. The reviewed
 36-CTest corpus inventory is unchanged.
+
+Batch 150's ten scalar-closure rows advance the reviewed differential
+inventory to 1,162 required rows and 110 runtime owners. Exact real/time
+payloads, Unicode strings, opaque handles, recursive composite storage, file
+I/O, artifacts, relocation, diagnostics, and rollback are linked through
+frontend, elaboration, runtime, interpreter, LLVM O0/O2, debugger, callbacks,
+VCD, scheduling, and cold/warm/edited-cache evidence. The linked totals are
+472 interpreter rows, 389 LLVM rows, 258 cache rows, 108 debugger rows, 134
+VCD/trace rows, 418 scheduling rows, and 102 failure rows. The reviewed
+36-CTest corpus inventory is unchanged.

@@ -11,7 +11,8 @@
 namespace fsim::frontend {
 
 enum class InputScanFormat : std::uint8_t {
-  Binary, Octal, Decimal, UnsignedDecimal, Hexadecimal, Character, String
+  Binary, Octal, Decimal, UnsignedDecimal, Hexadecimal, Character, String,
+  Real
 };
 struct ParsedInputConversion {
   std::string prefix;
@@ -79,6 +80,8 @@ parse_input_format(const std::string_view text) {
     else if (code == 'h' || code == 'x') conversion.format = InputScanFormat::Hexadecimal;
     else if (code == 'c') conversion.format = InputScanFormat::Character;
     else if (code == 's') conversion.format = InputScanFormat::String;
+    else if (code == 'e' || code == 'f' || code == 'g')
+      conversion.format = InputScanFormat::Real;
     else {
       result.valid = false;
       return result;

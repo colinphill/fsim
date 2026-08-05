@@ -2,8 +2,8 @@
 #pragma once
 
 #include "fsim/frontend/source.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
 #include "fsim/frontend/token.hpp"
-
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -14,9 +14,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
-
 namespace fsim::frontend {
-
 enum class UnitKind {
   VhdlEntity,
   VhdlArchitecture,
@@ -27,7 +25,6 @@ enum class UnitKind {
   SystemVerilogInterface,
   VerilogModule,
 };
-
 enum class PortDirection {
   Unknown,
   Input,
@@ -36,7 +33,6 @@ enum class PortDirection {
   Ref,
   Buffer,
 };
-
 enum class ValueDomain {
   Unknown,
   Bit2,
@@ -77,22 +73,16 @@ enum class ExpressionKind {
 };
 
 // `text` contains the identifier/literal/operator/callee. Operands retain
-// source order, so this compact tree can be lowered without
-// language-specific nodes.
+// source order for language-independent lowering.
 struct Expression {
   ExpressionKind kind{ExpressionKind::Invalid};
   std::string text;
   std::vector<Expression> operands;
   SourceSpan span;
-  // VHDL aggregate choices parallel operands. Empty denotes a positional
-  // association; otherwise the canonical record element name, `others`, or
-  // the internal `@array` marker is retained. SystemVerilog keyed patterns use
-  // the internal `@key` marker and defaulted patterns use `default`. Each
-  // corresponding entry in aggregate_choice_expressions retains the parsed
-  // discrete/range choices; a SystemVerilog default association retains one
-  // source-spanned DefaultChoice node, record aggregates normally have one
-  // identifier choice, positional associations have none, and non-aggregate
-  // expressions leave both vectors empty.
+  // Aggregate choices parallel operands. Empty denotes positional; named,
+  // `others`, `@array`, SystemVerilog `@key`, and `default` associations retain
+  // their source choices in aggregate_choice_expressions. A SystemVerilog
+  // default retains one source-spanned DefaultChoice node.
   std::vector<std::string> aggregate_choices{};
   std::vector<std::vector<Expression>> aggregate_choice_expressions{};
   // Set only on elaboration-internal folded VHDL enumeration constants so
@@ -103,12 +93,13 @@ struct Expression {
   // parser. The original token spelling remains in text for diagnostics and
   // cache/source provenance.
   std::optional<std::string> decoded_string;
+  std::optional<SystemVerilogDecimalLiteral> systemverilog_decimal_literal;
   std::vector<std::string> call_argument_names;
   std::vector<PortDirection> call_argument_directions;
   std::uint64_t call_result_width{};
   ValueDomain call_result_domain{ValueDomain::Unknown};
   bool call_result_signed{};
-
+  SystemVerilogScalarKind systemverilog_scalar_kind{SystemVerilogScalarKind::None};
   Expression() = default;
 
   Expression(ExpressionKind expression_kind, std::string expression_text,
@@ -409,6 +400,11 @@ struct SystemVerilogContainerInfo {
   // preserves value-copy isolation without embedding expression trees in
   // every Type; nonstatic containers keep this empty.
   std::vector<PackedRangeExpression> static_range_expressions;
+  // Exactly one retained element type. This permits scalar/string elements
+  // and recursively nested unpacked containers without making Type directly
+  // self-recursive. Older flat static-array views still retain every range
+  // above while this entry describes the scalar leaf.
+  std::vector<Type> element_types;
   SourceSpan span;
 };
 
@@ -429,6 +425,8 @@ enum class PackedAggregateKind {
 struct Type {
   ValueDomain domain{ValueDomain::Unknown};
   std::string spelling;
+  SystemVerilogScalarKind systemverilog_scalar{SystemVerilogScalarKind::None};
+  std::string systemverilog_net_type;
   std::optional<PackedRange> packed_range;
   bool is_signed{};
   // Retained until elaboration even when packed_range is already known, so a
@@ -1098,6 +1096,8 @@ enum class OutputFormat {
   Decimal,
   Character,
   String,
+  RealScientific, RealFixed,
+  RealGeneral,
   Hierarchy,
   Time,
 };

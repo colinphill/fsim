@@ -588,6 +588,8 @@ using namespace elaboration_detail;
             return existing->second;
         }
         if (declaration.type.domain == frontend::ValueDomain::Unknown
+            && declaration.type.systemverilog_scalar
+                == frontend::SystemVerilogScalarKind::None
             && declaration.type.systemverilog_class_declaration.empty()) {
             report(
                 "FSIM-ELAB-TYPE-001",
@@ -663,6 +665,8 @@ using namespace elaboration_detail;
             static_cast<std::size_t>(width),
             declaration.type.spelling,
             declaration.type.domain,
+            declaration.type.systemverilog_scalar,
+            declaration.type.systemverilog_net_type,
             declaration.type.is_signed,
             declaration.type.packed_range,
             declaration.type.vhdl_array,
@@ -680,7 +684,9 @@ using namespace elaboration_detail;
             resolver_by_signal_.insert_or_assign(
                 id, declaration.type.vhdl_resolution_function);
         }
-        auto initial = Logic4::x;
+        auto initial = declaration.type.systemverilog_scalar
+                    != frontend::SystemVerilogScalarKind::None
+            ? Logic4::zero : Logic4::x;
         if (declaration.type.spelling == "event") {
             initial = Logic4::zero;
         } else if (declaration.type.spelling == "tri0") {
@@ -724,7 +730,8 @@ using namespace elaboration_detail;
             std::nullopt,
             {StrengthRank::pull, StrengthRank::pull},
             std::nullopt,
-            std::nullopt};
+            std::nullopt,
+            declaration.type.systemverilog_scalar};
         if (declaration.type.spelling == "tri0"
             || declaration.type.spelling == "tri1") {
             signal.implicit_driver =
@@ -1162,17 +1169,30 @@ using namespace elaboration_detail;
                         return;
                       }
                       if (!imported) {
-                        const bool supplied = function
-                            ? std::ranges::any_of(
+                        bool supplied{};
+                        if (function) {
+                          const auto profile = std::ranges::find(
+                              interface_unit.functions, member,
+                              &frontend::FunctionDeclaration::name);
+                          supplied = profile != interface_unit.functions.end()
+                              && std::ranges::any_of(
                                   dependency_owner->functions,
                                   [&](const auto& candidate) {
-                                    return candidate.name == member;
-                                  })
-                            : std::ranges::any_of(
+                                    return systemverilog_function_profile_matches(
+                                        *profile, candidate);
+                                  });
+                        } else {
+                          const auto profile = std::ranges::find(
+                              interface_unit.tasks, member,
+                              &frontend::TaskDeclaration::name);
+                          supplied = profile != interface_unit.tasks.end()
+                              && std::ranges::any_of(
                                   dependency_owner->tasks,
                                   [&](const auto& candidate) {
-                                    return candidate.name == member;
+                                    return systemverilog_task_profile_matches(
+                                        *profile, candidate);
                                   });
+                        }
                         if (!supplied) {
                           report(
                               "FSIM-ELAB-SVIFACE-009",

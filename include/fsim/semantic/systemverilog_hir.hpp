@@ -179,6 +179,9 @@ enum class OutputFormat : std::uint8_t {
     decimal,
     character,
     string,
+    real_scientific,
+    real_fixed,
+    real_general,
     hierarchy,
     time,
 };

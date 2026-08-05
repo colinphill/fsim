@@ -4,6 +4,7 @@
 #include "hierarchy_builder_types.hpp"
 
 #include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/systemverilog_scalar_folding.hpp"
 #include "elaboration_targets.hpp"
 
 #include <algorithm>
@@ -58,6 +59,35 @@ struct SystemVerilogConstantValue {
 };
 using SystemVerilogConstantEnvironment =
     std::unordered_map<std::string, SystemVerilogConstantValue>;
+using frontend::SystemVerilogScalarConstant;
+using frontend::SystemVerilogScalarConstantEnvironment;
+frontend::SystemVerilogScalarEvaluationContext
+systemverilog_scalar_evaluation_context(const DesignUnit& unit);
+std::optional<SystemVerilogScalarConstant>
+evaluate_systemverilog_scalar_parameter(
+    const Expression& expression,
+    const frontend::Type& type,
+    const SystemVerilogScalarConstantEnvironment& environment,
+    const SystemVerilogConstantEnvironment& integral_environment,
+    const ConstantEnvironment& fallback_environment,
+    const frontend::SystemVerilogScalarEvaluationContext& context,
+    bool& applicable,
+    std::string& error);
+void substitute_systemverilog_scalars(
+    Expression& expression,
+    const SystemVerilogScalarConstantEnvironment& environment);
+void substitute_systemverilog_scalar_parameter_sites(
+    DesignUnit& unit,
+    const SystemVerilogScalarConstantEnvironment& environment);
+void prepare_systemverilog_scalar_callable_profiles(
+    DesignUnit& unit,
+    const SystemVerilogScalarConstantEnvironment& environment);
+bool systemverilog_function_profile_matches(
+    const frontend::FunctionDeclaration& left,
+    const frontend::FunctionDeclaration& right);
+bool systemverilog_task_profile_matches(
+    const frontend::TaskDeclaration& left,
+    const frontend::TaskDeclaration& right);
 struct SystemVerilogStringValue {
     std::string bytes;
     frontend::SourceSpan source;
@@ -631,6 +661,7 @@ struct SpecializedUnit {
     ConstantEnvironment environment;
     ConstantDomainEnvironment domains;
     SystemVerilogStringEnvironment string_environment;
+    SystemVerilogScalarConstantEnvironment scalar_environment;
     std::vector<std::pair<std::string, std::string>> values;
     std::vector<std::pair<std::string, std::string>> identity_values;
     PackageEnvironment packages;
@@ -717,6 +748,22 @@ specialize_systemc_construction(
     const ConstantEnvironment& parent_environment,
     const frontend::Language association_language,
     std::vector<Diagnostic>& diagnostics);
+
+using SystemVerilogContainerConstantEvaluator =
+    std::function<std::optional<std::int64_t>(
+        const frontend::Expression&)>;
+using SystemVerilogContainerReporter =
+    std::function<void(
+        std::string,
+        std::string,
+        frontend::SourceSpan)>;
+
+[[nodiscard]] std::optional<runtime::simir::ContainerType>
+materialize_systemverilog_container_type(
+    const frontend::Type& type,
+    const frontend::SourceSpan& span,
+    const SystemVerilogContainerConstantEvaluator& evaluate,
+    const SystemVerilogContainerReporter& report);
 
 } // namespace elaboration_detail
 
@@ -1244,14 +1291,16 @@ private:
         bool is_container,
         std::string temporary);
 
-    std::vector<RegisterId> allocate_static_callable_variables(
+    struct CallableVariableRegister;
+    std::vector<CallableVariableRegister>
+    allocate_static_callable_variables(
         const std::vector<frontend::VariableDeclaration>& variables,
         std::string_view diagnostic_code,
         std::string_view callable_kind);
 
     void bind_static_callable_variables(
         const std::vector<frontend::VariableDeclaration>& variables,
-        const std::vector<RegisterId>& registers);
+        const std::vector<CallableVariableRegister>& registers);
 
     void lower_task_call(const Statement& statement);
     void lower_pending_tasks();
@@ -1362,6 +1411,11 @@ private:
         std::string label;
     };
     std::vector<LoopControlContext> loop_controls_;
+    struct CallableVariableRegister {
+        RegisterId packed{};
+        StringRegisterId string{};
+        bool is_string{};
+    };
     struct FunctionFrame {
         const frontend::FunctionDeclaration* source{};
         RegisterId result{};
@@ -1375,7 +1429,7 @@ private:
         std::vector<ContainerRegisterId> container_arguments;
         std::vector<bool> argument_is_string;
         std::vector<bool> argument_is_container;
-        std::vector<RegisterId> static_variables;
+        std::vector<CallableVariableRegister> static_variables;
         std::optional<InstructionIndex> target;
         std::vector<InstructionIndex> call_sites;
         bool allocated{};
@@ -1401,7 +1455,7 @@ private:
             container_output_defaults;
         std::vector<bool> argument_is_string;
         std::vector<bool> argument_is_container;
-        std::vector<RegisterId> static_variables;
+        std::vector<CallableVariableRegister> static_variables;
         std::optional<InstructionIndex> target;
         std::vector<InstructionIndex> call_sites;
         bool allocated{};

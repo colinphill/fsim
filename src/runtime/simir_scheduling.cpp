@@ -69,6 +69,11 @@ void Interpreter::Impl::force_slice(
     PackedLogic4 value,
     const std::size_t offset) {
   const auto& signal = get_signal(signal_id);
+  if (signal.systemverilog_scalar != SystemVerilogScalarKind::None
+      && (offset != 0 || value.width() != signal.initial_value.width())) {
+    throw std::invalid_argument{
+        "SimIR scalar signals do not support partial force"};
+  }
   if (offset > signal.initial_value.width()
       || value.width() > signal.initial_value.width() - offset) {
     throw std::invalid_argument("SimIR signal force slice is out of range");
@@ -92,6 +97,11 @@ void Interpreter::Impl::release_slice(
     const std::size_t offset,
     const std::size_t width) {
   const auto& signal = get_signal(signal_id);
+  if (signal.systemverilog_scalar != SystemVerilogScalarKind::None
+      && (offset != 0 || width != signal.initial_value.width())) {
+    throw std::invalid_argument{
+        "SimIR scalar signals do not support partial release"};
+  }
   if (offset > signal.initial_value.width()
       || width > signal.initial_value.width() - offset) {
     throw std::invalid_argument("SimIR signal release slice is out of range");
@@ -740,7 +750,11 @@ void Interpreter::Impl::commit_slice(
     const SignalId signal_id,
     PackedLogic4 value,
     const std::size_t offset)  {
-    (void)get_signal(signal_id);
+    if (get_signal(signal_id).systemverilog_scalar
+        != SystemVerilogScalarKind::None) {
+      throw std::invalid_argument{
+          "SimIR scalar signals do not support partial assignment"};
+    }
     commit(
         signal_id,
         insert_value(
@@ -946,6 +960,11 @@ void Interpreter::Impl::stage_update_slice(
     const std::size_t offset)  {
     (void)get_signal(signal_id);
     const auto target_width = driven_values[signal_id].width();
+    if (get_signal(signal_id).systemverilog_scalar
+        != SystemVerilogScalarKind::None) {
+      throw std::invalid_argument{
+          "SimIR scalar signals do not support partial update"};
+    }
     if (value.width() == 0 || offset > target_width
         || value.width() > target_width - offset) {
       throw std::invalid_argument(

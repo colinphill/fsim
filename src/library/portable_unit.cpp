@@ -42,21 +42,37 @@ template <typename T>
 struct IsSharedPtr<std::shared_ptr<T>> : std::true_type {};
 
 template <typename T>
+constexpr bool valid_archive_enum(const T value) noexcept {
+  if constexpr (std::same_as<T, frontend::SystemVerilogScalarKind>) {
+    return value >= frontend::SystemVerilogScalarKind::None
+        && value <= frontend::SystemVerilogScalarKind::Chandle;
+  } else if constexpr (
+      std::same_as<T, frontend::SystemVerilogDecimalLiteralKind>) {
+    return value >= frontend::SystemVerilogDecimalLiteralKind::Real
+        && value <= frontend::SystemVerilogDecimalLiteralKind::Time;
+  }
+  return true;
+}
+
+template <typename T>
   requires std::same_as<std::remove_cv_t<T>, frontend::Expression>
 auto archive_fields(T& value) {
   return std::tie(
       value.kind, value.text, value.operands, value.span,
       value.aggregate_choices, value.aggregate_choice_expressions,
-      value.nominal_type, value.decoded_string, value.call_argument_names,
+      value.nominal_type, value.decoded_string,
+      value.systemverilog_decimal_literal, value.call_argument_names,
       value.call_argument_directions, value.call_result_width,
-      value.call_result_domain, value.call_result_signed);
+      value.call_result_domain, value.call_result_signed,
+      value.systemverilog_scalar_kind);
 }
 
 template <typename T>
   requires std::same_as<std::remove_cv_t<T>, frontend::Type>
 auto archive_fields(T& value) {
   return std::tie(
-      value.domain, value.spelling, value.packed_range, value.is_signed,
+      value.domain, value.spelling, value.systemverilog_scalar,
+      value.systemverilog_net_type, value.packed_range, value.is_signed,
       value.packed_range_expression, value.named_type, value.named_type_span,
       value.nominal_type, value.vhdl_type_declaration,
       value.vhdl_resolution_function, value.enumeration_literals,
@@ -152,6 +168,11 @@ class Writer final {
     if constexpr (std::same_as<Value, bool>) {
       bytes_.push_back(value ? '\1' : '\0');
     } else if constexpr (std::is_enum_v<Value>) {
+      if (!valid_archive_enum(value)) {
+        failure_ = "portable unit contains an invalid scalar enumeration";
+        --depth_;
+        return;
+      }
       auto underlying = static_cast<std::underlying_type_t<Value>>(value);
       write(underlying);
     } else if constexpr (std::is_integral_v<Value>) {
@@ -249,7 +270,8 @@ class Reader final {
           return false;
         }
         value = static_cast<Value>(underlying);
-        return true;
+        return valid_archive_enum(value)
+            || fail("portable unit contains an invalid scalar enumeration");
       } else if constexpr (std::is_integral_v<Value>) {
         std::uint64_t encoded{};
         if (!unsigned64(encoded)) {

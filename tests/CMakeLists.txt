@@ -42,6 +42,7 @@ add_executable(
   frontend/frontend_vhdl_attribute_tests.cpp
   frontend/frontend_vhdl_time_file_tests.cpp
   frontend/frontend_declaration_tests.cpp
+  frontend/frontend_chandle_tests.cpp
   frontend/frontend_interface_tests.cpp
   frontend/frontend_package_tests.cpp
   frontend/frontend_callable_tests.cpp
@@ -477,6 +478,7 @@ add_executable(
   elaboration/elaborator_vhdl_concurrent_test.cpp
   elaboration/elaborator_sv_file_test.cpp
   elaboration/elaborator_sv_container_test.cpp
+  elaboration/elaborator_sv_composite_container_test.cpp
   elaboration/elaborator_sv_aggregate_container_test.cpp
   elaboration/elaborator_sv_slice_call_test.cpp
   elaboration/elaborator_sv_slice_order_test.cpp
@@ -492,6 +494,7 @@ add_executable(
   fsim_sv_container_elaboration_tests
   elaboration/elaborator_sv_container_main.cpp
   elaboration/elaborator_sv_container_test.cpp
+  elaboration/elaborator_sv_composite_container_test.cpp
   elaboration/elaborator_sv_aggregate_container_test.cpp
   elaboration/elaborator_sv_slice_call_test.cpp
   elaboration/elaborator_sv_slice_order_test.cpp

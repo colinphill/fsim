@@ -48,10 +48,12 @@ using SignalOperationGroup =
 using StringOperationGroup =
     OperationGroup<LoadStringConstant, CopyStringRegister, ReadStringObject,
                    WriteStringObject, ConcatenateStrings, CompareStrings,
-                   StringLength, StringIndex, StringReplaceByte, StringMethod>;
+                   StringLength, StringIndex, StringReplaceCodePoint,
+                   StringMethod>;
 
 using ContainerOperationGroup =
-    OperationGroup<ResizeContainer, CopyContainerRegister,
+    OperationGroup<SystemVerilogScalarBinary, ResizeContainer,
+                   CopyContainerRegister,
                    ConditionalContainerSelect, CompareContainers,
                    ReadContainerObject, WriteContainerObject, ContainerSize,
                    ContainerReduction, OrderContainer, LocateContainer,
@@ -196,7 +198,7 @@ static_assert(
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
         + std::variant_size_v<ClassOperationGroup::Storage>
-    == 131);
+    == 132);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept {

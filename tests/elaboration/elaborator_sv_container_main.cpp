@@ -3,6 +3,7 @@
 
 int main() {
   fsim::tests::elaboration::test_systemverilog_container_lowering();
+  fsim::tests::elaboration::test_systemverilog_composite_container_types();
   fsim::tests::elaboration::test_systemverilog_aggregate_containers();
   fsim::tests::elaboration::test_systemverilog_static_slice_calls();
   fsim::tests::elaboration::test_systemverilog_static_slice_ordering();
