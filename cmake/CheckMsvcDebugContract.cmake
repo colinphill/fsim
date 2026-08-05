@@ -72,8 +72,8 @@ file(READ "${FSIM_ELABORATION}" FSIM_ELABORATION_CONTENTS)
 foreach(FSIM_ROOT_POLICY IN ITEMS
     "function(fsim_configure_test_platform target)"
     "CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL \"MSVC\""
+    "add_compile_options(/bigobj)"
     "target_link_options(\${target} PRIVATE /STACK:8388608)"
-    "target_compile_options(fsim_application PRIVATE /bigobj)"
     "fsim_configure_test_platform(\${target})")
   string(FIND "${FSIM_ROOT_CONTENTS}" "${FSIM_ROOT_POLICY}" FSIM_POLICY_INDEX)
   if(FSIM_POLICY_INDEX EQUAL -1)
@@ -267,7 +267,8 @@ if(FSIM_ELABORATION_INDEX EQUAL -1)
 endif()
 
 message(STATUS
-  "MSVC Debug contract: common 8 MiB stack policy covers C/C++ test hosts; "
+  "MSVC Debug contract: /bigobj covers every target and the common 8 MiB "
+  "stack policy covers C/C++ test hosts; "
   "SystemC enum metadata crosses the integer validation seam explicitly and "
   "interface-kind selection uses an explicit constexpr fallback; "
   "compiler tests use the shared MSVC-safe environment helper; "

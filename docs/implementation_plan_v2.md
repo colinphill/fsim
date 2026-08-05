@@ -1545,6 +1545,569 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     release evidence covers 1,142 executable rows, 4,568 linked evidence
     cells, 377 exact paths, and 108 runtime owners.
 
+## Batch 149 - SystemVerilog constraint solving and randomization - In progress
+
+1. **Complete.** Apply `/bigobj` to every MSVC-command-line target, including
+   clang-cl, instead of only `fsim_application`; update the MSVC Debug contract
+   to reject a return to target-local coverage. An eight-worker exact-LLVM
+   Debug configuration/build plus source, MSVC Debug/Release, and Windows LLVM
+   contract gates pass. At the user's explicit request, commit and push this
+   correction together with the locked remaining-v2 roadmap as a clean
+   checkpoint before Change 2; Changes 2-19 then accumulate from that baseline.
+2. **Pending.** Define the executable SystemVerilog-2017 constraint subset and
+   normalize retained constraint blocks, property qualifiers, spans, and
+   inherited ownership into canonical semantic HIR.
+3. **Pending.** Resolve constrained properties, parameters, local variables,
+   class selections, and method references against exact specializations before
+   solver construction.
+4. **Pending.** Compose base-to-derived constraint blocks with named block
+   identity, override legality, `constraint_mode`, and deterministic inherited
+   enable state.
+5. **Pending.** Add checked per-object `rand` and `randc` state without exposing
+   host pointers or collapsing declared signedness, width, enum, or handle
+   profiles.
+6. **Pending.** Derive deterministic simulation-, root-, object-, and call-local
+   random streams from the project seed while preserving replay across engines
+   and artifacts.
+7. **Pending.** Add a resource-governed finite-domain bit-vector/integer/enum
+   solver with explicit variable, clause, search, and elapsed-work budgets.
+8. **Pending.** Lower equality, relational, arithmetic, logical, conditional,
+   unary, and four-state legality constraints with exact width and signedness.
+9. **Pending.** Implement `inside` ranges/sets, `dist` weights, and soft
+   constraints with deterministic conflict and overflow handling.
+10. **Pending.** Implement constraint implication, `if`/`else`, bounded
+    `foreach`, and array/container element selection without arbitrary element
+    limits.
+11. **Pending.** Implement `solve ... before` ordering, dependency-cycle
+    diagnostics, and stable declaration-independent solver ordering.
+12. **Pending.** Execute object `randomize()` with optional variable lists and
+    inline `with` constraints transactionally, returning zero without partial
+    writes when no solution exists.
+13. **Pending.** Execute bounded `std::randomize` over local integral, enum, and
+    supported container values with the same solver and seed semantics.
+14. **Pending.** Run inherited virtual `pre_randomize` and `post_randomize`
+    callbacks with checked failure containment and post-hook execution only
+    after successful assignment.
+15. **Pending.** Implement property `rand_mode` and constraint-block
+    `constraint_mode` query/update methods with per-object state and access
+    validation.
+16. **Pending.** Implement exact `randc` permutation cycles, reset/reseed rules,
+    domain-change invalidation, and artifact-safe cycle state.
+17. **Pending.** Add parse, resolution, unsupported-form, unsatisfiable,
+    resource-budget, callback, stale/null, and solver-corruption negatives with
+    cataloged diagnostics and transactional rollback.
+18. **Pending.** Preserve constraint HIR, solver provenance, seeds, modes, and
+    `randc` state through interpreter, LLVM O0/O2 service boundaries,
+    debugger/callback/trace inspection, `.fsimobj`, `.fsimdesign`, mapped
+    `.fsimlib`, relocation, and cold/warm/edit caches.
+19. **Pending.** Add complete positive differentials and synchronize
+    architecture, language support, diagnostics, feature matrix, inventories,
+    UVM readiness boundaries, and restart evidence.
+20. **Pending.** Run exact-LLVM Debug and Release plus source, catalog,
+    inventory, installed-public-contract, Windows ABI, differential, and
+    release gates after eight-worker builds, then commit and push once. Batch
+    149 is not a CI boundary and runs no sanitizer or hosted CI-monitoring gate.
+
+## Locked remaining v2 batch roadmap
+
+The remaining v2 release sequence is Batches 150-175. Every batch has exactly
+20 changes. The compact allocations below partition all 20 changes; before a
+batch starts, its ranges are expanded into 20 individually numbered status
+entries without changing scope or priority. For Batches 150-175, Changes 1-19
+remain one recoverable accumulated worktree and Change 20 owns full gates,
+documentation, one commit, and one push. Local builds use at least eight
+workers. GitHub
+Actions uses four. Only Batches 150, 160, and 170 run the LLVM-disabled
+sanitizer immediately before commit and then monitor and repair every
+non-documentation CI failure.
+
+For this roadmap, “language closure” means the standardized digital surfaces
+of VHDL-2008 plus embedded PSL, Verilog-2005, SystemVerilog-2017, VITAL, UVM
+1.2/UVM 2020-3.1, DPI, VPI, and VHPI, followed by the listed older language
+revisions. VHDL-AMS analog semantics, proprietary packages/pragmas, full
+Accellera SystemC kernel/TLM/AMS/CCI compatibility, GUI/reverse execution,
+parallel simulation, coverage products beyond language-defined assertion/UVM/
+covergroup data, standalone AOT executables, and Python/notebook packaging are
+not v2 requirements unless the user explicitly expands scope. Every currently
+deferred standardized digital-language row must either execute by Batch 175 or
+carry an explicit evidence-backed scope disposition approved by the user.
+
+### Batch 150 - SystemVerilog real, time, string, and foreign scalar closure
+
+- **Changes 1-4:** complete `shortreal`, `real`, `realtime`, real/time literals,
+  exact type propagation, constant folding, parameters, ports, and callable
+  profiles.
+- **Changes 5-8:** add deterministic IEEE-754 runtime storage, arithmetic,
+  comparison, conversion, formatting, scheduling, debugger, callback, and
+  trace behavior.
+- **Changes 9-12:** implement `chandle`, `null`/equality/casts, host-safe opaque
+  identity, Unicode code-point string semantics, and remaining standard string
+  methods.
+- **Changes 13-16:** close real/time/string/chandle aggregate, container,
+  package, function/task, file-I/O, artifact, relocation, and cache behavior.
+- **Changes 17-19:** add transactional negatives, cross-engine differentials,
+  documentation, diagnostics, feature rows, inventories, and restart evidence.
+- **Change 20:** run the monitoring-batch sanitizer, full Debug/Release and
+  release gates, commit/push once, then inspect and repair all non-doc CI jobs.
+
+### Batch 151 - Arbitrary-width packed values and aggregate closure
+
+- **Changes 1-4:** replace the remaining executable 64-bit assumptions with
+  resource-governed arbitrary-width two-/four-/nine-state scalar storage and
+  exact signed/type metadata.
+- **Changes 5-8:** close wide arithmetic, comparison, shifts, streaming,
+  reductions, selectors, updates, casts, system functions, and unknown-state
+  behavior across interpreter and LLVM.
+- **Changes 9-12:** implement nested packed structs, unequal-width/tagged
+  unions, anonymous enums/aggregates, member initializers, and complete nominal
+  assignment/cast legality.
+- **Changes 13-16:** preserve wide values through parameters, ports,
+  functions/tasks, debugger/VCD, mixed boundaries, artifacts, relocation, and
+  native caches without arbitrary length caps.
+- **Changes 17-19:** add overflow/resource/corruption negatives, engine and
+  boundary differentials, public docs, matrices, inventories, and handoff.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 152 - Unpacked data, file/memory, and procedural closure
+
+- **Changes 1-4:** close multidimensional unpacked arrays, subarray slices,
+  unpacked aggregate members/unions, assignment patterns, queries, and
+  recursive value-copy semantics.
+- **Changes 5-8:** close string-element containers, string associative indices,
+  cross-language aggregate/container values, standard descriptors,
+  multichannel I/O, and multidimensional/string/aggregate memory files.
+- **Changes 9-12:** implement runtime real/variable delays, general edge
+  expressions, runtime-selected force/release, nonlocal/suspending references,
+  and nested/nonintegral static locals/tasks.
+- **Changes 13-16:** close simultaneous fork-site re-entry, process handles,
+  mailboxes, semaphores, event/container ordering, shuffle, and scheduler
+  lifetime/failure containment.
+- **Changes 17-19:** add artifacts/caches/debug/trace coverage, negatives,
+  differential fixtures, docs, inventories, and restart evidence.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 153 - Program, clocking, and interface closure
+
+- **Changes 1-4:** implement program blocks, program instances, reactive-region
+  scheduling, initialization/final behavior, and hierarchy/debug identities.
+- **Changes 5-8:** implement clocking blocks, input/output skews, cycle delays,
+  sampled/driven values, default clocking, and race-free scheduler integration.
+- **Changes 9-12:** close virtual interfaces, interface arrays, interface
+  classes, generic interface expressions, modport callables, clocking members,
+  and parameterized interface typing.
+- **Changes 13-16:** preserve these constructs through recursive/multiple-root
+  mixed hierarchy, interpreter/LLVM, callbacks/traces, artifacts, relocation,
+  and caches.
+- **Changes 17-19:** add legality/race/resource negatives, full differentials,
+  docs, diagnostics, matrices, inventories, and handoff.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 154 - SystemVerilog concurrent assertion closure
+
+- **Changes 1-4:** own and resolve sequence/property/checker declarations,
+  formal arguments, local variables, clocks, disables, and hierarchical/package
+  references.
+- **Changes 5-8:** implement sequence concatenation/repetition, fusion,
+  intersection, throughout/within, first-match, matched/triggered, and endpoint
+  semantics.
+- **Changes 9-12:** implement property implication, delay ranges, until/nexttime,
+  always/eventually, strong/weak, accept/reject, abort, and vacuity rules.
+- **Changes 13-16:** schedule concurrent assert/assume/cover/restrict, assertion
+  controls, pass/fail actions, callbacks, debugger, trace, coverage counts, and
+  multi-root behavior.
+- **Changes 17-19:** add formal/type/clock/resource negatives, interpreter/LLVM
+  and artifact differentials, documentation, inventories, and handoff.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 155 - SystemVerilog functional coverage closure
+
+- **Changes 1-4:** parse, own, specialize, and resolve covergroups, coverpoints,
+  crosses, sampling events/methods, arguments, options, and per-instance state.
+- **Changes 5-8:** implement automatic/default/explicit/illegal/ignore bins,
+  ranges, wildcards, transitions, arrays, iff guards, and deterministic overlap
+  rules.
+- **Changes 9-12:** implement cross bins, binsof/intersect, weights, goals,
+  at-least thresholds, merge/per-instance/type coverage, and standardized
+  percentage calculation.
+- **Changes 13-16:** expose callbacks, reports, debugger/trace inspection,
+  save/restore, multiple roots, artifacts, relocation, caches, and API access.
+- **Changes 17-19:** add malformed/resource/overflow negatives, deterministic
+  differentials, docs, diagnostics, feature/inventory evidence, and handoff.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 156 - DPI-C import/export closure
+
+- **Changes 1-4:** parse and validate DPI imports/exports, names, pure/context
+  qualifiers, functions/tasks, scopes, and exact C/SystemVerilog profiles.
+- **Changes 5-8:** implement scalar, real, string, chandle, packed/unpacked,
+  fixed/open-array, struct, enum, and in/out/inout/ref marshalling with checked
+  lifetime and ownership.
+- **Changes 9-12:** implement `svScope`, open-array accessors, disabled-state
+  helpers, exported callbacks, suspending tasks, re-entry, exceptions, and
+  scheduler containment.
+- **Changes 13-16:** add portable plug-in discovery/build/link, symbols,
+  artifacts, ABI/version checks, relocation, cache provenance, and Windows/POSIX
+  calling-convention behavior.
+- **Changes 17-19:** add C/C++ fixtures, malformed ABI/profile negatives,
+  engine/multi-root differentials, docs, matrices, inventories, and handoff.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 157 - IEEE VPI closure
+
+- **Changes 1-4:** add a versioned VPI host ABI, plug-in loader/lifecycle,
+  error model, object handles, iterators, names, hierarchy, and source metadata.
+- **Changes 5-8:** implement type/property queries and value get/put for nets,
+  variables, parameters, memories, arrays, classes, strengths, delays, and
+  four-/nine-state values.
+- **Changes 9-12:** implement time/delay APIs, callbacks for value/time/region/
+  lifecycle events, callback removal, control operations, force/release, and
+  scheduler-safe re-entry.
+- **Changes 13-16:** implement system task/function registration,
+  compiletf/sizetf/calltf, user data, MCD/vlog I/O, argv/product/version, and
+  save/restart-safe behavior.
+- **Changes 17-19:** add reference plug-ins, invalid/stale/reentrant negatives,
+  cross-engine/artifact tests, docs, diagnostics, matrices, and inventories.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 158 - IEEE VHPI closure
+
+- **Changes 1-4:** add a versioned VHPI host ABI, library/plug-in lifecycle,
+  error model, handles, iterators, selected/indexed names, hierarchy, regions,
+  and source metadata.
+- **Changes 5-8:** implement type/constraint/subtype/object queries and scalar,
+  enum, physical, access, array, record, file, protected, resolved, and
+  nine-state value transfer.
+- **Changes 9-12:** implement drivers/transactions, force/deposit/release,
+  delays, time/phase callbacks, signal/process/lifecycle callbacks, and safe
+  callback removal/re-entry.
+- **Changes 13-16:** implement foreign subprogram/model registration, generic/
+  port association, user data, assertions/output, multiple roots, artifacts,
+  relocation, and cache/ABI provenance.
+- **Changes 17-19:** add C fixtures, invalid/stale/profile/resource negatives,
+  interpreter/LLVM/mixed differentials, docs, matrices, inventories, and handoff.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 159 - UVM object, factory, configuration, and reporting foundation
+
+- **Changes 1-4:** compile unmodified UVM 1.2 and UVM 2020-3.1 package/macro
+  foundations and close any required class, macro, package, virtual-interface,
+  process, and DPI compatibility gaps without vendoring the standard library.
+- **Changes 5-8:** execute `uvm_object`/`uvm_component` construction, hierarchy,
+  type/object wrappers, registry macros, factory type/instance overrides, and
+  deterministic factory diagnostics.
+- **Changes 9-12:** implement config/resource pools, precedence, wildcard scope,
+  typed get/set, command-line settings, callbacks, and multi-root isolation or
+  sharing according to UVM rules.
+- **Changes 13-16:** implement report objects/servers/handlers/catchers, actions,
+  verbosity, IDs, files, summaries, quit counts, and deterministic formatting.
+- **Changes 17-19:** add standard examples and negative matrices across all
+  engines/artifacts, UVM-version docs, feature evidence, inventories, and handoff.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 160 - UVM phases, objections, and TLM - CI monitoring boundary
+
+- **Changes 1-4:** implement common/domain phase graphs, build/connect/end-of-
+  elaboration/start-of-simulation/run/extract/check/report/final ordering,
+  jumps, synchronization, and custom phases.
+- **Changes 5-8:** implement objections, drain time, all-dropped callbacks,
+  phase-ready/end hooks, task cancellation, process lifetime, and scheduler
+  quiescence across multiple roots.
+- **Changes 9-12:** implement TLM1/TLM2 ports/exports/imps, blocking/nonblocking
+  transport, analysis ports/FIFOs, sockets, payloads, phases, and connection
+  validation.
+- **Changes 13-16:** integrate phase/TLM state with debugger, callbacks, traces,
+  DPI/VPI, artifacts, relocation, deterministic replay, and cache provenance.
+- **Changes 17-19:** add UVM phase/TLM examples, race/deadlock/connection
+  negatives, cross-engine differentials, docs, matrices, inventories, and handoff.
+- **Change 20:** run the monitoring-batch sanitizer, full Debug/Release and
+  release gates, commit/push once, then inspect and repair all non-doc CI jobs.
+
+### Batch 161 - UVM sequences, callbacks, and register model
+
+- **Changes 1-4:** implement sequence items/sequences, sequencer arbitration,
+  locks/grabs, priorities, relevance, response queues, macros, and deterministic
+  randomization integration.
+- **Changes 5-8:** implement drivers, monitors, agents, scoreboards,
+  sequence-driver handshakes, virtual sequences/sequencers, callbacks, and
+  transaction recording.
+- **Changes 9-12:** implement UVM register blocks/maps/registers/fields/memories,
+  adapters, predictors, frontdoor/backdoor access, mirrors, reset, and rights.
+- **Changes 13-16:** implement register sequences, HDL paths through VPI/VHPI,
+  coverage, byte enables, endianness, multiple maps, callbacks, and debugger
+  inspection.
+- **Changes 17-19:** add representative sequence and register environments,
+  arbitration/model negatives, engine/artifact parity, docs, evidence, and handoff.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 162 - UVM 1.2 and UVM 2020-3.1 conformance closure
+
+- **Changes 1-4:** close printer, comparer, packer, recorder, copier, transaction,
+  event/barrier/pool/queue, heartbeat, spell-challenge, and policy-class behavior.
+- **Changes 5-8:** close command-line processor, plusargs, test selection,
+  topology/reporting switches, timeout, seed handling, objection tracing, and
+  factory/config tracing.
+- **Changes 9-12:** close UVM 1.2 compatibility macros/APIs and UVM 2020-3.1
+  additions, deprecations, behavioral differences, and version selection.
+- **Changes 13-16:** run standard and project-owned smoke suites for factory,
+  phases, sequences, TLM, callbacks, register model, coverage, DPI, and
+  VPI/VHPI backdoors across platforms and engines.
+- **Changes 17-19:** close every diagnosed UVM gap, freeze compatibility docs
+  and evidence inventories, and publish a producer-independent tutorial.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 163 - VHDL-2008 and PSL digital-language closure
+
+- **Changes 1-4:** inventory and close remaining VHDL-2008 lexical, declaration,
+  type, expression, overload, generic, package, configuration, context, and
+  external-name gaps.
+- **Changes 5-8:** close remaining sequential/concurrent, access/file/protected,
+  resolution, postponed, shared-variable, disconnect, guard, block, and generate
+  semantics.
+- **Changes 9-12:** parse, analyze, and execute the IEEE 1850 PSL subset embedded
+  in VHDL, including clocks, sequences, properties, directives, abort/vacuity,
+  reports, and coverage.
+- **Changes 13-16:** integrate residual VHDL/PSL behavior with VITAL, mixed
+  boundaries, multiple roots, debugger/callback/trace, artifacts, relocation,
+  caches, and VHPI.
+- **Changes 17-19:** add LRM-indexed positive/negative conformance matrices,
+  cross-engine tests, docs, diagnostics, inventories, and handoff.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 164 - Verilog-2005 residual language closure
+
+- **Changes 1-4:** inventory and close remaining IEEE 1364-2005 lexical,
+  directive, config/library, declaration, net/variable, expression, generate,
+  and hierarchy rules.
+- **Changes 5-8:** close remaining gate/switch/UDP, strength, charge, continuous/
+  procedural assignment, event, task/function, memory, timing-control, and race
+  semantics beyond Batches 144-146.
+- **Changes 9-12:** close remaining specify/path/timing-check/pulse behavior,
+  compiler directives, celldefine/unconnected-drive/default-net behavior, and
+  standard system tasks/functions.
+- **Changes 13-16:** integrate residual behavior with VPI/DPI, SDF-ready timing
+  identity, mixed hierarchy, debugger/trace, artifacts, relocation, and caches.
+- **Changes 17-19:** add LRM-indexed conformance and negative matrices,
+  cross-engine/platform tests, docs, diagnostics, inventories, and handoff.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 165 - SystemVerilog-2017 residual language closure
+
+- **Changes 1-4:** inventory every remaining IEEE 1800-2017 grammar and semantic
+  gap after Batches 147-155, including checker, let, nettype, alias, bind,
+  package, interface, class, and callable corners.
+- **Changes 5-8:** close remaining expression/type/assignment-pattern/cast,
+  aggregate/container, streaming, random, process, timing, and scheduler rules.
+- **Changes 9-12:** close remaining hierarchy/configuration, assertions,
+  coverage, clocking/program, system task/function, file/memory, and
+  introspection behavior.
+- **Changes 13-16:** integrate all residual constructs with UVM, DPI/VPI,
+  multiple roots, mixed language, debugger/trace, artifacts, relocation, and
+  caches.
+- **Changes 17-19:** publish a complete LRM-indexed zero-gap matrix with
+  positives/negatives and cross-engine/platform evidence; update all docs and
+  inventories.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 166 - Older VHDL standard modes
+
+- **Changes 1-4:** add explicit VHDL-87, VHDL-93, VHDL-2000, and VHDL-2002
+  modes, manifest/CLI selection, standard identity, cache keys, and diagnostics.
+- **Changes 5-8:** implement revision-specific tokens, grammar, declaration/type,
+  expression, association, subprogram, package, configuration, generate, and
+  statement legality.
+- **Changes 9-12:** provide revision-correct predefined environments, IEEE
+  library profiles, semantic defaults, protected/shared rules, and migration
+  diagnostics for newer constructs.
+- **Changes 13-16:** preserve revision identity through libraries, artifacts,
+  mixed boundaries, debugger, VHPI, relocation, caches, and non-project phases.
+- **Changes 17-19:** add standard-specific positive/negative corpora and
+  cross-platform/engine evidence; update docs, matrices, inventories, and handoff.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 167 - Older Verilog and SystemVerilog standard modes
+
+- **Changes 1-4:** add Verilog-1995/2001/2001-noconfig and SystemVerilog-2005/
+  2009/2012 modes, manifest/CLI selection, identity, cache keys, and diagnostics.
+- **Changes 5-8:** enforce revision-specific preprocessing, keywords, grammar,
+  declarations/types, ports, hierarchy/generate, expressions, assignments,
+  processes, assertions, classes, interfaces, and packages.
+- **Changes 9-12:** provide revision-correct predefined names, system tasks,
+  DPI/VPI profiles, default semantics, compatibility switches, and actionable
+  newer-feature diagnostics.
+- **Changes 13-16:** preserve revision identity through libraries, artifacts,
+  mixed boundaries, debugger, relocation, caches, and non-project phases.
+- **Changes 17-19:** add standard-specific positive/negative corpora and
+  cross-platform/engine evidence; update docs, matrices, inventories, and handoff.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 168 - SDF 4.0 parser, normalization, and artifacts
+
+- **Changes 1-4:** implement complete SDF 4.0 lexical/parser coverage with
+  headers, hierarchy dividers, escaped identifiers, conditions, triples,
+  scaling, and precise diagnostics.
+- **Changes 5-8:** accept SDF 2.1/3.0 inputs through explicit revision adapters
+  and normalize all delay/timing-check constructs into one immutable SDF IR.
+- **Changes 9-12:** resolve celltype/instance/wildcard/divider names against
+  elaborated multi-root mixed hierarchy with deterministic missing/ambiguous
+  diagnostics and explicit annotation scope.
+- **Changes 13-16:** version and preserve normalized SDF, source provenance,
+  timescale, selection, digests, and mapping through design artifacts,
+  libraries, relocation, non-project phases, and cache keys.
+- **Changes 17-19:** add parser/schema/corruption/resource negatives, standard
+  fixture corpora, docs, diagnostics, matrices, inventories, and handoff.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 169 - Verilog/SystemVerilog SDF annotation
+
+- **Changes 1-4:** annotate module/interconnect/device/path/pulse delays onto
+  elaborated Verilog/SystemVerilog specify and primitive timing objects with
+  min/typ/max selection and incremental/absolute modes.
+- **Changes 5-8:** annotate all standard timing checks, conditions, edge forms,
+  notifier behavior, negative timing checks, retain/removal/recovery, and
+  pathpulse semantics.
+- **Changes 9-12:** define precedence and interaction with source delays,
+  delay modes, transport/inertial queues, strengths/switches, force/release,
+  multiple roots, and reannotation.
+- **Changes 13-16:** expose annotation summaries/errors through CLI/API,
+  debugger/callback/trace, VPI, artifacts, relocation, caches, and scripted
+  compile/elaborate/simulate phases.
+- **Changes 17-19:** add standard cell/timing fixtures, missing/mismatch/resource
+  negatives, interpreter/LLVM/platform differentials, docs, and inventories.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 170 - VHDL/VITAL and mixed-language SDF - CI monitoring boundary
+
+- **Changes 1-4:** map SDF cells, ports, generics, paths, and timing checks onto
+  VHDL/VITAL primitives, delay records, wire/path functions, state tables,
+  memory models, and vendor-compatible wrappers.
+- **Changes 5-8:** implement VITAL/SDF precedence, timing generics, min/typ/max,
+  transport/inertial/reject/pulse behavior, negative checks, and reannotation.
+- **Changes 9-12:** annotate interconnect and timing across VHDL, Verilog,
+  SystemVerilog, and SystemC proxy boundaries with explicit resolver/conversion
+  semantics and multiple-root path identity.
+- **Changes 13-16:** integrate mixed SDF with VHPI/VPI, debugger/callback/trace,
+  artifacts, mapped libraries, relocation, caches, and non-project phases.
+- **Changes 17-19:** add cross-language standard-cell/memory fixtures,
+  ambiguity/mismatch/resource negatives, full engine/platform evidence, docs,
+  matrices, inventories, and handoff.
+- **Change 20:** run the monitoring-batch sanitizer, full Debug/Release and
+  release gates, commit/push once, then inspect and repair all non-doc CI jobs.
+
+### Batch 171 - FST tracing closure
+
+- **Changes 1-4:** add a deterministic FST writer and public trace-format
+  selection while preserving the existing trace model, hierarchy, aliases,
+  timescale, scopes, and stable IDs.
+- **Changes 5-8:** encode every supported scalar/vector/real/string/enum/
+  physical/aggregate/class/strength value, X/Z/nine-state semantics, aliases,
+  and changes without truncation.
+- **Changes 9-12:** support multiple roots, mixed boundaries, callbacks,
+  dynamic class/coverage/assertion values, selective tracing, late enablement,
+  flush/close, and failure containment.
+- **Changes 13-16:** integrate FST with CLI/Tcl/API/non-project simulation,
+  artifacts, relocation, deterministic compression settings, and cross-platform
+  byte identity where the format permits.
+- **Changes 17-19:** add FST reader-based equivalence against VCD and internal
+  traces, corrupt/I/O/resource negatives, docs, examples, inventories, and handoff.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 172 - v2 artifact, ABI, and migration freeze
+
+- **Changes 1-4:** inventory and freeze all v2 public C/C++/SystemC/DPI/VPI/VHPI
+  ABIs, append-only layouts, symbol/version policies, installed headers, and
+  compatibility tests.
+- **Changes 5-8:** freeze `.fsimobj`, `.fsimdesign`, `.fsimlib`, incremental
+  SystemC, native-cache, SDF, trace, coverage, assertion, and UVM schemas with
+  explicit version/provenance identities.
+- **Changes 9-12:** provide migrations from every v1/project schema and every
+  supported earlier v2 artifact schema, plus clear unsupported downgrade and
+  producer/version diagnostics.
+- **Changes 13-16:** verify source-hidden relocation, read-only mappings,
+  non-project restartability, mixed hosts/toolchains, stale/corrupt artifacts,
+  and cache separation across Linux and Windows.
+- **Changes 17-19:** publish ABI/schema/migration references, exhaustive positive
+  and corruption matrices, inventories, release evidence, and restart handoff.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 173 - Cross-platform conformance and performance qualification
+
+- **Changes 1-4:** run complete VHDL/Verilog/SystemVerilog/SystemC/UVM/VITAL/
+  SDF and foreign-interface conformance on Linux GCC/Clang and Windows
+  MSVC/clang-cl Debug/Release with exact LLVM selection.
+- **Changes 5-8:** run interpreter/LLVM O0/O2/debug, multiple-root, mixed-
+  language, debugger, callbacks, VCD/FST, artifacts, relocation, and cold/warm/
+  edit differentials with deterministic seeds and outputs.
+- **Changes 9-12:** measure and repair compile, link, memory, elaboration,
+  simulation, solver, UVM, SDF, and trace regressions while retaining four-job
+  hosted and eight-worker local policies.
+- **Changes 13-16:** execute long-duration, high-delta, wide-value, large-array,
+  deep-hierarchy, plug-in, scheduler, failure-injection, and resource-limit
+  stress suites without arbitrary language caps.
+- **Changes 17-19:** close all failures, freeze performance/resource baselines,
+  update portability/conformance matrices, inventories, and restart evidence.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push once without hosted CI monitoring.
+
+### Batch 174 - v2 release candidate, packaging, examples, and documentation
+
+- **Changes 1-4:** update every tutorial and example for multiple roots,
+  libraries, non-project phases, incremental SystemC, UVM, DPI/VPI/VHPI, SDF,
+  FST, older standards, debugger, and artifacts.
+- **Changes 5-8:** complete user, language, architecture, API/ABI, plug-in,
+  migration, diagnostics, troubleshooting, platform, and release documentation
+  with no stale v1 limitation claims.
+- **Changes 9-12:** verify source/binary packaging, install/uninstall,
+  CMake/pkg-config discovery, runtime data, mapped libraries, headers, licenses,
+  examples, and offline producer/consumer workflows.
+- **Changes 13-16:** build signed/reproducible release-candidate archives for
+  supported Linux/Windows toolchains and run clean-machine install, tutorial,
+  artifact, plug-in, and compatibility smoke tests.
+- **Changes 17-19:** resolve release-candidate defects, freeze changelog/known-
+  issues/support matrices, complete inventories, and record exact artifact
+  digests and restart evidence.
+- **Change 20:** run full non-sanitized Debug/Release and release gates, then
+  commit and push the v2.0 release candidate once without hosted CI monitoring.
+
+### Batch 175 - v2.0 final qualification and release
+
+- **Changes 1-4:** audit every v2 priority and deferred-row disposition against
+  executable evidence, confirming no required language, UVM, foreign-interface,
+  standard-mode, SDF, FST, artifact, or platform gap remains.
+- **Changes 5-8:** repeat clean exact-LLVM Linux Debug/Release, Windows hosted
+  MSVC/clang-cl Debug/Release, interpreter/O0/O2/debug, sanitizer evidence from
+  Batch 170, and all release-candidate smoke workflows.
+- **Changes 9-12:** verify deterministic source and binary archives, SBOM/
+  licenses, install layouts, ABI/schema versions, migrations, artifact digests,
+  examples, and offline reproducibility.
+- **Changes 13-16:** close any final release blockers transactionally and rerun
+  every affected focused, full, portability, conformance, and packaging gate.
+- **Changes 17-19:** freeze final docs/changelog/support policy, mark all v2
+  roadmap items complete, prepare the exact release commit/tag notes, and record
+  clean-context evidence.
+- **Change 20:** run the final full Debug/Release and release gates, commit and
+  push once, create and push annotated tag `v2.0.0`, verify the tag/artifacts,
+  and declare v2 complete. This non-monitoring batch runs no new sanitizer.
+
 ## Forward priority order
 
 1. **Completed in Batch 136:** read-only out-of-tree `.fsimlib` directory
@@ -1553,14 +2116,18 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
    simulate artifact phases.
 3. **Completed in Batch 138:** separate incremental SystemC compilation and
    linking.
-4. **In progress:** complete VHDL-2008/VITAL, followed by Verilog-2005,
-   SystemVerilog-2017 classes/UVM, VPI, DPI, and VHPI. Batches 139-143 complete
-   the clean-room VITAL timing, primitive, path, memory, and vendor-model
-   compatibility surface; Batch 144 completes Verilog-2005 UDPs, Batch 145
-   closes strengths and switch primitives, and Batch 146 closes specify timing
-   before the later dedicated SDF batch.
-5. Older VHDL, Verilog, and SystemVerilog standard modes.
-6. Full SDF annotation with 2.1/3.0 compatibility and VITAL integration.
-7. FST tracing for every value exposed through the trace model.
-8. Cross-platform artifact, migration, conformance, debugger, trace, and
-    documentation closure before declaring v2.0.
+4. **Batches 139-143 complete:** VHDL-2008/VITAL timing, primitive, path,
+   memory, and vendor-model compatibility; Batch 163 closes the residual
+   VHDL-2008/PSL digital surface.
+5. **Batches 144-146 complete:** Verilog-2005 UDP, strength/switch, and specify
+   timing; Batch 164 closes the residual current-standard surface.
+6. **Batches 147-165:** SystemVerilog-2017 class, constraint, data, procedural,
+   interface, assertion, coverage, DPI/VPI/VHPI, UVM, and residual language
+   closure.
+7. **Batches 166-167:** older VHDL, Verilog, and SystemVerilog standards.
+8. **Batches 168-170:** SDF 4.0 with 2.1/3.0 input compatibility and complete
+   Verilog/SystemVerilog/VHDL/VITAL/mixed annotation.
+9. **Batch 171:** deterministic FST tracing for the complete trace model.
+10. **Batches 172-175:** ABI/artifact migration freeze, cross-platform
+    qualification, release candidate packaging/documentation, and v2.0 final
+    release.

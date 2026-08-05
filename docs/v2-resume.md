@@ -5,8 +5,78 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
+## Clean-context restart checkpoint - 2026-08-05
+
+1. Start in `/home/colin/projects/fsim` and read this file plus the Batch 149
+   and locked Batches 150-175 sections of `implementation_plan_v2.md`.
+2. Run `git status --short --branch`, `git rev-parse HEAD`,
+   `git rev-parse origin/codex/v2`, and `git log -1 --oneline`. The branch and
+   origin revisions must match, the worktree must be clean, and the latest
+   subject must be `Batch 149 checkpoint: globalize MSVC bigobj and lock v2
+   roadmap` unless the user has intentionally advanced the branch.
+3. This is a user-requested clean checkpoint after Batch 149 Change 1. There
+   are no expected modified or untracked files. Do not reconstruct or reapply
+   the pre-checkpoint dirty worktree.
+4. The committed implementation patch for the global `/bigobj` correction has SHA-256
+   `380a29f6b83cda3d19c97ecaddaff1b44f177baba71bd22e8598eeb71968b7c7` when
+   `git show --format= -- CMakeLists.txt cmake/CheckMsvcDebugContract.cmake` is
+   piped to `sha256sum`.
+5. Change 1 is complete. Resume at Batch 149 Change 2: define the executable
+   SystemVerilog-2017 constraint subset and normalize retained constraint HIR.
+   Accumulate Changes 2-19 from this clean checkpoint. Change 20 runs full
+   gates, records completion, and makes the next commit/push.
+6. The current focused evidence is an exact-LLVM 22.1.8 Debug configuration,
+   an eight-worker `fsim_application` build with no pending work, clean
+   `git diff --check`, and 4/4 passing `fsim.source-line-budget`,
+   `fsim.msvc-debug-contract`, `fsim.msvc-release-contract`, and
+   `fsim.windows-llvm-contract` tests.
+7. Use `cmake --build build/llvm22-ninja-debug --parallel 8` or another local
+   build with at least eight workers. Batch 149 is not a CI boundary: do not
+   configure/run a sanitizer and do not inspect hosted CI. GitHub Actions stays
+   at four-way parallelism.
+
+The complete remaining release roadmap is locked through Batch 175:
+
+- 149: class constraint solving and randomization.
+- 150-155: real/string/foreign scalars, arbitrary-width and unpacked data,
+  procedural/program/clocking/interface closure, SVA, and functional coverage.
+- 156-158: DPI-C, VPI, and VHPI.
+- 159-162: UVM object/factory/config/reporting, phases/objections/TLM,
+  sequences/register model, and UVM 1.2/2020-3.1 conformance.
+- 163-165: residual VHDL-2008/PSL, Verilog-2005, and SystemVerilog-2017 closure.
+- 166-167: older VHDL, Verilog, and SystemVerilog standard modes.
+- 168-170: SDF 4.0 parsing plus Verilog/SystemVerilog/VHDL/VITAL/mixed
+  annotation with SDF 2.1/3.0 input compatibility.
+- 171: deterministic FST tracing.
+- 172-175: ABI/artifact/migration freeze, cross-platform qualification,
+  release-candidate packaging/documentation, and final `v2.0.0` qualification.
+
+Batches 150, 160, and 170 are the only remaining CI-monitoring boundaries.
+Only their Change 20 runs the LLVM-disabled sanitizer immediately before the
+single commit, then pushes and monitors/repairs all non-documentation GitHub
+Actions jobs. All other batches run no sanitizer and no hosted CI inspection.
+The v2 language-closure boundary is the standardized digital surface recorded
+in the official plan; VHDL-AMS, proprietary semantics, full Accellera SystemC
+kernel/TLM/AMS/CCI compatibility, GUI/reverse/parallel simulation, standalone
+AOT, and Python/notebook product work remain outside v2 unless the user changes
+scope.
+
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
+- Current unit: Batch 149, exactly 20 changes, in progress after pushed Batch
+  148 closeout `dce6c36`. Its authoritative SystemVerilog constraint-solving
+  and randomization contract is recorded in `implementation_plan_v2.md`.
+  Change 1 is complete and Change 2 is next. The root CMake configuration now
+  applies `/bigobj` to every target using the MSVC command-line frontend,
+  including clang-cl, and the former application-only option is removed. The
+  MSVC Debug contract requires the directory-wide policy. Exact-LLVM Debug
+  configures cleanly, the `fsim_application` target is current after an
+  eight-worker build, and source-line, MSVC Debug/Release, and Windows LLVM
+  contract gates pass. Preserve this accumulated worktree through Changes
+  2-19 from the user-requested Change 1 checkpoint; Change 20 owns the full
+  gates and next commit/push. Batch
+  149 is not a CI-monitoring boundary and must not run a sanitizer or inspect
+  hosted CI.
 - Current unit: Batch 148, exactly 20 changes, complete after pushed Batch
   147 closeout `37fbaaa`. Its authoritative source-executable SystemVerilog
   class contract and per-change status are recorded in

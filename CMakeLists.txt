@@ -284,6 +284,16 @@ set(CMAKE_C_VISIBILITY_PRESET hidden)
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN YES)
 
+if(
+  MSVC
+  OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
+)
+  # Rich generated and template-heavy translation units throughout the
+  # project can exceed COFF's default section limit in unoptimized builds.
+  # Extended section numbering changes only the object container.
+  add_compile_options(/bigobj)
+endif()
+
 function(fsim_configure_library target)
   target_compile_features(${target} PUBLIC cxx_std_20)
   target_include_directories(
@@ -776,15 +786,6 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
   )
   add_library(fsim::application ALIAS fsim_application)
   fsim_configure_library(fsim_application)
-  if(
-    MSVC
-    OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC"
-  )
-    # Rich archived DesignIR aggregates can exceed COFF's default 65,279
-    # section limit in unoptimized builds. Extended section numbering changes
-    # only the object container and avoids forcing a less useful Debug mode.
-    target_compile_options(fsim_application PRIVATE /bigobj)
-  endif()
   file(
     RELATIVE_PATH
     FSIM_IEEE_LIBRARY_RELATIVE_TO_BINDIR
