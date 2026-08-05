@@ -128,3 +128,13 @@ artifacts, and 204 authored test/control files. The strength, topology, charge,
 and decay implementation and fixtures are clean-room code; no external
 Verilog model, proprietary strength table, third-party artifact, or provenance
 entry is imported.
+
+v2 Batch 146 adds the split specify parser, hierarchy/expression normalizers,
+module-path runtime, focused frontend/elaboration/runtime/application owners,
+and structural public/private header and hierarchy partitions as twelve
+SPDX-owned bounded C++ sources. Twenty-two specify semantic and elaboration
+diagnostics advance the reviewed totals to 1,777 diagnostics, 501 bounded C/C++
+sources, 591 authored artifacts, and 208 authored test/control files. Module
+paths, pulse controls, timing checks, fixtures, and documentation are
+clean-room code; no external Verilog timing model, SDF file, third-party
+artifact, or provenance entry is imported.

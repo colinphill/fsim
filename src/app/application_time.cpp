@@ -121,6 +121,35 @@ void visit_instance_delays(
 }
 
 template <typename Function>
+void visit_specify_delays(
+    std::vector<frontend::VerilogSpecifyBlock>& blocks,
+    Function& function) {
+  for (auto& block : blocks) {
+    for (auto& specparam : block.specparams) {
+      if (specparam.path_pulse_reject_delay) {
+        visit_delay(*specparam.path_pulse_reject_delay, function);
+      }
+      if (specparam.path_pulse_error_delay) {
+        visit_delay(*specparam.path_pulse_error_delay, function);
+      }
+    }
+    for (auto& path : block.module_paths) {
+      for (auto& delay : path.delays) {
+        visit_delay(delay, function);
+      }
+    }
+    for (auto& check : block.timing_checks) {
+      for (auto& limit : check.normalized_limits) {
+        visit_delay(limit, function);
+      }
+      if (check.normalized_threshold) {
+        visit_delay(*check.normalized_threshold, function);
+      }
+    }
+  }
+}
+
+template <typename Function>
 void visit_procedure_delays(
     frontend::ProcedureDeclaration& procedure,
     Function& function) {
@@ -725,6 +754,7 @@ bool normalize_delays(
     visit_signal_delays(unit.ports, normalize);
     visit_signal_delays(unit.signals, normalize);
     visit_instance_delays(unit.instances, normalize);
+    visit_specify_delays(unit.verilog_specify_blocks, normalize);
     visit_delays(unit.concurrent_statements, normalize);
     for (auto& process : unit.processes) {
       visit_delays(process.statements, normalize);
@@ -788,6 +818,7 @@ void select_delay_alternatives(
     visit_signal_delays(unit.ports, select);
     visit_signal_delays(unit.signals, select);
     visit_instance_delays(unit.instances, select);
+    visit_specify_delays(unit.verilog_specify_blocks, select);
     visit_delays(unit.concurrent_statements, select);
     for (auto& process : unit.processes) {
       visit_delays(process.statements, select);

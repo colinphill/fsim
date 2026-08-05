@@ -460,6 +460,48 @@ struct SystemCNamedObjectInfo {
     runtime::simir::SourceLocation source;
 };
 
+using VerilogSpecifyPathId = std::uint32_t;
+
+struct VerilogSpecifyTerminalInfo {
+    runtime::simir::SignalId signal{};
+    std::uint32_t offset{};
+    std::uint32_t width{};
+    friend bool operator==(
+        const VerilogSpecifyTerminalInfo&,
+        const VerilogSpecifyTerminalInfo&) = default;
+};
+
+/// One instance-local, specialization-normalized Verilog module path.
+/// Conditions and destination data-source expressions retain their substituted
+/// frontend trees until Change 9 lowers them into scheduler-owned programs.
+struct VerilogSpecifyPathInfo {
+    VerilogSpecifyPathId id{};
+    std::string instance;
+    std::vector<VerilogSpecifyTerminalInfo> sources;
+    std::vector<VerilogSpecifyTerminalInfo> destinations;
+    std::vector<runtime::simir::ProcessId> drivers;
+    runtime::simir::ModulePathExpression condition_program;
+    runtime::simir::ModulePathExpression data_source_program;
+    std::uint32_t selection_group{};
+    frontend::VerilogModulePathKind kind{
+        frontend::VerilogModulePathKind::Parallel};
+    frontend::VerilogSpecifyEdge source_edge{
+        frontend::VerilogSpecifyEdge::None};
+    frontend::VerilogPathPolarity polarity{
+        frontend::VerilogPathPolarity::None};
+    frontend::VerilogPulseStyle pulse_style{
+        frontend::VerilogPulseStyle::Onevent};
+    bool show_cancelled{};
+    std::optional<runtime::SimulationTick> pulse_reject_limit;
+    std::optional<runtime::SimulationTick> pulse_error_limit;
+    frontend::Expression condition;
+    frontend::Expression destination_data_source;
+    bool conditional{};
+    bool ifnone{};
+    std::vector<runtime::SimulationTick> delays;
+    frontend::SourceSpan source;
+};
+
 struct ElaboratedDesignState {
     std::string top;
     std::vector<std::string> roots;
@@ -474,6 +516,8 @@ struct ElaboratedDesignState {
     std::vector<runtime::simir::Process> processes;
     std::vector<SpecializationInfo> specializations;
     std::vector<UdpTableInfo> udp_tables;
+    std::vector<VerilogSpecifyPathInfo> verilog_specify_paths;
+    std::vector<runtime::simir::ModuleTimingCheck> verilog_timing_checks;
     std::vector<SystemCInstanceInfo> systemc_instances;
     std::vector<SystemCProcessInfo> systemc_processes;
     std::vector<SystemCNamedObjectInfo> systemc_objects;
@@ -504,6 +548,10 @@ public:
     specializations() const noexcept;
     [[nodiscard]] const std::vector<UdpTableInfo>&
     udp_tables() const noexcept;
+    [[nodiscard]] const std::vector<VerilogSpecifyPathInfo>&
+    verilog_specify_paths() const noexcept;
+    [[nodiscard]] const std::vector<runtime::simir::ModuleTimingCheck>&
+    verilog_timing_checks() const noexcept;
     [[nodiscard]] const std::vector<SystemCInstanceInfo>&
     systemc_instances() const noexcept;
     [[nodiscard]] const std::vector<SystemCProcessInfo>&
@@ -583,6 +631,8 @@ private:
     std::vector<runtime::simir::Process> processes_;
     std::vector<SpecializationInfo> specializations_;
     std::vector<UdpTableInfo> udp_tables_;
+    std::vector<VerilogSpecifyPathInfo> verilog_specify_paths_;
+    std::vector<runtime::simir::ModuleTimingCheck> verilog_timing_checks_;
     std::vector<SystemCInstanceInfo> systemc_instances_;
     std::vector<SystemCProcessInfo> systemc_processes_;
     std::vector<SystemCNamedObjectInfo> systemc_objects_;

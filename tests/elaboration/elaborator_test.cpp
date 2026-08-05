@@ -6,6 +6,7 @@
 int main() {
   using namespace fsim::tests::elaboration;
   test_specialization_and_packages();
+  test_verilog_specify_specialization();
   test_systemverilog_typed_constants();
   test_systemverilog_string_constants();
   test_systemverilog_type_parameters();

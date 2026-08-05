@@ -770,6 +770,7 @@ void Interpreter::Impl::publish(SignalId signal_id, PackedLogic4 value)  {
     signal_events[signal_id] =
         std::pair{scheduler.now(), scheduler.delta() + 1};
     scheduler.note_signal_change(signal_id);
+    evaluate_module_timing_checks(signal_id, old_value, signal.initial_value);
     if (signal_change_hook) {
       signal_change_hook(signal_id, signal.initial_value, scheduler.now());
     }

@@ -1689,6 +1689,86 @@ void substitute_systemverilog_parameters(
     substitute_sv_instances(unit.instances, environment);
     substitute_sv_generate_regions(
         unit.generate_regions, environment);
+    for (auto& block : unit.verilog_specify_blocks) {
+        for (auto& declaration : block.specparams) {
+            substitute_systemverilog_parameters(
+                declaration.value, environment);
+            if (declaration.minimum) {
+                substitute_systemverilog_parameters(
+                    *declaration.minimum, environment);
+            }
+            if (declaration.typical) {
+                substitute_systemverilog_parameters(
+                    *declaration.typical, environment);
+            }
+            if (declaration.maximum) {
+                substitute_systemverilog_parameters(
+                    *declaration.maximum, environment);
+            }
+            if (declaration.path_pulse_error_limit) {
+                substitute_systemverilog_parameters(
+                    *declaration.path_pulse_error_limit, environment);
+            }
+        }
+        for (auto& path : block.module_paths) {
+            for (auto& source : path.sources) {
+                substitute_systemverilog_parameters(source, environment);
+            }
+            for (auto& destination : path.destinations) {
+                substitute_systemverilog_parameters(
+                    destination, environment);
+            }
+            substitute_systemverilog_parameters(
+                path.destination_data_source, environment);
+            substitute_systemverilog_parameters(
+                path.condition, environment);
+            for (auto& delay : path.delays) {
+                substitute_sv_delay_parameters(delay, environment);
+            }
+        }
+        for (auto& pulse : block.pulse_declarations) {
+            for (auto& terminal : pulse.terminals) {
+                substitute_systemverilog_parameters(
+                    terminal, environment);
+            }
+        }
+        for (auto& check : block.timing_checks) {
+            const auto substitute_event = [&](auto& event) {
+                substitute_systemverilog_parameters(
+                    event.expression, environment);
+                substitute_systemverilog_parameters(
+                    event.condition, environment);
+            };
+            substitute_event(check.reference_event);
+            substitute_event(check.data_event);
+            for (auto& limit : check.limits) {
+                substitute_systemverilog_parameters(limit, environment);
+            }
+            for (auto& limit : check.normalized_limits) {
+                substitute_sv_delay_parameters(limit, environment);
+            }
+            substitute_systemverilog_parameters(
+                check.threshold, environment);
+            if (check.normalized_threshold) {
+                substitute_sv_delay_parameters(
+                    *check.normalized_threshold, environment);
+            }
+            substitute_systemverilog_parameters(
+                check.notifier, environment);
+            substitute_systemverilog_parameters(
+                check.timestamp_condition, environment);
+            substitute_systemverilog_parameters(
+                check.timecheck_condition, environment);
+            substitute_systemverilog_parameters(
+                check.delayed_reference, environment);
+            substitute_systemverilog_parameters(
+                check.delayed_data, environment);
+            substitute_systemverilog_parameters(
+                check.event_based_flag, environment);
+            substitute_systemverilog_parameters(
+                check.remain_active_flag, environment);
+        }
+    }
 }
 
 void substitute_systemverilog_parameters(

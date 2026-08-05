@@ -365,6 +365,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_core.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_declarations.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_switch.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_specify.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_strength.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_expressions.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_functions.cpp"
@@ -406,6 +407,7 @@ add_library(
     src/runtime/simir_format.cpp
     src/runtime/simir_interpreter.cpp
     src/runtime/simir_logic.cpp
+      src/runtime/simir_module_path.cpp
       src/runtime/simir_scheduling.cpp
       src/runtime/simir_string_methods.cpp
       src/runtime/simir_vital.cpp
@@ -453,7 +455,10 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/hierarchy_sv_package_qualified.cpp
       src/elaboration/hierarchy_sv_interface_callables.cpp
       src/elaboration/hierarchy_resolution.cpp
+      src/elaboration/hierarchy_specify.cpp
+      src/elaboration/hierarchy_specify_expression.cpp
       src/elaboration/hierarchy_sv_ports.cpp
+      src/elaboration/hierarchy_instantiate.cpp
       src/elaboration/hierarchy_systemc.cpp
       src/elaboration/hierarchy_udp.cpp
       src/elaboration/hierarchy_type_resolution.cpp

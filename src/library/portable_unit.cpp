@@ -561,6 +561,54 @@ bool valid_unit_strengths(const frontend::DesignUnit& unit) {
           unit.generate_regions, valid_region_strengths);
 }
 
+bool valid_unit_specify(const frontend::DesignUnit& unit) {
+  const auto valid_edge = [](const frontend::VerilogSpecifyEdge edge) {
+    return edge <= frontend::VerilogSpecifyEdge::Edge;
+  };
+  for (const auto& block : unit.verilog_specify_blocks) {
+    for (const auto& path : block.module_paths) {
+      const auto delay_count = path.delays.size();
+      if (path.kind > frontend::VerilogModulePathKind::Full
+          || !valid_edge(path.source_edge)
+          || path.polarity > frontend::VerilogPathPolarity::Negative
+          || path.sources.empty() || path.destinations.empty()
+          || (delay_count != 1 && delay_count != 2 && delay_count != 3
+              && delay_count != 6 && delay_count != 12)) {
+        return false;
+      }
+    }
+    for (const auto& pulse : block.pulse_declarations) {
+      if (pulse.terminals.empty()
+          || pulse.style > frontend::VerilogPulseStyle::Ondetect) {
+        return false;
+      }
+    }
+    for (const auto& check : block.timing_checks) {
+      if (check.kind > frontend::VerilogTimingCheckKind::NoChange
+          || !valid_edge(check.reference_event.edge)
+          || !valid_edge(check.data_event.edge)
+          || !check.reference_event.expression.valid()) {
+        return false;
+      }
+      const bool one_event =
+          check.kind == frontend::VerilogTimingCheckKind::Period
+          || check.kind == frontend::VerilogTimingCheckKind::Width;
+      const bool two_limits =
+          check.kind == frontend::VerilogTimingCheckKind::SetupHold
+          || check.kind == frontend::VerilogTimingCheckKind::RecRem
+          || check.kind == frontend::VerilogTimingCheckKind::FullSkew
+          || check.kind == frontend::VerilogTimingCheckKind::NoChange;
+      const auto expected_limits = two_limits ? 2U : 1U;
+      if (one_event == check.data_event.expression.valid()
+          || check.limits.size() != expected_limits
+          || check.normalized_limits.size() != expected_limits) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 bool relocate_unit_sources(
@@ -614,10 +662,10 @@ std::optional<std::string> serialize_portable_unit(
     const frontend::DesignUnit& unit,
     diagnostic::Engine& diagnostics) {
   std::unordered_set<const void*> visited;
-  if (!valid_unit_strengths(unit)) {
+  if (!valid_unit_strengths(unit) || !valid_unit_specify(unit)) {
     diagnostics.error(
         std::string{kCode},
-        "portable unit contains invalid strength metadata");
+        "portable unit contains invalid strength or specify metadata");
     return std::nullopt;
   }
   if (has_absolute_span(unit, visited)) {
@@ -678,7 +726,8 @@ std::optional<frontend::DesignUnit> deserialize_portable_unit(
   frontend::DesignUnit unit;
   if (!reader.raw(kMagic) || !reader.read(schema)
       || schema != kOwningUnitSchemaVersion || !reader.read(unit)
-      || reader.remaining() != 0 || !valid_unit_strengths(unit)) {
+      || reader.remaining() != 0 || !valid_unit_strengths(unit)
+      || !valid_unit_specify(unit)) {
     auto message = reader.failure();
     if (message.empty() && schema != kOwningUnitSchemaVersion) {
       message = "unsupported portable owning-unit schema "
@@ -686,7 +735,7 @@ std::optional<frontend::DesignUnit> deserialize_portable_unit(
     } else if (message.empty() && reader.remaining() != 0) {
       message = "portable unit contains trailing bytes";
     } else if (message.empty()) {
-      message = "portable unit contains invalid strength metadata";
+      message = "portable unit contains invalid strength or specify metadata";
     }
     diagnostics.error(
         std::string{kCode}, std::move(message),

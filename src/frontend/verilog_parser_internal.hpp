@@ -417,6 +417,30 @@ class VerilogParser final : private detail::ParserBase {
 
   VerilogUdpDeclaration parse_udp_declaration(const Token& start);
 
+  VerilogSpecifyBlock parse_specify_block(const Token& start);
+
+  void parse_specparam_declaration(
+      VerilogSpecifyBlock& block,
+      const Token& start);
+
+  VerilogModulePathDeclaration parse_specify_module_path(
+      const Token& start,
+      Expression condition = {},
+      bool conditional = false,
+      bool ifnone = false);
+
+  VerilogSpecifyPulseDeclaration parse_specify_pulse_declaration(
+      const Token& start,
+      bool controls_style,
+      VerilogPulseStyle style,
+      bool show_cancelled);
+
+  VerilogTimingCheckEvent parse_verilog_timing_check_event();
+
+  VerilogTimingCheckDeclaration parse_verilog_timing_check(
+      const Token& start,
+      VerilogTimingCheckKind kind);
+
   VerilogUdpTableRow parse_udp_table_row(
       const VerilogUdpDeclaration& declaration);
 

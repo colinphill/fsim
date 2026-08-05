@@ -11,6 +11,7 @@ add_executable(
   runtime_file_tests.cpp
   runtime_container_tests.cpp
   runtime_executor_tests.cpp
+  runtime_specify_tests.cpp
   runtime_timing_tests.cpp
   runtime_vital_memory_path_tests.cpp
 )

@@ -1660,6 +1660,115 @@ inline constexpr std::size_t maximum_udp_table_storage_bytes =
     std::span<const VerilogUdpLevelSymbol> current_inputs,
     VerilogUdpLevelSymbol current_output) noexcept;
 
+enum class VerilogSpecifyEdge : std::uint8_t {
+  None,
+  Posedge,
+  Negedge,
+  Edge,
+};
+
+enum class VerilogModulePathKind : std::uint8_t {
+  Parallel,
+  Full,
+};
+
+enum class VerilogPathPolarity : std::uint8_t {
+  None,
+  Positive,
+  Negative,
+};
+
+enum class VerilogPulseStyle : std::uint8_t {
+  Onevent,
+  Ondetect,
+};
+
+enum class VerilogTimingCheckKind : std::uint8_t {
+  Setup,
+  Hold,
+  SetupHold,
+  Recovery,
+  Removal,
+  RecRem,
+  Skew,
+  TimeSkew,
+  FullSkew,
+  Period,
+  Width,
+  NoChange,
+};
+
+struct VerilogSpecparamDeclaration {
+  std::string name;
+  Expression value;
+  std::optional<Expression> minimum;
+  std::optional<Expression> typical;
+  std::optional<Expression> maximum;
+  bool path_pulse{};
+  std::string path_pulse_input;
+  std::string path_pulse_output;
+  std::optional<Expression> path_pulse_error_limit;
+  std::optional<Delay> path_pulse_reject_delay;
+  std::optional<Delay> path_pulse_error_delay;
+  SourceSpan span;
+};
+
+struct VerilogModulePathDeclaration {
+  VerilogModulePathKind kind{VerilogModulePathKind::Parallel};
+  std::vector<Expression> sources;
+  std::vector<Expression> destinations;
+  VerilogSpecifyEdge source_edge{VerilogSpecifyEdge::None};
+  VerilogPathPolarity polarity{VerilogPathPolarity::None};
+  Expression destination_data_source;
+  Expression condition;
+  bool conditional{};
+  bool ifnone{};
+  std::vector<Delay> delays;
+  SourceSpan span;
+};
+
+struct VerilogSpecifyPulseDeclaration {
+  std::vector<Expression> terminals;
+  VerilogPulseStyle style{VerilogPulseStyle::Onevent};
+  bool controls_style{};
+  bool show_cancelled{};
+  SourceSpan span;
+};
+
+struct VerilogTimingCheckEvent {
+  Expression expression;
+  VerilogSpecifyEdge edge{VerilogSpecifyEdge::None};
+  std::vector<std::string> edge_descriptors;
+  Expression condition;
+  SourceSpan span;
+};
+
+struct VerilogTimingCheckDeclaration {
+  VerilogTimingCheckKind kind{VerilogTimingCheckKind::Setup};
+  VerilogTimingCheckEvent reference_event;
+  VerilogTimingCheckEvent data_event;
+  std::vector<Expression> limits;
+  std::vector<Delay> normalized_limits;
+  Expression threshold;
+  std::optional<Delay> normalized_threshold;
+  Expression notifier;
+  Expression timestamp_condition;
+  Expression timecheck_condition;
+  Expression delayed_reference;
+  Expression delayed_data;
+  Expression event_based_flag;
+  Expression remain_active_flag;
+  SourceSpan span;
+};
+
+struct VerilogSpecifyBlock {
+  std::vector<VerilogSpecparamDeclaration> specparams;
+  std::vector<VerilogModulePathDeclaration> module_paths;
+  std::vector<VerilogSpecifyPulseDeclaration> pulse_declarations;
+  std::vector<VerilogTimingCheckDeclaration> timing_checks;
+  SourceSpan span;
+};
+
 struct DesignUnit {
   UnitKind kind{UnitKind::VerilogModule};
   Language language{Language::SystemVerilog2017};
@@ -1723,6 +1832,10 @@ struct DesignUnit {
   std::vector<Process> processes;
   std::vector<Instance> instances;
   std::vector<GenerateRegion> generate_regions;
+  // Verilog specify blocks retain timing-only declarations separately from
+  // executable module items. Elaboration specializes and normalizes them into
+  // scheduler arcs without introducing hierarchy objects or processes.
+  std::vector<VerilogSpecifyBlock> verilog_specify_blocks;
   // Semantically imported design-unit sources that affect specialization and
   // native-cache identity (for example bounded VHDL package constants).
   std::vector<std::string> source_dependencies;

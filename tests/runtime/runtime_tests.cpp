@@ -64,6 +64,8 @@ int main() {
     test_deterministic_random_values();
     test_transition_delay_selection();
     test_simir_inertial_transition_writes();
+    test_simir_module_paths();
+    test_simir_module_timing_checks();
     test_simir_projected_writes();
     test_vital_timing_checks();
     test_vital_delay_scheduling();

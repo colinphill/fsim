@@ -918,6 +918,9 @@ are therefore excluded.
 | `FSIM-SV-SEM-156` | error | A switch-instance array range is not locally static. |
 | `FSIM-SV-SEM-157` | error | A switch-instance array exceeds the frontend owning-storage budget. |
 | `FSIM-SV-SEM-158` | error | A switch-array terminal is neither scalar nor width-matched to the array. |
+| `FSIM-SV-SEM-164` | error | A specify block is used outside a module or a module path has an unsupported transition-delay arity. |
+| `FSIM-SV-SEM-165` | error | A module repeats a `specparam` declaration name across its specify blocks. |
+| `FSIM-SV-SEM-166` | error | A `$width` timing check omits its threshold while supplying a later optional argument. |
 | `FSIM-ELAB-SVIFACE-006` | error | A process writes through a read-only input port or modport input member. |
 | `FSIM-ELAB-SVIFACE-007` | error | A retained interface callable cannot be materialized at its same-language module boundary. |
 | `FSIM-ELAB-SVIFACE-008` | error | An interface callable is visible more than once through the same module port. |
@@ -1685,6 +1688,25 @@ are therefore excluded.
 | `FSIM-ELAB-SVMDARRAY-002` | error | A runtime multidimensional static-array index cannot lower to a signed 32-bit integral value. |
 | `FSIM-ELAB-SVMDARRAY-003` | error | A multidimensional static-array index is outside its declared range or cannot be flattened within the bounded capacity. |
 | `FSIM-ELAB-SVREPL-001` | error | A replication concatenation has a nonconstant/nonpositive count, no statically sized operands, or an overflowing expanded width. |
+| `FSIM-ELAB-SVSPEC-001` | error | A specify parameter, condition operand, path delay, or timing-check value is not locally static after specialization. |
+| `FSIM-ELAB-SVSPEC-002` | error | A specify terminal does not name a direct signal or port in its owning module instance. |
+| `FSIM-ELAB-SVSPEC-003` | error | A specify path terminal has a direction incompatible with its source or destination role. |
+| `FSIM-ELAB-SVSPEC-004` | error | A specify path terminal does not have a static nonzero packed width. |
+| `FSIM-ELAB-SVSPEC-005` | error | A parallel module path does not pair equal-width source and destination terminals. |
+| `FSIM-ELAB-SVSPEC-006` | error | A restored or native module path has a delay count other than 1, 2, 3, 6, or 12. |
+| `FSIM-ELAB-SVSPEC-007` | error | A module-path delay is negative, nonstatic, overflowing, or not normalized to project ticks. |
+| `FSIM-ELAB-SVSPEC-008` | error | A specify condition or destination-data expression is outside the bounded executable integral expression model. |
+| `FSIM-ELAB-SVSPEC-009` | error | A destination-data expression is neither scalar nor width-compatible with every destination. |
+| `FSIM-ELAB-SVSPEC-010` | error | An edge-sensitive module path has a nonscalar source terminal. |
+| `FSIM-ELAB-SVSPEC-011` | error | A `PATHPULSE` limit is not a representable normalized project time. |
+| `FSIM-ELAB-SVSPEC-012` | error | A `PATHPULSE` rejection limit exceeds its error limit. |
+| `FSIM-ELAB-SVSPEC-013` | error | A terminal-specific `PATHPULSE` selector does not name signals in the owning module. |
+| `FSIM-ELAB-SVSPEC-014` | error | A timing-check event terminal is not scalar. |
+| `FSIM-ELAB-SVSPEC-015` | error | A timing-check notifier is not a scalar signal. |
+| `FSIM-ELAB-SVSPEC-016` | error | A timing-check limit violates its normalization, range, sign, compound-sum, or ordering requirement. |
+| `FSIM-ELAB-SVSPEC-017` | error | A delayed timing-check reference or data terminal is not scalar. |
+| `FSIM-ELAB-SVSPEC-018` | error | A timing-check event-based or remain-active flag is not a static two-state value. |
+| `FSIM-ELAB-SVSPEC-019` | error | A controlled timing-check event lacks its required edge or contains an invalid scalar transition descriptor. |
 | `FSIM-ELAB-GENERIC-001` | error | A VHDL generic actual is unknown, missing, excessive, or cannot target the selected SystemC factory. |
 | `FSIM-ELAB-GENERIC-002` | error | A VHDL generic receives more than one actual. |
 | `FSIM-ELAB-GENERIC-003` | error | A positional VHDL generic actual follows a named actual. |

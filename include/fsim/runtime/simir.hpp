@@ -1202,6 +1202,8 @@ struct Sensitivity {
   bool operator==(const Sensitivity&) const = default;
 };
 
+#include "fsim/runtime/simir_specify.hpp"
+
 struct DebugLocal {
   std::string name;
   std::string type_name;
@@ -1912,6 +1914,9 @@ public:
   [[nodiscard]] ContainerObjectId add_container_object(
       ContainerObject object);
   [[nodiscard]] ProcessId add_process(Process process);
+  [[nodiscard]] std::uint32_t add_module_path(ModulePath path);
+  [[nodiscard]] std::uint32_t add_module_timing_check(
+      ModuleTimingCheck check);
 
   /// Restrict all HDL file operations to paths below this root. Must be set
   /// before start; an empty root leaves file operations disabled.

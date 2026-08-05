@@ -1141,6 +1141,71 @@ SpecializedUnit specialize_unit(
     }
 
     if (is_verilog) {
+        const auto specialize_specparam_expression =
+            [&](frontend::Expression& expression,
+                const frontend::SourceSpan& span,
+                const std::string_view description)
+                -> std::optional<SystemVerilogConstantValue> {
+              substitute_systemverilog_parameters(
+                  expression, systemverilog_environment);
+              std::string error;
+              auto value = evaluate_systemverilog_constant_function_expression(
+                  expression,
+                  systemverilog_environment,
+                  result.environment,
+                  result.unit.functions,
+                  error);
+              if (!value) {
+                  diagnostics.push_back({
+                      "FSIM-ELAB-SVSPEC-001",
+                      std::string{description}
+                          + " is not a locally static integral expression: "
+                          + error,
+                      span});
+                  return std::nullopt;
+              }
+              expression = value->expression(span);
+              return value;
+            };
+        for (auto& block : result.unit.verilog_specify_blocks) {
+            for (auto& declaration : block.specparams) {
+                auto value = specialize_specparam_expression(
+                    declaration.value,
+                    declaration.span,
+                    "specparam '" + declaration.name + "'");
+                if (value) {
+                    systemverilog_environment[declaration.name] = *value;
+                    if (const auto integer = value->integer_value()) {
+                        result.environment[declaration.name] = *integer;
+                    }
+                    result.identity_values.emplace_back(
+                        "@specparam:" + declaration.name,
+                        value->canonical());
+                }
+                const auto specialize_optional = [&](auto& expression) {
+                    if (expression) {
+                        (void)specialize_specparam_expression(
+                            *expression,
+                            expression->span,
+                            "specparam alternative");
+                    }
+                };
+                specialize_optional(declaration.minimum);
+                specialize_optional(declaration.typical);
+                specialize_optional(declaration.maximum);
+                specialize_optional(
+                    declaration.path_pulse_error_limit);
+                if (declaration.path_pulse_reject_delay) {
+                    declaration.path_pulse_reject_delay->expression =
+                        declaration.value;
+                }
+                if (declaration.path_pulse_error_delay
+                    && declaration.path_pulse_error_limit) {
+                    declaration.path_pulse_error_delay->expression =
+                        *declaration.path_pulse_error_limit;
+                }
+            }
+        }
         substitute_systemverilog_parameters(
             result.unit, systemverilog_environment);
         fold_systemverilog_constant_functions(

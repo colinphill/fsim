@@ -299,6 +299,164 @@ ProcessId Interpreter::add_process(Process process) {
   return id;
 }
 
+std::uint32_t Interpreter::add_module_path(ModulePath path) {
+  if (impl_->started) {
+    throw std::logic_error("cannot add a SimIR module path after start");
+  }
+  const auto id = static_cast<std::uint32_t>(impl_->module_paths.size());
+  if (static_cast<std::size_t>(id) != impl_->module_paths.size()) {
+    throw std::length_error("too many SimIR module paths");
+  }
+  if (path.id != id) {
+    throw std::invalid_argument(
+        "SimIR module-path IDs must be dense and ordered");
+  }
+  const auto valid_terminal = [&](const ModulePathTerminal& terminal) {
+    if (terminal.signal >= impl_->signals.size() || terminal.width == 0) {
+      return false;
+    }
+    const auto width =
+        impl_->signals[terminal.signal].initial_value.width();
+    return terminal.offset <= width
+        && terminal.width <= width - terminal.offset;
+  };
+  if (path.sources.empty() || path.destinations.empty()
+      || !std::ranges::all_of(path.sources, valid_terminal)
+      || !std::ranges::all_of(path.destinations, valid_terminal)) {
+    throw std::invalid_argument("invalid SimIR module-path terminals");
+  }
+  const bool valid_delay_count = path.delays.size() == 1
+      || path.delays.size() == 2 || path.delays.size() == 3
+      || path.delays.size() == 6 || path.delays.size() == 12;
+  if (!valid_delay_count) {
+    throw std::invalid_argument("invalid SimIR module-path delay count");
+  }
+  if (!path.full
+      && (path.sources.size() != path.destinations.size()
+          || !std::ranges::equal(
+              path.sources, path.destinations,
+              [](const auto& source, const auto& destination) {
+                return source.width == destination.width;
+              }))) {
+    throw std::invalid_argument(
+        "parallel SimIR module-path terminal widths do not match");
+  }
+  if (!std::ranges::all_of(
+          path.drivers,
+          [&](const ProcessId driver) {
+            return driver < impl_->processes.size();
+          })
+      || !std::ranges::is_sorted(path.drivers)
+      || std::ranges::adjacent_find(path.drivers)
+          != path.drivers.end()) {
+    throw std::invalid_argument("invalid SimIR module-path driver set");
+  }
+  if (path.source_edge > ModulePathEdge::edge
+      || path.polarity > ModulePathPolarity::negative
+      || path.pulse_style > ModulePathPulseStyle::ondetect
+      || path.selection_group > path.id || (path.conditional && path.ifnone)
+      || path.conditional == path.condition.empty()
+      || path.pulse_reject_limit.has_value()
+          != path.pulse_error_limit.has_value()
+      || (path.pulse_reject_limit
+          && *path.pulse_reject_limit > *path.pulse_error_limit)) {
+    throw std::invalid_argument("invalid SimIR module-path enumeration");
+  }
+  validate_module_path_expression(path.condition, impl_->signals);
+  validate_module_path_expression(path.data_source, impl_->signals);
+  impl_->module_paths.push_back(std::move(path));
+  return id;
+}
+
+std::uint32_t Interpreter::add_module_timing_check(
+    ModuleTimingCheck check) {
+  if (impl_->started) {
+    throw std::logic_error{
+        "cannot add a SimIR module timing check after start"};
+  }
+  const auto id = static_cast<std::uint32_t>(
+      impl_->module_timing_checks.size());
+  if (static_cast<std::size_t>(id)
+      != impl_->module_timing_checks.size()) {
+    throw std::length_error{"too many SimIR module timing checks"};
+  }
+  const auto valid_event = [&](const ModuleTimingEvent& event) {
+    return event.terminal.signal < impl_->signals.size()
+        && event.terminal.width == 1
+        && event.terminal.offset
+            < impl_->signals[event.terminal.signal].initial_value.width()
+        && event.edge <= ModulePathEdge::edge;
+  };
+  const auto valid_delayed_terminal = [&](const ModulePathTerminal& terminal) {
+    return terminal.signal < impl_->signals.size()
+        && terminal.width == 1
+        && terminal.offset
+            < impl_->signals[terminal.signal].initial_value.width();
+  };
+  const bool compound = check.kind == ModuleTimingCheckKind::setuphold
+      || check.kind == ModuleTimingCheckKind::recrem
+      || check.kind == ModuleTimingCheckKind::fullskew
+      || check.kind == ModuleTimingCheckKind::nochange;
+  const auto expected_limits = compound ? 2U : 1U;
+  bool valid_compound_sum = !compound;
+  if (check.limits.size() == 2) {
+    const bool overflow =
+        (check.limits[1] > 0
+         && check.limits[0]
+             > std::numeric_limits<std::int64_t>::max()
+                 - check.limits[1])
+        || (check.limits[1] < 0
+            && check.limits[0]
+                < std::numeric_limits<std::int64_t>::min()
+                    - check.limits[1]);
+    valid_compound_sum = !overflow
+        && check.limits[0] + check.limits[1] > 0;
+  }
+  const bool controlled_reference =
+      check.reference.edge != ModulePathEdge::none;
+  if (check.id != id || check.kind > ModuleTimingCheckKind::nochange
+      || !valid_event(check.reference)
+      || ((check.kind == ModuleTimingCheckKind::period
+           || check.kind == ModuleTimingCheckKind::width)
+          && !controlled_reference)
+      || (check.kind != ModuleTimingCheckKind::period
+          && check.kind != ModuleTimingCheckKind::width
+          && (!check.data || !valid_event(*check.data)))
+      || check.limits.size() != expected_limits
+      || ((check.kind != ModuleTimingCheckKind::setuphold
+           && check.kind != ModuleTimingCheckKind::recrem
+           && check.kind != ModuleTimingCheckKind::nochange)
+          && std::ranges::any_of(
+              check.limits,
+              [](const std::int64_t limit) { return limit < 0; }))
+      || ((check.kind == ModuleTimingCheckKind::setuphold
+           || check.kind == ModuleTimingCheckKind::recrem)
+          && !valid_compound_sum)
+      || (check.kind == ModuleTimingCheckKind::nochange
+          && check.limits.size() == 2
+          && check.limits[0] > check.limits[1])
+      || (check.threshold.has_value()
+          && check.kind != ModuleTimingCheckKind::width)
+      || (check.notifier
+          && (*check.notifier >= impl_->signals.size()
+              || impl_->signals[*check.notifier].initial_value.width() != 1))
+      || (check.delayed_reference
+          && !valid_delayed_terminal(*check.delayed_reference))
+      || (check.delayed_data
+          && !valid_delayed_terminal(*check.delayed_data))) {
+    throw std::invalid_argument{"invalid SimIR module timing check"};
+  }
+  validate_module_path_expression(check.reference.condition, impl_->signals);
+  if (check.data) {
+    validate_module_path_expression(check.data->condition, impl_->signals);
+  }
+  validate_module_path_expression(check.timestamp_condition, impl_->signals);
+  validate_module_path_expression(check.timecheck_condition, impl_->signals);
+  impl_->module_timing_checks.push_back(std::move(check));
+  impl_->module_timing_check_states.emplace_back();
+  return id;
+}
+
 void Interpreter::set_process_executor(
     const ProcessId process,
     std::unique_ptr<ProcessExecutor> executor) {

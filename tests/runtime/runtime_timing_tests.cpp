@@ -31,66 +31,6 @@ void require(bool condition, const char *message) {
 
 } // namespace
 
-void test_transition_delay_selection() {
-  using namespace fsim::runtime;
-  using namespace fsim::runtime::simir;
-
-  const TransitionDelays delays{7, 11, 13};
-  require(
-      transition_delay(
-          PackedLogic4::from_msb_string("0000"),
-          PackedLogic4::from_msb_string("1000"),
-          delays)
-          == 7,
-      "a rising transition selects the rise delay");
-  require(
-      transition_delay(
-          PackedLogic4::from_msb_string("1111"),
-          PackedLogic4::from_msb_string("1011"),
-          delays)
-          == 11,
-      "a falling transition selects the fall delay");
-  require(
-      transition_delay(
-          PackedLogic4::from_msb_string("1111"),
-          PackedLogic4::from_msb_string("11Z1"),
-          delays)
-          == 13,
-      "a high-impedance transition selects the turnoff delay");
-  require(
-      transition_delay(
-          PackedLogic4::from_msb_string("0000"),
-          PackedLogic4::from_msb_string("00X0"),
-          delays)
-          == 7,
-      "a transition to unknown selects the shortest delay");
-  require(
-      transition_delay(
-          PackedLogic4::from_msb_string("0000"),
-          PackedLogic4::from_msb_string("1Z00"),
-          delays)
-          == 7,
-      "a packed mixed transition selects the shortest applicable delay");
-  require(
-      !transition_delay(
-          PackedLogic4::from_msb_string("10XZ"),
-          PackedLogic4::from_msb_string("10XZ"),
-          delays),
-      "an unchanged packed value has no transition delay");
-
-  bool rejected = false;
-  try {
-    static_cast<void>(
-        transition_delay(
-            PackedLogic4::from_msb_string("0"),
-            PackedLogic4::from_msb_string("00"),
-            delays));
-  } catch (const std::invalid_argument&) {
-    rejected = true;
-  }
-  require(rejected, "transition-delay width mismatch must be rejected");
-}
-
 void test_simir_inertial_transition_writes() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;

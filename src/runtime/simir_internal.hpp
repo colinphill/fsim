@@ -204,6 +204,10 @@ void check_integer_range(
     const PackedLogic4& when_true,
     const PackedLogic4& when_false);
 
+void validate_module_path_expression(
+    const ModulePathExpression& expression,
+    std::span<const Signal> signals);
+
 [[nodiscard]] Logic9 evaluate_vital_timing_check(
     const VitalTimingCheck& operation,
     VitalTimingState& state,
@@ -311,6 +315,25 @@ struct Interpreter::Impl {
     PackedLogic4 source_value;
   };
 
+  struct PendingModulePathWrite {
+    ScheduledTaskHandle handle;
+    PackedLogic4 source_value;
+    SimulationTick detected_at{};
+    SimulationTick target_time{};
+    SimulationTick reject_limit{};
+    SimulationTick error_limit{};
+    ModulePathPulseStyle pulse_style{ModulePathPulseStyle::onevent};
+    bool show_cancelled{};
+  };
+
+  struct ModuleTimingCheckState {
+    std::optional<SimulationTick> last_reference;
+    std::optional<SimulationTick> last_data;
+    std::optional<SimulationTick> last_terminal_change;
+    ScheduledTaskHandle deadline;
+    bool active{};
+  };
+
   struct ProjectedDriverKey {
     ProcessId process{};
     SignalId signal{};
@@ -371,6 +394,9 @@ struct Interpreter::Impl {
   std::vector<std::optional<PackedLogic4>> forced_values;
   std::vector<PackedLogic4> forced_masks;
   std::vector<ProcessState> processes;
+  std::vector<ModulePath> module_paths;
+  std::vector<ModuleTimingCheck> module_timing_checks;
+  std::vector<ModuleTimingCheckState> module_timing_check_states;
   std::map<std::uint64_t, ForkGroup> fork_groups;
   std::uint64_t next_fork_group{1};
   std::vector<std::vector<Fanout>> static_fanout;
@@ -386,6 +412,10 @@ struct Interpreter::Impl {
       InertialDriverKey,
       PendingInertialWrite,
       InertialDriverKeyHash> pending_inertial_writes;
+  std::unordered_map<
+      InertialDriverKey,
+      PendingModulePathWrite,
+      InertialDriverKeyHash> pending_module_path_writes;
   std::unordered_map<
       ProjectedDriverKey,
       ProjectedDriverState,
@@ -718,6 +748,29 @@ struct Interpreter::Impl {
       const std::size_t offset);
 
   void schedule_update_commit();
+
+  void stage_update_unrouted(
+      std::optional<ProcessId> driver,
+      SignalId signal,
+      PackedLogic4 value,
+      std::optional<std::size_t> offset);
+
+  [[nodiscard]] bool route_module_path_update(
+      ProcessId driver,
+      SignalId signal,
+      const PackedLogic4& value,
+      std::optional<std::size_t> offset,
+      const TransitionDelays* intrinsic_delays = nullptr,
+      SimulationTick fixed_delay = 0);
+
+  [[nodiscard]] PackedLogic4 evaluate_module_path_expression(
+      const ModulePathExpression& expression) const;
+
+  void evaluate_module_timing_checks(
+      SignalId changed,
+      const PackedLogic4& before,
+      const PackedLogic4& after);
+  void report_module_timing_violation(std::size_t check_index);
 
   void stage_update(
       const std::optional<ProcessId> driver,

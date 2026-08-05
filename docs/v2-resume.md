@@ -7,11 +7,80 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
-- Current unit: Batch 145, exactly 20 changes, complete after pushed Batch
-  144 closeout `4be4a51`. Its authoritative Verilog-2005 strength and switch
-  primitive contract and per-change status are recorded in
-  `implementation_plan_v2.md`. Changes 1-20 are complete. The exact-LLVM Debug,
-  Release, and LLVM-disabled focused slices pass for
+- Current unit: Batch 146, exactly 20 changes, complete after pushed Batch
+  145 closeout `9b771eb`. Its authoritative Verilog-2005 specify-timing
+  contract and per-change status are recorded in `implementation_plan_v2.md`.
+  Changes 1-20 are complete. The warning-clean focused
+  frontend regression passes after an eight-worker build. Specify HIR retains
+  source-spanned blocks, scalar/mintypmax/path-pulse specparams,
+  parallel/full and edge-sensitive paths, polarity and destination data-source
+  transforms, `if`/`ifnone`, one through twelve transition delays, pulse style
+  and cancellation controls, all twelve Verilog-2005 timing-check forms,
+  notifier and optional compound-check arguments, and explicit edge
+  descriptors. Specparams specialize in declaration order after module
+  parameters, feed every timing expression, reject non-static values through
+  `FSIM-ELAB-SVSPEC-001`, and add state-preserving native-cache identities.
+  Change 8 is complete: hierarchy validation resolves terminals through the
+  instance-local signal map and rejects incompatible module-port directions,
+  non-static widths, and unequal parallel paths through
+  `FSIM-ELAB-SVSPEC-002` through `007`, retains packed lane selections and
+  transition delays in checked design state, assigns the exact destination
+  driver set after lowering, and translates the result into a scheduler-owned
+  module-path arc. Change 9 adds storage-budgeted, recursion-free runtime
+  expression programs for conditions and destination data, ordered conditional
+  groups with `ifnone`, polarity/edge metadata, pulse style and cancellation
+  policy, exact transition tables, and immutable source provenance. The focused
+  frontend, elaboration, and runtime tests pass; the runtime proof selects an
+  `ifnone` rise at tick 3, then an enabled data-source fall at tick 27. Change
+  10 completes common-scheduler execution: exact one/two/three/six/twelve-entry
+  transition selection, packed parallel lane pairing versus full-path fanout,
+  intrinsic-plus-path delay accumulation with overflow checks, stable ordering,
+  and inertial replacement all pass focused tests. Change 11 closes ordered
+  competing `if` selection, X-valued condition fallback to `ifnone`, positive
+  and negative edge filtering, polarity transforms, and destination-data
+  evaluation. Change 12 adds timescale-normalized global and terminal-specific
+  PATHPULSE reject/error limits, onevent and ondetect X publication,
+  showcancelled negative-pulse windows, stale-free overlapping recovery,
+  overflow checks, callbacks, and VCD-visible corruption. Change 13 executes
+  all seven simple timing checks with exact event direction, four-state event
+  conditions, persistent history, mintypmax limits, width thresholds, and
+  notifier updates. Change 14 executes all five compound checks with signed
+  negative-timing windows, timestamp/check conditions, delayed signal copies,
+  event- and timer-based skew, remain-active behavior, and notifiers. Change
+  15 passes a dedicated integration differential across interpreter, LLVM
+  O0/O2 cold and warm caches, and debugger execution with parameterized
+  generate leaves, aliased multiple roots, recursive SV-to-VHDL-to-SV
+  hierarchy, resolved duplicate drivers, force/release, callbacks, and VCD.
+  Change 16 advances owning-unit/runtime/library schemas, round-trips specify
+  HIR and normalized state through `.fsimobj`, relocated `.fsimlib`, and
+  relocated standalone `.fsimdesign` execution, and preserves cold/warm/edit
+  native-cache behavior. Change 17 closes the positive differential matrix by
+  combining exact runtime form coverage with the representative interpreter,
+  LLVM O0/O2, debugger, artifact, relocation, and cache differential. Change
+  18 covers malformed arities/optionals, staticness, signed constraints,
+  controlled edges and descriptors, terminal/notifier/delayed widths, invalid
+  portable HIR and runtime state, schema mismatch, payload over-materialization,
+  and time overflow. Change 19 synchronizes architecture, public support and
+  compatibility notes, diagnostics, six feature rows, release inventories,
+  README, and this restart evidence while retaining SDF as dedicated later
+  work. Change 20's exact-LLVM Debug and Release regressions pass 112/112 in
+  136.29 and 106.68 seconds after eight-worker builds. Source, diagnostic,
+  inventory, installed-public, Windows ABI, differential, and release gates
+  pass at 1,777 diagnostics, 501 bounded sources, 591 SPDX-owned artifacts,
+  208 test/control files, 1,127 feature rows, 4,508 evidence cells, 362 exact
+  paths, and 107 runtime owners. The accumulated batch owns one commit and one
+  push. Batch 146 is not a CI-monitoring batch; do not run a
+  sanitizer or inspect hosted CI. The batch covers specify-block/specparam HIR,
+  parallel/full and conditional module paths, every path-delay arity,
+  polarity/data-source and edge forms, pulse controls, all Verilog-2005 timing
+  checks, notifiers, hierarchy and artifact/cache integration, both engines,
+  debugger/callback/VCD behavior, diagnostics, and release evidence. SDF
+  annotation remains a later dedicated batch.
+- Batch 145 is complete after pushed Batch 144 closeout `4be4a51`. Its
+  authoritative Verilog-2005 strength and switch primitive contract and
+  per-change status are recorded in `implementation_plan_v2.md`. Changes 1-20
+  are complete. The exact-LLVM Debug, Release, and LLVM-disabled focused slices
+  pass for
   frontend, elaboration, runtime, library artifacts, application resolution,
   diagnostic catalog, and source budget. Transmission-switch regression now
   proves release to `Z`, reconnection, conditional enabled/disabled/unknown

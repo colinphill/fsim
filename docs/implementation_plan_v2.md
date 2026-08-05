@@ -16,7 +16,7 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
 - Sanitizers run only immediately before committing a scheduled CI-monitoring
   batch. Ordinary batches do not configure, build, or run sanitizer targets.
 - Every tenth numbered batch is a non-documentation CI-monitoring boundary;
-  Batch 140 is the next boundary. Documentation-only runs are not monitored.
+  Batch 150 is the next boundary. Documentation-only runs are not monitored.
 
 ## Batch 133 - automatic cross-language resolution - Complete
 
@@ -1152,6 +1152,83 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     Batch 145 is not a CI boundary and ran no sanitizer or hosted
     CI-monitoring gate.
 
+## Batch 146 - Verilog-2005 specify timing closure - Complete
+
+1. **Complete.** Start after pushed Batch 145 closeout `9b771eb`, record this
+   exact 20-change contract, and synchronize the restart handoff before
+   implementation changes. Keep Changes 1-19 in one recoverable accumulated
+   worktree; Change 20 alone owns full gates, one commit, and one push.
+2. **Complete.** Define clean-room frontend HIR for specify blocks, specparams,
+   module paths, timing checks, pulse controls, notifiers, conditions, source
+   spans, canonical identities, and deterministic introspection.
+3. **Complete.** Parse specify blocks and specparam declarations, including
+   scalar constants, mintypmax triples, path-pulse specparams, closing-name
+   recovery, duplicate handling, and stable malformed-block diagnostics.
+4. **Complete.** Parse simple and edge-sensitive parallel (`=>`) and full (`*>`)
+   module paths, ordered source/destination terminal lists, polarity operators,
+   destination data-source expressions, and `posedge`/`negedge` qualifiers.
+5. **Complete.** Parse unconditional, `if`-conditional, and `ifnone` paths plus
+   `pulsestyle_onevent`, `pulsestyle_ondetect`, `showcancelled`, and
+   `noshowcancelled` declarations with exact terminal scoping.
+6. **Complete.** Parse and normalize one, two, three, six, and twelve path-delay
+   forms, parenthesized lists, specparam references, mintypmax selection, and
+   checked project-tick conversion without reserving SDF syntax.
+7. **Complete.** Evaluate specparams and path conditions after parameter
+   specialization, enforce locally-static timing limits where required, and
+   retain exact specialization and source provenance.
+8. **Complete.** Resolve specify terminals through generated hierarchy, packed
+   lanes, port aliases, multiple roots, searched/mapped libraries, and
+   VHDL/SystemC boundaries while rejecting ambiguous, recursive, or
+   direction-incompatible paths.
+9. **Complete.** Add normalized runtime module-path arcs with source/destination
+   lanes, transition-delay tables, condition state, polarity/data-source
+   transforms, pulse policy, and immutable hierarchy/debug provenance.
+10. **Complete.** Execute parallel and full paths through the common scheduler,
+    selecting exact 0/1/X/Z transition delays, accumulating source and path
+    timing, and preserving deterministic inertial replacement and delta-cycle
+    ordering.
+11. **Complete.** Execute state-dependent paths with ordered `if` selection and
+    `ifnone` fallback, exact four-state condition truth, edge filtering,
+    polarity transforms, and destination data-source evaluation.
+12. **Complete.** Implement onevent/ondetect pulse handling and
+    showcancelled/noshowcancelled X publication, including reject/error limits,
+    overlapping pulses, cancellation, overflow checks, callbacks, and VCD.
+13. **Complete.** Parse, normalize, and execute `$setup`, `$hold`, `$recovery`,
+    `$removal`, `$skew`, `$period`, and `$width` timing checks with exact event
+    controls, thresholds, conditions, persistent per-instance history, and
+    optional notifier updates.
+14. **Complete.** Parse, normalize, and execute `$setuphold`, `$recrem`,
+    `$timeskew`, `$fullskew`, and `$nochange`, including optional timestamp/check
+    conditions, delayed signals, event-based/remain-active flags, and notifier
+    behavior.
+15. **Complete.** Integrate path and timing-check state with generate and
+    parameter-specialized instances, aliased multiple roots, recursive mixed
+    hierarchy, interpreter and LLVM O0/O2 execution, debugger inspection,
+    callbacks, VCD, force/release, and resolved multi-driver nets.
+16. **Complete.** Preserve specify HIR, normalized arcs, timing-check state,
+    pending pulses, notifiers, and selected provenance through `.fsimobj`,
+    `.fsimdesign`, `.fsimlib`, relocation, standalone simulation, and
+    cold/warm/edit native caches with append-only checked schema evolution.
+17. **Complete.** Add positive differentials for every delay arity, path kind,
+    condition, edge/polarity/data-source form, pulse policy, timing check,
+    notifier, engine, optimization level, artifact phase, and cache state.
+18. **Complete.** Add transactional syntax, staticness, terminal, direction,
+    width, ambiguity, timing-limit, optional-argument, invalid-native-HIR,
+    corrupt-artifact, excessive-materialization, and time-overflow negatives
+    with cataloged diagnostics and storage-derived budgets.
+19. **Complete.** Update architecture, language support, diagnostics, feature
+    matrix, inventories, Verilog compatibility notes, and restart evidence;
+    leave SDF annotation assigned to its later dedicated batch.
+20. **Complete.** Run exact-LLVM Debug and Release plus source, catalog,
+    inventory, installed-public-contract, Windows ABI, differential, and
+    release gates after eight-worker builds, then commit and push once. Debug
+    and Release each pass 112/112 tests in 136.29 and 106.68 seconds. The
+    reviewed baselines are 1,777 diagnostics, 501 bounded sources, 591
+    SPDX-owned artifacts, 208 test/control files, 1,127 executable feature
+    rows, 4,508 evidence cells, 362 evidence paths, and 107 runtime owners.
+    Batch 146 is not a CI boundary and ran no sanitizer or hosted CI-monitoring
+    gate.
+
 ## Forward priority order
 
 1. **Completed in Batch 136:** read-only out-of-tree `.fsimlib` directory
@@ -1164,8 +1241,8 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
    SystemVerilog-2017 classes/UVM, VPI, DPI, and VHPI. Batches 139-143 complete
    the clean-room VITAL timing, primitive, path, memory, and vendor-model
    compatibility surface; Batch 144 completes Verilog-2005 UDPs, Batch 145
-   closes strengths and switch primitives, and specify timing remains a
-   separate batch before the later dedicated SDF batch.
+   closes strengths and switch primitives, and Batch 146 closes specify timing
+   before the later dedicated SDF batch.
 5. Older VHDL, Verilog, and SystemVerilog standard modes.
 6. Full SDF annotation with 2.1/3.0 compatibility and VITAL integration.
 7. FST tracing for every value exposed through the trace model.

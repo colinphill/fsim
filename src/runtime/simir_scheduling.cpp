@@ -607,6 +607,10 @@ void Interpreter::Impl::commit_driver(
     const ProcessId process,
     const SignalId signal_id,
     PackedLogic4 value)  {
+    if (route_module_path_update(
+            process, signal_id, value, std::nullopt)) {
+      return;
+    }
     if (get_signal(signal_id).resolution
         == ResolutionKind::none) {
       commit(signal_id, std::move(value));
@@ -748,6 +752,10 @@ void Interpreter::Impl::commit_driver_slice(
     const SignalId signal_id,
     PackedLogic4 value,
     const std::size_t offset)  {
+    if (route_module_path_update(
+            process, signal_id, value, offset)) {
+      return;
+    }
     if (get_signal(signal_id).resolution
         == ResolutionKind::none) {
       commit_slice(
@@ -905,12 +913,13 @@ void Interpreter::Impl::stage_update(
     }
     staged_value = normalize_signal_value(
         signal_id, std::move(staged_value));
-    pending_updates.push_back(PendingUpdate{
-        signal_id,
-        driver,
-        std::nullopt,
-        std::move(staged_value)});
-    schedule_update_commit();
+    if (driver
+        && route_module_path_update(
+            *driver, signal_id, staged_value, std::nullopt)) {
+      return;
+    }
+    stage_update_unrouted(
+        driver, signal_id, std::move(staged_value), std::nullopt);
   }
 
 void Interpreter::Impl::stage_update(
@@ -945,9 +954,13 @@ void Interpreter::Impl::stage_update_slice(
     value = coerce_value_kind(
         std::move(value),
         get_signal(signal_id).value_kind);
-    pending_updates.push_back(PendingUpdate{
-        signal_id, driver, offset, std::move(value)});
-    schedule_update_commit();
+    if (driver
+        && route_module_path_update(
+            *driver, signal_id, value, offset)) {
+      return;
+    }
+    stage_update_unrouted(
+        driver, signal_id, std::move(value), offset);
   }
 
 void Interpreter::Impl::stage_update_slice(
@@ -960,6 +973,315 @@ void Interpreter::Impl::stage_update_slice(
         std::move(value),
         offset);
   }
+
+void Interpreter::Impl::stage_update_unrouted(
+    const std::optional<ProcessId> driver,
+    const SignalId signal,
+    PackedLogic4 value,
+    const std::optional<std::size_t> offset) {
+  pending_updates.push_back(PendingUpdate{
+      signal, driver, offset, std::move(value)});
+  schedule_update_commit();
+}
+
+bool Interpreter::Impl::route_module_path_update(
+    const ProcessId driver,
+    const SignalId signal,
+    const PackedLogic4& value,
+    const std::optional<std::size_t> offset,
+    const TransitionDelays* intrinsic_delays,
+    const SimulationTick fixed_delay) {
+  const auto write_offset = offset.value_or(0U);
+  const auto write_end = write_offset + value.width();
+  const bool has_routed_destination = std::ranges::any_of(
+      module_paths,
+      [&](const ModulePath& path) {
+        return std::ranges::binary_search(path.drivers, driver)
+            && std::ranges::any_of(
+                path.destinations,
+                [&](const ModulePathTerminal& destination) {
+                  const auto destination_end =
+                      static_cast<std::size_t>(destination.offset)
+                      + destination.width;
+                  return destination.signal == signal
+                      && write_offset < destination_end
+                      && static_cast<std::size_t>(destination.offset)
+                          < write_end;
+                });
+      });
+  if (!has_routed_destination) return false;
+  const auto driver_current = get_signal(signal).resolution
+          == ResolutionKind::none
+      ? driven_values.at(signal)
+      : driver_slot(driver, signal);
+  std::vector<std::optional<SimulationTick>> selected(value.width());
+  std::vector<std::uint32_t> orders(value.width());
+  std::vector<std::optional<Logic4>> routed_values(value.width());
+  std::vector<ModulePathPulseStyle> pulse_styles(
+      value.width(), ModulePathPulseStyle::onevent);
+  std::vector<bool> show_cancelled(value.width());
+  std::vector<std::optional<SimulationTick>> reject_limits(value.width());
+  std::vector<std::optional<SimulationTick>> error_limits(value.width());
+  bool routed = false;
+  const auto accumulated_delay = [&](
+      const Logic4 before,
+      const Logic4 after,
+      const SimulationTick path_delay) {
+    const std::array intrinsic{
+        intrinsic_delays ? intrinsic_delays->rise : SimulationTick{},
+        intrinsic_delays ? intrinsic_delays->fall : SimulationTick{},
+        intrinsic_delays ? intrinsic_delays->turnoff : SimulationTick{}};
+    const auto intrinsic_delay = intrinsic_delays
+        ? module_path_transition_delay(before, after, intrinsic).value_or(0)
+        : SimulationTick{};
+    if (path_delay > std::numeric_limits<SimulationTick>::max() - fixed_delay
+        || intrinsic_delay
+            > std::numeric_limits<SimulationTick>::max()
+                - fixed_delay - path_delay) {
+      throw std::overflow_error{
+          "simulation time overflow while accumulating module-path delay"};
+    }
+    return fixed_delay + path_delay + intrinsic_delay;
+  };
+  std::map<std::uint32_t, std::optional<std::uint32_t>> selected_conditions;
+  for (const auto& path : module_paths) {
+    if (!path.conditional
+        || !std::ranges::binary_search(path.drivers, driver)) {
+      continue;
+    }
+    auto [group, inserted] = selected_conditions.try_emplace(
+        path.selection_group, std::nullopt);
+    (void)inserted;
+    if (!group->second
+        && truth_value(evaluate_module_path_expression(path.condition))
+            == Logic4::one) {
+      group->second = path.id;
+    }
+  }
+  const auto source_event = [&](
+      const ModulePath& path,
+      const std::optional<std::size_t> source_terminal,
+      const std::optional<std::size_t> parallel_bit) {
+    for (std::size_t terminal_index = 0;
+         terminal_index < path.sources.size(); ++terminal_index) {
+      if (source_terminal && terminal_index != *source_terminal) continue;
+      const auto& terminal = path.sources[terminal_index];
+      const auto& stamp = signal_events.at(terminal.signal);
+      if (!stamp || stamp->first != scheduler.now()
+          || stamp->second != scheduler.delta()) {
+        continue;
+      }
+      const auto begin = parallel_bit.value_or(0U);
+      const auto end = parallel_bit
+          ? std::min(*parallel_bit + 1U,
+                     static_cast<std::size_t>(terminal.width))
+          : terminal.width;
+      if (begin >= end) continue;
+      for (auto bit = begin; bit < end; ++bit) {
+        const auto lane = terminal.offset + bit;
+        const auto before = signal_last_values[terminal.signal].get(lane);
+        const auto after = signals[terminal.signal].initial_value.get(lane);
+        if (path.source_edge == ModulePathEdge::none
+            || path.source_edge == ModulePathEdge::edge
+            || (path.source_edge == ModulePathEdge::posedge
+                && edge_matches(EdgeKind::posedge, before, after))
+            || (path.source_edge == ModulePathEdge::negedge
+                && edge_matches(EdgeKind::negedge, before, after))) {
+          return before != after;
+        }
+      }
+    }
+    return false;
+  };
+  for (const auto& path : module_paths) {
+    if (!std::ranges::binary_search(path.drivers, driver)) continue;
+    const auto selected_condition = selected_conditions.find(
+        path.selection_group);
+    if ((path.conditional
+         && (selected_condition == selected_conditions.end()
+             || selected_condition->second != path.id))
+        || (path.ifnone
+            && selected_condition != selected_conditions.end()
+            && selected_condition->second)) {
+      continue;
+    }
+    const auto data_source = path.data_source.empty()
+        ? std::optional<PackedLogic4>{}
+        : std::optional<PackedLogic4>{
+            evaluate_module_path_expression(path.data_source)};
+    for (std::size_t destination_index = 0;
+         destination_index < path.destinations.size(); ++destination_index) {
+      const auto& destination = path.destinations[destination_index];
+      if (destination.signal != signal) continue;
+      for (std::size_t bit = 0; bit < value.width(); ++bit) {
+        const auto target_bit = write_offset + bit;
+        if (target_bit < destination.offset
+            || target_bit >= destination.offset + destination.width) {
+          continue;
+        }
+        const auto path_bit = target_bit - destination.offset;
+        if (!source_event(
+                path,
+                path.full
+                    ? std::nullopt
+                    : std::optional<std::size_t>{destination_index},
+                path.full
+                    ? std::nullopt
+                    : std::optional<std::size_t>{path_bit})) {
+          continue;
+        }
+        auto routed_value = value.get(bit);
+        if (data_source) {
+          const auto data_bit = data_source->width() == 1
+              ? 0U : path_bit;
+          if (data_bit >= data_source->width()) continue;
+          routed_value = data_source->get(data_bit);
+          if (path.polarity == ModulePathPolarity::negative) {
+            auto scalar = unary_not(PackedLogic4{1U, routed_value});
+            routed_value = scalar.get(0);
+          }
+        }
+        const InertialDriverKey projected_key{
+            driver,
+            signal,
+            static_cast<std::uint32_t>(target_bit),
+            1U};
+        const auto projected = pending_module_path_writes.find(projected_key);
+        const auto transition_before =
+            projected == pending_module_path_writes.end()
+            ? driver_current.get(target_bit)
+            : projected->second.source_value.get(0);
+        const auto delay = accumulated_delay(
+            transition_before,
+            routed_value,
+            module_path_transition_delay(
+                transition_before, routed_value, path.delays)
+                .value_or(0));
+        if (!selected[bit] || delay < *selected[bit]
+            || (delay == *selected[bit] && path.id < orders[bit])) {
+          selected[bit] = delay;
+          orders[bit] = path.id;
+          routed_values[bit] = routed_value;
+          pulse_styles[bit] = path.pulse_style;
+          show_cancelled[bit] = path.show_cancelled;
+          reject_limits[bit] = path.pulse_reject_limit;
+          error_limits[bit] = path.pulse_error_limit;
+        }
+        routed = true;
+      }
+    }
+  }
+  if (!routed) return false;
+
+  for (std::size_t bit = 0; bit < value.width(); ++bit) {
+    auto scalar = PackedLogic4{
+        1U, routed_values[bit].value_or(value.get(bit))};
+    const auto target_bit = write_offset + bit;
+    if (!selected[bit]) {
+      if (!intrinsic_delays && fixed_delay == 0) {
+        stage_update_unrouted(driver, signal, std::move(scalar), target_bit);
+        continue;
+      }
+      selected[bit] = accumulated_delay(
+          driver_current.get(target_bit), scalar.get(0), 0);
+      orders[bit] = std::numeric_limits<std::uint32_t>::max();
+    }
+    const InertialDriverKey key{
+        driver, signal, static_cast<std::uint32_t>(target_bit), 1U};
+    bool force_recovery = false;
+    if (const auto pending = pending_module_path_writes.find(key);
+        pending != pending_module_path_writes.end()) {
+      if (pending->second.source_value == scalar) continue;
+      const auto now = scheduler.now();
+      const auto pulse_width = now - pending->second.detected_at;
+      const bool rejected =
+          pulse_width < pending->second.reject_limit;
+      const auto new_target = *selected[bit]
+              > std::numeric_limits<SimulationTick>::max() - now
+          ? std::optional<SimulationTick>{}
+          : std::optional<SimulationTick>{now + *selected[bit]};
+      if (!new_target) {
+        throw std::overflow_error{
+            "simulation time overflow while scheduling module path"};
+      }
+      const bool corrupt = !rejected
+          && (pulse_width < pending->second.error_limit
+              || (pending->second.show_cancelled
+                  && *new_target < pending->second.target_time));
+      const bool negative_cancelled = !rejected
+          && pending->second.show_cancelled
+          && *new_target < pending->second.target_time;
+      scheduler.cancel(pending->second.handle);
+      if (corrupt) {
+        force_recovery = true;
+        const auto x_delay = negative_cancelled
+            ? *new_target - now
+            : pending->second.pulse_style == ModulePathPulseStyle::ondetect
+            ? SimulationTick{}
+            : pending->second.target_time > now
+                ? pending->second.target_time - now : SimulationTick{};
+        if (negative_cancelled) {
+          *selected[bit] = pending->second.target_time - now;
+        }
+        scheduler.schedule_after(
+            x_delay, SchedulerPhase::update, orders[bit],
+            [this, driver, signal, target_bit](Scheduler&) {
+              stage_update_unrouted(
+                  driver,
+                  signal,
+                  PackedLogic4{1U, Logic4::x},
+                  target_bit);
+            });
+      }
+      pending_module_path_writes.erase(pending);
+      if (rejected && driver_current.get(target_bit) == scalar.get(0)) {
+        continue;
+      }
+    }
+    if (!force_recovery
+        && driver_current.get(target_bit) == scalar.get(0)) {
+      continue;
+    }
+    if (*selected[bit] == 0) {
+      stage_update_unrouted(driver, signal, std::move(scalar), target_bit);
+      continue;
+    }
+    const auto now = scheduler.now();
+    if (*selected[bit]
+        > std::numeric_limits<SimulationTick>::max() - now) {
+      throw std::overflow_error{
+          "simulation time overflow while scheduling module path"};
+    }
+    const auto reject = reject_limits[bit].value_or(*selected[bit]);
+    const auto error = error_limits[bit].value_or(reject);
+    auto [pending, inserted] = pending_module_path_writes.try_emplace(
+        key,
+        PendingModulePathWrite{
+            ScheduledTaskHandle{},
+            scalar,
+            now,
+            now + *selected[bit],
+            reject,
+            error,
+            pulse_styles[bit],
+            show_cancelled[bit]});
+    (void)inserted;
+    try {
+      pending->second.handle = scheduler.schedule_after_cancelable(
+          *selected[bit], SchedulerPhase::update, orders[bit],
+          [this, key, driver, signal, target_bit,
+           scalar = std::move(scalar)](Scheduler&) mutable {
+            pending_module_path_writes.erase(key);
+            stage_update_unrouted(
+                driver, signal, std::move(scalar), target_bit);
+          });
+    } catch (...) {
+      pending_module_path_writes.erase(pending);
+      throw;
+    }
+  }
+  return true;
+}
 
 void Interpreter::Impl::stage_update_slice(
     const ProcessId process,
@@ -992,6 +1314,12 @@ void Interpreter::Impl::schedule_inertial(
         || (!offset && value.width() != target_width)) {
       throw std::invalid_argument(
           "inertial write range is outside its target signal");
+    }
+    value = coerce_value_kind(
+        std::move(value), get_signal(signal).value_kind);
+    if (route_module_path_update(
+            process, signal, value, offset, &delays)) {
+      return;
     }
     const InertialDriverKey key{
         process,

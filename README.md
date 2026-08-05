@@ -27,6 +27,8 @@ The current tree contains:
 - C++20 value kernels for packed 2-, 4-, and 9-state logic;
 - a deterministic, single-thread, phased event scheduler;
 - a typed SimIR and reference interpreter;
+- normalized Verilog specify module paths, pulse controls, all twelve timing
+  checks, and shared interpreter/LLVM scheduling with portable artifact state;
 - hand-written VHDL-2008 and Verilog/SystemVerilog tokenizers and parsers for a
   deliberately small executable subset;
 - bounded VHDL package declarations with declaration-ordered scalar

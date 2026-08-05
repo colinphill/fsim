@@ -14,6 +14,7 @@ int fsim_application_case_core();
 int fsim_application_case_systemc_matrix();
 int fsim_application_case_expressions();
 int fsim_application_case_scoped_locals();
+int fsim_application_case_specify();
 int fsim_application_case_call_safe_points();
 int fsim_application_case_named_events();
 int fsim_application_case_fork();
@@ -32,6 +33,7 @@ constexpr NamedApplicationCase application_cases[] = {
     {"systemc_matrix", fsim_application_case_systemc_matrix},
     {"expressions", fsim_application_case_expressions},
     {"scoped_locals", fsim_application_case_scoped_locals},
+    {"specify", fsim_application_case_specify},
     {"call_safe_points", fsim_application_case_call_safe_points},
     {"named_events", fsim_application_case_named_events},
     {"fork", fsim_application_case_fork},

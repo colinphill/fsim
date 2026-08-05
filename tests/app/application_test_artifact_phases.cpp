@@ -29,9 +29,15 @@ void ApplicationTestFixture::test_artifact_phase_semantics() {
 module phase_child #(
   parameter logic [7:0] MASK = 8'hff
 ) (
+  input logic clk,
   input logic [7:0] value,
   output logic [7:0] transformed
 );
+  reg notifier;
+  specify
+    (value => transformed) = 0;
+    $setup(posedge value[0], posedge clk, 0, notifier);
+  endspecify
   assign transformed = value ^ MASK;
 endmodule
 
@@ -43,7 +49,7 @@ module phase_tb;
   phase_counter counter (
     .clk(clk), .reset(reset), .q(counter_q));
   phase_child #(.MASK(8'h0f)) child (
-    .value(counter_q), .transformed(transformed));
+    .clk(clk), .value(counter_q), .transformed(transformed));
   initial begin
     clk = 1'b0;
     reset = 1'b1;
@@ -206,6 +212,7 @@ end architecture;
   assert(design_inspection->roots
       == std::vector<std::string>({"main", "observer"}));
   assert(design_inspection->process_count != 0);
+  auto active_design = design;
 
   const auto missing_design = directory / "artifact-missing.fsimdesign";
   const auto missing_design_text = support::path_to_utf8(missing_design);
@@ -236,11 +243,13 @@ end architecture;
 
   const auto run_engine = [&](const app::SimulationEngine engine) {
     diagnostic::Engine diagnostics;
-    auto built = app::load_design_artifact(design, diagnostics);
+    auto built = app::load_design_artifact(active_design, diagnostics);
     assert(built && !diagnostics.has_error());
     assert(built->design.roots()
         == std::vector<std::string>({"main", "observer"}));
     assert(built->semantics.source_files().size() >= 2);
+    assert(built->design.verilog_specify_paths().size() == 1);
+    assert(built->design.verilog_timing_checks().size() == 1);
     for (const auto& file : built->semantics.source_files()) {
       assert(!std::filesystem::path(file.physical_name).is_absolute());
     }
@@ -282,10 +291,17 @@ end architecture;
   assert(interpreted.first == "00000001");
   assert(interpreted.second == "1");
 
+  const auto relocated_design = directory / "relocated.fsimdesign";
+  std::filesystem::rename(active_design, relocated_design);
+  active_design = relocated_design;
+  const auto relocated = run_engine(app::SimulationEngine::interpreter);
+  assert(relocated == interpreted);
+
   output.str({});
   error.str({});
+  const auto active_design_text = support::path_to_utf8(active_design);
   const std::vector<const char*> simulate{
-      "fsim", "simulate", "--design", design_text.c_str(), "--engine",
+      "fsim", "simulate", "--design", active_design_text.c_str(), "--engine",
       "compiled", "--trace", trace_text.c_str(), "--trace-filter",
       "main.*", "--trace-filter", "observer.*"};
   assert(cli::run(

@@ -127,6 +127,7 @@ int main() {
   const auto parsed_source = fsim::frontend::parse_text(
       "sources/stage.sv",
       R"sv(module stage #(parameter int WIDTH = 4) (
+  input logic clock,
   input logic [WIDTH-1:0] value,
   output logic [WIDTH-1:0] result
 );
@@ -135,6 +136,11 @@ int main() {
   wire (weak0, strong1) strength_driver;
   wire switch_left, switch_right;
   trireg (large) #2 retained;
+  reg notifier;
+  specify
+    (value[0] => result[0]) = (1:2:3);
+    $setup(posedge value[0], posedge clock, 2, notifier);
+  endspecify
   assign (weak0, strong1) strength_driver = value[0];
   tran linked(switch_left, switch_right);
   function automatic logic [WIDTH-1:0] invert(
@@ -166,6 +172,13 @@ endmodule
   assert(restored_unit->name == "stage");
   assert(restored_unit->parameters.size() == 1);
   assert(restored_unit->functions.size() == 1);
+  assert(restored_unit->verilog_specify_blocks.size() == 1);
+  assert(restored_unit->verilog_specify_blocks.front().module_paths.size()
+         == 1);
+  assert(restored_unit->verilog_specify_blocks.front().timing_checks.size()
+         == 1);
+  assert(restored_unit->verilog_specify_blocks.front().module_paths.front()
+             .delays.front().minimum.has_value());
   const auto strength_driver = std::ranges::find_if(
       restored_unit->signals, [](const auto& signal) {
         return signal.name == "strength_driver";
@@ -191,6 +204,13 @@ endmodule
   fsim::diagnostic::Engine repeat_diagnostics;
   assert(fsim::library::serialize_portable_unit(
       *restored_unit, repeat_diagnostics) == unit_bytes);
+  auto invalid_specify_unit = *restored_unit;
+  invalid_specify_unit.verilog_specify_blocks.front()
+      .module_paths.front().kind =
+          static_cast<fsim::frontend::VerilogModulePathKind>(255);
+  fsim::diagnostic::Engine invalid_specify_diagnostics;
+  assert(!fsim::library::serialize_portable_unit(
+      invalid_specify_unit, invalid_specify_diagnostics));
   auto invalid_strength_unit = *restored_unit;
   invalid_strength_unit.signals.front().drive_strength =
       fsim::frontend::VerilogDriveStrength{
@@ -326,7 +346,7 @@ endprimitive
   assert(!fsim::library::deserialize_portable_unit(
       trailing_unit, "trailing.fsimir", trailing_diagnostics));
   auto future_unit = *unit_bytes;
-  future_unit[8] = '\4';
+  future_unit[8] = '\5';
   fsim::diagnostic::Engine future_diagnostics;
   assert(!fsim::library::deserialize_portable_unit(
       future_unit, "future.fsimir", future_diagnostics));

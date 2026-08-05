@@ -106,6 +106,7 @@ int main() {
     test_systemverilog_arithmetic_expressions();
     test_gate_primitives();
     test_verilog_strength_and_switch_primitives();
+    test_verilog_specify_blocks();
     test_verilog_udp_declarations();
     test_systemverilog_select_and_concatenation_expressions();
     test_conditional_statement_trees();

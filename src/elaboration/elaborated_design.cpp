@@ -2,6 +2,7 @@
 #include "fsim/elaboration/elaborator.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -57,6 +58,16 @@ ElaboratedDesign::specializations() const noexcept {
 const std::vector<UdpTableInfo>&
 ElaboratedDesign::udp_tables() const noexcept {
   return udp_tables_;
+}
+
+const std::vector<VerilogSpecifyPathInfo>&
+ElaboratedDesign::verilog_specify_paths() const noexcept {
+  return verilog_specify_paths_;
+}
+
+const std::vector<runtime::simir::ModuleTimingCheck>&
+ElaboratedDesign::verilog_timing_checks() const noexcept {
+  return verilog_timing_checks_;
 }
 
 const std::vector<SystemCInstanceInfo>&
@@ -167,6 +178,68 @@ ElaboratedDesign::create_interpreter(
   for (const auto& process : processes_) {
     (void)interpreter->add_process(process);
   }
+  for (const auto& path : verilog_specify_paths_) {
+    runtime::simir::ModulePath runtime_path;
+    runtime_path.id = path.id;
+    const auto append_terminals = [](const auto& source, auto& destination) {
+      destination.reserve(source.size());
+      for (const auto& terminal : source) {
+        destination.push_back(runtime::simir::ModulePathTerminal{
+            terminal.signal, terminal.offset, terminal.width});
+      }
+    };
+    append_terminals(path.sources, runtime_path.sources);
+    append_terminals(path.destinations, runtime_path.destinations);
+    runtime_path.drivers = path.drivers;
+    runtime_path.delays = path.delays;
+    runtime_path.condition = path.condition_program;
+    runtime_path.data_source = path.data_source_program;
+    runtime_path.selection_group = path.selection_group;
+    runtime_path.full =
+        path.kind == frontend::VerilogModulePathKind::Full;
+    runtime_path.conditional = path.conditional;
+    runtime_path.ifnone = path.ifnone;
+    switch (path.source_edge) {
+      case frontend::VerilogSpecifyEdge::None:
+        runtime_path.source_edge = runtime::simir::ModulePathEdge::none;
+        break;
+      case frontend::VerilogSpecifyEdge::Posedge:
+        runtime_path.source_edge = runtime::simir::ModulePathEdge::posedge;
+        break;
+      case frontend::VerilogSpecifyEdge::Negedge:
+        runtime_path.source_edge = runtime::simir::ModulePathEdge::negedge;
+        break;
+      case frontend::VerilogSpecifyEdge::Edge:
+        runtime_path.source_edge = runtime::simir::ModulePathEdge::edge;
+        break;
+    }
+    switch (path.polarity) {
+      case frontend::VerilogPathPolarity::None:
+        runtime_path.polarity = runtime::simir::ModulePathPolarity::none;
+        break;
+      case frontend::VerilogPathPolarity::Positive:
+        runtime_path.polarity = runtime::simir::ModulePathPolarity::positive;
+        break;
+      case frontend::VerilogPathPolarity::Negative:
+        runtime_path.polarity = runtime::simir::ModulePathPolarity::negative;
+        break;
+    }
+    runtime_path.pulse_style =
+        path.pulse_style == frontend::VerilogPulseStyle::Ondetect
+        ? runtime::simir::ModulePathPulseStyle::ondetect
+        : runtime::simir::ModulePathPulseStyle::onevent;
+    runtime_path.show_cancelled = path.show_cancelled;
+    runtime_path.pulse_reject_limit = path.pulse_reject_limit;
+    runtime_path.pulse_error_limit = path.pulse_error_limit;
+    runtime_path.source = runtime::simir::SourceLocation{
+        path.source.source_name,
+        static_cast<std::uint32_t>(path.source.begin.line),
+        static_cast<std::uint32_t>(path.source.begin.column)};
+    (void)interpreter->add_module_path(std::move(runtime_path));
+  }
+  for (const auto& check : verilog_timing_checks_) {
+    (void)interpreter->add_module_timing_check(check);
+  }
   return interpreter;
 }
 
@@ -175,8 +248,9 @@ ElaboratedDesignState ElaboratedDesign::state() const {
       top_, roots_, signal_info_, boundary_conversions_, signals_,
       string_object_info_, string_objects_, container_object_info_,
       container_objects_, vhdl_protected_object_info_, processes_,
-      specializations_, udp_tables_, systemc_instances_, systemc_processes_,
-      systemc_objects_, {}, {}, {}};
+      specializations_, udp_tables_, verilog_specify_paths_,
+      verilog_timing_checks_,
+      systemc_instances_, systemc_processes_, systemc_objects_, {}, {}, {}};
   result.signal_names.assign(signal_by_name_.begin(), signal_by_name_.end());
   result.string_names.assign(string_by_name_.begin(), string_by_name_.end());
   result.container_names.assign(
@@ -333,6 +407,46 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
   if (referenced_udp_tables.size() != state.udp_tables.size()) {
     return std::nullopt;
   }
+  for (std::size_t index = 0;
+       index < state.verilog_specify_paths.size(); ++index) {
+    const auto& path = state.verilog_specify_paths[index];
+    const auto valid_terminal = [&](const VerilogSpecifyTerminalInfo& terminal) {
+      return terminal.signal < state.signals.size()
+          && terminal.width != 0
+          && terminal.offset
+              <= state.signals[terminal.signal].initial_value.width()
+          && terminal.width
+              <= state.signals[terminal.signal].initial_value.width()
+                  - terminal.offset;
+    };
+    const bool valid_delay_count = path.delays.size() == 1
+        || path.delays.size() == 2 || path.delays.size() == 3
+        || path.delays.size() == 6 || path.delays.size() == 12;
+    if (path.id != index || path.instance.empty()
+        || path.sources.empty() || path.destinations.empty()
+        || !valid_delay_count
+        || !std::ranges::all_of(path.sources, valid_terminal)
+        || !std::ranges::all_of(path.destinations, valid_terminal)
+        || (path.kind == frontend::VerilogModulePathKind::Parallel
+            && (path.sources.size() != path.destinations.size()
+                || !std::ranges::equal(
+                    path.sources, path.destinations,
+                    [](const auto& left, const auto& right) {
+                      return left.width == right.width;
+                    })))) {
+      return std::nullopt;
+    }
+    if (!std::ranges::is_sorted(path.drivers)
+        || std::ranges::adjacent_find(path.drivers)
+            != path.drivers.end()
+        || !std::ranges::all_of(
+            path.drivers,
+            [&](const runtime::simir::ProcessId driver) {
+              return driver < state.processes.size();
+            })) {
+      return std::nullopt;
+    }
+  }
   ElaboratedDesign result;
   result.top_ = std::move(state.top);
   result.roots_ = std::move(state.roots);
@@ -348,6 +462,10 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
   result.processes_ = std::move(state.processes);
   result.specializations_ = std::move(state.specializations);
   result.udp_tables_ = std::move(state.udp_tables);
+  result.verilog_specify_paths_ =
+      std::move(state.verilog_specify_paths);
+  result.verilog_timing_checks_ =
+      std::move(state.verilog_timing_checks);
   result.systemc_instances_ = std::move(state.systemc_instances);
   result.systemc_processes_ = std::move(state.systemc_processes);
   result.systemc_objects_ = std::move(state.systemc_objects);
@@ -368,6 +486,11 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
         || !result.container_by_name_.emplace(std::move(entry)).second) {
       return std::nullopt;
     }
+  }
+  try {
+    (void)result.create_interpreter();
+  } catch (const std::exception&) {
+    return std::nullopt;
   }
   return result;
 }

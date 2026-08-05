@@ -870,6 +870,32 @@ cross-language lattice in
 driver transactions, SystemC channel updates, net resolution, and all postponed
 callbacks are not yet complete.
 
+### Verilog specify timing
+
+Specify blocks remain module-owned frontend HIR until parameter specialization
+has selected every scalar or mintypmax `specparam`. Hierarchy elaboration then
+resolves their terminals through the same generated-instance signal and port
+alias map used by ordinary drivers. It emits immutable module-path arcs and
+timing-check records containing dense signal/lane identities, normalized
+project ticks, bounded expression programs, source provenance, and exact
+transition, edge, polarity, pulse, and optional-argument metadata.
+
+The scheduler evaluates ordered `if` paths before `ifnone`, routes selected
+transitions through its cancelable inertial event handles, and records pending
+pulse state for onevent/ondetect and showcancelled behavior. Timing checks keep
+per-instance event history, compound deadlines, delayed reference/data copies,
+and notifier state. Violations use the ordinary report callback, while any
+notifier toggle and path output use normal signal publication so debugger,
+callbacks, VCD, force/release, and resolved-driver behavior remain shared with
+untimed logic.
+
+Owning-unit, portable-library, and runtime-state schemas serialize this HIR and
+normalized state with checked enums, dense IDs, expression roots, sizes, and
+time ranges. The selected specify specialization and normalized records enter
+native-cache provenance; restored state is validated before either interpreter
+or LLVM execution. SDF annotation is deliberately outside this layer and will
+translate into the same normalized timing model in its dedicated v2 batch.
+
 ## SimIR
 
 SimIR processes are explicit state machines. The current operation set includes:

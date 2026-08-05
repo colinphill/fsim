@@ -52,6 +52,7 @@ add_executable(
   frontend/frontend_vhdl_package_generic_tests.cpp
   frontend/frontend_statement_tests.cpp
   frontend/frontend_strength_tests.cpp
+  frontend/frontend_specify_tests.cpp
   frontend/frontend_udp_tests.cpp
   frontend/frontend_generate_output_tests.cpp
   frontend/frontend_file_tests.cpp
@@ -430,6 +431,7 @@ add_executable(
   fsim_elaboration_tests
   elaboration/elaborator_test.cpp
   elaboration/elaborator_specialization_test.cpp
+  elaboration/elaborator_specify_test.cpp
   elaboration/elaborator_sv_constant_test.cpp
   elaboration/elaborator_sv_string_test.cpp
   elaboration/elaborator_sv_type_parameter_test.cpp
@@ -872,6 +874,10 @@ if(TARGET fsim_application)
     fsim_add_application_case(
       0 scoped_locals app/scoped_local_application_test.cpp
       fsim.application.scoped_locals fast scoped-locals)
+    fsim_add_application_case(
+      0 specify app/specify_application_test.cpp
+      fsim.application.specify
+      fast specify timing systemverilog vhdl hierarchy llvm debugger vcd)
     fsim_add_application_case(
       0 call_safe_points app/call_safe_point_application_test.cpp
       fsim.application.call_safe_points fast call-safe-points)
@@ -1404,6 +1410,25 @@ set_tests_properties(
     PROPERTIES
       LABELS "fast;scoped-locals"
       TIMEOUT 120
+  )
+
+  add_executable(
+    fsim_specify_application_tests
+    app/specify_application_test.cpp
+  )
+  fsim_configure_test(fsim_specify_application_tests)
+  target_link_libraries(
+    fsim_specify_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.specify
+    COMMAND fsim_specify_application_tests
+  )
+  set_tests_properties(
+    fsim.application.specify
+    PROPERTIES
+      LABELS "fast;specify;timing;systemverilog;vhdl;hierarchy;llvm;debugger;vcd"
   )
 
   add_executable(

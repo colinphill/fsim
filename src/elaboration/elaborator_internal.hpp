@@ -122,89 +122,7 @@ void substitute_systemverilog_parameters(
     const SystemVerilogConstantEnvironment& environment);
 [[nodiscard]] bool is_two_state_domain(
     const frontend::ValueDomain domain) noexcept;
-[[nodiscard]] runtime::simir::ValueKind value_kind(
-    const frontend::ValueDomain domain) noexcept;
-std::optional<std::int64_t> evaluate_constant_expression(
-    const Expression& expression,
-    const ConstantEnvironment& environment,
-    std::string& error);
-struct LoweredLiteral {
-    PackedLogic4 value;
-    frontend::ValueDomain domain{frontend::ValueDomain::Bit2};
-};
-
-std::string simple_top_name(std::string_view top);
-
-std::optional<std::uint64_t> unsigned_decimal(std::string_view text);
-
-std::optional<std::int64_t> constant_index(
-    const Expression& expression);
-
-std::uint64_t index_distance(
-    const std::int64_t lhs,
-    const std::int64_t rhs) noexcept;
-
-PackedLogic4 unsigned_value(const std::uint64_t value, const std::size_t width);
-
-PackedLogic4 integer_value(const std::int64_t value);
-
-PackedLogic4 default_packed_value(
-    const frontend::Type& type,
-    const std::size_t width);
-
-std::optional<std::int64_t> vhdl_enumeration_ordinal(
-    const Expression& expression,
-    const frontend::Type& type);
-
-const frontend::Type* vhdl_enumeration_type_mark(
-    const DesignUnit& unit,
-    const std::string_view name);
-
-const frontend::Type* vhdl_object_type(
-    const DesignUnit& unit,
-    const std::string_view name);
-
-struct FoldedEnumerationAttribute {
-    std::int64_t value{};
-    bool enumeration_result{};
-    bool boolean_result{};
-};
-
-std::optional<FoldedEnumerationAttribute>
-evaluate_vhdl_enumeration_attribute(
-    const Expression& expression,
-    const DesignUnit& unit,
-    const ConstantEnvironment& environment,
-    std::string& error,
-    bool& range_error);
-
-std::optional<LoweredLiteral> literal_value(
-    const Expression& expression,
-    const std::size_t expected_width,
-    const frontend::Language language);
-
-std::optional<PackedLogic4> static_vhdl_value(
-    const Expression& expression,
-    const frontend::Type& type,
-    std::string& error);
-
-std::optional<std::int64_t> vhdl_physical_literal_value(
-    const Expression&, const frontend::Type&, std::string& error);
-struct ConstantTypeInfo {
-    frontend::ValueDomain domain{frontend::ValueDomain::Unknown};
-    bool vhdl_enumeration{};
-    std::string nominal_type;
-    std::optional<Expression> vhdl_composite_value;
-    ConstantTypeInfo();
-    ConstantTypeInfo(frontend::ValueDomain value);
-    ConstantTypeInfo(
-        frontend::ValueDomain value,
-        bool enumeration,
-        std::string nominal = {});
-};
-
-using ConstantDomainEnvironment =
-    std::unordered_map<std::string, ConstantTypeInfo>;
+#include "elaborator_value_helpers.hpp"
 
 void prepare_systemverilog_generate_regions(
     std::vector<frontend::GenerateRegion>& regions,
@@ -1700,6 +1618,19 @@ private:
     void validate_systemverilog_exports(
         const DesignUnit& declared_package,
         const DesignUnit& effective_package);
+
+    void validate_verilog_specify(
+        const DesignUnit& unit,
+        const std::string& path,
+        const SignalMap& signals,
+        const ConstantEnvironment& parameter_environment);
+
+    std::optional<runtime::simir::ModulePathExpression>
+    compile_verilog_specify_expression(
+        const frontend::Expression& expression,
+        const SignalMap& signals,
+        const ConstantEnvironment& parameter_environment,
+        std::string_view role);
 
     void qualify_interface_callable(
         frontend::FunctionDeclaration& callable,

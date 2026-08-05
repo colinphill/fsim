@@ -950,6 +950,38 @@ DesignUnit VerilogParser::parse_module(
     } else if (match_keyword("event")) {
       module_has_non_time_item_ = true;
       parse_event_declaration(unit, previous());
+    } else if (match_keyword("specify")) {
+      module_has_non_time_item_ = true;
+      if (interface_unit) {
+        error(
+            previous(),
+            "FSIM-SV-SEM-164",
+            "a specify block is legal only in a module");
+      }
+      auto block = parse_specify_block(previous());
+      for (const auto& declaration : block.specparams) {
+        const bool duplicate = std::ranges::any_of(
+            unit.verilog_specify_blocks,
+            [&](const VerilogSpecifyBlock& existing_block) {
+              return std::ranges::any_of(
+                  existing_block.specparams,
+                  [&](const VerilogSpecparamDeclaration& existing) {
+                    return existing.name == declaration.name;
+                  });
+            });
+        if (duplicate) {
+          error(
+              Token{
+                  TokenKind::Identifier,
+                  declaration.name,
+                  declaration.span,
+                  {}},
+              "FSIM-SV-SEM-165",
+              "duplicate specparam declaration '"
+                  + declaration.name + "'");
+        }
+      }
+      unit.verilog_specify_blocks.push_back(std::move(block));
     } else if (
         keyword("final")
         || (language_ == Language::Verilog2005
