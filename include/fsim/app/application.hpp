@@ -112,6 +112,9 @@ struct BuiltProject {
   semantic::design::DesignIr design_ir;
   /// Owner for every semantic ID referenced by `design_ir`.
   semantic::Model semantics;
+  /// Owning SystemVerilog class/constraint HIR used by live source
+  /// randomization and restored from the durable constraint-HIR payload.
+  semantic::sv::Hir systemverilog_hir;
   std::string cache_key;
   std::string time_resolution;
   std::filesystem::path cache_path;
@@ -223,6 +226,23 @@ struct ClassPackedTraceValue {
   std::optional<runtime::SystemVerilogClassHandle> object;
 };
 
+enum class ClassRandomizationTraceKind : std::uint8_t {
+  property,
+  constraint,
+};
+
+struct ClassRandomizationTraceState {
+  std::string path;
+  runtime::SystemVerilogClassHandle object{};
+  ClassRandomizationTraceKind kind{ClassRandomizationTraceKind::property};
+  bool enabled{};
+  std::uint64_t revision{};
+  std::uint64_t stream_seed{};
+  std::uint64_t domain_signature{};
+  std::uint64_t cycle{};
+  std::uint64_t used_values{};
+};
+
 class Simulation final {
  public:
   using SignalChangeHook = std::function<void(
@@ -308,6 +328,10 @@ class Simulation final {
   /// declaration or snapshots. Paths and handles contain no host addresses.
   [[nodiscard]] std::vector<ClassPackedTraceValue>
   class_packed_trace_values() const;
+  /// Stable randomization provenance snapshots for debugger, callbacks, and
+  /// trace backends. Paths and state contain no host addresses or RNG objects.
+  [[nodiscard]] std::vector<ClassRandomizationTraceState>
+  class_randomization_trace_states() const;
   [[nodiscard]] runtime::SystemVerilogClassHandle allocate_class(
       std::string_view specialization_identity,
       std::string_view declared_type = {});

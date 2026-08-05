@@ -11,6 +11,7 @@ add_executable(
   runtime_file_tests.cpp
   runtime_container_tests.cpp
   runtime_class_heap_tests.cpp
+  runtime_constraint_solver_tests.cpp
   runtime_executor_tests.cpp
   runtime_specify_tests.cpp
   runtime_timing_tests.cpp

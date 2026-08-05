@@ -584,6 +584,8 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
       layout.type = std::move(type);
       layout.bit_width = *width;
       layout.is_static = property.is_static;
+      layout.is_rand = property.is_rand;
+      layout.is_randc = property.is_randc;
       layout.initializer = property.declaration.initializer;
       if (layout.initializer) {
         if (const auto value = evaluate(*layout.initializer, values)) {

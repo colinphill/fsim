@@ -16,7 +16,8 @@ namespace fsim::app {
 inline constexpr std::uint32_t kRuntimeStateSchema = 6;
 inline constexpr std::uint32_t kSemanticStateSchema = 1;
 inline constexpr std::uint32_t kDesignIrStateSchema = 1;
-inline constexpr std::uint32_t kClassStateSchema = 3;
+inline constexpr std::uint32_t kClassStateSchema = 5;
+inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 1;
 
 [[nodiscard]] std::optional<std::string> serialize_runtime_state(
     const elaboration::ElaboratedDesign& design,
@@ -50,6 +51,16 @@ deserialize_design_ir_state(
 [[nodiscard]] std::optional<std::vector<
     frontend::SystemVerilogClassSpecialization>>
 deserialize_class_state(
+    std::string_view bytes,
+    std::string source_name,
+    diagnostic::Engine& diagnostics);
+
+[[nodiscard]] std::optional<std::string>
+serialize_systemverilog_constraint_hir_state(
+    const semantic::sv::Hir& hir,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<semantic::sv::Hir>
+deserialize_systemverilog_constraint_hir_state(
     std::string_view bytes,
     std::string source_name,
     diagnostic::Engine& diagnostics);

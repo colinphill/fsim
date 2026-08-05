@@ -1424,8 +1424,7 @@ struct SystemVerilogClassBase {
 
 struct SystemVerilogClassProperty {
   VariableDeclaration declaration;
-  SystemVerilogClassVisibility visibility{
-      SystemVerilogClassVisibility::Public};
+  SystemVerilogClassVisibility visibility{SystemVerilogClassVisibility::Public};
   bool is_static{};
   bool is_const{};
   bool is_rand{};
@@ -1451,8 +1450,7 @@ struct SystemVerilogClassMethod {
   std::vector<FunctionArgument> arguments;
   std::vector<VariableDeclaration> variables;
   std::vector<Statement> statements;
-  SystemVerilogClassVisibility visibility{
-      SystemVerilogClassVisibility::Public};
+  SystemVerilogClassVisibility visibility{SystemVerilogClassVisibility::Public};
   SystemVerilogClassLifetime lifetime{
       SystemVerilogClassLifetime::Inherited};
   bool is_static{};
@@ -1469,6 +1467,8 @@ struct SystemVerilogClassConstraint {
   std::string name;
   std::string canonical_identity;
   std::vector<Expression> expressions;
+  SystemVerilogClassVisibility visibility{
+      SystemVerilogClassVisibility::Public};
   bool is_static{};
   bool is_pure{};
   bool is_extern{};

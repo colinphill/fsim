@@ -10,6 +10,19 @@ runtime::SystemVerilogClassPropertyDescriptor class_property_descriptor(
   result.name = qualified_name
       ? property.owner_identity + "::" + property.name
       : property.name;
+  if (!property.is_static) {
+    result.random_kind = property.is_rand
+        ? runtime::SystemVerilogClassRandomKind::Rand
+        : property.is_randc
+            ? runtime::SystemVerilogClassRandomKind::Randc
+            : runtime::SystemVerilogClassRandomKind::None;
+  }
+  result.signed_value = property.type.is_signed;
+  result.nominal_type = !property.type.systemverilog_class_declaration.empty()
+      ? property.type.systemverilog_class_declaration
+      : !property.type.named_type.empty()
+          ? property.type.named_type
+          : property.type.spelling;
   if (!property.type.systemverilog_class_declaration.empty()
       && property.type.systemverilog_container) {
     const auto& source = *property.type.systemverilog_container;
@@ -154,6 +167,37 @@ Simulation::class_packed_trace_values() const {
               + state.property_names[index],
           property.packed,
           std::nullopt});
+    }
+  }
+  return result;
+}
+
+std::vector<ClassRandomizationTraceState>
+Simulation::class_randomization_trace_states() const {
+  std::vector<ClassRandomizationTraceState> result;
+  for (const auto handle : class_heap().live_handles()) {
+    const auto& object = class_heap().object(handle);
+    const auto prefix = "$class." + std::to_string(handle) + ".";
+    for (std::size_t index = 0; index < object.properties.size(); ++index) {
+      const auto& random = object.properties[index].random_state;
+      if (!random) continue;
+      result.push_back({
+          prefix + object.property_names[index] + ".$random-state",
+          handle,
+          ClassRandomizationTraceKind::property,
+          random->enabled,
+          random->revision,
+          random->stream_seed,
+          random->randc_domain_signature,
+          random->randc_cycle,
+          static_cast<std::uint64_t>(random->randc_used_values.size())});
+    }
+    for (const auto& [identity, enabled] : object.constraint_modes) {
+      result.push_back({
+          prefix + identity + ".$constraint-mode",
+          handle,
+          ClassRandomizationTraceKind::constraint,
+          enabled});
     }
   }
   return result;

@@ -1554,59 +1554,336 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
    contract gates pass. At the user's explicit request, commit and push this
    correction together with the locked remaining-v2 roadmap as a clean
    checkpoint before Change 2; Changes 2-19 then accumulate from that baseline.
-2. **Pending.** Define the executable SystemVerilog-2017 constraint subset and
+2. **Complete.** Define the executable SystemVerilog-2017 constraint subset and
    normalize retained constraint blocks, property qualifiers, spans, and
-   inherited ownership into canonical semantic HIR.
-3. **Pending.** Resolve constrained properties, parameters, local variables,
+   inherited ownership into canonical semantic HIR. The owning HIR now
+   flattens canonical class declarations while retaining their exact base
+   ownership edge; records public/protected/local, static, const, `rand`, and
+   `randc` property qualifiers; and owns source-spanned trees for names,
+   literals, unary/binary/conditional expressions, calls, selections,
+   concatenations, patterns, and `inside` sets/ranges. Constraint prototypes
+   and static/pure/extern qualifiers remain distinct. Class resolution now
+   canonicalizes constraint identities together with method identities.
+   Exact-LLVM Debug frontend, SystemVerilog semantic-HIR, and source-line
+   gates pass after eight-worker builds. Binding names and types against exact
+   specializations remains Change 3.
+3. **Complete.** Resolve constrained properties, parameters, local variables,
    class selections, and method references against exact specializations before
-   solver construction.
-4. **Pending.** Compose base-to-derived constraint blocks with named block
+   solver construction. Each normalized name/call node now owns one typed
+   binding per materialized specialization, including canonical declaration or
+   method-profile identity, exact specialization identity, and locally
+   evaluated parameter value. Reverse-layout lookup preserves derived hiding;
+   `this`, `super`, qualified owners, local-access properties, and ordinary
+   property/method references select their exact canonical owner. The focused
+   HIR proof materializes default and edited parameter specializations and
+   binds `MAX` independently to 3 and 7 while retaining the same canonical
+   property and method declarations. Exact-LLVM Debug frontend, semantic-HIR,
+   and source-line gates pass after eight-worker builds. Solver construction
+   still consumes no source nodes and remains Change 7.
+4. **Complete.** Compose base-to-derived constraint blocks with named block
    identity, override legality, `constraint_mode`, and deterministic inherited
-   enable state.
-5. **Pending.** Add checked per-object `rand` and `randc` state without exposing
-   host pointers or collapsing declared signedness, width, enum, or handle
-   profiles.
-6. **Pending.** Derive deterministic simulation-, root-, object-, and call-local
-   random streams from the project seed while preserving replay across engines
-   and artifacts.
-7. **Pending.** Add a resource-governed finite-domain bit-vector/integer/enum
+   enable state. Each flattened class now owns a stable base-order composed
+   view; a same-name derived block replaces the inherited slot while retaining
+   both canonical identities and an explicit override edge. Static/nonstatic
+   mismatch is marked illegal before solver construction. Defined blocks begin
+   enabled, while pure/extern prototypes begin disabled, providing the exact
+   deterministic default later copied into per-object `constraint_mode` state.
+   Focused HIR coverage proves legal replacement, inherited identity, disabled
+   pure prototypes, and an illegal static override. Exact-LLVM Debug frontend,
+   semantic-HIR, and source-line gates pass after eight-worker builds.
+5. **Complete.** Add checked per-object `rand` and `randc` state without
+   exposing host pointers or collapsing declared signedness, width, enum, or
+   handle profiles. Class specialization layouts and class-state schema 4 now
+   preserve both qualifiers. Allocation materializes an independently owned,
+   enabled state record beside each random property with its exact kind,
+   executable width, signedness, nominal enum/handle profile, and revision;
+   conceptual storage accounting includes that state and nominal identity.
+   Checked lookup rejects nonrandom properties, and `randc` rejects string,
+   handle, and container profiles before publication. Runtime coverage proves
+   two objects do not share mode/revision state, generation-safe cleanup leaves
+   no stale state, and budget/profile failures are transactional. The source
+   class application and serialized class artifact retain `rand`/`randc` and
+   construct exact 8-/4-bit runtime profiles across interpreter, compiled, and
+   debugger engines. Exact-LLVM Debug runtime, core application, artifact, and
+   source-line gates pass after eight-worker builds.
+6. **Complete.** Derive deterministic simulation-, root-, object-, and
+   call-local random streams from the project seed while preserving replay
+   across engines and artifacts. A host-independent FNV-1a identity hash and
+   explicit SplitMix-style mixer derive root streams, per-root allocation-
+   ordinal object streams, property streams, and call-site plus invocation-
+   ordinal streams without `std::hash` or host pointers. Source allocation
+   carries the canonical root process identity across the interpreter,
+   compiled, and debugger boundaries; public API allocation uses a stable
+   `$api` root. Heap restart resets allocation ordinals, failed publication
+   consumes no ordinal, and conceptual storage includes each property-local
+   seed. Runtime coverage proves exact replay for equal project seed/root,
+   independent object and call ordinals, and divergence for changed seed,
+   root, or call site. Core application coverage proves identical root seed,
+   object seed, and first call-local sample across all three engines; the
+   artifact, runtime, application, and source-line gates pass after
+   eight-worker exact-LLVM Debug builds.
+7. **Complete.** Add a resource-governed finite-domain bit-vector/integer/enum
    solver with explicit variable, clause, search, and elapsed-work budgets.
-8. **Pending.** Lower equality, relational, arithmetic, logical, conditional,
+   The runtime-owned value-semantic solver retains canonical variable and
+   clause identities, exact width, signedness, nominal type, and `PackedLogic4`
+   domains without host pointers. Iterative deterministic backtracking avoids
+   variable-count recursion and returns either a complete assignment,
+   unsatisfiable, or an exact search/elapsed resource-exhaustion reason with no
+   partial values. Checked variable, clause, and aggregate-domain registration
+   budgets fail transactionally through typed resource errors; malformed
+   profiles, duplicate identities/domain values, and unknown or repeated
+   dependencies reject before publication. Focused coverage proves repeatable
+   mixed bit-vector/integer/enum solving, finite unsatisfiability, independent
+   search and elapsed exhaustion, and every registration budget after an
+   eight-worker exact-LLVM Debug build. Runtime and source-line gates pass.
+   Declaration/domain order intentionally remains the search order until
+   Change 11 adds solve-before and source-order-independent scheduling.
+8. **Complete.** Lower equality, relational, arithmetic, logical, conditional,
    unary, and four-state legality constraints with exact width and signedness.
-9. **Pending.** Implement `inside` ranges/sets, `dist` weights, and soft
-   constraints with deterministic conflict and overflow handling.
-10. **Pending.** Implement constraint implication, `if`/`else`, bounded
+   A validated source-ordered runtime expression graph now evaluates variables,
+   constants, unary plus/minus, bitwise/logical negation, add/subtract/multiply/
+   power/divide/modulo, bitwise and logical operators, ordinary/case equality,
+   signed or unsigned relations, and conditional selection without recursive
+   host evaluation. Arbitrary-width resize, sign extension, truncated
+   arithmetic, comparison, and division preserve the typed operand rules.
+   Four-state evaluation retains controlling logical values and conditional
+   X/Z bit merging; case equality remains known while an ordinary predicate
+   that finishes X/Z rejects explicitly instead of becoming a solution.
+   Semantic class bindings now carry exact executable width and four-state
+   domain. The application lowerer selects one exact specialization, converts
+   bounded decimal/binary/octal/hex literals and parameters, maps canonical
+   properties to solver variables, and emits complete dependencies. A source
+   differential lowers `payload + super.base_value <= MAX` for the `MAX=3`
+   specialization and solves the exact 32-bit signed graph. Runtime coverage
+   proves signed ordering, width wrap, power/divide/modulo, logical and
+   conditional four-state behavior, repeatability, and illegal unknown roots.
+   Exact-LLVM Debug semantic-HIR, runtime, and source-line gates pass after
+   eight-worker builds.
+9. **Complete.** Implement `inside` ranges/sets, `dist` weights, and soft
+   constraints with deterministic conflict and overflow handling. Class
+   constraint parsing and owning HIR now retain `soft` wrappers, membership
+   sets/ranges, `dist :=` per-value items, and `dist :/` across-range items as
+   distinct source-spanned nodes with exact specialization bindings. Membership
+   lowers to typed equality/range predicates. Distribution lowering accepts
+   exact literals or bound parameters, resizes them to the selected property,
+   and registers checked finite-domain weights. Across-range rational weights
+   use a checked common denominator; overlapping and composed weights reject
+   overflow transactionally. A caller-supplied replay word drives a stable
+   weighted permutation without host RNG state. Multiple distributions compose
+   deterministically, including an unsatisfiable empty intersection. Hard
+   clauses dominate soft clauses; conflicting soft clauses use later
+   declaration priority after complete bounded search, never exposing a partial
+   candidate. Runtime proof covers exact `:=`/`:/` normalization, replay,
+   conflict, overflow, and hard/soft priority. The semantic-HIR differential
+   parses, lowers, weights, and solves a source `soft ... inside` plus `dist`
+   pair for one exact class specialization. Exact-LLVM Debug semantic-HIR,
+   runtime, and source-line gates pass after eight-worker builds.
+10. **Complete.** Implement constraint implication, `if`/`else`, bounded
     `foreach`, and array/container element selection without arbitrary element
-    limits.
-11. **Pending.** Implement `solve ... before` ordering, dependency-cycle
-    diagnostics, and stable declaration-independent solver ordering.
-12. **Pending.** Execute object `randomize()` with optional variable lists and
+    limits. The class parser and owning HIR retain source-spanned structured
+    blocks, implication, conditional constraint sets, optional else branches,
+    and named-index foreach selections. Each foreach iterator receives an
+    exact specialization-local 32-bit signed binding rather than being confused
+    with a property. Runtime graph construction provides checked implication,
+    conditional-constraint, and arbitrary-length conjunction composition.
+    Application lowering maps scalar properties and each materialized bounded
+    container element to independent typed solver variables; constant and
+    foreach-local selections validate their actual bounds, and foreach expands
+    every supplied element with no language-visible count ceiling. Empty
+    containers use the true empty conjunction. A source differential parses
+    and solves implication, if/else, and a three-element static-array foreach
+    for one exact class specialization. Runtime coverage constrains and solves
+    300 separately materialized elements, crossing the former class of
+    arbitrary 256-element caps while remaining governed by the solver's
+    explicit variable/domain/search budgets. Exact-LLVM Debug semantic-HIR,
+    runtime, and source-line gates pass after eight-worker builds.
+11. **Complete.** Implement `solve ... before` ordering, dependency-cycle
+    diagnostics, and stable declaration-independent solver ordering. Class
+    constraint parsing and owning HIR retain nonempty source-spanned before/after
+    variable lists with exact specialization bindings. Application lowering
+    expands each list pair into checked solver edges. Edge registration rejects
+    self/unknown references and detects a path back to the earlier variable
+    before mutating the graph, reporting the canonical identity reached by the
+    cycle. Search uses a deterministic topological order with canonical
+    variable identity as the ready-set tie breaker, so unconstrained source
+    declaration order and variable IDs cannot affect the assignment walk.
+    Distribution permutation seeding likewise uses canonical identity rather
+    than registration ID. Result vectors remain indexed by stable variable ID,
+    separating external assignment ownership from internal scheduling. Runtime
+    proof declares variables out of lexical order, verifies canonical order,
+    applies an overriding edge, and proves a reverse edge rejects
+    transactionally. The semantic-HIR differential parses and applies source
+    `solve payload before choice` and verifies the resulting topological
+    positions. Exact-LLVM Debug semantic-HIR, runtime, and source-line gates
+    pass after eight-worker builds.
+12. **Complete.** Execute object `randomize()` with optional variable lists and
     inline `with` constraints transactionally, returning zero without partial
-    writes when no solution exists.
-13. **Pending.** Execute bounded `std::randomize` over local integral, enum, and
-    supported container values with the same solver and seed semantics.
-14. **Pending.** Run inherited virtual `pre_randomize` and `post_randomize`
+    writes when no solution exists. A dedicated runtime transaction registers
+    every packed object property under its canonical identity: selected,
+    enabled `rand`/`randc` properties receive their complete finite domain and
+    unselected properties retain singleton current-value domains for constraint
+    visibility. Class and caller-supplied inline constraint graphs configure
+    the same solver before one call-local replay word is consumed. The complete
+    assignment, packed widths, two-state legality, random-state ownership, and
+    every revision increment are validated before a final non-allocating commit;
+    unsatisfiable and resource-exhausted attempts expose no property or revision
+    writes, and constraint-construction failure occurs before publication.
+    Uniform distributions make unconstrained fields replay-sensitive without
+    host RNG state. Live project builds carry the owning constraint HIR into
+    simulation, resolve source `object.randomize()` as a built-in 32-bit result,
+    canonicalize optional property lists, compose enabled inherited class
+    blocks, and lower ordinary, soft, distribution, and solve-before
+    expressions into the transaction. Source proof calls both
+    `randomize(generated_value)` and `randomize()` under an `inside` class
+    constraint across the application engine matrix; runtime proof covers joint
+    class/inline constraints, selected-only publication, equal-seed replay,
+    unsatisfiable rollback, domain/search exhaustion, and configuration failure.
+    Exact-LLVM Debug runtime and application gates pass after eight-worker
+    builds. Portable constraint-HIR persistence remains owned by Change 18.
+13. **Complete.** Execute bounded `std::randomize` over local integral, enum,
+    and supported container values with the same solver and seed semantics. The
+    runtime foundation now accepts unique caller-owned packed targets, complete
+    integral domains, explicit nominal enum domains, and materialized bounded
+    container-element domains. One inline constraint factory configures the
+    shared solver; results are fully staged and swapped into every target only
+    after complete validation. Focused runtime proof covers a joint integral,
+    enum, and two-element container solution plus unsatisfiable and domain-budget
+    rollback. Source `std::randomize` now lowers writable packed locals into one
+    owning SimIR operation with exact widths, signedness, nominal identity, and
+    explicit enum domains. The interpreter derives a 64-bit selection from the
+    project-seeded process stream, executes the shared transaction, then uses
+    ordinary callable copy-out assignments to publish all targets. A named
+    1,048,576-value source-service budget returns zero for domains beyond the
+    bounded implementation instead of allocating without limit. LLVM O0/O2
+    validation recognizes the operation and deliberately selects interpreter
+    fallback until Change 18 adds the durable solver service boundary. The
+    application random differential proves equal interpreter/compiled replay
+    for a joint local integral/enum call; the runtime proof supplies the bounded
+    container-element and rollback matrix. Exact-LLVM Debug frontend, LLVM,
+    application, runtime, and source-line gates pass after eight-worker builds.
+14. **Complete.** Run inherited virtual `pre_randomize` and `post_randomize`
     callbacks with checked failure containment and post-hook execution only
-    after successful assignment.
-15. **Pending.** Implement property `rand_mode` and constraint-block
+    after successful assignment. Randomize callback lookup walks the exact
+    dynamic specialization before its base-specialization chain, requires a
+    nonstatic zero-argument `void` function profile, and therefore selects the
+    most-derived inherited override. Source-function execution now admits
+    fallthrough completion for `void` methods while retaining guarded recursion,
+    locals, assignments, and conditional behavior. `pre_randomize` runs before
+    solver construction and its valid side effects remain visible even when the
+    constraints are unsatisfiable; `post_randomize` runs only after a successful
+    atomic assignment. An exception or unknown control in either callback is
+    contained as a zero result. Pre-hook failure restores its property writes;
+    post-hook failure restores the complete pre-call property and random-revision
+    snapshot, so a solved assignment is never exposed without a completed post
+    hook. Adding a second derived constraint also exposed and fixed inherited
+    constraint bindings: every base-owned expression now receives bindings for
+    all exact derived specializations by following specialization base edges.
+    The application matrix proves most-derived callback counts, pre-without-post
+    on an unsatisfiable object, pre/post failure rollback, and zero random
+    revisions after callback failure. Exact-LLVM Debug frontend, semantic-HIR,
+    application, and source-line gates pass after eight-worker builds.
+15. **Complete.** Implement property `rand_mode` and constraint-block
     `constraint_mode` query/update methods with per-object state and access
-    validation.
-16. **Pending.** Implement exact `randc` permutation cycles, reset/reseed rules,
-    domain-change invalidation, and artifact-safe cycle state.
-17. **Pending.** Add parse, resolution, unsupported-form, unsatisfiable,
+    validation. The parser and owning class HIR retain constraint visibility;
+    selected mode calls resolve random properties and inherited constraint
+    blocks to canonical identities and enforce public, exact-owner local, and
+    owner-or-derived protected access. Each heap object owns independent
+    property and constraint enable maps. Query and checked 0/1 update services
+    return 32-bit language values, disabled properties are excluded from the
+    randomized variable set, and disabled blocks are omitted while configuring
+    the shared solver. Class-state schema 5 durably carries the composed
+    constraint-mode inventory so direct project and reloaded standalone
+    artifact execution agree before Change 18 persists the complete HIR.
+    Runtime proof toggles one of two objects and rejects nonrandom/missing
+    selections; frontend proof covers allowed and denied visibility paths; the
+    source application matrix proves query, disable, re-enable, revision,
+    satisfiable-disabled-block, and restored-unsatisfiable behavior. Exact-LLVM
+    Debug frontend, semantic-HIR, runtime, application, artifact-reload, and
+    source-line gates pass after eight-worker builds.
+16. **Complete.** Implement exact `randc` permutation cycles, reset/reseed rules,
+    domain-change invalidation, and artifact-safe cycle state. Each random
+    property retains a host-independent stream seed, exact-domain signature,
+    cycle ordinal, and sparse used-value indices; no standard-library RNG or
+    host pointer crosses the runtime boundary. A deterministic Fisher-Yates
+    permutation visits every exact finite-domain value once. Constraint-limited
+    cycles restart only after the remaining candidates are unsatisfiable, while
+    an explicit exact-domain change discards incompatible indices. Cycle state
+    is staged with the assignment and revision and commits only after a
+    satisfied solve; unsatisfiable/resource paths preserve it. The heap accounts
+    sparse indices against its storage limit and releases them on reset/reseed.
+    Explicit reset replays the current seeded first permutation, while object
+    reseed clears call ordinals, rederives property streams, and resets every
+    cycle. The portable value/index representation is ready for Change 18's
+    live-state artifact/service serialization. Runtime proof covers two complete
+    four-value cycles, reachable constrained cycles, domain invalidation,
+    reset/reseed replay, accounting, and rollback. The source application
+    differential proves one complete constrained `randc` cycle across direct
+    and standalone-artifact execution. Exact-LLVM Debug runtime, application,
+    and source-line gates pass after eight-worker builds.
+17. **Complete.** Add parse, resolution, unsupported-form, unsatisfiable,
     resource-budget, callback, stale/null, and solver-corruption negatives with
-    cataloged diagnostics and transactional rollback.
-18. **Pending.** Preserve constraint HIR, solver provenance, seeds, modes, and
+    cataloged diagnostics and transactional rollback. Stable parser entries now
+    cover malformed class constraints through distribution, conditional,
+    foreach, and solve-before syntax. Resolution rejects nonrandom object lists,
+    invalid mode arity/selections, and exact public/protected/local access with
+    `FSIM-SV-CLASS-019` through `021`. Elaborator diagnostics
+    `FSIM-ELAB-SVRAND-001` through `004` reject empty, nonidentifier, nonlocal,
+    container, and over-width scope arguments; the standard `std::randomize`
+    name is explicitly excluded from user-package import resolution. Runtime
+    proof covers unsatisfiable, search/domain/elapsed and heap-storage budgets,
+    callback failure, null/stale handles, malformed exact domains, and a corrupt
+    clause that remains undetermined at a complete assignment. Every staged
+    property, revision, mode, cycle, accounting, and container value remains
+    unchanged on failure. The diagnostics catalog, frontend, random application,
+    core application, runtime, and source-line gates pass after eight-worker
+    builds.
+18. **Complete.** Preserve constraint HIR, solver provenance, seeds, modes, and
     `randc` state through interpreter, LLVM O0/O2 service boundaries,
     debugger/callback/trace inspection, `.fsimobj`, `.fsimdesign`, mapped
-    `.fsimlib`, relocation, and cold/warm/edit caches.
-19. **Pending.** Add complete positive differentials and synchronize
+    `.fsimlib`, relocation, and cold/warm/edit caches. A checksummed
+    `sv-constraint-hir` payload with schema 1 now owns flattened class
+    declarations, typed constraint trees/bindings, composed overrides, and
+    default modes. Its structural validator rejects duplicate/missing class,
+    property, constraint, base, and composition identities before publication.
+    Standalone loading requires and restores that payload instead of fabricating
+    an empty HIR; object and mapped-library flows continue rebuilding the same
+    owning projection from their portable parsed units. Relocation proof removes
+    the original source/object and executes the restored constraints and exact
+    seeded `randc` cycle. A stable inspection surface exposes property and
+    constraint paths, enable state, revision, stream seed, domain signature,
+    cycle, and used count to debugger, callbacks, and trace backends without
+    host pointers or RNG objects. Debugger and callback proofs observe all three
+    staged cycle commits. `ScopeRandomize` remains an intentional validated
+    interpreter fallback because the current JIT resume ABI has no solver
+    status; its complete target/domain shape is now included in native cache
+    identity so later service lowering cannot reuse an incompatible object.
+    Exact-LLVM Debug LLVM, application, random, artifact, relocation/cache,
+    diagnostics, and source-line gates pass after eight-worker builds.
+19. **Complete.** Add complete positive differentials and synchronize
     architecture, language support, diagnostics, feature matrix, inventories,
-    UVM readiness boundaries, and restart evidence.
-20. **Pending.** Run exact-LLVM Debug and Release plus source, catalog,
+    UVM readiness boundaries, and restart evidence. Architecture and language
+    support now describe canonical constraint HIR, exact-specialization
+    lowering, finite solver/resource policy, independent object modes and
+    streams, transactional object/scope randomization, callbacks, exact-domain
+    `randc`, inspection, artifacts, and the intentional scope interpreter
+    service boundary. Feature rows `SV-713` through `SV-722` own the positive,
+    negative, elaboration, and cross-engine/artifact evidence; class constraint
+    solving/randomization is removed from the deferred inventory while
+    covergroups and UVM library/runtime closure remain assigned to later locked
+    batches. The reviewed baselines are 1,870 diagnostics, 537 bounded sources,
+    627 SPDX-owned artifacts, 212 test/control files, 1,152 executable rows,
+    4,608 evidence cells, 389 exact paths, and 108 runtime owners. Catalog,
+    source, legality, SystemVerilog, inventory, differential, resource, and
+    release-candidate gates pass.
+20. **Complete.** Run exact-LLVM Debug and Release plus source, catalog,
     inventory, installed-public-contract, Windows ABI, differential, and
-    release gates after eight-worker builds, then commit and push once. Batch
-    149 is not a CI boundary and runs no sanitizer or hosted CI-monitoring gate.
+    release gates after eight-worker builds, then commit and push once. Exact
+    LLVM 22.1.8 Debug passes 112/112 in 139.03 seconds and Release passes
+    112/112 in 114.29 seconds. Both configurations include the catalog, source,
+    legality, installed-public-contract, MSVC Debug/Release, Windows LLVM,
+    inventory, differential, resource, and release-candidate gates. The single
+    accumulated Changes 2-20 commit and push close the batch. Batch 149 is not
+    a CI boundary and runs no sanitizer or hosted CI-monitoring gate.
 
 ## Locked remaining v2 batch roadmap
 

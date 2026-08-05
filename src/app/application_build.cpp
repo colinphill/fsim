@@ -193,7 +193,9 @@ std::optional<BuiltProject> build_checked_project(
   checked->vhdl_hir = build_vhdl_hir(
       lowering_adapter, checked->semantics);
   checked->systemverilog_hir = build_systemverilog_hir(
-      lowering_adapter, checked->semantics);
+      lowering_adapter,
+      checked->semantics,
+      checked->systemverilog_class_specializations);
   if (!checked->semantics.valid()) {
     diagnostics.error(
         "FSIM-SEM-0001",
@@ -392,6 +394,7 @@ std::optional<BuiltProject> build_checked_project(
       std::move(*elaborated.design),
       std::move(design_ir),
       std::move(checked->semantics),
+      std::move(checked->systemverilog_hir),
       key,
       resolution,
       config.build.cache_path,

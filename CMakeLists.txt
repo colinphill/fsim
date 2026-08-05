@@ -410,11 +410,15 @@ add_library(
   fsim_runtime
   STATIC
     src/runtime/class_heap.cpp
+    src/runtime/class_randomize.cpp
     src/runtime/class_containers.cpp
     src/runtime/class_methods.cpp
     src/runtime/class_static.cpp
+    src/runtime/constraint_expression.cpp
+    src/runtime/constraint_solver.cpp
     src/runtime/packed_value.cpp
     src/runtime/scheduler.cpp
+    src/runtime/scope_randomize.cpp
     src/runtime/simir.cpp
     src/runtime/simir_arithmetic.cpp
     src/runtime/simir_containers.cpp
@@ -774,6 +778,8 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_phase_object.cpp
       src/app/application_run.cpp
       src/app/application_semantic.cpp
+      src/app/application_constraint_lowering.cpp
+      src/app/application_class_randomization.cpp
       src/app/application_systemverilog_hir.cpp
       src/app/application_systemverilog_executable_hir.cpp
       src/app/application_vhdl_hir.cpp

@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iostream>
 #include <ranges>
+#include <set>
 #include <string>
 #include <sstream>
 #include <tuple>
@@ -32,6 +33,7 @@ void ApplicationTestFixture::test_class_simulation_integration() {
 
   using EngineSnapshot = std::tuple<
       std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t,
+      std::uint64_t, std::uint64_t, std::uint64_t,
       std::size_t, std::size_t>;
   std::vector<EngineSnapshot> engine_snapshots;
 
@@ -88,6 +90,18 @@ void ApplicationTestFixture::test_class_simulation_integration() {
       assert(
           restored->size()
           == built->systemverilog_class_specializations.size());
+      const auto restored_derived = std::ranges::find(
+          *restored,
+          derived_specialization,
+          &fsim::frontend::SystemVerilogClassSpecialization::
+              specialization_identity);
+      assert(restored_derived != restored->end());
+      const auto restored_random = std::ranges::find(
+          restored_derived->properties,
+          std::string{"generated_value"},
+          &fsim::frontend::SystemVerilogClassPropertyLayout::name);
+      assert(restored_random != restored_derived->properties.end());
+      assert(restored_random->is_randc && !restored_random->is_rand);
       auto trailing = *class_state;
       trailing.push_back('\0');
       fsim::diagnostic::Engine trailing_diagnostics;
@@ -102,6 +116,37 @@ void ApplicationTestFixture::test_class_simulation_integration() {
       fsim::diagnostic::Engine future_diagnostics;
       assert(!fsim::app::deserialize_class_state(
           future, "future-classes.bin", future_diagnostics));
+
+      const auto constraint_hir_state =
+          fsim::app::serialize_systemverilog_constraint_hir_state(
+              built->systemverilog_hir, class_state_diagnostics);
+      assert(constraint_hir_state);
+      const auto restored_constraint_hir =
+          fsim::app::deserialize_systemverilog_constraint_hir_state(
+              *constraint_hir_state,
+              "sv-constraint-hir.bin",
+              class_state_diagnostics);
+      assert(restored_constraint_hir);
+      assert(
+          restored_constraint_hir->classes().size()
+          == built->systemverilog_hir.classes().size());
+      const auto restored_constraint_class = std::ranges::find(
+          restored_constraint_hir->classes(),
+          derived_identity,
+          &fsim::semantic::sv::ClassDeclaration::canonical_identity);
+      assert(
+          restored_constraint_class
+              != restored_constraint_hir->classes().end()
+          && !restored_constraint_class->constraints.empty()
+          && !restored_constraint_class->composed_constraints.empty());
+      auto future_constraint_hir = *constraint_hir_state;
+      future_constraint_hir[8] = static_cast<char>(
+          fsim::app::kSystemVerilogConstraintHirStateSchema + 1U);
+      fsim::diagnostic::Engine future_constraint_hir_diagnostics;
+      assert(!fsim::app::deserialize_systemverilog_constraint_hir_state(
+          future_constraint_hir,
+          "future-sv-constraint-hir.bin",
+          future_constraint_hir_diagnostics));
     }
     const auto virtual_slot = derived_method->virtual_slot;
 
@@ -110,6 +155,15 @@ void ApplicationTestFixture::test_class_simulation_integration() {
     const auto handle = simulation.allocate_class(
         derived_specialization,
         base_identity);
+    assert(simulation.class_heap()
+               .random_state(handle, derived_identity + "::value").kind
+           == fsim::runtime::SystemVerilogClassRandomKind::Rand);
+    const auto& generated_random = simulation.class_heap().random_state(
+        handle, derived_identity + "::generated_value");
+    assert(generated_random.kind
+           == fsim::runtime::SystemVerilogClassRandomKind::Randc);
+    assert(generated_random.width == 4);
+    assert(generated_random.nominal_type == "logic");
     simulation.deposit_class_property(
         handle,
         base_identity + "::value",
@@ -178,6 +232,12 @@ void ApplicationTestFixture::test_class_simulation_integration() {
         fsim::runtime::SystemVerilogClassHandle,
         std::string,
         std::string>> all_property_changes;
+    std::vector<std::tuple<
+        fsim::runtime::SystemVerilogClassHandle,
+        std::uint64_t,
+        std::uint64_t,
+        std::uint64_t>>
+        randomization_callback_states;
     simulation.set_class_property_change_hook(
         [&](const auto changed_handle,
             const std::string_view property,
@@ -186,6 +246,15 @@ void ApplicationTestFixture::test_class_simulation_integration() {
             const auto delta) {
           all_property_changes.emplace_back(
               changed_handle, std::string{property}, value.to_msb_string());
+          if (property.ends_with("::generated_value")) {
+            const auto& random = simulation.class_heap().random_state(
+                changed_handle, property);
+            randomization_callback_states.emplace_back(
+                changed_handle,
+                random.revision,
+                random.randc_cycle,
+                random.randc_used_values.size());
+          }
           if (changed_handle != handle) return;
           assert(property.ends_with("::value"));
           property_changes.emplace_back(
@@ -275,6 +344,12 @@ void ApplicationTestFixture::test_class_simulation_integration() {
     assert(source_handle != 0 && source_handle != handle);
     assert(simulation.class_heap().object(source_handle).dynamic_type
            == derived_identity);
+    const auto& source_object_state =
+        simulation.class_heap().object(source_handle);
+    assert(source_object_state.random_root_identity == "class_top");
+    auto source_random_stream = simulation.class_heap().random_stream(
+        source_handle, derived_identity + "::randomize@source");
+    const auto source_random_sample = source_random_stream.next_u64();
     assert(
         simulation.read_class_property(
             source_handle, base_identity + "::value")
@@ -329,10 +404,124 @@ void ApplicationTestFixture::test_class_simulation_integration() {
              {"class_top.source_function_handle_alias", 1},
              {"class_top.source_module_task_handle_alias", 1},
              {"class_top.source_final_seen", 1},
+             {"class_top.source_randomize_result", 1},
+             {"class_top.source_randomize_pre", 30},
+             {"class_top.source_randomize_post", 30},
+             {"class_top.source_rand_mode_initial", 1},
+             {"class_top.source_rand_mode_disabled", 0},
+             {"class_top.source_rand_mode_enabled", 1},
+             {"class_top.source_constraint_mode_initial", 1},
+             {"class_top.source_constraint_mode_disabled", 0},
+             {"class_top.source_constraint_mode_enabled", 1},
+             {"class_top.source_impossible_enabled_result", 1},
+             {"class_top.source_impossible_result", 0},
+             {"class_top.source_impossible_pre", 20},
+             {"class_top.source_impossible_post", 10},
+             {"class_top.source_broken_pre_result", 0},
+             {"class_top.source_broken_pre_count", 0},
+             {"class_top.source_broken_post_result", 0},
+             {"class_top.source_broken_post_pre", 0},
+             {"class_top.source_broken_post_count", 0},
+             {"class_top.source_selected_randomize_result", 1},
+             {"class_top.source_selected_randomize_value", 77},
              {"class_top.source_property", 18}}) {
       const auto signal = simulation.find_signal(path);
       assert(signal);
       assert(simulation.read_signal(*signal).low_word().aval == expected);
+    }
+    const auto selected_randomized = simulation.find_signal(
+        "class_top.source_selected_randomize_generated");
+    const auto fully_randomized = simulation.find_signal(
+        "class_top.source_randomize_generated");
+    const auto third_randomized = simulation.find_signal(
+        "class_top.source_randc_third");
+    assert(selected_randomized && fully_randomized && third_randomized);
+    assert(simulation.read_signal(*selected_randomized).low_word().aval >= 1
+           && simulation.read_signal(*selected_randomized).low_word().aval <= 3);
+    assert(simulation.read_signal(*fully_randomized).low_word().aval >= 1
+           && simulation.read_signal(*fully_randomized).low_word().aval <= 3);
+    const std::set<std::uint64_t> randc_cycle{
+        simulation.read_signal(*selected_randomized).low_word().aval,
+        simulation.read_signal(*fully_randomized).low_word().aval,
+        simulation.read_signal(*third_randomized).low_word().aval};
+    assert((randc_cycle == std::set<std::uint64_t>{1, 2, 3}));
+    const auto randomized_object_signal = simulation.find_signal(
+        "class_top.randomized_object");
+    assert(randomized_object_signal);
+    const auto randomized_handle = simulation.read_signal(
+        *randomized_object_signal).low_word().aval;
+    assert(simulation.class_heap().random_state(
+               randomized_handle, derived_identity + "::value").revision == 0);
+    assert(simulation.class_heap().random_state(
+               randomized_handle,
+               derived_identity + "::generated_value").revision == 3);
+    std::vector<std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>>
+        randomized_callback_states;
+    for (const auto& [changed_handle, revision, cycle, used] :
+         randomization_callback_states) {
+      if (changed_handle == randomized_handle) {
+        randomized_callback_states.emplace_back(revision, cycle, used);
+      }
+    }
+    assert((
+        randomized_callback_states
+        == std::vector<std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>>{
+            {1, 0, 1}, {2, 0, 2}, {3, 0, 3}}));
+    const auto randomization_trace =
+        simulation.class_randomization_trace_states();
+    const auto generated_trace = std::ranges::find_if(
+        randomization_trace, [&](const auto& state) {
+          return state.object == randomized_handle
+              && state.kind
+                  == fsim::app::ClassRandomizationTraceKind::property
+              && state.path.ends_with("::generated_value.$random-state");
+        });
+    assert(
+        generated_trace != randomization_trace.end()
+        && generated_trace->enabled
+        && generated_trace->revision == 3
+        && generated_trace->stream_seed != 0
+        && generated_trace->domain_signature != 0
+        && generated_trace->cycle == 0
+        && generated_trace->used_values == 3);
+    assert(std::ranges::any_of(
+        randomization_trace, [&](const auto& state) {
+          return state.object == randomized_handle
+              && state.kind
+                  == fsim::app::ClassRandomizationTraceKind::constraint
+              && state.enabled
+              && state.path.ends_with("::generated_small.$constraint-mode");
+        }));
+    if (engine == fsim::app::SimulationEngine::debug) {
+      std::ostringstream random_debug_output;
+      std::ostringstream random_debug_error;
+      fsim::app::DebuggerControl random_debugger(
+          simulation, random_debug_output, random_debug_error);
+      random_debugger.execute({"class", std::to_string(randomized_handle)});
+      assert(random_debug_error.str().empty());
+      assert(
+          random_debug_output.str().find(
+              "randc enabled 1 revision 3") != std::string::npos
+          && random_debug_output.str().find("cycle 0 used 3")
+              != std::string::npos
+          && random_debug_output.str().find(
+              "constraint " + derived_identity
+                  + "::generated_small enabled 1")
+              != std::string::npos);
+    }
+    for (const auto name : {
+             "class_top.broken_pre_object",
+             "class_top.broken_post_object"}) {
+      const auto failed_object = simulation.find_signal(name);
+      assert(failed_object);
+      const auto failed_handle = simulation.read_signal(
+          *failed_object).low_word().aval;
+      assert(simulation.class_heap().random_state(
+                 failed_handle,
+                 derived_identity + "::value").revision == 0);
+      assert(simulation.class_heap().random_state(
+                 failed_handle,
+                 derived_identity + "::generated_value").revision == 0);
     }
     assert(completion_called);
     assert(
@@ -426,6 +615,9 @@ void ApplicationTestFixture::test_class_simulation_integration() {
             source_handle, derived_identity + "::value").packed.low_word().aval,
         simulation.class_static_store()
             .property(base_identity, "shared").packed.low_word().aval,
+        source_object_state.random_root_seed,
+        source_object_state.random_object_seed,
+        source_random_sample,
         simulation.class_heap().live_objects(),
         trace_values.size());
   }
@@ -520,7 +712,14 @@ void ApplicationTestFixture::test_class_simulation_integration() {
   auto standalone = fsim::app::load_design_artifact(
       relocated_design, standalone_diagnostics);
   assert(standalone);
-  assert(standalone->systemverilog_class_specializations.size() == 3);
+  assert(standalone->systemverilog_class_specializations.size() == 6);
+  assert(standalone->systemverilog_hir.classes().size() == 6);
+  assert(std::ranges::any_of(
+      standalone->systemverilog_hir.classes(), [](const auto& declaration) {
+        return declaration.canonical_identity.ends_with("::AppDerived")
+            && !declaration.constraints.empty()
+            && !declaration.composed_constraints.empty();
+      }));
   assert(std::ranges::any_of(
       standalone->design.processes(), [](const auto& process) {
         return std::ranges::any_of(process.operations, [](const auto& op) {
@@ -601,7 +800,7 @@ void ApplicationTestFixture::test_class_simulation_integration() {
   fsim::diagnostic::Engine mapped_diagnostics;
   auto mapped = fsim::app::build_project(mapped_config, mapped_diagnostics);
   assert(mapped);
-  assert(mapped->systemverilog_class_specializations.size() == 3);
+  assert(mapped->systemverilog_class_specializations.size() == 6);
   fsim::app::Simulation mapped_simulation(
       std::move(*mapped), mapped_config.run.max_deltas,
       fsim::app::SimulationEngine::compiled);

@@ -407,7 +407,9 @@ bool publish_design_artifact(
   auto design_ir = serialize_design_ir_state(project.design_ir, diagnostics);
   auto classes = serialize_class_state(
       project.systemverilog_class_specializations, diagnostics);
-  if (!runtime || !semantics || !design_ir || !classes) {
+  auto constraint_hir = serialize_systemverilog_constraint_hir_state(
+      project.systemverilog_hir, diagnostics);
+  if (!runtime || !semantics || !design_ir || !classes || !constraint_hir) {
     return false;
   }
 
@@ -453,11 +455,14 @@ bool publish_design_artifact(
   add_payload("semantics", "state/semantics.bin", *semantics);
   add_payload("design-ir", "state/design-ir.bin", *design_ir);
   add_payload("classes", "state/classes.bin", *classes);
+  add_payload(
+      "sv-constraint-hir", "state/sv-constraint-hir.bin", *constraint_hir);
   std::vector<library::PortablePayload> payloads{
       {metadata.payloads[0].artifact, std::move(*runtime)},
       {metadata.payloads[1].artifact, std::move(*semantics)},
       {metadata.payloads[2].artifact, std::move(*design_ir)},
-      {metadata.payloads[3].artifact, std::move(*classes)}};
+      {metadata.payloads[3].artifact, std::move(*classes)},
+      {metadata.payloads[4].artifact, std::move(*constraint_hir)}};
   std::set<std::string> selected_plugin_libraries;
   for (const auto& instance : project.design.systemc_instances()) {
     if (const auto target = systemc_target(instance.target)) {
@@ -558,8 +563,11 @@ std::optional<BuiltProject> load_design_artifact(
   const auto* semantic_index = payload_by_kind(*metadata, "semantics");
   const auto* design_ir_index = payload_by_kind(*metadata, "design-ir");
   const auto* class_index = payload_by_kind(*metadata, "classes");
+  const auto* constraint_hir_index = payload_by_kind(
+      *metadata, "sv-constraint-hir");
   if (runtime_index == nullptr || semantic_index == nullptr
-      || design_ir_index == nullptr || class_index == nullptr) {
+      || design_ir_index == nullptr || class_index == nullptr
+      || constraint_hir_index == nullptr) {
     diagnostics.error(
         "FSIM-ART-0014", ".fsimdesign is missing a required state payload");
     return std::nullopt;
@@ -576,7 +584,12 @@ std::optional<BuiltProject> load_design_artifact(
   auto class_bytes = read_design_payload(
       directory / class_index->artifact, class_index->checksum,
       diagnostics);
-  if (!runtime_bytes || !semantic_bytes || !design_ir_bytes || !class_bytes) {
+  auto constraint_hir_bytes = read_design_payload(
+      directory / constraint_hir_index->artifact,
+      constraint_hir_index->checksum,
+      diagnostics);
+  if (!runtime_bytes || !semantic_bytes || !design_ir_bytes || !class_bytes
+      || !constraint_hir_bytes) {
     return std::nullopt;
   }
   auto runtime = deserialize_runtime_state(
@@ -591,7 +604,10 @@ std::optional<BuiltProject> load_design_artifact(
   auto classes = deserialize_class_state(
       *class_bytes, support::path_to_utf8(class_index->artifact),
       diagnostics);
-  if (!runtime || !semantics || !design_ir || !classes
+  auto constraint_hir = deserialize_systemverilog_constraint_hir_state(
+      *constraint_hir_bytes,
+      support::path_to_utf8(constraint_hir_index->artifact), diagnostics);
+  if (!runtime || !semantics || !design_ir || !classes || !constraint_hir
       || !design_ir->valid(*semantics)
       || !application_detail::valid_runtime_projection(*design_ir, *runtime)) {
     if (!diagnostics.has_error()) {
@@ -641,6 +657,7 @@ std::optional<BuiltProject> load_design_artifact(
       : live_systemc->registries.front();
   return BuiltProject{
       std::move(*runtime), std::move(*design_ir), std::move(*semantics),
+      std::move(*constraint_hir),
       metadata->cache_key, metadata->time_resolution,
       directory.parent_path() / ".fsim-sim-cache", optimization,
       metadata->specialization_cache_keys,

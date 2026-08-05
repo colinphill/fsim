@@ -65,8 +65,18 @@ class AppBase;
   AppBase queued_handles[$:2];
   AppBase associative_handles[int];
   logic [7:0] value;
+  int hook_pre;
+  int hook_post;
   function new(int initial_value = 0);
     value = initial_value;
+    hook_pre = 0;
+    hook_post = 0;
+  endfunction
+  virtual function void pre_randomize();
+    hook_pre = hook_pre + 1;
+  endfunction
+  virtual function void post_randomize();
+    hook_post = hook_post + 1;
   endfunction
   virtual function int bump(input int amount);
     value = value + amount;
@@ -97,11 +107,20 @@ class AppBase;
 endclass
 
 class AppDerived extends AppBase;
-  logic [7:0] value;
-  logic [3:0] generated_value;
+  rand logic [7:0] value;
+  randc logic [3:0] generated_value;
+  constraint generated_small {
+    generated_value inside {[1:3]};
+  }
   function new(int initial_value = 0);
     super.new(initial_value);
     value = initial_value;
+  endfunction
+  function void pre_randomize();
+    hook_pre = hook_pre + 10;
+  endfunction
+  function void post_randomize();
+    hook_post = hook_post + 10;
   endfunction
   function int bump(input int amount);
     value = value + amount + 1;
@@ -142,6 +161,24 @@ class AppDerived extends AppBase;
   endtask
 endclass
 
+class ImpossibleDerived extends AppDerived;
+  constraint impossible {
+    generated_value > 15;
+  }
+endclass
+
+class BrokenPreDerived extends AppDerived;
+  function void pre_randomize();
+    if (1'bx) hook_pre = 99;
+  endfunction
+endclass
+
+class BrokenPostDerived extends AppDerived;
+  function void post_randomize();
+    if (1'bx) hook_post = 99;
+  endfunction
+endclass
+
 module class_top;
   logic task_trigger;
   logic task_event_observed;
@@ -157,6 +194,10 @@ module class_top;
   AppBase source_base_view;
   AppBase source_cast;
   AppDerived source_failed_cast;
+  AppDerived randomized_object;
+  ImpossibleDerived impossible_object;
+  BrokenPreDerived broken_pre_object;
+  BrokenPostDerived broken_post_object;
   AppBase source_function_returned;
   AppBase source_task_returned;
   LocalWaiter source_waiter;
@@ -190,6 +231,29 @@ module class_top;
   logic source_module_task_handle_alias;
   logic source_final_seen;
   logic [7:0] source_property;
+  int source_randomize_result;
+  int source_selected_randomize_result;
+  logic [7:0] source_selected_randomize_value;
+  logic [3:0] source_selected_randomize_generated;
+  logic [3:0] source_randomize_generated;
+  logic [3:0] source_randc_third;
+  int source_randomize_pre;
+  int source_randomize_post;
+  int source_impossible_result;
+  int source_impossible_pre;
+  int source_impossible_post;
+  int source_broken_pre_result;
+  int source_broken_pre_count;
+  int source_broken_post_result;
+  int source_broken_post_pre;
+  int source_broken_post_count;
+  int source_rand_mode_initial;
+  int source_rand_mode_disabled;
+  int source_rand_mode_enabled;
+  int source_constraint_mode_initial;
+  int source_constraint_mode_disabled;
+  int source_constraint_mode_enabled;
+  int source_impossible_enabled_result;
   function automatic AppBase pass_handle(input AppBase candidate);
     return candidate;
   endfunction
@@ -254,6 +318,39 @@ module class_top;
     AppBase::bump_shared(2, source_static_task_observed);
     source_static_property = AppDerived::shared;
     source_property = source_object.value;
+    randomized_object = new(77);
+    source_rand_mode_initial = randomized_object.value.rand_mode();
+    source_rand_mode_disabled = randomized_object.value.rand_mode(0);
+    source_selected_randomize_result =
+        randomized_object.randomize(generated_value);
+    source_selected_randomize_value = randomized_object.value;
+    source_selected_randomize_generated = randomized_object.generated_value;
+    source_randomize_result = randomized_object.randomize();
+    source_randomize_generated = randomized_object.generated_value;
+    source_randomize_result =
+        randomized_object.randomize(generated_value);
+    source_randc_third = randomized_object.generated_value;
+    source_rand_mode_enabled = randomized_object.value.rand_mode(1);
+    source_randomize_pre = randomized_object.hook_pre;
+    source_randomize_post = randomized_object.hook_post;
+    impossible_object = new;
+    source_constraint_mode_initial =
+        impossible_object.impossible.constraint_mode();
+    source_constraint_mode_disabled =
+        impossible_object.impossible.constraint_mode(0);
+    source_impossible_enabled_result = impossible_object.randomize();
+    source_constraint_mode_enabled =
+        impossible_object.impossible.constraint_mode(1);
+    source_impossible_result = impossible_object.randomize();
+    source_impossible_pre = impossible_object.hook_pre;
+    source_impossible_post = impossible_object.hook_post;
+    broken_pre_object = new;
+    source_broken_pre_result = broken_pre_object.randomize();
+    source_broken_pre_count = broken_pre_object.hook_pre;
+    broken_post_object = new;
+    source_broken_post_result = broken_post_object.randomize();
+    source_broken_post_pre = broken_post_object.hook_pre;
+    source_broken_post_count = broken_post_object.hook_post;
     #3 $finish;
   end
   initial begin

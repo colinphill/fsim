@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <ranges>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -28,7 +29,7 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<fsim::runtime::Logic4Word, 9> values{};
+  std::array<fsim::runtime::Logic4Word, 12> values{};
   std::vector<std::string> output;
   std::size_t compiled_processes{};
 };
@@ -56,8 +57,9 @@ Capture execute(
     const fsim::app::SimulationEngine engine) {
   fsim::app::Simulation simulation{
       std::move(project), 1000, engine};
-  constexpr std::array<std::string_view, 9> names{
-      "a", "b", "c", "d", "e", "f", "u", "p0", "p1"};
+  constexpr std::array<std::string_view, 12> names{
+      "a", "b", "c", "d", "e", "f", "u", "p0", "p1",
+      "scope_result", "scope_value", "scope_mode"};
   Capture capture;
   capture.compiled_processes = simulation.compiled_process_count();
   simulation.set_output_hook(
@@ -165,9 +167,12 @@ void test_random(
       reference.values[6].bval
       == std::numeric_limits<std::uint32_t>::max());
   assert(reference.values[7] != reference.values[8]);
+  assert(reference.values[9].aval == 1 && reference.values[9].bval == 0);
+  assert(reference.values[10].aval <= 7 && reference.values[10].bval == 0);
+  assert(reference.values[11].aval <= 2 && reference.values[11].bval == 0);
   assert(reference.compiled_processes == 0);
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 3);
+  assert(compiled.compiled_processes == 2);
 #else
   assert(compiled.compiled_processes == 0);
 #endif
@@ -235,6 +240,46 @@ void test_cli_seed_selection(
   static_cast<void>(directory);
 }
 
+void test_invalid_scope_randomize(
+    const std::filesystem::path& directory) {
+  const auto source = directory / "invalid_scope_randomize.sv";
+  {
+    std::ofstream output(source);
+    output << R"(
+module invalid_scope_randomize;
+  logic module_value;
+  initial begin
+    logic local_value;
+    logic [64:0] wide_value;
+    int result;
+    result = std::randomize();
+    result = std::randomize(local_value + 1);
+    result = std::randomize(module_value);
+    result = std::randomize(wide_value);
+  end
+endmodule
+)";
+  }
+  auto config = config_for(
+      directory, source, fsim::project::Optimization::o0, 1);
+  config.project.name = "invalid-scope-randomize";
+  config.project.top = "sv:work.invalid_scope_randomize";
+  config.build.cache_path = directory / "invalid-scope-randomize-cache";
+  fsim::diagnostic::Engine diagnostics;
+  const auto project = fsim::app::build_project(config, diagnostics);
+  assert(!project);
+  for (const auto code : {
+           "FSIM-ELAB-SVRAND-001",
+           "FSIM-ELAB-SVRAND-002",
+           "FSIM-ELAB-SVRAND-003",
+           "FSIM-ELAB-SVRAND-004"}) {
+    assert(std::ranges::any_of(
+        diagnostics.diagnostics(), [&](const auto& diagnostic) {
+          return diagnostic.code == code;
+        }));
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -249,8 +294,14 @@ int main() {
     std::ofstream output(source);
     output << R"(
 module random_test;
+  typedef enum logic [1:0] {MODE_ZERO, MODE_ONE, MODE_TWO} mode_t;
   logic [31:0] a, b, c, d, e, f, u, p0, p1;
+  int scope_result;
+  logic [2:0] scope_value;
+  mode_t scope_mode;
   initial begin
+    logic [2:0] scoped;
+    mode_t mode;
     u = $urandom_range(4'bx);
     a = $urandom;
     b = $urandom();
@@ -258,6 +309,9 @@ module random_test;
     d = $random();
     e = $urandom_range(9);
     f = $urandom_range(3, 9);
+    scope_result = std::randomize(scoped, mode);
+    scope_value = scoped;
+    scope_mode = mode;
     $display("cli=%h", $urandom);
     $display("signed=%d", $random);
   end
@@ -291,6 +345,7 @@ endmodule
       directory.path, source, fsim::project::Optimization::o0);
   test_random(
       directory.path, source, fsim::project::Optimization::o2);
+  test_invalid_scope_randomize(directory.path);
   test_cli_seed_selection(directory.path, manifest);
   std::cout << "random application tests passed\n";
   return 0;

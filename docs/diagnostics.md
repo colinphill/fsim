@@ -736,6 +736,19 @@ are therefore excluded.
 | `FSIM-SV-PARSE-265` | error | A class constraint expression omits its terminating semicolon. |
 | `FSIM-SV-PARSE-266` | error | A class constraint body omits its closing brace. |
 | `FSIM-SV-PARSE-267` | error | A qualified class constraint declaration omits the `constraint` keyword. |
+| `FSIM-SV-PARSE-268` | error | A constraint `dist` list omits its opening brace. |
+| `FSIM-SV-PARSE-269` | error | A constraint `dist` range omits its separating colon. |
+| `FSIM-SV-PARSE-270` | error | A constraint `dist` range omits its closing bracket. |
+| `FSIM-SV-PARSE-271` | error | A constraint `dist :/` weight omits its slash. |
+| `FSIM-SV-PARSE-272` | error | A constraint distribution item uses neither `:=` nor `:/`. |
+| `FSIM-SV-PARSE-273` | error | A constraint `dist` list omits its closing brace. |
+| `FSIM-SV-PARSE-274` | error | A structured constraint set omits its closing brace. |
+| `FSIM-SV-PARSE-275` | error | A conditional constraint omits the opening parenthesis. |
+| `FSIM-SV-PARSE-276` | error | A conditional constraint omits the closing parenthesis. |
+| `FSIM-SV-PARSE-277` | error | A constraint `foreach` selection omits the opening parenthesis. |
+| `FSIM-SV-PARSE-278` | error | A constraint `foreach` selection omits the closing parenthesis. |
+| `FSIM-SV-PARSE-279` | error | A solve-order constraint omits `before`. |
+| `FSIM-SV-PARSE-280` | error | A solve-before constraint omits its terminating semicolon. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -956,6 +969,9 @@ are therefore excluded.
 | `FSIM-SV-CLASS-013` | error | A class method selection has no compatible profile or remains ambiguous after argument association. |
 | `FSIM-SV-CLASS-014` | error | A class construction expression has no destination class-handle type. |
 | `FSIM-SV-CLASS-015` | error | `$cast` lacks a writable class-handle destination or compatible source expression. |
+| `FSIM-SV-CLASS-019` | error | An object `randomize` variable list selects a missing or nonrandom property. |
+| `FSIM-SV-CLASS-020` | error | A randomization mode call has invalid arity or selects no random property or constraint block. |
+| `FSIM-SV-CLASS-021` | error | A randomization mode call violates local or protected class-member access. |
 | `FSIM-SV-CLASS-INHERIT-001` | error | The class inheritance graph contains a cycle. |
 | `FSIM-SV-CLASS-INHERIT-002` | error | A class contains duplicate method profiles. |
 | `FSIM-SV-CLASS-INHERIT-003` | error | A concrete class contains a pure method declaration. |
@@ -993,6 +1009,10 @@ are therefore excluded.
 | `FSIM-ELAB-SVCLASS-015` | error | A class-handle queue operation has an invalid argument profile. |
 | `FSIM-ELAB-SVCLASS-016` | error | A class-handle container expression is not a supported `pop_front` or `size` call. |
 | `FSIM-ELAB-SVCLASS-017` | error | `$cast` lacks a resolved destination class handle or source during lowering. |
+| `FSIM-ELAB-SVRAND-001` | error | `std::randomize` has no arguments or appears outside SystemVerilog execution. |
+| `FSIM-ELAB-SVRAND-002` | error | A `std::randomize` argument is not a writable local identifier. |
+| `FSIM-ELAB-SVRAND-003` | error | A `std::randomize` argument is not a supported packed scalar local. |
+| `FSIM-ELAB-SVRAND-004` | error | A packed `std::randomize` local has no executable width in 1 through 64. |
 | `FSIM-ELAB-SVIFACE-006` | error | A process writes through a read-only input port or modport input member. |
 | `FSIM-ELAB-SVIFACE-007` | error | A retained interface callable cannot be materialized at its same-language module boundary. |
 | `FSIM-ELAB-SVIFACE-008` | error | An interface callable is visible more than once through the same module port. |

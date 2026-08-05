@@ -51,6 +51,7 @@ int main() {
     test_simir_containers();
     test_systemverilog_class_heap();
     test_systemverilog_class_methods();
+    test_systemverilog_constraint_solver();
     test_simir_alternate_executor_scheduled_word_writes();
     test_simir_alternate_executor_zero_delay_and_frame();
     test_simir_alternate_executor_cpp_exception_containment();

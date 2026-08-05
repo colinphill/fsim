@@ -158,3 +158,14 @@ authored test/control files. The source-executable class fixture, service
 boundary, artifact codec repair, and documentation are clean-room code; no UVM
 source, constraint solver, external class library, third-party artifact, or
 provenance entry is imported.
+
+v2 Batch 149 adds semantic constraint projection/lowering, object and scope
+randomization services, the finite-domain solver and expression evaluator,
+portable randomization operation/state headers, and a focused solver owner as
+eleven SPDX-owned bounded C++ sources. Twenty parser, class-resolution, and
+elaboration diagnostics advance the reviewed totals to 1,870 diagnostics, 537
+bounded C/C++ sources, 627 authored artifacts, and 212 authored test/control
+files. The constraint solver, deterministic stream/cycle algorithms, source
+fixtures, and documentation are clean-room code; no UVM source, external
+solver/RNG library, third-party constraint corpus, or provenance entry is
+imported.

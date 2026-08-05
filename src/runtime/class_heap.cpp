@@ -12,6 +12,32 @@ namespace fsim::runtime {
 
 namespace {
 
+[[nodiscard]] std::uint64_t mixed(const std::uint64_t input) noexcept {
+  auto value = input;
+  value = (value ^ (value >> 30U)) * UINT64_C(0xbf58476d1ce4e5b9);
+  value = (value ^ (value >> 27U)) * UINT64_C(0x94d049bb133111eb);
+  return value ^ (value >> 31U);
+}
+
+[[nodiscard]] std::uint64_t identity_hash(
+    const std::string_view identity) noexcept {
+  auto value = UINT64_C(14695981039346656037);
+  for (const auto character : identity) {
+    value ^= static_cast<std::uint8_t>(character);
+    value *= UINT64_C(1099511628211);
+  }
+  return value;
+}
+
+[[nodiscard]] std::uint64_t derived_seed(
+    const std::uint64_t parent,
+    const std::string_view identity,
+    const std::uint64_t ordinal) noexcept {
+  return mixed(
+      parent ^ identity_hash(identity)
+      ^ mixed(ordinal + UINT64_C(0x9e3779b97f4a7c15)));
+}
+
 [[nodiscard]] std::size_t checked_add(
     const std::size_t left,
     const std::size_t right,
@@ -39,17 +65,23 @@ namespace {
 
 [[nodiscard]] std::size_t property_bytes(
     const SystemVerilogClassPropertyDescriptor& descriptor) {
+  std::size_t payload{};
   switch (descriptor.kind) {
     case SystemVerilogClassPropertyKind::Bit2:
-      return packed_bytes(descriptor.width, 1U);
+      payload = packed_bytes(descriptor.width, 1U);
+      break;
     case SystemVerilogClassPropertyKind::Logic4:
-      return packed_bytes(descriptor.width, 2U);
+      payload = packed_bytes(descriptor.width, 2U);
+      break;
     case SystemVerilogClassPropertyKind::Logic9:
-      return packed_bytes(descriptor.width, 4U);
+      payload = packed_bytes(descriptor.width, 4U);
+      break;
     case SystemVerilogClassPropertyKind::Integer:
-      return sizeof(std::int64_t);
+      payload = sizeof(std::int64_t);
+      break;
     case SystemVerilogClassPropertyKind::ClassHandle:
-      return sizeof(SystemVerilogClassHandle);
+      payload = sizeof(SystemVerilogClassHandle);
+      break;
     case SystemVerilogClassPropertyKind::Container:
       if (descriptor.handle_container) {
         const auto elements =
@@ -62,13 +94,21 @@ namespace {
           throw std::length_error{
               "class handle container storage size overflows"};
         }
-        return elements * sizeof(SystemVerilogClassHandle);
+        payload = elements * sizeof(SystemVerilogClassHandle);
       }
-      return 0U;
+      break;
     case SystemVerilogClassPropertyKind::String:
-      return 0U;
+      break;
   }
-  return 0U;
+  if (descriptor.random_kind != SystemVerilogClassRandomKind::None) {
+    constexpr auto fixed_random_state_bytes = sizeof(std::uint8_t)
+        + 2U * sizeof(std::uint64_t) + sizeof(std::size_t) + 2U;
+    payload = checked_add(
+        payload, fixed_random_state_bytes, "class random state");
+    payload = checked_add(
+        payload, descriptor.nominal_type.size(), "class random state");
+  }
+  return payload;
 }
 
 [[nodiscard]] SystemVerilogClassObject make_object(
@@ -156,8 +196,48 @@ namespace {
       }
       property.string = *descriptor_property.initial_string;
     }
+    if (descriptor_property.random_kind
+        != SystemVerilogClassRandomKind::None) {
+      if (descriptor_property.nominal_type.empty()) {
+        throw std::invalid_argument{
+            "random class property requires an exact nominal type"};
+      }
+      if (descriptor_property.random_kind
+              == SystemVerilogClassRandomKind::Randc
+          && (descriptor_property.kind
+                  == SystemVerilogClassPropertyKind::String
+              || descriptor_property.kind
+                  == SystemVerilogClassPropertyKind::ClassHandle
+              || descriptor_property.kind
+                  == SystemVerilogClassPropertyKind::Container)) {
+        throw std::invalid_argument{
+            "randc class property requires an integral or enum profile"};
+      }
+      property.random_state = SystemVerilogClassRandomState{
+          descriptor_property.random_kind,
+          width,
+          descriptor_property.signed_value,
+          descriptor_property.nominal_type,
+          true,
+          0,
+          0,
+          0,
+          0,
+          {}};
+    }
     object.property_names.push_back(descriptor_property.name);
     object.properties.push_back(std::move(property));
+  }
+  for (const auto& [identity, enabled] : descriptor.constraint_modes) {
+    if (identity.empty()
+        || !object.constraint_modes.emplace(identity, enabled).second) {
+      throw std::invalid_argument{
+          "class constraint mode requires a unique canonical identity"};
+    }
+    object.accounted_bytes = checked_add(
+        object.accounted_bytes,
+        identity.size() + sizeof(bool),
+        "class constraint mode");
   }
   return object;
 }
@@ -165,8 +245,18 @@ namespace {
 }  // namespace
 
 SystemVerilogClassHeap::SystemVerilogClassHeap(
-    const SystemVerilogClassHeapLimits limits)
-    : limits_(limits) {}
+    const SystemVerilogClassHeapLimits limits,
+    const std::uint64_t simulation_seed)
+    : limits_(limits), simulation_seed_(simulation_seed) {}
+
+std::uint64_t SystemVerilogClassRandomStream::next_u64() noexcept {
+  state += UINT64_C(0x9e3779b97f4a7c15);
+  return mixed(state);
+}
+
+std::uint32_t SystemVerilogClassRandomStream::next_u32() noexcept {
+  return static_cast<std::uint32_t>(next_u64() >> 32U);
+}
 
 SystemVerilogClassHandle SystemVerilogClassHeap::encode(
     const std::uint32_t slot,
@@ -216,6 +306,35 @@ SystemVerilogClassHandle SystemVerilogClassHeap::allocate(
       > limits_.maximum_storage_bytes - storage_bytes_) {
     throw std::length_error{"SystemVerilog class storage budget exceeded"};
   }
+  if (descriptor.random_root_identity.empty()) {
+    throw std::invalid_argument{
+        "class random root identity must not be empty"};
+  }
+  const auto ordinal_entry = next_object_ordinals_.find(
+      descriptor.random_root_identity);
+  const auto object_ordinal = ordinal_entry == next_object_ordinals_.end()
+      ? std::uint64_t{}
+      : ordinal_entry->second;
+  if (object_ordinal == std::numeric_limits<std::uint64_t>::max()) {
+    throw std::overflow_error{"class random object ordinal exhausted"};
+  }
+  object_value.random_root_identity = descriptor.random_root_identity;
+  object_value.random_root_seed = derived_seed(
+      simulation_seed_, descriptor.random_root_identity, 0);
+  object_value.random_object_ordinal = object_ordinal;
+  object_value.random_object_seed = derived_seed(
+      object_value.random_root_seed,
+      descriptor.specialization_identity,
+      object_ordinal);
+  for (std::size_t index = 0; index < object_value.properties.size(); ++index) {
+    auto& state = object_value.properties[index].random_state;
+    if (state) {
+      state->stream_seed = derived_seed(
+          object_value.random_object_seed,
+          object_value.property_names[index],
+          0);
+    }
+  }
 
   std::uint32_t slot_index{};
   if (!free_slots_.empty()) {
@@ -241,6 +360,8 @@ SystemVerilogClassHandle SystemVerilogClassHeap::allocate(
   }
   ++live_objects_;
   storage_bytes_ += slots_[slot_index].object.accounted_bytes;
+  next_object_ordinals_[descriptor.random_root_identity] =
+      object_ordinal + 1U;
   return encode(slot_index, slots_[slot_index].generation);
 }
 
@@ -288,6 +409,7 @@ void SystemVerilogClassHeap::clear() noexcept {
   }
   live_objects_ = 0;
   storage_bytes_ = 0;
+  next_object_ordinals_.clear();
 }
 
 bool SystemVerilogClassHeap::contains(
@@ -357,6 +479,198 @@ const SystemVerilogClassPropertyValue& SystemVerilogClassHeap::property(
   }
   return value.properties[static_cast<std::size_t>(
       std::distance(value.property_names.begin(), found))];
+}
+
+SystemVerilogClassRandomState& SystemVerilogClassHeap::random_state(
+    const SystemVerilogClassHandle handle,
+    const std::string_view name) {
+  auto& state = property(handle, name).random_state;
+  if (!state) {
+    throw std::invalid_argument{
+        "SystemVerilog class property '" + std::string{name}
+        + "' is not randomizable"};
+  }
+  return *state;
+}
+
+const SystemVerilogClassRandomState& SystemVerilogClassHeap::random_state(
+    const SystemVerilogClassHandle handle,
+    const std::string_view name) const {
+  const auto& state = property(handle, name).random_state;
+  if (!state) {
+    throw std::invalid_argument{
+        "SystemVerilog class property '" + std::string{name}
+        + "' is not randomizable"};
+  }
+  return *state;
+}
+
+SystemVerilogClassRandomStream SystemVerilogClassHeap::random_stream(
+    const SystemVerilogClassHandle handle,
+    const std::string_view call_identity) {
+  if (call_identity.empty()) {
+    throw std::invalid_argument{
+        "class random call identity must not be empty"};
+  }
+  auto& value = object(handle);
+  auto [position, inserted] = value.random_call_ordinals.try_emplace(
+      std::string{call_identity}, 0);
+  (void)inserted;
+  if (position->second == std::numeric_limits<std::uint64_t>::max()) {
+    throw std::overflow_error{"class random call ordinal exhausted"};
+  }
+  const auto call_ordinal = position->second++;
+  const auto call_seed = derived_seed(
+      value.random_object_seed, call_identity, call_ordinal);
+  return {
+      simulation_seed_,
+      value.random_root_seed,
+      value.random_object_seed,
+      call_seed,
+      call_seed,
+      call_ordinal};
+}
+
+bool SystemVerilogClassHeap::random_mode(
+    const SystemVerilogClassHandle handle,
+    const std::string_view property_name) const {
+  return random_state(handle, property_name).enabled;
+}
+
+void SystemVerilogClassHeap::set_random_mode(
+    const SystemVerilogClassHandle handle,
+    const std::string_view property_name,
+    const bool enabled) {
+  random_state(handle, property_name).enabled = enabled;
+}
+
+bool SystemVerilogClassHeap::constraint_mode(
+    const SystemVerilogClassHandle handle,
+    const std::string_view constraint) const {
+  const auto& modes = object(handle).constraint_modes;
+  auto found = modes.find(constraint);
+  if (found == modes.end()) {
+    const auto suffix = "::" + std::string{constraint};
+    found = std::find_if(modes.begin(), modes.end(), [&](const auto& item) {
+      return item.first.ends_with(suffix);
+    });
+  }
+  if (found == modes.end()) {
+    throw std::out_of_range{
+        "SystemVerilog class constraint '" + std::string{constraint}
+        + "' does not exist"};
+  }
+  return found->second;
+}
+
+void SystemVerilogClassHeap::set_constraint_mode(
+    const SystemVerilogClassHandle handle,
+    const std::string_view constraint,
+    const bool enabled) {
+  auto& modes = object(handle).constraint_modes;
+  auto found = modes.find(constraint);
+  if (found == modes.end()) {
+    const auto suffix = "::" + std::string{constraint};
+    found = std::find_if(modes.begin(), modes.end(), [&](const auto& item) {
+      return item.first.ends_with(suffix);
+    });
+  }
+  if (found == modes.end()) {
+    throw std::out_of_range{
+        "SystemVerilog class constraint '" + std::string{constraint}
+        + "' does not exist"};
+  }
+  found->second = enabled;
+}
+
+void SystemVerilogClassHeap::reset_randc_cycle(
+    const SystemVerilogClassHandle handle,
+    const std::string_view property_name) {
+  auto& value = object(handle);
+  auto& state = random_state(handle, property_name);
+  if (state.kind != SystemVerilogClassRandomKind::Randc) {
+    throw std::invalid_argument{
+        "SystemVerilog class property '" + std::string{property_name}
+        + "' is not randc"};
+  }
+  const auto released =
+      state.randc_used_values.size() * sizeof(std::uint64_t);
+  value.accounted_bytes -= released;
+  storage_bytes_ -= released;
+  state.randc_domain_signature = 0;
+  state.randc_cycle = 0;
+  state.randc_used_values.clear();
+}
+
+void SystemVerilogClassHeap::reseed_random(
+    const SystemVerilogClassHandle handle,
+    const std::uint64_t seed) {
+  auto& value = object(handle);
+  value.random_object_seed = seed;
+  value.random_call_ordinals.clear();
+  std::size_t released{};
+  for (std::size_t index = 0; index < value.properties.size(); ++index) {
+    auto& state = value.properties[index].random_state;
+    if (!state) continue;
+    state->stream_seed = derived_seed(seed, value.property_names[index], 0);
+    released += state->randc_used_values.size() * sizeof(std::uint64_t);
+    state->randc_domain_signature = 0;
+    state->randc_cycle = 0;
+    state->randc_used_values.clear();
+  }
+  value.accounted_bytes -= released;
+  storage_bytes_ -= released;
+}
+
+void SystemVerilogClassHeap::commit_randc_states(
+    const SystemVerilogClassHandle handle,
+    std::vector<SystemVerilogClassRandcStateUpdate>& updates) {
+  auto& value = object(handle);
+  std::set<std::size_t> indices;
+  std::size_t old_bytes{};
+  std::size_t new_bytes{};
+  for (const auto& update : updates) {
+    if (update.property_index >= value.properties.size()
+        || !indices.insert(update.property_index).second) {
+      throw std::invalid_argument{"randc state update has an invalid property index"};
+    }
+    const auto& current = value.properties[update.property_index].random_state;
+    if (!current || current->kind != SystemVerilogClassRandomKind::Randc
+        || update.state.kind != SystemVerilogClassRandomKind::Randc
+        || update.state.width != current->width
+        || update.state.nominal_type != current->nominal_type) {
+      throw std::invalid_argument{"randc state update does not match its property"};
+    }
+    std::set<std::uint64_t> used;
+    if (std::ranges::any_of(
+            update.state.randc_used_values,
+            [&](const auto index) { return !used.insert(index).second; })) {
+      throw std::invalid_argument{"randc state update repeats a used value"};
+    }
+    old_bytes = checked_add(
+        old_bytes,
+        current->randc_used_values.size() * sizeof(std::uint64_t),
+        "randc cycle state");
+    new_bytes = checked_add(
+        new_bytes,
+        update.state.randc_used_values.size() * sizeof(std::uint64_t),
+        "randc cycle state");
+  }
+  const auto retained_object_bytes = value.accounted_bytes - old_bytes;
+  const auto retained_storage_bytes = storage_bytes_ - old_bytes;
+  const auto updated_object_bytes = checked_add(
+      retained_object_bytes, new_bytes, "randc cycle state");
+  const auto updated_storage_bytes = checked_add(
+      retained_storage_bytes, new_bytes, "randc cycle state");
+  if (updated_storage_bytes > limits_.maximum_storage_bytes) {
+    throw std::length_error{"SystemVerilog class storage budget exceeded"};
+  }
+  value.accounted_bytes = updated_object_bytes;
+  storage_bytes_ = updated_storage_bytes;
+  for (auto& update : updates) {
+    value.properties[update.property_index].random_state =
+        std::move(update.state);
+  }
 }
 
 SystemVerilogClassHandle SystemVerilogClassHeap::checked_cast(

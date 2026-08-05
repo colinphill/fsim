@@ -1125,7 +1125,6 @@ struct MonitorInstall {
 struct MonitorControl {
   bool enabled{};
 };
-
 enum class RandomKind : std::uint8_t {
   urandom,
   random,
@@ -1140,7 +1139,7 @@ struct RandomValue {
   std::optional<RegisterId> maximum;
   std::optional<RegisterId> minimum;
 };
-
+#include "fsim/runtime/simir_randomize.hpp"
 /// Emit a nonfatal VHDL report with retained severity and source metadata.
 struct Report {
   std::string message;
@@ -1875,7 +1874,7 @@ public:
       SimulationTick,
       std::uint64_t)>;
   using ClassAllocateHook = std::function<std::uint64_t(
-      std::string_view,
+      std::string_view, std::string_view,
       std::string_view,
       std::span<const PackedLogic4>,
       std::span<const std::string>)>;

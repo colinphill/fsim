@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
 
+#include <functional>
+
 #include <algorithm>
 #include <iterator>
 #include <utility>
@@ -277,10 +279,12 @@ SystemVerilogClassMethod VerilogParser::parse_class_out_of_block_method(
 SystemVerilogClassConstraint VerilogParser::parse_class_constraint(
     const Token& start,
     const std::string_view owner_identity,
+    const SystemVerilogClassVisibility visibility,
     const bool is_static,
     const bool is_pure,
     const bool is_extern) {
   SystemVerilogClassConstraint constraint;
+  constraint.visibility = visibility;
   constraint.is_static = is_static;
   constraint.is_pure = is_pure;
   constraint.is_extern = is_extern;
@@ -304,12 +308,203 @@ SystemVerilogClassConstraint VerilogParser::parse_class_constraint(
       TokenKind::LeftBrace,
       "'{' before class constraint block",
       "FSIM-SV-PARSE-264");
-  while (!at_end() && !at(TokenKind::RightBrace)) {
-    constraint.expressions.push_back(parse_expression());
+  std::function<Expression()> parse_constraint_item;
+  std::function<Expression()> parse_constraint_set;
+  const auto parse_plain_constraint = [&]() {
+    const auto soft = keyword("soft");
+    std::optional<Token> soft_token;
+    if (soft) soft_token = advance();
+    auto expression = parse_expression();
+    if (keyword("dist")) {
+      const auto dist = advance();
+      expect(
+          TokenKind::LeftBrace,
+          "'{' after dist",
+          "FSIM-SV-PARSE-268");
+      std::vector<Expression> operands;
+      operands.push_back(std::move(expression));
+      while (!at_end() && !at(TokenKind::RightBrace)) {
+        Expression choice;
+        if (match(TokenKind::LeftBracket)) {
+          const auto range_start = previous();
+          auto low = parse_expression();
+          expect(
+              TokenKind::Colon,
+              "':' in dist range",
+              "FSIM-SV-PARSE-269");
+          auto high = parse_expression();
+          expect(
+              TokenKind::RightBracket,
+              "']' after dist range",
+              "FSIM-SV-PARSE-270");
+          choice = Expression{
+              ExpressionKind::Call,
+              "@inside-range",
+              {std::move(low), std::move(high)},
+              cover(range_start.span, previous().span)};
+        } else {
+          choice = parse_expression();
+        }
+        std::string weight_kind;
+        if (match(TokenKind::ColonEqual)) {
+          weight_kind = "@dist-:=";
+        } else if (match(TokenKind::Colon)) {
+          expect(
+              TokenKind::Slash,
+              "'/' after ':' in dist weight",
+              "FSIM-SV-PARSE-271");
+          weight_kind = "@dist-:/";
+        } else {
+          error(
+              current(),
+              "FSIM-SV-PARSE-272",
+              "a dist item requires ':=' or ':/' weight syntax");
+          weight_kind = "@dist-:=";
+        }
+        auto weight = parse_expression();
+        const auto item_span = cover(dist.span, weight.span);
+        operands.push_back(Expression{
+            ExpressionKind::Call,
+            std::move(weight_kind),
+            {std::move(choice), std::move(weight)},
+            item_span});
+        if (!match(TokenKind::Comma)) break;
+      }
+      expect(
+          TokenKind::RightBrace,
+          "'}' after dist list",
+          "FSIM-SV-PARSE-273");
+      expression = Expression{
+          ExpressionKind::Call,
+          "dist",
+          std::move(operands),
+          cover(dist.span, previous().span)};
+    }
+    if (soft_token) {
+      const auto soft_span = cover(soft_token->span, expression.span);
+      expression = Expression{
+          ExpressionKind::Call,
+          "soft",
+          {std::move(expression)},
+          soft_span};
+    }
+    if (match(TokenKind::ThinArrow)) {
+      auto consequent = parse_constraint_set();
+      const auto implication_span = cover(expression.span, consequent.span);
+      return Expression{
+          ExpressionKind::Call,
+          "@constraint-implies",
+          {std::move(expression), std::move(consequent)},
+          implication_span};
+    }
     expect(
         TokenKind::Semicolon,
         "';' after class constraint expression",
         "FSIM-SV-PARSE-265");
+    return expression;
+  };
+  parse_constraint_set = [&]() {
+    if (!match(TokenKind::LeftBrace)) return parse_constraint_item();
+    const auto block_start = previous();
+    std::vector<Expression> items;
+    while (!at_end() && !at(TokenKind::RightBrace)) {
+      items.push_back(parse_constraint_item());
+    }
+    expect(
+        TokenKind::RightBrace,
+        "'}' after structured constraint set",
+        "FSIM-SV-PARSE-274");
+    return Expression{
+        ExpressionKind::Call,
+        "@constraint-block",
+        std::move(items),
+        cover(block_start.span, previous().span)};
+  };
+  parse_constraint_item = [&]() {
+    if (match_keyword("solve")) {
+      const auto solve_token = previous();
+      std::vector<Expression> earlier;
+      do {
+        earlier.push_back(parse_expression());
+      } while (match(TokenKind::Comma));
+      if (!match_keyword("before")) {
+        error(
+            current(),
+            "FSIM-SV-PARSE-279",
+            "a solve-order constraint requires 'before'");
+      }
+      std::vector<Expression> later;
+      do {
+        later.push_back(parse_expression());
+      } while (match(TokenKind::Comma));
+      expect(
+          TokenKind::Semicolon,
+          "';' after solve-before constraint",
+          "FSIM-SV-PARSE-280");
+      Expression earlier_list{
+          ExpressionKind::Call,
+          "@solve-list",
+          std::move(earlier),
+          solve_token.span};
+      Expression later_list{
+          ExpressionKind::Call,
+          "@solve-list",
+          std::move(later),
+          previous().span};
+      return Expression{
+          ExpressionKind::Call,
+          "@solve-before",
+          {std::move(earlier_list), std::move(later_list)},
+          cover(solve_token.span, previous().span)};
+    }
+    if (match_keyword("if")) {
+      const auto if_token = previous();
+      expect(
+          TokenKind::LeftParen,
+          "'(' after constraint if",
+          "FSIM-SV-PARSE-275");
+      auto condition = parse_expression();
+      expect(
+          TokenKind::RightParen,
+          "')' after constraint if condition",
+          "FSIM-SV-PARSE-276");
+      auto when_true = parse_constraint_set();
+      std::vector<Expression> operands;
+      operands.push_back(std::move(condition));
+      operands.push_back(std::move(when_true));
+      if (match_keyword("else")) {
+        operands.push_back(parse_constraint_set());
+      }
+      const auto item_span = cover(if_token.span, operands.back().span);
+      return Expression{
+          ExpressionKind::Call,
+          "@constraint-if",
+          std::move(operands),
+          item_span};
+    }
+    if (match_keyword("foreach")) {
+      const auto foreach_token = previous();
+      expect(
+          TokenKind::LeftParen,
+          "'(' after constraint foreach",
+          "FSIM-SV-PARSE-277");
+      auto selection = parse_expression();
+      expect(
+          TokenKind::RightParen,
+          "')' after constraint foreach selection",
+          "FSIM-SV-PARSE-278");
+      auto body = parse_constraint_set();
+      const auto item_span = cover(foreach_token.span, body.span);
+      return Expression{
+          ExpressionKind::Call,
+          "@constraint-foreach",
+          {std::move(selection), std::move(body)},
+          item_span};
+    }
+    return parse_plain_constraint();
+  };
+  while (!at_end() && !at(TokenKind::RightBrace)) {
+    constraint.expressions.push_back(parse_constraint_item());
   }
   expect(
       TokenKind::RightBrace,
@@ -514,7 +709,7 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
     const auto constraint_prefix = [&]() {
       std::size_t lookahead = 0;
       while (contains_word(
-          {"static", "pure", "extern"},
+          {"local", "protected", "static", "pure", "extern"},
           current(lookahead).text)) {
         ++lookahead;
       }
@@ -522,11 +717,16 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
     };
     if (constraint_prefix()) {
       const auto constraint_start = current();
+      auto visibility = SystemVerilogClassVisibility::Public;
       bool is_static = false;
       bool is_pure = false;
       bool is_extern = false;
       for (;;) {
-        if (match_keyword("static")) {
+        if (match_keyword("local")) {
+          visibility = SystemVerilogClassVisibility::Local;
+        } else if (match_keyword("protected")) {
+          visibility = SystemVerilogClassVisibility::Protected;
+        } else if (match_keyword("static")) {
           is_static = true;
         } else if (match_keyword("pure")) {
           is_pure = true;
@@ -540,6 +740,7 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
       auto constraint = parse_class_constraint(
           constraint_start,
           declaration.canonical_identity,
+          visibility,
           is_static,
           is_pure,
           is_extern);

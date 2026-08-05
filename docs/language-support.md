@@ -1193,8 +1193,8 @@ The current v2 slice owns and resolves compilation-unit, package, module,
 interface, and nested class declarations. It supports forward typedefs,
 value/type parameters, parameterized bases, properties with visibility and
 static/const/random qualifiers, constructors, functions, tasks, extern and
-pure-virtual prototypes, out-of-block definitions, constraints as retained
-HIR, single inheritance, interface implementation, hiding, checked overrides,
+pure-virtual prototypes, out-of-block definitions, executable constraints in
+canonical typed HIR, single inheritance, interface implementation, hiding, checked overrides,
 covariant class-handle returns, and stable virtual dispatch slots.
 
 Executable support includes opaque nullable/generation-safe handles,
@@ -1217,9 +1217,31 @@ containers. Interpreter, LLVM O0/O2 service boundaries, debugger inspection,
 packed callbacks/VCD snapshots, portable artifacts, relocation, and cold/warm
 native caches share the same canonical identities and behavior.
 
-This is source-executable class support, not full UVM closure. Constraint
-bodies are retained but not solved; `randomize`/`std::randomize`, covergroups,
-UVM library/runtime behavior, DPI, and VPI remain for subsequent v2 batches.
+The implemented randomization slice includes `rand` and `randc`, per-object
+property `rand_mode` and block `constraint_mode`, object `randomize` with an
+optional property list, scope `std::randomize`, pre/post callbacks, inheritance
+and constraint-block override composition, exact public/protected/local
+access, deterministic per-root/object/property/call streams, and transactional
+failure. The finite-domain solver supports integral, packed four-state, enum,
+handle, and materialized container-element variables; equality, relational,
+arithmetic, bitwise, logical, unary, and conditional expressions; `soft`,
+`inside`, `dist :=`, `dist :/`, implication, structured blocks, `foreach`, and
+solve-before ordering. Width/sign conversion and unknown predicate behavior
+are explicit. Exact-domain `randc` cycles, modes, seeds, revisions, solver
+provenance, callbacks, debugger/trace state, portable objects, standalone
+designs, relocated mapped libraries, and native-cache identities share one
+checked representation.
+
+Randomization is intentionally finite and resource-governed: callers supply
+variable, aggregate-domain, search-step, elapsed-work, heap, and cycle-storage
+budgets. Runtime-width values beyond the supported packed representation,
+nonintegral random variables, unmaterialized/unbounded containers, arbitrary
+user-defined solver functions, and coverage-driven solving are rejected or
+remain outside this slice. Scope randomization currently executes through the
+common validated interpreter service while its full operation participates in
+native-cache identity. This is executable class randomization, not full UVM
+closure; covergroups, UVM library/runtime behavior, DPI, and VPI remain for
+subsequent v2 batches.
 
 ## v1 target
 

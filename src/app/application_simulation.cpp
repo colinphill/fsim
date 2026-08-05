@@ -18,17 +18,19 @@ struct Simulation::Impl {
       const std::uint64_t max_deltas,
       const SimulationEngine engine)
       : built(std::move(project)),
+        class_heap({}, built.seed),
         class_methods(class_heap, {}, &class_static_store),
         interpreter(built.design.create_interpreter(
             runtime::SchedulerOptions{max_deltas, 32},
             built.seed)) {
     interpreter->set_class_allocate_hook(
-        [this](const std::string_view specialization,
+        [this](const std::string_view scope,
+               const std::string_view specialization,
                const std::string_view declared_type,
                const std::span<const runtime::PackedLogic4> actuals,
                const std::span<const std::string> actual_names) {
           return construct_class(
-              specialization, declared_type, actuals, actual_names);
+              specialization, declared_type, actuals, actual_names, scope);
         });
     interpreter->set_class_property_read_hook(
         [this](const std::uint64_t handle, const std::string_view property) {
@@ -56,6 +58,12 @@ struct Simulation::Impl {
               ? invoke_class_container(handle, method, actuals)
               : method.starts_with("@checked-cast:")
                   ? invoke_checked_class_cast(handle, method)
+              : method == "@builtin-randomize"
+                  ? invoke_source_randomize(handle, names)
+              : method.starts_with("@builtin-rand-mode:")
+                    || method.starts_with("@builtin-constraint-mode:")
+                  ? invoke_source_randomization_mode(
+                        handle, method, actuals)
               : invoke_source_function(
                     handle, method, actuals, names, directions,
                     virtual_dispatch);
@@ -371,6 +379,70 @@ struct Simulation::Impl {
           + "' is not available in this simulation"};
     }
     return *found;
+  }
+
+  [[nodiscard]] runtime::PackedLogic4 invoke_source_randomize(
+      const runtime::SystemVerilogClassHandle handle,
+      const std::span<const std::string> selected_names) {
+    auto& object = class_heap.object(handle);
+    const auto prior_properties = object.properties;
+    const auto callback = [&](const std::string_view name) {
+      const auto* found = application_detail::systemverilog_randomize_callback(
+          built.systemverilog_class_specializations,
+          class_heap, handle, name);
+      if (found == nullptr) return;
+      if (found->kind != frontend::SystemVerilogClassMethodKind::Function
+          || found->is_static || !found->arguments.empty()
+          || found->return_type.spelling != "void") {
+        throw std::invalid_argument{
+            "randomize callback requires a nonstatic zero-argument void function"};
+      }
+      std::vector<runtime::PackedLogic4> actuals;
+      (void)invoke_source_profile(*found, handle, actuals, {}, {});
+    };
+    try {
+      callback("pre_randomize");
+    } catch (...) {
+      object.properties = prior_properties;
+      return runtime::PackedLogic4::from_aval_bval(32, 0, 0);
+    }
+    runtime::SystemVerilogClassRandomizeRequest request;
+    for (const auto& name : selected_names) {
+      if (!name.empty()) request.variable_list.push_back(name);
+    }
+    request.call_identity = object.specialization_identity
+        + "::randomize@source";
+    request.class_constraints = [this, handle, specialization =
+        object.specialization_identity](auto& solver, const auto& variables) {
+      application_detail::configure_systemverilog_class_constraints(
+          solver,
+          variables,
+          built.systemverilog_hir,
+          class_specialization(specialization),
+          [this, handle](const auto identity) {
+            return class_heap.constraint_mode(handle, identity);
+          });
+    };
+    const auto result = runtime::randomize_systemverilog_class_object(
+        class_heap, handle, request);
+    if (result.language_result() != 0) {
+      try {
+        callback("post_randomize");
+      } catch (...) {
+        object.properties = prior_properties;
+        return runtime::PackedLogic4::from_aval_bval(32, 0, 0);
+      }
+    }
+    return runtime::PackedLogic4::from_aval_bval(
+        32, result.language_result(), 0);
+  }
+
+  [[nodiscard]] runtime::PackedLogic4 invoke_source_randomization_mode(
+      const runtime::SystemVerilogClassHandle handle,
+      const std::string_view method,
+      const std::span<const runtime::PackedLogic4> actuals) {
+    return application_detail::invoke_systemverilog_randomization_mode(
+        class_heap, handle, method, actuals);
   }
 
   using ConstructorEnvironment =
@@ -1096,7 +1168,8 @@ struct Simulation::Impl {
     }
     const auto result = execute_source_function_statements(
         method.statements, handle, environment);
-    if (!result.returned) {
+    const auto void_result = method.return_type.spelling == "void";
+    if (!result.returned && !void_result) {
       throw std::invalid_argument{
           "class function completed without returning a value"};
     }
@@ -1146,6 +1219,7 @@ struct Simulation::Impl {
             original_widths[index]);
       }
     }
+    if (void_result) return runtime::PackedLogic4{};
     const auto width = method.return_type.width();
     if (!width || *width == 0
         || *width > std::numeric_limits<std::size_t>::max()) {
@@ -1275,7 +1349,8 @@ struct Simulation::Impl {
 
   [[nodiscard]] runtime::SystemVerilogClassHandle allocate_class(
       const std::string_view specialization_identity,
-      const std::string_view declared_type) {
+      const std::string_view declared_type,
+      const std::string_view allocation_scope = "$api") {
     const auto& specialization = class_specialization(
         specialization_identity);
     runtime::SystemVerilogClassDescriptor descriptor;
@@ -1285,6 +1360,9 @@ struct Simulation::Impl {
         : std::string{declared_type};
     descriptor.specialization_identity =
         specialization.specialization_identity;
+    const auto separator = allocation_scope.find('.');
+    descriptor.random_root_identity = std::string{
+        allocation_scope.substr(0, separator)};
     const auto* current = &specialization;
     while (current != nullptr) {
       descriptor.assignable_declared_types.push_back(
@@ -1299,6 +1377,21 @@ struct Simulation::Impl {
             class_property_descriptor(property, true));
       }
     }
+    const auto declaration = std::ranges::find(
+        built.systemverilog_hir.classes(),
+        specialization.declaration_identity,
+        &semantic::sv::ClassDeclaration::canonical_identity);
+    if (declaration != built.systemverilog_hir.classes().end()) {
+      for (const auto& constraint : declaration->composed_constraints) {
+        if (constraint.override_legal) {
+          descriptor.constraint_modes.emplace_back(
+              constraint.selected_identity,
+              constraint.mode_enabled);
+        }
+      }
+    } else {
+      descriptor.constraint_modes = specialization.constraint_modes;
+    }
     return class_heap.allocate(descriptor);
   }
 
@@ -1306,11 +1399,14 @@ struct Simulation::Impl {
       const std::string_view specialization_identity,
       const std::string_view declared_type,
       const std::span<const runtime::PackedLogic4> actuals,
-      const std::span<const std::string> actual_names) {
+      const std::span<const std::string> actual_names,
+      const std::string_view allocation_scope) {
     const auto& specialization = class_specialization(
         specialization_identity);
     const auto handle = allocate_class(
-        specialization.specialization_identity, declared_type);
+        specialization.specialization_identity,
+        declared_type,
+        allocation_scope);
     const auto before = packed_class_snapshot();
     invoke_source_constructor(
         specialization, handle, actuals, actual_names);

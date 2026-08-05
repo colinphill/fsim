@@ -17,6 +17,9 @@ const std::vector<Statement>& Hir::statements() const noexcept {
 const std::vector<Process>& Hir::processes() const noexcept {
     return processes_;
 }
+const std::vector<ClassDeclaration>& Hir::classes() const noexcept {
+    return classes_;
+}
 std::vector<Unit>& Hir::mutable_units() noexcept { return units_; }
 std::vector<Declaration>& Hir::mutable_declarations() noexcept {
     return declarations_;
@@ -29,5 +32,8 @@ std::vector<Statement>& Hir::mutable_statements() noexcept {
     return statements_;
 }
 std::vector<Process>& Hir::mutable_processes() noexcept { return processes_; }
+std::vector<ClassDeclaration>& Hir::mutable_classes() noexcept {
+    return classes_;
+}
 
 } // namespace fsim::semantic::sv

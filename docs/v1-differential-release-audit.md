@@ -59,3 +59,13 @@ VCD, and cache paths. The linked totals are 466 interpreter rows, 383 LLVM
 rows, 256 cache rows, 103 debugger rows, 130 VCD rows, 414 scheduling rows, and
 96 failure rows. The reviewed 36-CTest corpus adds the dedicated
 `fsim.application.specify` owner.
+
+Batch 149's ten class-constraint and randomization rows advance the reviewed
+differential inventory to 1,152 required rows while retaining 108 runtime
+owners. Semantic HIR, modes, streams, finite solving, exact expressions,
+object/scope transactions, callbacks, `randc`, negatives, artifacts, and
+inspection are linked through frontend, runtime, interpreter, LLVM O0/O2,
+debugger, callbacks, trace, relocation, and cache evidence. The linked totals
+are 470 interpreter rows, 387 LLVM rows, 256 cache rows, 106 debugger rows, 132
+VCD/trace rows, 414 scheduling rows, and 100 failure rows. The reviewed
+36-CTest corpus inventory is unchanged.

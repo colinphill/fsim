@@ -20,6 +20,8 @@ struct SystemVerilogClassPropertyLayout {
   std::size_t bit_offset{};
   std::size_t bit_width{};
   bool is_static{};
+  bool is_rand{};
+  bool is_randc{};
   std::optional<Expression> initializer;
 };
 
@@ -50,6 +52,7 @@ struct SystemVerilogClassSpecialization {
   std::string base_specialization_identity;
   std::vector<SystemVerilogClassPropertyLayout> properties;
   std::vector<SystemVerilogClassMethodProfile> methods;
+  std::vector<std::pair<std::string, bool>> constraint_modes;
   std::size_t instance_bit_width{};
   std::size_t static_property_count{};
   std::vector<std::string> source_dependencies;

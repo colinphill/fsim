@@ -70,6 +70,10 @@ void assign_class_identities(
     method.canonical_identity = declaration.canonical_identity
         + "::" + method.name;
   }
+  for (auto& constraint : declaration.constraints) {
+    constraint.canonical_identity = declaration.canonical_identity
+        + "::" + constraint.name;
+  }
   entries.push_back({
       &declaration,
       imports,

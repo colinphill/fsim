@@ -217,9 +217,11 @@ endmodule : class_owner
   require(
       worker.constraints.size() == 2
           && worker.constraints.front().expressions.size() == 2
+          && worker.constraints.front().canonical_identity
+              == "work::$unit::Worker::valid_count"
           && worker.constraints.back().is_pure
           && !worker.constraints.back().defined,
-      "constraint bodies and prototypes must remain source owned");
+      "constraint bodies, identities, and prototypes must remain source owned");
   const auto specialized = specialize_systemverilog_classes(parsed.design);
   if (!specialized.ok()) {
     throw std::runtime_error(
@@ -806,6 +808,130 @@ endclass
                 return diagnostic.code == "FSIM-SV-CLASS-SPEC-010";
               }),
       "host-addressable class layout overflow must reject transactionally");
+
+  auto allowed_modes = parse_text(
+      "allowed_class_modes.sv",
+      R"(
+class ModeBase;
+  rand int public_value;
+  protected rand int protected_value;
+  local rand int local_value;
+  constraint public_rule { public_value >= 0; }
+  protected constraint protected_rule { protected_value >= 0; }
+  local constraint local_rule { local_value >= 0; }
+  function int local_modes();
+    return this.local_value.rand_mode()
+        + this.local_rule.constraint_mode();
+  endfunction
+endclass
+class ModeDerived extends ModeBase;
+  function int inherited_modes();
+    return this.protected_value.rand_mode()
+        + this.protected_rule.constraint_mode();
+  endfunction
+endclass
+module allowed_mode_user;
+  ModeDerived object;
+  int result;
+  initial result = object.public_value.rand_mode()
+      + object.public_rule.constraint_mode();
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(allowed_modes.ok(), "valid randomization mode access must parse");
+  std::vector<Diagnostic> allowed_mode_diagnostics;
+  require(
+      resolve_systemverilog_classes(
+          allowed_modes.design, allowed_mode_diagnostics),
+      "local owner, protected derived, and public external mode access must resolve");
+
+  auto denied_modes = parse_text(
+      "denied_class_modes.sv",
+      R"(
+class ModeBase;
+  protected rand int protected_value;
+  local rand int local_value;
+  protected constraint protected_rule { protected_value >= 0; }
+  local constraint local_rule { local_value >= 0; }
+endclass
+class ModeDerived extends ModeBase;
+  function int denied_local_mode();
+    return this.local_rule.constraint_mode();
+  endfunction
+endclass
+module denied_mode_user;
+  ModeDerived object;
+  int result;
+  initial result = object.protected_value.rand_mode()
+      + object.local_value.rand_mode()
+      + object.protected_rule.constraint_mode()
+      + object.local_rule.constraint_mode();
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(denied_modes.ok(), "invalid randomization mode access must parse");
+  std::vector<Diagnostic> denied_mode_diagnostics;
+  require(
+      !resolve_systemverilog_classes(
+          denied_modes.design, denied_mode_diagnostics)
+          && std::ranges::count(
+              denied_mode_diagnostics,
+              std::string{"FSIM-SV-CLASS-021"},
+              &Diagnostic::code) == 5,
+      "local derived and nonpublic external mode access must reject precisely");
+
+  auto invalid_randomization_calls = parse_text(
+      "invalid_randomization_calls.sv",
+      R"(
+class RandomizationCalls;
+  int fixed_value;
+  rand int choice;
+  constraint legal { choice >= 0; }
+endclass
+module invalid_randomization_user;
+  RandomizationCalls object;
+  int result;
+  initial result = object.randomize(fixed_value)
+      + object.fixed_value.rand_mode()
+      + object.choice.rand_mode(0, 1)
+      + object.missing.constraint_mode();
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      invalid_randomization_calls.ok(),
+      "invalid randomization selections must remain syntactically valid");
+  std::vector<Diagnostic> invalid_randomization_diagnostics;
+  require(
+      !resolve_systemverilog_classes(
+          invalid_randomization_calls.design,
+          invalid_randomization_diagnostics)
+          && std::ranges::count(
+              invalid_randomization_diagnostics,
+              std::string{"FSIM-SV-CLASS-019"},
+              &Diagnostic::code) == 1
+          && std::ranges::count(
+              invalid_randomization_diagnostics,
+              std::string{"FSIM-SV-CLASS-020"},
+              &Diagnostic::code) == 3,
+      "nonrandom variable lists and invalid mode selections must diagnose precisely");
+
+  const auto malformed_constraint = parse_text(
+      "malformed_randomization_constraint.sv",
+      R"(
+class MalformedConstraint;
+  rand int value;
+  constraint broken value > 0;
+endclass
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::any_of(
+          malformed_constraint.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-264";
+          }),
+      "a missing constraint opening brace must retain its cataloged parse diagnostic");
 }
 
 }  // namespace fsim::tests::frontend

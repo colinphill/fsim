@@ -28,6 +28,11 @@ struct PropertyMatch {
   const SystemVerilogClassDeclaration* owner{};
 };
 
+struct ConstraintMatch {
+  const SystemVerilogClassConstraint* constraint{};
+  const SystemVerilogClassDeclaration* owner{};
+};
+
 struct MethodMatch {
   const SystemVerilogClassMethod* method{};
   const SystemVerilogClassDeclaration* owner{};
@@ -269,6 +274,48 @@ class Resolver final {
           : nullptr;
     }
     return {};
+  }
+
+  [[nodiscard]] ConstraintMatch find_constraint(
+      const std::string_view identity,
+      const std::string_view name) const {
+    std::set<std::string> visited;
+    auto current = find_class(identity);
+    while (current != nullptr
+           && visited.insert(current->canonical_identity).second) {
+      const auto constraint = std::ranges::find(
+          current->constraints, name,
+          &SystemVerilogClassConstraint::name);
+      if (constraint != current->constraints.end()) {
+        return {&*constraint, current};
+      }
+      current = current->base
+          ? find_class(current->base->declaration_identity)
+          : nullptr;
+    }
+    return {};
+  }
+
+  [[nodiscard]] bool can_access(
+      const SystemVerilogClassVisibility visibility,
+      const SystemVerilogClassDeclaration& owner,
+      const Scope& scope) const {
+    if (visibility == SystemVerilogClassVisibility::Public) return true;
+    if (scope.class_owner == nullptr) return false;
+    if (scope.class_owner->canonical_identity == owner.canonical_identity) {
+      return true;
+    }
+    if (visibility == SystemVerilogClassVisibility::Local) return false;
+    std::set<std::string> visited;
+    auto current = scope.class_owner;
+    while (current != nullptr
+           && visited.insert(current->canonical_identity).second) {
+      if (current->canonical_identity == owner.canonical_identity) return true;
+      current = current->base
+          ? find_class(current->base->declaration_identity)
+          : nullptr;
+    }
+    return false;
   }
 
   static void retain_result_type(
@@ -560,6 +607,76 @@ class Resolver final {
     }
 
     if (expression.text.starts_with('.') && !expression.operands.empty()) {
+      const auto built_in_mode = expression.text == ".rand_mode"
+          || expression.text == ".constraint_mode";
+      if (built_in_mode
+          && expression.operands.front().kind == ExpressionKind::Identifier) {
+        const auto selected = expression.operands.front().text.rfind('.');
+        if (selected != std::string::npos) {
+          Expression receiver{
+              ExpressionKind::Identifier,
+              expression.operands.front().text.substr(0, selected),
+              {}, expression.operands.front().span};
+          const auto receiver_type = resolve_expression(receiver, scope);
+          const auto identity = receiver_type
+              ? class_identity(*receiver_type) : std::nullopt;
+          const auto member = expression.operands.front().text.substr(
+              selected + 1U);
+          std::string canonical;
+          SystemVerilogClassVisibility visibility{
+              SystemVerilogClassVisibility::Public};
+          const SystemVerilogClassDeclaration* owner{};
+          if (identity && expression.text == ".rand_mode") {
+            const auto property = find_property(*identity, member);
+            if (property.property
+                && (property.property->is_rand
+                    || property.property->is_randc)) {
+              canonical = property.owner->canonical_identity + "::"
+                  + property.property->declaration.name;
+              visibility = property.property->visibility;
+              owner = property.owner;
+            }
+          } else if (identity) {
+            const auto constraint = find_constraint(*identity, member);
+            if (constraint.constraint) {
+              canonical = constraint.constraint->canonical_identity;
+              visibility = constraint.constraint->visibility;
+              owner = constraint.owner;
+            }
+          }
+          if (canonical.empty() || expression.operands.size() > 2U) {
+            diagnose(
+                diagnostics_, "FSIM-SV-CLASS-020",
+                "randomization mode call does not select a visible random "
+                "property or constraint block",
+                expression.span);
+            return std::nullopt;
+          }
+          if (owner != nullptr && !can_access(visibility, *owner, scope)) {
+            diagnose(
+                diagnostics_, "FSIM-SV-CLASS-021",
+                "randomization mode call cannot access a nonpublic member",
+                expression.span);
+            return std::nullopt;
+          }
+          expression.operands.front() = std::move(receiver);
+          expression.text = "@sv-method:@builtin-"
+              + std::string{expression.text == ".rand_mode"
+                    ? "rand-mode:" : "constraint-mode:"}
+              + canonical;
+          expression.call_argument_names.resize(expression.operands.size());
+          expression.call_argument_directions.assign(
+              expression.operands.size(), PortDirection::Input);
+          for (auto& operand : expression.operands | std::views::drop(1)) {
+            resolve_expression(operand, scope);
+          }
+          Type result{
+              ValueDomain::Integer, "int",
+              PackedRange{31, 0, true}, true};
+          retain_result_type(expression, result);
+          return result;
+        }
+      }
       auto receiver_type = resolve_expression(expression.operands.front(), scope);
       constexpr std::string_view container_property_prefix{
           "@sv-container-property:"};
@@ -614,6 +731,47 @@ class Resolver final {
         return std::nullopt;
       }
       const auto name = expression.text.substr(1U);
+      if (name == "randomize") {
+        const auto receiver_identity = *class_identity(*receiver_type);
+        expression.text = "@sv-method:@builtin-randomize";
+        expression.call_argument_names.resize(expression.operands.size());
+        expression.call_argument_directions.assign(
+            expression.operands.size(), PortDirection::Input);
+        for (std::size_t index = 1; index < expression.operands.size();
+             ++index) {
+          const auto selected_name = expression.operands[index].text;
+          const auto selected =
+              expression.operands[index].kind == ExpressionKind::Identifier
+                  ? find_property(receiver_identity, selected_name)
+                  : PropertyMatch{};
+          if (!selected.property
+              || (!selected.property->is_rand
+                  && !selected.property->is_randc)) {
+            diagnose(
+                diagnostics_,
+                "FSIM-SV-CLASS-019",
+                "object randomize variable list requires a rand or randc "
+                "property of class '" + receiver_identity + "'",
+                expression.operands[index].span);
+            continue;
+          }
+          expression.call_argument_names[index] =
+              selected.owner->canonical_identity + "::"
+              + selected.property->declaration.name;
+          expression.operands[index] = Expression{
+              ExpressionKind::IntegerLiteral,
+              "0",
+              {},
+              expression.operands[index].span};
+        }
+        Type result{
+            ValueDomain::Integer,
+            "int",
+            PackedRange{31, 0, true},
+            true};
+        retain_result_type(expression, result);
+        return result;
+      }
       const auto match = select_method(
           *class_identity(*receiver_type),
           name,

@@ -341,7 +341,9 @@ std::optional<CheckedProject> load_objects(
       checked.parsed, checked.semantics);
   checked.systemverilog_hir =
       application_detail::build_systemverilog_hir(
-          checked.parsed, checked.semantics);
+          checked.parsed,
+          checked.semantics,
+          checked.systemverilog_class_specializations);
   if (!checked.semantics.valid()) {
     diagnostics.error(
         "FSIM-ART-0005",

@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 
 namespace fsim::tests::runtime {
 
@@ -28,6 +29,13 @@ fsim::runtime::SystemVerilogClassDescriptor descriptor() {
       {"count", SystemVerilogClassPropertyKind::Integer, 64},
       {"label", SystemVerilogClassPropertyKind::String, 0},
       {"next", SystemVerilogClassPropertyKind::ClassHandle, 64}};
+  result.properties[0].random_kind = SystemVerilogClassRandomKind::Rand;
+  result.properties[0].nominal_type = "bit[8:0]";
+  result.properties[1].random_kind = SystemVerilogClassRandomKind::Randc;
+  result.properties[1].signed_value = true;
+  result.properties[1].nominal_type = "work::mode_t";
+  result.properties[4].random_kind = SystemVerilogClassRandomKind::Rand;
+  result.properties[4].nominal_type = "work::Base";
   return result;
 }
 
@@ -35,8 +43,44 @@ fsim::runtime::SystemVerilogClassDescriptor descriptor() {
 
 void test_systemverilog_class_heap() {
   using namespace fsim::runtime;
-  SystemVerilogClassHeap heap{{2, 44}};
+  SystemVerilogClassHeap heap{{2, 266}};
   require(!heap.contains(0), "the null class handle must never be live");
+
+  const auto stream_snapshot = [](const std::uint64_t seed,
+                                  std::string root) {
+    SystemVerilogClassHeap random_heap{{}, seed};
+    auto first_descriptor = descriptor();
+    first_descriptor.random_root_identity = std::move(root);
+    const auto first_handle = random_heap.allocate(first_descriptor);
+    const auto second_handle = random_heap.allocate(first_descriptor);
+    auto first_call = random_heap.random_stream(
+        first_handle, "work::Base::randomize@call-a");
+    auto repeated_call = random_heap.random_stream(
+        first_handle, "work::Base::randomize@call-a");
+    auto other_call = random_heap.random_stream(
+        first_handle, "work::Base::randomize@call-b");
+    return std::tuple{
+        random_heap.object(first_handle).random_root_seed,
+        random_heap.object(first_handle).random_object_seed,
+        random_heap.object(second_handle).random_object_seed,
+        random_heap.random_state(first_handle, "two_state").stream_seed,
+        first_call.call_seed,
+        first_call.next_u64(),
+        repeated_call.call_seed,
+        other_call.call_seed};
+  };
+  const auto stream_first = stream_snapshot(42, "root_a");
+  const auto stream_replay = stream_snapshot(42, "root_a");
+  const auto stream_changed_seed = stream_snapshot(43, "root_a");
+  const auto stream_changed_root = stream_snapshot(42, "root_b");
+  require(
+      stream_first == stream_replay
+          && stream_first != stream_changed_seed
+          && stream_first != stream_changed_root
+          && std::get<1>(stream_first) != std::get<2>(stream_first)
+          && std::get<4>(stream_first) != std::get<6>(stream_first)
+          && std::get<4>(stream_first) != std::get<7>(stream_first),
+      "simulation, root, object, property, call-site, and call-ordinal streams must be deterministic and independent");
 
   std::vector<SystemVerilogClassHeap::ConstructorStep> constructors;
   constructors.push_back([](auto& runtime, const auto handle) {
@@ -51,7 +95,7 @@ void test_systemverilog_class_heap() {
   require(
       first != 0 && heap.contains(first)
           && heap.live_objects() == 1
-          && heap.storage_bytes() == 22,
+          && heap.storage_bytes() == 133,
       "allocation must consume the exact storage-derived budget");
   const auto& object = heap.object(first);
   require(
@@ -67,6 +111,17 @@ void test_systemverilog_class_heap() {
           && object.properties[3].string.empty()
           && object.properties[4].handle == 0,
       "class properties must use deterministic language defaults");
+  require(
+      heap.random_state(first, "two_state").kind
+              == SystemVerilogClassRandomKind::Rand
+          && heap.random_state(first, "four_state").kind
+              == SystemVerilogClassRandomKind::Randc
+          && heap.random_state(first, "four_state").signed_value
+          && heap.random_state(first, "four_state").width == 9
+          && heap.random_state(first, "four_state").nominal_type
+              == "work::mode_t"
+          && heap.random_state(first, "next").nominal_type == "work::Base",
+      "per-object random state must retain exact kinds, widths, signedness, enums, and handle profiles");
   const auto alias = first;
   heap.property(alias, "next").handle = first;
   require(
@@ -92,9 +147,15 @@ void test_systemverilog_class_heap() {
       "invalid downcasts and property selections must fail explicitly");
 
   const auto second = heap.allocate(descriptor());
+  heap.random_state(first, "two_state").enabled = false;
+  ++heap.random_state(first, "two_state").revision;
   require(
-      heap.live_objects() == 2 && heap.storage_bytes() == 44,
-      "the heap must account every live object");
+      heap.live_objects() == 2 && heap.storage_bytes() == 266
+          && !heap.random_state(first, "two_state").enabled
+          && heap.random_state(first, "two_state").revision == 1
+          && heap.random_state(second, "two_state").enabled
+          && heap.random_state(second, "two_state").revision == 0,
+      "the heap must account every live object and isolate its random state");
   bool live_budget_failed = false;
   try {
     (void)heap.allocate(descriptor());
@@ -135,7 +196,7 @@ void test_systemverilog_class_heap() {
           && heap.live_objects() == live_before_failed_constructor,
       "constructor failure must release the unpublished object transactionally");
 
-  SystemVerilogClassHeap storage_limited{{10, 21}};
+  SystemVerilogClassHeap storage_limited{{10, 132}};
   bool storage_budget_failed = false;
   try {
     (void)storage_limited.allocate(descriptor());
@@ -157,6 +218,58 @@ void test_systemverilog_class_heap() {
     duplicate_failed = true;
   }
   require(duplicate_failed, "duplicate property descriptors must be rejected");
+
+  const auto random_check = heap.allocate(descriptor());
+  bool nonrandom_failed = false;
+  try {
+    (void)heap.random_state(random_check, "count");
+  } catch (const std::invalid_argument&) {
+    nonrandom_failed = true;
+  }
+  auto invalid_randc = descriptor();
+  invalid_randc.properties[4].random_kind =
+      SystemVerilogClassRandomKind::Randc;
+  bool randc_profile_failed = false;
+  try {
+    (void)heap.allocate(invalid_randc);
+  } catch (const std::invalid_argument&) {
+    randc_profile_failed = true;
+  }
+  require(
+      nonrandom_failed && randc_profile_failed,
+      "nonrandom state access and nonintegral randc profiles must fail explicitly");
+
+  auto mode_descriptor = descriptor();
+  mode_descriptor.constraint_modes = {
+      {"work::Base::base_rule", true},
+      {"work::Derived::derived_rule", true}};
+  SystemVerilogClassHeap mode_heap;
+  const auto mode_first = mode_heap.allocate(mode_descriptor);
+  const auto mode_second = mode_heap.allocate(mode_descriptor);
+  mode_heap.set_random_mode(mode_first, "two_state", false);
+  mode_heap.set_constraint_mode(mode_first, "derived_rule", false);
+  require(
+      !mode_heap.random_mode(mode_first, "two_state")
+          && mode_heap.random_mode(mode_second, "two_state")
+          && !mode_heap.constraint_mode(mode_first, "derived_rule")
+          && mode_heap.constraint_mode(mode_second, "derived_rule")
+          && mode_heap.constraint_mode(mode_first, "base_rule"),
+      "property and constraint modes must be independently owned by each object");
+  bool invalid_random_mode_failed = false;
+  try {
+    (void)mode_heap.random_mode(mode_first, "count");
+  } catch (const std::invalid_argument&) {
+    invalid_random_mode_failed = true;
+  }
+  bool missing_constraint_mode_failed = false;
+  try {
+    (void)mode_heap.constraint_mode(mode_first, "missing_rule");
+  } catch (const std::out_of_range&) {
+    missing_constraint_mode_failed = true;
+  }
+  require(
+      invalid_random_mode_failed && missing_constraint_mode_failed,
+      "mode access must reject nonrandom properties and missing constraint blocks");
 
   SystemVerilogClassHeap container_heap;
   const auto element = container_heap.allocate(descriptor());
@@ -214,7 +327,7 @@ void test_systemverilog_class_heap() {
           && associative.at("primary") == element
           && associative.at("missing") == 0
           && aggregate.at("left") == element
-          && container_heap.storage_bytes() == 118,
+          && container_heap.storage_bytes() == 229,
       "fixed, dynamic, queue, keyed, aggregate, and property containers must preserve aliases and exact budgets");
   queue.push_back(container_heap, element);
   bool queue_budget_failed = false;

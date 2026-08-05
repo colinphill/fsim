@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
+#include "fsim/runtime/scope_randomize.hpp"
 #include "simir_signal_attributes.hpp"
 #include "fsim/runtime/string_methods.hpp"
 #include "simir_execution_context.hpp"
@@ -284,6 +285,7 @@ void Interpreter::Impl::handle_boundary(
       actuals.push_back(read_boundary_register(actual));
     }
     const auto handle = class_allocate_hook(
+        process.program.name,
         class_allocate->specialization_identity,
         class_allocate->declared_type,
         actuals,
@@ -658,6 +660,7 @@ void Interpreter::Impl::execute(ProcessId id) {
               actuals.push_back(get_register(process, actual));
             }
             const auto handle = class_allocate_hook(
+                process.program.name,
                 op.specialization_identity,
                 op.declared_type,
                 actuals,
@@ -1629,6 +1632,35 @@ void Interpreter::Impl::execute(ProcessId id) {
                     op.kind,
                     maximum,
                     minimum);
+            ++process.pc;
+          } else if constexpr (
+              std::is_same_v<OperationType, ScopeRandomize>) {
+            SystemVerilogScopeRandomizeRequest request;
+            request.limits.maximum_domain_values =
+                op.maximum_domain_values;
+            request.selection =
+                (static_cast<std::uint64_t>(next_random(process)) << 32U)
+                | next_random(process);
+            request.variables.reserve(op.targets.size());
+            for (const auto& target : op.targets) {
+              request.variables.push_back({
+                  target.canonical_identity,
+                  {target.domain_kind == ScopeRandomizeDomainKind::enumeration
+                       ? SystemVerilogConstraintDomainKind::Enumeration
+                       : target.domain_kind
+                                 == ScopeRandomizeDomainKind::integer
+                             ? SystemVerilogConstraintDomainKind::Integer
+                             : SystemVerilogConstraintDomainKind::BitVector,
+                   target.width,
+                   target.signed_value,
+                   target.nominal_type},
+                  target.domain,
+                  &get_register(process, target.target)});
+            }
+            const auto result = randomize_systemverilog_scope(request);
+            get_register(process, op.destination) =
+                PackedLogic4::from_aval_bval(
+                    32, result.language_result(), 0);
             ++process.pc;
           } else if constexpr (std::is_same_v<OperationType, Report>) {
             if (report_hook) {

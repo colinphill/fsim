@@ -452,6 +452,7 @@ class VerilogParser final : private detail::ParserBase {
   SystemVerilogClassConstraint parse_class_constraint(
       const Token& start,
       std::string_view owner_identity,
+      SystemVerilogClassVisibility visibility,
       bool is_static,
       bool is_pure,
       bool is_extern);

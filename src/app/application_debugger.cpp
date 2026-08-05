@@ -359,6 +359,23 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
                index < object.properties.size(); ++index) {
             output_ << "  " << object.property_names[index] << " = "
                     << format_class_property(object.properties[index]) << '\n';
+            const auto& random = object.properties[index].random_state;
+            if (random) {
+              output_ << "    "
+                      << (random->kind
+                                  == runtime::SystemVerilogClassRandomKind::Randc
+                              ? "randc" : "rand")
+                      << " enabled " << random->enabled
+                      << " revision " << random->revision
+                      << " stream " << random->stream_seed
+                      << " domain " << random->randc_domain_signature
+                      << " cycle " << random->randc_cycle
+                      << " used " << random->randc_used_values.size() << '\n';
+            }
+          }
+          for (const auto& [identity, enabled] : object.constraint_modes) {
+            output_ << "  constraint " << identity
+                    << " enabled " << enabled << '\n';
           }
         }
       } catch (const std::exception& exception) {

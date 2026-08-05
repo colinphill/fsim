@@ -426,7 +426,8 @@ using namespace elaboration_detail;
         if (expression.kind == ExpressionKind::Call
             && (expression.text == "$urandom"
                 || expression.text == "$random"
-                || expression.text == "$urandom_range")) {
+                || expression.text == "$urandom_range"
+                || expression.text == "std::randomize")) {
             return std::size_t{32};
         }
         if (expression.kind == ExpressionKind::Call

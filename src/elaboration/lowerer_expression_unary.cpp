@@ -759,6 +759,95 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
                 expression.operands.front(), source_width);
         }
         if (expression.kind == ExpressionKind::Call
+            && expression.text == "std::randomize") {
+            if (language_ != frontend::Language::SystemVerilog2017
+                || expression.operands.empty()) {
+                report(
+                    "FSIM-ELAB-SVRAND-001",
+                    "std::randomize requires one or more local packed "
+                    "arguments in SystemVerilog",
+                    expression.span);
+                return std::nullopt;
+            }
+            ScopeRandomize operation;
+            operation.destination = allocate_register(
+                32, frontend::ValueDomain::Integer);
+            operation.maximum_domain_values = std::size_t{1} << 20U;
+            struct CopyOut {
+                const Expression* expression{};
+                const frontend::Type* type{};
+                RegisterId value{};
+            };
+            std::vector<CopyOut> copy_outs;
+            for (const auto& operand : expression.operands) {
+                if (operand.kind != ExpressionKind::Identifier) {
+                    report(
+                        "FSIM-ELAB-SVRAND-002",
+                        "std::randomize arguments must be writable local "
+                        "identifiers",
+                        operand.span);
+                    return std::nullopt;
+                }
+                const auto local = local_types_.find(operand.text);
+                if (local == local_types_.end() || local->second == nullptr
+                    || local->second->systemverilog_container) {
+                    report(
+                        "FSIM-ELAB-SVRAND-003",
+                        "std::randomize argument '" + operand.text
+                            + "' is not a supported packed local",
+                        operand.span);
+                    return std::nullopt;
+                }
+                const auto& type = *local->second;
+                const auto width = type.width();
+                if (!width || *width == 0 || *width > 64) {
+                    report(
+                        "FSIM-ELAB-SVRAND-004",
+                        "std::randomize packed locals require a width in "
+                        "1..64",
+                        operand.span);
+                    return std::nullopt;
+                }
+                const auto target = lower_expression(operand, *width);
+                if (!target) return std::nullopt;
+                ScopeRandomizeTarget retained;
+                retained.target = *target;
+                retained.canonical_identity = process_.name + "::"
+                    + operand.text;
+                retained.width = static_cast<std::uint32_t>(*width);
+                retained.signed_value = type.is_signed;
+                retained.nominal_type = !type.named_type.empty()
+                    ? type.named_type : type.spelling;
+                retained.domain_kind = !type.enumeration_literals.empty()
+                    ? ScopeRandomizeDomainKind::enumeration
+                    : type.domain == frontend::ValueDomain::Integer
+                        ? ScopeRandomizeDomainKind::integer
+                        : ScopeRandomizeDomainKind::bit_vector;
+                if (!type.enumeration_literals.empty()) {
+                    for (std::size_t ordinal = 0;
+                         ordinal < type.enumeration_literals.size();
+                         ++ordinal) {
+                        retained.domain.push_back(
+                            PackedLogic4::from_aval_bval(
+                                *width, ordinal, 0));
+                    }
+                }
+                operation.targets.push_back(std::move(retained));
+                copy_outs.push_back({&operand, &type, *target});
+            }
+            const auto destination = operation.destination;
+            process_.operations.emplace_back(std::move(operation));
+            for (std::size_t index = 0; index < copy_outs.size(); ++index) {
+                lower_callable_copy_out(
+                    *copy_outs[index].expression,
+                    *copy_outs[index].type,
+                    copy_outs[index].value,
+                    {}, {}, false, false,
+                    "@std_randomize_copyout_" + std::to_string(index));
+            }
+            return destination;
+        }
+        if (expression.kind == ExpressionKind::Call
             && (expression.text == "$urandom"
                 || expression.text == "$random")) {
             const bool urandom = expression.text == "$urandom";

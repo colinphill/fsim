@@ -361,6 +361,127 @@ struct TypeReference {
     std::optional<ExpressionId> queue_maximum;
     std::optional<semantic::TypeReference> associative_index;
     std::vector<PackedRange> unpacked_dimensions;
+    std::optional<std::uint64_t> executable_width;
+    bool four_state{};
+};
+
+enum class ClassVisibility : std::uint8_t {
+    public_access,
+    protected_access,
+    local_access,
+};
+
+enum class ClassRandomKind : std::uint8_t {
+    none,
+    rand,
+    randc,
+};
+
+/// Source-normalized expression forms admitted by the executable
+/// SystemVerilog-2017 constraint subset. Name and type bindings remain empty
+/// until specialization-aware constraint resolution.
+enum class ConstraintExpressionKind : std::uint8_t {
+    invalid,
+    name,
+    integer_literal,
+    boolean_literal,
+    logic_literal,
+    string_literal,
+    unary,
+    binary,
+    conditional,
+    call,
+    index,
+    slice,
+    concatenation,
+    replication,
+    assignment_pattern,
+    inside_set,
+    inside_range,
+    distribution,
+    distribution_item,
+    soft,
+    constraint_block,
+    implication,
+    conditional_constraint,
+    foreach_constraint,
+    solve_before,
+    solve_list,
+};
+
+enum class ConstraintReferenceKind : std::uint8_t {
+    property,
+    parameter,
+    local_variable,
+    method,
+};
+
+struct ConstraintBinding {
+    ConstraintReferenceKind kind{ConstraintReferenceKind::property};
+    std::string specialization_identity;
+    std::string canonical_identity;
+    TypeReference type;
+    std::string constant_value;
+};
+
+struct ConstraintExpression {
+    ConstraintExpressionKind kind{ConstraintExpressionKind::invalid};
+    std::string text;
+    std::string resolved_identity;
+    SourceSpanId source;
+    std::vector<ConstraintExpression> operands;
+    std::vector<ConstraintBinding> bindings;
+};
+
+struct ClassProperty {
+    std::string name;
+    std::string canonical_identity;
+    std::string owner_identity;
+    TypeReference type;
+    ClassVisibility visibility{ClassVisibility::public_access};
+    ClassRandomKind random_kind{ClassRandomKind::none};
+    bool static_storage{};
+    bool constant{};
+    SourceSpanId source;
+};
+
+struct ClassConstraint {
+    std::string name;
+    std::string canonical_identity;
+  std::string owner_identity;
+  ClassVisibility visibility{ClassVisibility::public_access};
+    std::vector<ConstraintExpression> expressions;
+    bool static_constraint{};
+    bool pure{};
+    bool external{};
+    bool defined{true};
+    SourceSpanId source;
+};
+
+struct ComposedClassConstraint {
+    std::string name;
+    std::string selected_identity;
+    std::string overridden_identity;
+    bool overrides{};
+    bool override_legal{true};
+    bool mode_enabled{true};
+};
+
+/// One flattened class declaration. Declared members retain their exact
+/// owner while base_declaration_identity records the inherited ownership edge;
+/// later composition can therefore walk base-to-derived without copying or
+/// renaming source declarations.
+struct ClassDeclaration {
+    std::string name;
+    std::string canonical_identity;
+    std::string enclosing_identity;
+    std::string base_declaration_identity;
+    std::vector<ClassProperty> properties;
+    std::vector<ClassConstraint> constraints;
+    std::vector<ComposedClassConstraint> composed_constraints;
+    bool virtual_class{};
+    bool interface_class{};
+    SourceSpanId source;
 };
 
 struct PackedMember {
@@ -528,6 +649,7 @@ public:
     [[nodiscard]] const std::vector<Expression>& expressions() const noexcept;
     [[nodiscard]] const std::vector<Statement>& statements() const noexcept;
     [[nodiscard]] const std::vector<Process>& processes() const noexcept;
+    [[nodiscard]] const std::vector<ClassDeclaration>& classes() const noexcept;
 
     std::vector<Unit>& mutable_units() noexcept;
     std::vector<Declaration>& mutable_declarations() noexcept;
@@ -535,6 +657,7 @@ public:
     std::vector<Expression>& mutable_expressions() noexcept;
     std::vector<Statement>& mutable_statements() noexcept;
     std::vector<Process>& mutable_processes() noexcept;
+    std::vector<ClassDeclaration>& mutable_classes() noexcept;
 
 private:
     std::vector<Unit> units_;
@@ -543,6 +666,7 @@ private:
     std::vector<Expression> expressions_;
     std::vector<Statement> statements_;
     std::vector<Process> processes_;
+    std::vector<ClassDeclaration> classes_;
 };
 
 } // namespace fsim::semantic::sv

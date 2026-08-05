@@ -1194,26 +1194,25 @@ using runtime::Logic9; using namespace runtime::simir;
               }
             }
             result.uses_monitor_install = true;
-          } else if constexpr (std::is_same_v<OperationType, MonitorControl>) {
-            result.uses_monitor_control = true;
+          } else if constexpr (std::is_same_v<OperationType, MonitorControl>) { result.uses_monitor_control = true;
           } else if constexpr (std::is_same_v<OperationType, RandomValue>) {
-            record_definition(operation.destination, index);
-            constrain_width(operation.destination, 32U, index);
-            if (operation.maximum) {
-              record_use(*operation.maximum, index);
-            }
-            if (operation.minimum) {
-              record_use(*operation.minimum, index);
-            }
+            record_definition(operation.destination, index); constrain_width(operation.destination, 32U, index);
+            if (operation.maximum) record_use(*operation.maximum, index);
+            if (operation.minimum) record_use(*operation.minimum, index);
             if (operation.minimum && !operation.maximum) {
-              reject(
-                  process,
-                  index,
-                  "random minimum requires a maximum");
+              reject(process, index, "random minimum requires a maximum");
             }
             result.uses_random_value = true;
-          } else if constexpr (std::is_same_v<OperationType, Report>) {
-            result.uses_report = true;
+          } else if constexpr (std::is_same_v<OperationType, ScopeRandomize>) {
+            record_definition(operation.destination, index); constrain_width(operation.destination, 32U, index);
+            if (operation.targets.empty()) reject(process, index, "scope randomize requires a target");
+            for (const auto& target : operation.targets) {
+              record_use(target.target, index); record_definition(target.target, index);
+              constrain_width(target.target, target.width, index);
+              if (target.canonical_identity.empty() || target.width == 0 || target.nominal_type.empty()) reject(process, index, "scope randomize target is incomplete");
+            }
+            record_unsupported(index, "scope randomize uses the interpreter solver service");
+          } else if constexpr (std::is_same_v<OperationType, Report>) { result.uses_report = true;
           } else if constexpr (std::is_same_v<OperationType, Jump>) {
             validate_target(operation.target, index, "jump");
           } else if constexpr (std::is_same_v<OperationType, Call>) {

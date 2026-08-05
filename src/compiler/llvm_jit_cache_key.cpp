@@ -85,6 +85,7 @@ using runtime::simir::ReductionOperator;
 using runtime::simir::ReleaseSignalSlice;
 using runtime::simir::RegisterId;
 using runtime::simir::RandomValue;
+using runtime::simir::ScopeRandomize;
 using runtime::simir::Report;
 using runtime::simir::Return;
 using runtime::simir::Shift;
@@ -1607,6 +1608,35 @@ void add_dynamic_part_index_key(
             if (value.minimum) {
               add_key_u64(
                   builder, "minimum", *value.minimum);
+            }
+          } else if constexpr (std::is_same_v<OperationType, ScopeRandomize>) {
+            builder.add("operation", "ScopeRandomize");
+            add_key_u64(builder, "destination", value.destination);
+            add_key_u64(
+                builder, "maximum-domain-values",
+                value.maximum_domain_values);
+            add_key_u64(builder, "target-count", value.targets.size());
+            for (std::size_t index = 0; index < value.targets.size(); ++index) {
+              const auto& target = value.targets[index];
+              const auto key = "target-" + std::to_string(index) + "-";
+              add_key_u64(builder, key + "register", target.target);
+              builder.add(key + "identity", target.canonical_identity);
+              add_key_u64(builder, key + "width", target.width);
+              add_key_u64(
+                  builder, key + "signed", target.signed_value ? 1U : 0U);
+              add_key_u64(
+                  builder, key + "domain-kind",
+                  static_cast<std::underlying_type_t<
+                      runtime::simir::ScopeRandomizeDomainKind>>(
+                      target.domain_kind));
+              builder.add(key + "nominal-type", target.nominal_type);
+              add_key_u64(builder, key + "domain-size", target.domain.size());
+              for (std::size_t value_index = 0;
+                   value_index < target.domain.size(); ++value_index) {
+                builder.add(
+                    key + "domain-" + std::to_string(value_index),
+                    target.domain[value_index].to_msb_string());
+              }
             }
           } else if constexpr (std::is_same_v<OperationType, Report>) {
             builder.add("operation", "Report");

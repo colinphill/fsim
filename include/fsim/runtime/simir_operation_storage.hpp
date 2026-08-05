@@ -25,7 +25,7 @@ using ValueOperationGroup =
                    Extract, DynamicExtract, DynamicPartSelect, Concatenate,
                    Binary, Insert, DynamicInsert, DynamicPartInsert,
                    IntegerUnary, IntegerBinary, IntegerCheck,
-                   ConditionalSelect, RandomValue>;
+                   ConditionalSelect, RandomValue, ScopeRandomize>;
 
 using SignalOperationGroup =
     OperationGroup<ReadSignal, SignalEvent, SignalLastValue, SignalLastEvent,
@@ -196,7 +196,7 @@ static_assert(
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
         + std::variant_size_v<ClassOperationGroup::Storage>
-    == 130);
+    == 131);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept {

@@ -284,14 +284,55 @@ endmodule
   auto class_parsed = fsim::frontend::parse_text(
       "class_hir.sv",
       R"(
-class HirObject;
+class HirBase;
+  rand int base_value;
+  constraint nonnegative {
+    base_value >= 0;
+  }
+endclass
+class HirObject #(parameter int MAX = 3) extends HirBase;
   int payload;
   static int count;
+  local static const int limit = 3;
+  randc logic [1:0] choice;
+  rand int samples[0:2];
+  constraint nonnegative {
+    base_value >= 1;
+  }
+  constraint valid_choice {
+    this.choice inside {[0:2], 3};
+    payload + super.base_value <= MAX;
+    payload <= limit;
+    payload <= limit_value();
+  }
+  constraint weighted_choice {
+    soft choice inside {0, 1};
+    choice dist {0 := 1, [1:3] :/ 6};
+  }
+  constraint structured_choice {
+    (choice == 0) -> { payload == 0; }
+    if (choice == 1) { payload == 1; }
+    else { payload >= 0; }
+    foreach (samples[i]) { samples[i] >= 0; }
+    solve payload before choice;
+  }
+  pure constraint inherited_contract;
   function new();
   endfunction
   function int read();
     return payload;
   endfunction
+  function int limit_value();
+    return limit;
+  endfunction
+endclass
+class IllegalOverride extends HirBase;
+  static constraint nonnegative {
+    base_value >= 2;
+  }
+endclass
+class HirHolder;
+  HirObject #(.MAX(7)) wide;
 endclass
 module class_hir_top;
   HirObject handle;
@@ -322,8 +363,14 @@ endmodule
       std::span<const fsim::app::CheckedSource>{},
       std::span<const fsim::app::CheckedSource>{},
       std::span<const fsim::app::CheckedSource>{});
+  auto class_specializations =
+      fsim::frontend::specialize_systemverilog_classes(
+          class_parsed.design);
+  assert(class_specializations.ok());
   auto class_hir = fsim::app::application_detail::build_systemverilog_hir(
-      class_parsed.design, class_model);
+      class_parsed.design,
+      class_model,
+      class_specializations.specializations);
   const auto handle_declaration = std::ranges::find(
       class_hir.declarations(),
       std::string{"handle"},
@@ -357,6 +404,340 @@ endmodule
              class_hir.statements(), [](const auto& statement) {
                return statement.class_handle_transfer;
              }) >= 3);
+  const auto hir_base = std::ranges::find(
+      class_hir.classes(),
+      std::string{"work::$unit::HirBase"},
+      &fsim::semantic::sv::ClassDeclaration::canonical_identity);
+  const auto hir_object = std::ranges::find(
+      class_hir.classes(),
+      std::string{"work::$unit::HirObject"},
+      &fsim::semantic::sv::ClassDeclaration::canonical_identity);
+  const auto illegal_override = std::ranges::find(
+      class_hir.classes(),
+      std::string{"work::$unit::IllegalOverride"},
+      &fsim::semantic::sv::ClassDeclaration::canonical_identity);
+  assert(hir_base != class_hir.classes().end());
+  assert(hir_object != class_hir.classes().end());
+  assert(illegal_override != class_hir.classes().end());
+  assert(hir_object->base_declaration_identity
+         == "work::$unit::HirBase");
+  assert(hir_base->properties.size() == 1);
+  assert(hir_base->properties.front().owner_identity
+         == "work::$unit::HirBase");
+  assert(hir_base->properties.front().random_kind
+         == fsim::semantic::sv::ClassRandomKind::rand);
+  assert(hir_object->properties.size() == 5);
+  assert(hir_object->properties[2].visibility
+         == fsim::semantic::sv::ClassVisibility::local_access);
+  assert(hir_object->properties[2].static_storage
+         && hir_object->properties[2].constant);
+  assert(hir_object->properties[3].random_kind
+         == fsim::semantic::sv::ClassRandomKind::randc);
+  assert(hir_object->constraints.size() == 5);
+  const auto valid_choice_position = std::ranges::find(
+      hir_object->constraints,
+      std::string{"valid_choice"},
+      &fsim::semantic::sv::ClassConstraint::name);
+  assert(valid_choice_position != hir_object->constraints.end());
+  const auto& valid_choice = *valid_choice_position;
+  const auto weighted_choice_position = std::ranges::find(
+      hir_object->constraints,
+      std::string{"weighted_choice"},
+      &fsim::semantic::sv::ClassConstraint::name);
+  assert(weighted_choice_position != hir_object->constraints.end());
+  const auto& weighted_choice = *weighted_choice_position;
+  assert(weighted_choice.expressions.size() == 2);
+  assert(weighted_choice.expressions[0].kind
+         == fsim::semantic::sv::ConstraintExpressionKind::soft);
+  assert(weighted_choice.expressions[0].operands.front().kind
+         == fsim::semantic::sv::ConstraintExpressionKind::inside_set);
+  assert(weighted_choice.expressions[1].kind
+         == fsim::semantic::sv::ConstraintExpressionKind::distribution);
+  assert(weighted_choice.expressions[1].operands.size() == 3);
+  assert(weighted_choice.expressions[1].operands[2].kind
+         == fsim::semantic::sv::ConstraintExpressionKind::distribution_item);
+  assert(weighted_choice.expressions[1].operands[2].text == "@dist-:/");
+  const auto structured_choice_position = std::ranges::find(
+      hir_object->constraints,
+      std::string{"structured_choice"},
+      &fsim::semantic::sv::ClassConstraint::name);
+  assert(structured_choice_position != hir_object->constraints.end());
+  const auto& structured_choice = *structured_choice_position;
+  assert(structured_choice.expressions.size() == 4);
+  assert(structured_choice.expressions[0].kind
+         == fsim::semantic::sv::ConstraintExpressionKind::implication);
+  assert(structured_choice.expressions[1].kind
+         == fsim::semantic::sv::ConstraintExpressionKind::conditional_constraint);
+  assert(structured_choice.expressions[1].operands.size() == 3);
+  assert(structured_choice.expressions[2].kind
+         == fsim::semantic::sv::ConstraintExpressionKind::foreach_constraint);
+  assert(structured_choice.expressions[2].operands[0].operands[1]
+             .bindings.front().kind
+         == fsim::semantic::sv::ConstraintReferenceKind::local_variable);
+  assert(structured_choice.expressions[3].kind
+         == fsim::semantic::sv::ConstraintExpressionKind::solve_before);
+  assert(valid_choice.canonical_identity
+         == "work::$unit::HirObject::valid_choice");
+  assert(valid_choice.owner_identity == "work::$unit::HirObject");
+  assert(valid_choice.expressions.size() == 4);
+  assert(valid_choice.expressions.front().kind
+         == fsim::semantic::sv::ConstraintExpressionKind::inside_set);
+  assert(valid_choice.expressions.front().operands.size() == 3);
+  assert(valid_choice.expressions.front().operands.front().bindings.size()
+         == 2);
+  assert(std::ranges::all_of(
+      valid_choice.expressions.front().operands.front().bindings,
+      [](const auto& binding) {
+        return binding.canonical_identity
+            == "work::$unit::HirObject::choice";
+      }));
+  assert(valid_choice.expressions.front().operands[1].kind
+         == fsim::semantic::sv::ConstraintExpressionKind::inside_range);
+  assert(valid_choice.expressions[1].kind
+         == fsim::semantic::sv::ConstraintExpressionKind::binary);
+  assert(valid_choice.expressions[1].operands.front().kind
+         == fsim::semantic::sv::ConstraintExpressionKind::binary);
+  assert(valid_choice.expressions[1].operands.front().operands[1]
+             .bindings.front().canonical_identity
+         == "work::$unit::HirBase::base_value");
+  assert(valid_choice.expressions[1].operands[1].bindings.front().kind
+         == fsim::semantic::sv::ConstraintReferenceKind::parameter);
+  assert(std::ranges::any_of(
+      valid_choice.expressions[1].operands[1].bindings,
+      [](const auto& binding) { return binding.constant_value == "3"; }));
+  assert(std::ranges::any_of(
+      valid_choice.expressions[1].operands[1].bindings,
+      [](const auto& binding) { return binding.constant_value == "7"; }));
+  const auto& arithmetic_constraint = valid_choice.expressions[1];
+  const auto& payload_reference =
+      arithmetic_constraint.operands[0].operands[0];
+  const auto& base_reference =
+      arithmetic_constraint.operands[0].operands[1];
+  const auto parameter_binding = std::ranges::find(
+      arithmetic_constraint.operands[1].bindings,
+      std::string{"3"},
+      &fsim::semantic::sv::ConstraintBinding::constant_value);
+  assert(parameter_binding
+         != arithmetic_constraint.operands[1].bindings.end());
+  const auto payload_binding = std::ranges::find(
+      payload_reference.bindings,
+      parameter_binding->specialization_identity,
+      &fsim::semantic::sv::ConstraintBinding::specialization_identity);
+  const auto base_binding = std::ranges::find(
+      base_reference.bindings,
+      parameter_binding->specialization_identity,
+      &fsim::semantic::sv::ConstraintBinding::specialization_identity);
+  assert(payload_binding != payload_reference.bindings.end());
+  assert(base_binding != base_reference.bindings.end());
+  assert(payload_binding->type.executable_width == 32
+         && payload_binding->type.four_state
+         && base_binding->type.executable_width == 32
+         && base_binding->type.signed_value);
+  fsim::runtime::SystemVerilogConstraintSolver source_solver;
+  const auto add_source_variable = [&](
+      const auto& binding,
+      const std::initializer_list<std::uint64_t> domain) {
+    fsim::runtime::SystemVerilogConstraintVariable variable;
+    variable.canonical_identity = binding.canonical_identity;
+    variable.profile = fsim::app::application_detail::
+        systemverilog_constraint_profile(binding);
+    for (const auto value : domain) {
+      variable.domain.push_back(
+          fsim::runtime::PackedLogic4::from_aval_bval(
+              variable.profile.width, value, 0));
+    }
+    return source_solver.add_variable(std::move(variable));
+  };
+  const auto payload_variable = add_source_variable(
+      *payload_binding, {4, 1});
+  const auto base_variable = add_source_variable(*base_binding, {0, 1});
+  const std::map<std::string,
+                 fsim::runtime::SystemVerilogConstraintVariableId>
+      source_variables{
+          {payload_binding->canonical_identity, payload_variable},
+          {base_binding->canonical_identity, base_variable}};
+  std::vector<fsim::runtime::SystemVerilogConstraintVariableId>
+      source_dependencies;
+  std::string lowering_error;
+  auto lowered_constraint = fsim::app::application_detail::
+      lower_systemverilog_constraint_expression(
+          arithmetic_constraint,
+          parameter_binding->specialization_identity,
+          source_variables,
+          source_dependencies,
+          lowering_error);
+  assert(lowered_constraint && lowering_error.empty());
+  source_solver.add_clause(
+      fsim::runtime::systemverilog_constraint_expression_clause(
+          valid_choice.canonical_identity + "::arithmetic",
+          source_dependencies,
+          std::move(*lowered_constraint)));
+  const auto source_solution = source_solver.solve();
+  assert(source_solution.status
+         == fsim::runtime::SystemVerilogConstraintSolveStatus::Satisfied);
+  assert(source_solution.values[payload_variable].low_word().aval == 1
+         && source_solution.values[base_variable].low_word().aval == 0);
+  const auto& weighted_subject = weighted_choice.expressions[1].operands[0];
+  const auto weighted_binding = std::ranges::find(
+      weighted_subject.bindings,
+      parameter_binding->specialization_identity,
+      &fsim::semantic::sv::ConstraintBinding::specialization_identity);
+  assert(weighted_binding != weighted_subject.bindings.end());
+  fsim::runtime::SystemVerilogConstraintSolver weighted_solver;
+  fsim::runtime::SystemVerilogConstraintVariable weighted_variable;
+  weighted_variable.canonical_identity = weighted_binding->canonical_identity;
+  weighted_variable.profile = fsim::app::application_detail::
+      systemverilog_constraint_profile(*weighted_binding);
+  for (std::uint64_t value = 0; value != 4; ++value) {
+    weighted_variable.domain.push_back(
+        fsim::runtime::PackedLogic4::from_aval_bval(
+            weighted_variable.profile.width, value, 0));
+  }
+  const auto weighted_variable_id = weighted_solver.add_variable(
+      std::move(weighted_variable));
+  const std::map<std::string,
+                 fsim::runtime::SystemVerilogConstraintVariableId>
+      weighted_variables{
+          {weighted_binding->canonical_identity, weighted_variable_id}};
+  std::vector<fsim::runtime::SystemVerilogConstraintVariableId>
+      weighted_dependencies;
+  auto lowered_soft = fsim::app::application_detail::
+      lower_systemverilog_constraint_expression(
+          weighted_choice.expressions[0],
+          parameter_binding->specialization_identity,
+          weighted_variables,
+          weighted_dependencies,
+          lowering_error);
+  assert(lowered_soft && lowering_error.empty());
+  auto soft_clause =
+      fsim::runtime::systemverilog_constraint_expression_clause(
+          weighted_choice.canonical_identity + "::soft-inside",
+          weighted_dependencies,
+          std::move(*lowered_soft));
+  soft_clause.soft = true;
+  weighted_solver.add_clause(std::move(soft_clause));
+  auto lowered_distribution = fsim::app::application_detail::
+      lower_systemverilog_constraint_distribution(
+          weighted_choice.expressions[1],
+          parameter_binding->specialization_identity,
+          weighted_variables,
+          weighted_solver.variables(),
+          weighted_choice.canonical_identity + "::dist",
+          lowering_error);
+  assert(lowered_distribution && lowering_error.empty());
+  weighted_solver.add_distribution(std::move(*lowered_distribution));
+  const auto weighted_solution = weighted_solver.solve(77);
+  const auto weighted_solution_replay = weighted_solver.solve(77);
+  assert(weighted_solution.status
+         == fsim::runtime::SystemVerilogConstraintSolveStatus::Satisfied);
+  assert(weighted_solution.values == weighted_solution_replay.values);
+  assert(weighted_solution.values[weighted_variable_id].low_word().aval <= 1);
+  const auto& foreach_selection =
+      structured_choice.expressions[2].operands[0];
+  const auto samples_binding = std::ranges::find(
+      foreach_selection.operands[0].bindings,
+      parameter_binding->specialization_identity,
+      &fsim::semantic::sv::ConstraintBinding::specialization_identity);
+  assert(samples_binding
+         != foreach_selection.operands[0].bindings.end());
+  fsim::runtime::SystemVerilogConstraintSolver structured_solver;
+  const auto add_structured_variable = [&](
+      const auto& binding, const std::uint64_t initial,
+      std::string identity) {
+    fsim::runtime::SystemVerilogConstraintVariable variable;
+    variable.canonical_identity = std::move(identity);
+    variable.profile = fsim::app::application_detail::
+        systemverilog_constraint_profile(binding);
+    variable.domain.push_back(
+        fsim::runtime::PackedLogic4::from_aval_bval(
+            variable.profile.width, initial, 0));
+    return structured_solver.add_variable(std::move(variable));
+  };
+  const auto structured_choice_variable = add_structured_variable(
+      *weighted_binding, 1, weighted_binding->canonical_identity);
+  const auto structured_payload_variable = add_structured_variable(
+      *payload_binding, 1, payload_binding->canonical_identity);
+  std::vector<fsim::runtime::SystemVerilogConstraintVariableId>
+      sample_variables;
+  for (std::size_t index = 0; index < 3; ++index) {
+    sample_variables.push_back(add_structured_variable(
+        *samples_binding, 0,
+        samples_binding->canonical_identity + "["
+            + std::to_string(index) + "]"));
+  }
+  const std::map<std::string,
+                 fsim::runtime::SystemVerilogConstraintVariableId>
+      structured_variables{
+          {weighted_binding->canonical_identity,
+           structured_choice_variable},
+          {payload_binding->canonical_identity,
+           structured_payload_variable}};
+  const std::map<std::string, std::vector<
+      fsim::runtime::SystemVerilogConstraintVariableId>>
+      structured_containers{
+          {samples_binding->canonical_identity, sample_variables}};
+  for (std::size_t index = 0; index < 3; ++index) {
+    std::vector<fsim::runtime::SystemVerilogConstraintVariableId>
+        dependencies;
+    auto lowered = fsim::app::application_detail::
+        lower_systemverilog_constraint_expression(
+            structured_choice.expressions[index],
+            parameter_binding->specialization_identity,
+            structured_variables,
+            dependencies,
+            lowering_error,
+            structured_containers);
+    assert(lowered && lowering_error.empty());
+    structured_solver.add_clause(
+        fsim::runtime::systemverilog_constraint_expression_clause(
+            structured_choice.canonical_identity + "::"
+                + std::to_string(index),
+            dependencies,
+            std::move(*lowered)));
+  }
+  auto solve_order = fsim::app::application_detail::
+      lower_systemverilog_solve_before(
+          structured_choice.expressions[3],
+          parameter_binding->specialization_identity,
+          structured_variables,
+          lowering_error);
+  assert(solve_order && lowering_error.empty() && solve_order->size() == 1);
+  for (const auto& [earlier, later] : *solve_order) {
+    structured_solver.add_solve_before(earlier, later);
+  }
+  const auto structured_order = structured_solver.search_order();
+  assert(std::ranges::find(structured_order, structured_payload_variable)
+         < std::ranges::find(structured_order, structured_choice_variable));
+  const auto structured_solution = structured_solver.solve();
+  assert(structured_solution.status
+         == fsim::runtime::SystemVerilogConstraintSolveStatus::Satisfied);
+  assert(structured_solution.values[structured_payload_variable]
+             .low_word().aval == 1);
+  assert(valid_choice.expressions[2].operands[1]
+             .bindings.front().canonical_identity
+         == "work::$unit::HirObject::limit");
+  assert(valid_choice.expressions.back().operands[1].kind
+         == fsim::semantic::sv::ConstraintExpressionKind::call);
+  assert(valid_choice.expressions.back().operands[1]
+             .bindings.front().canonical_identity
+         == "work::$unit::HirObject::limit_value");
+  assert(valid_choice.expressions.front().source
+         != valid_choice.source);
+  assert(hir_object->constraints.back().pure
+         && !hir_object->constraints.back().defined);
+  assert(hir_object->composed_constraints.size() == 5);
+  assert(hir_object->composed_constraints.front().name == "nonnegative");
+  assert(hir_object->composed_constraints.front().selected_identity
+         == "work::$unit::HirObject::nonnegative");
+  assert(hir_object->composed_constraints.front().overrides);
+  assert(hir_object->composed_constraints.front().override_legal);
+  assert(hir_object->composed_constraints.front().overridden_identity
+         == "work::$unit::HirBase::nonnegative");
+  assert(hir_object->composed_constraints.front().mode_enabled);
+  assert(!hir_object->composed_constraints.back().mode_enabled);
+  assert(illegal_override->composed_constraints.size() == 1);
+  assert(illegal_override->composed_constraints.front().overrides);
+  assert(!illegal_override->composed_constraints.front().override_legal);
 
   const auto design_source = directory.path / "design_ir.sv";
   {

@@ -10,6 +10,8 @@
 #endif
 #include "fsim/frontend/parser.hpp"
 #include "fsim/frontend/preprocessor.hpp"
+#include "fsim/runtime/constraint_solver.hpp"
+#include "fsim/runtime/class_randomize.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/support/environment.hpp"
@@ -90,7 +92,67 @@ void complete_vhdl_executable_hir(
 
 [[nodiscard]] semantic::sv::Hir build_systemverilog_hir(
     const frontend::ParsedDesign& parsed,
-    semantic::Model& semantics);
+    semantic::Model& semantics,
+    std::span<frontend::SystemVerilogClassSpecialization>
+        class_specializations = {});
+
+[[nodiscard]] runtime::SystemVerilogConstraintVariableProfile
+systemverilog_constraint_profile(
+    const semantic::sv::ConstraintBinding& binding);
+
+[[nodiscard]] std::optional<runtime::SystemVerilogConstraintExpression>
+lower_systemverilog_constraint_expression(
+    const semantic::sv::ConstraintExpression& expression,
+    std::string_view specialization_identity,
+    const std::map<std::string,
+                   runtime::SystemVerilogConstraintVariableId>& variables,
+    std::vector<runtime::SystemVerilogConstraintVariableId>& dependencies,
+    std::string& error,
+    const std::map<std::string, std::vector<
+        runtime::SystemVerilogConstraintVariableId>>& container_variables = {});
+
+[[nodiscard]] std::optional<runtime::SystemVerilogConstraintDistribution>
+lower_systemverilog_constraint_distribution(
+    const semantic::sv::ConstraintExpression& expression,
+    std::string_view specialization_identity,
+    const std::map<std::string,
+                   runtime::SystemVerilogConstraintVariableId>& variables,
+    std::span<const runtime::SystemVerilogConstraintVariable>
+        solver_variables,
+    std::string canonical_identity,
+    std::string& error);
+
+[[nodiscard]] std::optional<std::vector<std::pair<
+    runtime::SystemVerilogConstraintVariableId,
+    runtime::SystemVerilogConstraintVariableId>>>
+lower_systemverilog_solve_before(
+    const semantic::sv::ConstraintExpression& expression,
+    std::string_view specialization_identity,
+    const std::map<std::string,
+                   runtime::SystemVerilogConstraintVariableId>& variables,
+    std::string& error);
+
+void configure_systemverilog_class_constraints(
+    runtime::SystemVerilogConstraintSolver& solver,
+    const runtime::SystemVerilogClassRandomizeVariables& variables,
+    const semantic::sv::Hir& hir,
+    const frontend::SystemVerilogClassSpecialization& specialization,
+    const std::function<bool(std::string_view)>& constraint_enabled = {});
+
+[[nodiscard]] const frontend::SystemVerilogClassMethodProfile*
+systemverilog_randomize_callback(
+    std::span<const frontend::SystemVerilogClassSpecialization>
+        specializations,
+    const runtime::SystemVerilogClassHeap& heap,
+    runtime::SystemVerilogClassHandle handle,
+    std::string_view name);
+
+[[nodiscard]] runtime::PackedLogic4
+invoke_systemverilog_randomization_mode(
+    runtime::SystemVerilogClassHeap& heap,
+    runtime::SystemVerilogClassHandle handle,
+    std::string_view method,
+    std::span<const runtime::PackedLogic4> actuals);
 
 void complete_systemverilog_executable_hir(
     const frontend::ParsedDesign& parsed,

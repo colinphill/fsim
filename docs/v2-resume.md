@@ -5,31 +5,138 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
-## Clean-context restart checkpoint - 2026-08-05
+## Completed Batch 149 checkpoint - 2026-08-05
 
 1. Start in `/home/colin/projects/fsim` and read this file plus the Batch 149
    and locked Batches 150-175 sections of `implementation_plan_v2.md`.
 2. Run `git status --short --branch`, `git rev-parse HEAD`,
    `git rev-parse origin/codex/v2`, and `git log -1 --oneline`. The branch and
-   origin revisions must match, the worktree must be clean, and the latest
-   subject must be `Batch 149 checkpoint: globalize MSVC bigobj and lock v2
-   roadmap` unless the user has intentionally advanced the branch.
-3. This is a user-requested clean checkpoint after Batch 149 Change 1. There
-   are no expected modified or untracked files. Do not reconstruct or reapply
-   the pre-checkpoint dirty worktree.
+   origin revisions must match the pushed Batch 149 closeout unless the user
+   has intentionally advanced the branch. Its central
+   edits are the semantic class/constraint HIR, application projection and
+   call sites, class resolution, deterministic runtime random streams, the
+   resource-governed finite-domain solver, exact typed constraint-expression
+   lowering, membership/distribution/soft and structured/foreach solver
+   semantics, canonical solve-before scheduling, transactional object
+   randomization, staged scope `std::randomize`, randomize callbacks, focused
+   frontend/application/runtime tests, and these two v2 records.
+3. Batch 149 is complete as one accumulated Changes 2-20 implementation commit
+   after the user-requested Change 1 checkpoint. Do not recreate or discard
+   that history when starting Batch 150.
 4. The committed implementation patch for the global `/bigobj` correction has SHA-256
    `380a29f6b83cda3d19c97ecaddaff1b44f177baba71bd22e8598eeb71968b7c7` when
    `git show --format= -- CMakeLists.txt cmake/CheckMsvcDebugContract.cmake` is
    piped to `sha256sum`.
-5. Change 1 is complete. Resume at Batch 149 Change 2: define the executable
-   SystemVerilog-2017 constraint subset and normalize retained constraint HIR.
-   Accumulate Changes 2-19 from this clean checkpoint. Change 20 runs full
-   gates, records completion, and makes the next commit/push.
-6. The current focused evidence is an exact-LLVM 22.1.8 Debug configuration,
-   an eight-worker `fsim_application` build with no pending work, clean
-   `git diff --check`, and 4/4 passing `fsim.source-line-budget`,
-   `fsim.msvc-debug-contract`, `fsim.msvc-release-contract`, and
-   `fsim.windows-llvm-contract` tests.
+5. Changes 1 through 20 are complete. Exact LLVM 22.1.8 Debug passes 112/112 in
+   139.03 seconds and Release passes 112/112 in 114.29 seconds after
+   eight-worker builds. Source, catalog, inventory, installed-public-contract,
+   Windows ABI/plan, legality, differential, resource, and release-candidate
+   gates are green. Batch 149 is not a monitoring boundary, so no sanitizer or
+   hosted CI inspection was run. Resume by expanding Batch 150's locked compact
+   allocation into 20 numbered changes without altering scope or priority.
+6. Change 2 defines owning canonical class/property/constraint HIR with base
+   ownership, exact qualifiers, source spans, and normalized expression trees.
+   Change 3 attaches typed canonical bindings for every exact specialization,
+   including derived/base selections, local-access properties, parameters, and
+   method profiles; the focused proof distinguishes parameter values 3 and 7.
+   Change 4 adds deterministic base-order block composition, exact override
+   provenance/legality, and enabled/disabled default mode state.
+   Change 5 carries `rand`/`randc` through specialization and class-state
+   schema 4 into independently owned per-object runtime profiles with checked
+   signedness, width, nominal enum/handle identity, revisions, and storage.
+   Change 6 derives host-independent root, per-root object-ordinal, property,
+   and call-site/invocation-ordinal streams from the project seed. Source
+   allocation carries its root process identity through all three engines;
+   runtime and application proofs establish equal-seed replay and deliberate
+   divergence for changed seed, root, object, or call identity.
+   Change 7 adds an iterative value-semantic finite-domain solver over exact
+   bit-vector/integer/enum profiles. Variable, clause, aggregate-domain,
+   search-step, and elapsed-work limits are explicit; registration and solve
+   exhaustion expose typed reasons and never publish partial state.
+   Change 8 lowers exact-specialization HIR into validated source-order solver
+   graphs for equality, relations, arithmetic, bitwise/logical, unary, and
+   conditional operators. Width/sign extension and truncation are explicit;
+   four-state controlling/merge behavior is retained and an unknown final
+   predicate rejects. The `MAX=3` source graph solves against canonical
+   property variables in the focused semantic-HIR proof.
+   Change 9 retains and lowers source `soft`, `inside`, `dist :=`, and
+   `dist :/`. Checked rational weights produce replay-driven deterministic
+   domain permutations; hard clauses dominate later-priority soft clauses,
+   distribution conflicts become unsatisfiable, and weight overflow rejects
+   transactionally.
+   Change 10 retains and lowers implication, structured blocks, if/else, and
+   foreach with exact iterator-local bindings. Materialized container elements
+   become typed variables; constant/iterator bounds are checked and a focused
+   runtime proof traverses 300 elements with only explicit solver budgets.
+   Change 11 retains and lowers source solve-before lists. Transactional cycle
+   detection precedes canonical-identity topological ordering; declaration IDs
+   no longer influence search or weighted replay ordering.
+   Change 12 adds one commit-or-zero object randomization transaction over
+   selected complete domains and fixed current-value domains. Class and inline
+   constraint factories share the solver and call-local replay stream; complete
+   assignment and revision validation precede publication. Source
+   `randomize()` and optional property lists execute through the class-call
+   service against live owning constraint HIR. Runtime proof covers inline
+   composition, replay, rollback, and resource exhaustion; the application
+   matrix composes an `inside` class block for selected and full calls.
+   Change 13 is complete. Its runtime scope transaction jointly supports
+   complete integral, explicit enum, and materialized container-element domains,
+   inline solver configuration, staged publication, deterministic selection,
+   and zero-result rollback. Source `std::randomize` lowers packed local
+   integrals/enums to one SimIR operation, consumes the process-local replay
+   stream, and publishes through ordinary copy-out. LLVM validation selects the
+   interpreter solver fallback until Change 18. Focused frontend, LLVM,
+   application, runtime, and source-line gates pass.
+   Change 14 runs the most-derived inherited zero-argument void pre/post hooks,
+   suppresses post after a zero solver result, and contains callback failure as
+   zero. Pre failure restores its writes and post failure restores the complete
+   pre-call property/revision snapshot. Inherited constraint bindings now cover
+   every exact derived specialization. The application matrix proves override,
+   unsatisfiable, pre-failure, and post-failure behavior.
+   Change 15 resolves property `rand_mode` and constraint-block
+   `constraint_mode` queries/updates to canonical members with exact public,
+   protected-derived, and local-owner access. Every object owns independent
+   property and constraint modes; disabled variables and blocks are omitted
+   from the shared solve. Class-state schema 5 carries the composed mode
+   inventory through standalone artifact reload. Runtime, frontend, and source
+   proofs cover isolation, invalid selections, visibility, disable/re-enable,
+   revisions, and satisfiable-versus-restored-unsatisfiable behavior.
+   Change 16 adds deterministic exact-domain `randc` permutations with portable
+   signatures, cycle ordinals, and sparse used-value indices. Exact-domain
+   changes invalidate incompatible state; explicit reset and object reseed have
+   deterministic replay rules; sparse state is storage-accounted and staged
+   transactionally. Runtime proof covers full/constrained cycles, domain
+   changes, reset/reseed, accounting, and rollback, while the source matrix
+   completes the constrained 1..3 cycle in every engine and artifact path.
+   Change 17 catalogs and proves malformed constraint syntax, invalid object and
+   scope randomization selections, exact mode access, unsatisfiable/resource
+   rollback, callback containment, null/stale handles, and corrupt solver
+   clauses. It also fixes `std::randomize` being mistaken for a user package.
+   Change 18 adds required checksummed constraint-HIR schema 1 to standalone
+   designs, restores it after relocation, and validates its class/constraint
+   graph. Object/mapped-library rebuilds retain the same owning projection.
+   Stable debugger/callback/trace snapshots expose modes, revisions, seeds,
+   domain signatures, cycle ordinals, and used counts. `ScopeRandomize` remains
+   a safe interpreter fallback but its full shape now participates in native
+   cache identity.
+   Change 19 synchronizes the public architecture and language contract, stable
+   diagnostics, feature rows `SV-713` through `SV-722`, clean-room inventory,
+   differential/release evidence, the UVM boundary, and this restart record.
+   The reviewed baselines are 1,870 diagnostics, 537 bounded sources, 627
+   SPDX-owned artifacts, 212 test/control files, 1,152 executable rows, 4,608
+   evidence cells, 389 exact paths, and 108 runtime owners. Catalog, source,
+   legality, SystemVerilog, inventory, differential, resource, and release-
+   candidate gates pass.
+   Change 20 completes exact-LLVM Debug and Release qualification at 112/112 in
+   139.03 and 114.29 seconds. Both configurations include source, catalog,
+   inventory, installed-public-contract, Windows ABI/plan, legality,
+   differential, resource, and release-candidate gates. The batch closes with
+   one accumulated commit and push; no sanitizer or hosted CI inspection is
+   run because Batch 149 is not a monitoring boundary.
+   The current exact-LLVM Debug evidence is eight-worker focused builds plus
+   passing `fsim.frontend`, `fsim.application.systemverilog_hir`,
+   `fsim.runtime`, `fsim.application`, `fsim.library.artifact`, and
+   `fsim.source-line-budget` tests. `git diff --check` is clean.
 7. Use `cmake --build build/llvm22-ninja-debug --parallel 8` or another local
    build with at least eight workers. Batch 149 is not a CI boundary: do not
    configure/run a sanitizer and do not inspect hosted CI. GitHub Actions stays
@@ -63,20 +170,85 @@ scope.
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
-- Current unit: Batch 149, exactly 20 changes, in progress after pushed Batch
+- Current unit: Batch 149, exactly 20 changes, complete after pushed Batch
   148 closeout `dce6c36`. Its authoritative SystemVerilog constraint-solving
   and randomization contract is recorded in `implementation_plan_v2.md`.
-  Change 1 is complete and Change 2 is next. The root CMake configuration now
-  applies `/bigobj` to every target using the MSVC command-line frontend,
+  Changes 1 through 20 are complete. The root CMake
+  configuration now applies `/bigobj` to every target using the MSVC
+  command-line frontend,
   including clang-cl, and the former application-only option is removed. The
   MSVC Debug contract requires the directory-wide policy. Exact-LLVM Debug
   configures cleanly, the `fsim_application` target is current after an
   eight-worker build, and source-line, MSVC Debug/Release, and Windows LLVM
-  contract gates pass. Preserve this accumulated worktree through Changes
-  2-19 from the user-requested Change 1 checkpoint; Change 20 owns the full
-  gates and next commit/push. Batch
-  149 is not a CI-monitoring boundary and must not run a sanitizer or inspect
-  hosted CI.
+  contract gates pass. The accumulated worktree adds flattened owning
+  semantic HIR for canonical classes, base ownership, qualified `rand`/`randc`
+  properties, source-spanned constraint expression trees, and per-
+  specialization typed bindings for properties, parameters, `this`/`super`,
+  qualified selections, and methods. Base-order composed block views retain
+  override identities, static-compatibility legality, and deterministic
+  enabled state for later per-object modes. Class resolution also canonicalizes
+  constraint identities with methods. Exact-LLVM Debug frontend, semantic-HIR,
+  runtime, core application, artifact, and source-line tests pass after
+  eight-worker builds. Per-object random state is generation-safe,
+  storage-accounted, schema-4 portable, and retains exact random kind, width,
+  signedness, and nominal profile without host pointers. Host-independent
+  project-seed derivation now supplies stable root, per-root object-ordinal,
+  property, and call-site/invocation-ordinal streams, with identical replay
+  across interpreter, compiled, and debugger execution. The runtime now also
+  owns a deterministic iterative finite-domain solver with exact typed
+  profiles, checked registration, explicit variable/clause/domain/search/time
+  budgets, and transactional satisfied/unsatisfiable/exhausted results. Exact
+  specialization HIR now lowers to iterative typed expression graphs with
+  signed/arbitrary-width arithmetic and relations, logical/bitwise/unary and
+  conditional operators, and explicit four-state predicate legality.
+  Source `inside`, `soft`, and both distribution weight forms now lower for an
+  exact specialization with checked rational normalization, deterministic
+  replay selection, hard/soft priority, conflict, and overflow behavior.
+  Structured implication, if/else, and bounded foreach graphs now lower with
+  exact iterator bindings and materialized element selection without an
+  arbitrary element-count cap.
+  Source solve-before directives now create checked topological edges with
+  canonical tie breaking and transactional canonical cycle diagnostics.
+  Source object `randomize()` now reaches the shared finite-domain transaction,
+  including optional property lists, enabled class blocks, caller-supplied
+  inline graphs, deterministic replay, and commit-or-zero assignment/revision
+  semantics. Live project builds retain owning constraint HIR for execution;
+  its portable artifact boundary remains scheduled for Change 18.
+  Change 13 adds a staged scope-randomize transaction, a process-seeded SimIR
+  `std::randomize` operation for local packed integral/enum values, and focused
+  integral/enum/container proof. Compiled configurations use the intentional
+  interpreter fallback until Change 18 owns the solver boundary.
+  Change 14 adds inherited most-derived pre/post callbacks, void source-function
+  completion, zero-result suppression, and complete callback-failure rollback.
+  Base-owned constraints now bind every derived exact specialization.
+  Change 15 adds canonical property/constraint mode query and update services,
+  per-object state, exact visibility validation, solver filtering, and portable
+  class-state schema 5 mode inventory. Direct and artifact-reloaded source
+  execution plus runtime/frontend visibility and isolation proofs pass.
+  Change 16 adds host-independent exact-domain `randc` cycles, domain-change
+  invalidation, reset/reseed replay, sparse heap accounting, and transactional
+  cycle publication. Runtime and direct/artifact source cycle proofs pass.
+  Change 17 completes the cataloged parse/resolution/unsupported, budget,
+  callback, stale/null, and solver-corruption negative matrix with rollback.
+  Change 18 persists and validates constraint HIR schema 1 through standalone,
+  relocation, object/library, and cache paths and exposes portable randomization
+  provenance to debugger, callbacks, and trace inspection.
+  Change 19 synchronizes architecture, language support, diagnostics, feature
+  rows `SV-713` through `SV-722`, inventories, the executable-randomization/UVM
+  boundary, differential and release evidence, and restart state. The reviewed
+  baselines are 1,870 diagnostics, 537 bounded sources, 627 SPDX-owned
+  artifacts, 212 test/control files, 1,152 execute rows, 4,608 evidence cells,
+  389 exact paths, and 108 runtime owners. The focused catalog, source,
+  legality, SystemVerilog, inventory, differential, resource, and release-
+  candidate gates pass.
+  Exact LLVM 22.1.8 Debug and Release pass 112/112 in 139.03 and 114.29
+  seconds after eight-worker builds. Their full suites include source, catalog,
+  inventory, installed-public-contract, Windows ABI/plan, legality,
+  differential, resource, and release-candidate gates. The batch closes with
+  one accumulated Changes 2-20 commit and push. No sanitizer or hosted CI
+  inspection is run because Batch 149 is not a monitoring boundary.
+  Batch 150 is the next locked unit and must be expanded into 20 numbered
+  changes before implementation begins.
 - Current unit: Batch 148, exactly 20 changes, complete after pushed Batch
   147 closeout `37fbaaa`. Its authoritative source-executable SystemVerilog
   class contract and per-change status are recorded in

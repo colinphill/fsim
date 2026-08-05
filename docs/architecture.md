@@ -789,8 +789,36 @@ class tasks through the common time/delta scheduler. Versioned class owning-
 unit and runtime-state payloads preserve declarations, specializations,
 executable bodies, initial static state, virtual slots, continuations, and
 provenance through `.fsimobj`, `.fsimdesign`, and relocatable `.fsimlib`
-artifacts. Constraint solving, `randomize`/`std::randomize`, covergroups, and
-UVM library/runtime behavior remain in following closure batches.
+artifacts.
+
+Class constraints have a second, canonical semantic HIR keyed by exact class,
+property, constraint, base, and specialization identities. It owns typed
+bindings, source-order block composition and override provenance, visibility,
+default modes, normalized expressions, `soft`, `inside`, weighted
+distributions, implication, structured blocks, `foreach`, and solve-before
+edges. Exact-specialization lowering creates finite typed variables and
+validated clauses without retaining parser nodes or host addresses.
+
+Each object owns independent random-property and constraint modes, revisions,
+root/object/property/call stream identities, and portable `randc` cycle state.
+The iterative finite-domain solver uses explicit variable, domain, search,
+elapsed-work, and storage budgets. Object `randomize` and scope
+`std::randomize` stage all scalar and materialized-container assignments,
+callbacks, revisions, and cycle state and publish them atomically only after a
+complete solution. Unsatisfiable calls return zero; malformed state, resource
+exhaustion, or callback failure cannot partially mutate the heap or scope.
+Seeds and exact domain permutations are host-independent, so interpreter,
+LLVM service paths, artifacts, relocation, and cache reuse observe the same
+result. Scope randomization currently uses the validated interpreter service;
+its complete operation shape is nevertheless part of native-cache identity.
+
+The debugger and trace API expose stable random property/constraint paths,
+enable state, revision, stream seed, `randc` domain signature, cycle, and used
+count without exposing an RNG object. A checksummed `sv-constraint-hir`
+payload makes the semantic graph independently reloadable in standalone
+designs; `.fsimobj` and mapped-library flows reconstruct the same graph from
+portable owning units. Covergroups and UVM library/runtime behavior remain in
+following closure batches.
 
 ## Runtime values
 

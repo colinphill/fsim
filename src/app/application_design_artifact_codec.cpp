@@ -23,6 +23,10 @@ namespace {
 constexpr std::size_t kMaximumNesting = 1024;
 constexpr std::string_view kCode = "FSIM-ART-0013";
 
+struct SystemVerilogConstraintHirState {
+  std::vector<semantic::sv::ClassDeclaration> classes;
+};
+
 template <typename T>
 struct IsVector : std::false_type {};
 template <typename T, typename Allocator>
@@ -590,12 +594,63 @@ bool valid_class_state(
         return false;
       }
     }
+    std::set<std::string> constraint_identities;
+    for (const auto& [identity, enabled] : specialization.constraint_modes) {
+      (void)enabled;
+      if (identity.empty() || !constraint_identities.insert(identity).second) {
+        return false;
+      }
+    }
   }
   return std::ranges::all_of(classes, [&](const auto& specialization) {
     return specialization.base_specialization_identity.empty()
         || identities.contains(
             specialization.base_specialization_identity);
   });
+}
+
+bool valid_systemverilog_constraint_hir_state(
+    const SystemVerilogConstraintHirState& state) {
+  std::set<std::string> classes;
+  std::set<std::string> constraints;
+  for (const auto& declaration : state.classes) {
+    if (declaration.canonical_identity.empty()
+        || !classes.insert(declaration.canonical_identity).second) {
+      return false;
+    }
+    std::set<std::string> properties;
+    for (const auto& property : declaration.properties) {
+      if (property.canonical_identity.empty()
+          || property.owner_identity.empty()
+          || !properties.insert(property.canonical_identity).second) {
+        return false;
+      }
+    }
+    for (const auto& constraint : declaration.constraints) {
+      if (constraint.canonical_identity.empty()
+          || constraint.owner_identity.empty()
+          || !constraints.insert(constraint.canonical_identity).second) {
+        return false;
+      }
+    }
+  }
+  for (const auto& declaration : state.classes) {
+    if (!declaration.base_declaration_identity.empty()
+        && !classes.contains(declaration.base_declaration_identity)) {
+      return false;
+    }
+    std::set<std::string> composed_names;
+    for (const auto& composed : declaration.composed_constraints) {
+      if (composed.name.empty() || composed.selected_identity.empty()
+          || !constraints.contains(composed.selected_identity)
+          || !composed_names.insert(composed.name).second
+          || (!composed.overridden_identity.empty()
+              && !constraints.contains(composed.overridden_identity))) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 }  // namespace
@@ -655,6 +710,44 @@ deserialize_class_state(
     return std::nullopt;
   }
   return classes;
+}
+
+std::optional<std::string> serialize_systemverilog_constraint_hir_state(
+    const semantic::sv::Hir& hir,
+    diagnostic::Engine& diagnostics) {
+  SystemVerilogConstraintHirState state{
+      std::vector<semantic::sv::ClassDeclaration>{
+          hir.classes().begin(), hir.classes().end()}};
+  if (!valid_systemverilog_constraint_hir_state(state)) {
+    diagnostics.error(
+        std::string{kCode},
+        "SystemVerilog constraint HIR state is structurally invalid");
+    return std::nullopt;
+  }
+  return serialize(
+      "FSIMSVCH", kSystemVerilogConstraintHirStateSchema,
+      state, diagnostics);
+}
+
+std::optional<semantic::sv::Hir>
+deserialize_systemverilog_constraint_hir_state(
+    const std::string_view bytes,
+    std::string source_name,
+    diagnostic::Engine& diagnostics) {
+  auto state = deserialize<SystemVerilogConstraintHirState>(
+      "FSIMSVCH", kSystemVerilogConstraintHirStateSchema,
+      bytes, std::move(source_name), diagnostics);
+  if (!state || !valid_systemverilog_constraint_hir_state(*state)) {
+    if (state && !diagnostics.has_error()) {
+      diagnostics.error(
+          std::string{kCode},
+          "SystemVerilog constraint HIR state is structurally invalid");
+    }
+    return std::nullopt;
+  }
+  semantic::sv::Hir hir;
+  hir.mutable_classes() = std::move(state->classes);
+  return hir;
 }
 
 std::optional<std::string> serialize_semantic_state(

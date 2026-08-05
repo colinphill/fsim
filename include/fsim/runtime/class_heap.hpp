@@ -97,6 +97,37 @@ enum class SystemVerilogClassPropertyKind : std::uint8_t {
   Container,
 };
 
+enum class SystemVerilogClassRandomKind : std::uint8_t {
+  None,
+  Rand,
+  Randc,
+};
+
+struct SystemVerilogClassRandomState {
+  SystemVerilogClassRandomKind kind{SystemVerilogClassRandomKind::None};
+  std::size_t width{};
+  bool signed_value{};
+  std::string nominal_type;
+  bool enabled{true};
+  std::uint64_t revision{};
+  std::uint64_t stream_seed{};
+  std::uint64_t randc_domain_signature{};
+  std::uint64_t randc_cycle{};
+  std::vector<std::uint64_t> randc_used_values;
+};
+
+struct SystemVerilogClassRandomStream {
+  std::uint64_t simulation_seed{};
+  std::uint64_t root_seed{};
+  std::uint64_t object_seed{};
+  std::uint64_t call_seed{};
+  std::uint64_t state{};
+  std::uint64_t call_ordinal{};
+
+  [[nodiscard]] std::uint64_t next_u64() noexcept;
+  [[nodiscard]] std::uint32_t next_u32() noexcept;
+};
+
 struct SystemVerilogClassPropertyDescriptor {
   SystemVerilogClassPropertyDescriptor() = default;
   SystemVerilogClassPropertyDescriptor(
@@ -117,6 +148,10 @@ struct SystemVerilogClassPropertyDescriptor {
   std::optional<SystemVerilogClassHandleContainerDescriptor> handle_container;
   std::optional<PackedLogic4> initial_packed;
   std::optional<std::string> initial_string;
+  SystemVerilogClassRandomKind random_kind{
+      SystemVerilogClassRandomKind::None};
+  bool signed_value{};
+  std::string nominal_type;
 };
 
 struct SystemVerilogClassDescriptor {
@@ -126,6 +161,8 @@ struct SystemVerilogClassDescriptor {
   // Dynamic type followed by every legal base/interface handle view.
   std::vector<std::string> assignable_declared_types;
   std::vector<SystemVerilogClassPropertyDescriptor> properties;
+  std::vector<std::pair<std::string, bool>> constraint_modes;
+  std::string random_root_identity{"$api"};
 };
 
 struct SystemVerilogClassPropertyValue {
@@ -136,6 +173,7 @@ struct SystemVerilogClassPropertyValue {
   SystemVerilogClassHandle handle{};
   std::vector<SystemVerilogClassHandle> handles;
   std::optional<SystemVerilogClassHandleContainer> handle_container;
+  std::optional<SystemVerilogClassRandomState> random_state;
 };
 
 struct SystemVerilogClassObject {
@@ -146,6 +184,17 @@ struct SystemVerilogClassObject {
   std::vector<std::string> property_names;
   std::vector<SystemVerilogClassPropertyValue> properties;
   std::size_t accounted_bytes{};
+  std::string random_root_identity;
+  std::uint64_t random_root_seed{};
+  std::uint64_t random_object_seed{};
+  std::uint64_t random_object_ordinal{};
+  std::map<std::string, std::uint64_t, std::less<>> random_call_ordinals;
+  std::map<std::string, bool, std::less<>> constraint_modes;
+};
+
+struct SystemVerilogClassRandcStateUpdate {
+  std::size_t property_index{};
+  SystemVerilogClassRandomState state;
 };
 
 struct SystemVerilogClassHeapLimits {
@@ -163,7 +212,8 @@ class SystemVerilogClassHeap final {
       SystemVerilogClassHeap&, SystemVerilogClassHandle)>;
 
   explicit SystemVerilogClassHeap(
-      SystemVerilogClassHeapLimits limits = {});
+      SystemVerilogClassHeapLimits limits = {},
+      std::uint64_t simulation_seed = 1);
 
   [[nodiscard]] SystemVerilogClassHandle allocate(
       const SystemVerilogClassDescriptor& descriptor);
@@ -184,6 +234,41 @@ class SystemVerilogClassHeap final {
   [[nodiscard]] const SystemVerilogClassPropertyValue& property(
       SystemVerilogClassHandle handle,
       std::string_view name) const;
+  [[nodiscard]] SystemVerilogClassRandomState& random_state(
+      SystemVerilogClassHandle handle,
+      std::string_view name);
+  [[nodiscard]] const SystemVerilogClassRandomState& random_state(
+      SystemVerilogClassHandle handle,
+      std::string_view name) const;
+  [[nodiscard]] SystemVerilogClassRandomStream random_stream(
+      SystemVerilogClassHandle handle,
+      std::string_view call_identity);
+  [[nodiscard]] bool random_mode(
+      SystemVerilogClassHandle handle,
+      std::string_view property) const;
+  void set_random_mode(
+      SystemVerilogClassHandle handle,
+      std::string_view property,
+      bool enabled);
+  [[nodiscard]] bool constraint_mode(
+      SystemVerilogClassHandle handle,
+      std::string_view constraint) const;
+  void set_constraint_mode(
+      SystemVerilogClassHandle handle,
+      std::string_view constraint,
+      bool enabled);
+  void reset_randc_cycle(
+      SystemVerilogClassHandle handle,
+      std::string_view property);
+  void reseed_random(
+      SystemVerilogClassHandle handle,
+      std::uint64_t seed);
+  void commit_randc_states(
+      SystemVerilogClassHandle handle,
+      std::vector<SystemVerilogClassRandcStateUpdate>& updates);
+  [[nodiscard]] std::uint64_t simulation_seed() const noexcept {
+    return simulation_seed_;
+  }
   [[nodiscard]] SystemVerilogClassHandle checked_cast(
       SystemVerilogClassHandle handle,
       std::string_view declared_type) const;
@@ -227,6 +312,8 @@ class SystemVerilogClassHeap final {
   std::set<std::uint32_t> free_slots_;
   std::size_t live_objects_{};
   std::size_t storage_bytes_{};
+  std::uint64_t simulation_seed_{1};
+  std::map<std::string, std::uint64_t, std::less<>> next_object_ordinals_;
 };
 
 }  // namespace fsim::runtime
