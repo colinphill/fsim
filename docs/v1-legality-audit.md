@@ -55,7 +55,7 @@ state, generated declarations, and aggregate/multidimensional types. Every
 closed row became `execute` with complete positive, negative, elaboration, and
 direct runtime evidence. Task 4 closed the other 120 non-execute status rows
 plus every pre-existing execute-status evidence gap. The legality gate now
-requires all 681 SystemVerilog rows to remain `execute` with complete P+, P-,
+requires all 691 SystemVerilog rows to remain `execute` with complete P+, P-,
 E, and R evidence; there is no remaining SystemVerilog legality queue.
 
 ## Mixed-language and SystemC queues — Batch 127 Tasks 7 and 8

@@ -25,7 +25,7 @@ runtime evidence, and names evidence paths that exist in the checkout.
 | Common release contract | `V1-CM` | 10 | Tasks 5 through 9 |
 
 The Task 1 baseline matrix digest is
-`a45df7c2074a60f952d1af79b326b3b5bc2e339b28ed972dddf7f049c6be2472`.
+`5e0f681e379768cf2e054d5de3b050fd93aad295c7b7df9a9e73d8de89d474c8`.
 Changing any row requires an intentional audit update and the owning focused
 gate; the digest is evidence of review, not a substitute for semantic tests.
 Corrective Batch 131 re-reviewed the affected container rows after replacing

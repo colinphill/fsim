@@ -51,6 +51,7 @@ add_executable(
   frontend/frontend_vhdl_configuration_tests.cpp
   frontend/frontend_vhdl_package_generic_tests.cpp
   frontend/frontend_statement_tests.cpp
+  frontend/frontend_strength_tests.cpp
   frontend/frontend_udp_tests.cpp
   frontend/frontend_generate_output_tests.cpp
   frontend/frontend_file_tests.cpp
@@ -436,6 +437,7 @@ add_executable(
   elaboration/elaborator_mixed_test.cpp
   elaboration/elaborator_library_search_test.cpp
   elaboration/elaborator_udp_test.cpp
+  elaboration/elaborator_strength_test.cpp
   elaboration/elaborator_multiple_root_test.cpp
   elaboration/elaborator_mixed_conversion_test.cpp
   elaboration/elaborator_mixed_construction_test.cpp

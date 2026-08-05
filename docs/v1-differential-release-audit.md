@@ -44,3 +44,9 @@ required rows and 103 runtime owners. The linked evidence covers 459
 interpreter rows, 378 LLVM rows, 254 cache rows, 97 debugger rows, 127 VCD rows,
 410 scheduling rows, and 92 failure rows; the reviewed 36-CTest corpus inventory
 is unchanged.
+
+Batch 145's ten strength, switch, and charge rows advance the reviewed
+differential inventory to 1,121 required rows and 104 runtime owners. The
+linked evidence covers 461 interpreter rows, 380 LLVM rows, 254 cache rows, 98
+debugger rows, 128 VCD rows, 411 scheduling rows, and 93 failure rows; the
+reviewed 36-CTest corpus inventory remains unchanged.

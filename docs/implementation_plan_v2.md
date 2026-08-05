@@ -1067,6 +1067,91 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
     Batch 144 is not a CI boundary and ran no sanitizer or hosted CI-monitoring
     gate.
 
+## Batch 145 - Verilog-2005 strength and switch-primitive closure - Complete
+
+1. **Complete.** Start after pushed Batch 144 closeout `4be4a51`, record this
+   exact 20-change contract, and synchronize the restart handoff before
+   implementation changes. Keep Changes 1-19 in one recoverable accumulated
+   worktree; Change 20 alone owns full gates, one commit, and one push.
+2. **Complete.** Define a clean-room immutable Verilog strength model covering
+   `supply`, `strong`, `pull`, `weak`, `large`, `medium`, `small`, and `highz`
+   ranks, distinct zero/one drive strengths, charge strengths, source spans,
+   canonical identities, and deterministic comparison rules.
+3. **Complete.** Parse legal drive-strength pairs on continuous assignments, net
+   declarations, built-in gates, UDP instances, and module-instance outputs;
+   retain strength before delay syntax and reject illegal order, duplicate,
+   same-polarity, or context-specific forms with stable diagnostics.
+4. **Complete.** Parse pull strengths, supply-net semantics, and `trireg`
+   `small`/`medium`/`large` charge strengths, including legal defaults and
+   explicit high-impedance members without conflating strength syntax with
+   ordinary parameter or delay parentheses.
+5. **Complete.** Carry strength and charge descriptors through frontend HIR,
+   merged snapshots, normalized hierarchy drivers, specialization identities,
+   source/debug provenance, and public introspection without adding hidden
+   hierarchy objects.
+6. **Complete.** Replace strength-blind scalar Verilog resolution with a common
+   strength-aware four-state resolver that compares zero and one components,
+   produces exact unknowns on tied opposition, ignores high impedance, and
+   preserves `wand`/`triand` and `wor`/`trior` wired-net combination semantics.
+7. **Complete.** Apply default and explicit drive strengths to module ports,
+   continuous assignments, primitive outputs, UDP outputs, procedural drivers,
+   force/release, deposits, VHDL boundaries, and SystemC boundaries without
+   changing their existing unstrengthened behavior.
+8. **Complete.** Execute strength-qualified `buf`, `not`, `and`, `nand`, `or`,
+   `nor`, `xor`, and `xnor` primitives, including scalar/vector terminals,
+   static arrays, multiple outputs where legal, and common one/two-value delay
+   scheduling.
+9. **Complete.** Execute strength-qualified `bufif0`, `bufif1`, `notif0`, and
+   `notif1` primitives with exact enabled, disabled, and unknown-control
+   strength reduction plus common rise/fall/turnoff inertial delays.
+10. **Complete.** Implement unidirectional `nmos`, `pmos`, `cmos`, `rnmos`,
+    `rpmos`, and `rcmos` primitives with four-state controls, resistive strength
+    reduction, scalar/vector terminals, static arrays, and shared delays.
+11. **Complete.** Implement bidirectional `tran`, `rtran`, `tranif0`, `tranif1`,
+    `rtranif0`, and `rtranif1` devices as cycle-safe connected-net components
+    with conditional conductance, resistive strength reduction, arrays, and no
+    artificial driver ownership or hierarchy level.
+12. **Complete.** Implement `pullup` and `pulldown` sources, `supply0`/`supply1`
+    nets, and `tri0`/`tri1` implicit pulls with their standard default and
+    explicit strength rules, resolved multi-driver interaction, and normal
+    debugger/trace visibility.
+13. **Complete.** Implement `trireg` charge retention, exact charge-strength
+    arbitration, drive-to-charge transitions, reconnection, initialization,
+    and deterministic delta-cycle behavior for scalar and packed nets.
+14. **Complete.** Implement `trireg` decay timing through the common checked
+    inertial event model, including zero, finite, and effectively infinite
+    decay, cancellation by renewed drive, time scaling, overflow diagnostics,
+    callbacks, and VCD publication.
+15. **Complete.** Cover strength and switch networks under generates,
+    parameter-specialized hierarchy, multiple roots, searched and mapped
+    logical libraries, recursive mixed-language wrappers, aliases, and
+    disconnected or cyclic transmission topologies through the central
+    resolver and scheduler.
+16. **Complete.** Preserve strength descriptors, switch topology, charge state,
+    pending decay, and selected provenance through `.fsimobj`, `.fsimdesign`,
+    `.fsimlib`, relocation, standalone simulation, and cold/warm/edit native
+    caches with append-only checked schema evolution.
+17. **Complete.** Add interpreter and LLVM O0/O2 differentials for strength
+    conflicts, wired nets, pulls, supplies, MOS devices, bidirectional and
+    conditional switches, resistive chains, charge retention/decay, debugger,
+    callbacks, and VCD across source and relocated artifacts.
+18. **Complete.** Add transactional negative, ambiguity, topology, recursion,
+    unsupported-profile, excessive-materialization, corrupt-artifact, invalid
+    native-HIR, and time-overflow coverage with resource budgets derived from
+    materialized graph and event storage rather than semantic length limits.
+19. **Complete.** Update architecture, language support, diagnostics, feature
+    matrix, inventories, Verilog compatibility notes, and restart evidence;
+    leave specify timing and SDF assigned to their later dedicated batches.
+20. **Complete.** Run exact-LLVM Debug and Release plus source, catalog,
+    inventory, installed-public-contract, Windows ABI, differential, and
+    release gates after eight-worker builds, then commit and push once. Debug
+    and Release each pass 111/111 tests in 135.16 and 106.30 seconds. The
+    reviewed baselines are 1,755 diagnostics, 489 bounded sources, 579
+    SPDX-owned artifacts, 204 test/control files, 1,121 executable feature
+    rows, 4,484 evidence cells, 356 evidence paths, and 104 runtime owners.
+    Batch 145 is not a CI boundary and ran no sanitizer or hosted
+    CI-monitoring gate.
+
 ## Forward priority order
 
 1. **Completed in Batch 136:** read-only out-of-tree `.fsimlib` directory
@@ -1078,9 +1163,9 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
 4. **In progress:** complete VHDL-2008/VITAL, followed by Verilog-2005,
    SystemVerilog-2017 classes/UVM, VPI, DPI, and VHPI. Batches 139-143 complete
    the clean-room VITAL timing, primitive, path, memory, and vendor-model
-   compatibility surface; Batch 144 begins Verilog-2005 closure with UDPs,
-   followed by strengths/switch primitives and specify timing in separate
-   batches before the later dedicated SDF batch.
+   compatibility surface; Batch 144 completes Verilog-2005 UDPs, Batch 145
+   closes strengths and switch primitives, and specify timing remains a
+   separate batch before the later dedicated SDF batch.
 5. Older VHDL, Verilog, and SystemVerilog standard modes.
 6. Full SDF annotation with 2.1/3.0 compatibility and VITAL integration.
 7. FST tracing for every value exposed through the trace model.

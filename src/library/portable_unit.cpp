@@ -73,7 +73,8 @@ template <typename T>
 auto archive_fields(T& value) {
   return std::tie(
       value.name, value.type, value.direction, value.is_port, value.span,
-      value.net_delay, value.interface_type, value.modport,
+      value.net_delay, value.drive_strength, value.charge_strength,
+      value.charge_decay, value.interface_type, value.modport,
       value.default_value);
 }
 
@@ -482,6 +483,84 @@ bool remap_spans(
   }
 }
 
+bool valid_strength(const frontend::VerilogStrength strength) {
+  return static_cast<std::underlying_type_t<
+      frontend::VerilogStrength>>(strength)
+      <= static_cast<std::underlying_type_t<
+          frontend::VerilogStrength>>(
+              frontend::VerilogStrength::Supply);
+}
+
+bool valid_drive_strength(
+    const std::optional<frontend::VerilogDriveStrength>& strength) {
+  return !strength
+      || (valid_strength(strength->zero)
+          && valid_strength(strength->one)
+          && !(strength->zero == frontend::VerilogStrength::HighZ
+               && strength->one == frontend::VerilogStrength::HighZ));
+}
+
+bool valid_signal_strength(
+    const frontend::SignalDeclaration& signal) {
+  return valid_drive_strength(signal.drive_strength)
+      && (!signal.charge_strength
+          || (signal.type.spelling == "trireg"
+              && (signal.charge_strength->rank
+                      == frontend::VerilogStrength::Small
+                  || signal.charge_strength->rank
+                      == frontend::VerilogStrength::Medium
+                  || signal.charge_strength->rank
+                      == frontend::VerilogStrength::Large)))
+      && (!signal.charge_decay
+          || signal.type.spelling == "trireg");
+}
+
+bool valid_statement_strength(const frontend::Statement& statement) {
+  return valid_drive_strength(statement.verilog_drive_strength)
+      && (!statement.verilog_switch_resistive
+          || statement.verilog_switch_driver)
+      && (!statement.verilog_switch_bidirectional
+          || statement.verilog_switch_driver)
+      && (!statement.verilog_switch_control.valid()
+          || statement.verilog_switch_driver)
+      && (statement.verilog_switch_driver
+          == statement.verilog_switch_source.valid());
+}
+
+bool valid_generate_strengths(const frontend::GenerateBody& body);
+
+bool valid_region_strengths(const frontend::GenerateRegion& region) {
+  return valid_generate_strengths(region.then_body)
+      && valid_generate_strengths(region.else_body)
+      && std::ranges::all_of(
+          region.alternatives, [](const auto& alternative) {
+            return valid_generate_strengths(alternative.body);
+          });
+}
+
+bool valid_generate_strengths(const frontend::GenerateBody& body) {
+  return std::ranges::all_of(body.signals, valid_signal_strength)
+      && std::ranges::all_of(
+          body.concurrent_statements, valid_statement_strength)
+      && std::ranges::all_of(body.instances, [](const auto& instance) {
+           return valid_drive_strength(instance.drive_strength);
+         })
+      && std::ranges::all_of(
+          body.generate_regions, valid_region_strengths);
+}
+
+bool valid_unit_strengths(const frontend::DesignUnit& unit) {
+  return std::ranges::all_of(unit.ports, valid_signal_strength)
+      && std::ranges::all_of(unit.signals, valid_signal_strength)
+      && std::ranges::all_of(
+          unit.concurrent_statements, valid_statement_strength)
+      && std::ranges::all_of(unit.instances, [](const auto& instance) {
+           return valid_drive_strength(instance.drive_strength);
+         })
+      && std::ranges::all_of(
+          unit.generate_regions, valid_region_strengths);
+}
+
 }  // namespace
 
 bool relocate_unit_sources(
@@ -535,6 +614,12 @@ std::optional<std::string> serialize_portable_unit(
     const frontend::DesignUnit& unit,
     diagnostic::Engine& diagnostics) {
   std::unordered_set<const void*> visited;
+  if (!valid_unit_strengths(unit)) {
+    diagnostics.error(
+        std::string{kCode},
+        "portable unit contains invalid strength metadata");
+    return std::nullopt;
+  }
   if (has_absolute_span(unit, visited)) {
     diagnostics.error(
         std::string{kCode},
@@ -593,13 +678,15 @@ std::optional<frontend::DesignUnit> deserialize_portable_unit(
   frontend::DesignUnit unit;
   if (!reader.raw(kMagic) || !reader.read(schema)
       || schema != kOwningUnitSchemaVersion || !reader.read(unit)
-      || reader.remaining() != 0) {
+      || reader.remaining() != 0 || !valid_unit_strengths(unit)) {
     auto message = reader.failure();
     if (message.empty() && schema != kOwningUnitSchemaVersion) {
       message = "unsupported portable owning-unit schema "
           + std::to_string(schema);
-    } else if (message.empty()) {
+    } else if (message.empty() && reader.remaining() != 0) {
       message = "portable unit contains trailing bytes";
+    } else if (message.empty()) {
+      message = "portable unit contains invalid strength metadata";
     }
     diagnostics.error(
         std::string{kCode}, std::move(message),

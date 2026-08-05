@@ -1550,6 +1550,10 @@ void substitute_sv_generate_body(
             substitute_sv_delay_parameters(
                 *signal.net_delay, body_environment);
         }
+        if (signal.charge_decay) {
+            substitute_sv_delay_parameters(
+                *signal.charge_decay, body_environment);
+        }
     }
     for (auto& function : body.functions) {
         substitute_sv_function(function, body_environment);
@@ -1648,12 +1652,20 @@ void substitute_systemverilog_parameters(
             substitute_sv_delay_parameters(
                 *port.net_delay, environment);
         }
+        if (port.charge_decay) {
+            substitute_sv_delay_parameters(
+                *port.charge_decay, environment);
+        }
     }
     for (auto& signal : unit.signals) {
         substitute_sv_type(signal.type, environment);
         if (signal.net_delay) {
             substitute_sv_delay_parameters(
                 *signal.net_delay, environment);
+        }
+        if (signal.charge_decay) {
+            substitute_sv_delay_parameters(
+                *signal.charge_decay, environment);
         }
     }
     for (auto& variable : unit.variables) {

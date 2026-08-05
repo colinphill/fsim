@@ -119,3 +119,12 @@ reviewed totals to 1,735 diagnostics, 484 bounded C/C++ sources, 574 authored
 artifacts, and 202 authored test/control files. The UDP implementation and
 fixtures are clean-room code; no external Verilog model, table, third-party
 artifact, or provenance entry is imported.
+
+v2 Batch 145 adds the split strength and switch parsers, public SimIR signal
+model, and focused frontend/elaboration owners as five SPDX-owned bounded C++
+sources. Twenty drive, charge, switch, and binding diagnostics advance the
+reviewed totals to 1,755 diagnostics, 489 bounded C/C++ sources, 579 authored
+artifacts, and 204 authored test/control files. The strength, topology, charge,
+and decay implementation and fixtures are clean-room code; no external
+Verilog model, proprietary strength table, third-party artifact, or provenance
+entry is imported.

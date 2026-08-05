@@ -39,6 +39,50 @@ Process Lowerer::lower_concurrent(
       + (statement.label.empty()
              ? "concurrent_" + std::to_string(order)
              : statement.label);
+  if (statement.verilog_drive_strength) {
+    const auto rank = [](const frontend::VerilogStrength strength) {
+      using Frontend = frontend::VerilogStrength;
+      switch (strength) {
+        case Frontend::HighZ: return StrengthRank::highz;
+        case Frontend::Small: return StrengthRank::small;
+        case Frontend::Medium: return StrengthRank::medium;
+        case Frontend::Weak: return StrengthRank::weak;
+        case Frontend::Large: return StrengthRank::large;
+        case Frontend::Pull: return StrengthRank::pull;
+        case Frontend::Strong: return StrengthRank::strong;
+        case Frontend::Supply: return StrengthRank::supply;
+      }
+      return StrengthRank::strong;
+    };
+    process_.drive_strength = DriveStrength{
+        rank(statement.verilog_drive_strength->zero),
+        rank(statement.verilog_drive_strength->one)};
+  }
+  if (statement.verilog_switch_driver) {
+    const auto endpoint = [&](const frontend::Expression& expression)
+        -> std::optional<SignalId> {
+      const auto* base = &expression;
+      while ((base->kind == frontend::ExpressionKind::Index
+              || base->kind == frontend::ExpressionKind::Slice)
+             && !base->operands.empty()) {
+        base = &base->operands.front();
+      }
+      if (base->kind != frontend::ExpressionKind::Identifier) {
+        return std::nullopt;
+      }
+      const auto found = signals_.find(base->text);
+      return found == signals_.end()
+          ? std::nullopt : std::optional<SignalId>{found->second};
+    };
+    process_.switch_source = endpoint(statement.verilog_switch_source);
+    if (statement.verilog_switch_control.valid()) {
+      process_.switch_control = endpoint(statement.verilog_switch_control);
+      process_.switch_active_high = statement.verilog_switch_active_high;
+    }
+    process_.switch_bidirectional =
+        statement.verilog_switch_bidirectional;
+    process_.switch_resistive = statement.verilog_switch_resistive;
+  }
   initialize_function_support();
   initialize_task_support();
   initialize_procedure_support();
@@ -149,6 +193,9 @@ Process Lowerer::lower_concurrent(
   }
   process_.driver_regions = collect_driver_regions(
       process_, register_widths_);
+  if (process_.switch_source && process_.driver_regions.size() == 1) {
+    process_.switch_target = process_.driver_regions.front().signal;
+  }
   validate_vhdl_driver_attributes(statement.span);
   next_register_ = 0;
   next_string_register_ = 0;

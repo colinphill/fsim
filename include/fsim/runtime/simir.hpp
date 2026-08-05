@@ -1168,27 +1168,7 @@ struct Halt {};
 
 #include "fsim/runtime/simir_operation_storage.hpp"
 
-enum class ResolutionKind : std::uint8_t {
-  none,
-  sv_wire,
-  std_logic,
-  vhdl_user_or,
-  vhdl_user_and,
-  sv_wand,
-  sv_wor,
-};
-
-enum class ValueKind : std::uint8_t {
-  logic4,
-  logic9,
-};
-
-struct Signal {
-  std::string name;
-  PackedLogic4 initial_value;
-  ResolutionKind resolution{ResolutionKind::none};
-  ValueKind value_kind{ValueKind::logic4};
-};
+#include "fsim/runtime/simir_signal.hpp"
 
 struct StringObject {
   std::string name;
@@ -1269,6 +1249,13 @@ struct Process {
     friend bool operator==(const DriverRegion&, const DriverRegion&) = default;
   };
   std::vector<DriverRegion> driver_regions;
+  DriveStrength drive_strength;
+  std::optional<SignalId> switch_source;
+  std::optional<SignalId> switch_target;
+  std::optional<SignalId> switch_control;
+  bool switch_active_high{true};
+  bool switch_bidirectional{};
+  bool switch_resistive{};
   std::vector<ValueKind> register_value_kinds;
   bool initialize{true};
   // A SystemVerilog final process is excluded from ordinary initialization

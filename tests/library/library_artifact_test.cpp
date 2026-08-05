@@ -132,6 +132,11 @@ int main() {
 );
   typedef struct packed { logic flag; logic [2:0] payload; } packet_t;
   packet_t packet;
+  wire (weak0, strong1) strength_driver;
+  wire switch_left, switch_right;
+  trireg (large) #2 retained;
+  assign (weak0, strong1) strength_driver = value[0];
+  tran linked(switch_left, switch_right);
   function automatic logic [WIDTH-1:0] invert(
       input logic [WIDTH-1:0] operand);
     invert = ~operand;
@@ -161,9 +166,50 @@ endmodule
   assert(restored_unit->name == "stage");
   assert(restored_unit->parameters.size() == 1);
   assert(restored_unit->functions.size() == 1);
+  const auto strength_driver = std::ranges::find_if(
+      restored_unit->signals, [](const auto& signal) {
+        return signal.name == "strength_driver";
+      });
+  const auto retained = std::ranges::find_if(
+      restored_unit->signals, [](const auto& signal) {
+        return signal.name == "retained";
+      });
+  assert(
+      strength_driver != restored_unit->signals.end()
+      && strength_driver->drive_strength
+      && strength_driver->drive_strength->zero
+          == fsim::frontend::VerilogStrength::Weak
+      && retained != restored_unit->signals.end()
+      && retained->charge_strength && retained->charge_decay
+      && restored_unit->concurrent_statements.front()
+             .verilog_drive_strength
+      && std::ranges::any_of(
+          restored_unit->concurrent_statements, [](const auto& statement) {
+            return statement.verilog_switch_bidirectional
+                && statement.verilog_switch_source.valid();
+          }));
   fsim::diagnostic::Engine repeat_diagnostics;
   assert(fsim::library::serialize_portable_unit(
       *restored_unit, repeat_diagnostics) == unit_bytes);
+  auto invalid_strength_unit = *restored_unit;
+  invalid_strength_unit.signals.front().drive_strength =
+      fsim::frontend::VerilogDriveStrength{
+          static_cast<fsim::frontend::VerilogStrength>(255),
+          fsim::frontend::VerilogStrength::Strong, {}};
+  fsim::diagnostic::Engine invalid_strength_diagnostics;
+  assert(!fsim::library::serialize_portable_unit(
+      invalid_strength_unit, invalid_strength_diagnostics));
+  auto invalid_switch_unit = *restored_unit;
+  const auto switch_statement = std::ranges::find_if(
+      invalid_switch_unit.concurrent_statements, [](const auto& statement) {
+        return statement.verilog_switch_bidirectional;
+      });
+  assert(switch_statement
+         != invalid_switch_unit.concurrent_statements.end());
+  switch_statement->verilog_switch_source = {};
+  fsim::diagnostic::Engine invalid_switch_diagnostics;
+  assert(!fsim::library::serialize_portable_unit(
+      invalid_switch_unit, invalid_switch_diagnostics));
 
   const auto parsed_udp = fsim::frontend::parse_text(
       "sources/invert.v",
@@ -280,7 +326,7 @@ endprimitive
   assert(!fsim::library::deserialize_portable_unit(
       trailing_unit, "trailing.fsimir", trailing_diagnostics));
   auto future_unit = *unit_bytes;
-  future_unit[8] = '\3';
+  future_unit[8] = '\4';
   fsim::diagnostic::Engine future_diagnostics;
   assert(!fsim::library::deserialize_portable_unit(
       future_unit, "future.fsimir", future_diagnostics));

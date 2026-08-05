@@ -686,6 +686,10 @@ using namespace elaboration_detail;
             initial = Logic4::zero;
         } else if (declaration.type.spelling == "tri1") {
             initial = Logic4::one;
+        } else if (declaration.type.spelling == "supply0") {
+            initial = Logic4::zero;
+        } else if (declaration.type.spelling == "supply1") {
+            initial = Logic4::one;
         } else if (is_two_state_domain(declaration.type.domain)) {
             initial = Logic4::zero;
         } else if (
@@ -711,12 +715,46 @@ using namespace elaboration_detail;
             initial_value = default_packed_value(
                 declaration.type, static_cast<std::size_t>(width));
         }
-        design_.signals_.push_back(
-            {
-                full_name,
-                std::move(initial_value),
-                ResolutionKind::none,
-                value_kind(declaration.type.domain)});
+        runtime::simir::Signal signal{
+            full_name,
+            std::move(initial_value),
+            ResolutionKind::none,
+            value_kind(declaration.type.domain),
+            std::nullopt,
+            {StrengthRank::pull, StrengthRank::pull},
+            std::nullopt,
+            std::nullopt};
+        if (declaration.type.spelling == "tri0"
+            || declaration.type.spelling == "tri1") {
+            signal.implicit_driver =
+                declaration.type.spelling == "tri0"
+                    ? Logic4::zero : Logic4::one;
+        } else if (declaration.type.spelling == "supply0"
+                   || declaration.type.spelling == "supply1") {
+            signal.implicit_driver =
+                declaration.type.spelling == "supply0"
+                    ? Logic4::zero : Logic4::one;
+            signal.implicit_drive_strength = {
+                StrengthRank::supply, StrengthRank::supply};
+        }
+        if (declaration.type.spelling == "trireg") {
+            const auto rank = [](const frontend::VerilogStrength strength) {
+                using Frontend = frontend::VerilogStrength;
+                switch (strength) {
+                    case Frontend::Small: return StrengthRank::small;
+                    case Frontend::Large: return StrengthRank::large;
+                    case Frontend::Medium: return StrengthRank::medium;
+                    default: return StrengthRank::medium;
+                }
+            };
+            signal.charge_strength = declaration.charge_strength
+                ? rank(declaration.charge_strength->rank)
+                : StrengthRank::medium;
+            if (declaration.charge_decay) {
+                signal.charge_decay = declaration.charge_decay->magnitude;
+            }
+        }
+        design_.signals_.push_back(std::move(signal));
         return id;
     }
     const Binding* HierarchyBuilder::binding_for(const std::string& path) {

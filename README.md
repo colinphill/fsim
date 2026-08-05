@@ -160,6 +160,12 @@ The current tree contains:
   ordered four-state/edge tables, optional initial state, static instance
   arrays, common inertial transition delays, logical-library resolution, and
   interpreter/LLVM/artifact/debugger/VCD parity;
+- Verilog-2005 drive, pull, supply, and charge strengths with strength-aware
+  four-state resolution across continuous, gate, UDP, procedural, VHDL, and
+  SystemC drivers;
+- executable MOS/resistive-MOS and cycle-safe bidirectional/conditional
+  transmission primitives, plus `trireg` retention and checked finite,
+  zero, or infinite decay, with interpreter/LLVM/artifact/debugger/VCD parity;
 - recursive VHDL/SV/SystemC instance elaboration in every hierarchy direction
   with automatic parent-plus-configured-library resolution, repeatable
   `--search-library` overrides, explicit qualified overrides, whole-signal port

@@ -23,9 +23,26 @@ SignalId Interpreter::add_signal(Signal signal) {
   if (static_cast<std::size_t>(id) != impl_->signals.size()) {
     throw std::length_error("too many SimIR signals");
   }
+  const auto valid_strength = [](const StrengthRank rank) {
+    return static_cast<std::underlying_type_t<StrengthRank>>(rank)
+        <= static_cast<std::underlying_type_t<StrengthRank>>(
+            StrengthRank::supply);
+  };
+  if (!valid_strength(signal.implicit_drive_strength.zero)
+      || !valid_strength(signal.implicit_drive_strength.one)
+      || (signal.charge_strength
+          && !valid_strength(*signal.charge_strength))) {
+    throw std::invalid_argument{"invalid SimIR signal strength metadata"};
+  }
   impl_->driven_values.push_back(signal.initial_value);
   impl_->driver_values.emplace_back();
+  impl_->driver_strengths.emplace_back();
   impl_->external_driver_values.emplace_back();
+  impl_->charge_decay_handles.emplace_back();
+  impl_->charge_values.push_back(
+      signal.charge_strength
+          ? std::optional<PackedLogic4>{signal.initial_value}
+          : std::nullopt);
   impl_->signal_last_values.push_back(signal.initial_value);
   impl_->forced_values.emplace_back();
   impl_->forced_masks.emplace_back(
@@ -129,6 +146,47 @@ ProcessId Interpreter::add_process(Process process) {
   if (process.id != id) {
     throw std::invalid_argument("SimIR process IDs must be dense and ordered");
   }
+  const auto valid_strength = [](const StrengthRank rank) {
+    return static_cast<std::underlying_type_t<StrengthRank>>(rank)
+        <= static_cast<std::underlying_type_t<StrengthRank>>(
+            StrengthRank::supply);
+  };
+  if (!valid_strength(process.drive_strength.zero)
+      || !valid_strength(process.drive_strength.one)) {
+    throw std::invalid_argument{"invalid SimIR process drive strength"};
+  }
+  const bool has_switch_metadata = process.switch_source.has_value()
+      || process.switch_target.has_value()
+      || process.switch_control.has_value();
+  const bool switch_connection = process.switch_bidirectional;
+  if ((switch_connection
+       && (!process.switch_source || !process.switch_target))
+      || (has_switch_metadata
+      && (!process.switch_source || !process.switch_target
+          || *process.switch_source >= impl_->signals.size()
+          || *process.switch_target >= impl_->signals.size()
+          || (process.switch_control
+              && *process.switch_control >= impl_->signals.size())))) {
+    throw std::invalid_argument{
+        "SimIR transmission connection has invalid endpoint metadata"};
+  }
+  if (has_switch_metadata) {
+    const auto source_width = impl_->signals[*process.switch_source]
+                                  .initial_value.width();
+    const auto target_width = impl_->signals[*process.switch_target]
+                                  .initial_value.width();
+    if ((source_width != target_width
+         && source_width != 1 && target_width != 1)
+        || (process.switch_control
+            && impl_->signals[*process.switch_control]
+                       .initial_value.width() != 1
+            && impl_->signals[*process.switch_control]
+                       .initial_value.width()
+                != std::max(source_width, target_width))) {
+      throw std::invalid_argument{
+          "SimIR transmission connection has incompatible endpoint widths"};
+    }
+  }
   if (process.final && process.initialize) {
     throw std::invalid_argument(
         "a SimIR final process cannot initialize at time zero");
@@ -214,7 +272,10 @@ ProcessId Interpreter::add_process(Process process) {
       throw std::invalid_argument(
           "process output references invalid signal");
     }
-    impl_->register_driver(id, signal, regions);
+    if (!switch_connection) {
+      impl_->register_driver(
+          id, signal, regions, process.drive_strength);
+    }
   }
 
   Impl::ProcessState state;

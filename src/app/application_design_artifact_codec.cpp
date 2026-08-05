@@ -83,8 +83,19 @@ template <typename T>
 auto archive_fields(T& value) {
   return std::tie(
       value.name, value.type, value.direction, value.is_port, value.span,
-      value.net_delay, value.interface_type, value.modport,
+      value.net_delay, value.drive_strength, value.charge_strength,
+      value.charge_decay, value.interface_type, value.modport,
       value.default_value);
+}
+
+template <typename T>
+  requires std::same_as<
+      std::remove_cv_t<T>, runtime::simir::Signal>
+auto archive_fields(T& value) {
+  return std::tie(
+      value.name, value.initial_value, value.resolution, value.value_kind,
+      value.implicit_driver, value.implicit_drive_strength,
+      value.charge_strength, value.charge_decay);
 }
 
 template <typename T>

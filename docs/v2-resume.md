@@ -7,12 +7,58 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
-- Current unit: Batch 144, exactly 20 changes, complete after pushed Batch 143
-  closeout `cc5a6bb` and corrective LLVM-disabled VITAL callback build repair
-  `e012444`. Its authoritative Verilog-2005 UDP contract and per-change status
-  are recorded in `implementation_plan_v2.md`. Changes 1-20 are complete and
-  the next implementation unit is Batch 145. Batch 144 is not a CI-monitoring
-  batch.
+- Current unit: Batch 145, exactly 20 changes, complete after pushed Batch
+  144 closeout `4be4a51`. Its authoritative Verilog-2005 strength and switch
+  primitive contract and per-change status are recorded in
+  `implementation_plan_v2.md`. Changes 1-20 are complete. The exact-LLVM Debug,
+  Release, and LLVM-disabled focused slices pass for
+  frontend, elaboration, runtime, library artifacts, application resolution,
+  diagnostic catalog, and source budget. Transmission-switch regression now
+  proves release to `Z`, reconnection, conditional enabled/disabled/unknown
+  conductance, repeated resistive reduction, and cycle-safe resolution without
+  stale retention. Bidirectional transmission metadata now names source,
+  target, optional control, polarity, and resistance in runtime-state and
+  native-cache provenance; the scheduler resolves the connected-net graph and
+  the transmission processes own no driver slots or hierarchy objects. Pull,
+  supply, implicit-pull, scalar/packed charge retention, charge-strength
+  arbitration, zero decay, finite decay, renewed-drive cancellation, and
+  infinite retention pass the same interpreter/LLVM and runtime-state slice.
+  Generated and parameter-specialized instances, aliased multiple roots,
+  searched source libraries, recursive VHDL/SystemC wrappers, disconnected
+  components, and cyclic transmission graphs pass through the central
+  resolver. The same strength-conflict, direct/routed switch, retained-charge,
+  and finite-decay design passes through `.fsimobj`, standalone
+  `.fsimdesign`, and relocated mapped `.fsimlib` flows. Interpreter and
+  compiled cold/warm results match; native-cache hits, misses, stores, and a
+  source edit prove topology-aware separation. The complete LLVM-disabled
+  warnings-as-errors rebuild and its seven focused tests pass after the
+  topology refactor.
+  Negative evidence rejects ambiguous strength syntax, malformed topology and
+  strength ranks, incomplete or width-incompatible native edges, unsupported
+  module-instance strength profiles, a switch array beyond its 256 MiB owning
+  storage budget, a corrupted strength-bearing design artifact, and decay-time
+  overflow. Vector-controlled transmission now selects conductance per lane.
+  Architecture, language support, README, diagnostics, feature matrix,
+  evidence inventory, legality, differential, and release-candidate records
+  are synchronized. All 12 focused documentation/release gates pass at 1,755
+  diagnostics, 489 bounded sources, 579 SPDX-owned artifacts, 204 authored
+  test/control files, 1,121 executable rows, 4,484 evidence cells, 356 exact
+  paths, and 104 runtime owners.
+  The time application now proves a `trireg` decay literal that overflows after
+  project-resolution scaling is rejected through `FSIM-TIME-0003`.
+  Changes 1-19 remained one recoverable accumulated worktree. Change 20's
+  eight-worker exact-LLVM Debug and Release builds pass 111/111 tests in
+  135.16 and 106.30 seconds. Source, catalog, inventory,
+  installed-public-contract, Windows ABI, differential, and release gates pass.
+  Batch 145 is not a CI-monitoring batch; no sanitizer or hosted CI inspection
+  ran.
+- Batch 145 owns the common strength-aware four-state resolver; parsed drive,
+  pull, and charge strengths; ordinary and tri-state gate strengths; MOS and
+  resistive MOS devices; bidirectional and conditional transmission switches;
+  pull/supply/implicit-pull sources; `trireg` charge retention and decay;
+  generated, multiple-root, library, and mixed-language topology; portable
+  artifacts and caches; both engines; debugger, callbacks, VCD; diagnostics;
+  and release evidence. Specify timing and SDF remain later dedicated batches.
 - Batch 144 owns Verilog-2005 combinational and sequential user-defined
   primitives: declarations, table symbols and edge descriptors, instance
   resolution and arrays, normalized specialization, per-instance state,

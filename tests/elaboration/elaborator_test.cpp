@@ -13,6 +13,7 @@ int main() {
   test_mixed_language_and_systemc();
   test_multi_library_resolution();
   test_verilog_udp_resolution();
+  test_verilog_strength_hierarchy();
   test_multiple_root_elaboration();
   test_mixed_language_conversions();
   test_mixed_language_construction();

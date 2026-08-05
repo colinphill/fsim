@@ -268,7 +268,7 @@ std::optional<RegisterId> Lowerer::lower_expression(
             || expression.text == "&&"
             || expression.text == "||");
     const bool context_determined =
-        language_ == frontend::Language::SystemVerilog2017
+        language_ != frontend::Language::Vhdl2008
         && ((expression.kind == ExpressionKind::Binary
              && !scalar_result)
             || (expression.kind == ExpressionKind::Unary

@@ -429,6 +429,23 @@ end architecture;
     assert(!collision.ok());
     assert(has_diagnostic(collision, "FSIM-ELAB-BIND-017"));
 
+    const auto module_strength = fsim::frontend::parse_text(
+        "module-strength.v",
+        R"(
+module ordinary_child(output q, input d); assign q = d; endmodule
+module ordinary_parent;
+  wire d, q;
+  ordinary_child (weak1, strong0) child(q, d);
+endmodule
+)",
+        fsim::frontend::Language::Verilog2005);
+    assert(module_strength.ok());
+    const auto rejected_module_strength = fsim::elaboration::elaborate(
+        module_strength.design, "verilog:work.ordinary_parent");
+    assert(!rejected_module_strength.ok());
+    assert(has_diagnostic(
+        rejected_module_strength, "FSIM-ELAB-BIND-065"));
+
     auto malformed_table_state = selected.design->state();
     malformed_table_state.udp_tables.front().rows.front().inputs.clear();
     assert(!fsim::elaboration::ElaboratedDesign::from_state(
@@ -448,6 +465,21 @@ end architecture;
     digest_parameter->second.assign(64, '0');
     assert(!fsim::elaboration::ElaboratedDesign::from_state(
         std::move(malformed_provenance_state)));
+    auto malformed_strength_state = selected.design->state();
+    malformed_strength_state.processes.front().drive_strength.zero =
+        static_cast<fsim::runtime::simir::StrengthRank>(255);
+    assert(!fsim::elaboration::ElaboratedDesign::from_state(
+        std::move(malformed_strength_state)));
+    auto malformed_switch_state = selected.design->state();
+    malformed_switch_state.processes.front().switch_source =
+        static_cast<fsim::runtime::simir::SignalId>(
+            malformed_switch_state.signals.size());
+    assert(!fsim::elaboration::ElaboratedDesign::from_state(
+        std::move(malformed_switch_state)));
+    auto incomplete_switch_state = selected.design->state();
+    incomplete_switch_state.processes.front().switch_bidirectional = true;
+    assert(!fsim::elaboration::ElaboratedDesign::from_state(
+        std::move(incomplete_switch_state)));
 }
 
 } // namespace fsim::tests::elaboration

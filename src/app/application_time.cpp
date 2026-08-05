@@ -103,6 +103,9 @@ void visit_signal_delays(
     if (signal.net_delay) {
       visit_delay(*signal.net_delay, function);
     }
+    if (signal.charge_decay) {
+      visit_delay(*signal.charge_decay, function);
+    }
   }
 }
 

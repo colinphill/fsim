@@ -1514,7 +1514,7 @@ module gates;
   logic tri_not;
   buf #2 (y_buf, a), named_buf (y_buf_second, b);
   not named_not (y_not, a);
-  and (y_and, a, b, c);
+  and (strong1, pull0) (y_and, a, b, c);
   nand (y_nand, a, b, c);
   or (y_or, a, b, c);
   nor (y_nor, a, b, c);
@@ -1545,6 +1545,11 @@ endmodule
           && statements[0].value.kind == ExpressionKind::Identifier
           && statements[2].value.kind == ExpressionKind::Unary
           && statements[3].value.kind == ExpressionKind::Binary
+          && statements[3].verilog_drive_strength
+          && statements[3].verilog_drive_strength->zero
+              == VerilogStrength::Pull
+          && statements[3].verilog_drive_strength->one
+              == VerilogStrength::Strong
           && statements[4].value.kind == ExpressionKind::Unary,
       "gate primitives lower into continuous expression HIR");
   require(
@@ -1586,8 +1591,8 @@ module invalid_gate;
   and enormous[2147483647:0] (y, a, a);
   and [3:0] (y, a, a);
   and symbolic[a:0] (y, a, a);
-  and (strong1, pull0) (y, a, a);
-  nmos deferred_switch(y, a, b);
+  and (strong1, pull1) (y, a, a);
+  nmos wrong_terminal_count(y, a);
 endmodule
 )",
       Language::SystemVerilog2017);
@@ -1604,9 +1609,9 @@ endmodule
       std::ranges::any_of(
           invalid.diagnostics,
           [](const Diagnostic& diagnostic) {
-            return diagnostic.code == "FSIM-SV-UNSUPPORTED-030";
+            return diagnostic.code == "FSIM-SV-SEM-148";
           }),
-      "unsupported gate strengths are targeted");
+      "invalid gate-strength polarity is targeted");
   require(
       std::ranges::any_of(
           invalid.diagnostics,
@@ -1633,9 +1638,9 @@ endmodule
       std::ranges::any_of(
           invalid.diagnostics,
           [](const Diagnostic& diagnostic) {
-            return diagnostic.code == "FSIM-SV-UNSUPPORTED-040";
+            return diagnostic.code == "FSIM-SV-SEM-153";
           }),
-      "deferred switch and pull primitive families are targeted");
+      "switch primitive terminal counts are targeted");
 }
 
 void test_systemverilog_select_and_concatenation_expressions() {

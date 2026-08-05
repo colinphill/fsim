@@ -548,11 +548,24 @@ class VerilogParser final : private detail::ParserBase {
   static bool update_existing_port_type(
       DesignUnit& unit, const SignalDeclaration& declaration);
 
+  [[nodiscard]] bool verilog_drive_strength_start() const;
+
+  std::optional<VerilogDriveStrength>
+  parse_verilog_drive_strength(std::string_view context);
+
+  std::optional<VerilogChargeStrength>
+  parse_verilog_charge_strength(std::string_view context);
+
   std::optional<Statement> parse_continuous_assignment(const Token& start);
 
   [[nodiscard]] bool is_gate_primitive() const;
 
   void parse_gate_primitive(
+      std::vector<Statement>& statements,
+      const std::vector<SignalDeclaration>& signals,
+      const std::vector<SignalDeclaration>& ports);
+
+  void parse_switch_primitive(
       std::vector<Statement>& statements,
       const std::vector<SignalDeclaration>& signals,
       const std::vector<SignalDeclaration>& ports);

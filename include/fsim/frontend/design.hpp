@@ -166,6 +166,39 @@ struct Delay {
   SourceSpan span;
 };
 
+/// IEEE 1364 drive/charge strength rank, ordered from no drive to supply.
+enum class VerilogStrength : std::uint8_t {
+  HighZ,
+  Small,
+  Medium,
+  Weak,
+  Large,
+  Pull,
+  Strong,
+  Supply,
+};
+
+/// Distinct strengths contributed when a Verilog driver produces zero or one.
+struct VerilogDriveStrength {
+  VerilogStrength zero{VerilogStrength::Strong};
+  VerilogStrength one{VerilogStrength::Strong};
+  SourceSpan span;
+
+  friend bool operator==(
+      const VerilogDriveStrength&,
+      const VerilogDriveStrength&) = default;
+};
+
+/// Charge retained by a trireg after its active drivers disconnect.
+struct VerilogChargeStrength {
+  VerilogStrength rank{VerilogStrength::Medium};
+  SourceSpan span;
+
+  friend bool operator==(
+      const VerilogChargeStrength&,
+      const VerilogChargeStrength&) = default;
+};
+
 struct PackedRangeExpression {
   Expression left;
   Expression right;
@@ -525,6 +558,10 @@ struct SignalDeclaration {
   // A SystemVerilog net-declaration propagation delay. Elaboration applies
   // it to every continuous driver targeting this net after specialization.
   std::optional<Delay> net_delay;
+  // Verilog net-declaration drive strength and trireg charge strength.
+  std::optional<VerilogDriveStrength> drive_strength;
+  std::optional<VerilogChargeStrength> charge_strength;
+  std::optional<Delay> charge_decay;
   // Non-empty only for a SystemVerilog interface port. The optional modport
   // names the view selected after `interface_type.`; these declarations are
   // hierarchy bundles rather than independently allocated packed signals.
@@ -923,6 +960,7 @@ struct Instance {
   // Populated for UDP propagation-delay syntax after declaration-aware
   // frontend normalization. Module parameter overrides remain separate.
   std::optional<Delay> udp_delay;
+  std::optional<VerilogDriveStrength> drive_strength;
   std::vector<PortConnection> connections;
   // True for `label: component_name ...`; false for direct entity/module
   // instantiation. VHDL configuration specifications apply only to the
@@ -1148,6 +1186,19 @@ struct Statement {
       ProceduralUpdateKind::None};
   std::string procedural_update_operator;
   std::optional<Delay> delay;
+  // Static strength for a Verilog continuous/gate/UDP driver. Empty denotes
+  // the language default strong0/strong1 contribution.
+  std::optional<VerilogDriveStrength> verilog_drive_strength;
+  // One directional half of a bidirectional Verilog transmission device.
+  // The source expression is retained separately so elaboration/runtime can
+  // break feedback cycles and propagate resistive strength without exposing
+  // an artificial hierarchy object.
+  bool verilog_switch_driver{};
+  bool verilog_switch_bidirectional{};
+  bool verilog_switch_resistive{};
+  Expression verilog_switch_source;
+  Expression verilog_switch_control;
+  bool verilog_switch_active_high{true};
   // Present only on VHDL signal assignments. VHDL variable assignments and
   // assignments from the Verilog/SystemVerilog frontends leave this empty.
   std::optional<VhdlDelayMechanism> vhdl_delay_mechanism;

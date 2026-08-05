@@ -622,8 +622,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
         if (expression.kind == ExpressionKind::Call
             && expression.text == "?:"
             && expression.operands.size() == 3) {
-            if (language_
-                == frontend::Language::SystemVerilog2017) {
+            if (language_ != frontend::Language::Vhdl2008) {
                 const auto condition = lower_condition(
                     expression.operands[0],
                     "FSIM-ELAB-064",

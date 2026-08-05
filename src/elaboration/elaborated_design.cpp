@@ -199,8 +199,23 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
     return std::nullopt;
   }
   for (std::size_t index = 0; index < state.signal_info.size(); ++index) {
+    const auto valid_strength = [](const runtime::simir::StrengthRank rank) {
+      return static_cast<std::underlying_type_t<
+          runtime::simir::StrengthRank>>(rank)
+          <= static_cast<std::underlying_type_t<
+              runtime::simir::StrengthRank>>(
+                  runtime::simir::StrengthRank::supply);
+    };
     if (state.signal_info[index].id != index
-        || state.signal_info[index].width != state.signals[index].initial_value.width()) {
+        || state.signal_info[index].width
+            != state.signals[index].initial_value.width()
+        || !valid_strength(
+            state.signals[index].implicit_drive_strength.zero)
+        || !valid_strength(
+            state.signals[index].implicit_drive_strength.one)
+        || (state.signals[index].charge_strength
+            && !valid_strength(
+                *state.signals[index].charge_strength))) {
       return std::nullopt;
     }
   }
@@ -215,8 +230,45 @@ std::optional<ElaboratedDesign> ElaboratedDesign::from_state(
     }
   }
   for (std::size_t index = 0; index < state.processes.size(); ++index) {
-    if (state.processes[index].id != index) {
+    const auto& process = state.processes[index];
+    const auto valid_strength = [](const runtime::simir::StrengthRank rank) {
+      return static_cast<std::underlying_type_t<
+          runtime::simir::StrengthRank>>(rank)
+          <= static_cast<std::underlying_type_t<
+              runtime::simir::StrengthRank>>(
+                  runtime::simir::StrengthRank::supply);
+    };
+    if (process.id != index
+        || !valid_strength(process.drive_strength.zero)
+        || !valid_strength(process.drive_strength.one)
+        || (process.switch_source
+            && *process.switch_source
+                >= state.signals.size())
+        || (process.switch_target
+            && *process.switch_target
+                >= state.signals.size())
+        || (process.switch_control
+            && *process.switch_control
+                >= state.signals.size())
+        || (process.switch_bidirectional
+            && (!process.switch_source || !process.switch_target))) {
       return std::nullopt;
+    }
+    if (process.switch_source && process.switch_target) {
+      const auto source_width = state.signals[*process.switch_source]
+                                    .initial_value.width();
+      const auto target_width = state.signals[*process.switch_target]
+                                    .initial_value.width();
+      if ((source_width != target_width
+           && source_width != 1 && target_width != 1)
+          || (process.switch_control
+              && state.signals[*process.switch_control]
+                         .initial_value.width() != 1
+              && state.signals[*process.switch_control]
+                         .initial_value.width()
+                  != std::max(source_width, target_width))) {
+        return std::nullopt;
+      }
     }
   }
   for (std::size_t index = 0; index < state.specializations.size(); ++index) {

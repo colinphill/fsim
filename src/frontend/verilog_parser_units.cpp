@@ -642,6 +642,15 @@ void VerilogParser::parse_generate_branch(
         body.concurrent_statements.push_back(
             std::move(*assignment));
       }
+    } else if (is_gate_primitive()) {
+      parse_gate_primitive(
+          body.concurrent_statements, body.signals, {});
+    } else if (any_keyword({
+                   "cmos", "rcmos", "nmos", "pmos", "rnmos",
+                   "rpmos", "tran", "rtran", "tranif0", "tranif1",
+                   "rtranif0", "rtranif1", "pullup", "pulldown"})) {
+      parse_switch_primitive(
+          body.concurrent_statements, body.signals, {});
     } else if (
         keyword("always") || keyword("always_ff")
         || keyword("always_comb") || keyword("always_latch")) {
@@ -1192,6 +1201,8 @@ std::vector<Instance> VerilogParser::parse_instances() {
   const auto start = expect_identifier("instantiated module name");
   Instance common;
   common.unit_name = start.text;
+  common.drive_strength =
+      parse_verilog_drive_strength("UDP instance");
   if (match(TokenKind::Hash)) {
     const auto hash = previous();
     if (at(TokenKind::LeftParen)) {

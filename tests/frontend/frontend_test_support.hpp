@@ -77,6 +77,7 @@ void test_systemverilog_comparison_expressions();
 void test_systemverilog_membership_expressions();
 void test_systemverilog_arithmetic_expressions();
 void test_gate_primitives();
+void test_verilog_strength_and_switch_primitives();
 void test_verilog_udp_declarations();
 void test_systemverilog_select_and_concatenation_expressions();
 void test_conditional_statement_trees();

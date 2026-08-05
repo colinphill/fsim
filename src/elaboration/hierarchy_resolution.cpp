@@ -45,7 +45,12 @@ ResolutionKind HierarchyBuilder::native_resolution(
         return ResolutionKind::std_logic;
     }
     if (signal.type_name == "wire"
-        || signal.type_name == "tri") {
+        || signal.type_name == "tri"
+        || signal.type_name == "tri0"
+        || signal.type_name == "tri1"
+        || signal.type_name == "trireg"
+        || signal.type_name == "supply0"
+        || signal.type_name == "supply1") {
         return ResolutionKind::sv_wire;
     }
     if (signal.type_name == "wand"

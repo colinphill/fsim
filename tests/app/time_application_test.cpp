@@ -196,7 +196,8 @@ void verify_overflow_diagnostic(
     std::ofstream output(source, std::ios::binary);
     output << R"(timeunit 1s / 1s;
 module time_rounding;
-  initial #18446744073709551615 $finish;
+  trireg (small) #18446744073709551615 retained;
+  assign retained = 1'b1;
 endmodule
 )";
     assert(output.good());

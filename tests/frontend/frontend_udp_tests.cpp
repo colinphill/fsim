@@ -159,6 +159,7 @@ module udp_forms(
   inv_udp arrayed[1:0](q, d);
   inv_udp #(1, 2, 3) delayed(y0, a);
   inv_udp #4 direct_delay(y1, a);
+  inv_udp (weak1, strong0) strength_selected(y2, a);
 endmodule
 )",
       Language::Verilog2005);
@@ -170,7 +171,7 @@ endmodule
   require(instances.ok(), "UDP instance forms must parse");
   require(
       instances.design.units.size() == 1
-          && instances.design.units.front().instances.size() == 6,
+          && instances.design.units.front().instances.size() == 7,
       "anonymous, multiple, arrayed, and delayed UDP instances retained");
   const auto& forms = instances.design.units.front().instances;
   require(
@@ -186,6 +187,11 @@ endmodule
           && forms[4].udp_delay->additional_values[1].magnitude == 3
           && forms[5].udp_delay && forms[5].udp_delay->magnitude == 4,
       "one/two/three-value UDP delays use the common delay HIR");
+  require(
+      forms[6].drive_strength
+          && forms[6].drive_strength->zero == VerilogStrength::Strong
+          && forms[6].drive_strength->one == VerilogStrength::Weak,
+      "UDP instance drive strength retains canonical zero/one ranks");
 
   const auto invalid = parse_text(
       "invalid_udp.v",

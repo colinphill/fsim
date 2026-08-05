@@ -141,6 +141,14 @@ void substitute_parameters(
             diagnostics,
             language);
     }
+    if (declaration.charge_decay) {
+        substitute_delay_parameters(
+            *declaration.charge_decay,
+            environment,
+            domains,
+            diagnostics,
+            language);
+    }
 }
 
 void substitute_parameters(

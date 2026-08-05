@@ -364,6 +364,8 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_core.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_declarations.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_switch.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_strength.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_expressions.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_functions.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_processes.cpp"

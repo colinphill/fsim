@@ -1801,20 +1801,19 @@ void adapt_vhdl_array_port_shapes(
                         binding);
                 }
             }
-            if (target == nullptr) {
-                continue;
-            }
+            if (target == nullptr) continue;
             if (selected_instance->anonymous) {
-                report("FSIM-ELAB-BIND-062", "module instance '"
-                    + child_path + "' requires an explicit instance name",
-                    selected_instance->span);
+                report("FSIM-ELAB-BIND-062", "module instance '" + child_path
+                    + "' requires an explicit instance name", selected_instance->span);
                 continue;
             }
-            if (selected_instance->udp_delay.has_value()) {
-                report("FSIM-ELAB-BIND-063", "module instance '"
-                    + child_path
-                    + "' cannot use UDP propagation-delay syntax",
-                    selected_instance->span);
+            if (selected_instance->udp_delay
+                || selected_instance->drive_strength) {
+                const bool delay = selected_instance->udp_delay.has_value();
+                report(delay ? "FSIM-ELAB-BIND-063" : "FSIM-ELAB-BIND-065",
+                    "module instance '" + child_path + "' cannot use UDP "
+                        + (delay ? "propagation-delay" : "drive-strength")
+                        + " syntax", selected_instance->span);
                 continue;
             }
             auto child_specialized = specialize_selected_unit(

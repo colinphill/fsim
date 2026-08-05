@@ -363,7 +363,10 @@ struct Interpreter::Impl {
   FileHandle next_file_handle{1};
   std::vector<PackedLogic4> driven_values;
   std::vector<std::map<ProcessId, PackedLogic4>> driver_values;
+  std::vector<std::map<ProcessId, DriveStrength>> driver_strengths;
   std::vector<std::optional<PackedLogic4>> external_driver_values;
+  std::vector<std::optional<ScheduledTaskHandle>> charge_decay_handles;
+  std::vector<std::optional<PackedLogic4>> charge_values;
   std::vector<PackedLogic4> signal_last_values;
   std::vector<std::optional<PackedLogic4>> forced_values;
   std::vector<PackedLogic4> forced_masks;
@@ -399,6 +402,7 @@ struct Interpreter::Impl {
   std::optional<std::pair<SimulationTick, std::uint64_t>>
       monitor_publication;
   bool update_commit_scheduled{};
+  bool switch_refreshing{};
   bool started{};
   bool stopped_by_design{};
   bool finals_ran{};
@@ -655,6 +659,10 @@ struct Interpreter::Impl {
 
   void commit(SignalId signal_id, PackedLogic4 value);
 
+  void refresh_switch_network();
+
+  void commit_resolved(SignalId signal_id, PackedLogic4 value);
+
   [[nodiscard]] PackedLogic4 initial_driver_value(
       const SignalId signal_id) const;
 
@@ -665,13 +673,24 @@ struct Interpreter::Impl {
   [[nodiscard]] PackedLogic4 resolved_driver_value(
       const SignalId signal_id) const;
 
+  [[nodiscard]] PackedLogic4 resolved_local_driver_value(
+      SignalId signal_id) const;
+
+  [[nodiscard]] DriveStrength resolved_signal_strength(
+      SignalId signal_id) const;
+
+  [[nodiscard]] bool switch_process(ProcessId process) const;
+
+  void reset_switch_drivers();
+
   PackedLogic4& external_driver_slot(
       const SignalId signal_id);
 
   void register_driver(
       const ProcessId process,
       const SignalId signal_id,
-      std::span<const Process::DriverRegion> regions);
+      std::span<const Process::DriverRegion> regions,
+      DriveStrength strength);
 
   void set_driver(
       const ProcessId process,

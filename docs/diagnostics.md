@@ -712,6 +712,16 @@ are therefore excluded.
 | `FSIM-SV-PARSE-241` | error | Expected `table` in a user-defined primitive declaration. |
 | `FSIM-SV-PARSE-242` | error | Expected `endtable` after user-defined primitive rows. |
 | `FSIM-SV-PARSE-243` | error | Expected `endprimitive` after a user-defined primitive table. |
+| `FSIM-SV-PARSE-244` | error | Expected a comma between Verilog drive-strength members. |
+| `FSIM-SV-PARSE-245` | error | Expected a legal zero/one drive-strength member. |
+| `FSIM-SV-PARSE-246` | error | Expected a closing parenthesis after a Verilog drive-strength pair. |
+| `FSIM-SV-PARSE-247` | error | Expected a closing parenthesis after a Verilog charge strength. |
+| `FSIM-SV-PARSE-248` | error | Expected an opening parenthesis before switch-primitive terminals. |
+| `FSIM-SV-PARSE-249` | error | Expected a closing parenthesis after switch-primitive terminals. |
+| `FSIM-SV-PARSE-250` | error | Expected a semicolon after a switch-primitive declaration. |
+| `FSIM-SV-PARSE-251` | error | Expected a closing parenthesis after a single pull strength. |
+| `FSIM-SV-PARSE-252` | error | Expected a colon in a switch-instance array range. |
+| `FSIM-SV-PARSE-253` | error | Expected a closing bracket after a switch-instance array range. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -897,6 +907,17 @@ are therefore excluded.
 | `FSIM-SV-SEM-145` | error | A user-defined primitive propagation delay is not a representable nonnegative decimal expression. |
 | `FSIM-SV-SEM-146` | error | A user-defined primitive propagation delay supplies more than three transition values. |
 | `FSIM-SV-SEM-147` | error | Materializing a user-defined primitive table would exceed the frontend owning-storage budget. |
+| `FSIM-SV-SEM-148` | error | A drive-strength pair does not contain one zero strength and one one strength. |
+| `FSIM-SV-SEM-149` | error | A net declaration contains an invalid charge-strength spelling. |
+| `FSIM-SV-SEM-150` | error | A variable declaration carries net drive-strength syntax. |
+| `FSIM-SV-SEM-151` | error | A charge strength is attached to a declaration other than `trireg`. |
+| `FSIM-SV-SEM-152` | error | A MOS or transmission primitive carries illegal drive-strength syntax. |
+| `FSIM-SV-SEM-153` | error | A switch primitive has the wrong terminal count. |
+| `FSIM-SV-SEM-154` | error | A single pull strength has the wrong output polarity. |
+| `FSIM-SV-SEM-155` | error | Both members of a drive-strength pair specify high impedance. |
+| `FSIM-SV-SEM-156` | error | A switch-instance array range is not locally static. |
+| `FSIM-SV-SEM-157` | error | A switch-instance array exceeds the frontend owning-storage budget. |
+| `FSIM-SV-SEM-158` | error | A switch-array terminal is neither scalar nor width-matched to the array. |
 | `FSIM-ELAB-SVIFACE-006` | error | A process writes through a read-only input port or modport input member. |
 | `FSIM-ELAB-SVIFACE-007` | error | A retained interface callable cannot be materialized at its same-language module boundary. |
 | `FSIM-ELAB-SVIFACE-008` | error | An interface callable is visible more than once through the same module port. |
@@ -995,9 +1016,7 @@ are therefore excluded.
 | `FSIM-SV-UNSUPPORTED-027` | error | A bounded aggregate declaration uses an unpacked union, which is outside the supported packed-union or unpacked-struct slice. |
 | `FSIM-SV-UNSUPPORTED-028` | error | A bounded aggregate member uses a data type outside the packed integral, enum, or nested aggregate subset. |
 | `FSIM-SV-UNSUPPORTED-029` | error | A bounded aggregate member has an unpacked dimension or initializer. |
-| `FSIM-SV-UNSUPPORTED-030` | error | A built-in gate declaration uses unsupported drive strengths. |
 | `FSIM-SV-UNSUPPORTED-035` | error | A bounded function output, inout, or ref formal uses a string or unpacked-container type instead of the supported packed integral type. |
-| `FSIM-SV-UNSUPPORTED-040` | error | A MOS, bidirectional-switch, resistive, or pull primitive is outside the bounded v1 gate subset. |
 | `FSIM-SV-UNSUPPORTED-041` | error | `reverse` or nondeterministic `shuffle` uses an excluded container-ordering `with` clause. |
 | `FSIM-SV-UNSUPPORTED-042` | error | A bounded `case matches` item uses a deferred variable-binding, tagged, or structured pattern. |
 | `FSIM-SV-UNSUPPORTED-043` | error | A bounded `case matches` item uses a deferred `&&&` guard. |
@@ -1761,6 +1780,7 @@ are therefore excluded.
 | `FSIM-ELAB-BIND-062` | error | An ordinary module instance omits its required instance name. |
 | `FSIM-ELAB-BIND-063` | error | An ordinary module instance uses syntax reserved for a UDP propagation delay. |
 | `FSIM-ELAB-BIND-064` | error | A user-defined primitive instance-array terminal is neither scalar nor width-matched to the array. |
+| `FSIM-ELAB-BIND-065` | error | An ordinary module instance uses syntax reserved for a UDP drive strength. |
 
 ## Time, runtime, trace, and design cache
 

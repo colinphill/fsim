@@ -636,6 +636,21 @@ void test_resolved_driver_slots() {
           "top.standard_logic",
           PackedLogic4::from_msb_string("X"),
           ResolutionKind::std_logic});
+  const auto strength_resolved = interpreter.add_signal(
+      {
+          "top.strength_resolved",
+          PackedLogic4::from_msb_string("Z"),
+          ResolutionKind::sv_wire});
+  const auto switch_pair = interpreter.add_signal(
+      {
+          "top.switch_pair",
+          PackedLogic4::from_msb_string("ZZ"),
+          ResolutionKind::sv_wire});
+  const auto switch_triplet = interpreter.add_signal(
+      {
+          "top.switch_triplet",
+          PackedLogic4::from_msb_string("ZZZ"),
+          ResolutionKind::sv_wire});
 
   Process first;
   first.id = 0;
@@ -671,6 +686,66 @@ void test_resolved_driver_slots() {
       Halt{}};
   (void)interpreter.add_process(std::move(second));
 
+  Process weak_zero;
+  weak_zero.id = 2;
+  weak_zero.name = "weak_zero_driver";
+  weak_zero.register_count = 1;
+  weak_zero.drive_strength = {
+      StrengthRank::weak, StrengthRank::weak};
+  weak_zero.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("0")},
+      WriteUpdate{strength_resolved, 0},
+      Halt{}};
+  (void)interpreter.add_process(std::move(weak_zero));
+
+  Process strong_one;
+  strong_one.id = 3;
+  strong_one.name = "strong_one_driver";
+  strong_one.register_count = 1;
+  strong_one.drive_strength = {
+      StrengthRank::strong, StrengthRank::strong};
+  strong_one.operations = {
+      LoadConstant{0, PackedLogic4::from_msb_string("1")},
+      WriteUpdate{strength_resolved, 0},
+      Halt{}};
+  (void)interpreter.add_process(std::move(strong_one));
+
+  const auto rejects_process = [&](Process process) {
+    try {
+      (void)interpreter.add_process(std::move(process));
+    } catch (const std::invalid_argument&) {
+      return true;
+    }
+    return false;
+  };
+  Process invalid_strength;
+  invalid_strength.id = 4;
+  invalid_strength.name = "invalid_strength";
+  invalid_strength.drive_strength.zero =
+      static_cast<StrengthRank>(255);
+  invalid_strength.operations = {Halt{}};
+  require(
+      rejects_process(std::move(invalid_strength)),
+      "runtime construction rejects an invalid strength rank");
+  Process incomplete_switch;
+  incomplete_switch.id = 4;
+  incomplete_switch.name = "incomplete_switch";
+  incomplete_switch.switch_bidirectional = true;
+  incomplete_switch.operations = {Halt{}};
+  require(
+      rejects_process(std::move(incomplete_switch)),
+      "runtime construction rejects an incomplete transmission edge");
+  Process incompatible_switch;
+  incompatible_switch.id = 4;
+  incompatible_switch.name = "incompatible_switch";
+  incompatible_switch.switch_source = switch_pair;
+  incompatible_switch.switch_target = switch_triplet;
+  incompatible_switch.switch_bidirectional = true;
+  incompatible_switch.operations = {Halt{}};
+  require(
+      rejects_process(std::move(incompatible_switch)),
+      "runtime construction rejects incompatible transmission widths");
+
   struct Change {
     SignalId signal{};
     std::string value;
@@ -699,6 +774,9 @@ void test_resolved_driver_slots() {
   require(
       interpreter.signal_value(sliced).to_msb_string() == "11XX",
       "partial driver slots resolve disjoint and overlapping packed bits");
+  require(
+      interpreter.signal_value(strength_resolved).to_msb_string() == "1",
+      "the strongest opposing Verilog driver determines the visible value");
   require(
       interpreter.driver_value(0, sliced).to_msb_string() == "ZZ10"
           && interpreter.driver_value(1, sliced).to_msb_string()

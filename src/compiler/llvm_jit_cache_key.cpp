@@ -134,6 +134,7 @@ using runtime::simir::WriteUpdateDynamicPartSlice;
 using runtime::simir::WriteUpdateSlice;
 using runtime::simir::WriteStringObject;
 using runtime::simir::Yield;
+using runtime::simir::StrengthRank;
 using runtime::simir::Fork;
 using runtime::simir::ForkEnd;
 using runtime::simir::ForkJoinKind;
@@ -142,7 +143,7 @@ using runtime::simir::DisableFork;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v78";
+    "fsim-llvm-native-object-v80";
 
 void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
                  const std::uint64_t value) {
@@ -304,6 +305,40 @@ void add_dynamic_part_index_key(
         "register-value-kind",
         static_cast<std::underlying_type_t<ValueKind>>(kind));
   }
+  add_key_u64(
+      builder, "drive-strength-zero",
+      static_cast<std::underlying_type_t<StrengthRank>>(
+          process.drive_strength.zero));
+  add_key_u64(
+      builder, "drive-strength-one",
+      static_cast<std::underlying_type_t<StrengthRank>>(
+          process.drive_strength.one));
+  add_key_u64(
+      builder, "switch-source-present",
+      process.switch_source.has_value() ? 1U : 0U);
+  if (process.switch_source) {
+    add_key_u64(builder, "switch-source", *process.switch_source);
+  }
+  add_key_u64(
+      builder, "switch-target-present",
+      process.switch_target.has_value() ? 1U : 0U);
+  if (process.switch_target) {
+    add_key_u64(builder, "switch-target", *process.switch_target);
+  }
+  add_key_u64(
+      builder, "switch-control-present",
+      process.switch_control.has_value() ? 1U : 0U);
+  if (process.switch_control) {
+    add_key_u64(builder, "switch-control", *process.switch_control);
+  }
+  add_key_u64(
+      builder, "switch-active-high",
+      process.switch_active_high ? 1U : 0U);
+  add_key_u64(
+      builder, "switch-bidirectional",
+      process.switch_bidirectional ? 1U : 0U);
+  add_key_u64(
+      builder, "switch-resistive", process.switch_resistive ? 1U : 0U);
   add_key_u64(
       builder,
       "expression-profile-count",

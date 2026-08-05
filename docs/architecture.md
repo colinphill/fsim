@@ -47,11 +47,11 @@ than independent semantic definitions.
 |---|---|---|
 | Source manager | Files, source locations, include and macro ancestry | Exact ordered compilation-unit/transitive snapshots, owning VHDL/SV/SystemC source records, and interned include/macro ancestry are current |
 | Language frontend | Tokenization, preprocessing, parsing, name/type rules | Hand-written bounded VHDL and SV parsers, a multi-root SV preprocessor, and complete owning typed HIR for the v1 profile are current |
-| Design elaboration | Candidate resolution, specialization, hierarchy, bindings, drivers, stable IDs | Recursive VHDL/SV/SystemC hierarchy, configurable complete-scope logical-library resolution with explicit overrides, dense instance-specific specialization records, bounded scalar VHDL generic and integral SV parameter specialization, executable conditional/iterative/selection generate expansion, construction-actual transfer across all three languages, port aliasing, and boundary checks are current; mapped external libraries, general generic/parameter typing, and complete driver semantics are planned |
+| Design elaboration | Candidate resolution, specialization, hierarchy, bindings, drivers, stable IDs | Recursive VHDL/SV/SystemC hierarchy, configurable complete-scope logical-library resolution with explicit overrides and lazy read-only mapped libraries, dense instance-specific specialization records, bounded scalar VHDL generic and integral SV parameter specialization, executable conditional/iterative/selection generate expansion, construction-actual transfer across all three languages, port aliasing, strength/charge provenance, and boundary checks are current; general generic/parameter typing remains planned |
 | SimIR lowering | Explicit reads, writes, waits, branches, assertions and yields | A typed executable subset is current |
 | Reference engine | Execute any supported SimIR with deterministic scheduling | Current |
 | LLVM engine | Compile each design-unit specialization and execute via ORC | The application groups eligible processes from each bounded elaborated specialization into one LLVM module while retaining typed per-process interpreter fallback; update/delayed writes plus dynamic/static sensitivity waits are current |
-| Runtime | Time, deltas, resolution, callbacks, force/deposit and diagnostics | Scheduler, domain-preserving process-owned driver slots, exact nine-state `std_logic` and four-state `sv_wire` policies, committed value changes, deposit, and force/release masking are current; wired/strength resolution remains planned |
+| Runtime | Time, deltas, resolution, callbacks, force/deposit and diagnostics | Scheduler, domain-preserving process-owned driver slots, exact nine-state `std_logic`, wired and strength-aware four-state Verilog resolution, cycle-safe transmission graphs, `trireg` retention/decay, committed value changes, deposit, and force/release masking are current |
 | Visibility | C API, debugger safe points and VCD | Executable session API, VCD, and a scope/signal-oriented REPL with source/time/signal breakpoints, all four step modes, and bounded packed process-local reads are current; complete local scopes/types are planned |
 
 The language-specific HIR retains resolved symbols, types, overload choices,
@@ -548,8 +548,8 @@ case-sensitive Verilog/SystemVerilog parameters is rejected as ambiguous.
 The association syntax owns ordering legality, so VHDL may use positional
 actuals followed by named actuals while Verilog/SystemVerilog may not mix the
 two forms. Typed scalar construction actuals also cross SystemC factories in
-both directions. Expression port actuals, unpacked/record boundaries, and
-wired-net or strength-aware multi-driver resolution remain outside this slice.
+both directions. Expression port actuals and unpacked/record boundaries remain
+outside this slice.
 Exact nine-state `std_logic` and four-state `sv_wire` resolution are current
 in the reference runtime; exact nine-state generated code remains a
 capability-gated interpreter fallback.
@@ -563,6 +563,25 @@ rows, terminal profile, sequential state, and SHA-256 digest. Instance
 specialization provenance carries both identity and digest, so generated,
 multi-root, searched-library, and mixed-language wrapper paths use the same
 resolver and native-cache contract as ordinary hierarchy.
+
+Verilog drive and charge strengths use one canonical rank model from frontend
+HIR through portable units, specialization provenance, SimIR, runtime state,
+and native-cache identity. Resolved nets compare independent zero/one
+components per bit, retain exact ties as `X`, ignore high impedance, and keep
+the wired-AND/OR policies distinct. Gate, tri-state, UDP, procedural,
+cross-language, pull, supply, and implicit-pull contributions enter the same
+resolver. MOS drivers derive their effective strength from the live source and
+apply the standard resistive reduction.
+
+Bidirectional `tran` families are passive topology edges rather than synthetic
+drivers or hierarchy children. The scheduler traverses each enabled connected
+component per lane with cycle detection, scalar/vector mapping, conditional
+four-state conductance, and cumulative resistive reduction. `trireg` signals
+retain the last driven value at their declared charge strength and use the
+common checked inertial event queue for zero, finite, renewed-drive-cancelled,
+or infinite decay. The topology, charge metadata, and selected provenance are
+checked across `.fsimobj`, `.fsimdesign`, relocated `.fsimlib`, and native
+cache boundaries.
 
 Schema-2 projects may select an ordered list of aliased roots with repeated
 `[[project.top]]` records or repeated `--top ALIAS=TARGET` replacements. The
@@ -818,9 +837,10 @@ stream's logical file/line coordinates, built-in macros, expansion ancestry,
 diagnostics, debug points, and report callbacks. The span separately retains
 the physical input identity for library ownership and analysis/native cache
 provenance; mapping state is local to each included file or compilation-unit
-root. The current runtime executes these net forms with one four-state driver;
-wired resolution, trireg charge storage, and standardized pragma behavior
-remain incomplete.
+root. The current runtime combines these net forms through common wired and
+strength-aware four-state driver resolution, including implicit pulls,
+supplies, transmission networks, and `trireg` charge storage. Standardized
+pragma payload behavior remains incomplete.
 
 ## Scheduler
 

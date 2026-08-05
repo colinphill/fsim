@@ -277,7 +277,8 @@ frontend::Process sequential_udp_process(
 
 frontend::DesignUnit udp_profile(
     const frontend::VerilogUdpDeclaration& declaration,
-    const std::optional<frontend::Delay>& propagation_delay) {
+    const std::optional<frontend::Delay>& propagation_delay,
+    const std::optional<frontend::VerilogDriveStrength>& drive_strength) {
     frontend::DesignUnit result;
     result.kind = frontend::UnitKind::VerilogModule;
     result.language = declaration.language;
@@ -319,6 +320,7 @@ frontend::DesignUnit udp_profile(
     driver.target = udp_identifier(declaration.output, declaration.span);
     driver.value = udp_identifier("$udp_value", declaration.span);
     driver.delay = propagation_delay;
+    driver.verilog_drive_strength = drive_strength;
     driver.span = declaration.span;
     result.concurrent_statements.push_back(std::move(driver));
     auto executable = declaration;
@@ -462,7 +464,8 @@ void HierarchyBuilder::instantiate_udp(
         return;
     }
 
-    auto profile = udp_profile(declaration, instance.udp_delay);
+    auto profile = udp_profile(
+        declaration, instance.udp_delay, instance.drive_strength);
     const auto table_id = normalized_udp_table(declaration);
     const auto& table = design_.udp_tables_[table_id];
     auto aliases = connect_instance(

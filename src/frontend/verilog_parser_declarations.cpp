@@ -435,7 +435,8 @@ void VerilogParser::require_default_port_net_type(
 [[nodiscard]] bool VerilogParser::is_net_type_keyword() const  {
   return any_keyword({
       "wire", "tri", "tri0", "tri1", "wand", "triand", "wor",
-      "trior", "trireg", "uwire", "reg", "logic", "bit", "byte",
+      "trior", "trireg", "uwire", "supply0", "supply1",
+      "reg", "logic", "bit", "byte",
       "shortint", "int", "longint", "integer", "time"});
 }
 
@@ -1138,18 +1139,45 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
   } else {
     parse_optional_net_type(spec.type);
   }
+  auto drive_strength = parse_verilog_drive_strength("net declaration");
+  auto charge_strength = parse_verilog_charge_strength("net declaration");
+  if (drive_strength
+      && contains_word(
+          {"reg", "logic", "bit", "byte", "shortint", "int",
+           "longint", "integer", "time"},
+          spec.type.spelling)) {
+    error(
+        start,
+        "FSIM-SV-SEM-150",
+        "a variable declaration cannot carry a net drive strength");
+    drive_strength.reset();
+  }
+  if (charge_strength && spec.type.spelling != "trireg") {
+    error(
+        start,
+        "FSIM-SV-SEM-151",
+        "a charge strength is legal only on a trireg declaration");
+    charge_strength.reset();
+  }
   if (spec.type.named_type.empty()) {
     parse_optional_signedness(spec.type);
     parse_optional_range(spec.type);
   }
   std::optional<Delay> net_delay;
+  std::optional<Delay> charge_decay;
   if (match(TokenKind::Hash)) {
-    net_delay = parse_verilog_delay(previous(), 3);
-    if (spec.type.spelling != "wire") {
+    auto parsed_delay = parse_verilog_delay(previous(), 3);
+    if (spec.type.spelling == "trireg") {
+      charge_decay = std::move(parsed_delay);
+    } else {
+      net_delay = std::move(parsed_delay);
+    }
+    if (spec.type.spelling != "wire"
+        && spec.type.spelling != "trireg") {
       error(
           start,
           "FSIM-SV-SEM-110",
-          "a net-declaration delay requires a wire net type");
+          "a net-declaration delay requires a wire or trireg net type");
     }
   }
 
@@ -1239,6 +1267,9 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
         name.text, std::move(declaration_type), spec.direction,
         spec.direction != PortDirection::Unknown,
         span_from(start, previous()), net_delay};
+    declaration.drive_strength = drive_strength;
+    declaration.charge_strength = charge_strength;
+    declaration.charge_decay = charge_decay;
     const auto parameter_conflict = std::any_of(
         unit.parameters.begin(),
         unit.parameters.end(),
@@ -1318,6 +1349,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
       driver.target = Expression{
           ExpressionKind::Identifier, name.text, {}, name.span};
       driver.value = std::move(*initializer);
+      driver.verilog_drive_strength = drive_strength;
       driver.span = span_from(name, previous());
       unit.concurrent_statements.push_back(std::move(driver));
     }
@@ -1381,6 +1413,10 @@ void VerilogParser::update_or_add_port(DesignUnit& unit,
     if (existing.name == declaration.name) {
       existing.type = std::move(declaration.type);
       existing.direction = declaration.direction;
+      existing.net_delay = std::move(declaration.net_delay);
+      existing.drive_strength = std::move(declaration.drive_strength);
+      existing.charge_strength = std::move(declaration.charge_strength);
+      existing.charge_decay = std::move(declaration.charge_decay);
       existing.span = std::move(declaration.span);
       return;
     }
@@ -1394,6 +1430,9 @@ bool VerilogParser::update_existing_port_type(
     if (existing.name == declaration.name) {
       existing.type = declaration.type;
       existing.net_delay = declaration.net_delay;
+      existing.drive_strength = declaration.drive_strength;
+      existing.charge_strength = declaration.charge_strength;
+      existing.charge_decay = declaration.charge_decay;
       existing.span = cover(existing.span, declaration.span);
       return true;
     }
@@ -1402,6 +1441,7 @@ bool VerilogParser::update_existing_port_type(
 }
 
 std::optional<Statement> VerilogParser::parse_continuous_assignment(const Token& start) {
+  auto strength = parse_verilog_drive_strength("continuous assignment");
   std::optional<Delay> delay;
   if (match(TokenKind::Hash)) {
     delay = parse_verilog_delay(previous(), 3);
@@ -1424,6 +1464,7 @@ std::optional<Statement> VerilogParser::parse_continuous_assignment(const Token&
   statement.target = std::move(target);
   statement.value = std::move(value);
   statement.delay = std::move(delay);
+  statement.verilog_drive_strength = std::move(strength);
   statement.span = span_from(start, previous());
   return statement;
 }
@@ -1443,28 +1484,7 @@ void VerilogParser::parse_gate_primitive(
     const std::vector<SignalDeclaration>& ports) {
   const auto start = advance();
   const auto operation = detail::ascii_lower(start.text);
-  const auto strength_keyword =
-      [](const std::string_view text) {
-        return text == "supply0" || text == "supply1"
-            || text == "strong0" || text == "strong1"
-            || text == "pull0" || text == "pull1"
-            || text == "weak0" || text == "weak1"
-            || text == "highz0" || text == "highz1";
-      };
-  if (at(TokenKind::LeftParen)
-      && at(TokenKind::Identifier, 1)
-      && strength_keyword(current(1).text)
-      && at(TokenKind::Comma, 2)
-      && at(TokenKind::Identifier, 3)
-      && strength_keyword(current(3).text)
-      && at(TokenKind::RightParen, 4)) {
-    error(
-        current(),
-        "FSIM-SV-UNSUPPORTED-030",
-        "gate drive strengths are not implemented");
-    skip_to_semicolon();
-    return;
-  }
+  auto strength = parse_verilog_drive_strength("gate primitive");
   std::optional<Delay> delay;
   if (match(TokenKind::Hash)) {
     const bool tristate = operation == "bufif0"
@@ -1750,6 +1770,7 @@ void VerilogParser::parse_gate_primitive(
       statement.target = std::move(mapped_target);
       statement.value = std::move(value);
       statement.delay = delay;
+      statement.verilog_drive_strength = strength;
       statement.label = instance_name.empty()
           ? std::string{}
           : instance_name
