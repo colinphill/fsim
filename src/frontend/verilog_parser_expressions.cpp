@@ -562,6 +562,11 @@ Expression VerilogParser::parse_primary() {
                               std::move(arguments),
                               cover(name.span, previous().span)};
       expression.call_argument_names = std::move(argument_names);
+      if (canonical == "new") {
+        expression.text = "@sv-new";
+      } else if (canonical == "$cast") {
+        expression.text = "@sv-dollar-cast";
+      }
       const auto require_file_call =
           [&](const std::size_t arity,
               const std::string_view description) {
@@ -625,6 +630,14 @@ Expression VerilogParser::parse_primary() {
         require_file_call(1, "one file handle");
       }
       return parse_postfix(std::move(expression));
+    }
+    if (canonical == "null") {
+      return Expression{
+          ExpressionKind::Call, "@sv-null", {}, name.span};
+    }
+    if (canonical == "new" && !at(TokenKind::LeftBracket)) {
+      return Expression{
+          ExpressionKind::Call, "@sv-new", {}, name.span};
     }
     if (canonical == "$urandom" || canonical == "$random") {
       expression.kind = ExpressionKind::Call;
@@ -772,10 +785,31 @@ Expression VerilogParser::parse_postfix(Expression expression) {
         const auto implicit_reference_count =
             implicit_net_references_.size();
         std::vector<Expression> operands;
+        std::vector<std::string> argument_names(1);
         operands.push_back(std::move(expression));
         if (!at(TokenKind::RightParen)) {
           do {
-            operands.push_back(parse_expression());
+            if (match(TokenKind::Dot)) {
+              const auto formal =
+                  expect_identifier("named method argument");
+              expect(
+                  TokenKind::LeftParen,
+                  "'(' after named method argument",
+                  "FSIM-SV-PARSE-224");
+              argument_names.push_back(formal.text);
+              if (at(TokenKind::RightParen)) {
+                operands.emplace_back();
+              } else {
+                operands.push_back(parse_expression());
+              }
+              expect(
+                  TokenKind::RightParen,
+                  "')' after named method argument",
+                  "FSIM-SV-PARSE-225");
+            } else {
+              argument_names.emplace_back();
+              operands.push_back(parse_expression());
+            }
           } while (match(TokenKind::Comma));
         }
         expect(
@@ -1140,6 +1174,7 @@ Expression VerilogParser::parse_postfix(Expression expression) {
             "." + member.text,
             std::move(operands),
             cover(receiver_span, previous().span)};
+        expression.call_argument_names = std::move(argument_names);
         continue;
       }
       expression.text += '.';

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "llvm_jit_internal.hpp"
+#include "llvm_jit_validation_class.hpp"
 #include <algorithm>
 #include <limits>
 #include <optional>
@@ -9,11 +10,9 @@
 #include <variant>
 #include <vector>
 namespace fsim::compiler::llvm_detail {
-using runtime::Logic9;
-using namespace runtime::simir;
-[[nodiscard]] ValidatedProcess
-validate_process(
-    const Process &process, const std::span<const std::uint32_t> signal_widths,
+using runtime::Logic9; using namespace runtime::simir;
+[[nodiscard]] ValidatedProcess validate_process(
+    const Process& process, const std::span<const std::uint32_t> signal_widths,
     const std::span<const ValueKind> signal_value_kinds) {
   validate_process_shape(process, signal_widths, signal_value_kinds);
   ValidatedProcess result;
@@ -21,15 +20,11 @@ validate_process(
       process.register_value_kinds,
       [](const ValueKind kind) { return kind == ValueKind::logic9; });
   result.register_widths.resize(process.register_count);
-  std::vector<RegisterId> parents(process.register_count);
-  std::vector<std::size_t> root_widths(process.register_count);
+  std::vector<RegisterId> parents(process.register_count); std::vector<std::size_t> root_widths(process.register_count);
   for (std::size_t index = 0; index < parents.size(); ++index)
     parents[index] = static_cast<RegisterId>(index);
   std::vector<bool> defined(process.register_count);
-  std::vector<std::vector<RegisterId>> instruction_definitions(
-      process.operations.size());
-  std::vector<std::vector<RegisterId>> instruction_uses(
-      process.operations.size());
+  std::vector<std::vector<RegisterId>> instruction_definitions(process.operations.size()); std::vector<std::vector<RegisterId>> instruction_uses(process.operations.size());
   std::optional<std::pair<std::size_t, std::string>> unsupported;
   const auto record_unsupported =
       [&](const std::size_t instruction, const std::string_view message) {
@@ -358,6 +353,11 @@ validate_process(
                 operation.destination,
                 signal_width(operation.signal, index),
                 index);
+          } else if constexpr (
+              operation_group_contains_v<OperationType, ClassOperationGroup>) {
+            validate_class_operation(
+                process, index, operation, record_use, record_definition,
+                constrain_width);
           } else if constexpr (std::is_same_v<OperationType, CopyRegister>) {
             record_definition(operation.destination, index);
             record_use(operation.source, index);

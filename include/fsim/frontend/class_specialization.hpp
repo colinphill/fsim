@@ -28,10 +28,17 @@ struct SystemVerilogClassMethodProfile {
   std::string canonical_identity;
   SystemVerilogClassMethodKind kind{
       SystemVerilogClassMethodKind::Function};
+  Type return_type;
+  SystemVerilogClassLifetime lifetime{
+      SystemVerilogClassLifetime::Inherited};
+  bool is_static{};
   std::string profile_identity;
   bool is_virtual{};
   bool is_pure{};
   std::optional<std::uint32_t> virtual_slot;
+  std::vector<FunctionArgument> arguments;
+  std::vector<VariableDeclaration> variables;
+  std::vector<Statement> statements;
 };
 
 struct SystemVerilogClassSpecialization {

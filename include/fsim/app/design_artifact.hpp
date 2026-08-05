@@ -13,10 +13,10 @@
 
 namespace fsim::app {
 
-inline constexpr std::uint32_t kRuntimeStateSchema = 5;
+inline constexpr std::uint32_t kRuntimeStateSchema = 6;
 inline constexpr std::uint32_t kSemanticStateSchema = 1;
 inline constexpr std::uint32_t kDesignIrStateSchema = 1;
-inline constexpr std::uint32_t kClassStateSchema = 1;
+inline constexpr std::uint32_t kClassStateSchema = 3;
 
 [[nodiscard]] std::optional<std::string> serialize_runtime_state(
     const elaboration::ElaboratedDesign& design,

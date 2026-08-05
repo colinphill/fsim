@@ -217,6 +217,12 @@ struct NativeCacheStatistics {
       NativeCacheStatistics) = default;
 };
 
+struct ClassPackedTraceValue {
+  std::string path;
+  runtime::PackedLogic4 value;
+  std::optional<runtime::SystemVerilogClassHandle> object;
+};
+
 class Simulation final {
  public:
   using SignalChangeHook = std::function<void(
@@ -231,6 +237,12 @@ class Simulation final {
   using SafePointHook = runtime::Scheduler::SafePointHook;
   using ClassPropertyChangeHook = std::function<void(
       runtime::SystemVerilogClassHandle,
+      std::string_view,
+      const runtime::PackedLogic4&,
+      runtime::SimulationTick,
+      std::uint64_t)>;
+  using ClassStaticPropertyChangeHook = std::function<void(
+      std::string_view,
       std::string_view,
       const runtime::PackedLogic4&,
       runtime::SimulationTick,
@@ -286,8 +298,16 @@ class Simulation final {
   class_heap() const noexcept;
   [[nodiscard]] runtime::SystemVerilogClassStaticStore&
   class_static_store() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogClassStaticStore&
+  class_static_store() const noexcept;
   [[nodiscard]] runtime::SystemVerilogClassMethodRuntime&
   class_methods() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogClassMethodRuntime&
+  class_methods() const noexcept;
+  /// Deterministic packed class-property/static values suitable for trace
+  /// declaration or snapshots. Paths and handles contain no host addresses.
+  [[nodiscard]] std::vector<ClassPackedTraceValue>
+  class_packed_trace_values() const;
   [[nodiscard]] runtime::SystemVerilogClassHandle allocate_class(
       std::string_view specialization_identity,
       std::string_view declared_type = {});
@@ -364,6 +384,8 @@ class Simulation final {
   void set_output_hook(OutputHook hook);
   void set_report_hook(ReportHook hook);
   void set_class_property_change_hook(ClassPropertyChangeHook hook);
+  void set_class_static_property_change_hook(
+      ClassStaticPropertyChangeHook hook);
 
  private:
   struct Impl;

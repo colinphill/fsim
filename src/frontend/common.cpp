@@ -96,6 +96,9 @@ std::optional<std::uint64_t> PackedMember::width() const noexcept {
 }
 
 std::optional<std::uint64_t> Type::width() const noexcept {
+  if (!systemverilog_class_declaration.empty()) {
+    return 64;
+  }
   if (vhdl_file) {
     return 32;
   }

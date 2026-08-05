@@ -78,6 +78,11 @@ using OutputOperationGroup =
     OperationGroup<Display, FormatDisplay, StringDisplay, StringReport,
                    TimeDisplay, MonitorInstall, MonitorControl>;
 
+using ClassOperationGroup = OperationGroup<
+    ClassAllocate, ClassPropertyRead, ClassPropertyWrite, ClassMethodCall,
+    ClassStaticPropertyRead, ClassStaticPropertyWrite,
+    ClassStaticMethodCall>;
+
 template <typename Alternative, typename Variant>
 struct VariantContains;
 
@@ -99,7 +104,8 @@ inline constexpr bool is_operation_alternative_v =
     || operation_group_contains_v<Alternative, FileOperationGroup>
     || operation_group_contains_v<Alternative, SchedulingOperationGroup>
     || operation_group_contains_v<Alternative, ControlOperationGroup>
-    || operation_group_contains_v<Alternative, OutputOperationGroup>;
+    || operation_group_contains_v<Alternative, OutputOperationGroup>
+    || operation_group_contains_v<Alternative, ClassOperationGroup>;
 
 template <typename Alternative>
 struct OperationGroupSelector {
@@ -130,7 +136,11 @@ struct OperationGroupSelector {
                               operation_group_contains_v<
                                   Type, ControlOperationGroup>,
                               ControlOperationGroup,
-                              OutputOperationGroup>>>>>>>;
+                              std::conditional_t<
+                                  operation_group_contains_v<
+                                      Type, OutputOperationGroup>,
+                                  OutputOperationGroup,
+                                  ClassOperationGroup>>>>>>>>;
 };
 
 template <typename Alternative>
@@ -142,7 +152,8 @@ struct Operation {
       std::variant<ValueOperationGroup, SignalOperationGroup,
                    StringOperationGroup, ContainerOperationGroup,
                    FileOperationGroup, SchedulingOperationGroup,
-                   ControlOperationGroup, OutputOperationGroup>;
+                   ControlOperationGroup, OutputOperationGroup,
+                   ClassOperationGroup>;
 
   Storage storage;
 
@@ -184,7 +195,8 @@ static_assert(
         + std::variant_size_v<SchedulingOperationGroup::Storage>
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
-    == 123);
+        + std::variant_size_v<ClassOperationGroup::Storage>
+    == 130);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept {

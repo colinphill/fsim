@@ -15,6 +15,37 @@ void Interpreter::set_file_root(std::filesystem::path root) {
   impl_->set_file_root(std::move(root));
 }
 
+void Interpreter::set_class_allocate_hook(ClassAllocateHook hook) {
+  impl_->class_allocate_hook = std::move(hook);
+}
+
+void Interpreter::set_class_property_read_hook(ClassPropertyReadHook hook) {
+  impl_->class_property_read_hook = std::move(hook);
+}
+
+void Interpreter::set_class_property_write_hook(ClassPropertyWriteHook hook) {
+  impl_->class_property_write_hook = std::move(hook);
+}
+
+void Interpreter::set_class_method_call_hook(ClassMethodCallHook hook) {
+  impl_->class_method_call_hook = std::move(hook);
+}
+
+void Interpreter::set_class_static_property_read_hook(
+    ClassStaticPropertyReadHook hook) {
+  impl_->class_static_property_read_hook = std::move(hook);
+}
+
+void Interpreter::set_class_static_property_write_hook(
+    ClassStaticPropertyWriteHook hook) {
+  impl_->class_static_property_write_hook = std::move(hook);
+}
+
+void Interpreter::set_class_static_method_call_hook(
+    ClassStaticMethodCallHook hook) {
+  impl_->class_static_method_call_hook = std::move(hook);
+}
+
 SignalId Interpreter::add_signal(Signal signal) {
   if (impl_->started) {
     throw std::logic_error("cannot add a SimIR signal after start");

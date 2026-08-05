@@ -59,6 +59,7 @@ enum class TypeForm : std::uint8_t {
     string,
     alias,
     type_parameter,
+    class_handle,
 };
 
 enum class ModportMemberKind : std::uint8_t {
@@ -93,6 +94,13 @@ enum class ExpressionKind : std::uint8_t {
     concatenation,
     replication,
     default_choice,
+    class_null,
+    class_allocation,
+    class_cast,
+    class_property,
+    class_static_property,
+    class_method_call,
+    class_static_method_call,
 };
 
 enum class AssignmentKind : std::uint8_t {
@@ -209,6 +217,9 @@ struct Expression {
     std::vector<CallAssociation> call_arguments;
     std::vector<AssignmentPatternAssociation> associations;
     std::string nominal_type;
+    std::string class_identity;
+    std::string class_member_identity;
+    bool class_checked{};
     std::optional<std::string> decoded_string;
 };
 
@@ -315,6 +326,8 @@ struct Statement {
     std::vector<CaseAlternative> case_alternatives;
     std::vector<DeclarationId> declarations;
     std::optional<ScopeId> nested_scope;
+    bool class_handle_transfer{};
+    std::string class_handle_type;
 };
 
 struct Process {
@@ -340,6 +353,8 @@ struct PackedRange {
 
 struct TypeReference {
     semantic::TypeReference target;
+    std::optional<TypeForm> value_form;
+    std::string class_identity;
     std::optional<PackedRange> packed_range;
     bool signed_value{};
     std::optional<TypeForm> container_form;
@@ -504,8 +519,7 @@ struct Unit {
     std::vector<GenerateRegion> generates;
 };
 
-/// Owning SystemVerilog semantic HIR. The bounded v1 language has no class
-/// declarations; unsupported class syntax is rejected before this boundary.
+/// Owning SystemVerilog semantic HIR, including opaque class-handle operations.
 class Hir final {
 public:
     [[nodiscard]] const std::vector<Unit>& units() const noexcept;

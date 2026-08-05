@@ -726,6 +726,21 @@ void adapt_vhdl_array_port_shapes(
                 }
                 continue;
             }
+            if (!variable.type.systemverilog_class_declaration.empty()) {
+                const frontend::SignalDeclaration declaration{
+                    variable.name,
+                    variable.type,
+                    frontend::PortDirection::Unknown,
+                    false,
+                    variable.span};
+                const auto signal =
+                    add_owned_signal(declaration, path, local);
+                if (signal) {
+                    design_.signals_[*signal].initial_value =
+                        PackedLogic4::from_aval_bval(64, 0, 0);
+                }
+                continue;
+            }
             if (variable.type.domain
                 == frontend::ValueDomain::Integer) {
                 const frontend::SignalDeclaration declaration{

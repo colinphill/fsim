@@ -3,6 +3,21 @@
 #include "simir_signal_attributes.hpp"
 #include "fsim/runtime/string_methods.hpp"
 #include "simir_execution_context.hpp"
+
+namespace {
+
+[[nodiscard]] PackedLogic4 resize_class_value(
+    const PackedLogic4& value,
+    const std::size_t width) {
+  PackedLogic4 result(width, Logic4::zero);
+  for (std::size_t bit = 0; bit < std::min(width, value.width()); ++bit) {
+    result.set(bit, value.get(bit));
+  }
+  return value.is_logic9() ? result.promoted_to_logic9() : result;
+}
+
+}  // namespace
+
 void Interpreter::Impl::request_channel_update(
     const ProcessId process_id,
     const std::uint64_t channel) {
@@ -255,6 +270,139 @@ void Interpreter::Impl::handle_boundary(
         process.current_source);
     return;
   }
+  const auto read_boundary_register = [&](const RegisterId id) {
+    return process.executor->read_register(id, 64);
+  };
+  if (const auto* class_allocate =
+          fsim::runtime::simir::operation_get_if<ClassAllocate>(&operation)) {
+    if (!class_allocate_hook) {
+      fail(process, "class allocation service is unavailable");
+    }
+    std::vector<PackedLogic4> actuals;
+    actuals.reserve(class_allocate->constructor_actuals.size());
+    for (const auto actual : class_allocate->constructor_actuals) {
+      actuals.push_back(read_boundary_register(actual));
+    }
+    const auto handle = class_allocate_hook(
+        class_allocate->specialization_identity,
+        class_allocate->declared_type,
+        actuals,
+        class_allocate->constructor_actual_names);
+    write_process_register(
+        process,
+        class_allocate->destination,
+        PackedLogic4::from_aval_bval(64, handle, 0));
+    return;
+  }
+  if (const auto* property =
+          fsim::runtime::simir::operation_get_if<ClassPropertyRead>(
+              &operation)) {
+    if (!class_property_read_hook) {
+      fail(process, "class property service is unavailable");
+    }
+    const auto handle = read_boundary_register(
+        property->receiver).low_word().aval;
+    write_process_register(
+        process,
+        property->destination,
+        resize_class_value(
+            class_property_read_hook(handle, property->property_identity),
+            property->width));
+    return;
+  }
+  if (const auto* property =
+          fsim::runtime::simir::operation_get_if<ClassPropertyWrite>(
+              &operation)) {
+    if (!class_property_write_hook) {
+      fail(process, "class property service is unavailable");
+    }
+    class_property_write_hook(
+        read_boundary_register(property->receiver).low_word().aval,
+        property->property_identity,
+        read_boundary_register(property->source));
+    return;
+  }
+  if (const auto* method =
+          fsim::runtime::simir::operation_get_if<ClassMethodCall>(
+              &operation)) {
+    if (!class_method_call_hook) {
+      fail(process, "class method service is unavailable");
+    }
+    std::vector<PackedLogic4> actuals;
+    actuals.reserve(method->actuals.size());
+    for (const auto actual : method->actuals) {
+      actuals.push_back(read_boundary_register(actual));
+    }
+    const auto handle = read_boundary_register(
+        method->receiver).low_word().aval;
+    write_process_register(
+        process,
+        method->destination,
+        resize_class_value(
+            class_method_call_hook(
+                handle,
+                method->method_identity,
+                actuals,
+                method->actual_names,
+                method->actual_directions,
+                method->virtual_dispatch),
+            method->result_width));
+    for (std::size_t index = 0; index < actuals.size(); ++index) {
+      write_process_register(process, method->actuals[index], actuals[index]);
+    }
+    return;
+  }
+  if (const auto* property =
+          fsim::runtime::simir::operation_get_if<ClassStaticPropertyRead>(
+              &operation)) {
+    if (!class_static_property_read_hook) {
+      fail(process, "class static property service is unavailable");
+    }
+    write_process_register(
+        process,
+        property->destination,
+        resize_class_value(
+            class_static_property_read_hook(property->property_identity),
+            property->width));
+    return;
+  }
+  if (const auto* property =
+          fsim::runtime::simir::operation_get_if<ClassStaticPropertyWrite>(
+              &operation)) {
+    if (!class_static_property_write_hook) {
+      fail(process, "class static property service is unavailable");
+    }
+    class_static_property_write_hook(
+        property->property_identity,
+        read_boundary_register(property->source));
+    return;
+  }
+  if (const auto* method =
+          fsim::runtime::simir::operation_get_if<ClassStaticMethodCall>(
+              &operation)) {
+    if (!class_static_method_call_hook) {
+      fail(process, "class static method service is unavailable");
+    }
+    std::vector<PackedLogic4> actuals;
+    actuals.reserve(method->actuals.size());
+    for (const auto actual : method->actuals) {
+      actuals.push_back(read_boundary_register(actual));
+    }
+    write_process_register(
+        process,
+        method->destination,
+        resize_class_value(
+            class_static_method_call_hook(
+                method->method_identity,
+                actuals,
+                method->actual_names,
+                method->actual_directions),
+            method->result_width));
+    for (std::size_t index = 0; index < actuals.size(); ++index) {
+      write_process_register(process, method->actuals[index], actuals[index]);
+    }
+    return;
+  }
   if (handle_fork_boundary(process, instruction, operation)) {
     return;
   }
@@ -306,6 +454,24 @@ void Interpreter::Impl::execute(ProcessId id) {
           boundary.instruction < process.program.operations.size()
           && fsim::runtime::simir::operation_holds<DebugPoint>(
               process.program.operations[boundary.instruction]);
+      const bool class_boundary =
+          boundary.instruction < process.program.operations.size()
+          && (fsim::runtime::simir::operation_holds<ClassAllocate>(
+                  process.program.operations[boundary.instruction])
+              || fsim::runtime::simir::operation_holds<ClassPropertyRead>(
+                  process.program.operations[boundary.instruction])
+              || fsim::runtime::simir::operation_holds<ClassPropertyWrite>(
+                  process.program.operations[boundary.instruction])
+              || fsim::runtime::simir::operation_holds<ClassMethodCall>(
+                  process.program.operations[boundary.instruction])
+              || fsim::runtime::simir::operation_holds<
+                  ClassStaticPropertyRead>(
+                  process.program.operations[boundary.instruction])
+              || fsim::runtime::simir::operation_holds<
+                  ClassStaticPropertyWrite>(
+                  process.program.operations[boundary.instruction])
+              || fsim::runtime::simir::operation_holds<ClassStaticMethodCall>(
+                  process.program.operations[boundary.instruction]));
       if (boundary.external.kind
           == ExternalSuspendKind::simir_boundary) {
         handle_boundary(
@@ -316,6 +482,9 @@ void Interpreter::Impl::execute(ProcessId id) {
             boundary.instruction,
             boundary.next_instruction,
             boundary.external);
+      }
+      if (class_boundary && !scheduler.stop_requested()) {
+        continue;
       }
       if (!debug_boundary || scheduler.stop_requested()) {
         return;
@@ -478,6 +647,105 @@ void Interpreter::Impl::execute(ProcessId id) {
                     get_register(process, op.source),
                     register_value_kind(
                         process, op.destination));
+            ++process.pc;
+          } else if constexpr (std::is_same_v<OperationType, ClassAllocate>) {
+            if (!class_allocate_hook) {
+              fail(process, "class allocation service is unavailable");
+            }
+            std::vector<PackedLogic4> actuals;
+            actuals.reserve(op.constructor_actuals.size());
+            for (const auto actual : op.constructor_actuals) {
+              actuals.push_back(get_register(process, actual));
+            }
+            const auto handle = class_allocate_hook(
+                op.specialization_identity,
+                op.declared_type,
+                actuals,
+                op.constructor_actual_names);
+            get_register(process, op.destination) =
+                PackedLogic4::from_aval_bval(64, handle, 0);
+            ++process.pc;
+          } else if constexpr (
+              std::is_same_v<OperationType, ClassPropertyRead>) {
+            if (!class_property_read_hook) {
+              fail(process, "class property service is unavailable");
+            }
+            const auto handle =
+                get_register(process, op.receiver).low_word().aval;
+            get_register(process, op.destination) = resize_class_value(
+                class_property_read_hook(handle, op.property_identity),
+                op.width);
+            ++process.pc;
+          } else if constexpr (
+              std::is_same_v<OperationType, ClassPropertyWrite>) {
+            if (!class_property_write_hook) {
+              fail(process, "class property service is unavailable");
+            }
+            const auto handle =
+                get_register(process, op.receiver).low_word().aval;
+            class_property_write_hook(
+                handle, op.property_identity,
+                get_register(process, op.source));
+            ++process.pc;
+          } else if constexpr (
+              std::is_same_v<OperationType, ClassMethodCall>) {
+            if (!class_method_call_hook) {
+              fail(process, "class method service is unavailable");
+            }
+            std::vector<PackedLogic4> actuals;
+            actuals.reserve(op.actuals.size());
+            for (const auto actual : op.actuals) {
+              actuals.push_back(get_register(process, actual));
+            }
+            const auto handle =
+                get_register(process, op.receiver).low_word().aval;
+            get_register(process, op.destination) = class_method_call_hook(
+                handle,
+                op.method_identity,
+                actuals,
+                op.actual_names,
+                op.actual_directions,
+                op.virtual_dispatch);
+            for (std::size_t index = 0; index < actuals.size(); ++index) {
+              get_register(process, op.actuals[index]) = actuals[index];
+            }
+            ++process.pc;
+          } else if constexpr (
+              std::is_same_v<OperationType, ClassStaticPropertyRead>) {
+            if (!class_static_property_read_hook) {
+              fail(process, "class static property service is unavailable");
+            }
+            get_register(process, op.destination) = resize_class_value(
+                class_static_property_read_hook(op.property_identity),
+                op.width);
+            ++process.pc;
+          } else if constexpr (
+              std::is_same_v<OperationType, ClassStaticPropertyWrite>) {
+            if (!class_static_property_write_hook) {
+              fail(process, "class static property service is unavailable");
+            }
+            class_static_property_write_hook(
+                op.property_identity, get_register(process, op.source));
+            ++process.pc;
+          } else if constexpr (
+              std::is_same_v<OperationType, ClassStaticMethodCall>) {
+            if (!class_static_method_call_hook) {
+              fail(process, "class static method service is unavailable");
+            }
+            std::vector<PackedLogic4> actuals;
+            actuals.reserve(op.actuals.size());
+            for (const auto actual : op.actuals) {
+              actuals.push_back(get_register(process, actual));
+            }
+            get_register(process, op.destination) =
+                class_static_method_call_hook(
+                    op.method_identity,
+                    actuals,
+                    op.actual_names,
+                    op.actual_directions);
+            for (std::size_t index = 0; index < actuals.size(); ++index) {
+              get_register(process, op.actuals[index]) = actuals[index];
+            }
             ++process.pc;
           } else if constexpr (std::is_same_v<OperationType, LoadStringConstant>) {
             if (op.value.size() > maximum_string_bytes) {

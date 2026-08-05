@@ -8,7 +8,8 @@ namespace fsim::frontend {
 
 FunctionDeclaration VerilogParser::parse_function(
     const Token& start,
-    const bool prototype) {
+    const bool prototype,
+    const bool default_automatic) {
   FunctionDeclaration function;
   if (match_keyword("automatic")) {
     function.automatic = true;
@@ -16,6 +17,7 @@ FunctionDeclaration VerilogParser::parse_function(
   } else if (match_keyword("static")) {
     function.lifetime_explicit = true;
   } else {
+    function.automatic = default_automatic;
     function.lifetime_explicit = false;
   }
 
@@ -446,7 +448,8 @@ void VerilogParser::validate_function_body(
 
 TaskDeclaration VerilogParser::parse_task(
     const Token& start,
-    const bool prototype) {
+    const bool prototype,
+    const bool default_automatic) {
   TaskDeclaration task;
   if (match_keyword("automatic")) {
     task.automatic = true;
@@ -454,6 +457,7 @@ TaskDeclaration VerilogParser::parse_task(
   } else if (match_keyword("static")) {
     task.lifetime_explicit = true;
   } else {
+    task.automatic = default_automatic;
     task.lifetime_explicit = false;
   }
 

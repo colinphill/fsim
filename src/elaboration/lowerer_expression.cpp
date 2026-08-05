@@ -229,10 +229,14 @@ std::optional<RegisterId> Lowerer::lower_expression(
         const Expression& expression,
         const std::size_t expected_width,
         const frontend::Type* expected_type) {
-    auto attempt = expression.kind == ExpressionKind::Update
+    auto attempt = lower_class_expression(
+        expression, expected_width, expected_type);
+    if (!attempt.handled) {
+        attempt = expression.kind == ExpressionKind::Update
         ? ExpressionAttempt{lower_procedural_update_expression(
               expression, expected_width, expected_type)}
         : lower_membership_expression(expression);
+    }
     if (!attempt.handled) {
         attempt = lower_primary_expression(
             expression, expected_width, expected_type);

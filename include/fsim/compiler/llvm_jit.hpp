@@ -92,6 +92,7 @@ enum class JitResumeStatus : std::uint32_t {
   fork_end = FSIM_JIT_RESUME_STATUS_FORK_END,
   wait_fork = FSIM_JIT_RESUME_STATUS_WAIT_FORK,
   disable_fork = FSIM_JIT_RESUME_STATUS_DISABLE_FORK,
+  simir_boundary = FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
 };
 
 struct JitProcessFrameLayout {

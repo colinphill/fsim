@@ -158,6 +158,7 @@ endmodule
   assert(parsed_source.design.units.size() == 1);
   auto source_unit = parsed_source.design.units.front();
   source_unit.library = "vendor";
+  source_unit.compilation_unit_identity = "fixture-compilation-unit";
   fsim::diagnostic::Engine unit_write_diagnostics;
   const auto unit_bytes = fsim::library::serialize_portable_unit(
       source_unit, unit_write_diagnostics);
@@ -169,6 +170,8 @@ endmodule
   assert(restored_unit.has_value());
   assert(!unit_read_diagnostics.has_error());
   assert(restored_unit->library == "vendor");
+  assert(restored_unit->compilation_unit_identity
+         == "fixture-compilation-unit");
   assert(restored_unit->name == "stage");
   assert(restored_unit->parameters.size() == 1);
   assert(restored_unit->functions.size() == 1);

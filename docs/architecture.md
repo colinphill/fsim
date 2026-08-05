@@ -775,15 +775,22 @@ task continuations. Fixed/dynamic arrays, queues, associative arrays, and
 unpacked aggregates may contain checked opaque handles while packed placement
 is rejected.
 
-The application exposes packed-property callbacks and debugger inspection
-without exposing host pointers, and schedules class methods through the common
-time/delta scheduler. Versioned class owning-unit and runtime-state payloads
-preserve declarations, specializations, initial static state, virtual slots,
-and provenance through `.fsimobj`, `.fsimdesign`, and relocatable `.fsimlib`
-artifacts. The current foundation does not implement constraint solving,
-randomization execution, UVM library behavior, or the complete expression and
-statement surface inside methods; those remain in following class-closure
-batches.
+Source class expressions first resolve against canonical lexical and
+specialization environments, then lower to owning class SimIR operations.
+Interpreter execution invokes simulation-owned typed services directly. LLVM
+O0/O2 code instead returns an append-only service-boundary status containing
+only the operation index and next program counter; the common scheduler runs
+the same typed service and resumes the native frame. Native objects and cache
+keys therefore contain canonical class metadata but no host addresses.
+
+The application exposes opaque object, static-state, and suspended-frame
+inspection plus packed-property callbacks and trace snapshots, and schedules
+class tasks through the common time/delta scheduler. Versioned class owning-
+unit and runtime-state payloads preserve declarations, specializations,
+executable bodies, initial static state, virtual slots, continuations, and
+provenance through `.fsimobj`, `.fsimdesign`, and relocatable `.fsimlib`
+artifacts. Constraint solving, `randomize`/`std::randomize`, covergroups, and
+UVM library/runtime behavior remain in following closure batches.
 
 ## Runtime values
 

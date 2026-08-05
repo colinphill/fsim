@@ -492,7 +492,8 @@ class VerilogParser final : private detail::ParserBase {
 
   FunctionDeclaration parse_function(
       const Token& start,
-      bool prototype = false);
+      bool prototype = false,
+      bool default_automatic = false);
 
   void validate_function_body(
       const FunctionDeclaration& function,
@@ -500,7 +501,8 @@ class VerilogParser final : private detail::ParserBase {
 
   TaskDeclaration parse_task(
       const Token& start,
-      bool prototype = false);
+      bool prototype = false,
+      bool default_automatic = false);
 
   void validate_task_body(
       const TaskDeclaration& task,

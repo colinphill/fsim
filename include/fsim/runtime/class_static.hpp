@@ -34,6 +34,12 @@ struct SystemVerilogClassStaticLimits {
       std::numeric_limits<std::size_t>::max()};
 };
 
+struct SystemVerilogClassStaticSnapshot {
+  std::string specialization_identity;
+  std::vector<std::string> property_names;
+  std::vector<SystemVerilogClassPropertyValue> properties;
+};
+
 /// Simulation-wide state for class static members. Canonical specialization
 /// identities and every registered import/root alias resolve to one entry.
 class SystemVerilogClassStaticStore final {
@@ -53,6 +59,10 @@ class SystemVerilogClassStaticStore final {
       std::string_view name) const;
   [[nodiscard]] bool initialized(
       std::string_view specialization_or_alias) const;
+  /// Canonical, specialization-sorted debugger/trace view. Aliases are not
+  /// duplicated and no address into the store escapes.
+  [[nodiscard]] std::vector<SystemVerilogClassStaticSnapshot>
+  snapshots() const;
   [[nodiscard]] std::size_t property_count() const noexcept {
     return property_count_;
   }

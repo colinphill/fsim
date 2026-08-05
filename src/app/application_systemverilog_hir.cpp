@@ -211,6 +211,10 @@ class SystemVerilogHirBuilder final {
                                  : find_type(scope, input.named_type),
         source(input.named_type.empty() ? fallback : input.named_type_span),
         spelling};
+    if (!input.systemverilog_class_declaration.empty()) {
+      output.value_form = sv::TypeForm::class_handle;
+      output.class_identity = input.systemverilog_class_declaration;
+    }
     output.signed_value = input.is_signed;
     if (input.packed_range) {
       output.packed_range = packed_range(

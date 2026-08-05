@@ -75,6 +75,36 @@ namespace {
   return "<uninitialized>";
 }
 
+[[nodiscard]] std::optional<std::string> class_local_declaration(
+    const Simulation& simulation,
+    const std::string_view type_name) {
+  const auto type = std::ranges::find_if(
+      simulation.class_specializations(), [&](const auto& specialization) {
+        return specialization.declaration_identity == type_name
+            || specialization.declaration_identity.ends_with(
+                "::" + std::string{type_name});
+      });
+  if (type == simulation.class_specializations().end()) return std::nullopt;
+  return type->declaration_identity;
+}
+
+[[nodiscard]] std::optional<std::string> format_class_local(
+    const Simulation& simulation,
+    const std::string_view type_name,
+    const runtime::PackedLogic4& value) {
+  const auto declared = class_local_declaration(simulation, type_name);
+  if (!declared) return std::nullopt;
+  const auto word = value.low_word();
+  if (word.bval != 0) return "<unknown class handle>";
+  if (word.aval == 0) return "null declared " + *declared;
+  if (!simulation.class_heap().contains(word.aval)) {
+    return "stale handle " + std::to_string(word.aval);
+  }
+  const auto& object = simulation.class_heap().object(word.aval);
+  return "handle " + std::to_string(word.aval) + " declared "
+      + *declared + " dynamic " + object.dynamic_type;
+}
+
 [[nodiscard]] std::vector<std::pair<std::string, SignalId>>
 design_signal_paths(const Simulation& simulation) {
   std::vector<std::pair<std::string, SignalId>> result;
@@ -113,7 +143,7 @@ design_container_paths(const Simulation& simulation) {
   const auto& objects = simulation.design_ir().objects();
   const auto found = std::ranges::find_if(
       objects, [&](const semantic::design::Object& object) {
-        return object.kind == semantic::design::ObjectKind::signal
+        return design_object_is_signal_bearing(object)
             && !object.parent_object && object.runtime_index == signal;
       });
   return found == objects.end() ? nullptr : &*found;
@@ -244,8 +274,62 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
       }
       for (const auto handle : handles) {
         const auto& object = simulation_.class_heap().object(handle);
-        output_ << handle << " " << object.dynamic_type
-                << " [" << object.specialization_identity << "]\n";
+        output_ << "handle " << handle
+                << " declared " << object.declared_type
+                << " dynamic " << object.dynamic_type
+                << " specialization " << object.specialization_identity
+                << '\n';
+      }
+      return;
+    }
+    if (command[0] == "class" && command.size() == 2
+        && command[1] == "statics") {
+      for (const auto& state : simulation_.class_static_store().snapshots()) {
+        output_ << state.specialization_identity << '\n';
+        for (std::size_t index = 0; index < state.properties.size(); ++index) {
+          output_ << "  " << state.property_names[index] << " = "
+                  << format_class_property(state.properties[index]) << '\n';
+        }
+      }
+      return;
+    }
+    if (command[0] == "class" && command.size() == 2
+        && command[1] == "frames") {
+      const auto frames = simulation_.class_methods().pending_invocations();
+      if (frames.empty()) output_ << "(no suspended class calls)\n";
+      for (const auto& frame : frames) {
+        output_ << "continuation " << frame.continuation << " method "
+                << frame.canonical_method << " this " << frame.this_handle
+                << " point " << frame.continuation_point << '\n';
+        for (std::size_t index = 0; index < frame.arguments.size(); ++index) {
+          output_ << "  argument[" << index << "] = "
+                  << format_class_property(frame.arguments[index]) << '\n';
+        }
+        for (std::size_t index = 0; index < frame.locals.size(); ++index) {
+          output_ << "  local[" << index << "] = "
+                  << format_class_property(frame.locals[index]) << '\n';
+        }
+      }
+      return;
+    }
+    if (command[0] == "class"
+        && (command.size() == 3 || command.size() == 4)
+        && command[1] == "static") {
+      const auto snapshots = simulation_.class_static_store().snapshots();
+      const auto state = std::ranges::find(
+          snapshots, command[2],
+          &runtime::SystemVerilogClassStaticSnapshot::specialization_identity);
+      if (state == snapshots.end()) {
+        output_ << "unknown class static specialization: " << command[2]
+                << '\n';
+        return;
+      }
+      for (std::size_t index = 0; index < state->properties.size(); ++index) {
+        if (command.size() == 4 && state->property_names[index] != command[3]) {
+          continue;
+        }
+        output_ << state->property_names[index] << " = "
+                << format_class_property(state->properties[index]) << '\n';
       }
       return;
     }
@@ -267,8 +351,10 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
                          simulation_.read_class_property(handle, command[2]))
                   << '\n';
         } else {
-          output_ << object.dynamic_type << " ["
-                  << object.specialization_identity << "]\n";
+          output_ << "declared " << object.declared_type
+                  << " dynamic " << object.dynamic_type
+                  << " specialization " << object.specialization_identity
+                  << '\n';
           for (std::size_t index = 0;
                index < object.properties.size(); ++index) {
             output_ << "  " << object.property_names[index] << " = "
@@ -311,10 +397,20 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
       if (const auto signal = resolve_signal(command[1])) {
         const auto& info =
             simulation_.runtime_adapter().signals().at(signal->second);
-        output_ << signal->first << " = "
-                << format_value(
-                       simulation_.read_signal(signal->second),
-                       info.enumeration_literals);
+        const auto& value = simulation_.read_signal(signal->second);
+        output_ << signal->first << " = ";
+        const auto* object = design_signal_object(
+            simulation_, signal->second);
+        if (object != nullptr) {
+          if (const auto handle = format_class_local(
+                  simulation_, object->type.spelling, value)) {
+            output_ << *handle;
+          } else {
+            output_ << format_value(value, info.enumeration_literals);
+          }
+        } else {
+          output_ << format_value(value, info.enumeration_literals);
+        }
         if (simulation_.signal_is_forced(signal->second)) {
           output_ << " (forced)";
         }
@@ -767,12 +863,24 @@ void DebuggerSession::show_locals()  {
     for (std::size_t index = 0; index < process.debug_locals.size();
          ++index) {
       const auto& local = process.debug_locals[index];
-      const auto& value =
-          simulation_.read_process_local(process_id, index);
-      output_ << local.name << " = "
-              << format_value(
-                     value, local.enumeration_literals)
-              << '\n';
+      output_ << local.name << " = ";
+      try {
+        const auto value = simulation_.read_process_local(process_id, index);
+        if (const auto handle = format_class_local(
+                simulation_, local.type_name, value)) {
+          output_ << *handle;
+        } else {
+          output_ << format_value(value, local.enumeration_literals);
+        }
+      } catch (const std::logic_error&) {
+        if (const auto declared = class_local_declaration(
+                simulation_, local.type_name)) {
+          output_ << "<uninitialized class handle> declared " << *declared;
+        } else {
+          output_ << "<uninitialized>";
+        }
+      }
+      output_ << '\n';
     }
     for (std::size_t index = 0;
          index < process.debug_string_locals.size();

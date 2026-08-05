@@ -210,7 +210,10 @@ namespace fsim::runtime::simir {
                                         const PackedLogic4 &lhs,
                                         const PackedLogic4 &rhs) {
   if (lhs.width() != rhs.width()) {
-    throw std::invalid_argument("binary operands have different widths");
+    throw std::invalid_argument(
+        "binary operands have different widths (left="
+        + std::to_string(lhs.width()) + ", right="
+        + std::to_string(rhs.width()) + ")");
   }
   if (lhs.empty()) {
     throw std::invalid_argument("binary operands must not be empty");

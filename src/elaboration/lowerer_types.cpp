@@ -8,6 +8,13 @@ using namespace elaboration_detail;
 
 
     std::optional<std::size_t> Lowerer::infer_width(const Expression& expression) const {
+        if (expression.kind == ExpressionKind::Call
+            && expression.text.starts_with("@sv-")
+            && expression.call_result_width != 0
+            && expression.call_result_width
+                <= std::numeric_limits<std::size_t>::max()) {
+            return static_cast<std::size_t>(expression.call_result_width);
+        }
         if (expression.kind == ExpressionKind::Update
             && expression.operands.size() == 1) {
             return infer_width(expression.operands.front());

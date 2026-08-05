@@ -1208,10 +1208,18 @@ objects, standalone designs, mapped libraries, relocation, and native-cache
 reuse. Resource rejection is based on caller budgets and checked materialized
 storage, not an arbitrary class/container element limit.
 
-This is the object-model foundation, not full class closure. Constraint bodies
-are retained but not solved; `randomize`/`std::randomize`, complete method-body
-lowering, covergroups, UVM library/runtime behavior, DPI, and VPI remain for
-subsequent v2 batches.
+Source-executable class expressions include `new`, `null`, assignment,
+equality, `$cast`, instance and static property selection, constructors,
+ordinary/static/nonvirtual/explicit-base/virtual functions, and suspending
+tasks. Class handles pass through module functions/tasks, generated recursive
+hierarchy, multiple roots, and typed fixed/dynamic/queue/associative
+containers. Interpreter, LLVM O0/O2 service boundaries, debugger inspection,
+packed callbacks/VCD snapshots, portable artifacts, relocation, and cold/warm
+native caches share the same canonical identities and behavior.
+
+This is source-executable class support, not full UVM closure. Constraint
+bodies are retained but not solved; `randomize`/`std::randomize`, covergroups,
+UVM library/runtime behavior, DPI, and VPI remain for subsequent v2 batches.
 
 ## v1 target
 

@@ -39,6 +39,10 @@ struct SystemVerilogClassHandleContainerDescriptor {
   std::size_t initial_elements{};
   std::vector<std::string> aggregate_members;
   bool packed{};
+  // Fixed and explicitly bounded containers reserve their full declared
+  // budget. Language-unbounded source containers account their initial
+  // descriptor storage and retain an addressability-derived element ceiling.
+  bool reserve_maximum_storage{true};
 };
 
 /// Value-semantic container storage for opaque class handles. The caller sets

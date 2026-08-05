@@ -125,11 +125,11 @@ list(JOIN FSIM_EVIDENCE_PATHS "\n" FSIM_EVIDENCE_CANONICAL)
 string(SHA256 FSIM_EVIDENCE_DIGEST "${FSIM_EVIDENCE_CANONICAL}\n")
 
 set(FSIM_EXPECTED_VALUES
-  FSIM_ROW_COUNT 1137
-  FSIM_EVIDENCE_SLOT_COUNT 4548
-  FSIM_EVIDENCE_PATH_COUNT 372
+  FSIM_ROW_COUNT 1142
+  FSIM_EVIDENCE_SLOT_COUNT 4568
+  FSIM_EVIDENCE_PATH_COUNT 377
   FSIM_TEST_EVIDENCE_COUNT 178
-  FSIM_PRODUCTION_EVIDENCE_COUNT 178
+  FSIM_PRODUCTION_EVIDENCE_COUNT 183
   FSIM_RELEASE_EVIDENCE_COUNT 16)
 while(FSIM_EXPECTED_VALUES)
   list(POP_FRONT FSIM_EXPECTED_VALUES FSIM_VALUE_NAME FSIM_VALUE_EXPECTED)
@@ -141,9 +141,9 @@ while(FSIM_EXPECTED_VALUES)
 endwhile()
 
 set(FSIM_EXPECTED_MATRIX_DIGEST
-  "db5b905fb2a81857a9acf5ad499d270ad8db75e1f0f26415fbb8df1ef1db848f")
+  "c6002bf16d5a8f6a2f40c3150af1450694ba9af5c73e20fab5ce23433ced5798")
 set(FSIM_EXPECTED_EVIDENCE_DIGEST
-  "22d7c45ef8a0806a5a2f8a29f980ea69eb644a6c999e7ea91087eba88f216585")
+  "01d35b4f97ba04f60062053c458b3a9a2dbd0bb8cd2a4968e439d01d39c0b1b9")
 if(NOT FSIM_MATRIX_DIGEST STREQUAL FSIM_EXPECTED_MATRIX_DIGEST
     OR NOT FSIM_EVIDENCE_DIGEST STREQUAL FSIM_EXPECTED_EVIDENCE_DIGEST)
   message(FATAL_ERROR
@@ -152,10 +152,10 @@ if(NOT FSIM_MATRIX_DIGEST STREQUAL FSIM_EXPECTED_MATRIX_DIGEST
 endif()
 
 foreach(FSIM_TOKEN IN ITEMS
-    "matrix-rows: 1137"
+    "matrix-rows: 1142"
     "matrix-sha256: ${FSIM_MATRIX_DIGEST}"
-    "evidence-slots: 4548"
-    "evidence-paths: 372"
+    "evidence-slots: 4568"
+    "evidence-paths: 377"
     "evidence-sha256: ${FSIM_EVIDENCE_DIGEST}"
     "test-evidence-paths: 178"
     "production-evidence-paths: 178"
@@ -182,6 +182,6 @@ if(FSIM_REGISTRATION_INDEX EQUAL -1)
 endif()
 
 message(STATUS
-  "final release candidate: 1137 execute rows, 4548 linked evidence cells, "
-  "372 exact paths (178 test, 178 production, 16 release), 108 runtime files, "
+  "final release candidate: 1142 execute rows, 4568 linked evidence cells, "
+  "377 exact paths (178 test, 183 production, 16 release), 108 runtime files, "
   "and 36 corpus CTests")

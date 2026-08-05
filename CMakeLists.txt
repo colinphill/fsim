@@ -358,6 +358,7 @@ fsim_configure_library(fsim_semantic)
 set(
   FSIM_FRONTEND_SOURCES
   "${PROJECT_SOURCE_DIR}/src/frontend/common.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/class_expression_resolution.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/class_resolution.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/class_inheritance.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/class_specialization.cpp"
@@ -495,6 +496,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_vhdl_protected.cpp
       src/elaboration/lowerer_control.cpp
       src/elaboration/lowerer_expression.cpp
+      src/elaboration/lowerer_sv_classes.cpp
       src/elaboration/lowerer_expression_binary.cpp
       src/elaboration/lowerer_expression_membership.cpp
       src/elaboration/lowerer_expression_system.cpp
@@ -513,6 +515,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_sv_string_format.cpp
       src/elaboration/lowerer_sv_strings.cpp
       src/elaboration/lowerer_sv_container_slices.cpp
+      src/elaboration/lowerer_sv_container_types.cpp
       src/elaboration/lowerer_sv_containers.cpp
       src/elaboration/lowerer_sv_file_binary.cpp
       src/elaboration/lowerer_sv_file_scan.cpp
@@ -766,6 +769,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_vhdl_hir.cpp
       src/app/application_vhdl_executable_hir.cpp
       src/app/application_services.cpp
+      src/app/application_class_inspection.cpp
       src/app/application_simulation.cpp
       src/app/application_time.cpp
       src/app/tcl.cpp

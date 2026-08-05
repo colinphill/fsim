@@ -262,6 +262,7 @@ void collect_qualified_identifiers(
     QualifiedIdentifierMap& identifiers) {
     if ((expression.kind == ExpressionKind::Identifier
          || expression.kind == ExpressionKind::Call)
+        && !expression.text.starts_with("@sv-")
         && (expression.text.find('.') != std::string::npos
             || expression.text.find("::")
                 != std::string::npos)) {
@@ -425,6 +426,7 @@ void collect_qualified_identifiers(
         collect_qualified_identifiers(
             statement.vhdl_guard, identifiers);
         if (statement.kind == StatementKind::TaskCall
+            && !statement.task_name.starts_with("@sv-")
             && statement.task_name.find("::")
                 != std::string::npos) {
             identifiers.try_emplace(
@@ -1437,6 +1439,17 @@ void append_generated_body(
         signal.name = generated_scope(scope, local_name);
         body_names[local_name] = signal.name;
         unit.signals.push_back(std::move(signal));
+    }
+    for (auto& variable : body.variables) {
+        const auto local_name = variable.name;
+        qualify_generated_type(variable.type, body_names);
+        if (variable.initializer) {
+            qualify_generated_expression(
+                *variable.initializer, body_names);
+        }
+        variable.name = generated_scope(scope, local_name);
+        body_names[local_name] = variable.name;
+        unit.variables.push_back(std::move(variable));
     }
     for (auto& alias : body.signal_aliases) {
         const auto local_name = alias.name;

@@ -124,6 +124,9 @@ void Lowerer::validate_read_only_signal_writes(
     }
 
     void Lowerer::lower_assignment(const Statement& statement) {
+        if (lower_class_assignment(statement)) {
+            return;
+        }
         if (lower_vhdl_access_assignment(statement)) {
             return;
         }

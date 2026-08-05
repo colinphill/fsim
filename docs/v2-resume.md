@@ -7,6 +7,147 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
+- Current unit: Batch 148, exactly 20 changes, complete after pushed Batch
+  147 closeout `37fbaaa`. Its authoritative source-executable SystemVerilog
+  class contract and per-change status are recorded in
+  `implementation_plan_v2.md`. Changes 1-20 are complete. Checked type
+  environments now resolve module/process/function/task/
+  block/argument/return class handles to canonical lexical, package, or
+  compilation-unit identities. Ordinary design units retain a stable
+  compilation-unit identity through portable owning-unit schema 6, and
+  module-scope handles migrate transactionally from unresolved signals to
+  typed variables. Focused frontend, portable-artifact round-trip, and source
+  budget tests pass after eight-worker builds. The parser now gives source
+  `new`, `null`, and `$cast` distinct owning expression markers, preserves
+  positional/named constructor and method actuals with the explicit receiver,
+  and retains handle assignment/equality, property selections, class-qualified
+  statics, and task calls. Focused frontend and source-budget gates remain
+  green. A separate class-expression resolver now walks class/module/process/
+  function/task/block scopes, propagates expected class types through
+  assignments and returns, and binds constructors, casts, instance/static
+  properties, functions, tasks, `this`, and `super` base constructors to
+  canonical identities with explicit receivers before lowering. The full
+  frontend suite and `fsim.application` pass after eight-worker builds.
+  Owning SystemVerilog semantic HIR now distinguishes class handles and null,
+  allocation, checked cast, instance/static property, and instance/static
+  method operations; carries canonical class/member identities and checked
+  access metadata; and marks typed assignment/return transfers without host
+  pointers. A direct HIR regression covers the complete pre-lowering surface.
+  Source `new(...)` now lowers to an owning SimIR allocation carrying aligned
+  packed actual registers and names. Specialized method profiles retain
+  constructor formals, defaults, locals, and bodies through class-state schema
+  2. The runtime associates positional/named/default actuals, executes explicit
+  or implicit base construction before the derived body, and initializes
+  owner-qualified hidden properties. The exact Debug core application case
+  passes across interpreter, compiled-fallback, debugger, class-state and
+  standalone design-artifact paths; its source-created derived object has both
+  base and derived `value` members initialized to 3.
+  Instance property reads/writes and class function calls are now owning SimIR
+  operations. Resolved calls retain operand-aligned directions and packed
+  return profiles through portable owning schema 7. The source evaluator owns
+  implicit `this`, positional/named/default association, automatic and
+  static-lifetime locals, input/output/inout/ref copy rules, returns, guarded
+  recursion, explicit `super` dispatch, and owner-qualified hidden properties.
+  The exact Debug core application and full frontend suites pass; the class
+  case proves all four formal modes, persistent locals, legal recursion, base
+  method access, property reads, and producer-independent artifact execution
+  across interpreter, compiled-fallback, and debugger engines.
+  Resolved class-task calls now retain source formals, locals, and bodies so
+  elaboration can synthesize ordinary automatic task frames on the common
+  SimIR call stack. Delay, edge-wait, assertion, register lifetime, resume, and
+  copy-out semantics use the existing scheduler. Runtime-state schema 6 gives
+  class operation results explicit widths before LLVM validation chooses
+  interpreter fallback. The exact Debug core case proves a local across delay,
+  delayed output/inout copy-out, assertion execution, and a nested-class task
+  waiting on a module signal edge across all engines and artifacts.
+  Ordinary and explicit `super` calls now carry distinct owning markers, and
+  SimIR records whether each source call requests virtual dispatch. The runtime
+  resolves the declaration profile, selects the matching stable slot on the
+  heap object's dynamic specialization chain, verifies exact profile identity,
+  and rejects pure selections. The exact Debug proof calls a derived override
+  through an `AppBase` handle while `super.bump` remains nonvirtual and updates
+  only the hidden base property; all engines and artifacts remain green.
+  Source static properties and methods now use owning SimIR operations backed
+  by the shared per-specialization store. Static functions execute directly;
+  static tasks reuse synthesized scheduler frames for delay and copy-out; and
+  inherited aliases select the base declaration's one state object. Reads
+  normalize internal integer storage to the declared executable width. The
+  exact Debug class proof checks base-first initialization, function updates,
+  delayed task update, inherited static selection, all engines, and standalone
+  artifacts. Focused owning-HIR, frontend, portable-artifact, and application
+  tests pass after eight-worker builds. Source function returns and suspending
+  task input/output now preserve opaque handle aliases. Instance/static handle
+  properties use dedicated typed slots with dynamic-view validation, and
+  fixed/dynamic/queue/associative class-property containers execute indexed
+  reads/writes, dynamic sizing, and queue push/size/pop without imposing an
+  arbitrary element count. Existing runtime aggregate coverage remains green
+  for named unpacked handle members and bounded storage accounting. Exact
+  Debug runtime, owning-HIR, frontend, portable-artifact, and application
+  proofs pass after eight-worker builds. Class resolution and generate
+  expansion now preserve typed class variables and their qualified references
+  inside generated bodies. A final process observes its live source object;
+  parameter-specialized generated leaves beneath wrapper modules construct two
+  distinct objects in aliased roots while sharing one scheduler and static
+  store. Interpreter, compiled, and debug runs agree on time, root values,
+  heap count, and shared state. Native O0/O2 execution now returns an
+  append-only SimIR service-boundary status for class operations; the common
+  scheduler executes the typed heap/static hooks and immediately resumes the
+  generated frame. Native-cache schema 81 hashes only canonical identities,
+  registers, actuals, directions, dispatch, and widths. Direct C ABI and LLVM
+  O0/O2 tests prove instruction, PC, and register handoff, while the exact
+  Debug application core remains green across every engine and standalone
+  artifacts. Source-created objects now have deterministic declared/dynamic
+  debugger views; canonical static-state and suspended-call snapshots expose
+  packed properties, frames, and call identities without internal addresses.
+  Source construction and instance/static operations publish packed time/delta
+  callbacks visible at scheduler safe points, and deterministic packed class
+  snapshots feed the existing VCD writer. Exact Debug runtime, LLVM, and core
+  application proofs pass after eight-worker builds. Artifact execution found
+  and closed a missing class-call direction/result serialization defect;
+  class-state schema 3 now owns the complete executable expression profile.
+  Copied read-only `.fsimdesign` and relocated mapped `.fsimlib` payloads run
+  with source and `.fsimobj` hidden while retaining class operations, SimIR
+  continuations, method bodies/provenance, initial handles/statics, and final
+  results. Cold/warm/semantic-edit native-cache evidence passes. The ordinary
+  module fixture additionally proves checked success/failure `$cast` with
+  destination preservation plus class handles through an automatic module
+  function and suspending module task across every engine/artifact. An explicit
+  engine snapshot now proves identical time, hidden properties, shared state,
+  live-object count, and packed trace inventory for interpreter, compiled/O2,
+  and debug/O0, alongside the direct O0/O2 boundary, callbacks, multi-root,
+  relocation, and cache evidence. All class resolution/lowering diagnostics
+  are now cataloged. Malformed class-call native HIR publishes no symbol;
+  truncated/future/trailing class-state payloads reject; failed `$cast`
+  preserves its destination; and the accumulated frontend/runtime negatives
+  cover transactional access/profile/construction, pure/null/stale/suspension,
+  recursion, cycles, and exact resource budgets without arbitrary container
+  caps. Change 19 is complete: architecture, language support, diagnostics,
+  feature evidence, the class/UVM boundary, and restart records describe the
+  source-executable slice without claiming constraint solving or UVM closure.
+  Class inspection, container type construction, class JIT validation, and
+  SimIR debug metadata now have focused structural owners. The reviewed
+  inventory is 1,850 diagnostics, 526 bounded sources, 616 SPDX-owned
+  artifacts, and 211 test/control files; the release evidence covers 1,142
+  executable rows, 4,568 evidence cells, and 377 exact paths. Source, catalog,
+  inventory, legality, differential, and release-candidate gates pass. Change
+  20 is complete. The first full Debug pass found that ordinary interface-
+  function lowering removed a receiver operand without its newly aligned
+  named-argument metadata; both packed and container-return paths now remove
+  the pair transactionally, and the interface regression passes in both
+  configurations. Exact LLVM 22.1.8 Debug passes 112/112 in 331.12 seconds and
+  Release passes 112/112 in 289.34 seconds after eight-worker builds. All
+  source, catalog, inventory, installed-public-contract, Windows ABI/plan,
+  differential, legality, and release-candidate gates are green. The batch is
+  ready for its single commit and push; no sanitizer or hosted CI inspection
+  was run because Batch 148 is not a monitoring boundary.
+  Changes 1-19 remain one recoverable accumulated worktree; Change 20 alone
+  owns full gates, one commit, and one push. Batch 148 is not a CI-monitoring
+  batch; do not run a sanitizer or inspect hosted CI. The batch closes the
+  source-to-runtime seam for typed class objects, `new`, constructors,
+  properties, instance/static/virtual functions, suspending tasks, handle
+  containers, debugger/callback/trace visibility, artifacts, and native-cache
+  identity. Constraint solving/randomization and UVM behavior remain assigned
+  to subsequent batches.
 - Current unit: Batch 147, exactly 20 changes, complete after pushed Batch
   146 closeout `eafadad`. Its authoritative SystemVerilog class object-model
   contract and per-change status are recorded in `implementation_plan_v2.md`.

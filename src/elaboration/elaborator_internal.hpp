@@ -908,6 +908,7 @@ private:
         const frontend::Type* expected_type);
     void lower_force_release(const Statement& statement);
     void lower_assignment(const Statement& statement);
+    bool lower_class_assignment(const Statement& statement);
     bool lower_assignment_selections(
         const Statement& statement,
         std::string_view target_name,
@@ -1020,6 +1021,10 @@ private:
         const frontend::Type& expected_type);
     ExpressionAttempt lower_membership_expression(
         const Expression& expression);
+    ExpressionAttempt lower_class_expression(
+        const Expression& expression,
+        std::size_t expected_width,
+        const frontend::Type* expected_type);
 
     std::optional<StringRegisterId> lower_string_expression(
         const Expression& expression);
@@ -1223,6 +1228,7 @@ private:
     void diagnose_function_cycles();
 
     void initialize_task_support();
+    void collect_class_tasks(const std::vector<Statement>& statements);
 
     std::optional<std::vector<const Expression*>> bind_task_actuals(
         const Statement& statement,
@@ -1403,6 +1409,7 @@ private:
         bool lowered{};
     };
     std::vector<TaskFrame> task_frames_;
+    std::deque<frontend::TaskDeclaration> class_tasks_;
     std::unordered_map<std::string, std::size_t> task_indices_;
     std::deque<std::size_t> pending_tasks_;
     std::vector<std::unordered_set<std::size_t>>

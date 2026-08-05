@@ -1120,6 +1120,9 @@ void test_checked_integer_at_level(
 void test_resumable_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);
+void test_class_service_boundaries_at_level(
+    fsim::compiler::JitOptimizationLevel optimization,
+    std::string_view symbol);
 void test_signal_waits_at_level(
     fsim::compiler::JitOptimizationLevel optimization,
     std::string_view symbol);

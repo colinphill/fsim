@@ -25,6 +25,9 @@ void insert_default(
 PackedLogic4 default_packed_value(
     const frontend::Type& type,
     const std::size_t width) {
+  if (!type.systemverilog_class_declaration.empty()) {
+    return unsigned_value(0, width);
+  }
   if (!type.enumeration_literals.empty()
       && type.enumeration_range) {
     return unsigned_value(

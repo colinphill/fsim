@@ -62,6 +62,11 @@ using runtime::PackedLogic4;
 using runtime::SimulationTick;
 using runtime::simir::SignalId;
 
+[[nodiscard]] runtime::SystemVerilogClassPropertyDescriptor
+class_property_descriptor(
+    const frontend::SystemVerilogClassPropertyLayout& property,
+    bool qualified_name = false);
+
 [[nodiscard]] std::uint64_t entropy_seed();
 
 [[nodiscard]] semantic::Model build_semantic_model(

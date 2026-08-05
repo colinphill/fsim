@@ -148,3 +148,13 @@ C/C++ sources, 608 authored artifacts, and 211 authored test/control files.
 The class object model and fixtures are clean-room code; no UVM source,
 constraint solver, external class library, third-party artifact, or provenance
 entry is imported.
+
+v2 Batch 148 adds class-expression resolution, source lowering, class
+inspection, SimIR class/debug partitions, class JIT validation, and container-
+type lowering as eight SPDX-owned bounded C++ sources. Twenty-one source class
+resolution and lowering diagnostics advance the reviewed totals to 1,850
+diagnostics, 526 bounded C/C++ sources, 616 authored artifacts, and 211
+authored test/control files. The source-executable class fixture, service
+boundary, artifact codec repair, and documentation are clean-room code; no UVM
+source, constraint solver, external class library, third-party artifact, or
+provenance entry is imported.

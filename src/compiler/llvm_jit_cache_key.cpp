@@ -140,10 +140,17 @@ using runtime::simir::ForkEnd;
 using runtime::simir::ForkJoinKind;
 using runtime::simir::WaitFork;
 using runtime::simir::DisableFork;
+using runtime::simir::ClassAllocate;
+using runtime::simir::ClassMethodCall;
+using runtime::simir::ClassPropertyRead;
+using runtime::simir::ClassPropertyWrite;
+using runtime::simir::ClassStaticMethodCall;
+using runtime::simir::ClassStaticPropertyRead;
+using runtime::simir::ClassStaticPropertyWrite;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v80";
+    "fsim-llvm-native-object-v81";
 
 void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
                  const std::uint64_t value) {
@@ -1700,6 +1707,70 @@ void add_dynamic_part_index_key(
                   "wait-on-timeout-origin",
                   *value.timeout_origin);
             }
+          } else if constexpr (std::is_same_v<OperationType, ClassAllocate>) {
+            builder.add("operation", "ClassAllocate");
+            add_key_u64(builder, "class-destination", value.destination);
+            builder.add(
+                "class-specialization", value.specialization_identity);
+            builder.add("class-declared-type", value.declared_type);
+            add_key_u64(
+                builder, "class-actual-count",
+                value.constructor_actuals.size());
+            for (const auto actual : value.constructor_actuals) {
+              add_key_u64(builder, "class-actual", actual);
+            }
+            for (const auto& name : value.constructor_actual_names) {
+              builder.add("class-actual-name", name);
+            }
+          } else if constexpr (
+              std::is_same_v<OperationType, ClassPropertyRead>) {
+            builder.add("operation", "ClassPropertyRead");
+            add_key_u64(builder, "class-destination", value.destination);
+            add_key_u64(builder, "class-receiver", value.receiver);
+            builder.add("class-property", value.property_identity);
+            add_key_u64(builder, "class-width", value.width);
+          } else if constexpr (
+              std::is_same_v<OperationType, ClassPropertyWrite>) {
+            builder.add("operation", "ClassPropertyWrite");
+            add_key_u64(builder, "class-receiver", value.receiver);
+            add_key_u64(builder, "class-source", value.source);
+            builder.add("class-property", value.property_identity);
+          } else if constexpr (
+              std::is_same_v<OperationType, ClassMethodCall>
+              || std::is_same_v<OperationType, ClassStaticMethodCall>) {
+            builder.add(
+                "operation",
+                std::is_same_v<OperationType, ClassMethodCall>
+                    ? "ClassMethodCall" : "ClassStaticMethodCall");
+            add_key_u64(builder, "class-destination", value.destination);
+            if constexpr (std::is_same_v<OperationType, ClassMethodCall>) {
+              add_key_u64(builder, "class-receiver", value.receiver);
+              add_key_u64(
+                  builder, "class-virtual", value.virtual_dispatch ? 1U : 0U);
+            }
+            builder.add("class-method", value.method_identity);
+            add_key_u64(builder, "class-width", value.result_width);
+            add_key_u64(
+                builder, "class-actual-count", value.actuals.size());
+            for (std::size_t actual = 0;
+                 actual < value.actuals.size(); ++actual) {
+              add_key_u64(builder, "class-actual", value.actuals[actual]);
+              builder.add("class-actual-name", value.actual_names[actual]);
+              add_key_u64(
+                  builder, "class-actual-direction",
+                  value.actual_directions[actual]);
+            }
+          } else if constexpr (
+              std::is_same_v<OperationType, ClassStaticPropertyRead>) {
+            builder.add("operation", "ClassStaticPropertyRead");
+            add_key_u64(builder, "class-destination", value.destination);
+            builder.add("class-property", value.property_identity);
+            add_key_u64(builder, "class-width", value.width);
+          } else if constexpr (
+              std::is_same_v<OperationType, ClassStaticPropertyWrite>) {
+            builder.add("operation", "ClassStaticPropertyWrite");
+            add_key_u64(builder, "class-source", value.source);
+            builder.add("class-property", value.property_identity);
           } else if constexpr (std::is_same_v<OperationType, WaitSensitivity>) {
             builder.add("operation", "WaitSensitivity");
             add_key_u64(

@@ -2,10 +2,13 @@
 #include "application_test_support.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
+#include "fsim/runtime/vcd_writer.hpp"
 
 #include <algorithm>
 #include <cassert>
+#include <fstream>
 #include <iostream>
+#include <ranges>
 #include <string>
 #include <sstream>
 #include <tuple>
@@ -27,12 +30,22 @@ void ApplicationTestFixture::test_class_simulation_integration() {
   sources.files.push_back(class_source);
   config.source_sets.push_back(std::move(sources));
 
+  using EngineSnapshot = std::tuple<
+      std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t,
+      std::size_t, std::size_t>;
+  std::vector<EngineSnapshot> engine_snapshots;
+
   for (const auto engine : {
            fsim::app::SimulationEngine::interpreter,
            fsim::app::SimulationEngine::compiled,
            fsim::app::SimulationEngine::debug}) {
     fsim::diagnostic::Engine diagnostics;
     auto built = fsim::app::build_project(config, diagnostics);
+    if (!built) {
+      for (const auto& diagnostic : diagnostics.diagnostics()) {
+        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+      }
+    }
     assert(built);
     const auto derived = std::ranges::find_if(
         built->systemverilog_class_specializations,
@@ -80,6 +93,10 @@ void ApplicationTestFixture::test_class_simulation_integration() {
       fsim::diagnostic::Engine trailing_diagnostics;
       assert(!fsim::app::deserialize_class_state(
           trailing, "trailing-classes.bin", trailing_diagnostics));
+      const auto truncated = class_state->substr(0, class_state->size() - 1U);
+      fsim::diagnostic::Engine truncated_diagnostics;
+      assert(!fsim::app::deserialize_class_state(
+          truncated, "truncated-classes.bin", truncated_diagnostics));
       auto future = *class_state;
       future[8] = static_cast<char>(fsim::app::kClassStateSchema + 1U);
       fsim::diagnostic::Engine future_diagnostics;
@@ -136,19 +153,63 @@ void ApplicationTestFixture::test_class_simulation_integration() {
     };
     simulation.class_methods().register_method(
         std::move(derived_override));
+    const auto suspended_method_identity = base_identity + "::debug_suspend";
+    fsim::runtime::SystemVerilogClassMethodDescriptor suspended_method;
+    suspended_method.canonical_identity = suspended_method_identity;
+    suspended_method.owner_type = base_identity;
+    suspended_method.arguments = {
+        fsim::runtime::SystemVerilogClassArgumentMode::Input};
+    suspended_method.automatic_value_count = 1;
+    suspended_method.is_task = true;
+    suspended_method.entry = [](auto& frame) {
+      if (frame.continuation_point() == 0) {
+        frame.local(0).packed =
+            fsim::runtime::PackedLogic4::from_aval_bval(8, 42, 0);
+        frame.suspend_at(7);
+        return fsim::runtime::SystemVerilogClassMethodStatus::Suspended;
+      }
+      return fsim::runtime::SystemVerilogClassMethodStatus::Completed;
+    };
+    simulation.class_methods().register_method(std::move(suspended_method));
 
     std::vector<std::tuple<std::uint64_t, std::uint64_t, std::string>>
         property_changes;
+    std::vector<std::tuple<
+        fsim::runtime::SystemVerilogClassHandle,
+        std::string,
+        std::string>> all_property_changes;
     simulation.set_class_property_change_hook(
         [&](const auto changed_handle,
             const std::string_view property,
             const auto& value,
             const auto time,
             const auto delta) {
-          assert(changed_handle == handle);
+          all_property_changes.emplace_back(
+              changed_handle, std::string{property}, value.to_msb_string());
+          if (changed_handle != handle) return;
           assert(property.ends_with("::value"));
           property_changes.emplace_back(
               time, delta, value.to_msb_string());
+        });
+    std::vector<std::tuple<std::string, std::string, std::string>>
+        static_changes;
+    simulation.set_class_static_property_change_hook(
+        [&](const std::string_view specialization,
+            const std::string_view property,
+            const auto& value,
+            const auto,
+            const auto) {
+          static_changes.emplace_back(
+              specialization, property, value.to_msb_string());
+        });
+    std::size_t safe_points{};
+    std::size_t safe_point_live_objects{};
+    const auto safe_point = simulation.add_safe_point_hook(
+        [&](const auto&, const auto) {
+          ++safe_points;
+          safe_point_live_objects = std::max(
+              safe_point_live_objects,
+              simulation.class_heap().live_objects());
         });
     std::vector<fsim::runtime::SystemVerilogClassMethodValue> actuals(1);
     actuals.front().packed =
@@ -173,8 +234,106 @@ void ApplicationTestFixture::test_class_simulation_integration() {
           assert(retained_actuals.size() == 1);
           completion_called = true;
         });
+    if (engine == fsim::app::SimulationEngine::debug) {
+      std::ifstream source_input(class_source);
+      std::uint32_t source_object_line{};
+      for (std::string line; std::getline(source_input, line);) {
+        ++source_object_line;
+        if (line.find("source_object = new(3);") != std::string::npos) break;
+      }
+      assert(source_object_line != 0 && source_input.good());
+      std::ostringstream early_debug_output;
+      std::ostringstream early_debug_error;
+      {
+        fsim::app::DebuggerControl early_debugger(
+            simulation, early_debug_output, early_debug_error);
+        early_debugger.execute({
+            "break", "source",
+            class_source.filename().string() + ":"
+                + std::to_string(source_object_line)});
+        early_debugger.execute({"continue"});
+        early_debugger.execute({"show", "class_top.source_object"});
+      }
+      assert(early_debug_error.str().empty());
+      assert(
+          early_debug_output.str().find("source_object = ")
+          != std::string::npos);
+      assert(
+          early_debug_output.str().find(" declared " + derived_identity)
+          != std::string::npos);
+      simulation.clear_stop();
+    }
     const auto result = simulation.run();
-    assert(result.time == 3);
+    simulation.remove_safe_point_hook(safe_point);
+    assert(result.time == 7);
+    assert(safe_points != 0 && safe_point_live_objects >= 4);
+    const auto source_object = simulation.find_signal(
+        "class_top.source_object");
+    assert(source_object);
+    const auto source_handle = simulation.read_signal(
+        *source_object).low_word().aval;
+    assert(source_handle != 0 && source_handle != handle);
+    assert(simulation.class_heap().object(source_handle).dynamic_type
+           == derived_identity);
+    assert(
+        simulation.read_class_property(
+            source_handle, base_identity + "::value")
+                .packed.low_word().aval == 5);
+    assert(
+        simulation.read_class_property(
+            source_handle, derived_identity + "::value")
+                .packed.low_word().aval == 18);
+    assert(std::ranges::any_of(
+        all_property_changes, [&](const auto& change) {
+          return std::get<0>(change) == source_handle
+              && std::get<1>(change) == derived_identity + "::value"
+              && std::get<2>(change) == "00010010";
+        }));
+    assert(std::ranges::any_of(
+        static_changes, [&](const auto& change) {
+          return std::get<0>(change) == base->specialization_identity
+              && std::get<1>(change) == "shared"
+              && std::get<2>(change)
+                  == fsim::runtime::PackedLogic4::from_aval_bval(
+                         64, 10, 0).to_msb_string();
+        }));
+    for (const auto& [path, expected] : std::vector<
+             std::pair<std::string, std::uint64_t>>{
+             {"class_top.source_prior", 3},
+             {"class_top.source_accumulator", 6},
+             {"class_top.source_alias", 6},
+             {"class_top.source_result", 12},
+             {"class_top.source_recursive", 12},
+             {"class_top.source_static_first", 1},
+             {"class_top.source_static_second", 2},
+             {"class_top.source_base_result", 5},
+             {"class_top.source_task_observed", 16},
+             {"class_top.source_task_accumulator", 17},
+             {"class_top.task_event_observed", 1},
+             {"class_top.source_virtual_result", 18},
+             {"class_top.source_static_result", 8},
+             {"class_top.source_static_task_observed", 10},
+             {"class_top.source_static_property", 10},
+             {"class_top.source_handle_alias", 1},
+             {"class_top.source_handle_property_alias", 1},
+             {"class_top.source_task_handle_alias", 1},
+             {"class_top.source_static_handle_alias", 1},
+             {"class_top.source_fixed_handle_alias", 1},
+             {"class_top.source_dynamic_handle_alias", 1},
+             {"class_top.source_queued_handle_alias", 1},
+             {"class_top.source_queue_pop_alias", 1},
+             {"class_top.source_queue_size", 1},
+             {"class_top.source_associative_handle_alias", 1},
+             {"class_top.source_cast_alias", 1},
+             {"class_top.source_failed_cast_preserved", 1},
+             {"class_top.source_function_handle_alias", 1},
+             {"class_top.source_module_task_handle_alias", 1},
+             {"class_top.source_final_seen", 1},
+             {"class_top.source_property", 18}}) {
+      const auto signal = simulation.find_signal(path);
+      assert(signal);
+      assert(simulation.read_signal(*signal).low_word().aval == expected);
+    }
     assert(completion_called);
     assert(
         simulation.read_class_property(handle, "value")
@@ -182,25 +341,136 @@ void ApplicationTestFixture::test_class_simulation_integration() {
     assert(
         simulation.read_class_property(handle, base_identity + "::value")
                 .packed.low_word().aval == 2);
+    const auto source_other = simulation.find_signal(
+        "class_top.source_other");
+    assert(source_other);
+    assert(
+        simulation.read_class_property(
+            source_handle, base_identity + "::peer").handle
+        == simulation.read_signal(*source_other).low_word().aval);
     assert(
         simulation.class_static_store()
                 .property(derived_identity, "shared")
-                .packed.low_word().aval == 5);
+                .packed.low_word().aval == 10);
     const std::vector<
         std::tuple<std::uint64_t, std::uint64_t, std::string>>
         expected_changes{
             {0, 0, "00000010"},
             {1, 0, "00000100"}};
     assert(property_changes == expected_changes);
+    const auto trace_values = simulation.class_packed_trace_values();
+    assert(std::ranges::any_of(trace_values, [&](const auto& trace) {
+      return trace.object == source_handle
+          && trace.path.ends_with(derived_identity + "::value")
+          && trace.value.to_msb_string() == "00010010";
+    }));
+    assert(std::ranges::any_of(trace_values, [&](const auto& trace) {
+      return !trace.object
+          && trace.path.ends_with(
+              base->specialization_identity + ".shared")
+          && trace.value.low_word().aval == 10;
+    }));
+    std::ostringstream class_vcd_output;
+    fsim::runtime::VcdWriter class_vcd{class_vcd_output, "1ns", 64};
+    std::vector<fsim::runtime::VcdSignal> class_vcd_signals;
+    for (const auto& trace : trace_values) {
+      class_vcd_signals.push_back(
+          class_vcd.declare_signal(trace.path, trace.value.width()));
+    }
+    class_vcd.begin(simulation.now());
+    for (std::size_t index = 0; index < trace_values.size(); ++index) {
+      class_vcd.change(class_vcd_signals[index], trace_values[index].value);
+    }
+    class_vcd.flush();
+    assert(class_vcd_output.str().find("00010010") != std::string::npos);
+
+    std::vector<fsim::runtime::SystemVerilogClassMethodValue>
+        suspended_actuals(1);
+    suspended_actuals.front().packed =
+        fsim::runtime::PackedLogic4::from_aval_bval(8, 1, 0);
+    const auto suspended = simulation.class_methods().invoke(
+        suspended_method_identity, handle, suspended_actuals);
+    assert(
+        suspended.status
+        == fsim::runtime::SystemVerilogClassMethodStatus::Suspended);
     std::ostringstream debug_output;
     std::ostringstream debug_error;
     fsim::app::DebuggerControl debugger(
         simulation, debug_output, debug_error);
     debugger.execute({"classes"});
     debugger.execute({"class", std::to_string(handle), "value"});
+    debugger.execute({"class", "statics"});
+    debugger.execute({
+        "class", "static", base->specialization_identity, "shared"});
+    debugger.execute({"class", "frames"});
     assert(debug_error.str().empty());
     assert(debug_output.str().find(derived_identity) != std::string::npos);
     assert(debug_output.str().find("value = 00000100") != std::string::npos);
+    assert(debug_output.str().find("shared = ") != std::string::npos);
+    assert(
+        debug_output.str().find(suspended_method_identity)
+        != std::string::npos);
+    assert(debug_output.str().find("point 7") != std::string::npos);
+    assert(debug_output.str().find("local[0] = 00101010")
+           != std::string::npos);
+    const auto resumed = simulation.class_methods().resume(
+        suspended.continuation, suspended_actuals);
+    assert(
+        resumed.status
+        == fsim::runtime::SystemVerilogClassMethodStatus::Completed);
+    engine_snapshots.emplace_back(
+        result.time,
+        simulation.read_class_property(
+            source_handle, base_identity + "::value").packed.low_word().aval,
+        simulation.read_class_property(
+            source_handle, derived_identity + "::value").packed.low_word().aval,
+        simulation.class_static_store()
+            .property(base_identity, "shared").packed.low_word().aval,
+        simulation.class_heap().live_objects(),
+        trace_values.size());
+  }
+  assert(engine_snapshots.size() == 3);
+  assert(std::ranges::all_of(
+      engine_snapshots | std::views::drop(1),
+      [&](const auto& snapshot) { return snapshot == engine_snapshots.front(); }));
+
+  auto cache_config = config;
+  cache_config.project.name = "class-native-cache";
+  cache_config.build.cache_path = directory / "class-native-cache";
+  const auto cached_run = [&]() {
+    fsim::diagnostic::Engine diagnostics;
+    auto project = fsim::app::build_project(cache_config, diagnostics);
+    assert(project && !diagnostics.has_error());
+    fsim::app::Simulation simulation(
+        std::move(*project), cache_config.run.max_deltas,
+        fsim::app::SimulationEngine::compiled);
+    const auto result = simulation.run();
+    assert(result.status == fsim::runtime::RunStatus::stopped);
+    return simulation.native_cache_statistics();
+  };
+  const auto cold_cache = cached_run();
+  assert(cold_cache.misses != 0 && cold_cache.stores != 0);
+  const auto warm_cache = cached_run();
+  assert(warm_cache.hits != 0 && warm_cache.misses == 0);
+  std::ifstream original_input(class_source, std::ios::binary);
+  const std::string original_source{
+      std::istreambuf_iterator<char>{original_input},
+      std::istreambuf_iterator<char>{}};
+  auto edited_source = original_source;
+  const auto edited_delay = edited_source.find("#3 $finish;");
+  assert(edited_delay != std::string::npos);
+  edited_source.replace(edited_delay, 11, "#4 $finish;");
+  {
+    std::ofstream edited_output(
+        class_source, std::ios::binary | std::ios::trunc);
+    edited_output << edited_source;
+  }
+  const auto edited_cache = cached_run();
+  assert(edited_cache.misses != 0 && edited_cache.stores != 0);
+  {
+    std::ofstream restored_output(
+        class_source, std::ios::binary | std::ios::trunc);
+    restored_output << original_source;
   }
 
   const auto object = directory / "class-object.fsimobj";
@@ -228,11 +498,50 @@ void ApplicationTestFixture::test_class_simulation_integration() {
   const auto hidden_object = object.string() + ".hidden";
   std::filesystem::rename(class_source, hidden_source);
   std::filesystem::rename(object, hidden_object);
+  const auto relocated_root = directory / "relocated-classes";
+  std::filesystem::create_directories(relocated_root);
+  const auto relocated_design = relocated_root / design.filename();
+  const auto relocated_library = relocated_root / library.filename();
+  const auto relocate_directory = [](const auto& origin, const auto& target) {
+    std::filesystem::create_directories(target);
+    for (const auto& entry :
+         std::filesystem::recursive_directory_iterator(origin)) {
+      const auto destination = target / entry.path().lexically_relative(origin);
+      if (entry.is_directory()) {
+        std::filesystem::create_directories(destination);
+      } else if (entry.is_regular_file()) {
+        std::filesystem::copy_file(entry.path(), destination);
+      }
+    }
+  };
+  relocate_directory(design, relocated_design);
+  relocate_directory(library, relocated_library);
   fsim::diagnostic::Engine standalone_diagnostics;
   auto standalone = fsim::app::load_design_artifact(
-      design, standalone_diagnostics);
+      relocated_design, standalone_diagnostics);
   assert(standalone);
-  assert(standalone->systemverilog_class_specializations.size() == 2);
+  assert(standalone->systemverilog_class_specializations.size() == 3);
+  assert(std::ranges::any_of(
+      standalone->design.processes(), [](const auto& process) {
+        return std::ranges::any_of(process.operations, [](const auto& op) {
+          return fsim::runtime::simir::operation_holds<
+                     fsim::runtime::simir::ClassAllocate>(op);
+        });
+      }));
+  assert(std::ranges::any_of(
+      standalone->design.processes(), [](const auto& process) {
+        const auto has_class_call = std::ranges::any_of(
+            process.operations, [](const auto& op) {
+              return fsim::runtime::simir::operation_holds<
+                         fsim::runtime::simir::ClassMethodCall>(op);
+            });
+        const auto has_continuation = std::ranges::any_of(
+            process.operations, [](const auto& op) {
+              return fsim::runtime::simir::operation_holds<
+                         fsim::runtime::simir::Call>(op);
+            });
+        return has_class_call && has_continuation;
+      }));
   fsim::app::Simulation standalone_simulation(
       std::move(*standalone), config.run.max_deltas,
       fsim::app::SimulationEngine::interpreter);
@@ -244,23 +553,113 @@ void ApplicationTestFixture::test_class_simulation_integration() {
   assert(
       standalone_derived
       != standalone_simulation.class_specializations().end());
+  const auto standalone_transfer = std::ranges::find(
+      standalone_derived->methods,
+      std::string{"transfer"},
+      &fsim::frontend::SystemVerilogClassMethodProfile::name);
+  assert(
+      standalone_transfer != standalone_derived->methods.end()
+      && !standalone_transfer->statements.empty()
+      && !standalone_transfer->statements.front().span.source_name.empty());
   const auto standalone_handle = standalone_simulation.allocate_class(
       standalone_derived->specialization_identity);
   assert(
       standalone_simulation.read_class_property(
           standalone_handle, "value").packed.to_msb_string()
       == "XXXXXXXX");
+  const auto standalone_base = std::ranges::find_if(
+      standalone_simulation.class_specializations(),
+      [](const auto& specialization) {
+        return specialization.declaration_identity.ends_with("::AppBase");
+      });
+  assert(standalone_base != standalone_simulation.class_specializations().end());
+  assert(
+      standalone_simulation.class_static_store()
+              .property(standalone_base->declaration_identity, "shared")
+              .packed.low_word().aval == 2);
+  const auto standalone_result = standalone_simulation.run();
+  assert(
+      standalone_result.status == fsim::runtime::RunStatus::stopped
+      && standalone_result.time == 7);
+  const auto standalone_property = standalone_simulation.find_signal(
+      "class_top.source_property");
+  assert(
+      standalone_property
+      && standalone_simulation.read_signal(*standalone_property)
+             .low_word().aval == 18);
+  assert(
+      standalone_simulation.class_static_store()
+              .property(standalone_base->declaration_identity, "shared")
+              .packed.low_word().aval == 7);
 
   auto mapped_config = config;
   mapped_config.project.name = "mapped-class-simulation";
   mapped_config.source_sets.clear();
-  mapped_config.library_mappings = {{"work", library}};
+  mapped_config.library_mappings = {{"work", relocated_library}};
   mapped_config.elaboration.search_libraries = {"work"};
   mapped_config.build.cache_path = directory / "mapped-class-cache";
   fsim::diagnostic::Engine mapped_diagnostics;
   auto mapped = fsim::app::build_project(mapped_config, mapped_diagnostics);
   assert(mapped);
-  assert(mapped->systemverilog_class_specializations.size() == 2);
+  assert(mapped->systemverilog_class_specializations.size() == 3);
+  fsim::app::Simulation mapped_simulation(
+      std::move(*mapped), mapped_config.run.max_deltas,
+      fsim::app::SimulationEngine::compiled);
+  const auto mapped_result = mapped_simulation.run();
+  assert(
+      mapped_result.status == fsim::runtime::RunStatus::stopped
+      && mapped_result.time == 7);
+  const auto mapped_property = mapped_simulation.find_signal(
+      "class_top.source_property");
+  assert(
+      mapped_property
+      && mapped_simulation.read_signal(*mapped_property).low_word().aval == 18);
+
+  auto multiple = config;
+  multiple.project.name = "multi-root-class-simulation";
+  multiple.project.top.clear();
+  multiple.project.tops = {
+      {"sv:work.class_root_a", "left"},
+      {"sv:work.class_root_b", "right"}};
+  multiple.build.cache_path = directory / "multi-root-class-cache";
+  multiple.source_sets.front().files = {hidden_source};
+  for (const auto engine : {
+           fsim::app::SimulationEngine::interpreter,
+           fsim::app::SimulationEngine::compiled,
+           fsim::app::SimulationEngine::debug}) {
+    fsim::diagnostic::Engine multiple_diagnostics;
+    auto multiple_project = fsim::app::build_project(
+        multiple, multiple_diagnostics);
+    if (!multiple_project) {
+      for (const auto& diagnostic : multiple_diagnostics.diagnostics()) {
+        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+      }
+    }
+    assert(multiple_project);
+    assert((multiple_project->design.roots()
+            == std::vector<std::string>{"left", "right"}));
+    fsim::app::Simulation multiple_simulation(
+        std::move(*multiple_project), multiple.run.max_deltas, engine);
+    const auto multiple_result = multiple_simulation.run();
+    assert(multiple_result.status == fsim::runtime::RunStatus::stopped);
+    assert(multiple_result.time == 2);
+    for (const auto path : {"left.ready", "right.ready"}) {
+      const auto signal = multiple_simulation.find_signal(path);
+      assert(signal);
+      assert(multiple_simulation.read_signal(*signal).low_word().aval == 1);
+    }
+    assert(multiple_simulation.class_heap().live_objects() == 2);
+    const auto multi_base = std::ranges::find_if(
+        multiple_simulation.class_specializations(),
+        [](const auto& specialization) {
+          return specialization.declaration_identity.ends_with("::AppBase");
+        });
+    assert(multi_base != multiple_simulation.class_specializations().end());
+    assert(
+        multiple_simulation.class_static_store()
+                .property(multi_base->declaration_identity, "shared")
+                .packed.low_word().aval == 13);
+  }
 }
 
 }  // namespace fsim::test

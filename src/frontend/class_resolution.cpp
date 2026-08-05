@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/class_resolution.hpp"
 
+#include "class_expression_resolution.hpp"
+
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -353,6 +355,353 @@ void resolve_declaration_types(
   }
 }
 
+void resolve_statement_types(
+    Statement& statement,
+    const ClassEntry& owner,
+    std::vector<ClassEntry>& entries,
+    const std::set<std::string>& shadowed_types,
+    std::vector<Diagnostic>& diagnostics) {
+  for (auto& declaration : statement.declarations) {
+    resolve_type(
+        declaration.type,
+        owner,
+        entries,
+        shadowed_types,
+        diagnostics);
+  }
+  for (auto& child : statement.statements) {
+    resolve_statement_types(
+        child, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& child : statement.else_statements) {
+    resolve_statement_types(
+        child, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& alternative : statement.case_alternatives) {
+    for (auto& child : alternative.statements) {
+      resolve_statement_types(
+          child, owner, entries, shadowed_types, diagnostics);
+    }
+  }
+}
+
+void resolve_function_types(
+    FunctionDeclaration& function,
+    const ClassEntry& owner,
+    std::vector<ClassEntry>& entries,
+    const std::set<std::string>& inherited_shadowed_types,
+    std::vector<Diagnostic>& diagnostics) {
+  auto shadowed_types = inherited_shadowed_types;
+  for (const auto& alias : function.type_aliases) {
+    shadowed_types.insert(alias.name);
+  }
+  resolve_type(
+      function.return_type,
+      owner,
+      entries,
+      shadowed_types,
+      diagnostics);
+  for (auto& alias : function.type_aliases) {
+    resolve_type(
+        alias.type, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& argument : function.arguments) {
+    resolve_type(
+        argument.type, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& variable : function.variables) {
+    resolve_type(
+        variable.type, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& statement : function.statements) {
+    resolve_statement_types(
+        statement, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& nested : function.functions) {
+    resolve_function_types(
+        nested, owner, entries, shadowed_types, diagnostics);
+  }
+}
+
+void resolve_task_types(
+    TaskDeclaration& task,
+    const ClassEntry& owner,
+    std::vector<ClassEntry>& entries,
+    const std::set<std::string>& shadowed_types,
+    std::vector<Diagnostic>& diagnostics) {
+  for (auto& argument : task.arguments) {
+    resolve_type(
+        argument.type, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& variable : task.variables) {
+    resolve_type(
+        variable.type, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& statement : task.statements) {
+    resolve_statement_types(
+        statement, owner, entries, shadowed_types, diagnostics);
+  }
+}
+
+void migrate_class_signals(
+    std::vector<SignalDeclaration>& signals,
+    std::vector<VariableDeclaration>& variables,
+    std::vector<Diagnostic>& diagnostics) {
+  std::vector<SignalDeclaration> retained;
+  retained.reserve(signals.size());
+  for (auto& signal : signals) {
+    if (signal.direction == PortDirection::Unknown
+        && !signal.type.systemverilog_class_declaration.empty()) {
+      const bool duplicate = std::ranges::any_of(
+          variables, [&](const VariableDeclaration& variable) {
+            return variable.name == signal.name;
+          });
+      if (duplicate) {
+        diagnose(
+            diagnostics,
+            "FSIM-SV-SEM-006",
+            "duplicate class object declaration '" + signal.name + "'",
+            signal.span);
+      } else {
+        variables.push_back({
+            std::move(signal.name),
+            std::move(signal.type),
+            std::nullopt,
+            std::move(signal.span)});
+      }
+    } else {
+      retained.push_back(std::move(signal));
+    }
+  }
+  signals = std::move(retained);
+}
+
+void resolve_generate_body_types(
+    GenerateBody& body,
+    ClassEntry& owner,
+    std::vector<ClassEntry>& entries,
+    const std::set<std::string>& inherited_shadowed_types,
+    std::vector<Diagnostic>& diagnostics) {
+  auto shadowed_types = inherited_shadowed_types;
+  for (const auto& parameter : body.constants) {
+    if (parameter.kind == ParameterKind::Type) {
+      shadowed_types.insert(parameter.name);
+    }
+  }
+  for (const auto& alias : body.type_aliases) {
+    shadowed_types.insert(alias.name);
+  }
+  for (auto& parameter : body.constants) {
+    resolve_type(
+        parameter.type, owner, entries, shadowed_types, diagnostics);
+    if (parameter.default_type) {
+      resolve_type(
+          *parameter.default_type,
+          owner,
+          entries,
+          shadowed_types,
+          diagnostics);
+    }
+  }
+  for (auto& alias : body.type_aliases) {
+    resolve_type(alias.type, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& signal : body.signals) {
+    resolve_type(signal.type, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& variable : body.variables) {
+    resolve_type(variable.type, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& function : body.functions) {
+    resolve_function_types(
+        function, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& task : body.tasks) {
+    resolve_task_types(task, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& process : body.processes) {
+    auto process_shadowed_types = shadowed_types;
+    for (const auto& alias : process.type_aliases) {
+      process_shadowed_types.insert(alias.name);
+    }
+    for (auto& alias : process.type_aliases) {
+      resolve_type(
+          alias.type,
+          owner,
+          entries,
+          process_shadowed_types,
+          diagnostics);
+    }
+    for (auto& variable : process.variables) {
+      resolve_type(
+          variable.type,
+          owner,
+          entries,
+          process_shadowed_types,
+          diagnostics);
+    }
+    for (auto& function : process.functions) {
+      resolve_function_types(
+          function,
+          owner,
+          entries,
+          process_shadowed_types,
+          diagnostics);
+    }
+    for (auto& statement : process.statements) {
+      resolve_statement_types(
+          statement,
+          owner,
+          entries,
+          process_shadowed_types,
+          diagnostics);
+    }
+  }
+  migrate_class_signals(body.signals, body.variables, diagnostics);
+  for (auto& region : body.generate_regions) {
+    resolve_generate_body_types(
+        region.then_body,
+        owner,
+        entries,
+        shadowed_types,
+        diagnostics);
+    resolve_generate_body_types(
+        region.else_body,
+        owner,
+        entries,
+        shadowed_types,
+        diagnostics);
+    for (auto& alternative : region.alternatives) {
+      resolve_generate_body_types(
+          alternative.body,
+          owner,
+          entries,
+          shadowed_types,
+          diagnostics);
+    }
+  }
+}
+
+void resolve_unit_types(
+    DesignUnit& unit,
+    std::vector<ClassEntry>& entries,
+    std::vector<Diagnostic>& diagnostics) {
+  SystemVerilogClassDeclaration lexical_owner;
+  lexical_owner.canonical_identity = effective_library(unit.library)
+      + "::" + unit.name;
+  ClassEntry owner{
+      &lexical_owner,
+      &unit.systemverilog_imports,
+      effective_library(unit.library),
+      unit.compilation_unit_identity};
+  std::set<std::string> shadowed_types;
+  for (const auto& parameter : unit.parameters) {
+    if (parameter.kind == ParameterKind::Type) {
+      shadowed_types.insert(parameter.name);
+    }
+  }
+  for (const auto& alias : unit.type_aliases) {
+    shadowed_types.insert(alias.name);
+  }
+  for (auto& parameter : unit.parameters) {
+    resolve_type(
+        parameter.type, owner, entries, shadowed_types, diagnostics);
+    if (parameter.default_type) {
+      resolve_type(
+          *parameter.default_type,
+          owner,
+          entries,
+          shadowed_types,
+          diagnostics);
+    }
+  }
+  for (auto& alias : unit.type_aliases) {
+    resolve_type(
+        alias.type, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& port : unit.ports) {
+    resolve_type(
+        port.type, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& signal : unit.signals) {
+    resolve_type(
+        signal.type, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& variable : unit.variables) {
+    resolve_type(
+        variable.type, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& function : unit.functions) {
+    resolve_function_types(
+        function, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& task : unit.tasks) {
+    resolve_task_types(
+        task, owner, entries, shadowed_types, diagnostics);
+  }
+  for (auto& process : unit.processes) {
+    auto process_shadowed_types = shadowed_types;
+    for (const auto& alias : process.type_aliases) {
+      process_shadowed_types.insert(alias.name);
+    }
+    for (auto& alias : process.type_aliases) {
+      resolve_type(
+          alias.type,
+          owner,
+          entries,
+          process_shadowed_types,
+          diagnostics);
+    }
+    for (auto& variable : process.variables) {
+      resolve_type(
+          variable.type,
+          owner,
+          entries,
+          process_shadowed_types,
+          diagnostics);
+    }
+    for (auto& function : process.functions) {
+      resolve_function_types(
+          function,
+          owner,
+          entries,
+          process_shadowed_types,
+          diagnostics);
+    }
+    for (auto& statement : process.statements) {
+      resolve_statement_types(
+          statement,
+          owner,
+          entries,
+          process_shadowed_types,
+          diagnostics);
+    }
+  }
+  migrate_class_signals(unit.signals, unit.variables, diagnostics);
+  for (auto& region : unit.generate_regions) {
+    resolve_generate_body_types(
+        region.then_body,
+        owner,
+        entries,
+        shadowed_types,
+        diagnostics);
+    resolve_generate_body_types(
+        region.else_body,
+        owner,
+        entries,
+        shadowed_types,
+        diagnostics);
+    for (auto& alternative : region.alternatives) {
+      resolve_generate_body_types(
+          alternative.body,
+          owner,
+          entries,
+          shadowed_types,
+          diagnostics);
+    }
+  }
+}
+
 }  // namespace
 
 bool resolve_systemverilog_classes(
@@ -414,6 +763,11 @@ bool resolve_systemverilog_classes(
   }
   for (auto& entry : entries) {
     resolve_declaration_types(entry, entries, diagnostics);
+  }
+  for (auto& unit : design.units) {
+    if (unit.language == Language::SystemVerilog2017) {
+      resolve_unit_types(unit, entries, diagnostics);
+    }
   }
 
   std::set<std::string> linked_definitions;
@@ -486,6 +840,15 @@ bool resolve_systemverilog_classes(
     prototype->is_extern = false;
     prototype->out_of_block_definition = true;
     prototype->defined = true;
+  }
+  if (std::none_of(
+          diagnostics.begin()
+              + static_cast<std::ptrdiff_t>(initial_diagnostic_count),
+          diagnostics.end(),
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.severity == DiagnosticSeverity::Error;
+          })) {
+    (void)resolve_systemverilog_class_expressions(design, diagnostics);
   }
   return std::none_of(
       diagnostics.begin()

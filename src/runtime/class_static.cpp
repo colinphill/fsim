@@ -40,14 +40,17 @@ namespace {
       return sizeof(SystemVerilogClassHandle);
     case SystemVerilogClassPropertyKind::Container:
       if (descriptor.handle_container) {
-        if (descriptor.handle_container->maximum_elements
+        const auto elements =
+            descriptor.handle_container->reserve_maximum_storage
+                ? descriptor.handle_container->maximum_elements
+                : descriptor.handle_container->initial_elements;
+        if (elements
             > std::numeric_limits<std::size_t>::max()
                 / sizeof(SystemVerilogClassHandle)) {
           throw std::length_error{
               "class static handle container storage size overflows"};
         }
-        return descriptor.handle_container->maximum_elements
-            * sizeof(SystemVerilogClassHandle);
+        return elements * sizeof(SystemVerilogClassHandle);
       }
       return 0U;
     case SystemVerilogClassPropertyKind::String:
@@ -230,6 +233,16 @@ SystemVerilogClassStaticStore::property(
 bool SystemVerilogClassStaticStore::initialized(
     const std::string_view specialization_or_alias) const {
   return entry(specialization_or_alias).initialized;
+}
+
+std::vector<SystemVerilogClassStaticSnapshot>
+SystemVerilogClassStaticStore::snapshots() const {
+  std::vector<SystemVerilogClassStaticSnapshot> result;
+  result.reserve(entries_.size());
+  for (const auto& [identity, retained] : entries_) {
+    result.push_back({identity, retained.property_names, retained.values});
+  }
+  return result;
 }
 
 std::string SystemVerilogClassStaticStore::resolve(

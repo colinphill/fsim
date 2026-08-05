@@ -216,6 +216,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
         qualified.text = qualified.operands.front().text
             + qualified.text;
         qualified.operands.erase(qualified.operands.begin());
+        if (!qualified.call_argument_names.empty()) {
+          qualified.call_argument_names.erase(
+              qualified.call_argument_names.begin());
+        }
         return lower_user_function_expression(
             qualified, expected_width, expected_type);
     }
@@ -472,6 +476,10 @@ Lowerer::lower_user_container_function_expression(
         qualified.text = qualified.operands.front().text
             + qualified.text;
         qualified.operands.erase(qualified.operands.begin());
+        if (!qualified.call_argument_names.empty()) {
+          qualified.call_argument_names.erase(
+              qualified.call_argument_names.begin());
+        }
         return lower_user_container_function_expression(qualified);
     }
     const auto selected = select_function_overload(

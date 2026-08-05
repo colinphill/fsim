@@ -47,7 +47,9 @@ auto archive_fields(T& value) {
   return std::tie(
       value.kind, value.text, value.operands, value.span,
       value.aggregate_choices, value.aggregate_choice_expressions,
-      value.nominal_type, value.decoded_string, value.call_argument_names);
+      value.nominal_type, value.decoded_string, value.call_argument_names,
+      value.call_argument_directions, value.call_result_width,
+      value.call_result_domain, value.call_result_signed);
 }
 
 template <typename T>

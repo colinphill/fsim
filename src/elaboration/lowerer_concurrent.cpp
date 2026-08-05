@@ -83,6 +83,8 @@ Process Lowerer::lower_concurrent(
         statement.verilog_switch_bidirectional;
     process_.switch_resistive = statement.verilog_switch_resistive;
   }
+  class_tasks_.clear();
+  collect_class_tasks(std::vector<Statement>{statement});
   initialize_function_support();
   initialize_task_support();
   initialize_procedure_support();

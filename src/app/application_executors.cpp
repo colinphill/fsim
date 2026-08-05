@@ -334,6 +334,29 @@ namespace fsim::app::application_detail {
         require_boundary<runtime::simir::Stop>(
             result.instruction, "stop");
         break;
+      case compiler::JitResumeStatus::simir_boundary: {
+        const auto& operation = process_.operations[result.instruction];
+        const auto class_boundary =
+            fsim::runtime::simir::operation_holds<
+                runtime::simir::ClassAllocate>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ClassPropertyRead>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ClassPropertyWrite>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ClassMethodCall>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ClassStaticPropertyRead>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ClassStaticPropertyWrite>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ClassStaticMethodCall>(operation);
+        if (!class_boundary) {
+          throw compiler::LlvmJitError(
+              "compiled process reported an unsupported SimIR boundary");
+        }
+        break;
+      }
     }
     if (frame_.program_counter != result.instruction + 1U) {
       throw compiler::LlvmJitError(

@@ -425,6 +425,13 @@ struct Interpreter::Impl {
   ExecutionPointHook execution_point_hook;
   OutputHook output_hook;
   ReportHook report_hook;
+  ClassAllocateHook class_allocate_hook;
+  ClassPropertyReadHook class_property_read_hook;
+  ClassPropertyWriteHook class_property_write_hook;
+  ClassMethodCallHook class_method_call_hook;
+  ClassStaticPropertyReadHook class_static_property_read_hook;
+  ClassStaticPropertyWriteHook class_static_property_write_hook;
+  ClassStaticMethodCallHook class_static_method_call_hook;
   std::optional<MonitorInstall> monitor;
   ProcessId monitor_process{};
   bool monitor_enabled{true};

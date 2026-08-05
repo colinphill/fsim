@@ -38,6 +38,15 @@ struct SystemVerilogClassInvocationResult {
   SystemVerilogClassInvocationHandle continuation{};
 };
 
+struct SystemVerilogClassInvocationSnapshot {
+  SystemVerilogClassInvocationHandle continuation{};
+  std::string canonical_method;
+  SystemVerilogClassHandle this_handle{};
+  std::size_t continuation_point{};
+  std::vector<SystemVerilogClassMethodValue> arguments;
+  std::vector<SystemVerilogClassMethodValue> locals;
+};
+
 class SystemVerilogClassMethodRuntime;
 
 class SystemVerilogClassMethodFrame final {
@@ -138,6 +147,10 @@ class SystemVerilogClassMethodRuntime final {
   [[nodiscard]] std::size_t suspended_invocations() const noexcept {
     return pending_.size();
   }
+  /// Continuation-sorted value snapshots for debugger inspection. The
+  /// continuation and class handles remain opaque generation-safe integers.
+  [[nodiscard]] std::vector<SystemVerilogClassInvocationSnapshot>
+  pending_invocations() const;
 
  private:
   friend class SystemVerilogClassMethodFrame;

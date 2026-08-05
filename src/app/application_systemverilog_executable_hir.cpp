@@ -82,8 +82,30 @@ class SystemVerilogExecutableBuilder final {
   }
 
   [[nodiscard]] sv::ExpressionKind expression_kind(
-      const frontend::ExpressionKind kind) const noexcept {
-    switch (kind) {
+      const frontend::Expression& expression) const noexcept {
+    if (expression.text == "@sv-null") {
+      return sv::ExpressionKind::class_null;
+    }
+    if (expression.text.starts_with("@sv-new:")) {
+      return sv::ExpressionKind::class_allocation;
+    }
+    if (expression.text.starts_with("@sv-dollar-cast:")) {
+      return sv::ExpressionKind::class_cast;
+    }
+    if (expression.text.starts_with("@sv-property:")) {
+      return sv::ExpressionKind::class_property;
+    }
+    if (expression.text.starts_with("@sv-static-property:")) {
+      return sv::ExpressionKind::class_static_property;
+    }
+    if (expression.text.starts_with("@sv-method:")
+        || expression.text.starts_with("@sv-base-method:")) {
+      return sv::ExpressionKind::class_method_call;
+    }
+    if (expression.text.starts_with("@sv-static-method:")) {
+      return sv::ExpressionKind::class_static_method_call;
+    }
+    switch (expression.kind) {
       case frontend::ExpressionKind::Invalid:
         return sv::ExpressionKind::invalid;
       case frontend::ExpressionKind::Identifier:
@@ -158,14 +180,40 @@ class SystemVerilogExecutableBuilder final {
     sv::Expression output;
     output.id = id;
     output.scope = scope;
-    output.kind = expression_kind(input.kind);
+    output.kind = expression_kind(input);
     output.text = input.text;
     output.source = expression_source;
     output.origin = expression_origin;
     output.nominal_type = input.nominal_type;
+    output.class_identity = input.nominal_type;
+    const auto bind_class_operation = [&](const std::string_view prefix) {
+      if (!input.text.starts_with(prefix)) return false;
+      const auto payload = input.text.substr(prefix.size());
+      output.class_member_identity = payload;
+      if (output.class_identity.empty()) {
+        const auto separator = payload.rfind("::");
+        output.class_identity = separator == std::string::npos
+            ? payload
+            : payload.substr(0, separator);
+      }
+      return true;
+    };
+    if (!bind_class_operation("@sv-new:")
+        && !bind_class_operation("@sv-dollar-cast:")
+        && !bind_class_operation("@sv-property:")
+        && !bind_class_operation("@sv-static-property:")
+        && !bind_class_operation("@sv-base-method:")
+        && !bind_class_operation("@sv-method:")
+        && !bind_class_operation("@sv-static-method:")) {
+      output.class_member_identity.clear();
+    }
+    output.class_checked = output.kind == sv::ExpressionKind::class_cast
+        || output.kind == sv::ExpressionKind::class_property
+        || output.kind == sv::ExpressionKind::class_method_call;
     output.decoded_string = input.decoded_string;
     if (input.kind == frontend::ExpressionKind::Identifier
-        || input.kind == frontend::ExpressionKind::Call) {
+        || (input.kind == frontend::ExpressionKind::Call
+            && !input.text.starts_with("@sv-"))) {
       output.referenced_name = name(input.text, input.span, scope);
     }
     output.argument_names = input.call_argument_names;
@@ -510,6 +558,10 @@ class SystemVerilogExecutableBuilder final {
                                  : find_type(scope, input.named_type),
         source(input.named_type.empty() ? fallback : input.named_type_span),
         spelling};
+    if (!input.systemverilog_class_declaration.empty()) {
+      output.value_form = sv::TypeForm::class_handle;
+      output.class_identity = input.systemverilog_class_declaration;
+    }
     output.signed_value = input.is_signed;
     if (input.packed_range) {
       output.packed_range = sv::PackedRange{
@@ -758,6 +810,15 @@ class SystemVerilogExecutableBuilder final {
       }
     }
     output.output_trailing_text = input.output_trailing_text;
+    const auto transfer_type = !input.target.nominal_type.empty()
+        ? input.target.nominal_type
+        : input.value.nominal_type;
+    if (!transfer_type.empty()
+        && (input.kind == frontend::StatementKind::Assignment
+            || input.kind == frontend::StatementKind::Return)) {
+      output.class_handle_transfer = true;
+      output.class_handle_type = transfer_type;
+    }
     for (const auto& child : input.statements) {
       output.statements.push_back(statement(
           child, child_scope, statement_origin));

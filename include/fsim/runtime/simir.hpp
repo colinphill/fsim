@@ -1166,6 +1166,7 @@ struct Pause {};
 
 struct Halt {};
 
+#include "fsim/runtime/simir_class.hpp"
 #include "fsim/runtime/simir_operation_storage.hpp"
 
 #include "fsim/runtime/simir_signal.hpp"
@@ -1203,40 +1204,14 @@ struct Sensitivity {
 };
 
 #include "fsim/runtime/simir_specify.hpp"
-
-struct DebugLocal {
-  std::string name;
-  std::string type_name;
-  RegisterId register_id{};
-  std::size_t width{};
-  SourceLocation source;
-  std::optional<std::int32_t> integer_lower;
-  std::optional<std::int32_t> integer_upper;
-  ValueKind value_kind{ValueKind::logic4};
-  std::vector<std::string> enumeration_literals;
-};
-
-struct DebugStringLocal {
-  std::string name;
-  StringRegisterId register_id{};
-  SourceLocation source;
-};
-
-struct DebugContainerLocal {
-  std::string name;
-  ContainerRegisterId register_id{};
-  ContainerType type;
-  SourceLocation source;
-};
-
+#include "fsim/runtime/simir_debug.hpp"
 struct Process {
   ProcessId id{};
   std::string name;
   std::size_t register_count{};
   std::size_t string_register_count{};
   std::size_t container_register_count{};
-  std::vector<DebugLocal> debug_locals;
-  std::vector<DebugStringLocal> debug_string_locals;
+  std::vector<DebugLocal> debug_locals; std::vector<DebugStringLocal> debug_string_locals;
   std::vector<DebugContainerLocal> debug_container_locals;
   std::vector<ContainerType> container_register_types;
   std::vector<Sensitivity> static_sensitivity;
@@ -1899,6 +1874,31 @@ public:
       const SourceLocation&,
       SimulationTick,
       std::uint64_t)>;
+  using ClassAllocateHook = std::function<std::uint64_t(
+      std::string_view,
+      std::string_view,
+      std::span<const PackedLogic4>,
+      std::span<const std::string>)>;
+  using ClassPropertyReadHook = std::function<PackedLogic4(
+      std::uint64_t, std::string_view)>;
+  using ClassPropertyWriteHook = std::function<void(
+      std::uint64_t, std::string_view, const PackedLogic4&)>;
+  using ClassMethodCallHook = std::function<PackedLogic4(
+      std::uint64_t,
+      std::string_view,
+      std::vector<PackedLogic4>&,
+      std::span<const std::string>,
+      std::span<const std::uint8_t>,
+      bool)>;
+  using ClassStaticPropertyReadHook =
+      std::function<PackedLogic4(std::string_view)>;
+  using ClassStaticPropertyWriteHook = std::function<void(
+      std::string_view, const PackedLogic4&)>;
+  using ClassStaticMethodCallHook = std::function<PackedLogic4(
+      std::string_view,
+      std::vector<PackedLogic4>&,
+      std::span<const std::string>,
+      std::span<const std::uint8_t>)>;
 
   explicit Interpreter(
       SchedulerOptions options = {},
@@ -1982,6 +1982,15 @@ public:
   void set_execution_point_hook(ExecutionPointHook hook);
   void set_output_hook(OutputHook hook);
   void set_report_hook(ReportHook hook);
+  void set_class_allocate_hook(ClassAllocateHook hook);
+  void set_class_property_read_hook(ClassPropertyReadHook hook);
+  void set_class_property_write_hook(ClassPropertyWriteHook hook);
+  void set_class_method_call_hook(ClassMethodCallHook hook);
+  void set_class_static_property_read_hook(
+      ClassStaticPropertyReadHook hook);
+  void set_class_static_property_write_hook(
+      ClassStaticPropertyWriteHook hook);
+  void set_class_static_method_call_hook(ClassStaticMethodCallHook hook);
 
 private:
   struct Impl;

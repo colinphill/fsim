@@ -27,6 +27,7 @@ using runtime::Logic9;
 using runtime::simir::Assert; using runtime::simir::Binary;
 using runtime::simir::BinaryOperator; using runtime::simir::Branch;
 using runtime::simir::Call; using runtime::simir::Concatenate;
+using runtime::simir::ClassOperationGroup; using runtime::simir::operation_group_contains_v;
 using runtime::simir::ConditionalSelect; using runtime::simir::CountOnes;
 using runtime::simir::CountBits; using runtime::simir::CopyRegister;
 using runtime::simir::DebugPoint; using runtime::simir::Display;
@@ -36,24 +37,15 @@ using runtime::simir::DynamicPartIndex; using runtime::simir::DynamicPartInsert;
 using runtime::simir::EdgeKind; using runtime::simir::Extract;
 using runtime::simir::FormatDisplay; using runtime::simir::ForceSignalSlice;
 using runtime::simir::Fork; using runtime::simir::ForkEnd;
-using runtime::simir::Halt;
-using runtime::simir::InstructionIndex;
-using runtime::simir::Insert;
-using runtime::simir::IntegerBinary;
-using runtime::simir::IntegerBinaryOperator;
-using runtime::simir::IntegerCheck;
-using runtime::simir::IntegerUnary;
-using runtime::simir::IntegerUnaryOperator;
-using runtime::simir::Jump;
-using runtime::simir::LoadConstant;
-using runtime::simir::LogicalBinary;
-using runtime::simir::LogicalBinaryOperator;
-using runtime::simir::LogicalNot;
-using runtime::simir::MonitorControl;
-using runtime::simir::MonitorInstall;
-using runtime::simir::MonitorValueKind;
-using runtime::simir::Operation;
-using runtime::simir::Pause;
+using runtime::simir::Halt; using runtime::simir::InstructionIndex;
+using runtime::simir::Insert; using runtime::simir::IntegerBinary;
+using runtime::simir::IntegerBinaryOperator; using runtime::simir::IntegerCheck;
+using runtime::simir::IntegerUnary; using runtime::simir::IntegerUnaryOperator;
+using runtime::simir::Jump; using runtime::simir::LoadConstant;
+using runtime::simir::LogicalBinary; using runtime::simir::LogicalBinaryOperator;
+using runtime::simir::LogicalNot; using runtime::simir::MonitorControl;
+using runtime::simir::MonitorInstall; using runtime::simir::MonitorValueKind;
+using runtime::simir::Operation; using runtime::simir::Pause;
 using runtime::simir::Process;
 using runtime::simir::ReadSignal;
 using runtime::simir::ReadSimulationTime;
@@ -1938,6 +1930,14 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             output_lowerer.lower(operation);
           } else if constexpr (std::is_same_v<OperationType, WaitOn>) {
             output_lowerer.lower(operation);
+          } else if constexpr (
+              operation_group_contains_v<OperationType, ClassOperationGroup>) {
+            return_result(
+                FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                instruction,
+                0,
+                FSIM_JIT_FRAME_STATE_READY,
+                next_instruction);
           } else if constexpr (std::is_same_v<OperationType, WaitSensitivity>) {
             return_result(
                 FSIM_JIT_RESUME_STATUS_WAIT_SENSITIVITY, instruction, 0,

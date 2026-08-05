@@ -109,7 +109,17 @@ void validate_fork_operation(
       || fsim::runtime::simir::operation_holds<ForkEnd>(operation)
       || fsim::runtime::simir::operation_holds<WaitFork>(operation)
       || fsim::runtime::simir::operation_holds<DisableFork>(operation)
-      || fsim::runtime::simir::operation_holds<Pause>(operation);
+      || fsim::runtime::simir::operation_holds<Pause>(operation)
+      || fsim::runtime::simir::operation_holds<ClassAllocate>(operation)
+      || fsim::runtime::simir::operation_holds<ClassPropertyRead>(operation)
+      || fsim::runtime::simir::operation_holds<ClassPropertyWrite>(operation)
+      || fsim::runtime::simir::operation_holds<ClassMethodCall>(operation)
+      || fsim::runtime::simir::operation_holds<ClassStaticPropertyRead>(
+          operation)
+      || fsim::runtime::simir::operation_holds<ClassStaticPropertyWrite>(
+          operation)
+      || fsim::runtime::simir::operation_holds<ClassStaticMethodCall>(
+          operation);
 }
 
 [[nodiscard]] bool valid_symbol(const std::string_view symbol) noexcept {

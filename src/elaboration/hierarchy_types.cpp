@@ -587,7 +587,8 @@ using namespace elaboration_detail;
             existing != local.end()) {
             return existing->second;
         }
-        if (declaration.type.domain == frontend::ValueDomain::Unknown) {
+        if (declaration.type.domain == frontend::ValueDomain::Unknown
+            && declaration.type.systemverilog_class_declaration.empty()) {
             report(
                 "FSIM-ELAB-TYPE-001",
                 "signal '" + declaration.name

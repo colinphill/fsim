@@ -52,14 +52,17 @@ namespace {
       return sizeof(SystemVerilogClassHandle);
     case SystemVerilogClassPropertyKind::Container:
       if (descriptor.handle_container) {
-        if (descriptor.handle_container->maximum_elements
+        const auto elements =
+            descriptor.handle_container->reserve_maximum_storage
+                ? descriptor.handle_container->maximum_elements
+                : descriptor.handle_container->initial_elements;
+        if (elements
             > std::numeric_limits<std::size_t>::max()
                 / sizeof(SystemVerilogClassHandle)) {
           throw std::length_error{
               "class handle container storage size overflows"};
         }
-        return descriptor.handle_container->maximum_elements
-            * sizeof(SystemVerilogClassHandle);
+        return elements * sizeof(SystemVerilogClassHandle);
       }
       return 0U;
     case SystemVerilogClassPropertyKind::String:

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/frontend/class_resolution.hpp"
+
+#include "../../src/app/application_internal.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -277,6 +280,83 @@ endmodule
   assert(process.id == retained_process);
   assert(checked->systemverilog_hir.expressions().size()
          == retained_expression_count);
+
+  auto class_parsed = fsim::frontend::parse_text(
+      "class_hir.sv",
+      R"(
+class HirObject;
+  int payload;
+  static int count;
+  function new();
+  endfunction
+  function int read();
+    return payload;
+  endfunction
+endclass
+module class_hir_top;
+  HirObject handle;
+  HirObject other;
+  int result;
+  initial begin
+    handle = new();
+    other = null;
+    other = handle;
+    result = $cast(other, handle);
+    handle.payload = 1;
+    result = handle.read();
+    result = HirObject::count;
+  end
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(class_parsed.ok());
+  for (auto& unit : class_parsed.design.units) unit.library = "work";
+  for (auto& declaration : class_parsed.design.systemverilog_classes) {
+    declaration.library = "work";
+  }
+  std::vector<fsim::frontend::Diagnostic> class_resolution;
+  assert(fsim::frontend::resolve_systemverilog_classes(
+      class_parsed.design, class_resolution));
+  auto class_model = fsim::app::application_detail::build_semantic_model(
+      class_parsed.design,
+      std::span<const fsim::app::CheckedSource>{},
+      std::span<const fsim::app::CheckedSource>{},
+      std::span<const fsim::app::CheckedSource>{});
+  auto class_hir = fsim::app::application_detail::build_systemverilog_hir(
+      class_parsed.design, class_model);
+  const auto handle_declaration = std::ranges::find(
+      class_hir.declarations(),
+      std::string{"handle"},
+      &fsim::semantic::sv::Declaration::name);
+  assert(handle_declaration != class_hir.declarations().end());
+  assert(handle_declaration->type);
+  assert(handle_declaration->type->value_form
+         == fsim::semantic::sv::TypeForm::class_handle);
+  assert(handle_declaration->type->class_identity
+         == "work::$unit::HirObject");
+  const auto has_class_expression = [&](const auto kind) {
+    return std::ranges::any_of(
+        class_hir.expressions(), [&](const auto& expression) {
+          return expression.kind == kind
+              && !expression.class_identity.empty();
+        });
+  };
+  assert(has_class_expression(
+      fsim::semantic::sv::ExpressionKind::class_allocation));
+  assert(has_class_expression(
+      fsim::semantic::sv::ExpressionKind::class_null));
+  assert(has_class_expression(
+      fsim::semantic::sv::ExpressionKind::class_cast));
+  assert(has_class_expression(
+      fsim::semantic::sv::ExpressionKind::class_property));
+  assert(has_class_expression(
+      fsim::semantic::sv::ExpressionKind::class_method_call));
+  assert(has_class_expression(
+      fsim::semantic::sv::ExpressionKind::class_static_property));
+  assert(std::ranges::count_if(
+             class_hir.statements(), [](const auto& statement) {
+               return statement.class_handle_transfer;
+             }) >= 3);
 
   const auto design_source = directory.path / "design_ir.sv";
   {

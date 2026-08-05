@@ -359,6 +359,7 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
           break;
         }
       }
+      unit.compilation_unit_identity = unit_digest;
       for (auto& declaration : unit.systemverilog_classes) {
         assign_class_source_metadata(
             declaration, unit.library, unit_digest);
@@ -483,6 +484,7 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
       input.language);
   for (auto& unit : snapshot.result.design.units) {
     unit.library = input.library;
+    unit.compilation_unit_identity = source.compilation_unit_digest;
     for (auto& declaration : unit.systemverilog_classes) {
       assign_class_source_metadata(
           declaration, input.library, source.compilation_unit_digest);

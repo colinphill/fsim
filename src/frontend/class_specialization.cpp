@@ -616,8 +616,14 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
       profile.name = method.name;
       profile.canonical_identity = method.canonical_identity;
       profile.kind = method.kind;
+      profile.return_type = specialize_type(method.return_type, values, types);
+      profile.lifetime = method.lifetime;
+      profile.is_static = method.is_static;
       profile.is_virtual = method.is_virtual;
       profile.is_pure = method.is_pure;
+      profile.arguments = method.arguments;
+      profile.variables = method.variables;
+      profile.statements = method.statements;
       if (const auto table = slot_tables.find(
               declaration.canonical_identity);
           table != slot_tables.end()) {

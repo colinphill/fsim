@@ -94,6 +94,10 @@ int main() {
       JitOptimizationLevel::o2, "scheduled_diff_o2");
   test_resumable_at_level(JitOptimizationLevel::o0, "resume_o0");
   test_resumable_at_level(JitOptimizationLevel::o2, "resume_o2");
+  test_class_service_boundaries_at_level(
+      JitOptimizationLevel::o0, "class_boundary_o0");
+  test_class_service_boundaries_at_level(
+      JitOptimizationLevel::o2, "class_boundary_o2");
   test_signal_waits_at_level(
       JitOptimizationLevel::o0, "signal_wait_o0");
   test_signal_waits_at_level(

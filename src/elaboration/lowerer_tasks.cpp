@@ -5,6 +5,56 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
+void Lowerer::collect_class_tasks(
+    const std::vector<Statement>& statements) {
+    for (const auto& statement : statements) {
+        if (statement.kind == StatementKind::TaskCall
+            && (statement.task_name.starts_with("@sv-task:")
+                || statement.task_name.starts_with("@sv-static-task:"))
+            && std::ranges::none_of(
+                class_tasks_, [&](const auto& existing) {
+                  return existing.name == statement.task_name;
+                })) {
+            frontend::TaskDeclaration task;
+            task.name = statement.task_name;
+            task.automatic = true;
+            task.lifetime_explicit = false;
+            task.span = statement.span;
+            const auto has_receiver =
+                statement.task_name.starts_with("@sv-task:");
+            if (has_receiver && !statement.task_arguments.empty()) {
+                frontend::Type receiver_type;
+                receiver_type.systemverilog_class_declaration =
+                    statement.task_arguments.front().nominal_type;
+                receiver_type.systemverilog_class_name =
+                    statement.task_arguments.front().nominal_type;
+                task.arguments.emplace_back(
+                    "this",
+                    std::move(receiver_type),
+                    frontend::PortDirection::Input,
+                    statement.task_arguments.front().span);
+            }
+            for (const auto& argument : statement.class_method_arguments) {
+                task.arguments.emplace_back(
+                    argument.name,
+                    argument.type,
+                    argument.direction,
+                    argument.span,
+                    argument.reference,
+                    argument.default_value);
+            }
+            task.variables = statement.declarations;
+            task.statements = statement.statements;
+            class_tasks_.push_back(std::move(task));
+        }
+        collect_class_tasks(statement.statements);
+        collect_class_tasks(statement.else_statements);
+        for (const auto& alternative : statement.case_alternatives) {
+            collect_class_tasks(alternative.statements);
+        }
+    }
+}
+
 void Lowerer::initialize_task_support() {
     task_frames_.clear();
     task_indices_.clear();
@@ -15,20 +65,21 @@ void Lowerer::initialize_task_support() {
     task_return_jumps_.clear();
     task_call_stack_ = {};
     task_support_initialized_ = false;
-    if (tasks_.empty()) {
+    const auto task_count = tasks_.size() + class_tasks_.size();
+    if (task_count == 0) {
         return;
     }
-    if (tasks_.size()
+    if (task_count
         > std::numeric_limits<std::uint32_t>::max()) {
         report(
             "FSIM-ELAB-SVTASK-003",
             "too many visible tasks for the SimIR call stack",
-            tasks_.front().span);
+            tasks_.empty() ? class_tasks_.front().span : tasks_.front().span);
         return;
     }
 
-    task_frames_.reserve(tasks_.size());
-    for (const auto& task : tasks_) {
+    task_frames_.reserve(task_count);
+    const auto register_task = [&](const frontend::TaskDeclaration& task) {
         const auto index = task_frames_.size();
         const auto [existing, inserted] =
             task_indices_.emplace(task.name, index);
@@ -38,7 +89,7 @@ void Lowerer::initialize_task_support() {
                 "ambiguous visible task '" + task.name + "'",
                 task.span);
             (void)existing;
-            continue;
+            return;
         }
         TaskFrame frame;
         frame.source = &task;
@@ -50,6 +101,12 @@ void Lowerer::initialize_task_support() {
                     "task");
         }
         task_frames_.push_back(std::move(frame));
+    };
+    for (const auto& task : tasks_) {
+        register_task(task);
+    }
+    for (const auto& task : class_tasks_) {
+        register_task(task);
     }
     task_dependencies_.resize(task_frames_.size());
     task_suspending_.assign(task_frames_.size(), false);
@@ -132,6 +189,37 @@ void Lowerer::initialize_task_support() {
 
 void Lowerer::lower_task_call(const Statement& statement) {
     if (lower_string_format_task(statement)) {
+        return;
+    }
+    constexpr std::string_view class_container_push_prefix{
+        "@sv-container-push-back:"};
+    if (statement.task_name.starts_with(class_container_push_prefix)) {
+        if (statement.task_arguments.size() != 2U) {
+            report(
+                "FSIM-ELAB-SVCLASS-015",
+                "class handle queue push_back requires one value",
+                statement.span);
+            return;
+        }
+        const auto receiver = lower_expression(
+            statement.task_arguments[0], 64);
+        const auto value = lower_expression(
+            statement.task_arguments[1], 64);
+        if (!receiver || !value) return;
+        const auto destination = allocate_register(
+            64, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ClassMethodCall{
+            destination,
+            *receiver,
+            "@container-push-back:"
+                + statement.task_name.substr(
+                    class_container_push_prefix.size()),
+            {*value},
+            {""},
+            {static_cast<std::uint8_t>(
+                frontend::PortDirection::Input)},
+            64,
+            false});
         return;
     }
     if (!task_support_initialized_) {

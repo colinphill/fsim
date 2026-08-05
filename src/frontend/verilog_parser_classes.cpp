@@ -197,7 +197,7 @@ SystemVerilogClassMethod VerilogParser::parse_class_method(
   method.is_extern = is_extern;
   const bool prototype = is_extern || is_pure;
   if (kind == SystemVerilogClassMethodKind::Task) {
-    auto task = parse_task(start, prototype);
+    auto task = parse_task(start, prototype, true);
     method.name = std::move(task.name);
     method.variables = std::move(task.variables);
     method.statements = std::move(task.statements);
@@ -218,7 +218,7 @@ SystemVerilogClassMethod VerilogParser::parse_class_method(
     }
     method.span = std::move(task.span);
   } else {
-    auto function = parse_function(start, prototype);
+    auto function = parse_function(start, prototype, true);
     method.name = std::move(function.name);
     method.kind = method.name == "new"
         ? SystemVerilogClassMethodKind::Constructor

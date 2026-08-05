@@ -252,6 +252,22 @@ SystemVerilogClassInvocationResult SystemVerilogClassMethodRuntime::resume(
       method->second, std::move(frame), actuals, continuation);
 }
 
+std::vector<SystemVerilogClassInvocationSnapshot>
+SystemVerilogClassMethodRuntime::pending_invocations() const {
+  std::vector<SystemVerilogClassInvocationSnapshot> result;
+  result.reserve(pending_.size());
+  for (const auto& [continuation, invocation] : pending_) {
+    result.push_back({
+        continuation,
+        invocation.method,
+        invocation.frame.this_handle_,
+        invocation.frame.continuation_point_,
+        invocation.frame.arguments_,
+        invocation.frame.locals_});
+  }
+  return result;
+}
+
 SystemVerilogClassInvocationResult SystemVerilogClassMethodRuntime::execute(
     const SystemVerilogClassMethodDescriptor& descriptor,
     SystemVerilogClassMethodFrame frame,

@@ -138,6 +138,8 @@ bool Lowerer::report_unsupported_cross_root_reference(
         if (process_.final) {
             process_.initialize = false;
         }
+        class_tasks_.clear();
+        collect_class_tasks(source.statements);
         initialize_function_support();
         initialize_task_support();
         initialize_procedure_support();

@@ -952,6 +952,10 @@ are therefore excluded.
 | `FSIM-SV-CLASS-008` | error | A class method has more than one out-of-block definition. |
 | `FSIM-SV-CLASS-009` | error | An implemented interface-class name is not visible from the declaring class scope. |
 | `FSIM-SV-CLASS-010` | error | An implemented interface-class name is ambiguous in lexical or import scope. |
+| `FSIM-SV-CLASS-012` | error | A selected instance or static class property is not visible on the resolved receiver type. |
+| `FSIM-SV-CLASS-013` | error | A class method selection has no compatible profile or remains ambiguous after argument association. |
+| `FSIM-SV-CLASS-014` | error | A class construction expression has no destination class-handle type. |
+| `FSIM-SV-CLASS-015` | error | `$cast` lacks a writable class-handle destination or compatible source expression. |
 | `FSIM-SV-CLASS-INHERIT-001` | error | The class inheritance graph contains a cycle. |
 | `FSIM-SV-CLASS-INHERIT-002` | error | A class contains duplicate method profiles. |
 | `FSIM-SV-CLASS-INHERIT-003` | error | A concrete class contains a pure method declaration. |
@@ -972,6 +976,23 @@ are therefore excluded.
 | `FSIM-SV-CLASS-SPEC-009` | error | A specialized class property has no finite materializable layout. |
 | `FSIM-SV-CLASS-SPEC-010` | error | A class instance layout exceeds host-addressable storage. |
 | `FSIM-SV-CLASS-SPEC-011` | error | The stable virtual-method slot domain is exhausted. |
+| `FSIM-ELAB-SVCLASS-001` | error | `null` has no executable contextual class-handle type. |
+| `FSIM-ELAB-SVCLASS-002` | error | A class allocation result is incompatible with its destination handle type. |
+| `FSIM-ELAB-SVCLASS-003` | error | A constructor actual has no executable packed width. |
+| `FSIM-ELAB-SVCLASS-004` | error | An instance class-property assignment is not a supported time-free blocking packed assignment. |
+| `FSIM-ELAB-SVCLASS-005` | error | An instance class-property read lacks one receiver or an executable packed type. |
+| `FSIM-ELAB-SVCLASS-006` | error | A class method call has inconsistent receiver, argument, or result metadata. |
+| `FSIM-ELAB-SVCLASS-007` | error | A class method actual has no executable packed width. |
+| `FSIM-ELAB-SVCLASS-008` | error | A static class-property assignment is not a supported time-free blocking packed assignment. |
+| `FSIM-ELAB-SVCLASS-009` | error | A static class-property read has no executable packed type. |
+| `FSIM-ELAB-SVCLASS-010` | error | A static class-method call has inconsistent argument or result metadata. |
+| `FSIM-ELAB-SVCLASS-011` | error | A static class-method actual has no executable packed width. |
+| `FSIM-ELAB-SVCLASS-012` | error | A class-handle container element assignment is not a supported blocking indexed assignment. |
+| `FSIM-ELAB-SVCLASS-013` | error | A dynamic class-handle container assignment is not a supported `new[size]` operation. |
+| `FSIM-ELAB-SVCLASS-014` | error | A class-handle container read lacks a receiver or index. |
+| `FSIM-ELAB-SVCLASS-015` | error | A class-handle queue operation has an invalid argument profile. |
+| `FSIM-ELAB-SVCLASS-016` | error | A class-handle container expression is not a supported `pop_front` or `size` call. |
+| `FSIM-ELAB-SVCLASS-017` | error | `$cast` lacks a resolved destination class handle or source during lowering. |
 | `FSIM-ELAB-SVIFACE-006` | error | A process writes through a read-only input port or modport input member. |
 | `FSIM-ELAB-SVIFACE-007` | error | A retained interface callable cannot be materialized at its same-language module boundary. |
 | `FSIM-ELAB-SVIFACE-008` | error | An interface callable is visible more than once through the same module port. |

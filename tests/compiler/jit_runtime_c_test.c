@@ -35,6 +35,8 @@ _Static_assert(FSIM_JIT_RESUME_STATUS_WAIT_FORK == UINT32_C(13),
                "wait-fork resume status was not appended");
 _Static_assert(FSIM_JIT_RESUME_STATUS_DISABLE_FORK == UINT32_C(14),
                "disable-fork resume status was not appended");
+_Static_assert(FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY == UINT32_C(15),
+               "SimIR service-boundary status was not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, abi_version) == 0,
                "runtime ABI version offset changed");
 _Static_assert(offsetof(fsim_jit_runtime_v1, struct_size) == 4,

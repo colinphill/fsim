@@ -58,24 +58,247 @@ class_source = directory / "classes.sv";
   output << R"(
 class AppBase;
   static int shared = 2;
+  static AppBase shared_peer;
+  AppBase peer;
+  AppBase fixed_handles[0:1];
+  AppBase dynamic_handles[];
+  AppBase queued_handles[$:2];
+  AppBase associative_handles[int];
   logic [7:0] value;
+  function new(int initial_value = 0);
+    value = initial_value;
+  endfunction
   virtual function int bump(input int amount);
     value = value + amount;
     return value;
   endfunction
+  static function int add_shared(input int amount);
+    shared = shared + amount;
+    return shared;
+  endfunction
+  static task bump_shared(input int amount, output int observed);
+    #1;
+    shared = shared + amount;
+    observed = shared;
+  endtask
+  static function AppBase remember_shared(input AppBase candidate);
+    shared_peer = candidate;
+    return shared_peer;
+  endfunction
+  function AppBase remember(input AppBase candidate);
+    peer = candidate;
+    return peer;
+  endfunction
+  task delayed_remember(input AppBase candidate, output AppBase observed);
+    #1;
+    peer = candidate;
+    observed = peer;
+  endtask
 endclass
 
 class AppDerived extends AppBase;
   logic [7:0] value;
   logic [3:0] generated_value;
+  function new(int initial_value = 0);
+    super.new(initial_value);
+    value = initial_value;
+  endfunction
   function int bump(input int amount);
     value = value + amount + 1;
     return value;
   endfunction
+  function int transfer(input int amount, output int prior,
+                        inout int accumulator, ref int alias_value);
+    int local_value;
+    local_value = value;
+    prior = local_value;
+    accumulator = accumulator + amount;
+    alias_value = alias_value + 1;
+    value = accumulator + alias_value;
+    return value;
+  endfunction
+  function int recurse(input int count);
+    if (count == 0) return value;
+    return recurse(count - 1);
+  endfunction
+  function static int next_count();
+    int calls = 0;
+    calls = calls + 1;
+    return calls;
+  endfunction
+  function int bump_base(input int amount);
+    return super.bump(amount);
+  endfunction
+  task delayed_update(input logic [31:0] amount,
+                      output logic [31:0] observed,
+                      inout logic [31:0] accumulator);
+    logic [31:0] retained_across_delay;
+    retained_across_delay = value + amount;
+    #1;
+    value = retained_across_delay;
+    accumulator = accumulator + value;
+    observed = value;
+    assert (value == retained_across_delay);
+  endtask
 endclass
 
 module class_top;
-  initial #3 $finish;
+  logic task_trigger;
+  logic task_event_observed;
+  class LocalWaiter;
+    task wait_for_trigger(output logic observed);
+      @(posedge task_trigger);
+      observed = 1'b1;
+    endtask
+  endclass
+  AppDerived source_object;
+  AppBase source_other;
+  AppBase source_returned;
+  AppBase source_base_view;
+  AppBase source_cast;
+  AppDerived source_failed_cast;
+  AppBase source_function_returned;
+  AppBase source_task_returned;
+  LocalWaiter source_waiter;
+  int source_prior;
+  int source_accumulator;
+  int source_alias;
+  int source_result;
+  int source_recursive;
+  int source_static_first;
+  int source_static_second;
+  int source_base_result;
+  int source_virtual_result;
+  logic [31:0] source_task_observed;
+  logic [31:0] source_task_accumulator;
+  int source_static_result;
+  int source_static_task_observed;
+  int source_static_property;
+  logic source_handle_alias;
+  logic source_handle_property_alias;
+  logic source_task_handle_alias;
+  logic source_static_handle_alias;
+  logic source_fixed_handle_alias;
+  logic source_dynamic_handle_alias;
+  logic source_queued_handle_alias;
+  logic source_queue_pop_alias;
+  int source_queue_size;
+  logic source_associative_handle_alias;
+  logic source_cast_alias;
+  logic source_failed_cast_preserved;
+  logic source_function_handle_alias;
+  logic source_module_task_handle_alias;
+  logic source_final_seen;
+  logic [7:0] source_property;
+  function automatic AppBase pass_handle(input AppBase candidate);
+    return candidate;
+  endfunction
+  task automatic delayed_handle(input AppBase candidate,
+                                output AppBase observed);
+    #1;
+    observed = candidate;
+  endtask
+  initial begin
+    source_accumulator = 4;
+    source_alias = 5;
+    source_object = new(3);
+    source_other = new(9);
+    source_cast = null;
+    source_cast_alias =
+        $cast(source_cast, source_object) && source_cast == source_object;
+    source_failed_cast = source_object;
+    source_failed_cast_preserved =
+        !$cast(source_failed_cast, source_other)
+        && source_failed_cast == source_object;
+    source_function_returned = pass_handle(source_other);
+    source_function_handle_alias = source_function_returned == source_other;
+    source_returned = source_object.remember(source_other);
+    source_handle_alias = source_returned == source_other;
+    source_handle_property_alias = source_object.peer == source_other;
+    source_object.delayed_remember(source_other, source_returned);
+    source_task_handle_alias = source_returned == source_other;
+    source_returned = AppBase::remember_shared(source_other);
+    source_static_handle_alias = source_returned == AppBase::shared_peer;
+    source_object.fixed_handles[0] = source_other;
+    source_fixed_handle_alias =
+        source_object.fixed_handles[0] == source_other;
+    source_object.dynamic_handles = new[2];
+    source_object.dynamic_handles[1] = source_other;
+    source_dynamic_handle_alias =
+        source_object.dynamic_handles[1] == source_other;
+    source_object.queued_handles.push_back(source_other);
+    source_queued_handle_alias =
+        source_object.queued_handles[0] == source_other;
+    source_queue_size = source_object.queued_handles.size();
+    source_returned = source_object.queued_handles.pop_front();
+    source_queue_pop_alias = source_returned == source_other;
+    source_object.associative_handles[7] = source_other;
+    source_associative_handle_alias =
+        source_object.associative_handles[7] == source_other;
+    source_waiter = new;
+    source_result = source_object.transfer(
+        2, source_prior, source_accumulator, source_alias);
+    source_recursive = source_object.recurse(3);
+    source_static_first = source_object.next_count();
+    source_static_second = source_object.next_count();
+    source_base_result = source_object.bump_base(2);
+    source_task_accumulator = 1;
+    source_object.delayed_update(
+        4, source_task_observed, source_task_accumulator);
+    source_waiter.wait_for_trigger(task_event_observed);
+    delayed_handle(source_other, source_task_returned);
+    source_module_task_handle_alias = source_task_returned == source_other;
+    source_base_view = source_object;
+    source_virtual_result = source_base_view.bump(1);
+    source_static_result = AppBase::add_shared(3);
+    AppBase::bump_shared(2, source_static_task_observed);
+    source_static_property = AppDerived::shared;
+    source_property = source_object.value;
+    #3 $finish;
+  end
+  initial begin
+    task_trigger = 1'b0;
+    #2 task_trigger = 1'b1;
+  end
+  final begin
+    source_final_seen = source_object != null;
+  end
+endmodule
+
+module class_generated #(
+    parameter int INITIAL = 1)(
+    output logic ready,
+    output int static_value);
+  generate
+    if (INITIAL >= 0) begin : leaf
+      AppBase generated_object;
+      initial begin
+        generated_object = new(INITIAL);
+        ready = generated_object.bump(0) == INITIAL;
+        static_value = AppBase::add_shared(INITIAL);
+      end
+    end
+  endgenerate
+endmodule
+
+module class_wrapper #(
+    parameter int INITIAL = 1)(
+    output logic ready,
+    output int static_value);
+  class_generated #(.INITIAL(INITIAL)) child(ready, static_value);
+endmodule
+
+module class_root_a;
+  logic ready;
+  int static_value;
+  class_wrapper #(.INITIAL(4)) tree(ready, static_value);
+  initial #2 $finish;
+endmodule
+
+module class_root_b;
+  logic ready;
+  int static_value;
+  class_wrapper #(.INITIAL(7)) tree(ready, static_value);
 endmodule
 )";
 }

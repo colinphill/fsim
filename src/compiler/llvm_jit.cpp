@@ -1319,6 +1319,11 @@ LlvmJit::resume(const JitProcessHandle process,
       throw LlvmJitError("generated process returned an invalid frame state");
     }
     return JitResumeStatus::disable_fork;
+  case FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY:
+    if (frame.state != FSIM_JIT_FRAME_STATE_READY) {
+      throw LlvmJitError("generated process returned an invalid frame state");
+    }
+    return JitResumeStatus::simir_boundary;
   case FSIM_JIT_RESUME_STATUS_STOPPED:
     if (frame.state != FSIM_JIT_FRAME_STATE_STOPPED) {
       throw LlvmJitError("generated process returned an invalid frame state");
@@ -1403,6 +1408,7 @@ LlvmJit::execute(const JitProcessHandle process,
   case JitResumeStatus::fork_end:
   case JitResumeStatus::wait_fork:
   case JitResumeStatus::disable_fork:
+  case JitResumeStatus::simir_boundary:
     throw LlvmJitError(
         "compiled process suspended during one-shot execution");
   default:

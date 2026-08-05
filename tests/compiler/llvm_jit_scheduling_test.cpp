@@ -1260,6 +1260,83 @@ void test_resumable_at_level(const JitOptimizationLevel optimization,
   assert((loop_runtime.signals[0] == EncodedSignal{0, 0}));
 }
 
+void test_class_service_boundaries_at_level(
+    const JitOptimizationLevel optimization,
+    const std::string_view symbol) {
+  Process process;
+  process.id = 0;
+  process.name = std::string{symbol};
+  process.register_count = 3;
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_aval_bval(32, 7, 0)},
+      ClassAllocate{1, "work::Item<WIDTH=8>", "work::Item", {0}, {"value"}},
+      ClassPropertyRead{2, 1, "work::Item::value", 8},
+      ClassStaticPropertyWrite{2, "work::Item::shared"},
+      Halt{},
+  };
+  const std::array<std::uint32_t, 0> widths{};
+  LlvmJit jit{LlvmJitOptions{optimization, {}}};
+  assert(jit.supports_process(process, widths));
+  jit.add_process(symbol, process, widths);
+  const auto handle = jit.lookup(symbol);
+  const auto layout = jit.frame_layout(handle);
+  std::vector<std::uint64_t> register_aval(layout.register_count);
+  std::vector<std::uint64_t> register_bval(layout.register_count);
+  std::vector<std::uint8_t> register_initialized(layout.register_count);
+  fsim_jit_frame_v1 frame{};
+  jit.initialize_frame(
+      handle,
+      frame,
+      register_aval,
+      register_bval,
+      register_initialized);
+  TestRuntime runtime;
+  auto descriptor = abi(runtime);
+  auto result = new_resume_result();
+
+  assert(jit.resume(handle, descriptor, frame, result)
+         == JitResumeStatus::simir_boundary);
+  assert(result.instruction == 1 && frame.program_counter == 2);
+  assert(register_initialized[0] == 1 && register_aval[0] == 7);
+  register_aval[1] = UINT64_C(0x0000000100000001);
+  register_bval[1] = 0;
+  register_initialized[1] = 1;
+
+  assert(jit.resume(handle, descriptor, frame, result)
+         == JitResumeStatus::simir_boundary);
+  assert(result.instruction == 2 && frame.program_counter == 3);
+  register_aval[2] = 9;
+  register_bval[2] = 0;
+  register_initialized[2] = 1;
+
+  assert(jit.resume(handle, descriptor, frame, result)
+         == JitResumeStatus::simir_boundary);
+  assert(result.instruction == 3 && frame.program_counter == 4);
+  assert(jit.resume(handle, descriptor, frame, result)
+         == JitResumeStatus::completed);
+  assert(result.instruction == 4 && frame.program_counter == 5);
+
+  Process malformed;
+  malformed.id = 1;
+  malformed.name = std::string{symbol} + "_malformed";
+  malformed.register_count = 2;
+  malformed.operations = {
+      LoadConstant{0, PackedLogic4::from_aval_bval(64, 0, 0)},
+      ClassMethodCall{1, 0, "work::Item::call", {0}, {}, {}, 1, false},
+      Halt{}};
+  const std::array malformed_entry{
+      JitProcessModuleEntry{malformed.name, &malformed}};
+  expect_fatal_error(
+      [&] {
+        jit.add_process_module(
+            std::string{symbol} + "_malformed_module",
+            malformed_entry,
+            widths);
+      },
+      "ClassMethodCall requires aligned method actual metadata");
+  expect_error([&] { (void)jit.lookup(malformed.name); }, "was not added");
+}
+
 [[nodiscard]] Process make_signal_wait_process() {
   Process process;
   process.id = 7;

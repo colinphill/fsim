@@ -306,6 +306,9 @@ using namespace elaboration_detail;
             return resolved;
         };
         resolve_type = [&](frontend::Type& type) {
+            if (!type.systemverilog_class_declaration.empty()) {
+                return true;
+            }
             for (auto& member : type.packed_members) {
                 if (member.nested_types.empty()) {
                     continue;

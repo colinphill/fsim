@@ -107,6 +107,17 @@ module class_owner;
   import base_pkg::Base;
   class Local extends Base;
   endclass : Local
+  Local module_handle;
+  function automatic Local echo(input Local value);
+    Local function_local;
+    return value;
+  endfunction : echo
+  task automatic accept(input Local value);
+    Local task_local;
+  endtask : accept
+  initial begin : object_scope
+    Local block_local;
+  end
 endmodule : class_owner
 )",
       Language::SystemVerilog2017);
@@ -304,10 +315,14 @@ endmodule : class_owner
   require(
       worker.methods.front().statements.size() == 2
           && worker.methods.front().statements.front().target.text
-              == "this.count"
+              == "@sv-property:work::$unit::Worker::count"
+          && worker.methods.front().statements.front().target.operands.front()
+                 .text == "this"
           && worker.methods.front().statements.back().task_name
-              == "super.new",
-      "this and super selected-name expressions must remain source owned");
+              == "@sv-base-constructor:work::base_pkg::Base::new"
+          && worker.methods.front().statements.back().task_arguments.front()
+                 .text == "super",
+      "this and super selections must bind to canonical class members");
   require(
       parsed.design.units.size() == 3,
       "classes must not become top-selectable design units");
@@ -334,6 +349,202 @@ endmodule : class_owner
           && module->systemverilog_classes.front().base
                  ->declaration_identity == "work::base_pkg::Base",
       "module classes must remain declarations on their owning unit");
+  require(
+      module->variables.size() == 1
+          && module->variables.front().name == "module_handle"
+          && module->variables.front().type.systemverilog_class_declaration
+              == "work::class_owner::Local"
+          && std::ranges::none_of(
+              module->signals,
+              [](const SignalDeclaration& signal) {
+                return signal.name == "module_handle";
+              }),
+      "resolved module class handles must be typed objects, not packed signals");
+  require(
+      module->functions.size() == 1
+          && module->functions.front().return_type
+                 .systemverilog_class_declaration
+              == "work::class_owner::Local"
+          && module->functions.front().arguments.front().type
+                 .systemverilog_class_declaration
+              == "work::class_owner::Local"
+          && module->functions.front().variables.front().type
+                 .systemverilog_class_declaration
+              == "work::class_owner::Local"
+          && module->tasks.size() == 1
+          && module->tasks.front().arguments.front().type
+                 .systemverilog_class_declaration
+              == "work::class_owner::Local"
+          && module->tasks.front().variables.front().type
+                 .systemverilog_class_declaration
+              == "work::class_owner::Local",
+      "function/task return, argument, and local class handles must resolve canonically");
+  require(
+      module->processes.size() == 1
+          && module->processes.front().statements.size() == 1
+          && module->processes.front().statements.front().declarations.size()
+              == 1
+          && module->processes.front().statements.front()
+                 .declarations.front().type
+                 .systemverilog_class_declaration
+              == "work::class_owner::Local",
+      "process and leading block class-handle declarations must resolve canonically");
+
+  auto executable_syntax = parse_text(
+      "executable_class_syntax.sv",
+      R"(
+class ParseObject;
+  int payload;
+  static int count;
+  function new(int seed = 0);
+    payload = seed;
+  endfunction
+  function int value(input int offset = 0);
+    return payload + offset;
+  endfunction
+  static function int make();
+    return count;
+  endfunction
+  task run(input int cycles = 1);
+  endtask
+endclass
+module executable_class_syntax;
+  ParseObject handle;
+  ParseObject other;
+  int result;
+  initial begin
+    handle = new(.seed(3));
+    other = null;
+    other = handle;
+    result = (handle == null);
+    result = handle.value(.offset(1));
+    result = ParseObject::count;
+    result = ParseObject::make();
+    result = $cast(other, handle);
+    handle.payload = other.payload;
+    handle.run(.cycles(2));
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(executable_syntax.ok(), "executable class syntax must parse");
+  std::vector<Diagnostic> executable_resolution;
+  require(
+      resolve_systemverilog_classes(
+          executable_syntax.design, executable_resolution),
+      "executable class syntax must resolve before lowering");
+  const auto& executable_body = executable_syntax.design.units.front()
+      .processes.front().statements;
+  require(
+      executable_body.size() == 10,
+      "executable class syntax must retain ten source statements, found "
+          + std::to_string(executable_body.size()));
+  require(
+      executable_body[0].value.kind == ExpressionKind::Call
+          && executable_body[0].value.text
+              == "@sv-new:work::$unit::ParseObject"
+          && executable_body[0].value.call_argument_names
+              == std::vector<std::string>{"seed"},
+      "new and named constructor actuals must retain a distinct expression");
+  require(
+      executable_body[1].value.kind == ExpressionKind::Call
+          && executable_body[1].value.text == "@sv-null",
+      "null must retain a distinct expression");
+  require(
+      executable_body[2].value.text == "handle"
+          && executable_body[3].value.kind == ExpressionKind::Binary
+          && executable_body[3].value.text == "=="
+          && executable_body[3].value.operands[1].text == "@sv-null",
+      "class-handle assignment and equality must retain opaque operands");
+  require(
+      executable_body[4].value.kind == ExpressionKind::Call
+          && executable_body[4].value.text
+              == "@sv-method:work::$unit::ParseObject::value"
+          && executable_body[4].value.operands.front().text == "handle"
+          && executable_body[4].value.call_argument_names
+              == std::vector<std::string>({"", "offset"})
+          && executable_body[5].value.text
+              == "@sv-static-property:work::$unit::ParseObject::count"
+          && executable_body[6].value.kind == ExpressionKind::Call
+          && executable_body[6].value.text
+              == "@sv-static-method:work::$unit::ParseObject::make",
+      "selected methods, named actuals, and class-qualified statics must remain source owned");
+  require(
+      executable_body[7].value.kind == ExpressionKind::Call
+          && executable_body[7].value.text
+              == "@sv-dollar-cast:work::$unit::ParseObject"
+          && executable_body[7].value.operands.size() == 2,
+      "$cast must bind to its destination handle type");
+  require(
+      executable_body[8].target.text
+              == "@sv-property:work::$unit::ParseObject::payload"
+          && executable_body[8].value.text
+              == "@sv-property:work::$unit::ParseObject::payload",
+      "selected properties must bind to their declaring class");
+  require(
+      executable_body[9].kind == StatementKind::TaskCall
+          && executable_body[9].task_name
+              == "@sv-task:work::$unit::ParseObject::run"
+          && executable_body[9].task_argument_names
+              == std::vector<std::string>({"", "cycles"})
+          && executable_body[9].task_arguments.front().text == "handle",
+      "named class-task actuals must retain the explicit receiver: "
+          + executable_body[9].task_name + "/"
+          + std::to_string(executable_body[9].task_arguments.size()) + "/"
+          + std::to_string(executable_body[9].task_argument_names.size()));
+
+  auto left_compilation_unit = parse_text(
+      "left_class_unit.sv",
+      R"(
+class Scoped;
+endclass
+module left_owner;
+  Scoped handle;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  auto right_compilation_unit = parse_text(
+      "right_class_unit.sv",
+      R"(
+class Scoped;
+endclass
+module right_owner;
+  Scoped handle;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      left_compilation_unit.ok() && right_compilation_unit.ok(),
+      "independent class compilation units must parse");
+  left_compilation_unit.design.systemverilog_classes.front().library = "work";
+  left_compilation_unit.design.systemverilog_classes.front()
+      .compilation_unit_identity = "cu-left";
+  left_compilation_unit.design.units.front().library = "work";
+  left_compilation_unit.design.units.front().compilation_unit_identity =
+      "cu-left";
+  right_compilation_unit.design.systemverilog_classes.front().library =
+      "work";
+  right_compilation_unit.design.systemverilog_classes.front()
+      .compilation_unit_identity = "cu-right";
+  right_compilation_unit.design.units.front().library = "work";
+  right_compilation_unit.design.units.front().compilation_unit_identity =
+      "cu-right";
+  left_compilation_unit.design.systemverilog_classes.push_back(
+      std::move(
+          right_compilation_unit.design.systemverilog_classes.front()));
+  left_compilation_unit.design.units.push_back(
+      std::move(right_compilation_unit.design.units.front()));
+  std::vector<Diagnostic> compilation_unit_diagnostics;
+  require(
+      resolve_systemverilog_classes(
+          left_compilation_unit.design, compilation_unit_diagnostics)
+          && left_compilation_unit.design.units[0].variables.front().type
+                 .systemverilog_class_declaration
+              == "work::$unit@cu-left::Scoped"
+          && left_compilation_unit.design.units[1].variables.front().type
+                 .systemverilog_class_declaration
+              == "work::$unit@cu-right::Scoped",
+      "class handles must resolve within their owning compilation unit");
 
   const auto invalid = parse_text(
       "invalid_classes.sv",

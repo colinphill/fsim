@@ -103,9 +103,11 @@ struct Expression {
   // parser. The original token spelling remains in text for diagnostics and
   // cache/source provenance.
   std::optional<std::string> decoded_string;
-  // SystemVerilog user-function actual names parallel operands. Empty entries
-  // are positional; nonempty entries retain `.formal(expression)` syntax.
   std::vector<std::string> call_argument_names;
+  std::vector<PortDirection> call_argument_directions;
+  std::uint64_t call_result_width{};
+  ValueDomain call_result_domain{ValueDomain::Unknown};
+  bool call_result_signed{};
 
   Expression() = default;
 
@@ -480,9 +482,7 @@ struct Type {
   // A range parsed on an unresolved named VHDL type. Type resolution moves
   // this to integer_range_expression or enumeration_range_expression.
   std::optional<DiscreteRangeExpression> discrete_range_expression;
-  // Present only for a source-level VHDL array declaration or a type/subtype
-  // resolved from one. The packed range above is the concrete object
-  // constraint; this metadata preserves nominal array semantics.
+  // Present only for a source-level VHDL array declaration or resolved view.
   std::optional<VhdlArrayInfo> vhdl_array;
   // Present only for a source-level VHDL access declaration or a resolved
   // view of one. Allocation and ownership semantics are added during
@@ -1146,8 +1146,8 @@ struct Statement {
   std::vector<Expression> task_arguments;
   // Empty entries are positional; nonempty entries retain named task actuals.
   std::vector<std::string> task_argument_names;
-  // A VHDL sequential procedure call remains distinct from a SystemVerilog
-  // task call and retains each positional or named association span.
+  std::vector<FunctionArgument> class_method_arguments;
+  // VHDL procedure calls retain positional or named association spans.
   std::string procedure_name;
   std::vector<SubprogramAssociation> procedure_arguments;
   // A VHDL sequential for-loop retains its implicit constant name and
@@ -1909,6 +1909,7 @@ struct DesignUnit {
   UnitKind kind{UnitKind::VerilogModule};
   Language language{Language::SystemVerilog2017};
   std::string library;
+  std::string compilation_unit_identity;
   std::string name;
   // For a VHDL architecture, `name` is the architecture and `primary_name`
   // is the entity it implements.
