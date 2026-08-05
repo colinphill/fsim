@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/frontend/systemverilog_scalar_folding.hpp"
 
+#include <array>
 #include <bit>
 #include <charconv>
 #include <cmath>
