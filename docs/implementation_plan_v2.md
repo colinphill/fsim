@@ -2256,7 +2256,7 @@ carry an explicit evidence-backed scope disposition approved by the user.
     evidence cells, 409 exact paths, and 110 runtime owners. Inventory and
     release-candidate gates pass, with the evidence matrix and sorted path set
     frozen by reviewed SHA-256 digests.
-20. **In progress.** Run the LLVM-disabled sanitizer, exact-LLVM Debug and
+20. **Complete.** Run the LLVM-disabled sanitizer, exact-LLVM Debug and
     Release, source/catalog/inventory/installed-public/Windows ABI/differential/
     release gates after eight-worker builds, commit and push once, then inspect
     and repair every non-documentation hosted CI job. Local qualification is
@@ -2269,7 +2269,7 @@ carry an explicit evidence-backed scope disposition approved by the user.
     replaced two synthesized-port aggregate constructions with explicit
     default-initialized declarations to avoid GCC 13's `-O3` false-positive
     move warning for a disengaged recursive optional delay. The accumulated
-    commit/push and hosted non-documentation CI inspection remain. The project
+    implementation and qualification commits were pushed. The project
     source-size policy now uses a 2,500-line hard limit and requires any file
     that exceeds it to be refactored below 2,000 lines. The local ten-batch
     sanitizer cadence remains mandatory, while hosted CI excludes sanitizer
@@ -2285,7 +2285,9 @@ carry an explicit evidence-backed scope disposition approved by the user.
     its class-source input stream alive until function exit and then renamed
     that still-open file, which POSIX accepts but Windows rejects. The stream is
     now destroyed before the artifact rename; exact-LLVM Debug and Release
-    `fsim.application` pass locally in 29.33 and 28.18 seconds.
+    `fsim.application` pass locally in 29.33 and 28.18 seconds. Replacement
+    hosted run `31054730031` passes all eleven jobs, including both Windows
+    MSVC test suites and both clang-cl test suites; this closes Batch 150.
 
 ### Batch 151 - Arbitrary-width packed values and aggregate closure
 

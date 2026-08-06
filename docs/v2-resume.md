@@ -5,7 +5,25 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
-## Batch 150 start checkpoint - 2026-08-05
+## Batch 151 start checkpoint - 2026-08-05
+
+1. Start in `/home/colin/projects/fsim`, read this file and the locked Batch
+   151 allocation in `implementation_plan_v2.md`, and verify that
+   `codex/v2` is clean and synchronized with `origin/codex/v2`.
+2. Batch 150 is complete. Final implementation repair `0005462` closes the
+   Windows class-artifact input stream before renaming its source. Replacement
+   hosted run `31054730031` passes all eleven jobs, including the Windows MSVC
+   and clang-cl Debug/Release test suites.
+3. Begin Batch 151 Change 1 by replacing the remaining executable 64-bit
+   SystemVerilog constant-storage assumptions with resource-governed
+   arbitrary-width packed storage while preserving exact width, signedness,
+   state domain, source, and canonical identity. Use at least eight workers for
+   builds and retain focused wide two-/four-/nine-state evidence.
+4. Batch 151 is not a sanitizer or hosted-CI boundary. Run the local sanitizer
+   again at Batch 160 Change 20 under the ten-batch cadence; do not inspect
+   documentation-only hosted runs.
+
+## Batch 150 completed checkpoint - 2026-08-05
 
 1. Start in `/home/colin/projects/fsim` and read this file plus the expanded
    Batch 150 and locked Batches 151-175 sections of
@@ -263,7 +281,10 @@ scope.
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
-- Current unit: Batch 150, exactly 20 expanded changes, in progress after pushed
+- Current unit: Batch 151, exactly 20 locked changes. Change 1 is next; start
+  with the remaining executable 64-bit SystemVerilog constant representation
+  and preserve resource limits plus exact width/signed/domain/type identity.
+- Completed unit: Batch 150, exactly 20 expanded changes, complete after pushed
   Batch 149 closeout `6279f0b`. Change 1 is complete: exact scalar identities,
   canonical decimal/time literal payloads, declaration/port/callable/class/type
   parsing, spans, and stable malformed literal diagnostics pass the frontend,
@@ -360,7 +381,9 @@ scope.
   push. They localized `0xc0000409` after artifact creation to renaming the
   class source while its input stream remained alive. The input stream is now
   destroyed before the Windows rename boundary; exact-LLVM Debug/Release
-  `fsim.application` pass locally in 29.33/28.18 seconds.
+  `fsim.application` pass locally in 29.33/28.18 seconds. Replacement hosted
+  run `31054730031` passes all eleven jobs, including both Windows MSVC and
+  both clang-cl test suites.
 - Completed unit: Batch 149, exactly 20 changes, complete after pushed Batch
   148 closeout `dce6c36`. Its authoritative SystemVerilog constraint-solving
   and randomization contract is recorded in `implementation_plan_v2.md`.
