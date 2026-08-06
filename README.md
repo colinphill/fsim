@@ -24,7 +24,8 @@ implementations will be built.
 
 The current tree contains:
 
-- C++20 value kernels for packed 2-, 4-, and 9-state logic;
+- C++20 value kernels for packed 2-, 4-, and 9-state logic, including governed
+  arbitrary-width SystemVerilog Logic4 constants and runtime values;
 - a deterministic, single-thread, phased event scheduler;
 - a typed SimIR and reference interpreter;
 - normalized Verilog specify module paths, pulse controls, all twelve timing
@@ -705,12 +706,15 @@ compiled modes. A terminal HDL stop takes precedence when it coincides with an
 external step/stop request, so a finished design is never reported resumable.
 
 With LLVM enabled, `fsim build` compiles eligible processes and `fsim run`
-uses a hybrid engine. Processes whose supported value-bearing operations are
-at most 64 bits execute through LLVM at the selected O0/O2 setting—O2 by
-default—while typed capability misses fall back per process to the reference
-evaluator under the same deterministic kernel. Generated callbacks and the
-reference kernel share checked allocation-free single-word `Logic4` and
-four-plane `Logic9` representations for values up to 64 bits. Generated
+uses a hybrid engine. Native word operations execute through LLVM at the
+selected O0/O2 setting—O2 by default—while typed capability misses fall back
+per process to the reference evaluator under the same deterministic kernel.
+Validated service operations can own arbitrary-width values without narrowing:
+the binary `$fread`/packed-memory path has exact 137-bit, fully compiled O0/O2
+cold/warm evidence. Generated callbacks and the reference kernel share checked
+allocation-free single-word `Logic4` and four-plane `Logic9` representations
+for values up to 64 bits, while the owning runtime/API/artifact paths use
+word-vector `PackedLogic4` storage for wider Logic4 values. Generated
 Logic9 code preserves all nine ordinal states through constants, reads,
 structural operations, IEEE logical operators, exact equality, formatting,
 debug frames, and blocking, update-phase, delayed, inertial, projected,
@@ -749,10 +753,13 @@ crosses the generated ABI; edge-qualified sensitivities require scalar
 signals. Builds without LLVM execute entirely through the reference evaluator.
 The bounded O0 debug path is differentially tested against the interpreter for
 source breakpoints and statement/process/scheduler stepping.
-Value-bearing operations wider than 64 bits, complete local-variable
-scope/type semantics, complete parameter/generic type and sizing rules,
-reusable code-specialization deduplication, and broader differential coverage
-remain work in progress.
+General native arithmetic on values wider than 64 bits, complete
+local-variable scope/type semantics, complete parameter/generic type and
+sizing rules, reusable code-specialization deduplication, and broader
+differential coverage remain work in progress. SystemVerilog's Batch 151
+interpreter/runtime surface already preserves arbitrary-width constants,
+aggregates, callables, class values, mixed boundaries, debugger/trace/API/file
+services, and portable artifacts under explicit width/work/storage budgets.
 
 The application suite also compares a bounded scheduled-write design exactly
 between the interpreter and O2 hybrid engine. It checks an update commit at

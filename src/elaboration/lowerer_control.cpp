@@ -605,8 +605,12 @@ using namespace elaboration_detail;
         }
         const auto base = std::string{name.substr(0, separator)};
         auto member_name = name.substr(separator + 1);
+        const frontend::Type* owner_type = object_type(base);
         const std::vector<frontend::PackedMember>* members = nullptr;
-        if (const auto local = local_members_.find(base);
+        if (owner_type != nullptr
+            && !owner_type->packed_members.empty()) {
+            members = &owner_type->packed_members;
+        } else if (const auto local = local_members_.find(base);
             local != local_members_.end()) {
             members = &local->second;
         } else if (const auto signal = signals_.find(base);
@@ -618,6 +622,7 @@ using namespace elaboration_detail;
             return std::nullopt;
         }
         std::uint64_t offset = 0;
+        std::vector<PackedMemberReference::UnionContext> unions;
         for (;;) {
             const auto dot = member_name.find('.');
             const auto segment = member_name.substr(0, dot);
@@ -632,15 +637,51 @@ using namespace elaboration_detail;
                     > std::numeric_limits<std::uint64_t>::max() - offset) {
                 return std::nullopt;
             }
+            if (owner_type != nullptr
+                && (owner_type->packed_aggregate
+                        == frontend::PackedAggregateKind::Union
+                    || owner_type->packed_aggregate
+                        == frontend::PackedAggregateKind::TaggedUnion)) {
+                const auto owner_width = owner_type->width();
+                std::uint64_t payload_width = 0;
+                for (const auto& candidate : *members) {
+                    const auto width = candidate.width();
+                    if (!width) {
+                        return std::nullopt;
+                    }
+                    payload_width = std::max(payload_width, *width);
+                }
+                const bool tagged = owner_type->packed_aggregate
+                    == frontend::PackedAggregateKind::TaggedUnion;
+                if (!owner_width
+                    || *owner_width < payload_width
+                    || (tagged && *owner_width == payload_width)) {
+                    return std::nullopt;
+                }
+                const auto member_width = member->width();
+                if (!member_width) {
+                    return std::nullopt;
+                }
+                unions.push_back({
+                    offset,
+                    payload_width,
+                    *member_width,
+                    tagged ? offset + payload_width : 0,
+                    tagged ? *owner_width - payload_width : 0,
+                    static_cast<std::uint64_t>(
+                        std::distance(members->begin(), member))});
+            }
             offset += member->lsb_offset;
             if (dot == std::string_view::npos) {
-                return PackedMemberReference{base, &*member, offset};
+                return PackedMemberReference{
+                    base, &*member, offset, std::move(unions)};
             }
             if (member->nested_types.empty()
                 || member->nested_types.front().packed_members.empty()) {
                 return std::nullopt;
             }
-            members = &member->nested_types.front().packed_members;
+            owner_type = &member->nested_types.front();
+            members = &owner_type->packed_members;
             member_name.remove_prefix(dot + 1);
         }
     }

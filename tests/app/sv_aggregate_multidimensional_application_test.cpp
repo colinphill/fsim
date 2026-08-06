@@ -26,7 +26,7 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 8> values;
+  std::array<std::string, 32> values;
   std::string vcd;
   std::string debugger;
   std::size_t compiled{};
@@ -61,6 +61,23 @@ package aggregate_types;
     logic [3:0] tag;
     logic [3:0] data;
   } packet_t;
+  typedef union packed {
+    logic [15:0] wide;
+    logic [7:0] narrow;
+  } unequal_t;
+  typedef union tagged packed {
+    logic [15:0] wide;
+    logic [7:0] narrow;
+  } tagged_t;
+  typedef struct packed {
+    logic [7:0] payload = 8'ha5;
+    inner_t nested = '{code: TWO, valid: 1'b1};
+  } initialized_t;
+  localparam outer_t NESTED_CONSTANT = '{
+    prefix: 1'b1,
+    overlay: '{inner: '{code: TWO, valid: 1'b1}},
+    tail: 2'b10
+  };
   typedef struct {
     real weight;
     time ticks;
@@ -130,6 +147,46 @@ module aggregate_multidimensional_top #(
   state_t states[1:0];
   state_t state_copy[1:0];
   logic [7:0] scalar_container_observed;
+  struct packed {
+    logic [31:0] header;
+    struct packed {
+      bit [95:0] payload;
+      logic valid;
+    } body;
+    bit [7:0] tail;
+  } anonymous_default, anonymous_pattern, anonymous_update;
+  logic [136:0] anonymous_default_observed;
+  logic [136:0] anonymous_pattern_observed;
+  logic [136:0] anonymous_update_observed;
+  logic [40:0] anonymous_selected_observed;
+  unequal_t unequal;
+  tagged_t tagged_default;
+  tagged_t tagged_narrow;
+  tagged_t tagged_same;
+  tagged_t tagged_wide;
+  tagged_t tagged_casted;
+  logic [15:0] unequal_narrow_observed;
+  logic [15:0] unequal_wide_observed;
+  logic [15:0] unequal_selected_observed;
+  logic [16:0] tagged_default_observed;
+  logic [16:0] tagged_narrow_observed;
+  logic [16:0] tagged_wide_constructor_observed;
+  logic [16:0] tagged_wide_observed;
+  logic [16:0] tagged_cast_observed;
+  logic [7:0] tagged_active_observed;
+  logic [15:0] tagged_inactive_observed;
+  logic [3:0] tagged_compare_observed;
+  initialized_t initialized_default;
+  enum { ANON_START = 5, ANON_NEXT } anonymous_enum_value;
+  logic [10:0] initialized_default_observed;
+  logic [5:0] nested_constant_observed;
+  logic [31:0] anonymous_enum_default_observed;
+  logic signed [31:0] aggregate_bits_observed;
+  logic signed [31:0] aggregate_left_observed;
+  logic signed [31:0] aggregate_right_observed;
+  logic signed [31:0] aggregate_size_observed;
+  logic signed [31:0] aggregate_dimensions_observed;
+  logic signed [31:0] aggregate_unpacked_dimensions_observed;
   int row;
   int column;
 
@@ -258,6 +315,59 @@ module aggregate_multidimensional_top #(
     state_copy = states;
     assert (state_copy == states);
     scalar_container_observed = 8'ha5;
+    anonymous_default_observed = anonymous_default;
+    anonymous_pattern = '{
+      header: 32'h1234_5678,
+      body: '{payload: {
+        32'h0011_2233, 32'h4455_6677, 32'h8899_aabb
+      }, default: 1'b1},
+      default: '0
+    };
+    anonymous_pattern_observed = anonymous_pattern;
+    anonymous_update = anonymous_pattern;
+    anonymous_update.body.payload[95:88] = 8'hfe;
+    anonymous_update.body.valid = 1'b0;
+    anonymous_update.tail = 8'h3c;
+    anonymous_update_observed = anonymous_update;
+    anonymous_selected_observed = {
+      anonymous_update.header,
+      anonymous_update.body.valid,
+      anonymous_update.tail
+    };
+    unequal = '{narrow: 8'hab};
+    unequal_narrow_observed = unequal;
+    unequal = '{wide: 16'hcdef};
+    unequal_wide_observed = unequal;
+    unequal.narrow = 8'h5e;
+    unequal_selected_observed = unequal;
+    tagged_default_observed = tagged_default;
+    tagged_narrow = tagged narrow 8'h5a;
+    tagged_same = tagged narrow 8'h5a;
+    tagged_wide = tagged wide 16'h1234;
+    tagged_narrow_observed = tagged_narrow;
+    tagged_wide_constructor_observed = tagged_wide;
+    tagged_wide.narrow = 8'h7c;
+    tagged_wide_observed = tagged_wide;
+    tagged_active_observed = tagged_narrow.narrow;
+    tagged_inactive_observed = tagged_narrow.wide;
+    tagged_compare_observed = {
+      tagged_narrow === tagged_same,
+      tagged_narrow !== tagged_wide,
+      tagged_narrow == tagged_same,
+      tagged_narrow != tagged_wide
+    };
+    tagged_casted = tagged_t'(17'h1_00a5);
+    tagged_cast_observed = tagged_casted;
+    initialized_default_observed = initialized_default;
+    nested_constant_observed = NESTED_CONSTANT;
+    anonymous_enum_default_observed = anonymous_enum_value;
+    aggregate_bits_observed = $bits(initialized_t);
+    aggregate_left_observed = $left(initialized_t);
+    aggregate_right_observed = $right(initialized_t);
+    aggregate_size_observed = $size(initialized_t);
+    aggregate_dimensions_observed = $dimensions(initialized_t);
+    aggregate_unpacked_dimensions_observed =
+      $unpacked_dimensions(initialized_t);
     #2 $finish;
   end
 endmodule
@@ -310,7 +420,7 @@ Capture execute(
   Capture capture;
   capture.compiled = simulation.compiled_process_count();
   capture.cache = simulation.native_cache_statistics();
-  constexpr std::array<std::string_view, 8> names{
+  constexpr std::array<std::string_view, 32> names{
       "aggregate_multidimensional_top.aggregate_observed",
       "aggregate_multidimensional_top.matrix_observed",
       "aggregate_multidimensional_top.dynamic_observed",
@@ -318,7 +428,31 @@ Capture execute(
       "aggregate_multidimensional_top.aggregate_child_observed",
       "aggregate_multidimensional_top.container_observed",
       "aggregate_multidimensional_top.packet_child_observed",
-      "aggregate_multidimensional_top.scalar_container_observed"};
+      "aggregate_multidimensional_top.scalar_container_observed",
+      "aggregate_multidimensional_top.anonymous_default_observed",
+      "aggregate_multidimensional_top.anonymous_pattern_observed",
+      "aggregate_multidimensional_top.anonymous_update_observed",
+      "aggregate_multidimensional_top.anonymous_selected_observed",
+      "aggregate_multidimensional_top.unequal_narrow_observed",
+      "aggregate_multidimensional_top.unequal_wide_observed",
+      "aggregate_multidimensional_top.unequal_selected_observed",
+      "aggregate_multidimensional_top.tagged_default_observed",
+      "aggregate_multidimensional_top.tagged_narrow_observed",
+      "aggregate_multidimensional_top.tagged_wide_constructor_observed",
+      "aggregate_multidimensional_top.tagged_wide_observed",
+      "aggregate_multidimensional_top.tagged_cast_observed",
+      "aggregate_multidimensional_top.tagged_active_observed",
+      "aggregate_multidimensional_top.tagged_inactive_observed",
+      "aggregate_multidimensional_top.tagged_compare_observed",
+      "aggregate_multidimensional_top.initialized_default_observed",
+      "aggregate_multidimensional_top.nested_constant_observed",
+      "aggregate_multidimensional_top.anonymous_enum_default_observed",
+      "aggregate_multidimensional_top.aggregate_bits_observed",
+      "aggregate_multidimensional_top.aggregate_left_observed",
+      "aggregate_multidimensional_top.aggregate_right_observed",
+      "aggregate_multidimensional_top.aggregate_size_observed",
+      "aggregate_multidimensional_top.aggregate_dimensions_observed",
+      "aggregate_multidimensional_top.aggregate_unpacked_dimensions_observed"};
   std::array<fsim::runtime::simir::SignalId, names.size()> signals{};
   std::array<fsim::runtime::VcdSignal, names.size()> traces{};
   std::ostringstream vcd_text;
@@ -391,6 +525,50 @@ void verify(
       == "0001001000110101010001100101011101101000011111101000101011001101");
   assert(capture.values[6] == "01111110");
   assert(capture.values[7] == "10100101");
+  assert(
+      capture.values[8]
+      == "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+         "0000000000000000000000000000000000000000000000000000000000000000"
+         "00000000000000000000000000000000"
+         "X"
+         "00000000");
+  assert(
+      capture.values[9]
+      == "00010010001101000101011001111000"
+         "0000000000010001001000100011001101000100010101010110011001110111"
+         "10001000100110011010101010111011"
+         "1"
+         "00000000");
+  assert(
+      capture.values[10]
+      == "00010010001101000101011001111000"
+         "1111111000010001001000100011001101000100010101010110011001110111"
+         "10001000100110011010101010111011"
+         "0"
+         "00111100");
+  assert(
+      capture.values[11]
+      == "00010010001101000101011001111000000111100");
+  assert(capture.values[12] == "0000000010101011");
+  assert(capture.values[13] == "1100110111101111");
+  assert(capture.values[14] == "0000000001011110");
+  assert(capture.values[15] == "0XXXXXXXXXXXXXXXX");
+  assert(capture.values[16] == "10000000001011010");
+  assert(capture.values[17] == "00001001000110100");
+  assert(capture.values[18] == "10000000001111100");
+  assert(capture.values[19] == "10000000010100101");
+  assert(capture.values[20] == "01011010");
+  assert(capture.values[21] == "XXXXXXXXXXXXXXXX");
+  assert(capture.values[22] == "1111");
+  assert(capture.values[23] == "10100101101");
+  assert(capture.values[24] == "110110");
+  assert(capture.values[25] == "00000000000000000000000000000101");
+  assert(capture.values[26] == "00000000000000000000000000001011");
+  assert(capture.values[27] == "00000000000000000000000000001010");
+  assert(capture.values[28] == "00000000000000000000000000000000");
+  assert(capture.values[29] == "00000000000000000000000000001011");
+  assert(capture.values[30] == "00000000000000000000000000000001");
+  assert(capture.values[31] == "00000000000000000000000000000000");
   assert(capture.vcd.find("#1") != std::string::npos);
   assert(capture.debugger.find("matrix = [") != std::string::npos);
   assert(capture.debugger.find("packet_matrix = [") != std::string::npos);

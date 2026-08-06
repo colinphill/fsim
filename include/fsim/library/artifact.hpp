@@ -13,7 +13,7 @@
 namespace fsim::library {
 
 inline constexpr std::uint32_t kFormatVersion = 1;
-inline constexpr std::uint32_t kPortableSchemaVersion = 5;
+inline constexpr std::uint32_t kPortableSchemaVersion = 6;
 inline constexpr std::string_view kMetadataFilename = "fsim-library.toml";
 
 struct LanguageStandard {

@@ -19,6 +19,9 @@
 namespace fsim::test {
 
 void ApplicationTestFixture::test_artifact_phase_semantics() {
+  static_assert(app::kRuntimeStateSchema == 10);
+  static_assert(app::kClassStateSchema == 6);
+  static_assert(app::kSystemVerilogConstraintHirStateSchema == 3);
   const auto sv_source = directory / "artifact_phase.sv";
   const auto vhdl_source = directory / "artifact_phase.vhd";
   const auto sv_object = directory / "artifact-sv.fsimobj";
@@ -73,12 +76,31 @@ module phase_watch;
 endmodule
 
 module scalar_artifact;
+  localparam logic [136:0] WIDE_SEED =
+      {1'b1, 62'b0, 1'b1, 69'b0, 4'b1000};
+  typedef enum logic [136:0] {
+    WIDE_ZERO = 137'b0,
+    WIDE_ENUM = {1'b1, 62'b0, 1'b1, 69'b0, 4'b1000}
+  } wide_enum_t;
+  typedef struct packed {
+    logic [72:0] high = {1'b1, 71'b0, 1'b1};
+    logic [63:0] low = 64'h8;
+  } initialized_wide_t;
+  typedef union tagged packed {
+    logic [135:0] wide;
+    logic [7:0] narrow;
+  } tagged_wide_t;
   real r;
   shortreal s;
   realtime rt;
   time ticks;
   chandle handle;
+  logic [136:0] wide_value;
+  wide_enum_t wide_enum;
+  initialized_wide_t initialized_wide;
+  tagged_wide_t tagged_wide;
   logic [4:0] checks;
+  assign wide_value = WIDE_SEED;
   initial begin
     r = 1.25;
     s = -2.5;
@@ -205,9 +227,13 @@ end architecture;
       "fsim", "compile", "--lang", "systemverilog", "--standard", "2017",
       "--library", "work", "--output", sv_object_text.c_str(),
       sv_source_text.c_str()};
-  assert(cli::run(
+  const auto sv_result = cli::run(
       static_cast<int>(sv_compile.size()), sv_compile.data(), services,
-      output, error) == 0);
+      output, error);
+  if (sv_result != 0) {
+    std::cerr << error.str();
+  }
+  assert(sv_result == 0);
   assert(error.str().empty());
 
   output.str({});
@@ -292,9 +318,10 @@ end architecture;
     const auto scalar_realtime = simulation.find_signal("scalar.rt");
     const auto scalar_time = simulation.find_signal("scalar.ticks");
     const auto scalar_handle = simulation.find_signal("scalar.handle");
+    const auto scalar_wide = simulation.find_signal("scalar.wide_value");
     assert(counter && watch && stable_probe && vital_probe && scalar_checks
         && scalar_real && scalar_short && scalar_realtime && scalar_time
-        && scalar_handle);
+        && scalar_handle && scalar_wide);
     std::size_t callbacks{};
     simulation.set_signal_change_hook(
         [&](runtime::simir::SignalId, const runtime::PackedLogic4&,
@@ -306,6 +333,12 @@ end architecture;
     assert(simulation.read_signal(*stable_probe).to_msb_string() == "1");
     assert(simulation.read_signal(*vital_probe).to_msb_string() == "1");
     assert(simulation.read_signal(*scalar_checks).to_msb_string() == "11111");
+    auto expected_wide = runtime::PackedLogic4{
+        137, runtime::Logic4::zero};
+    expected_wide.set(136, runtime::Logic4::one);
+    expected_wide.set(73, runtime::Logic4::one);
+    expected_wide.set(3, runtime::Logic4::one);
+    assert(simulation.read_signal(*scalar_wide) == expected_wide);
     assert(simulation.read_scalar_signal(*scalar_real).as_real() == 1.25);
     assert(simulation.read_scalar_signal(*scalar_short).as_shortreal() == -2.5F);
     assert(simulation.read_scalar_signal(*scalar_realtime).as_real() == 3.75);
@@ -455,6 +488,7 @@ end architecture;
   assert(!scalar_export_diagnostics.has_error());
   struct ScalarLibraryCapture {
     std::string checks;
+    std::string wide;
     std::array<std::uint64_t, 5> payloads{};
     std::vector<std::string> keys;
     app::NativeCacheStatistics cache;
@@ -484,16 +518,18 @@ end architecture;
     capture.cache = simulation.native_cache_statistics();
     capture.compiled_processes = simulation.compiled_process_count();
     const auto checks = simulation.find_signal("scalar_artifact.checks");
+    const auto wide = simulation.find_signal("scalar_artifact.wide_value");
     const std::array signals{
         simulation.find_signal("scalar_artifact.r"),
         simulation.find_signal("scalar_artifact.s"),
         simulation.find_signal("scalar_artifact.rt"),
         simulation.find_signal("scalar_artifact.ticks"),
         simulation.find_signal("scalar_artifact.handle")};
-    assert(checks && std::ranges::all_of(
+    assert(checks && wide && std::ranges::all_of(
         signals, [](const auto& signal) { return signal.has_value(); }));
     assert(simulation.run().status == runtime::RunStatus::completed);
     capture.checks = simulation.read_signal(*checks).to_msb_string();
+    capture.wide = simulation.read_signal(*wide).to_msb_string();
     for (std::size_t index = 0; index < signals.size(); ++index) {
       capture.payloads[index] =
           simulation.read_scalar_signal(*signals[index]).bits;
@@ -509,6 +545,9 @@ end architecture;
     const auto scalar_warm = run_scalar_library(
         optimization, app::SimulationEngine::compiled);
     assert(scalar_interpreted.checks == "11111");
+    assert(
+        scalar_interpreted.wide == scalar_cold.wide
+        && scalar_cold.wide == scalar_warm.wide);
     assert(scalar_interpreted.payloads == scalar_cold.payloads
         && scalar_cold.payloads == scalar_warm.payloads);
     assert(scalar_interpreted.keys == scalar_cold.keys
@@ -529,6 +568,7 @@ end architecture;
       project::Optimization::o2, app::SimulationEngine::compiled);
   assert(
       relocated_scalar.checks == "11111"
+      && relocated_scalar.wide == scalar_o2_reference.wide
       && relocated_scalar.payloads == scalar_o2_reference.payloads
       && relocated_scalar.keys == scalar_o2_reference.keys);
 #if defined(FSIM_HAS_LLVM)
@@ -559,6 +599,7 @@ end architecture;
       project::Optimization::o2, app::SimulationEngine::compiled);
   assert(
       edited_scalar.checks == "11110"
+      && edited_scalar.wide == scalar_o2_reference.wide
       && edited_scalar.payloads != scalar_o2_reference.payloads
       && edited_scalar.keys != scalar_o2_reference.keys);
 #if defined(FSIM_HAS_LLVM)

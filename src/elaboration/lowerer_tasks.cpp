@@ -340,11 +340,11 @@ void Lowerer::lower_task_call(const Statement& statement) {
                 continue;
             }
             const auto width = argument.type.width();
-            if (!width || *width == 0 || *width > 64) {
+            if (!width || *width == 0) {
                 report(
                     "FSIM-ELAB-SVTASK-006",
                     "task argument '" + argument.name
-                        + "' must have an executable width in [1, 64]",
+                        + "' must have a positive executable width",
                     argument.span);
                 return;
             }
@@ -364,6 +364,11 @@ void Lowerer::lower_task_call(const Statement& statement) {
     for (std::size_t index = 0;
          index < task.arguments.size(); ++index) {
         const auto& formal = task.arguments[index];
+        if (formal.direction != frontend::PortDirection::Output
+            && !validate_sv_nominal_assignment(
+                &formal.type, *(*actuals)[index])) {
+            return;
+        }
         if (frame.argument_is_container[index]) {
             if (formal.direction
                 == frontend::PortDirection::Output) {

@@ -68,10 +68,13 @@ Lowerer::ExpressionAttempt Lowerer::lower_file_binary_read(
   } else if (const auto packed_local = locals_.find(target.text);
              packed_local != locals_.end()) {
     const auto width = register_width(packed_local->second);
-    if (width == 0 || width > 64 || expression.operands.size() != 2U) {
+    if (width == 0
+        || width > std::numeric_limits<std::uint32_t>::max()
+        || expression.operands.size() != 2U) {
       report(
           "FSIM-ELAB-SVFILE-014",
-          "packed $fread targets require width 1..64 and no start/count",
+          "packed $fread targets require a positive executable width and no "
+          "start/count",
           target.span);
       return std::nullopt;
     }
@@ -91,11 +94,14 @@ Lowerer::ExpressionAttempt Lowerer::lower_file_binary_read(
              && !read_only_signals_.contains(signal->second)) {
     const auto width = design_.signal_info_[signal->second].width;
     const auto* type = object_type(target.text);
-    if (width == 0 || width > 64 || type == nullptr
+    if (width == 0
+        || width > std::numeric_limits<std::uint32_t>::max()
+        || type == nullptr
         || expression.operands.size() != 2U) {
       report(
           "FSIM-ELAB-SVFILE-014",
-          "packed $fread targets require width 1..64 and no start/count",
+          "packed $fread targets require a positive executable width and no "
+          "start/count",
           target.span);
       return std::nullopt;
     }

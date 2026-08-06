@@ -577,7 +577,9 @@ void Interpreter::Impl::execute_file(
         if (!line.empty() && line.back() == '\n') line.pop_back();
         if (!line.empty() && line.back() == '\r') line.pop_back();
       }
-      get_string_register(process, operation.target) = std::move(line);
+      if (count != 0) {
+        get_string_register(process, operation.target) = std::move(line);
+      }
       result = static_cast<std::int32_t>(count);
     } else if (operation.kind == FileReadKind::character) {
       result = read_file_character(process.program.id, handle);

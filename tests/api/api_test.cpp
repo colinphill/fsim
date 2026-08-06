@@ -258,6 +258,7 @@ module tb(output logic observed);
       end
     end
   endgenerate
+  logic [136:0] wide_value;
 endmodule
 
 module child;
@@ -608,7 +609,7 @@ max_deltas = 1000
   assert(
       fsim_session_visit_children(session, root, visit, &children)
       == FSIM_STATUS_OK);
-  assert(children == 5);
+  assert(children == 6);
 
   fsim_object_t generated_scope = FSIM_INVALID_OBJECT;
   fsim_object_t generated_lane = FSIM_INVALID_OBJECT;
@@ -1319,6 +1320,68 @@ max_deltas = 1000
       fsim_session_read_value(session, q, value, sizeof(value), &required)
       == FSIM_STATUS_OK);
   assert(std::string(value) == "0");
+
+  fsim_object_t wide_value = FSIM_INVALID_OBJECT;
+  assert(
+      fsim_session_find_object(
+          session, text("wide_value"), &wide_value)
+      == FSIM_STATUS_OK);
+  fsim_object_info_t wide_info{};
+  wide_info.struct_size = sizeof(wide_info);
+  wide_info.api_version = FSIM_API_VERSION;
+  assert(
+      fsim_session_get_object_info(session, wide_value, &wide_info)
+      == FSIM_STATUS_OK);
+  assert(wide_info.width == 137);
+  std::string wide_seed(137, '0');
+  wide_seed[0] = '1';
+  wide_seed[63] = '1';
+  wide_seed[133] = '1';
+  std::string wide_amount(137, '0');
+  wide_amount[8] = '1';
+  wide_amount[129] = '1';
+  wide_amount[136] = '1';
+  assert(
+      fsim_session_deposit(
+          session, wide_value,
+          {wide_seed.data(), wide_seed.size()})
+      == FSIM_STATUS_OK);
+  std::size_t wide_required{};
+  assert(
+      fsim_session_read_value(
+          session, wide_value, nullptr, 0, &wide_required)
+      == FSIM_STATUS_INVALID_ARGUMENT);
+  assert(wide_required == 138);
+  std::vector<char> wide_buffer(wide_required);
+  assert(
+      fsim_session_read_value(
+          session, wide_value, wide_buffer.data(), wide_buffer.size(),
+          &wide_required)
+      == FSIM_STATUS_OK);
+  assert(std::string{wide_buffer.data()} == wide_seed);
+  assert(
+      fsim_session_force(
+          session, wide_value,
+          {wide_amount.data(), wide_amount.size()})
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_deposit(
+          session, wide_value,
+          {wide_seed.data(), wide_seed.size()})
+      == FSIM_STATUS_OK);
+  assert(
+      fsim_session_read_value(
+          session, wide_value, wide_buffer.data(), wide_buffer.size(),
+          &wide_required)
+      == FSIM_STATUS_OK);
+  assert(std::string{wide_buffer.data()} == wide_amount);
+  assert(fsim_session_release(session, wide_value) == FSIM_STATUS_OK);
+  assert(
+      fsim_session_read_value(
+          session, wide_value, wide_buffer.data(), wide_buffer.size(),
+          &wide_required)
+      == FSIM_STATUS_OK);
+  assert(std::string{wide_buffer.data()} == wide_seed);
 
   assert(fsim_session_run(session, 10) == FSIM_STATUS_STOPPED);
   assert(

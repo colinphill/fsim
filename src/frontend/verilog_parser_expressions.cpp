@@ -405,6 +405,33 @@ Expression VerilogParser::parse_unary() {
 }
 
 Expression VerilogParser::parse_primary() {
+  if (keyword("tagged")) {
+    const auto tagged = advance();
+    const auto member =
+        expect_identifier("tagged-union member name");
+    if (at(TokenKind::Semicolon)
+        || at(TokenKind::Comma)
+        || at(TokenKind::RightParen)
+        || at(TokenKind::RightBrace)
+        || at(TokenKind::EndOfFile)) {
+      error(
+          current(),
+          "FSIM-SV-PARSE-031",
+          "tagged-union construction requires a member value");
+      return Expression{
+          ExpressionKind::Call,
+          "@sv-tagged:" + member.text,
+          {},
+          cover(tagged.span, member.span)};
+    }
+    auto value = parse_unary();
+    const auto span = cover(tagged.span, value.span);
+    return Expression{
+        ExpressionKind::Call,
+        "@sv-tagged:" + member.text,
+        {std::move(value)},
+        span};
+  }
   if (match(TokenKind::Apostrophe)) {
     const auto apostrophe = previous();
     if (language_ != Language::SystemVerilog2017) {

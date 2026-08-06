@@ -68,7 +68,8 @@ materialize_systemverilog_container_type(
       result.element_width = 0;
     } else {
       const auto width = candidate.width();
-      if (!width || *width == 0 || *width > 64) {
+      if (!width || *width == 0
+          || *width > std::numeric_limits<std::uint32_t>::max()) {
         report(
             "FSIM-ELAB-SVCONTAINER-003",
             "container elements require an executable scalar, string, "

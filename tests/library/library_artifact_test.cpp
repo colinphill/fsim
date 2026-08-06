@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <ranges>
 #include <string>
 
@@ -51,8 +52,8 @@ fsim::library::Metadata example_metadata() {
 }  // namespace
 
 int main() {
-  static_assert(fsim::library::kOwningUnitSchemaVersion == 8);
-  static_assert(fsim::library::kPortableSchemaVersion == 5);
+  static_assert(fsim::library::kOwningUnitSchemaVersion == 9);
+  static_assert(fsim::library::kPortableSchemaVersion == 6);
   const auto expected = example_metadata();
   const auto serialized = fsim::library::serialize_metadata(expected);
   assert(serialized.starts_with(
@@ -117,6 +118,16 @@ int main() {
   fsim::diagnostic::Engine overwrite_diagnostics;
   assert(!fsim::library::publish(
       published, published_metadata, payloads, overwrite_diagnostics));
+  fsim::diagnostic::Engine rollback_diagnostics;
+  assert(fsim::library::load_metadata(
+      published, "vendor", rollback_diagnostics)
+      == std::optional{published_metadata});
+  {
+    std::ifstream input(published / payloads.front().path, std::ios::binary);
+    assert((std::string{
+        std::istreambuf_iterator<char>{input},
+        std::istreambuf_iterator<char>{}} == payloads.front().bytes));
+  }
 
   auto bad_payloads = payloads;
   bad_payloads.front().bytes = "corrupt";
@@ -134,6 +145,18 @@ int main() {
   output logic [WIDTH-1:0] result
 );
   typedef struct packed { logic flag; logic [2:0] payload; } packet_t;
+  typedef enum logic [136:0] {
+    WIDE_ZERO = 137'b0,
+    WIDE_MARK = {1'b1, 62'b0, 1'b1, 69'b0, 4'b1000}
+  } wide_enum_t;
+  typedef struct packed {
+    logic [72:0] high = {1'b1, 71'b0, 1'b1};
+    logic [63:0] low = 64'h8;
+  } initialized_wide_t;
+  typedef union tagged packed {
+    logic [135:0] wide;
+    logic [7:0] narrow;
+  } tagged_wide_t;
   packet_t packet;
   wire (weak0, strong1) strength_driver;
   wire switch_left, switch_right;
@@ -187,8 +210,51 @@ endmodule
   assert(restored_unit->compilation_unit_identity
          == "fixture-compilation-unit");
   assert(restored_unit->name == "stage");
-  assert(restored_unit->parameters.size() == 1);
+  assert(restored_unit->parameters.size() == 3);
   assert(restored_unit->functions.size() == 1);
+  const auto type_alias = [&](const std::string_view name)
+      -> const fsim::frontend::Type* {
+    const auto alias = std::ranges::find_if(
+        restored_unit->type_aliases,
+        [&](const auto& candidate) { return candidate.name == name; });
+    return alias == restored_unit->type_aliases.end()
+        ? nullptr : &alias->type;
+  };
+  const auto wide_enum = type_alias("wide_enum_t");
+  const auto initialized_wide = type_alias("initialized_wide_t");
+  const auto tagged_wide = type_alias("tagged_wide_t");
+  assert(
+      wide_enum && wide_enum->width() == 137
+      && wide_enum->enumeration_literals.size() == 2
+      && wide_enum->systemverilog_enumeration_values.size() == 2
+      && wide_enum->systemverilog_enumeration_values[1].kind
+          == fsim::frontend::ExpressionKind::Concatenation);
+  assert(
+      initialized_wide && initialized_wide->width() == 137
+      && initialized_wide->packed_members.size() == 2
+      && initialized_wide->packed_members[0].initializer
+      && initialized_wide->packed_members[1].initializer);
+  assert(
+      tagged_wide && tagged_wide->width() == 137
+      && tagged_wide->packed_aggregate
+          == fsim::frontend::PackedAggregateKind::TaggedUnion);
+  auto malformed_type_unit = *restored_unit;
+  const auto malformed_alias = std::ranges::find_if(
+      malformed_type_unit.type_aliases, [](const auto& alias) {
+        return alias.name == "tagged_wide_t";
+      });
+  assert(malformed_alias != malformed_type_unit.type_aliases.end());
+  malformed_alias->type.packed_aggregate =
+      static_cast<fsim::frontend::PackedAggregateKind>(255);
+  fsim::diagnostic::Engine malformed_type_diagnostics;
+  assert(!fsim::library::serialize_portable_unit(
+      malformed_type_unit, malformed_type_diagnostics));
+  assert(std::ranges::any_of(
+      malformed_type_diagnostics.diagnostics(), [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-LIB-0006"
+            && diagnostic.message.find("invalid scalar enumeration")
+                != std::string::npos;
+      }));
   const auto scalar_type = [&](const std::string_view name)
       -> const fsim::frontend::Type* {
     const auto variable = std::ranges::find_if(

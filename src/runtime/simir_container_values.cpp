@@ -149,11 +149,9 @@ void validate_container_value(const ContainerValue& value) {
   const auto packed_storage =
       value.type.element_kind == ContainerElementKind::Packed
       || value.type.element_kind == ContainerElementKind::Scalar;
-  if (packed_storage
-      && (value.type.element_width == 0
-          || value.type.element_width > 64)) {
+  if (packed_storage && value.type.element_width == 0) {
     throw std::invalid_argument{
-        "SimIR packed/scalar container element width must be in 1..64"};
+        "SimIR packed/scalar container element width must be positive"};
   }
   if (value.type.element_kind == ContainerElementKind::Scalar) {
     const auto expected_width =
@@ -252,11 +250,14 @@ void validate_container_value(const ContainerValue& value) {
         "nested SimIR container has inactive element storage"};
   }
   for (const auto& element : value.elements) {
+    const bool contains_unknown = std::ranges::any_of(
+        element.bval_words(),
+        [](const std::uint64_t word) { return word != 0; });
     if (element.width() != value.type.element_width
         || element.is_logic9()
         || ((value.type.two_state
              || value.type.element_kind == ContainerElementKind::Scalar)
-            && element.low_word().bval != 0)) {
+            && contains_unknown)) {
       throw std::invalid_argument{
           "SimIR container element does not match its type"};
     }

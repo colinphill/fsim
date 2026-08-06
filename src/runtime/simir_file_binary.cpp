@@ -8,19 +8,29 @@
 namespace fsim::runtime::simir {
 namespace {
 
-[[nodiscard]] std::pair<std::uint64_t, std::uint32_t> read_word(
+[[nodiscard]] std::pair<PackedLogic4, std::uint32_t> read_word(
     const std::uint32_t width,
     const std::function<std::int32_t()>& read) {
   const auto byte_count = (width + 7U) / 8U;
-  std::uint64_t value{};
+  if (byte_count > maximum_memory_file_bytes) {
+    throw std::length_error{"$fread target exceeds the bounded file byte limit"};
+  }
+  PackedLogic4 value{width, Logic4::zero};
   std::uint32_t consumed{};
   for (; consumed < byte_count; ++consumed) {
     const auto character = read();
     if (character < 0) break;
-    value = (value << 8U) | static_cast<std::uint8_t>(character);
+    const auto byte = static_cast<std::uint8_t>(character);
+    const auto byte_offset =
+        static_cast<std::size_t>(byte_count - consumed - 1U) * 8U;
+    for (std::size_t bit = 0; bit < 8U; ++bit) {
+      const auto destination = byte_offset + bit;
+      if (destination < width && ((byte >> bit) & 1U) != 0) {
+        value.set(destination, Logic4::one);
+      }
+    }
   }
-  if (consumed == 0) return {0, 0};
-  value <<= static_cast<unsigned>((byte_count - consumed) * 8U);
+  if (consumed == 0) return {PackedLogic4{width, Logic4::zero}, 0};
   return {value, consumed};
 }
 
@@ -38,11 +48,13 @@ namespace {
 }
 
 void require_safe_chandle(
-    const FileBinaryRead& operation, const std::uint64_t value) {
-  if (operation.scalar_kind == SystemVerilogScalarKind::Chandle
-      && value != 0) {
-    throw std::invalid_argument{
-        "$fread chandle input accepts only the null handle"};
+    const FileBinaryRead& operation, const PackedLogic4& value) {
+  if (operation.scalar_kind != SystemVerilogScalarKind::Chandle) return;
+  for (std::size_t bit = 0; bit < value.width(); ++bit) {
+    if (value.get(bit) != Logic4::zero) {
+        throw std::invalid_argument{
+            "$fread chandle input accepts only the null handle"};
+    }
   }
 }
 
@@ -66,7 +78,7 @@ FileBinaryReadResult read_binary_file(
     const auto [value, consumed] = read_word(operation.width, read);
     require_safe_chandle(operation, value);
     result.bytes = consumed;
-    result.packed = PackedLogic4::from_aval_bval(operation.width, value, 0);
+    result.packed = std::move(value);
     return result;
   }
   if (!container || !container->type.fixed || container->type.associative
@@ -93,8 +105,7 @@ FileBinaryReadResult read_binary_file(
       throw std::length_error{"$fread exceeds the bounded file byte limit"};
     }
     result.bytes += consumed;
-    container->elements[offset] =
-        PackedLogic4::from_aval_bval(operation.width, value, 0);
+    container->elements[offset] = std::move(value);
     if (index == container->type.index_right) break;
     index = static_cast<std::int32_t>(index + direction);
     offset = fixed_offset(container->type, index);

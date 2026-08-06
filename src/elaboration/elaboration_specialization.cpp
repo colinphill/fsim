@@ -83,6 +83,54 @@ bool vhdl_composite_constant_type(const frontend::Type& type) {
     return type.vhdl_array.has_value() || !type.packed_members.empty();
 }
 
+void annotate_systemverilog_constant_casts(
+    frontend::Expression& expression,
+    const frontend::Type& destination_type,
+    const std::vector<frontend::TypeAliasDeclaration>& type_aliases) {
+    for (auto& operand : expression.operands) {
+        annotate_systemverilog_constant_casts(
+            operand, destination_type, type_aliases);
+    }
+    for (auto& choices : expression.aggregate_choice_expressions) {
+        for (auto& choice : choices) {
+            annotate_systemverilog_constant_casts(
+                choice, destination_type, type_aliases);
+        }
+    }
+    if (expression.kind != frontend::ExpressionKind::Call
+        || !expression.text.starts_with("@sv-cast:")) {
+        return;
+    }
+    const auto type_name = std::string_view{expression.text}.substr(
+        std::string_view{"@sv-cast:"}.size());
+    const frontend::Type* cast_type = nullptr;
+    if (type_name == destination_type.spelling
+        || type_name == destination_type.named_type
+        || type_name == destination_type.nominal_type) {
+        cast_type = &destination_type;
+    } else {
+        const auto alias = std::ranges::find_if(
+            type_aliases,
+            [&](const auto& candidate) {
+                return candidate.name == type_name;
+            });
+        if (alias != type_aliases.end()) {
+            cast_type = &alias->type;
+        }
+    }
+    if (cast_type == nullptr) {
+        return;
+    }
+    const auto width = cast_type->width();
+    if (!width || *width == 0U) {
+        return;
+    }
+    expression.call_result_width = *width;
+    expression.call_result_domain = cast_type->domain;
+    expression.call_result_signed = cast_type->is_signed;
+    expression.nominal_type = cast_type->nominal_type;
+}
+
 std::optional<frontend::Expression> vital_constant_expression(
     const frontend::Expression& expression,
     const frontend::Type& type) {
@@ -323,7 +371,9 @@ SpecializedUnit specialize_unit(
     const ConstantEnvironment& parent_environment,
     const frontend::Language association_language,
     std::vector<Diagnostic>& diagnostics,
-    const bool expand_generates) {
+    const bool expand_generates,
+    const SystemVerilogConstantEnvironment&
+        parent_integral_environment) {
     SpecializedUnit result;
     result.unit = source;
     const bool is_vhdl =
@@ -506,7 +556,8 @@ SpecializedUnit specialize_unit(
                     evaluate_systemverilog_scalar_parameter(
                         actual_expression,
                         overridable[*actual_index]->type,
-                        {}, {}, parent_environment,
+                        {}, parent_integral_environment,
+                        parent_environment,
                         systemverilog_scalar_evaluation_context(source),
                         scalar_applicable, error);
                 if (scalar_applicable) {
@@ -535,13 +586,38 @@ SpecializedUnit specialize_unit(
                         override.span});
                     continue;
                 }
-                const auto value =
-                    evaluate_systemverilog_constant_function_expression(
-                        actual_expression,
-                        {},
-                        parent_environment,
-                        source.functions,
-                        error);
+                const auto& actual_type =
+                    overridable[*actual_index]->type;
+                annotate_systemverilog_constant_casts(
+                    actual_expression,
+                    actual_type,
+                    source.type_aliases);
+                std::optional<SystemVerilogConstantValue> value;
+                if (!actual_type.packed_members.empty()) {
+                    if (const auto packed =
+                            evaluate_systemverilog_packed_constant(
+                                actual_expression,
+                                actual_type,
+                                parent_integral_environment,
+                                parent_environment,
+                                error)) {
+                        value = SystemVerilogConstantValue{
+                            *packed,
+                            actual_type.is_signed,
+                            false,
+                            actual_type.domain,
+                            actual_type.nominal_type,
+                            actual_expression.span};
+                    }
+                } else {
+                    value =
+                        evaluate_systemverilog_constant_function_expression(
+                            actual_expression,
+                            parent_integral_environment,
+                            parent_environment,
+                            source.functions,
+                            error);
+                }
                 if (!value) {
                     diagnostics.push_back({
                         code(
@@ -690,6 +766,8 @@ SpecializedUnit specialize_unit(
     std::size_t overridable_index = 0;
     ConstantDomainEnvironment domains;
     SystemVerilogConstantEnvironment systemverilog_environment;
+    SystemVerilogConstantEnvironment
+        systemverilog_raw_enum_environment;
     SystemVerilogScalarConstantEnvironment
         systemverilog_scalar_environment;
     const auto scalar_context =
@@ -908,17 +986,39 @@ SpecializedUnit specialize_unit(
                 std::string error;
                 auto default_expression =
                     parameter.default_value;
+                annotate_systemverilog_constant_casts(
+                    default_expression, parameter_type,
+                    source.type_aliases);
                 substitute_systemverilog_strings(
                     default_expression,
                     systemverilog_string_environment,
                     result.environment);
-                systemverilog_value =
-                    evaluate_systemverilog_constant_function_expression(
-                        default_expression,
-                        systemverilog_environment,
-                        result.environment,
-                        source.functions,
-                        error);
+                if (!parameter_type.packed_members.empty()) {
+                    if (const auto packed =
+                            evaluate_systemverilog_packed_constant(
+                                default_expression,
+                                parameter_type,
+                                systemverilog_environment,
+                                result.environment,
+                                error)) {
+                        systemverilog_value =
+                            SystemVerilogConstantValue{
+                                *packed,
+                                parameter_type.is_signed,
+                                false,
+                                parameter_type.domain,
+                                parameter_type.nominal_type,
+                                default_expression.span};
+                    }
+                } else {
+                    systemverilog_value =
+                        evaluate_systemverilog_constant_function_expression(
+                            default_expression,
+                            systemverilog_environment,
+                            result.environment,
+                            source.functions,
+                            error);
+                }
                 if (!systemverilog_value) {
                     diagnostics.push_back({
                         code(
@@ -1026,49 +1126,72 @@ SpecializedUnit specialize_unit(
                 }
             }
         }
-        const bool enum_literal_parameter =
-            is_verilog
-            && std::ranges::any_of(
-                source.type_aliases,
-                [&](const auto& alias) {
-                  return std::ranges::any_of(
-                      alias.enum_literals,
-                      [&](const auto& literal) {
-                        return literal.name == parameter.name
-                            && literal.span.source_name
-                                == parameter.span.source_name
-                            && literal.span.begin.offset
-                                == parameter.span.begin.offset;
-                      });
-                });
+        const auto enum_literal_alias = is_verilog
+            ? std::ranges::find_if(
+                  source.type_aliases,
+                  [&](const auto& alias) {
+                    return std::ranges::any_of(
+                        alias.enum_literals,
+                        [&](const auto& literal) {
+                          return literal.name == parameter.name
+                              && literal.span.source_name
+                                  == parameter.span.source_name;
+                        });
+                  })
+            : source.type_aliases.end();
+        const bool enum_literal_parameter = is_verilog
+            && std::ranges::find(
+                parameter_type.enumeration_literals,
+                parameter.name)
+                != parameter_type.enumeration_literals.end();
         if (is_verilog) {
-            if (!enum_literal_parameter) {
-                std::string conversion_error;
-                const auto converted =
-                    convert_systemverilog_parameter_value(
-                        *systemverilog_value,
-                        parameter_type,
-                        conversion_error);
-                if (!converted) {
-                    diagnostics.push_back({
-                        "FSIM-ELAB-SVCONST-001",
-                        "cannot convert " + std::string{object_kind}
-                            + " '" + parameter.name + "': "
-                            + conversion_error,
-                        parameter.span});
-                    systemverilog_value =
-                        SystemVerilogConstantValue{
-                            0,
-                            0,
-                            0,
-                            static_cast<std::uint32_t>(
-                                parameter_type.width().value_or(32)),
-                            parameter_type.is_signed,
-                            false,
-                            parameter.span};
-                } else {
-                    systemverilog_value = *converted;
-                }
+            if (enum_literal_parameter) {
+                systemverilog_raw_enum_environment[parameter.name] =
+                    *systemverilog_value;
+                auto nominal_type =
+                    !parameter_type.nominal_type.empty()
+                    ? parameter_type.nominal_type
+                    : enum_literal_alias != source.type_aliases.end()
+                          && !enum_literal_alias->type.nominal_type.empty()
+                    ? enum_literal_alias->type.nominal_type
+                    : enum_literal_alias != source.type_aliases.end()
+                    ? "sv:"
+                        + (source.library.empty()
+                            ? std::string{"work"}
+                            : source.library)
+                        + "." + source.name + "."
+                        + enum_literal_alias->name
+                    : std::string{};
+                systemverilog_value->nominal_type = nominal_type;
+                specialized_parameter.type.nominal_type =
+                    std::move(nominal_type);
+            }
+            std::string conversion_error;
+            const auto converted =
+                convert_systemverilog_parameter_value(
+                    *systemverilog_value,
+                    parameter_type,
+                    conversion_error);
+            if (!converted) {
+                diagnostics.push_back({
+                    "FSIM-ELAB-SVCONST-001",
+                    "cannot convert " + std::string{object_kind}
+                        + " '" + parameter.name + "': "
+                        + conversion_error,
+                    parameter.span});
+                systemverilog_value =
+                    SystemVerilogConstantValue{
+                        0,
+                        0,
+                        0,
+                        32,
+                        parameter_type.is_signed,
+                        false,
+                        parameter.span};
+                systemverilog_value->nominal_type =
+                    parameter_type.nominal_type;
+            } else {
+                systemverilog_value = *converted;
             }
             systemverilog_environment[parameter.name] =
                 *systemverilog_value;
@@ -1352,7 +1475,8 @@ SpecializedUnit specialize_unit(
             continue;
         }
         const auto width = alias.type.width();
-        if (!width || *width == 0 || *width > 64) {
+        if (!width || *width == 0
+            || *width > 16U * 1024U * 1024U) {
             diagnostics.push_back({
                 "FSIM-ELAB-SVENUM-001",
                 "enum '" + alias.name
@@ -1360,59 +1484,64 @@ SpecializedUnit specialize_unit(
                 alias.span});
             continue;
         }
-        std::unordered_map<std::uint64_t, std::string>
-            enum_values;
+        std::unordered_map<std::string, std::string> enum_values;
         for (const auto& literal : alias.enum_literals) {
-            const auto value =
+            const auto raw_value =
+                systemverilog_raw_enum_environment.find(
+                    literal.name);
+            const auto converted_value =
                 systemverilog_environment.find(literal.name);
-            if (value == systemverilog_environment.end()) {
+            const auto* value = raw_value
+                    != systemverilog_raw_enum_environment.end()
+                ? &raw_value->second
+                : converted_value != systemverilog_environment.end()
+                    ? &converted_value->second : nullptr;
+            if (value == nullptr) {
                 continue;
             }
-            bool in_range = false;
-            std::uint64_t normalized_bits = 0;
-            const auto base_mask =
-                *width == 64
-                    ? std::numeric_limits<std::uint64_t>::max()
-                    : (std::uint64_t{1} << *width) - 1U;
-            if (alias.type.is_signed) {
-                const auto integer =
-                    value->second.integer_value();
-                if (integer && *width == 64) {
-                    in_range = true;
-                } else if (integer) {
-                    const auto limit =
-                        std::int64_t{1} << (*width - 1U);
-                    in_range =
-                        *integer >= -limit
-                        && *integer < limit;
-                }
-                if (integer) {
-                    normalized_bits =
-                        static_cast<std::uint64_t>(*integer)
-                        & base_mask;
-                }
-            } else if (value->second.known()) {
-                if (value->second.is_signed) {
-                    const auto integer =
-                        value->second.integer_value();
-                    in_range = integer && *integer >= 0
-                        && (*width == 64
-                            || static_cast<std::uint64_t>(*integer)
-                                <= base_mask);
-                    if (integer && *integer >= 0) {
-                        normalized_bits =
-                            static_cast<std::uint64_t>(*integer)
-                            & base_mask;
+            const auto state_at = [&](const std::uint64_t bit) {
+                return runtime::to_logic4(
+                    value->packed.get_logic9(
+                        static_cast<std::size_t>(bit)));
+            };
+            bool in_range = value->known();
+            const auto source_width =
+                static_cast<std::uint64_t>(value->width);
+            if (in_range && alias.type.is_signed) {
+                if (value->is_signed) {
+                    if (source_width > *width) {
+                        const auto extension = state_at(*width - 1U);
+                        for (auto bit = *width;
+                             in_range && bit < source_width; ++bit) {
+                            in_range = state_at(bit) == extension;
+                        }
                     }
                 } else {
-                    normalized_bits =
-                        value->second.bits
-                        & value->second.mask();
-                    in_range =
-                        *width == 64
-                        || normalized_bits <= base_mask;
-                    normalized_bits &= base_mask;
+                    for (auto bit = *width - 1U;
+                         in_range && bit < source_width; ++bit) {
+                        in_range = state_at(bit) == Logic4::zero;
+                    }
                 }
+            } else if (in_range) {
+                if (value->is_signed && source_width != 0
+                    && state_at(source_width - 1U) == Logic4::one) {
+                    in_range = false;
+                }
+                for (auto bit = *width;
+                     in_range && bit < source_width; ++bit) {
+                    in_range = state_at(bit) == Logic4::zero;
+                }
+            }
+            auto normalized = PackedLogic4{
+                static_cast<std::size_t>(*width), Logic4::zero};
+            if (value->is_signed && source_width != 0
+                && state_at(source_width - 1U) == Logic4::one) {
+                normalized.fill(Logic4::one);
+            }
+            for (std::uint64_t bit = 0;
+                 bit < std::min(*width, source_width); ++bit) {
+                normalized.set(
+                    static_cast<std::size_t>(bit), state_at(bit));
             }
             if (!in_range) {
                 diagnostics.push_back({
@@ -1424,7 +1553,7 @@ SpecializedUnit specialize_unit(
             }
             const auto [duplicate, inserted] =
                 enum_values.emplace(
-                    normalized_bits, literal.name);
+                    normalized.to_msb_string(), literal.name);
             if (!inserted) {
                 diagnostics.push_back({
                     "FSIM-ELAB-SVENUM-002",
@@ -1758,6 +1887,10 @@ SpecializedUnit specialize_unit(
     result.domains = domains;
     if (expand_generates) {
         expand_specialized_unit_generates(result, diagnostics);
+    }
+    if (is_verilog) {
+        result.integral_environment =
+            std::move(systemverilog_environment);
     }
     return result;
 }

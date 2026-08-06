@@ -365,6 +365,8 @@ using namespace elaboration_detail;
         const DesignUnit& selected,
         const std::vector<frontend::ParameterOverride>& overrides,
         const ConstantEnvironment& parent_environment,
+        const SystemVerilogConstantEnvironment&
+            parent_integral_environment,
         const ConstantDomainEnvironment& parent_domains,
         const NamedTypeEnvironment& parent_types,
         const std::vector<frontend::FunctionDeclaration>& parent_functions,
@@ -372,6 +374,36 @@ using namespace elaboration_detail;
         const PackageEnvironment& parent_packages,
         const frontend::Language association_language) {
         auto normalized_overrides = overrides;
+        if (selected.language
+                == frontend::Language::SystemVerilog2017) {
+            const auto annotate_nominal_actual =
+                [&](auto&& self, frontend::Expression& expression)
+                    -> void {
+                  if (expression.kind
+                          == frontend::ExpressionKind::Identifier) {
+                      const auto found =
+                          parent_domains.find(expression.text);
+                      if (found != parent_domains.end()
+                          && !found->second.nominal_type.empty()) {
+                          expression.nominal_type =
+                              found->second.nominal_type;
+                      }
+                  }
+                  for (auto& operand : expression.operands) {
+                      self(self, operand);
+                  }
+                  for (auto& choices :
+                       expression.aggregate_choice_expressions) {
+                      for (auto& choice : choices) {
+                          self(self, choice);
+                      }
+                  }
+                };
+            for (auto& override : normalized_overrides) {
+                annotate_nominal_actual(
+                    annotate_nominal_actual, override.value);
+            }
+        }
         PackageEnvironment interface_packages;
         std::vector<std::pair<std::string, std::string>>
             package_identities;
@@ -465,7 +497,8 @@ using namespace elaboration_detail;
             parent_environment,
             association_language,
             diagnostics_,
-            false);
+            false,
+            parent_integral_environment);
         if (selected.language
                 == frontend::Language::SystemVerilog2017
             && type_specialized.applied) {
@@ -1519,7 +1552,6 @@ using namespace elaboration_detail;
                 && cross_language
                 && (width_changed || signedness_changed
                     || boolean_boundary || integer_boundary)
-                && formal_width <= 64 && actual_info.width <= 64
                 && (port.direction == frontend::PortDirection::Input
                     || port.direction == frontend::PortDirection::Output
                     || port.direction == frontend::PortDirection::Buffer);

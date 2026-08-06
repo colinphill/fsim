@@ -42,6 +42,18 @@ package values;
   typedef logic signed [3:0] key_t;
   typedef enum logic [1:0] {idle = 0, busy = 1} state_t;
   typedef struct packed { logic valid; logic [2:0] data; } packet_t;
+  typedef struct packed {
+    logic [3:0] prefix = 4'ha;
+    packet_t packet = '{valid: 1'b1, data: 3'h5};
+  } initialized_t;
+  typedef union packed {
+    logic [15:0] wide;
+    logic [7:0] narrow;
+  } unequal_t;
+  typedef union tagged packed {
+    logic [15:0] wide;
+    logic [7:0] narrow;
+  } tagged_t;
   localparam int VALUE = 3;
 endpackage
 
@@ -172,13 +184,37 @@ endmodule
       checked->systemverilog_hir.types(), [](const auto& type) {
         return type.name == "packet_t";
       });
+  const auto unequal_type = std::ranges::find_if(
+      checked->systemverilog_hir.types(), [](const auto& type) {
+        return type.name == "unequal_t";
+      });
+  const auto tagged_type = std::ranges::find_if(
+      checked->systemverilog_hir.types(), [](const auto& type) {
+        return type.name == "tagged_t";
+      });
+  const auto initialized_type = std::ranges::find_if(
+      checked->systemverilog_hir.types(), [](const auto& type) {
+        return type.name == "initialized_t";
+      });
   assert(state_type != checked->systemverilog_hir.types().end());
   assert(packet_type != checked->systemverilog_hir.types().end());
+  assert(unequal_type != checked->systemverilog_hir.types().end());
+  assert(tagged_type != checked->systemverilog_hir.types().end());
+  assert(initialized_type != checked->systemverilog_hir.types().end());
   assert(state_type->form == fsim::semantic::sv::TypeForm::enumeration);
   assert(state_type->enumeration_literals.size() == 2);
   assert(packet_type->form
          == fsim::semantic::sv::TypeForm::packed_structure);
   assert(packet_type->members.size() == 2);
+  assert(unequal_type->form
+         == fsim::semantic::sv::TypeForm::packed_union);
+  assert(unequal_type->members.size() == 2);
+  assert(tagged_type->form
+         == fsim::semantic::sv::TypeForm::tagged_union);
+  assert(tagged_type->members.size() == 2);
+  assert(initialized_type->members.size() == 2);
+  assert(initialized_type->members[0].initializer);
+  assert(initialized_type->members[1].initializer);
 
   const auto top = std::ranges::find_if(
       checked->systemverilog_hir.units(), [](const auto& unit) {

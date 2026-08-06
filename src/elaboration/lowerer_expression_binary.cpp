@@ -374,6 +374,12 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
             const frontend::Type* rhs_object_type =
                 expression_object_type(
                     expression.operands[1]);
+            const auto* lhs_nominal_type =
+                systemverilog_expression_type(
+                    expression.operands[0]);
+            const auto* rhs_nominal_type =
+                systemverilog_expression_type(
+                    expression.operands[1]);
             const auto scalar_type = [&](const Expression& operand)
                 -> const frontend::Type* {
               if (const auto* direct = expression_object_type(operand);
@@ -524,20 +530,23 @@ Lowerer::ExpressionAttempt Lowerer::lower_binary_expression(
                     || expression.text == "!="
                     || expression.text == "==="
                     || expression.text == "!==")
-                && ((lhs_object_type != nullptr
-                     && !lhs_object_type->packed_members.empty())
-                    || (rhs_object_type != nullptr
-                        && !rhs_object_type->packed_members.empty()))
-                && (lhs_object_type == nullptr
-                    || rhs_object_type == nullptr
-                    || lhs_object_type->packed_members.empty()
-                    || rhs_object_type->packed_members.empty()
-                    || lhs_object_type->nominal_type.empty()
-                    || lhs_object_type->nominal_type
-                        != rhs_object_type->nominal_type)) {
+                && ((lhs_nominal_type != nullptr
+                     && is_systemverilog_nominal_packed_type(
+                         *lhs_nominal_type))
+                    || (rhs_nominal_type != nullptr
+                        && is_systemverilog_nominal_packed_type(
+                            *rhs_nominal_type)))
+                && (lhs_nominal_type == nullptr
+                    || rhs_nominal_type == nullptr
+                    || !is_systemverilog_nominal_packed_type(
+                        *lhs_nominal_type)
+                    || !is_systemverilog_nominal_packed_type(
+                        *rhs_nominal_type)
+                    || lhs_nominal_type->nominal_type
+                        != rhs_nominal_type->nominal_type)) {
                 report(
                     "FSIM-ELAB-SVTYPE-005",
-                    "aggregate equality requires two values of the same "
+                    "nominal packed equality requires two values of the same "
                     "nominal SystemVerilog type",
                     expression.span);
                 return std::nullopt;

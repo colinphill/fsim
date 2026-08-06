@@ -171,6 +171,191 @@ endmodule
           && record_type.packed_members[0].nested_types.size() == 1
           && record_type.packed_members[1].name == "count",
       "unpacked structs retain ordered scalar and nested aggregate members");
+
+  const auto anonymous_aggregates = parse_text(
+      "anonymous_aggregates.sv",
+      R"(
+module anonymous_aggregate_top;
+  struct packed {
+    logic [31:0] header;
+    struct packed {
+      bit [95:0] payload;
+      logic valid;
+    } body;
+    bit [7:0] tail;
+  } value;
+  initial begin
+    struct packed {
+      logic [15:0] prefix;
+      struct packed {
+        logic [7:0] data;
+        logic ready;
+      } inner;
+    } local_value;
+    local_value.inner.ready = 1'b1;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      anonymous_aggregates.ok()
+          && anonymous_aggregates.design.units.size() == 1
+          && anonymous_aggregates.design.units[0].signals.size() == 1
+          && anonymous_aggregates.design.units[0].processes.size() == 1
+          && anonymous_aggregates.design.units[0]
+                 .processes[0].variables.size()
+              == 1,
+      "anonymous packed aggregate signal and local declarations parse");
+  const auto& anonymous_type =
+      anonymous_aggregates.design.units[0].signals[0].type;
+  require(
+      anonymous_type.packed_aggregate
+              == PackedAggregateKind::Struct
+          && anonymous_type.width() == 137
+          && anonymous_type.packed_members.size() == 3
+          && anonymous_type.packed_members[0].name == "header"
+          && anonymous_type.packed_members[0].lsb_offset == 105
+          && anonymous_type.packed_members[1].name == "body"
+          && anonymous_type.packed_members[1].lsb_offset == 8
+          && anonymous_type.packed_members[1].nested_types.size() == 1
+          && anonymous_type.packed_members[2].name == "tail"
+          && anonymous_type.packed_members[2].lsb_offset == 0,
+      "anonymous packed struct retains exact outer layout");
+  const auto& anonymous_body =
+      anonymous_type.packed_members[1].nested_types.front();
+  require(
+      anonymous_body.packed_aggregate
+              == PackedAggregateKind::Struct
+          && anonymous_body.width() == 97
+          && anonymous_body.packed_members.size() == 2
+          && anonymous_body.packed_members[0].lsb_offset == 1
+          && anonymous_body.packed_members[1].lsb_offset == 0,
+      "nested anonymous packed struct retains exact member layout");
+  const auto& local_type = anonymous_aggregates.design.units[0]
+                               .processes[0].variables[0].type;
+  require(
+      local_type.packed_aggregate == PackedAggregateKind::Struct
+          && local_type.width() == 25
+          && local_type.packed_members[1].nested_types.size() == 1
+          && local_type.packed_members[1].nested_types.front().width() == 9,
+      "procedural anonymous packed aggregates retain nested layout");
+  const auto anonymous_unpacked = parse_text(
+      "anonymous_unpacked.sv",
+      "module anonymous_unpacked; "
+      "struct { logic value; } deferred; endmodule",
+      Language::SystemVerilog2017);
+  require(
+      !anonymous_unpacked.ok()
+          && std::ranges::any_of(
+              anonymous_unpacked.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-UNSUPPORTED-028";
+              }),
+      "anonymous unpacked structs remain deferred to their planned batch");
+  const auto union_forms = parse_text(
+      "union_forms.sv",
+      R"(
+package union_shapes;
+  typedef union packed {
+    logic [15:0] wide;
+    logic [7:0] narrow;
+  } unequal_t;
+  typedef union tagged packed {
+    logic [15:0] wide;
+    logic [7:0] narrow;
+  } tagged_t;
+endpackage
+import union_shapes::*;
+module union_syntax;
+  tagged_t value;
+  initial value = tagged narrow 8'hab;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      union_forms.ok()
+          && union_forms.design.units.size() == 2
+          && union_forms.design.units[0].type_aliases.size() == 2,
+      "unequal-width and tagged packed unions parse");
+  const auto& unequal_type =
+      union_forms.design.units[0].type_aliases[0].type;
+  const auto& tagged_type =
+      union_forms.design.units[0].type_aliases[1].type;
+  require(
+      unequal_type.packed_aggregate == PackedAggregateKind::Union
+          && unequal_type.width() == 16
+          && unequal_type.packed_members.size() == 2
+          && unequal_type.packed_members[0].lsb_offset == 0
+          && unequal_type.packed_members[1].lsb_offset == 0
+          && tagged_type.packed_aggregate
+              == PackedAggregateKind::TaggedUnion
+          && tagged_type.width() == 17
+          && tagged_type.packed_members.size() == 2,
+      "union storage uses the maximum payload plus a tagged discriminator");
+  const auto& tagged_constructor =
+      union_forms.design.units[1].processes[0].statements[0].value;
+  require(
+      tagged_constructor.kind == ExpressionKind::Call
+          && tagged_constructor.text == "@sv-tagged:narrow"
+          && tagged_constructor.operands.size() == 1
+          && tagged_constructor.operands[0].text == "8'hab",
+      "tagged-union construction retains member identity and payload");
+  const auto enum_and_member_defaults = parse_text(
+      "enum_and_member_defaults.sv",
+      R"(
+module enum_and_member_defaults;
+  enum { START = 5, NEXT } anonymous_value;
+  typedef enum { DEFAULT_ZERO, DEFAULT_ONE } default_enum_t;
+  typedef enum signed [2:0] { NEGATIVE = -2, FOLLOWING } ranged_enum_t;
+  typedef struct packed {
+    bit [1:0] code;
+    logic valid;
+  } initialized_inner_t;
+  typedef struct packed {
+    logic [7:0] payload = 8'ha5;
+    initialized_inner_t nested = '{code: 2'b01, valid: 1'b0};
+  } initialized_t;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      enum_and_member_defaults.ok(),
+      "anonymous/default-base enums and aggregate member defaults parse");
+  require(
+      enum_and_member_defaults.design.units.size() == 1,
+      "anonymous enum source retains one module");
+  const auto& enum_unit = enum_and_member_defaults.design.units[0];
+  const auto anonymous_object = std::ranges::find_if(
+      enum_unit.signals,
+      [](const SignalDeclaration& signal) {
+        return signal.name == "anonymous_value";
+      });
+  require(
+      anonymous_object != enum_unit.signals.end(),
+      "anonymous enum retains its declared object");
+  require(
+      enum_unit.parameters.size() == 6,
+      std::string{"anonymous and typedef enum literal count was "}
+          + std::to_string(enum_unit.parameters.size()));
+  require(
+      enum_unit.type_aliases.size() == 4,
+      std::string{"enum and initialized typedef count was "}
+          + std::to_string(enum_unit.type_aliases.size()));
+  const auto& anonymous_enum =
+      anonymous_object->type;
+  const auto& initialized =
+      enum_unit.type_aliases[3].type;
+  require(
+      anonymous_enum.spelling == "int"
+          && anonymous_enum.is_signed
+          && anonymous_enum.width() == 32
+          && anonymous_enum.enumeration_literals.size() == 2
+          && anonymous_enum.systemverilog_enumeration_values.size() == 2
+          && initialized.packed_members.size() == 2
+          && initialized.packed_members[0].initializer
+          && initialized.packed_members[1].initializer
+          && initialized.packed_members[1].nested_types.size() == 1,
+      "enum inference and recursive member initializer expressions survive parsing");
   require(
       parsed.design.units[1].systemverilog_imports.size() == 1
           && parsed.design.units[1]
@@ -265,13 +450,14 @@ package invalid_values;
   typedef logic duplicate_t;
   typedef bit duplicate_t;
   typedef logic unpacked_t [2];
-  typedef enum { MISSING_BASE } missing_base_t;
+  typedef enum { DEFAULT_BASE } default_base_t;
+  typedef enum real { INVALID_BASE } invalid_base_t;
   typedef enum logic [1:0] {} empty_enum_t;
   typedef enum logic [1:0] A, B } missing_open_t;
   typedef enum logic [1:0] { C missing_close_t;
   typedef union invalid_unpacked_t;
   typedef struct packed {
-    int unsupported;
+    real unsupported;
   } unsupported_member_t;
   typedef struct packed {
     logic duplicate;

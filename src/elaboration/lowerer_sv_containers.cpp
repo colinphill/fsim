@@ -311,6 +311,68 @@ Lowerer::ExpressionAttempt Lowerer::lower_container_query(
     const auto& operand = expression.operands.front();
     if (operand.kind == ExpressionKind::Identifier
         && visible_type_mark(operand.text) != nullptr) {
+      const auto* type = visible_type_mark(operand.text);
+      if (type != nullptr && !type->packed_members.empty()) {
+        const bool accepts_dimension = bound_query || size_query;
+        if (language_ != frontend::Language::SystemVerilog2017
+            || expression.operands.size()
+                > (accepts_dimension ? 2U : 1U)) {
+          report(
+              "FSIM-ELAB-SVQUERY-004",
+              expression.text
+                  + " aggregate type form has invalid arguments",
+              expression.span);
+          return std::nullopt;
+        }
+        if (expression.operands.size() == 2U) {
+          const auto dimension = constant_index(expression.operands[1]);
+          if (!dimension || *dimension != 1) {
+            report(
+                "FSIM-ELAB-SVQUERY-002",
+                expression.text
+                    + " aggregate type form supports only packed dimension 1",
+                expression.operands[1].span);
+            return std::nullopt;
+          }
+        }
+        const auto width = type->width();
+        const auto range = type->packed_range;
+        if (!width || *width == 0 || !range
+            || *width
+                > static_cast<std::uint64_t>(
+                    std::numeric_limits<std::int32_t>::max())) {
+          report(
+              "FSIM-ELAB-SVQUERY-004",
+              expression.text
+                  + " aggregate type has no representable packed layout",
+              operand.span);
+          return std::nullopt;
+        }
+        std::int64_t value = 0;
+        if (bits_query || size_query) {
+          value = static_cast<std::int64_t>(*width);
+        } else if (dimensions_query) {
+          value = 1;
+        } else if (unpacked_dimensions_query) {
+          value = 0;
+        } else if (expression.text == "$left") {
+          value = range->left;
+        } else if (expression.text == "$right") {
+          value = range->right;
+        } else if (expression.text == "$low") {
+          value = std::min(range->left, range->right);
+        } else if (expression.text == "$high") {
+          value = std::max(range->left, range->right);
+        } else {
+          value = range->left >= range->right ? 1 : -1;
+        }
+        const auto destination = allocate_register(
+            32, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant{
+            destination,
+            unsigned_value(static_cast<std::uint32_t>(value), 32)});
+        return destination;
+      }
       report(
           "FSIM-ELAB-SVQUERY-004",
           expression.text

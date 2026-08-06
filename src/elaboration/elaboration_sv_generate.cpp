@@ -6,23 +6,17 @@ namespace {
 
 using Value = SystemVerilogConstantValue;
 
-[[nodiscard]] std::uint64_t mask_for(
-    const std::uint32_t width) noexcept {
-    return width >= 64
-        ? std::numeric_limits<std::uint64_t>::max()
-        : (std::uint64_t{1} << width) - 1U;
-}
-
-[[nodiscard]] std::uint64_t extended_bits(
+[[nodiscard]] Logic4 extended_state(
     const Value& value,
-    const std::uint32_t width,
+    const std::uint32_t bit,
     const bool signed_context) noexcept {
-    auto bits = value.bits & value.mask();
-    if (signed_context && value.is_signed && width > value.width
-        && (bits & (std::uint64_t{1} << (value.width - 1U))) != 0) {
-        bits |= mask_for(width) & ~value.mask();
+    if (bit < value.width) {
+        return runtime::to_logic4(value.packed.get_logic9(bit));
     }
-    return bits & mask_for(width);
+    return signed_context && value.is_signed
+        ? runtime::to_logic4(
+              value.packed.get_logic9(value.width - 1U))
+        : Logic4::zero;
 }
 
 [[nodiscard]] bool equal_known(
@@ -34,8 +28,13 @@ using Value = SystemVerilogConstantValue;
     const auto width = std::max(left.width, right.width);
     const bool signed_context =
         left.is_signed && right.is_signed;
-    return extended_bits(left, width, signed_context)
-        == extended_bits(right, width, signed_context);
+    for (std::uint32_t bit = 0; bit < width; ++bit) {
+        if (extended_state(left, bit, signed_context)
+            != extended_state(right, bit, signed_context)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void set_integer_expression(

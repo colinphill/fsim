@@ -92,6 +92,8 @@ void adapt_vhdl_array_port_shapes(
         std::unordered_set<SignalId> read_only_signals,
         std::unordered_set<StringObjectId> read_only_strings,
         ConstantEnvironment parameter_environment,
+        SystemVerilogConstantEnvironment
+            parameter_integral_environment,
         std::vector<std::pair<std::string, std::string>>
             parameter_values,
         std::vector<std::pair<std::string, std::string>>
@@ -108,8 +110,11 @@ void adapt_vhdl_array_port_shapes(
         for (const auto& parameter : unit.parameters) {
             if (parameter.kind
                     != frontend::ParameterKind::Value
-                || parameter_environment.find(parameter.name)
-                    == parameter_environment.end()) {
+                || (parameter_environment.find(parameter.name)
+                        == parameter_environment.end()
+                    && parameter_integral_environment.find(
+                           parameter.name)
+                        == parameter_integral_environment.end())) {
                 continue;
             }
             parent_domains.insert_or_assign(
@@ -567,7 +572,9 @@ void adapt_vhdl_array_port_shapes(
                       std::string error;
                       const auto value =
                           evaluate_systemverilog_constant_expression(
-                              expression, {}, parameter_environment,
+                              expression,
+                              parameter_integral_environment,
+                              parameter_environment,
                               error);
                       return value ? value->integer_value()
                                    : std::optional<std::int64_t>{};
@@ -672,7 +679,7 @@ void adapt_vhdl_array_port_shapes(
                     const auto value =
                         evaluate_systemverilog_constant_expression(
                             *variable.initializer,
-                            {},
+                            parameter_integral_environment,
                             parameter_environment,
                             error);
                     const auto converted =
@@ -1028,6 +1035,7 @@ void adapt_vhdl_array_port_shapes(
                 *target,
                 selected_instance->parameter_overrides,
                 parameter_environment,
+                parameter_integral_environment,
                 parent_domains,
                 parent_types,
                 unit.functions,
@@ -1086,6 +1094,7 @@ void adapt_vhdl_array_port_shapes(
                 std::move(child_aliases.read_only_signals),
                 std::move(child_aliases.read_only_strings),
                 std::move(child_specialized.environment),
+                std::move(child_specialized.integral_environment),
                 std::move(child_specialized.values),
                 std::move(child_specialized.identity_values),
                 std::move(child_specialized.packages));

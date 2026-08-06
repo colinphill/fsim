@@ -271,6 +271,9 @@ struct PackedMember {
   // aggregate or enum member. Vector-backed recursion keeps Type value-copy
   // semantics without embedding another Type in every member.
   std::vector<Type> nested_types;
+  // Optional SystemVerilog member default. Parameter substitution retains a
+  // normalized contextual packed constant before runtime default construction.
+  std::optional<Expression> initializer;
 
   [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
 };
@@ -420,6 +423,7 @@ enum class PackedAggregateKind {
   Struct,
   Union,
   UnpackedStruct,
+  TaggedUnion,
 };
 
 struct Type {
@@ -454,6 +458,10 @@ struct Type {
   // literals are canonicalized case-insensitively; character literals retain
   // their quoted spelling. The ordinal is the vector index.
   std::vector<std::string> enumeration_literals;
+  // SystemVerilog enums retain each explicit or inferred source value in
+  // declaration order. This also gives anonymous enum objects a complete
+  // contextual default without synthesizing a nominal typedef.
+  std::vector<Expression> systemverilog_enumeration_values;
   // Concrete or specialization-dependent constraint over the declaration
   // ordinals above. A base enumeration covers its complete ascending range;
   // derived subtypes retain their own direction and inclusive bounds.

@@ -60,6 +60,7 @@ enum class TypeForm : std::uint8_t {
     alias,
     type_parameter,
     class_handle,
+    tagged_union,
 };
 
 enum class ModportMemberKind : std::uint8_t {
@@ -492,6 +493,7 @@ struct PackedMember {
     TypeReference type;
     std::uint64_t lsb_offset{};
     SourceSpanId source;
+    std::optional<ExpressionId> initializer;
 };
 
 struct ContainerType {

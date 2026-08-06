@@ -31,6 +31,7 @@ using namespace elaboration_detail;
                 {},
                 {},
                 std::move(specialized.environment),
+                std::move(specialized.integral_environment),
                 std::move(specialized.values),
                 std::move(specialized.identity_values),
                 std::move(specialized.packages));
@@ -65,7 +66,7 @@ using namespace elaboration_detail;
                 vhdl_configuration_identity(root);
         }
         auto specialized = specialize_selected_unit(
-            *selected, {}, {}, {}, {}, {}, {}, {},
+            *selected, {}, {}, {}, {}, {}, {}, {}, {},
             selected->language);
         if (!configuration_identity.empty()) {
             specialized.identity_values.emplace_back(
@@ -81,6 +82,7 @@ using namespace elaboration_detail;
             {},
             {},
             std::move(specialized.environment),
+            std::move(specialized.integral_environment),
             std::move(specialized.values),
             std::move(specialized.identity_values),
             std::move(specialized.packages));
@@ -1808,6 +1810,13 @@ using namespace elaboration_detail;
                                         ->scalar_environment.end()) {
                     imported_value =
                         value->second.expression(declaration.span);
+                } else if (const auto integral_constant =
+                               specialized_package->integral_environment.find(
+                                   declaration.name);
+                           integral_constant != specialized_package
+                                        ->integral_environment.end()) {
+                    imported_value =
+                        integral_constant->second.expression(declaration.span);
                 } else {
                     const auto integral_value =
                         specialized_package->environment.find(

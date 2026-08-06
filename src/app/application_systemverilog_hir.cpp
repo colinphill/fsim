@@ -777,6 +777,8 @@ class SystemVerilogHirBuilder final {
         return sv::TypeForm::packed_structure;
       case frontend::PackedAggregateKind::Union:
         return sv::TypeForm::packed_union;
+      case frontend::PackedAggregateKind::TaggedUnion:
+        return sv::TypeForm::tagged_union;
       case frontend::PackedAggregateKind::UnpackedStruct:
         return sv::TypeForm::unpacked_structure;
       case frontend::PackedAggregateKind::None:
@@ -846,7 +848,10 @@ class SystemVerilogHirBuilder final {
           member.name,
           type_reference(member_type, member.span, scope, parent),
           member.lsb_offset,
-          source(member.span)});
+          source(member.span),
+          member.initializer
+              ? expression(*member.initializer, scope, parent)
+              : std::nullopt});
     }
     for (const auto& literal : input.enum_literals) {
       const auto literal_id = add_declaration_record(

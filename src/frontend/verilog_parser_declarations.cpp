@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
 
+#include <bit>
+
 namespace fsim::frontend {
 
 void VerilogParser::parse_parameter_overrides(
@@ -507,6 +509,291 @@ Type VerilogParser::parse_named_type() {
   return type;
 }
 
+Type VerilogParser::parse_systemverilog_aggregate_type() {
+  const bool is_union = match_keyword("union");
+  if (!is_union) {
+    (void)match_keyword("struct");
+  }
+  bool tagged = is_union && match_keyword("tagged");
+  const bool packed = match_keyword("packed");
+  if (is_union && !tagged && match_keyword("tagged")) {
+    tagged = true;
+  }
+  Type type;
+  type.spelling =
+      tagged ? "union tagged packed"
+      : is_union ? "union packed"
+               : packed ? "struct packed" : "struct";
+  type.packed_aggregate =
+      tagged
+          ? PackedAggregateKind::TaggedUnion
+      : is_union
+          ? PackedAggregateKind::Union
+          : packed ? PackedAggregateKind::Struct
+                   : PackedAggregateKind::UnpackedStruct;
+  type.domain = ValueDomain::Bit2;
+  if (!packed && is_union) {
+    error(
+        previous(),
+        "FSIM-SV-UNSUPPORTED-027",
+        "bounded unpacked union declarations are not implemented");
+  } else if (!packed) {
+    error(
+        previous(),
+        "FSIM-SV-UNSUPPORTED-028",
+        "anonymous or nested unpacked struct declarations are not "
+        "implemented");
+  }
+  if (packed) {
+    parse_optional_signedness(type);
+  }
+  expect(
+      TokenKind::LeftBrace,
+      "'{' before aggregate members",
+      "FSIM-SV-PARSE-086");
+  if (at(TokenKind::RightBrace)) {
+    error(
+        current(),
+        "FSIM-SV-PARSE-089",
+        "bounded aggregates require at least one member");
+  }
+  std::unordered_set<std::string> member_names;
+  while (!at_end() && !at(TokenKind::RightBrace)) {
+    const auto member_start = current();
+    Type member_type;
+    if (keyword("struct") || keyword("union")) {
+      member_type = parse_systemverilog_aggregate_type();
+    } else if (
+        keyword("logic") || keyword("reg") || keyword("bit")
+        || keyword("byte") || keyword("shortint")
+        || keyword("int") || keyword("longint")
+        || keyword("integer") || keyword("time")) {
+      member_type = parse_parameter_type();
+    } else if (is_named_type_reference_start()) {
+      member_type = parse_named_type();
+    } else {
+      error(
+          current(),
+          "FSIM-SV-UNSUPPORTED-028",
+          "bounded aggregate members require an executable integral, "
+          "nested aggregate, or visible named type");
+      skip_to_semicolon();
+      if (match(TokenKind::Semicolon)) {
+        continue;
+      }
+      break;
+    }
+    if ((packed || is_union)
+        && member_type.packed_aggregate
+            == PackedAggregateKind::UnpackedStruct) {
+      error(
+          member_start,
+          "FSIM-SV-UNSUPPORTED-028",
+          "a packed aggregate cannot contain an unpacked aggregate member");
+    }
+    for (;;) {
+      const auto member =
+          expect_identifier("aggregate member name");
+      auto declarator_type = member_type;
+      if (at(TokenKind::LeftBracket)) {
+        if (packed || is_union) {
+          error(
+              current(),
+              "FSIM-SV-UNSUPPORTED-029",
+              "packed aggregate members cannot have unpacked dimensions");
+          skip_balanced(
+              TokenKind::LeftBracket,
+              TokenKind::RightBracket);
+        } else {
+          (void)parse_optional_container_dimension(declarator_type);
+        }
+      }
+      std::optional<Expression> member_initializer;
+      if (match(TokenKind::Assign)) {
+        member_initializer = parse_expression();
+      }
+      if (!member_names.insert(member.text).second) {
+        error(
+            member,
+            "FSIM-SV-SEM-025",
+            "duplicate aggregate member '" + member.text + "'");
+      } else {
+        auto packed_member = PackedMember{
+            member.text,
+            declarator_type.domain,
+            declarator_type.spelling,
+            declarator_type.packed_range,
+            declarator_type.is_signed,
+            declarator_type.packed_range_expression,
+            0,
+            cover(member_start.span, previous().span),
+            {},
+            std::move(member_initializer)};
+        if (!packed || !declarator_type.named_type.empty()
+            || declarator_type.packed_aggregate
+                != PackedAggregateKind::None) {
+          packed_member.nested_types.push_back(declarator_type);
+        }
+        type.packed_members.push_back(std::move(packed_member));
+        if (declarator_type.domain == ValueDomain::Logic9) {
+          type.domain = ValueDomain::Logic9;
+        } else if (declarator_type.domain == ValueDomain::Logic4
+                   && type.domain != ValueDomain::Logic9) {
+          type.domain = ValueDomain::Logic4;
+        }
+      }
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+    }
+    expect(
+        TokenKind::Semicolon,
+        "';' after aggregate member declaration",
+        "FSIM-SV-PARSE-088");
+  }
+  expect(
+      TokenKind::RightBrace,
+      "'}' after aggregate members",
+      "FSIM-SV-PARSE-087");
+  std::uint64_t total_width = 0;
+  std::optional<std::uint64_t> union_width;
+  bool concrete = !type.packed_members.empty();
+  for (const auto& member : type.packed_members) {
+    const auto width = member.width();
+    if (!width || *width == 0) {
+      concrete = false;
+      break;
+    }
+    if (is_union) {
+      union_width = std::max(union_width.value_or(0), *width);
+      total_width = *union_width;
+    } else if (*width
+               > std::numeric_limits<std::uint64_t>::max()
+                     - total_width) {
+      concrete = false;
+      break;
+    } else {
+      total_width += *width;
+    }
+  }
+  const auto tag_width = tagged && !type.packed_members.empty()
+      ? std::max<std::uint64_t>(
+            1U,
+            std::bit_width(type.packed_members.size() - 1U))
+      : 0U;
+  if (concrete && total_width != 0U
+      && tag_width
+          <= static_cast<std::uint64_t>(
+              std::numeric_limits<std::int64_t>::max())
+             - (total_width - 1U)
+      && total_width + tag_width - 1U
+          <= static_cast<std::uint64_t>(
+              std::numeric_limits<std::int64_t>::max())) {
+    if (!is_union) {
+      auto offset = total_width;
+      for (auto& member : type.packed_members) {
+        offset -= *member.width();
+        member.lsb_offset = offset;
+      }
+    }
+    type.packed_range = PackedRange{
+        static_cast<std::int64_t>(total_width + tag_width - 1U),
+        0,
+        true};
+  }
+  return type;
+}
+
+Type VerilogParser::parse_systemverilog_enum_type(
+    std::vector<EnumLiteralDeclaration>* retained_literals) {
+  (void)match_keyword("enum");
+  Type type;
+  if (keyword("logic") || keyword("reg") || keyword("bit")
+      || keyword("byte") || keyword("shortint")
+      || keyword("int") || keyword("longint")
+      || keyword("integer") || keyword("time")) {
+    type = parse_parameter_type();
+  } else if (keyword("signed") || keyword("unsigned")
+             || at(TokenKind::LeftBracket)) {
+    type.domain = ValueDomain::Logic4;
+    type.spelling = "logic";
+    parse_optional_signedness(type);
+    parse_optional_range(type);
+  } else if (is_named_type_reference_start()) {
+    type = parse_named_type();
+  } else if (keyword("string") || keyword("chandle")
+             || keyword("shortreal") || keyword("real")
+             || keyword("realtime")) {
+    const auto unsupported = advance();
+    error(
+        unsupported,
+        "FSIM-SV-UNSUPPORTED-026",
+        "an enum base type must be integral");
+    type.domain = ValueDomain::Integer;
+    type.spelling = "int";
+    type.is_signed = true;
+  } else {
+    type.domain = ValueDomain::Integer;
+    type.spelling = "int";
+    type.is_signed = true;
+  }
+  expect(
+      TokenKind::LeftBrace,
+      "'{' before enum literals",
+      "FSIM-SV-PARSE-083");
+  if (at(TokenKind::RightBrace)) {
+    error(
+        current(),
+        "FSIM-SV-PARSE-085",
+        "bounded enum declarations require at least one literal");
+  }
+  std::optional<std::string> previous_literal;
+  while (!at_end() && !at(TokenKind::RightBrace)) {
+    const auto literal = expect_identifier("enum literal name");
+    Expression value;
+    if (match(TokenKind::Assign)) {
+      value = parse_expression();
+    } else if (!previous_literal) {
+      value = Expression{
+          ExpressionKind::IntegerLiteral, "0", {}, literal.span};
+    } else {
+      value = Expression{
+          ExpressionKind::Binary,
+          "+",
+          {
+              Expression{
+                  ExpressionKind::Identifier,
+                  *previous_literal,
+                  {},
+                  literal.span},
+              Expression{
+                  ExpressionKind::IntegerLiteral,
+                  "1",
+                  {},
+                  literal.span},
+          },
+          literal.span};
+    }
+    type.enumeration_literals.push_back(literal.text);
+    type.systemverilog_enumeration_values.push_back(value);
+    if (retained_literals != nullptr) {
+      retained_literals->push_back({
+          literal.text,
+          std::move(value),
+          cover(literal.span, previous().span)});
+    }
+    previous_literal = literal.text;
+    if (!match(TokenKind::Comma)) {
+      break;
+    }
+  }
+  expect(
+      TokenKind::RightBrace,
+      "'}' after enum literals",
+      "FSIM-SV-PARSE-084");
+  return type;
+}
+
 void VerilogParser::parse_typedef(
   DesignUnit& unit,
   const Token& start) {
@@ -520,7 +807,11 @@ void VerilogParser::parse_typedef(
     if (!is_union) {
       (void)match_keyword("struct");
     }
+    bool tagged = is_union && match_keyword("tagged");
     const bool packed = match_keyword("packed");
+    if (is_union && !tagged && match_keyword("tagged")) {
+      tagged = true;
+    }
     if (!packed && is_union) {
       error(
           current(),
@@ -530,10 +821,13 @@ void VerilogParser::parse_typedef(
       return;
     }
     type.spelling =
-        is_union ? "union packed"
+        tagged ? "union tagged packed"
+        : is_union ? "union packed"
                  : packed ? "struct packed" : "struct";
     type.packed_aggregate =
-        is_union
+        tagged
+            ? PackedAggregateKind::TaggedUnion
+        : is_union
             ? PackedAggregateKind::Union
             : packed ? PackedAggregateKind::Struct
                      : PackedAggregateKind::UnpackedStruct;
@@ -555,18 +849,16 @@ void VerilogParser::parse_typedef(
     while (!at_end() && !at(TokenKind::RightBrace)) {
       const auto member_start = current();
       Type member_type;
-      if (!packed && !is_union) {
+      if (keyword("struct") || keyword("union")) {
+        member_type = parse_systemverilog_aggregate_type();
+      } else if (!packed && !is_union) {
         member_type = parse_parameter_type();
       } else if (keyword("logic") || keyword("reg")
-          || keyword("bit")) {
-        const auto type_token = advance();
-        member_type.spelling = type_token.text;
-        member_type.domain =
-            type_token.text == "bit"
-                ? ValueDomain::Bit2
-                : ValueDomain::Logic4;
-        parse_optional_signedness(member_type);
-        parse_optional_range(member_type);
+          || keyword("bit") || keyword("byte")
+          || keyword("shortint") || keyword("int")
+          || keyword("longint") || keyword("integer")
+          || keyword("time")) {
+        member_type = parse_parameter_type();
       } else if (is_named_type_reference_start()) {
         member_type = parse_named_type();
       } else {
@@ -577,6 +869,15 @@ void VerilogParser::parse_typedef(
             "visible named type");
         skip_to_semicolon();
         continue;
+      }
+      if ((packed || is_union)
+          && member_type.packed_aggregate
+              == PackedAggregateKind::UnpackedStruct) {
+        error(
+            member_start,
+            "FSIM-SV-UNSUPPORTED-028",
+            "a packed aggregate cannot contain an unpacked aggregate "
+            "member");
       }
       for (;;) {
         const auto member =
@@ -595,12 +896,9 @@ void VerilogParser::parse_typedef(
             (void)parse_optional_container_dimension(declarator_type);
           }
         }
+        std::optional<Expression> member_initializer;
         if (match(TokenKind::Assign)) {
-          (void)parse_expression();
-          error(
-              member,
-              "FSIM-SV-UNSUPPORTED-029",
-              "packed aggregate member initializers are not implemented");
+          member_initializer = parse_expression();
         }
         if (!member_names.insert(member.text).second) {
           error(
@@ -618,12 +916,18 @@ void VerilogParser::parse_typedef(
               declarator_type.packed_range_expression,
               0,
               cover(member_start.span, previous().span),
-              {}};
-          if (!packed || !declarator_type.named_type.empty()) {
+              {},
+              std::move(member_initializer)};
+          if (!packed || !declarator_type.named_type.empty()
+              || declarator_type.packed_aggregate
+                  != PackedAggregateKind::None) {
             packed_member.nested_types.push_back(declarator_type);
           }
           type.packed_members.push_back(std::move(packed_member));
-          if (declarator_type.domain == ValueDomain::Logic4) {
+          if (declarator_type.domain == ValueDomain::Logic9) {
+            type.domain = ValueDomain::Logic9;
+          } else if (declarator_type.domain == ValueDomain::Logic4
+                     && type.domain != ValueDomain::Logic9) {
             type.domain = ValueDomain::Logic4;
           }
         }
@@ -650,12 +954,8 @@ void VerilogParser::parse_typedef(
         break;
       }
       if (is_union) {
-        if (union_width && *union_width != *width) {
-          concrete = false;
-          break;
-        }
-        union_width = *width;
-        total_width = *width;
+        union_width = std::max(union_width.value_or(0), *width);
+        total_width = *union_width;
       } else {
         if (*width
             > std::numeric_limits<std::uint64_t>::max()
@@ -666,8 +966,17 @@ void VerilogParser::parse_typedef(
         total_width += *width;
       }
     }
+    const auto tag_width = tagged && !type.packed_members.empty()
+        ? std::max<std::uint64_t>(
+              1U,
+              std::bit_width(type.packed_members.size() - 1U))
+        : 0U;
     if (concrete
-        && total_width - 1U
+        && tag_width
+            <= static_cast<std::uint64_t>(
+                std::numeric_limits<std::int64_t>::max())
+               - (total_width - 1U)
+        && total_width + tag_width - 1U
             <= static_cast<std::uint64_t>(
                 std::numeric_limits<std::int64_t>::max())) {
       if (!is_union) {
@@ -678,93 +987,26 @@ void VerilogParser::parse_typedef(
         }
       }
       type.packed_range = PackedRange{
-          static_cast<std::int64_t>(total_width - 1U),
+          static_cast<std::int64_t>(
+              total_width + tag_width - 1U),
           0,
           true};
     }
-  } else if (match_keyword("enum")) {
-    if (keyword("logic") || keyword("reg")
-        || keyword("bit")) {
-      const auto type_token = advance();
-      type.spelling = type_token.text;
-      type.domain =
-          type_token.text == "bit"
-              ? ValueDomain::Bit2
-              : ValueDomain::Logic4;
-      parse_optional_signedness(type);
-      parse_optional_range(type);
-    } else {
-      error(
-          current(),
-          "FSIM-SV-UNSUPPORTED-026",
-          "bounded enum typedefs require an explicit bit, logic, or "
-          "reg base type");
-      skip_to_semicolon();
-      return;
-    }
-    expect(
-        TokenKind::LeftBrace,
-        "'{' before enum literals",
-        "FSIM-SV-PARSE-083");
-    if (at(TokenKind::RightBrace)) {
-      error(
-          current(),
-          "FSIM-SV-PARSE-085",
-          "bounded enum typedefs require at least one literal");
-    }
-    std::optional<std::string> previous_literal;
-    while (!at_end() && !at(TokenKind::RightBrace)) {
-      const auto literal =
-          expect_identifier("enum literal name");
-      Expression value;
-      if (match(TokenKind::Assign)) {
-        value = parse_expression();
-      } else if (!previous_literal) {
-        value = Expression{
-            ExpressionKind::IntegerLiteral,
-            "0",
-            {},
-            literal.span};
-      } else {
-        value = Expression{
-            ExpressionKind::Binary,
-            "+",
-            {
-                Expression{
-                    ExpressionKind::Identifier,
-                    *previous_literal,
-                    {},
-                    literal.span},
-                Expression{
-                    ExpressionKind::IntegerLiteral,
-                    "1",
-                    {},
-                    literal.span},
-            },
-            literal.span};
-      }
-      enum_literals.push_back({
-          literal.text, value,
-          cover(literal.span, previous().span)});
+  } else if (keyword("enum")) {
+    type = parse_systemverilog_enum_type(&enum_literals);
+    for (const auto& literal : enum_literals) {
       enum_parameters.push_back({
           ParameterDeclaration{
-              literal.text,
+              literal.name,
               type,
-              std::move(value),
+              literal.value,
               true,
-              cover(literal.span, previous().span),
+              literal.span,
               ParameterKind::Value,
               std::nullopt},
-          literal});
-      previous_literal = literal.text;
-      if (!match(TokenKind::Comma)) {
-        break;
-      }
+          Token{
+              TokenKind::Identifier, literal.name, literal.span, {}}});
     }
-    expect(
-        TokenKind::RightBrace,
-        "'}' after enum literals",
-        "FSIM-SV-PARSE-084");
   } else if (keyword("shortreal") || keyword("real")
       || keyword("realtime") || keyword("time")
       || keyword("chandle")) {
@@ -798,12 +1040,6 @@ void VerilogParser::parse_typedef(
     return;
   }
   const auto name = expect_identifier("typedef name");
-  if (!enum_literals.empty()) {
-    type.enumeration_literals.reserve(enum_literals.size());
-    for (const auto& literal : enum_literals) {
-      type.enumeration_literals.push_back(literal.name);
-    }
-  }
   if (at(TokenKind::LeftBracket)) {
     error(
         current(),
@@ -1126,6 +1362,7 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
 [[nodiscard]] bool VerilogParser::is_declaration_start() const  {
   return is_direction_keyword() || is_net_type_keyword()
       || keyword("string") || keyword("chandle")
+      || keyword("struct") || keyword("union") || keyword("enum")
       || is_named_type_reference_start();
 }
 
@@ -1187,8 +1424,10 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     const bool explicit_type =
         explicit_variable || is_net_type_keyword()
         || keyword("string") || keyword("chandle")
+        || keyword("struct") || keyword("union") || keyword("enum")
         || is_named_type_reference_start();
-    if (keyword("string") || keyword("chandle")) {
+    if (keyword("string") || keyword("chandle")
+        || keyword("struct") || keyword("union") || keyword("enum")) {
       spec.type = parse_parameter_type();
     } else if (is_named_type_reference_start()) {
       spec.type = parse_named_type();
@@ -1196,7 +1435,8 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
       parse_optional_net_type(spec.type);
     }
     require_default_port_net_type(current(), explicit_type);
-  } else if (keyword("string") || keyword("chandle")) {
+  } else if (keyword("string") || keyword("chandle")
+             || keyword("struct") || keyword("union") || keyword("enum")) {
     spec.type = parse_parameter_type();
   } else if (is_named_type_reference_start()) {
     spec.type = parse_named_type();
@@ -1227,6 +1467,30 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
   if (spec.type.named_type.empty()) {
     parse_optional_signedness(spec.type);
     parse_optional_range(spec.type);
+  }
+  if (spec.type.named_type.empty()
+      && !spec.type.systemverilog_enumeration_values.empty()) {
+    for (std::size_t index = 0;
+         index < spec.type.enumeration_literals.size(); ++index) {
+      const auto& literal_name = spec.type.enumeration_literals[index];
+      const auto& literal_value =
+          spec.type.systemverilog_enumeration_values[index];
+      add_parameter(
+          unit,
+          ParameterDeclaration{
+              literal_name,
+              spec.type,
+              literal_value,
+              true,
+              literal_value.span,
+              ParameterKind::Value,
+              std::nullopt},
+          Token{
+              TokenKind::Identifier,
+              literal_name,
+              literal_value.span,
+              {}});
+    }
   }
   std::optional<Delay> net_delay;
   std::optional<Delay> charge_decay;
@@ -1433,7 +1697,8 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
 void VerilogParser::parse_procedural_declaration(Statement& block) {
   const auto start = current();
   Type type = default_verilog_type();
-  if (keyword("string") || keyword("chandle")) {
+  if (keyword("string") || keyword("chandle")
+      || keyword("struct") || keyword("union") || keyword("enum")) {
     type = parse_parameter_type();
   } else if (is_named_type_reference_start()) {
     type = parse_named_type();

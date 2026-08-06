@@ -1313,6 +1313,19 @@ not yet run the main mixed case at O0, combine mixed-language behavior with
 assertion failures, transfer construction actuals through SystemC factory
 schemas, or provide Windows execution evidence.
 
+## Current v2 SystemVerilog arbitrary-width extension
+
+These rows supersede older v1 rows only for the precisely named Batch 151
+surface. UVM, SVA/coverage, foreign interfaces, programs, and clocking remain
+owned by their later locked batches.
+
+| ID | Precisely bounded feature | Status | P+ | P- | E | R |
+|---|---|---|---|---|---|---|
+| V2-SV-151-01 | Governed arbitrary-width packed constants, generated values, arithmetic/logical/bitwise/comparison/shift/stream/reduction/selection/pattern/cast/query semantics, and exact hierarchy specialization | execute | [constant and generate fixtures](../tests/elaboration/elaborator_sv_constant_test.cpp), [wide parameter fixture](../tests/app/sv_parameter_sizing_application_test.cpp) | [width/work overflow matrix](../tests/elaboration/elaborator_generate_test.cpp), [catalog](diagnostics.md) | [shared constant services](../src/elaboration/elaboration_sv_constant_services.cpp), [wide specialization](../src/elaboration/elaboration_specialization.cpp) | [interpreter/LLVM O0/O2 parameter differential](../tests/app/sv_parameter_sizing_application_test.cpp) |
+| V2-SV-151-02 | Nested/anonymous packed structs, unequal/tagged unions, enums, member initializers, nominal legality, and arbitrary-width values through supported callables, suspension, classes, interfaces, multiple roots, and mixed-language adapters | execute | [aggregate HIR](../tests/frontend/frontend_package_tests.cpp), [wide class/callable source](../tests/app/application_test_sources_common.cpp) | [nominal/profile and lossy-boundary matrices](../tests/elaboration) | [aggregate/callable/class lowering](../src/elaboration), [wide mixed adapters](../src/elaboration/hierarchy_types.cpp) | [aggregate differential](../tests/app/sv_aggregate_multidimensional_application_test.cpp), [class/callable/scheduling differential](../tests/app/application_test_classes.cpp), [mixed conversion differential](../tests/app/mixed_conversion_application_test.cpp) |
+| V2-SV-151-03 | Exact wide debugger, callback, VCD, C API, binary file/memory, `.fsimobj`, `.fsimdesign`, mapped/relocated `.fsimlib`, class/constraint-HIR, and native-cache service boundaries | execute | [wide file and debugger fixture](../tests/app/sv_file_application_test.cpp), [artifact profiles](../tests/app/application_test_artifact_phases.cpp) | [stale/malformed/corrupt/oversized rollback matrix](../tests/artifact), [file negatives](../tests/runtime/runtime_file_tests.cpp) | [arbitrary-width binary read](../src/runtime/simir_file_binary.cpp), [synchronized artifact codecs](../src/app/application_design_artifact_codec.cpp) | [fully compiled 137-bit LLVM O0/O2 file/cache differential](../tests/app/sv_file_application_test.cpp), [artifact relocation/cache differential](../tests/app/application_test_artifact_phases.cpp), [public API round trip](../tests/api/api_test.cpp) |
+| V2-SV-151-04 | Width, work, and storage limits plus malformed type/profile, unsupported formatted scan, lossy boundary, stale schema, corrupt publication, and oversized-line failures are cataloged and transactional | execute | [bounded positive matrix](../tests/elaboration/elaborator_sv_constant_test.cpp) | [negative and rollback matrix](../tests/elaboration/elaborator_sv_file_test.cpp), [artifact tests](../tests/artifact), [runtime file tests](../tests/runtime/runtime_file_tests.cpp) | [governed validation and transactional publication](../src/elaboration), [artifact writers](../src/library/portable_unit.cpp) | [fifteen-gate Batch 151 differential owners](../docs/implementation_plan_v2.md) |
+
 ## Completed v1 feature groups
 
 | ID | Required feature group | Status | P+ | P- | E | R |

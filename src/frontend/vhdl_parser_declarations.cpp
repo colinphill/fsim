@@ -697,7 +697,8 @@ void VhdlParser::parse_type_declaration(
           cover(member_start.span, previous().span),
           member_type.named_type.empty()
               ? std::vector<Type>{}
-              : std::vector<Type>{member_type}});
+              : std::vector<Type>{member_type},
+          std::nullopt});
       if (member_type.domain == ValueDomain::Logic9) {
         type.domain = ValueDomain::Logic9;
       } else if (

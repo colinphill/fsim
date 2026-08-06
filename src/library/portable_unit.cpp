@@ -50,6 +50,9 @@ constexpr bool valid_archive_enum(const T value) noexcept {
       std::same_as<T, frontend::SystemVerilogDecimalLiteralKind>) {
     return value >= frontend::SystemVerilogDecimalLiteralKind::Real
         && value <= frontend::SystemVerilogDecimalLiteralKind::Time;
+  } else if constexpr (std::same_as<T, frontend::PackedAggregateKind>) {
+    return value >= frontend::PackedAggregateKind::None
+        && value <= frontend::PackedAggregateKind::TaggedUnion;
   } else {
     return true;
   }
@@ -77,6 +80,7 @@ auto archive_fields(T& value) {
       value.packed_range_expression, value.named_type, value.named_type_span,
       value.nominal_type, value.vhdl_type_declaration,
       value.vhdl_resolution_function, value.enumeration_literals,
+      value.systemverilog_enumeration_values,
       value.enumeration_range, value.enumeration_range_expression,
       value.enumeration_base_range, value.enumeration_base_range_expression,
       value.packed_members, value.packed_aggregate, value.integer_range,

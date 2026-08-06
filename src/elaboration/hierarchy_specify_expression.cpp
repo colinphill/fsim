@@ -18,20 +18,7 @@ const frontend::Expression* expression_terminal_base(
 
 runtime::PackedLogic4 packed_constant(
     const elaboration_detail::SystemVerilogConstantValue& constant) {
-  auto result = runtime::PackedLogic4{
-      constant.width, runtime::Logic4::zero};
-  for (std::uint32_t bit = 0; bit < constant.width; ++bit) {
-    const auto mask = std::uint64_t{1} << bit;
-    if ((constant.unknown_bits & mask) != 0) {
-      result.set(
-          bit,
-          (constant.high_impedance_bits & mask) != 0
-              ? runtime::Logic4::z : runtime::Logic4::x);
-    } else if ((constant.bits & mask) != 0) {
-      result.set(bit, runtime::Logic4::one);
-    }
-  }
-  return result;
+  return constant.packed;
 }
 
 }  // namespace

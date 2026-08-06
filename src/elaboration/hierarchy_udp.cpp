@@ -489,6 +489,7 @@ void HierarchyBuilder::instantiate_udp(
         std::move(aliases.read_only_strings),
         {},
         {},
+        {},
         {{"__udp", table.identity}, {"__udp_table", table.digest}},
         {});
 }

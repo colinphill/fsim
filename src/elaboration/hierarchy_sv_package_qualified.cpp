@@ -295,6 +295,13 @@ void HierarchyBuilder::validate_systemverilog_exports(
                 }
                 imported_value =
                     value->second.expression(declaration->span);
+            } else if (const auto integral_constant =
+                           specialized_package->integral_environment.find(
+                               constant_name);
+                       integral_constant != specialized_package
+                                    ->integral_environment.end()) {
+                imported_value =
+                    integral_constant->second.expression(declaration->span);
             } else {
                 const auto value =
                     specialized_package->environment.find(

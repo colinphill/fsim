@@ -140,10 +140,14 @@ independent domain-preserving driver slot, including for whole/slice blocking,
 NBA, future, inertial, and projected writes. Native SV `wire`/`tri` and VHDL
 `std_logic`/`std_logic_vector` signals select their policy automatically;
 explicit mixed-boundary resolvers select it on an otherwise unresolved parent.
-Multiple unresolved drivers remain an elaboration error. Strengths,
-wired-AND/OR nets, and charge storage remain v1 work. Exact nine-state
-processes currently use the reference evaluator in compiled mode until the
-Logic9 generated-code ABI path is added.
+Multiple unresolved drivers remain an elaboration error. Strengths and charge
+storage remain later work; native wired-AND/OR nets are implemented. Exact
+nine-state processes use the append-only four-plane Logic9 generated-code ABI
+when their operations are in the compiled subset and otherwise fall back per
+process. Batch 151 also removes the former 64-bit admission ceiling from
+SystemVerilog/VHDL packed-vector width and signedness adapters: focused
+129-to-137-bit and 137-to-129-bit conversions retain every mapped bit, while
+lossy state-domain conversions still reject explicitly.
 
 ## Time and phase lattice
 

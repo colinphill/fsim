@@ -878,17 +878,18 @@ The runtime distinguishes three logic domains:
 - `Logic4`: `0`, `1`, `X`, and `Z`; and
 - `Logic9`: VHDL `U`, `X`, `0`, `1`, `Z`, `W`, `L`, `H`, and `-`.
 
-Packed storage is used throughout. Scalar and common vectors up to 64 bits are
-the fast path; wide values will use specialized runtime kernels. Conversion to
-a lower-state domain must be explicit whenever information could be lost.
-The common packed value retains either the inline `aval`/`bval` Logic4
-representation or four ordinal Logic9 planes. It exposes checked
-allocation-free `Logic4Word` and `Logic9Word` representations for widths up to
-64 elements and rejects a lossy Logic9-to-aval/bval request. The generated
-runtime ABI preserves its original v1 prefix and appends pointer-based
-four-plane Logic9 callbacks plus caller-owned third/fourth register planes.
-Per-process/per-signal SimIR value-kind metadata selects the correct path and
-drives explicit conversion at mixed-domain boundaries.
+Packed storage is used throughout. Scalar and common vectors up to 64 bits use
+an allocation-free word fast path; arbitrary-width Logic4 values use the same
+owning `PackedLogic4` abstraction with checked word-vector storage. Conversion
+to a lower-state domain must be explicit whenever information could be lost.
+The common packed value retains either `aval`/`bval` Logic4 words or four
+ordinal Logic9 planes. It exposes checked `Logic4Word` and `Logic9Word`
+representations for widths up to 64 elements, scans every word for lossy
+two-state conversion, and rejects a lossy Logic9-to-aval/bval request. The
+generated runtime ABI preserves its original v1 prefix and appends
+pointer-based four-plane Logic9 callbacks plus caller-owned third/fourth
+register planes. Per-process/per-signal SimIR value-kind metadata selects the
+correct path and drives explicit conversion at mixed-domain boundaries.
 
 Concrete VHDL user-array layout retains a source-ordered dimension vector in
 addition to the packed runtime view. Each dimension stores its exact evaluated
@@ -1636,8 +1637,12 @@ a `WaitFor`, `WaitOn`, `WaitSensitivity`, `WaitForever`, or `Yield`
 suspension; reachable zero-time cycles without one of these safe boundaries
 are rejected.
 Sensitivity-only signals may be wider than 64 bits because their values never
-cross the native ABI; any operation that reads or writes a value remains on the
-1-to-64-bit compiled fast path.
+cross the native word ABI. General native value operations remain on the
+1-to-64-bit compiled fast path, while validated service operations may own
+arbitrary-width storage directly. In particular, binary `$fread` targets and
+packed memory elements use the executor's owning `PackedLogic4` service path;
+the 137-bit file fixture compiles as one LLVM process at O0 and O2. Other native
+capability misses retain deterministic per-process interpreter fallback.
 
 Validation rejects empty dynamic or static lists, invalid or zero-width signal
 references, invalid edge kinds, and non-scalar positive/negative-edge signals.

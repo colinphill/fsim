@@ -1005,6 +1005,12 @@ class SystemVerilogExecutableBuilder final {
     const auto declaration_origin = declaration->origin;
     fill_type_expressions(
         input.type, input.span, scope, declaration_origin);
+    for (const auto& member : input.type.packed_members) {
+      if (member.initializer) {
+        static_cast<void>(expression(
+            *member.initializer, scope, declaration_origin));
+      }
+    }
     for (const auto& literal : input.enum_literals) {
       auto* literal_declaration = find_declaration(
           scope, sv::DeclarationForm::enumeration_literal,

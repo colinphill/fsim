@@ -541,6 +541,89 @@ bool Lowerer::report_unsupported_cross_root_reference(
 
 
 
+    [[nodiscard]] const frontend::Type*
+    Lowerer::systemverilog_expression_type(
+        const Expression& expression) const {
+        if (language_ != frontend::Language::SystemVerilog2017) {
+            return nullptr;
+        }
+        if (!expression.nominal_type.empty()) {
+            const auto found = std::ranges::find_if(
+                visible_type_marks_,
+                [&](const auto& entry) {
+                  return entry.second != nullptr
+                      && entry.second->nominal_type
+                          == expression.nominal_type;
+                });
+            if (found != visible_type_marks_.end()) {
+                return found->second;
+            }
+        }
+        if (expression.kind == ExpressionKind::Identifier) {
+            if (const auto* direct = object_type(expression.text)) {
+                return direct;
+            }
+            if (const auto selected =
+                    packed_member_reference(expression.text);
+                selected && !selected->member->nested_types.empty()) {
+                return &selected->member->nested_types.front();
+            }
+            return nullptr;
+        }
+        if (expression.kind == ExpressionKind::Index) {
+            const Expression* base = &expression;
+            std::size_t indices = 0;
+            while (base->kind == ExpressionKind::Index
+                   && !base->operands.empty()) {
+                ++indices;
+                base = &base->operands.front();
+            }
+            const auto* container_type =
+                systemverilog_expression_type(*base);
+            if (container_type == nullptr
+                || !container_type->systemverilog_container
+                || container_type->systemverilog_container
+                       ->element_types.empty()) {
+                return nullptr;
+            }
+            const auto& container =
+                *container_type->systemverilog_container;
+            const auto required_indices =
+                container.kind
+                        == frontend::SystemVerilogContainerKind::StaticArray
+                    ? std::max<std::size_t>(
+                          1U, container.static_range_expressions.size())
+                    : 1U;
+            return indices >= required_indices
+                ? &container.element_types.front() : nullptr;
+        }
+        if (expression.kind != ExpressionKind::Call) {
+            return nullptr;
+        }
+        if (expression.text.starts_with("@sv-cast:")) {
+            return visible_type_mark(
+                std::string_view{expression.text}.substr(
+                    std::string_view{"@sv-cast:"}.size()));
+        }
+        if (expression.text == "?:"
+            && expression.operands.size() == 3U) {
+            const auto* when_true =
+                systemverilog_expression_type(expression.operands[1]);
+            const auto* when_false =
+                systemverilog_expression_type(expression.operands[2]);
+            return when_true != nullptr && when_false != nullptr
+                    && when_true->nominal_type
+                        == when_false->nominal_type
+                ? when_true : nullptr;
+        }
+        if (const auto* function = visible_function(expression.text)) {
+            return &function->return_type;
+        }
+        return nullptr;
+    }
+
+
+
     [[nodiscard]] std::pair<std::int32_t, std::int32_t>
     Lowerer::integer_bounds(
         const std::optional<frontend::IntegerRange>& range) {

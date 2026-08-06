@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
 
+#include <bit>
+
 namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
@@ -37,11 +39,27 @@ std::optional<RegisterId> Lowerer::lower_sv_packed_pattern(
             expression.span);
         return std::nullopt;
     }
+    const bool is_union =
+        expected_type.packed_aggregate
+            == frontend::PackedAggregateKind::Union
+        || expected_type.packed_aggregate
+            == frontend::PackedAggregateKind::TaggedUnion;
+    const bool tagged_union =
+        expected_type.packed_aggregate
+        == frontend::PackedAggregateKind::TaggedUnion;
+    const auto tag_width = tagged_union
+        ? std::max<std::size_t>(
+              1U,
+              std::bit_width(
+                  expected_type.packed_members.size() - 1U))
+        : 0U;
     const auto destination =
         allocate_register(expected_width, expected_type.domain);
     process_.operations.emplace_back(LoadConstant{
         destination,
-        default_packed_value(expected_type, expected_width)});
+        is_union
+            ? PackedLogic4(expected_width, Logic4::zero)
+            : default_packed_value(expected_type, expected_width)});
     std::vector<bool> assigned(expected_type.packed_members.size());
     std::optional<std::size_t> default_index;
     std::size_t positional_index = 0;
@@ -91,6 +109,10 @@ std::optional<RegisterId> Lowerer::lower_sv_packed_pattern(
                 member.packed_range_expression;
             scalar_type.is_signed = member.is_signed;
           }
+          if (!validate_sv_nominal_assignment(member_type, value)) {
+            valid = false;
+            return;
+          }
           const auto lowered = lower_expression(
               value,
               static_cast<std::size_t>(*width),
@@ -124,6 +146,19 @@ std::optional<RegisterId> Lowerer::lower_sv_packed_pattern(
               destination,
               *lowered,
               static_cast<std::uint32_t>(member.lsb_offset)});
+          if (tagged_union) {
+            const auto tag = allocate_register(
+                tag_width, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(LoadConstant{
+                tag,
+                unsigned_value(member_index, tag_width)});
+            process_.operations.emplace_back(Insert{
+                destination,
+                destination,
+                tag,
+                static_cast<std::uint32_t>(
+                    expected_width - tag_width)});
+          }
           assigned[member_index] = true;
         };
     for (std::size_t index = 0;
@@ -179,9 +214,6 @@ std::optional<RegisterId> Lowerer::lower_sv_packed_pattern(
           expression.operands[index],
           expression.operands[index].span);
     }
-    const bool is_union =
-        expected_type.packed_aggregate
-        == frontend::PackedAggregateKind::Union;
     if (is_union && default_index) {
       report(
           "FSIM-ELAB-SVAGG-006",
@@ -360,13 +392,28 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 builtin.spelling = std::string{type_name};
                 if (type_name == "bit") {
                     builtin.domain = frontend::ValueDomain::Bit2;
+                    builtin.is_signed = false;
                 } else if (type_name == "logic"
                            || type_name == "reg") {
                     builtin.domain = frontend::ValueDomain::Logic4;
-                } else if (type_name == "int"
-                           || type_name == "integer") {
+                    builtin.is_signed = false;
+                } else if (type_name == "byte"
+                           || type_name == "shortint"
+                           || type_name == "int"
+                           || type_name == "longint") {
                     builtin.domain = frontend::ValueDomain::Integer;
                     builtin.is_signed = true;
+                    const auto width =
+                        type_name == "byte" ? 8
+                        : type_name == "shortint" ? 16
+                        : type_name == "int" ? 32 : 64;
+                    builtin.packed_range = frontend::PackedRange{
+                        width - 1, 0, true};
+                } else if (type_name == "integer") {
+                    builtin.domain = frontend::ValueDomain::Logic4;
+                    builtin.is_signed = true;
+                    builtin.packed_range = frontend::PackedRange{
+                        31, 0, true};
                 } else {
                     report(
                         "FSIM-ELAB-SVCAST-002",
@@ -378,11 +425,13 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 cast_type = &builtin;
             }
             const auto cast_width = cast_type->width();
-            if (!cast_width || *cast_width == 0 || *cast_width > 64) {
+            if (!cast_width || *cast_width == 0
+                || *cast_width > 16U * 1024U * 1024U) {
                 report(
                     "FSIM-ELAB-SVCAST-003",
                     "SystemVerilog cast type '" + std::string{type_name}
-                        + "' has no executable width in 1..64",
+                        + "' has no executable width in "
+                          "1..16777216",
                     expression.span);
                 return std::nullopt;
             }
@@ -1150,7 +1199,66 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                     static_cast<std::uint32_t>(
                         selected->lsb_offset),
                     static_cast<std::uint32_t>(*member_width)});
-                return destination;
+                auto result = destination;
+                for (const auto& tagged : selected->unions) {
+                    if (tagged.tag_width == 0) {
+                        continue;
+                    }
+                    if (tagged.tag_offset
+                            > std::numeric_limits<std::uint32_t>::max()
+                        || tagged.tag_width == 0
+                        || tagged.tag_width
+                            > std::numeric_limits<std::uint32_t>::max()) {
+                        report(
+                            "FSIM-ELAB-SVUNION-001",
+                            "tagged-union member has no executable tag "
+                            "layout",
+                            expression.span);
+                        return std::nullopt;
+                    }
+                    const auto tag = allocate_register(
+                        tagged.tag_width,
+                        register_domain(*source));
+                    process_.operations.emplace_back(Extract{
+                        tag,
+                        *source,
+                        static_cast<std::uint32_t>(tagged.tag_offset),
+                        static_cast<std::uint32_t>(tagged.tag_width)});
+                    const auto expected_tag = allocate_register(
+                        tagged.tag_width,
+                        register_domain(*source));
+                    process_.operations.emplace_back(LoadConstant{
+                        expected_tag,
+                        unsigned_value(tagged.tag, tagged.tag_width)});
+                    const auto active = allocate_register(
+                        1, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(Binary{
+                        BinaryOperator::case_equal,
+                        active,
+                        tag,
+                        expected_tag});
+                    const auto inactive = allocate_register(
+                        *member_width,
+                        selected->member->domain);
+                    auto inactive_value = PackedLogic4(
+                        *member_width,
+                        is_two_state_domain(selected->member->domain)
+                            ? Logic4::zero
+                            : Logic4::x);
+                    if (selected->member->domain
+                        == frontend::ValueDomain::Logic9) {
+                        inactive_value.fill(runtime::Logic9::x);
+                    }
+                    process_.operations.emplace_back(LoadConstant{
+                        inactive, std::move(inactive_value)});
+                    const auto checked = allocate_register(
+                        *member_width,
+                        selected->member->domain);
+                    process_.operations.emplace_back(ConditionalSelect{
+                        checked, active, result, inactive});
+                    result = checked;
+                }
+                return result;
             }
             if (language_ == frontend::Language::Vhdl2008
                 && expected_type != nullptr
@@ -1185,6 +1293,37 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 }
                 return std::nullopt;
             }
+        }
+        constexpr std::string_view tagged_prefix{"@sv-tagged:"};
+        if (expression.kind == ExpressionKind::Call
+            && expression.text.starts_with(tagged_prefix)) {
+            if (expected_type == nullptr
+                || expected_type->packed_aggregate
+                    != frontend::PackedAggregateKind::TaggedUnion
+                || expression.operands.size() != 1) {
+                report(
+                    "FSIM-ELAB-SVUNION-001",
+                    "tagged-union construction requires one member value "
+                    "and a contextual tagged-union type",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto member_name = std::string{
+                std::string_view{expression.text}.substr(
+                    tagged_prefix.size())};
+            Expression pattern{
+                ExpressionKind::Aggregate,
+                "sv-pattern",
+                expression.operands,
+                expression.span};
+            pattern.aggregate_choices = {"@key"};
+            pattern.aggregate_choice_expressions = {{Expression{
+                ExpressionKind::Identifier,
+                member_name,
+                {},
+                expression.span}}};
+            return lower_sv_packed_pattern(
+                pattern, expected_width, *expected_type);
         }
         if (expression.kind == ExpressionKind::Aggregate) {
             if (language_

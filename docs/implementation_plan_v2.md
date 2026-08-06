@@ -2291,22 +2291,368 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 151 - Arbitrary-width packed values and aggregate closure
 
-- **Changes 1-4:** replace the remaining executable 64-bit assumptions with
-  resource-governed arbitrary-width two-/four-/nine-state scalar storage and
-  exact signed/type metadata.
-- **Changes 5-8:** close wide arithmetic, comparison, shifts, streaming,
-  reductions, selectors, updates, casts, system functions, and unknown-state
-  behavior across interpreter and LLVM.
-- **Changes 9-12:** implement nested packed structs, unequal-width/tagged
-  unions, anonymous enums/aggregates, member initializers, and complete nominal
-  assignment/cast legality.
-- **Changes 13-16:** preserve wide values through parameters, ports,
-  functions/tasks, debugger/VCD, mixed boundaries, artifacts, relocation, and
-  native caches without arbitrary length caps.
-- **Changes 17-19:** add overflow/resource/corruption negatives, engine and
-  boundary differentials, public docs, matrices, inventories, and handoff.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+1. **Complete.** Replace the remaining host-word SystemVerilog constant representation with
+   resource-governed arbitrary-width packed storage, retaining exact width,
+   signedness, two-/four-/nine-state domain, nominal type, source, display, and
+   canonical identity. `SystemVerilogConstantValue` now owns the shared
+   arbitrary-width packed representation and retains low-word mirrors only for
+   the explicitly deferred Changes 5-8 arithmetic fast path. Literal,
+   parameter conversion, constant-function case matching, specify projection,
+   display/expression substitution, and `svconst-v2` canonical identities use
+   that owning value. A checked 16,777,216-bit materialization limit rejects
+   oversized types before resize/allocation; diagnostic fallback uses a safe
+   32-bit sentinel. Focused evidence covers 128-bit four- and two-state
+   parameters, a 96-bit all-Z parameter, exact domain-distinct identities,
+   the resource rejection, and updated specify/mixed identity consumers.
+   Exact-LLVM Debug builds with eight workers; semantic HIR, elaboration,
+   parameter sizing/type parameters, diagnostic-catalog, and source-budget
+   gates pass 7/7, and `git diff --check` is clean.
+2. **Complete.** Parse and materialize arbitrary-width binary/octal/hexadecimal/decimal,
+   unbased-unsized, X/Z, concatenation, and replication constants with checked
+   width/work/storage accounting and deterministic resource diagnostics. A
+   portable word-vector decimal multiply/add path admits exact sized and
+   unsized values without `__int128`; signed unsized sizing reserves its sign
+   bit, explicit sizing truncates deterministically, and all paths materialize
+   the shared packed owner. Binary/octal/hex digits, concatenation, and
+   replication now scale to the 16,777,216-bit storage boundary. A separate
+   67,108,864-unit work budget bounds decimal conversion and the current
+   append-based concatenation/replication algorithm before allocation. Focused
+   evidence adds sized and unsized 128-bit decimal values, 128-bit
+   concatenation/replication, and a 10,000,000-bit replication work rejection.
+   The eight-worker exact-LLVM Debug build plus seven semantic HIR,
+   elaboration, parameter, catalog, and source gates pass; `git diff --check`
+   is clean.
+3. **Complete.** Preserve wide constants through typed parameter/localparam/specparam,
+   package/import, generate, range, specialization-key, and
+   cross-language constant-boundary evaluation without host-integer loss.
+   Specialized units now export their exact integral constant environment, so
+   wildcard and qualified package imports reconstruct the owning packed
+   expression instead of requiring an `int64_t` package value. Generate-case
+   equality compares sign-extended packed states at arbitrary width; range
+   substitution projects a wide value to an integer expression only when the
+   exact value fits. Checked wide-to-host conversion likewise admits small
+   sign-extended values without accepting lossy high bits. Evidence covers
+   package/local/top propagation, 128-bit specparams, high-bit-distinct child
+   specialization keys, selected wide generate cases, a five-bit range driven
+   by a 128-bit value, and a lossless SystemVerilog-to-VHDL natural generic;
+   the existing high unsigned boundary still rejects. The eight-worker exact-
+   LLVM Debug build and nine semantic HIR, elaboration, parameter, generate,
+   mixed-conversion, catalog, and source gates pass; `git diff --check` is
+   clean. Wide enum-base semantics remain in Changes 9-12 as allocated.
+4. **Complete.** Carry arbitrary-width exact packed profiles and initial values through
+   frontend types, semantic HIR, elaborated signals, SimIR registers, runtime
+   admission, and interpreter/LLVM validation. The Change 1 owner now projects
+   directly into `PackedLogic4`, so no host-word reconstruction remains at the
+   specify/runtime admission boundary. Focused source evidence drives a
+   128-bit four-state signal, a domain-distinct 128-bit two-state signal, and a
+   96-bit all-Z signal from typed/package parameters through elaborated width/
+   domain profiles, SimIR loads/stores, and interpreter execution. The shared
+   runtime representation already retains exact nine-state planes, and its
+   runtime plus LLVM validation suites remain green. The eight-worker exact-
+   LLVM Debug build and eleven semantic HIR, elaboration, runtime, LLVM,
+   parameter, generate, mixed-boundary, catalog, and source gates pass;
+   `git diff --check` is clean.
+5. **Complete.** Implement arbitrary-width signed/unsigned arithmetic, unary
+   operations, divide/modulo/power overflow rules, and checked destination
+   sizing. The owning packed representation now evaluates exact add/subtract,
+   bounded shift-and-add multiplication, long division/remainder, and
+   exponentiation by squaring without host-word projection. Signed division
+   truncates toward zero, signed remainder retains the dividend sign, negative
+   powers preserve the established zero/one/minus-one rules, and the signed
+   minimum divided by minus one rejects before mutation. Unary negation and
+   complement operate across every packed bit; unknown arithmetic produces an
+   exact-width X result. Destination-width wrap and declaration truncation are
+   explicit, while quadratic operations and power accumulation enforce the
+   separate constant-work budget. Evidence covers high-bit 128-bit unsigned
+   results, signed negative operands, divide/modulo/power, unary operations,
+   wrap/truncation, unknown propagation, signed-overflow rejection, and a
+   9,000-bit multiplicative-work rejection. The eight-worker exact-LLVM Debug
+   build and eleven semantic HIR, elaboration, runtime, LLVM, parameter,
+   generate, mixed-boundary, catalog, and source gates pass; `git diff --check`
+   is clean.
+6. **Complete.** Implement wide logical/case/wildcard equality, relational
+   comparison, logical/arithmetic shifts, and unknown/sign extension semantics.
+   Logical truth now scans the owning value rather than its low-word mirror;
+   ordinary, exact case, and one-sided wildcard equality preserve arbitrary-
+   width X/Z policy. Signed comparison first resolves the sign partition and
+   then compares every packed bit, so unequal-width signed operands are
+   correctly extended. Binary bitwise operations implement four-state
+   dominance at every bit. Logical and arithmetic shifts accept exact wide
+   counts, saturate counts beyond the destination without host conversion,
+   propagate an unknown count to an exact-width X value, and copy the original
+   Logic4/Logic9 sign state for arithmetic fill. Evidence covers 128-bit
+   logical, equality, wildcard, signed/unsigned relational, bitwise, left/
+   right/arithmetic, unknown-count, all-Z sign-fill, unequal-width extension,
+   and huge-count cases. The eight-worker exact-LLVM Debug build and eleven
+   semantic HIR, elaboration, runtime, LLVM, parameter, generate, mixed-
+   boundary, catalog, and source gates pass; `git diff --check` is clean.
+7. **Complete.** Implement wide streaming, concatenation/replication,
+   reductions, bit/part/indexed selectors, selected updates, and assignment
+   patterns. Before adding semantics, constant display and parameter-
+   substitution services moved into a dedicated 520-line translation unit,
+   reducing the 2,493-line evaluator to 1,984 lines as required by the source-
+   limit policy; the completed evaluator remains at 2,135 lines. Streaming now
+   reverses arbitrary-width slices directly in owning packed storage with
+   width/work accounting and exact Logic9 preservation. Every reduction scans
+   all bits with four-state dominance. Bit, fixed part, ascending, `+:`, and
+   `-:` selections preserve X/Z and synthesize X for out-of-range bits;
+   constant-function selected assignments update one bit or part transactionally
+   while retaining untouched regions. Positional and scalar-default flat packed
+   patterns materialize at the checked destination width, and ambiguous wide
+   conditionals merge identical states bitwise. Evidence covers 128-bit stream,
+   reductions, all selector forms, huge/out-of-range selection behavior, wide
+   `inside`, selected function writes, and positional/default patterns. The
+   eight-worker exact-LLVM Debug build and eleven semantic HIR, elaboration,
+   runtime, LLVM, parameter, generate, mixed-boundary, catalog, and source gates
+   pass; `git diff --check` is clean.
+8. **Complete.** Complete wide casts, queries/system functions, interpreter and
+   LLVM O0/O2 execution, and exact unknown-state behavior across all scalar
+   domains. Integral constant casts now cover `bit`, `logic`/`reg`, `byte`,
+   `shortint`, `int`, `longint`, four-state `integer`, and resolved named packed
+   typedefs, with widths governed by the shared 16,777,216-bit limit. Named
+   runtime casts likewise accept that governed width rather than a host-word
+   ceiling; interpreter evidence zero-extends a 96-bit all-Z operand into an
+   exact 128-bit named type. Two-state constant casts reject X/Z loss while
+   four-state and nine-state conversions preserve or deliberately collapse
+   every source state. Owning constants retain declared packed bounds, so
+   `$bits`, `$left`, `$right`, `$low`, `$high`, `$size`, `$increment`,
+   `$dimensions`, and `$unpacked_dimensions` distinguish descending and
+   ascending 128-bit declarations even through parameter folding. `$clog2`
+   scans arbitrary-width known magnitudes without host conversion and rejects
+   negative or unknown operands. The parameter-sizing application executes 58
+   captured outputs identically through the interpreter and compiled O0/O2
+   engines, including wide query/cast results and preserved unknown bits, while
+   retaining four compiled processes and cold/warm native-cache assertions.
+   The eight-worker exact-LLVM Debug build and eleven semantic HIR,
+   elaboration, runtime, LLVM, parameter, generate, mixed-boundary, catalog,
+   and source gates pass; `git diff --check` is clean.
+9. **Complete.** Implement nested packed structs and anonymous packed
+   aggregates with exact member layout, defaults, assignment patterns,
+   selectors, and updates. A shared recursive aggregate-type parser now admits
+   anonymous packed struct/union declarations in module and procedural type
+   positions and nested anonymous packed members while retaining named-member
+   behavior. It computes exact declaration-ordered layouts beyond a host word;
+   focused evidence fixes a 137-bit outer layout at offsets 105, 8, and 0, a
+   nested 97-bit layout at offsets 1 and 0, and a 25-bit procedural-local
+   layout. Recursive default materialization retains Logic4 X leaves and Bit2
+   zero leaves. Contextual nested assignment patterns apply independent inner
+   and outer `default:` arms, and dotted member selectors plus whole-member,
+   bit/part-select, and leaf updates preserve all untouched bits. The aggregate
+   application compares twelve exact outputs through the interpreter and cold/
+   warm LLVM O0/O2 engines, including 137-bit defaults, patterns, selected
+   writes, and 41-bit nested selector results with cache reuse. Targeted
+   negatives retain member-initializer ownership for Change 11 and anonymous
+   unpacked-struct ownership for Batch 152. The eight-worker exact-LLVM Debug
+   build and thirteen frontend, semantic HIR, elaboration, runtime, LLVM,
+   aggregate/parameter/generate/mixed-boundary, catalog, and source gates pass;
+   `git diff --check` is clean.
+10. **Complete.** Implement unequal-width packed unions and tagged unions with
+    deterministic active-member, padding, read/write, comparison, and cast
+    behavior. Unequal-width payloads occupy the low bits of the maximum-width
+    union storage and narrow construction or selected writes clear canonical
+    high padding. Tagged unions add a compact ordinal discriminator above that
+    payload; recursive default construction selects and initializes member zero,
+    explicit `tagged member value` construction and keyed patterns select exact
+    members, direct selected writes update the tag, active reads return the
+    member payload, and inactive four-state reads return X. Raw casts and all
+    equality forms operate on the canonical representation. Semantic HIR keeps
+    tagged and untagged unions distinct, while focused negatives reject missing
+    context, invalid members, and delayed selected writes that cannot update
+    metadata coherently. A 23-output aggregate application proves defaults,
+    patterns, reads, writes, padding, tags, casts, and comparisons identically
+    through the interpreter and cold/warm LLVM O0/O2. `TaggedUnion` was appended
+    to the retained aggregate-kind enumeration so existing artifact ordinals
+    remain stable for Change 16 schema work. The eight-worker exact-LLVM Debug
+    build and thirteen frontend, semantic HIR, elaboration, runtime, LLVM,
+    aggregate/parameter/generate/mixed-boundary, catalog, and source gates pass;
+    `git diff --check` is clean.
+11. **Complete.** Complete anonymous enums/aggregates, enum base/range
+    inference, member initializers, nested aggregate constants, and packed
+    aggregate queries. Anonymous enums now retain explicit and inferred literal
+    sequences, default to signed 32-bit `int`, admit explicit integral atom or
+    vector bases/ranges, reject nonintegral bases, and construct the first
+    declared value as their recursive object default. Packed members retain
+    optional initializer expressions through specialization and semantic HIR;
+    one contextual constant service validates and materializes scalar, nested
+    struct, union, tagged-union, keyed, positional, and default-pattern values.
+    Invalid incomplete nested member defaults reject with
+    `FSIM-ELAB-SVAGG-007`. Typed aggregate localparams use the same service and
+    preserve exact nested bits. Type-only and selected-object `$bits`, `$left`,
+    `$right`, `$low`, `$high`, `$size`, `$increment`, `$dimensions`, and
+    `$unpacked_dimensions` queries use retained aggregate layouts. The expanded
+    32-output aggregate application proves an 11-bit recursive member default,
+    a six-bit nested aggregate constant, a default-base anonymous enum value,
+    and all six representative type-only queries identically through the
+    interpreter and cold/warm LLVM O0/O2. The eight-worker exact-LLVM Debug
+    build and thirteen frontend, semantic HIR, elaboration, runtime, LLVM,
+    aggregate/parameter/generate/mixed-boundary, catalog, and source gates pass
+    in 11.65 seconds; `git diff --check` is clean.
+12. **Complete.** Enforce complete nominal assignment, parameter, port,
+    callable, pattern, equality, and explicit-cast legality for packed structs,
+    unions, and enums. One resolved nominal-identity rule now covers procedural
+    and continuous assignments, automatic/static initialization, contextual
+    nested patterns, function arguments and returns, task input and copy-out,
+    constant parameters/localparams, and same-language hierarchy boundaries.
+    Equality requires two values of the same nominal packed type; a matching
+    explicit cast is legal, while a cast to another same-layout nominal type is
+    not. Constant integer/logic substitution and explicit casts retain canonical
+    identity, enum literals are converted to their declared base width without
+    hiding raw out-of-range/duplicate validation, and selected static-array
+    elements recover their retained nominal element type. Contextual aggregate
+    parameter patterns and member initializers recursively enforce nominal
+    member legality. A focused positive/negative matrix proves matching and
+    mismatched structs/enums across defaults, overrides, aggregate/enum ports,
+    callables, nested patterns, equality, and casts. The eight-worker build and
+    sixteen semantic, HIR, frontend, elaboration, LLVM, runtime, function/task,
+    aggregate/parameter/generate/mixed-boundary, catalog, and source gates pass
+    in 12.88 seconds; `git diff --check` is clean and every touched source remains
+    below the 2,500-line hard limit.
+13. **Complete.** Preserve wide scalar and aggregate values through parameters,
+    localparams, ports, interfaces, modports, nets/variables, multiple roots,
+    and mixed SystemVerilog/VHDL boundaries without arbitrary length caps.
+    Hierarchy specialization now carries the exact packed-constant environment
+    beside the legacy integer environment through root preparation, ordinary
+    roots, child recursion, and foreign-child entry; wide values therefore
+    remain available for override evaluation, nominal-domain recovery, module
+    initialization, and each independently selected root without an `int64_t`
+    projection. Cross-language width and signedness adapters no longer impose
+    the former 64-bit admission ceiling; their existing packed `Extract`,
+    `Concatenate`, and signal operations retain the complete value. Focused
+    proof covers a 137-bit nominal struct parameter/localparam and port across
+    two roots, a 137-bit anonymous struct through a parameterized interface and
+    consumer modport, and 129-to-137-bit plus 137-to-129-bit signed conversion
+    across a VHDL/SystemVerilog boundary. The eight-worker build, elaboration,
+    runtime, LLVM, parameter, interface, mixed-conversion, catalog, and source
+    gates pass; `git diff --check` is clean and every touched source remains
+    below the 2,500-line hard limit.
+14. **Complete.** Preserve them through functions/tasks/methods, recursion,
+    ref/inout/copy-out, static/automatic locals, classes, and process/object
+    lifetime. Function returns and formals, task formals, static callable
+    locals, and class method/constructor actuals no longer impose the former
+    64-bit admission ceiling; every executable positive packed width now uses
+    the owning `PackedLogic4` frame/register/property representation. A
+    137-bit source fixture proves module and class functions/tasks,
+    constructor actual/default binding, automatic locals, static retained
+    locals, bounded method recursion, direct `ref`, `inout` and output
+    copy-out, delayed task resumption, process-local lifetime, and inherited
+    object-property lifetime with exact high-bit checks. Runtime method
+    evidence separately proves arbitrary-width automatic frames, object
+    properties, suspended continuations, copy-out, and bounded recursive
+    calls. A narrow cache-only top preserves the existing native cold/warm/edit
+    contract while complete arbitrary-width LLVM lowering remains allocated to
+    Change 18. The eight-worker build, full application suite, and focused
+    elaboration, function, task, suspending-task, runtime, catalog, and source
+    gates pass; `git diff --check` is clean and every touched source remains
+    below the 2,500-line hard limit.
+15. **Complete.** Preserve exact values and profiles through debugger show/
+    deposit/force/release, callbacks, snapshots, VCD/trace, files/memory, and
+    public runtime service boundaries. Binary `$fread` now assembles every
+    byte directly into arbitrary-width `PackedLogic4` storage instead of a
+    `uint64_t`, retaining big-endian order, partial-read zero fill, non-byte-
+    aligned truncation, and the bounded-file limit. Packed `$fread` targets
+    and packed/scalar container elements accept every positive executable
+    width; two-state validation scans all unknown-state words rather than the
+    legacy low word. A 137-bit service fixture proves debugger show/deposit/
+    force/masked-deposit/release, owning read snapshots, exact callback copies,
+    VCD vectors, scalar and fixed-memory `$fread`, `$readmemh`, `$writememh`,
+    and `$writememb`. Class property callbacks, packed trace snapshots, and
+    VCD retain a separate 137-bit object value, while the public C API reports
+    width/buffer requirements and round-trips exact 137-bit deposit, force,
+    masked deposit, release, and read values. The eight-worker build plus
+    fourteen semantic, HIR, frontend, elaboration/container, LLVM, full-
+    application, procedural, file/container, API, runtime, catalog, and source
+    gates pass; `git diff --check` is clean and every touched source remains
+    below the 2,500-line hard limit.
+16. **Complete.** Preserve them through `.fsimobj`, `.fsimdesign`, mapped
+    `.fsimlib`, schema validation, relocation, interpreter/LLVM service
+    boundaries, and native cold/warm/edit caches. The owning-unit codecs now
+    retain the appended arbitrary-width enum-value metadata in matching field
+    order, and the owning-unit, portable-library, runtime, class, and
+    SystemVerilog constraint-HIR schemas advance together. Enum fit and
+    duplicate validation no longer narrows through `uint64_t`: governed-width
+    signed/unsigned extension checks and complete packed canonical keys admit
+    and distinguish 137-bit enumerators. Portable-unit tests round-trip a
+    137-bit enum, recursive member initializers, and a tagged union. The
+    artifact-phase fixture preserves an exact sparse 137-bit driven value and
+    those frontend profiles through `.fsimobj`, standalone `.fsimdesign`,
+    mapped and relocated `.fsimlib`, O0/O2 interpreter/compiled service
+    boundaries, cold/warm hits, and edited cache-key invalidation while the
+    existing narrow process retains its native compilation contract. Class
+    and constraint-HIR round trips, relocated standalone designs, and mapped
+    libraries retain the 137-bit class-property width. An eight-worker build
+    and twelve semantic, frontend, HIR, elaboration, LLVM, application,
+    object/design/library artifact, cache, catalog, and source gates pass;
+    `git diff --check` is clean and every touched source remains below the
+    2,500-line hard limit.
+17. **Complete.** Add cataloged width/work/storage overflow, malformed
+    profile/type, unsupported operation, lossy boundary, stale schema, and
+    corrupt artifact negatives with transactional rollback evidence. The
+    focused matrix ties the 16,777,216-bit generated-width rejection to
+    `FSIM-ELAB-GEN-012`, replication/multiplication work exhaustion to
+    `FSIM-ELAB-PARAM-005`, and static-container storage exhaustion to
+    `FSIM-ELAB-SVCONTAINER-020`. Oversized input-line storage now rejects
+    before publishing a partial or empty replacement string; the runtime
+    sentinel remains unchanged while `$ferror` retains the bounded message.
+    Invalid retained `PackedAggregateKind` and semantic `TypeForm` values now
+    reject in both portable-unit and design-state writers, with direct
+    malformed owning-unit, class-state, and constraint-HIR tests. A 137-bit
+    formatted-scan target documents the still-bounded operation through
+    `FSIM-ELAB-SVFILE-012`; existing two-state X/Z conversion and Logic9/Bit2
+    mixed-boundary cases retain their cataloged lossy-boundary failures.
+    Owning-unit, runtime, class, and constraint-HIR stale schemas plus
+    truncation/trailing corruption reject, while failed overwrites and
+    checksum-mismatched publications leave existing `.fsimobj`,
+    `.fsimdesign`, and `.fsimlib` metadata and payload bytes unchanged and
+    remove incomplete staging trees. The eight-worker build and focused
+    elaboration, application, runtime/file, artifact/library, catalog, and
+    source gates pass; `git diff --check` is clean and every touched source
+    remains below the 2,500-line hard limit.
+18. **Complete.** Add complete interpreter/LLVM O0/O2, debugger/trace,
+    scheduling, multiple-root, mixed-boundary, artifact/relocation, and cache
+    positive differentials for every Batch 151 surface. LLVM file-operation
+    validation now admits every positive governed `$fread` target width instead
+    of retaining a stale 64-bit metadata cap. The 137-bit binary-storage fixture
+    therefore runs as a fully compiled one-process module at both O0 and O2,
+    preserves the exact sparse packed signal and two-element packed memory,
+    and proves cold misses/stores plus warm hits; the interpreter run retains
+    debugger deposit/force/release, callback, snapshot, and VCD equality.
+    Existing aggregate, parameter, interface, function/task/suspension, class,
+    multiple-root, mixed-language conversion, artifact/relocation, and cache
+    fixtures jointly cover the remaining Batch 151 value/profile surfaces.
+    The eight-worker build and fifteen LLVM, application, parameter/interface/
+    callable/file/aggregate/mixed-boundary, artifact/library, catalog, and
+    source gates pass; `git diff --check` is clean and every touched source
+    remains below the 2,500-line hard limit.
+19. **Complete.** Synchronize architecture, language support, diagnostics,
+    feature rows, deferred boundaries, inventories, release matrices, UVM
+    readiness, public documentation, and the restart handoff. The public
+    language contract now makes Batch 151 authoritative over historical v1
+    64-bit/aggregate limitation text, describes governed arbitrary-width
+    constants, aggregate/callable/class lifetimes, services, artifacts, and
+    the remaining operation-specific formatted-scan/runtime-selection limits,
+    and keeps programs, clocking, SVA/coverage, foreign interfaces, and UVM in
+    their locked later batches. Architecture, README, and mixed-language docs
+    distinguish the arbitrary-width owning runtime/service paths from the
+    allocation-free 64-bit native word fast path and document exact 129/137-bit
+    adapters. Four executable feature rows map positive, negative,
+    elaboration, runtime, artifact, and LLVM/cache evidence. The reviewed
+    matrix digest is
+    `97da9b1e1135bfea5bb7c2879dce2e1196e448d5ffd5bfd05daff25e65aa4021`;
+    inventories advance to 1,877 production diagnostics, 560 bounded C/C++
+    sources, and 650 SPDX-owned artifacts. All 26 documentation, conformance,
+    release, inventory, installation, and Linux/Windows portability contracts
+    pass; `git diff --check` is clean.
+20. **Complete.** Run full non-sanitized exact-LLVM Debug/Release and release
+    gates after eight-worker builds, then commit and push once without hosted
+    CI monitoring. The exact LLVM 22.1.8 Debug build is current and its full
+    regression passes 112/112 in 349.27 seconds. The exact LLVM 22.1.8 Release
+    configuration rebuilds all 383 steps with eight workers and its full
+    regression passes 112/112 in 307.98 seconds. Both runs include the updated
+    26-contract release/inventory/portability prefix, the 137-bit native file
+    differential, artifacts, API, runtime, and all application matrices. Batch
+    151 is not a ten-batch monitoring boundary, so no sanitizer ran and no
+    hosted CI was inspected. Changes 1-20 close in one accumulated commit and
+    one push.
 
 ### Batch 152 - Unpacked data, file/memory, and procedural closure
 

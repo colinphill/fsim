@@ -13,6 +13,13 @@ silently discarded.
 
 ## Current executable frontend slice
 
+The large table below is the accumulated v1 slice and contains historical
+limitation text. The dated v2 status sections later in this document supersede
+those limitations. In particular, the Batch 151 arbitrary-width status update
+is authoritative for SystemVerilog packed constants, aggregates, callables,
+runtime services, and artifacts; a remaining 64-bit statement is a limit only
+when that update explicitly retains it for a particular operation.
+
 | Area | Parsed now | Executable now | Important limitations |
 |---|---|---|---|
 | VHDL units | `library`/`use`/context-reference clauses retained on their following unit; reusable context declarations containing bounded context items; package declarations containing bounded constants, subtypes, non-nested records, user-defined enumerations, bounded multidimensional arrays with scalar/vector/record/enumeration/nested-array elements, and scalar function/procedure declarations, plus matching bounded package subprogram bodies; bounded generic package declarations and entity/architecture-local package instantiations over existing scalar value/type/function/procedure generic families; bounded generic function/procedure templates and local or package-visible instantiations over those families; entities and architectures with package/entity/architecture type and subtype declarations over scalar logic/bit/Boolean, enumerations including ascending/descending constraints, constrained signed/unsigned or logic/bit vectors, constrained or `integer`/`natural`/`positive range <>` user arrays, portable integer ranges, and bounded records; scalar integer/Boolean/bit/enumeration or subtype-typed generics; VHDL-2008 unclassified interface type plus bounded interface function, procedure, and package generics; parameterized packed and enumeration ranges; record/subtype/enumeration/user-array or packed scalar/vector ports, signals, and bounded packed process variables; and `integer`/`natural`/`positive`/explicit integer-range ports, signals, and process variables; direct-entity and component-style instances with positional-then-named `generic map` actuals including `open` value-default selection, labeled `if`/`else`, integer-range `for`, scalar/inclusive-range-choice `case` generate regions, and labeled block statements with optional Boolean guards and implicit reactive `GUARD` signals containing bounded constants, local packed signals, concurrent assignments, processes, instances, and nested regions; block interfaces may bind bounded value/type/function/procedure/package generics and generic-dependent ports with positional-then-named maps, defaults, and `open` | Recursive acyclic `context library.name` expansion; explicit use visibility and direct `package.item`/`library.package.item` references for declaration-ordered scalar constants and bounded record/subtype/enumeration/array declarations and literals, including precise transitive context/package source provenance; directly visible package functions and procedures merged from matching bounded bodies; independently resolved entity and architecture type regions with entity subtype visibility in the associated architecture; chained subtype resolution, derived integer/enumeration-base containment, packed reconstraint legality, specialization-dependent packed/enumeration/array bounds, subtype-left defaults, checked enumeration constants/generics/stores, nominal user-array values, and directionally safe hierarchy aliases; declaration-order record layouts and minimum-width nominal enumeration ordinals, element-domain defaults, same-language nominal port aliases/copy/comparison, enum-typed constants/generics, contextual identifier/character literals and case choices, record/array subtype aliases, contextually typed positional/named/final-`others` record aggregates and recursive positional/discrete/range/choice-list/final-`others` multidimensional array aggregates, multidimensional member/index/slice access, persistent debug-visible record/subtype/enumeration/array locals, and explicit mixed-boundary rejection; recursively elaborated per-occurrence value/type/function/procedure/package generic specializations with named/positional whole-signal plus bounded static/dynamic expression and `open`/default `port map` associations, declaration-ordered local package and generic-subprogram specialization, selected package constants/types/functions/procedures, exact interface-package and instantiated-subprogram forwarding with transitive body provenance, declaration-ordered generated-constant and pure-function folding, interval-based selection with null-range handling, specialization-selected or always-selected scoped behavior with scope-qualified locals, delayed block-interface binding after enclosing local-package specialization, persistent process-variable registers, and signed 32-bit two-state integer-family objects with specialized constraints, subtype-left initialization, and range-safe aliases | Complete project package bodies and general package subprograms, general or nested generic package units, nested generic subprogram templates, unreviewed standard-library packages, and general visibility/overload resolution are not implemented; record types remain non-nested and packed and exclude integer/access/protected elements, nested aggregates, element-choice groups, and qualified aggregate expressions; user arrays support bounded multidimensional scalar/vector/record/enumeration/nested-array elements, recursive aggregates, null executable objects, and same-language callable/hierarchy boundaries but exclude qualified aggregate expressions, dynamically chosen aggregate associations, unbounded runtime-sized slices, and cross-language composite values; enumeration literal visibility is currently contextual rather than a complete overload candidate-set implementation; package/context visibility cycles are rejected; no configurations, mixed-language interface-package/subprogram actuals, VHDL-2019 classified interface types, process-local subtype declarations, nonintegral case-generate choices, generated variable/file/alias/attribute/use/group declarations, general qualified/function-call or dynamically composed aggregate port actuals, or process declarative items beyond bounded variables; scalar constraints outside the portable signed 32-bit interval are rejected |
@@ -1189,6 +1196,46 @@ file. Representative configured vendor-style cell and memory models accept
 VITAL_LEVEL metadata, timing generics, extended identifiers, pragmas, and null
 path idioms without proprietary-name handling. SDF annotation remains in its
 subsequent dedicated v2 batch.
+
+### SystemVerilog arbitrary-width packed values in v2
+
+Batch 151 replaces the former general 64-bit SystemVerilog constant/value
+ceiling with a governed `PackedLogic4` representation. Parameters,
+localparams, generated constants, enum values, packed structs and unions,
+signals, variables, ports, interface/modport paths, supported multiple roots,
+and signed mixed-language vector adapters retain every declared bit. Constant
+arithmetic, logical and bitwise operators, comparisons, shifts, streaming,
+reductions, selectors, patterns, casts, and type/object queries use checked
+width and work budgets; materialized widths above 16,777,216 bits reject before
+allocation.
+
+Nested anonymous packed structs, unequal-width packed unions, tagged packed
+unions, anonymous/default-base enums, recursive member initializers, and
+nominal assignment/parameter/port/callable/equality/cast rules share one exact
+layout and type identity. Supported functions, tasks, methods, recursion,
+automatic/static locals, ref/inout/output copy-out, delayed suspension, class
+properties, and process/object lifetime preserve arbitrary-width values.
+
+Debugger show/deposit/force/release, callbacks, owning snapshots, VCD/class
+traces, the public C API, binary `$fread`, and packed memory-file operations
+retain exact wide values. Owning `.fsimobj`, standalone `.fsimdesign`, mapped
+and relocated `.fsimlib`, class/constraint HIR, and native-cache identities
+retain arbitrary-width enum values and aggregate profiles. The 137-bit binary
+file fixture is a fully compiled one-process LLVM O0/O2 service-boundary test
+with cold/warm cache evidence; other unsupported native value operations use
+the documented per-process interpreter fallback under the same scheduler.
+
+Limits that remain operation-specific are intentional: formatted input scan
+targets and runtime-selected part widths remain 1 through 64 bits, runtime
+streaming requires a locally constant slice/result within its documented
+compiled representation, and nonintegral or unmaterialized container forms
+remain deferred. Width/work/storage, malformed profile, lossy conversion,
+stale schema, corrupt artifact, and oversized input failures are cataloged and
+transactional.
+
+This is prerequisite value/type infrastructure for UVM, not UVM completion.
+Programs, clocking, SVA/coverage, DPI/VPI, and UVM library/runtime work retain
+their locked Batch 153-162 ownership.
 
 ### SystemVerilog class foundation in v2
 

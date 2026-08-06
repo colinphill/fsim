@@ -57,10 +57,10 @@ endmodule
     assert(path_delay != identities.end());
     assert(path_pulse != identities.end());
     assert(
-        path_delay->second.find(":b=0000000000000006")
+        path_delay->second.find(":v=00000000000000000000000000000110")
         != std::string::npos);
     assert(
-        path_pulse->second.find(":b=0000000000000006")
+        path_pulse->second.find(":v=00000000000000000000000000000110")
         != std::string::npos);
     const auto& paths = elaborated.design->verilog_specify_paths();
     assert(paths.size() == 1);

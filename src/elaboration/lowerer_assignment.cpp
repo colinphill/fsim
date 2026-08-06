@@ -139,6 +139,7 @@ void Lowerer::validate_read_only_signal_writes(
         std::optional<DynamicIndex> dynamic_selection;
         std::optional<DynamicPartIndex> dynamic_part_selection;
         std::optional<frontend::Type> selected_type;
+        std::optional<PackedMemberReference> selected_member_reference;
         std::vector<const Expression*> packed_selections;
         constexpr std::string_view vhdl_member_prefix{
             "@vhdl-member:"};
@@ -508,6 +509,7 @@ void Lowerer::validate_read_only_signal_writes(
                 has_selected_offset = true;
                 selected_width = static_cast<std::size_t>(*width);
                 selected_domain = selected->member->domain;
+                selected_member_reference = *selected;
                 if (language_ == frontend::Language::Vhdl2008
                     && !selected->member->nested_types.empty()) {
                     selected_type =
@@ -640,6 +642,21 @@ void Lowerer::validate_read_only_signal_writes(
         const bool procedural_event =
             assignment_control
             == frontend::ProceduralAssignmentControl::Event;
+        if (selected_member_reference
+            && !selected_member_reference->unions.empty()
+            && (assignment_control
+                    != frontend::ProceduralAssignmentControl::None
+                || statement.delay
+                || statement.vhdl_delay_mechanism
+                || statement.vhdl_waveform.size() > 1)) {
+            report(
+                "FSIM-ELAB-SVUNION-001",
+                "selected union writes require a time-free scalar "
+                "assignment so payload padding and the active tag update "
+                "coherently",
+                statement.span);
+            return;
+        }
         if (assignment_control
                 != frontend::ProceduralAssignmentControl::None
             && statement.assignment_kind != AssignmentKind::Blocking
@@ -871,6 +888,44 @@ void Lowerer::validate_read_only_signal_writes(
             } else {
                 process_.operations.emplace_back(
                     CopyRegister{local->second, *value});
+            }
+            if (selected_member_reference) {
+                for (const auto& context :
+                     selected_member_reference->unions) {
+                    if (context.payload_width > context.member_width) {
+                        const auto padding_width =
+                            context.payload_width - context.member_width;
+                        const auto padding = allocate_register(
+                            padding_width,
+                            frontend::ValueDomain::Bit2);
+                        process_.operations.emplace_back(LoadConstant{
+                            padding,
+                            PackedLogic4(
+                                padding_width, Logic4::zero)});
+                        process_.operations.emplace_back(Insert{
+                            local->second,
+                            local->second,
+                            padding,
+                            static_cast<std::uint32_t>(
+                                context.payload_offset
+                                + context.member_width)});
+                    }
+                    if (context.tag_width != 0) {
+                        const auto tag = allocate_register(
+                            context.tag_width,
+                            frontend::ValueDomain::Bit2);
+                        process_.operations.emplace_back(LoadConstant{
+                            tag,
+                            unsigned_value(
+                                context.tag, context.tag_width)});
+                        process_.operations.emplace_back(Insert{
+                            local->second,
+                            local->second,
+                            tag,
+                            static_cast<std::uint32_t>(
+                                context.tag_offset)});
+                    }
+                }
             }
             return;
         }
@@ -1409,6 +1464,52 @@ void Lowerer::validate_read_only_signal_writes(
             } else {
                 process_.operations.emplace_back(
                     WriteUpdate{signal->second, *value});
+            }
+        }
+        if (selected_member_reference) {
+            const auto write_metadata =
+                [&](const RegisterId metadata,
+                    const std::uint32_t offset) {
+                  if (statement.assignment_kind
+                      == AssignmentKind::Blocking) {
+                    process_.operations.emplace_back(
+                        WriteBlockingSlice{
+                            signal->second, metadata, offset});
+                  } else {
+                    process_.operations.emplace_back(
+                        WriteUpdateSlice{
+                            signal->second, metadata, offset});
+                  }
+                };
+            for (const auto& context :
+                 selected_member_reference->unions) {
+                if (context.payload_width > context.member_width) {
+                    const auto padding_width =
+                        context.payload_width - context.member_width;
+                    const auto padding = allocate_register(
+                        padding_width,
+                        frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(LoadConstant{
+                        padding,
+                        PackedLogic4(
+                            padding_width, Logic4::zero)});
+                    write_metadata(
+                        padding,
+                        static_cast<std::uint32_t>(
+                            context.payload_offset
+                            + context.member_width));
+                }
+                if (context.tag_width != 0) {
+                    const auto tag = allocate_register(
+                        context.tag_width,
+                        frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(LoadConstant{
+                        tag,
+                        unsigned_value(context.tag, context.tag_width)});
+                    write_metadata(
+                        tag,
+                        static_cast<std::uint32_t>(context.tag_offset));
+                }
             }
         }
     }

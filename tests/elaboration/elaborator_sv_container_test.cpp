@@ -1460,8 +1460,6 @@ endmodule
       invalid.design, "container_invalid_lowering");
   assert(!rejected.ok());
   assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVCONTAINER-003"));
-  assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVREDUCE-001"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVREDUCE-003"));

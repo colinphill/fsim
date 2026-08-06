@@ -1103,7 +1103,6 @@ Lowerer::ExpressionAttempt Lowerer::lower_unary_attribute_expression(
                     static_cast<std::uint32_t>(result), 32)});
             return destination;
         }
-
         return ExpressionAttempt{};
     }
 

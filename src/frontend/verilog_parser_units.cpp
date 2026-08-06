@@ -1002,6 +1002,12 @@ void VerilogParser::parse_generated_parameter_group(
 }
 
 Type VerilogParser::parse_parameter_type() {
+  if (keyword("struct") || keyword("union")) {
+    return parse_systemverilog_aggregate_type();
+  }
+  if (keyword("enum")) {
+    return parse_systemverilog_enum_type();
+  }
   Type type{
       ValueDomain::Integer,
       "implicit",
@@ -1112,6 +1118,7 @@ Type VerilogParser::parse_type_parameter_actual() {
       || keyword("realtime")
       || keyword("integer") || keyword("int")
       || keyword("logic") || keyword("reg") || keyword("bit")
+      || keyword("struct") || keyword("union") || keyword("enum")
       || keyword("signed") || keyword("unsigned")
       || at(TokenKind::LeftBracket)) {
     return parse_parameter_type();

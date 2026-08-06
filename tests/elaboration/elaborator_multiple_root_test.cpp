@@ -180,6 +180,68 @@ endmodule
         });
     assert(leaf_specializations == 2);
 
+    auto wide_roots = fsim::frontend::parse_text(
+        "multiple-root-wide-values.sv",
+        R"(
+package wide_root_types;
+  typedef struct packed {
+    logic [72:0] upper;
+    logic [63:0] lower;
+  } wide_root_t;
+endpackage
+
+import wide_root_types::*;
+
+module wide_root_leaf #(
+    parameter wide_root_t VALUE = wide_root_t'(137'h0)
+) (output logic [136:0] observed);
+  localparam wide_root_t RETAINED = VALUE;
+  initial observed = RETAINED;
+endmodule
+module wide_root_a;
+  localparam wide_root_t ROOT_VALUE = wide_root_t'(
+      137'h10000000000000000000000000000000001);
+  logic [136:0] observed;
+  wide_root_leaf #(.VALUE(ROOT_VALUE)) leaf(observed);
+endmodule
+module wide_root_b;
+  localparam wide_root_t ROOT_VALUE = wide_root_t'(
+      137'h0ffffffffffffffffffffffffffffffffff);
+  logic [136:0] observed;
+  wide_root_leaf #(.VALUE(ROOT_VALUE)) leaf(observed);
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(wide_roots.ok());
+    const std::array wide_root_selection{
+        Root{"wide_root_a", "wide_a"},
+        Root{"wide_root_b", "wide_b"}};
+    const auto wide_root_result = elaborate_roots(
+        wide_roots.design, wide_root_selection);
+    if (!wide_root_result.ok()) {
+        for (const auto& diagnostic : wide_root_result.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(wide_root_result.ok());
+    const auto wide_a =
+        wide_root_result.design->find_signal("wide_a.observed");
+    const auto wide_b =
+        wide_root_result.design->find_signal("wide_b.observed");
+    assert(wide_a && wide_b && *wide_a != *wide_b);
+    auto wide_root_interpreter =
+        wide_root_result.design->create_interpreter();
+    assert(
+        wide_root_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(
+        wide_root_interpreter->signal_value(*wide_a).to_msb_string()
+        == "1" + std::string(135, '0') + "1");
+    assert(
+        wide_root_interpreter->signal_value(*wide_b).to_msb_string()
+        == "0" + std::string(136, '1'));
+
     const std::array missing{
         Root{"producer", "valid"},
         Root{"absent", "missing"}};

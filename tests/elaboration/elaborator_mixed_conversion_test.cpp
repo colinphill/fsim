@@ -927,6 +927,74 @@ end architecture;
           .to_msb_string()
       == "Z");
 
+  const auto wide_vhdl_parent = fsim::frontend::parse_text(
+      "wide_vhdl_parent.vhd",
+      R"(
+entity Wide_Vhdl_Parent is
+end entity;
+architecture rtl of Wide_Vhdl_Parent is
+  signal Source : std_logic_vector(128 downto 0);
+  signal Result : std_logic_vector(136 downto 0);
+begin
+  Source <= (128 => '1', 0 => '1', others => '0');
+  child : wide_sv_child
+    port map (Data => Source, Result => Result);
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  const auto wide_sv_child = fsim::frontend::parse_text(
+      "wide_sv_child.sv",
+      R"(
+module wide_sv_child(
+  input logic signed [136:0] data,
+  output logic signed [128:0] result
+);
+  assign result = data[128:0];
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(wide_vhdl_parent.ok() && wide_sv_child.ok());
+  auto wide_boundary_design = wide_vhdl_parent.design;
+  append_units(wide_boundary_design, wide_sv_child.design);
+  const std::vector<fsim::elaboration::Binding> wide_bindings{{
+      "wide_vhdl_parent.child",
+      "sv:work.wide_sv_child",
+      std::nullopt}};
+  const auto elaborated_wide = fsim::elaboration::elaborate(
+      wide_boundary_design,
+      "vhdl:work.wide_vhdl_parent(rtl)",
+      wide_bindings);
+  if (!elaborated_wide.ok()) {
+    for (const auto& diagnostic : elaborated_wide.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(elaborated_wide.ok());
+  const auto& wide_conversions =
+      elaborated_wide.design->boundary_conversions();
+  assert(wide_conversions.size() == 2);
+  assert(std::ranges::all_of(
+      wide_conversions,
+      [](const auto& conversion) {
+        return conversion.kind
+                == fsim::elaboration::BoundaryConversionKind::
+                    width_signedness_adapter
+            && conversion.process
+            && conversion.formal_width > 64
+            && conversion.actual_width > 64;
+      }));
+  auto wide_interpreter =
+      elaborated_wide.design->create_interpreter();
+  assert(
+      wide_interpreter->run().status
+      == fsim::runtime::RunStatus::completed);
+  const auto wide_result =
+      elaborated_wide.design->find_signal("result");
+  assert(wide_result);
+  assert(
+      wide_interpreter->signal_value(*wide_result).to_msb_string()
+      == std::string(9, '1') + std::string(127, '0') + "1");
+
   const auto lossy_logic9_vhdl_parent = fsim::frontend::parse_text(
       "lossy_logic9_vhdl_parent.vhd",
       R"(

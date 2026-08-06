@@ -1110,10 +1110,10 @@ are therefore excluded.
 | `FSIM-SV-UNSUPPORTED-023` | error | A package item is outside the bounded integral parameter/localparam and import subset. |
 | `FSIM-SV-UNSUPPORTED-024` | error | A bounded typedef target is not an integral built-in or user-defined type. |
 | `FSIM-SV-UNSUPPORTED-025` | error | An unpacked typedef dimension is outside the current packed alias subset. |
-| `FSIM-SV-UNSUPPORTED-026` | error | A bounded enum typedef lacks an explicit packed `bit`, `logic`, or `reg` base type. |
+| `FSIM-SV-UNSUPPORTED-026` | error | An enum declaration selects a nonintegral base type. |
 | `FSIM-SV-UNSUPPORTED-027` | error | A bounded aggregate declaration uses an unpacked union, which is outside the supported packed-union or unpacked-struct slice. |
 | `FSIM-SV-UNSUPPORTED-028` | error | A bounded aggregate member uses a data type outside the packed integral, enum, or nested aggregate subset. |
-| `FSIM-SV-UNSUPPORTED-029` | error | A bounded aggregate member has an unpacked dimension or initializer. |
+| `FSIM-SV-UNSUPPORTED-029` | error | A bounded packed aggregate member has an unpacked dimension. |
 | `FSIM-SV-UNSUPPORTED-035` | error | A bounded function output, inout, or ref formal uses a string or unpacked-container type instead of the supported packed integral type. |
 | `FSIM-SV-UNSUPPORTED-041` | error | `reverse` or nondeterministic `shuffle` uses an excluded container-ordering `with` clause. |
 | `FSIM-SV-UNSUPPORTED-042` | error | A bounded `case matches` item uses a deferred variable-binding, tagged, or structured pattern. |
@@ -1242,7 +1242,7 @@ are therefore excluded.
 | `FSIM-ELAB-GEN-009` | error | A selection-generate choice or range bound is not locally static or does not belong to the selector domain. |
 | `FSIM-ELAB-GEN-010` | error | Selection-generate choices or ranges overlap, or the alternatives contain duplicate defaults. |
 | `FSIM-ELAB-GEN-011` | error | A generated constant or parameter cannot be evaluated in its declaration-order environment. |
-| `FSIM-ELAB-GEN-012` | error | A generated constant/parameter violates a bounded scalar subtype or exceeds the 64-bit integral width. |
+| `FSIM-ELAB-GEN-012` | error | A generated constant/parameter violates its bounded scalar subtype, cannot be converted to its governed arbitrary-width packed type, or exceeds the configured materialization limit. |
 | `FSIM-ELAB-GEN-013` | error | A VHDL block guard expression has a non-Boolean type. |
 | `FSIM-ELAB-VHBLOCK-001` | error | A VHDL block generic map is missing, excessive, duplicated, unknown, misordered, or selects an unavailable default. |
 | `FSIM-ELAB-VHBLOCK-002` | error | A VHDL block port map is missing, excessive, duplicated, unknown, misordered, or uses an illegal actual for the formal mode. |
@@ -1271,8 +1271,8 @@ are therefore excluded.
 | `FSIM-ELAB-SVTYPE-001` | error | A SystemVerilog user-defined type is not visible in the unit where it is used. |
 | `FSIM-ELAB-SVTYPE-002` | error | The same direct type name is imported from multiple SystemVerilog packages. |
 | `FSIM-ELAB-SVTYPE-003` | error | Bounded SystemVerilog typedef aliases contain a cycle. |
-| `FSIM-ELAB-SVTYPE-004` | error | An aggregate assignment does not use the same nominal type, a matching explicit cast, or a contextual pattern. |
-| `FSIM-ELAB-SVTYPE-005` | error | SystemVerilog aggregate equality compares values with different or missing nominal aggregate types. |
+| `FSIM-ELAB-SVTYPE-004` | error | A SystemVerilog packed struct, union, or enum assignment-like context does not use the same nominal type, a matching explicit cast, or a legal contextual pattern. |
+| `FSIM-ELAB-SVTYPE-005` | error | SystemVerilog equality compares packed struct, union, or enum values with different or missing nominal types. |
 | `FSIM-ELAB-SVLOOP-001` | error | A runtime procedural for-loop inline variable shadows an active local. |
 | `FSIM-ELAB-SVLOOP-002` | error | A runtime procedural for-loop condition is not executable as a packed truth value. |
 | `FSIM-ELAB-SVEVENT-001` | error | A packed event expression has no readable signal dependencies. |
@@ -1290,7 +1290,7 @@ are therefore excluded.
 | `FSIM-ELAB-SVFUNC-001` | error | The visible bounded function set exceeds the representable SimIR call-stack capacity. |
 | `FSIM-ELAB-SVFUNC-002` | error | More than one bounded function has the same visible name. |
 | `FSIM-ELAB-SVFUNC-003` | error | A bounded function call has the wrong number of arguments. |
-| `FSIM-ELAB-SVFUNC-004` | error | A bounded function return or formal type does not specialize to an executable width from 1 through 64 bits. |
+| `FSIM-ELAB-SVFUNC-004` | error | A packed function return or formal type does not specialize to a positive executable width. |
 | `FSIM-ELAB-SVFUNC-005` | error | A return statement is outside an executable function or lacks a value during lowering. |
 | `FSIM-ELAB-SVFUNC-006` | error | Bounded runtime functions contain a direct or indirect recursive call cycle. |
 | `FSIM-ELAB-SVFUNC-007` | error | The same bare function name is directly visible from multiple imported SystemVerilog packages. |
@@ -1441,7 +1441,7 @@ are therefore excluded.
 | `FSIM-ELAB-SVTASK-003` | error | The visible bounded task set exceeds the representable SimIR call-stack capacity. |
 | `FSIM-ELAB-SVTASK-004` | error | More than one bounded task has the same visible name. |
 | `FSIM-ELAB-SVTASK-005` | error | A bounded task call has the wrong number of arguments. |
-| `FSIM-ELAB-SVTASK-006` | error | A bounded task formal type does not specialize to an executable width from 1 through 64 bits. |
+| `FSIM-ELAB-SVTASK-006` | error | A packed task formal type does not specialize to a positive executable width. |
 | `FSIM-ELAB-SVTASK-007` | error | A task return statement is outside an executable task during lowering. |
 | `FSIM-ELAB-SVTASK-008` | error | Bounded runtime tasks contain a direct or indirect recursive call cycle. |
 | `FSIM-ELAB-SVTASK-009` | error | The same bare task name is directly visible from multiple imported SystemVerilog packages. |
@@ -1602,7 +1602,7 @@ are therefore excluded.
 | `FSIM-ELAB-VITALMEM-002` | error | `VitalDeclareMemory` geometry is not static and positive, or its subword is wider than its word. |
 | `FSIM-ELAB-VITALMEM-003` | error | A `VitalDeclareMemory` load filename or binary-format control has an incompatible string/Boolean profile. |
 | `FSIM-ELAB-VITALMEM-004` | error | A static `VitalDeclareMemory` load file is unavailable, unreadable, or exceeds the bounded input budget. |
-| `FSIM-ELAB-SVENUM-001` | error | An enum base width is unsupported or an enumerator value does not fit it. |
+| `FSIM-ELAB-SVENUM-001` | error | An enum base width is non-positive or exceeds the governed constant-width limit, or an arbitrary-width enumerator value does not fit it. |
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
 | `FSIM-ELAB-SVCONST-001` | error | A SystemVerilog parameter value cannot be converted to its declared bounded integral type without losing X/Z state or valid width metadata. |
 | `FSIM-ELAB-SVEXPR-001` | error | Streaming-concatenation HIR has the wrong language, arity, or operand shape. |
@@ -1628,12 +1628,12 @@ are therefore excluded.
 | `FSIM-ELAB-SVFILE-011` | error | `$fscanf` or `$sscanf` has an invalid source, format, arity, or bounded conversion list. |
 | `FSIM-ELAB-SVFILE-012` | error | A formatted scan target is not a direct writable compatible packed or string variable. |
 | `FSIM-ELAB-SVFILE-013` | error | `$fread` does not have a compatible integer handle and optional bounded start/count expressions. |
-| `FSIM-ELAB-SVFILE-014` | error | A binary-read target is not a direct writable 1..64-bit packed value or one-dimensional fixed integral memory. |
+| `FSIM-ELAB-SVFILE-014` | error | A binary-read target is not a direct writable positive-width packed value or one-dimensional fixed integral memory. |
 | `FSIM-ELAB-SVFILE-015` | error | `$fseek`, `$ftell`, or `$rewind` has an invalid handle, arity, offset, or origin expression. |
 | `FSIM-ELAB-SVFILE-016` | error | `$fflush` has a nonintegral explicit file handle. |
 | `FSIM-ELAB-SVCONTAINER-001` | error | A container local is duplicated in one automatic scope. |
 | `FSIM-ELAB-SVCONTAINER-002` | error | A container element expression has no resolvable element type. |
-| `FSIM-ELAB-SVCONTAINER-003` | error | A container element is a string, unpacked aggregate, unresolved, or outside the executable 1-to-64-bit scalar, enum, or packed-aggregate range. |
+| `FSIM-ELAB-SVCONTAINER-003` | error | A container element is a string, unpacked aggregate, unresolved, or lacks a positive executable scalar, enum, or packed-aggregate width. |
 | `FSIM-ELAB-SVCONTAINER-004` | error | A bounded queue maximum index is unknown or negative. |
 | `FSIM-ELAB-SVCONTAINER-005` | error | A container value is not a direct supported object reference. |
 | `FSIM-ELAB-SVCONTAINER-006` | error | A container expression references an unknown container object. |
@@ -1772,16 +1772,17 @@ are therefore excluded.
 | `FSIM-ELAB-SVTYPEPARAM-004` | error | A SystemVerilog type parameter was associated across a mixed-language boundary instead of through a same-language wrapper. |
 | `FSIM-ELAB-SVSTRUCT-001` | error | A packed-struct member range or total layout cannot be specialized into a supported width. |
 | `FSIM-ELAB-SVSTRUCT-002` | error | A packed-aggregate member read/write has no executable normalized layout. |
-| `FSIM-ELAB-SVUNION-001` | error | Packed-union members do not specialize to one common nonzero supported width. |
+| `FSIM-ELAB-SVUNION-001` | error | Packed/tagged-union layout, construction context, discriminator, or selected-write timing is invalid. |
 | `FSIM-ELAB-SVAGG-001` | error | An aggregate assignment pattern has inconsistent contextual layout or association metadata. |
 | `FSIM-ELAB-SVAGG-002` | error | An aggregate assignment-pattern key is not a direct member name or names an unknown member. |
 | `FSIM-ELAB-SVAGG-003` | error | An aggregate assignment pattern duplicates, omits, or supplies too many members or defaults. |
 | `FSIM-ELAB-SVAGG-004` | error | An aggregate assignment-pattern member value has the wrong width. |
 | `FSIM-ELAB-SVAGG-005` | error | A two-state aggregate assignment-pattern member receives a four-state value without conversion. |
 | `FSIM-ELAB-SVAGG-006` | error | A packed-union assignment pattern does not select exactly one member or uses `default`. |
+| `FSIM-ELAB-SVAGG-007` | error | A packed aggregate member initializer is not a valid contextual constant. |
 | `FSIM-ELAB-SVCAST-001` | error | Malformed cast HIR does not contain exactly one operand. |
 | `FSIM-ELAB-SVCAST-002` | error | A SystemVerilog cast names a type that is not visible. |
-| `FSIM-ELAB-SVCAST-003` | error | A SystemVerilog cast type has no executable width in 1..64. |
+| `FSIM-ELAB-SVCAST-003` | error | A SystemVerilog cast type has no executable width in 1..16777216. |
 | `FSIM-ELAB-SVCAST-004` | error | A four-state-to-two-state cast is outside the bounded aggregate cast slice. |
 | `FSIM-ELAB-SVMDARRAY-001` | error | A multidimensional static-array access does not supply exactly one index per declared unpacked dimension. |
 | `FSIM-ELAB-SVMDARRAY-002` | error | A runtime multidimensional static-array index cannot lower to a signed 32-bit integral value. |
@@ -1889,7 +1890,7 @@ are therefore excluded.
 | `FSIM-ELAB-BIND-050` | error | An elaboration binding names a resolver other than `std_logic` or `sv_wire`. |
 | `FSIM-ELAB-BIND-051` | error | An integer hierarchy boundary cannot guarantee a range-safe same-language alias or cross-language 32-bit signed conversion in the port's data-flow direction. |
 | `FSIM-ELAB-BIND-052` | error | A VHDL enumeration crosses a language boundary without a same-language scalar/vector wrapper. |
-| `FSIM-ELAB-BIND-053` | error | A same-language VHDL hierarchy boundary connects different nominal enumeration types. |
+| `FSIM-ELAB-BIND-053` | error | A same-language hierarchy boundary connects different nominal enumeration types. |
 | `FSIM-ELAB-BIND-054` | error | Same-language VHDL enumeration subtype ranges cannot guarantee a range-safe alias in the port's data-flow direction. |
 | `FSIM-ELAB-BIND-055` | error | A VHDL array crosses a language boundary without a same-language scalar/vector wrapper. |
 | `FSIM-ELAB-BIND-056` | error | A same-language VHDL hierarchy boundary connects different nominal array types. |

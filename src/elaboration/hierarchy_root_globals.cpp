@@ -12,7 +12,7 @@ void HierarchyBuilder::predeclare_root_globals(
   }
   active_root_ = path;
   auto specialized = specialize_selected_unit(
-      root, {}, {}, {}, {}, {}, {}, {}, root.language);
+      root, {}, {}, {}, {}, {}, {}, {}, {}, root.language);
   SignalMap aliases;
   const auto* ports = unit_ports(parsed_, specialized.unit);
   if (ports != nullptr) {

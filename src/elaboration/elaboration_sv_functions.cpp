@@ -36,6 +36,23 @@ private:
         const SystemVerilogConstantEnvironment& environment,
         std::string& error,
         const frontend::Type* expected_type = nullptr) {
+        const bool packed_query =
+            expression.kind == ExpressionKind::Call
+            && (expression.text == "$bits"
+                || expression.text == "$left"
+                || expression.text == "$right"
+                || expression.text == "$low"
+                || expression.text == "$high"
+                || expression.text == "$size"
+                || expression.text == "$increment"
+                || expression.text == "$dimensions"
+                || expression.text == "$unpacked_dimensions");
+        if (packed_query) {
+            // Query the owning value directly so a declared ascending or
+            // nonzero packed range is not erased by literal substitution.
+            return evaluate_systemverilog_constant_expression(
+                expression, environment, fallback_, error);
+        }
         if (expression.kind == ExpressionKind::Call) {
             std::optional<Value> selected;
             std::size_t matches = 0;
@@ -202,6 +219,9 @@ private:
         for (auto& association :
              folded.aggregate_choice_expressions) {
             for (auto& choice : association) {
+                if (choice.kind == ExpressionKind::DefaultChoice) {
+                    continue;
+                }
                 const auto value =
                     evaluate_expression(
                         choice, environment, error);
@@ -488,31 +508,173 @@ private:
         std::optional<Value>& result,
         std::string& error) {
         if (statement.kind == StatementKind::Assignment) {
-            if (statement.target.kind
-                != ExpressionKind::Identifier) {
+            const Expression* root = &statement.target;
+            while ((root->kind == ExpressionKind::Index
+                    || root->kind == ExpressionKind::Slice)
+                   && !root->operands.empty()) {
+                root = &root->operands.front();
+            }
+            if (root->kind != ExpressionKind::Identifier) {
                 error =
-                    "constant functions currently require whole-variable "
-                    "assignment targets";
+                    "constant function assignment target is not a local "
+                    "packed variable or selection";
                 return Flow::failed;
             }
-            const auto type = types.find(statement.target.text);
+            const auto type = types.find(root->text);
             if (type == types.end()) {
                 error =
                     "constant function assignment target '"
-                    + statement.target.text + "' is not local";
+                    + root->text + "' is not local";
                 return Flow::failed;
             }
-            const auto value = converted(
-                statement.value, *type->second, environment, error);
+            std::optional<Value> value;
+            if (statement.target.kind == ExpressionKind::Identifier) {
+                value = converted(
+                    statement.value, *type->second, environment, error);
+            } else if ((statement.target.kind == ExpressionKind::Index
+                        && statement.target.operands.size() == 2U)
+                       || (statement.target.kind == ExpressionKind::Slice
+                           && statement.target.operands.size() == 3U)) {
+                const auto base = environment.find(root->text);
+                const auto selected = base != environment.end()
+                    ? evaluate_expression(
+                          statement.target, environment, error)
+                    : std::nullopt;
+                const auto raw = selected
+                    ? evaluate_expression(
+                          statement.value, environment, error)
+                    : std::nullopt;
+                if (base == environment.end()) {
+                    error =
+                        "constant function selected assignment target '"
+                        + root->text + "' has no current value";
+                }
+                if (!selected || !raw) {
+                    return Flow::failed;
+                }
+                frontend::Type selected_type{
+                    base->second.domain,
+                    base->second.domain == frontend::ValueDomain::Bit2
+                        ? "bit" : "logic",
+                    frontend::PackedRange{
+                        static_cast<std::int64_t>(selected->width - 1U),
+                        0,
+                        true},
+                    false};
+                const auto replacement =
+                    convert_systemverilog_parameter_value(
+                        *raw, selected_type, error);
+                if (!replacement) {
+                    return Flow::failed;
+                }
+                std::vector<std::uint32_t> offsets;
+                offsets.reserve(selected->width);
+                if (statement.target.kind == ExpressionKind::Index) {
+                    const auto index = evaluate_expression(
+                        statement.target.operands[1], environment, error);
+                    const auto position =
+                        index ? index->integer_value() : std::nullopt;
+                    if (!position || *position < 0
+                        || static_cast<std::uint64_t>(*position)
+                            >= base->second.width) {
+                        error =
+                            "constant function bit-select assignment is "
+                            "outside the packed target";
+                        return Flow::failed;
+                    }
+                    offsets.push_back(
+                        static_cast<std::uint32_t>(*position));
+                } else {
+                    const auto first = evaluate_expression(
+                        statement.target.operands[1], environment, error);
+                    const auto second = first
+                        ? evaluate_expression(
+                              statement.target.operands[2],
+                              environment, error)
+                        : std::nullopt;
+                    const auto first_index =
+                        first ? first->integer_value() : std::nullopt;
+                    const auto second_index =
+                        second ? second->integer_value() : std::nullopt;
+                    if (!first_index || !second_index) {
+                        error =
+                            "constant function part-select assignment "
+                            "bounds must be known integers";
+                        return Flow::failed;
+                    }
+                    for (std::uint32_t bit = 0;
+                         bit < selected->width;
+                         ++bit) {
+                        bool add = true;
+                        auto anchor = *second_index;
+                        auto offset = bit;
+                        if (statement.target.text == "+:") {
+                            anchor = *first_index;
+                        } else if (statement.target.text == "-:") {
+                            anchor = *first_index;
+                            offset = selected->width - bit - 1U;
+                            add = false;
+                        } else if (*first_index < *second_index) {
+                            add = false;
+                        }
+                        if (anchor < 0) {
+                            error =
+                                "constant function part-select assignment "
+                                "is outside the packed target";
+                            return Flow::failed;
+                        }
+                        const auto unsigned_anchor =
+                            static_cast<std::uint64_t>(anchor);
+                        if ((!add && unsigned_anchor < offset)
+                            || (add && unsigned_anchor
+                                > std::numeric_limits<std::uint64_t>::max()
+                                    - offset)) {
+                            error =
+                                "constant function part-select assignment "
+                                "is outside the packed target";
+                            return Flow::failed;
+                        }
+                        const auto source = add
+                            ? unsigned_anchor + offset
+                            : unsigned_anchor - offset;
+                        if (source >= base->second.width) {
+                            error =
+                                "constant function part-select assignment "
+                                "is outside the packed target";
+                            return Flow::failed;
+                        }
+                        offsets.push_back(
+                            static_cast<std::uint32_t>(source));
+                    }
+                }
+                auto updated = base->second;
+                for (std::uint32_t bit = 0;
+                     bit < offsets.size();
+                     ++bit) {
+                    const auto state = replacement->packed.get_logic9(bit);
+                    if (updated.packed.is_logic9()) {
+                        updated.packed.set_logic9(offsets[bit], state);
+                    } else {
+                        updated.packed.set(
+                            offsets[bit], runtime::to_logic4(state));
+                    }
+                }
+                updated.refresh_low_word_mirrors();
+                updated.source = statement.target.span;
+                value = std::move(updated);
+            } else {
+                error =
+                    "constant functions support one packed bit/part-select "
+                    "assignment level";
+                return Flow::failed;
+            }
             if (!value) {
                 return Flow::failed;
             }
             environment.insert_or_assign(
-                statement.target.text, *value);
-            if (statement.target.text
-                    == call_stack_.back()->name
-                || statement.target.text
-                    == result_alias(call_stack_.back()->name)) {
+                root->text, *value);
+            if (root->text == call_stack_.back()->name
+                || root->text == result_alias(call_stack_.back()->name)) {
                 result = *value;
             }
             return Flow::normal;
@@ -592,11 +754,7 @@ private:
                         return Flow::failed;
                     }
                     if (value->width == selector->width
-                        && value->bits == selector->bits
-                        && value->unknown_bits
-                            == selector->unknown_bits
-                        && value->high_impedance_bits
-                            == selector->high_impedance_bits) {
+                        && value->packed == selector->packed) {
                         selected = &alternative;
                         break;
                     }
@@ -631,11 +789,7 @@ private:
                         return Flow::failed;
                     }
                     if (value->width == selector->width
-                        && value->bits == selector->bits
-                        && value->unknown_bits
-                            == selector->unknown_bits
-                        && value->high_impedance_bits
-                            == selector->high_impedance_bits) {
+                        && value->packed == selector->packed) {
                         selected = &alternative;
                         break;
                     }

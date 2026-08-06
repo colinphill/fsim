@@ -264,13 +264,11 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
 
     if (!frame.allocated) {
         const auto return_width = function.return_type.width();
-        if (!return_width || *return_width == 0
-            || *return_width > 64) {
+        if (!return_width || *return_width == 0) {
             report(
                 "FSIM-ELAB-SVFUNC-004",
                 "function '" + function.name
-                    + "' return type must have an executable width in "
-                      "[1, 64]",
+                    + "' return type must have a positive executable width",
                 function.span);
             return std::nullopt;
         }
@@ -308,11 +306,11 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
                 continue;
             }
             const auto width = argument.type.width();
-            if (!width || *width == 0 || *width > 64) {
+            if (!width || *width == 0) {
                 report(
                     "FSIM-ELAB-SVFUNC-004",
                     "function argument '" + argument.name
-                        + "' must have an executable width in [1, 64]",
+                        + "' must have a positive executable width",
                     argument.span);
                 return std::nullopt;
             }
@@ -330,6 +328,11 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
     for (std::size_t index = 0;
          index < function.arguments.size(); ++index) {
         const auto& formal = function.arguments[index];
+        if (formal.direction != frontend::PortDirection::Output
+            && !validate_sv_nominal_assignment(
+                &formal.type, *(*actuals)[index])) {
+            return std::nullopt;
+        }
         if (formal.direction == frontend::PortDirection::Output) {
             if (frame.argument_is_container[index]
                 || frame.argument_is_string[index]) {
@@ -561,11 +564,11 @@ Lowerer::lower_user_container_function_expression(
                 continue;
             }
             const auto width = argument.type.width();
-            if (!width || *width == 0 || *width > 64) {
+            if (!width || *width == 0) {
                 report(
                     "FSIM-ELAB-SVFUNC-004",
                     "function argument '" + argument.name
-                        + "' must have an executable width in [1, 64]",
+                        + "' must have a positive executable width",
                     argument.span);
                 return std::nullopt;
             }
@@ -782,6 +785,9 @@ void Lowerer::lower_function_return(const Statement& statement) {
             "FSIM-ELAB-SVFUNC-005",
             "function return requires a value",
             statement.span);
+    } else if (!validate_sv_nominal_assignment(
+                   &function.return_type, statement.value)) {
+        return;
     } else {
         auto value = lower_expression(
             statement.value, width, &function.return_type);

@@ -29,7 +29,7 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 44> values;
+  std::array<std::string, 58> values;
   std::vector<std::string> specialization_keys;
   std::size_t compiled_processes{};
   std::size_t compiled_modules{};
@@ -93,7 +93,7 @@ Capture run_once(
       simulation.compiled_module_count();
   capture.cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 44> paths{
+  constexpr std::array<std::string_view, 58> paths{
       "sized_parameter_top.default_signed_byte",
       "sized_parameter_top.default_unsigned_byte",
       "sized_parameter_top.default_short",
@@ -137,7 +137,21 @@ Capture run_once(
       "sized_parameter_top.context_conditional",
       "sized_parameter_top.context_power",
       "sized_parameter_top.context_concat",
-      "sized_parameter_top.context_replication"};
+      "sized_parameter_top.context_replication",
+      "sized_parameter_top.wide_bits",
+      "sized_parameter_top.wide_left",
+      "sized_parameter_top.wide_right",
+      "sized_parameter_top.wide_size",
+      "sized_parameter_top.wide_increment",
+      "sized_parameter_top.wide_dimensions",
+      "sized_parameter_top.wide_unpacked_dimensions",
+      "sized_parameter_top.wide_clog2_power",
+      "sized_parameter_top.wide_clog2_nonpower",
+      "sized_parameter_top.wide_int_cast",
+      "sized_parameter_top.wide_logic_cast",
+      "sized_parameter_top.wide_bit_cast",
+      "sized_parameter_top.wide_unknown_is_unknown",
+      "sized_parameter_top.wide_integer_unknown_cast"};
   std::array<fsim::runtime::simir::SignalId, paths.size()> signals{};
   for (std::size_t index = 0; index < paths.size(); ++index) {
     const auto signal = simulation.find_signal(paths[index]);
@@ -225,7 +239,7 @@ void verify_capture(const Capture& capture) {
           != std::string::npos);
   assert((
       capture.values
-      == std::array<std::string, 44>{
+      == std::array<std::string, 58>{
           "11111111111111111111111111111111",
           "00000000000000000000000011111111",
           "11111111111111111000000000000000",
@@ -269,7 +283,21 @@ void verify_capture(const Capture& capture) {
           "00000000011111111",
           "0000000100000000",
           "0000000010100101",
-          "0000000000110011"}));
+          "0000000000110011",
+          "00000000000000000000000010000000",
+          "00000000000000000000000001111111",
+          "00000000000000000000000000000000",
+          "00000000000000000000000010000000",
+          "00000000000000000000000000000001",
+          "00000000000000000000000000000001",
+          "00000000000000000000000000000000",
+          "00000000000000000000000001111111",
+          "00000000000000000000000010000000",
+          "00000000000000000000000000000001",
+          "1",
+          "1",
+          "1",
+          "0000000000000000000000000000XXXX"}));
 }
 
 } // namespace
@@ -343,6 +371,28 @@ module sized_parameter_top #(
   localparam logic [7:0] STREAM_CONSTANT = {<<2{8'hd2}};
   localparam logic [63:0] STREAM_WIDE =
       {>>{64'h0123456789abcdef}};
+  localparam logic [127:0] WIDE_VALUE =
+      128'h80000000000000000000000000000001;
+  localparam logic [127:0] WIDE_UNKNOWN =
+      128'h0000000000000000000000000000000x;
+  localparam int WIDE_BITS = $bits(WIDE_VALUE);
+  localparam int WIDE_LEFT = $left(WIDE_VALUE);
+  localparam int WIDE_RIGHT = $right(WIDE_VALUE);
+  localparam int WIDE_SIZE = $size(WIDE_VALUE, 1);
+  localparam int WIDE_INCREMENT = $increment(WIDE_VALUE);
+  localparam int WIDE_DIMENSIONS = $dimensions(WIDE_VALUE);
+  localparam int WIDE_UNPACKED_DIMENSIONS =
+      $unpacked_dimensions(WIDE_VALUE);
+  localparam int WIDE_CLOG2_POWER =
+      $clog2(128'h80000000000000000000000000000000);
+  localparam int WIDE_CLOG2_NONPOWER =
+      $clog2(128'h80000000000000000000000000000001);
+  localparam int WIDE_INT_CAST = int'(WIDE_VALUE);
+  localparam logic WIDE_LOGIC_CAST = logic'(WIDE_VALUE);
+  localparam bit WIDE_BIT_CAST = bit'(WIDE_VALUE);
+  localparam bit WIDE_UNKNOWN_IS_UNKNOWN = $isunknown(WIDE_UNKNOWN);
+  localparam logic [31:0] WIDE_INTEGER_UNKNOWN_CAST =
+      integer'(WIDE_UNKNOWN);
   logic [31:0] default_signed_byte;
   logic [31:0] default_unsigned_byte;
   logic [31:0] default_short;
@@ -391,6 +441,20 @@ module sized_parameter_top #(
   logic [15:0] context_power;
   logic [15:0] context_concat;
   logic [15:0] context_replication;
+  logic [31:0] wide_bits;
+  logic [31:0] wide_left;
+  logic [31:0] wide_right;
+  logic [31:0] wide_size;
+  logic [31:0] wide_increment;
+  logic [31:0] wide_dimensions;
+  logic [31:0] wide_unpacked_dimensions;
+  logic [31:0] wide_clog2_power;
+  logic [31:0] wide_clog2_nonpower;
+  logic [31:0] wide_int_cast;
+  logic wide_logic_cast;
+  logic wide_bit_cast;
+  logic wide_unknown_is_unknown;
+  logic [31:0] wide_integer_unknown_cast;
 
   function automatic logic counted(input logic value);
     begin
@@ -480,6 +544,20 @@ module sized_parameter_top #(
     context_power = 8'd2 ** 32'd8;
     context_concat = {4'ha, 4'h5};
     context_replication = {2{4'h3}};
+    wide_bits = WIDE_BITS;
+    wide_left = WIDE_LEFT;
+    wide_right = WIDE_RIGHT;
+    wide_size = WIDE_SIZE;
+    wide_increment = WIDE_INCREMENT;
+    wide_dimensions = WIDE_DIMENSIONS;
+    wide_unpacked_dimensions = WIDE_UNPACKED_DIMENSIONS;
+    wide_clog2_power = WIDE_CLOG2_POWER;
+    wide_clog2_nonpower = WIDE_CLOG2_NONPOWER;
+    wide_int_cast = WIDE_INT_CAST;
+    wide_logic_cast = WIDE_LOGIC_CAST;
+    wide_bit_cast = WIDE_BIT_CAST;
+    wide_unknown_is_unknown = WIDE_UNKNOWN_IS_UNKNOWN;
+    wide_integer_unknown_cast = WIDE_INTEGER_UNKNOWN_CAST;
     #1;
     $finish;
   end
@@ -558,7 +636,7 @@ endmodule
   assert(changed.result.status == fsim::runtime::RunStatus::stopped);
   assert((
       changed.values
-      == std::array<std::string, 44>{
+      == std::array<std::string, 58>{
           "11111111111111111111111111111111",
           "00000000000000000000000011111111",
           "11111111111111111000000000000000",
@@ -602,7 +680,21 @@ endmodule
           "00000000011111111",
           "0000000100000000",
           "0000000010100101",
-          "0000000000110011"}));
+          "0000000000110011",
+          "00000000000000000000000010000000",
+          "00000000000000000000000001111111",
+          "00000000000000000000000000000000",
+          "00000000000000000000000010000000",
+          "00000000000000000000000000000001",
+          "00000000000000000000000000000001",
+          "00000000000000000000000000000000",
+          "00000000000000000000000001111111",
+          "00000000000000000000000010000000",
+          "00000000000000000000000000000001",
+          "1",
+          "1",
+          "1",
+          "0000000000000000000000000000XXXX"}));
   assert(baseline_o2_keys.size() == 4);
   assert(changed.specialization_keys.size() == 4);
   assert(changed.specialization_keys[0] != baseline_o2_keys[0]);

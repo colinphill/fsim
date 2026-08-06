@@ -305,10 +305,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_class_expression(
     std::vector<frontend::ValueDomain> actual_domains;
     for (const auto& operand : expression.operands | std::views::drop(1)) {
       const auto width = infer_width(operand);
-      if (!width || *width == 0 || *width > 64) {
+      if (!width || *width == 0) {
         report(
             "FSIM-ELAB-SVCLASS-007",
-            "class method actual requires a packed width in 1..64",
+            "class method actual requires a positive packed width",
             operand.span);
         return std::nullopt;
       }
@@ -391,10 +391,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_class_expression(
     std::vector<frontend::ValueDomain> actual_domains;
     for (const auto& operand : expression.operands) {
       const auto width = infer_width(operand);
-      if (!width || *width == 0 || *width > 64) {
+      if (!width || *width == 0) {
         report(
             "FSIM-ELAB-SVCLASS-011",
-            "class static method actual requires a packed width in 1..64",
+            "class static method actual requires a positive packed width",
             operand.span);
         return std::nullopt;
       }
@@ -526,10 +526,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_class_expression(
   actuals.reserve(expression.operands.size());
   for (const auto& operand : expression.operands) {
     const auto width = infer_width(operand);
-    if (!width || *width == 0 || *width > 64) {
+    if (!width || *width == 0) {
       report(
           "FSIM-ELAB-SVCLASS-003",
-          "constructor actual has no executable packed width in 1..64",
+          "constructor actual has no positive executable packed width",
           operand.span);
       return std::nullopt;
     }

@@ -254,7 +254,7 @@ Lowerer::allocate_static_callable_variables(
         }
         const auto width = variable.type.width();
         if (variable.type.systemverilog_container
-            || !width || *width == 0 || *width > 64) {
+            || !width || *width == 0) {
             report(
                 std::string{diagnostic_code},
                 "static or implicit-lifetime "
@@ -275,6 +275,11 @@ Lowerer::allocate_static_callable_variables(
             storage.packed,
             default_packed_value(variable.type, *width)});
         if (variable.initializer) {
+            if (!validate_sv_nominal_assignment(
+                    &variable.type, *variable.initializer)) {
+                registers.push_back(storage);
+                continue;
+            }
             auto value = lower_expression(
                 *variable.initializer,
                 static_cast<std::size_t>(*width),

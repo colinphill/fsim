@@ -33,20 +33,46 @@ using runtime::PackedLogic4;
 using namespace runtime::simir;
 using ConstantEnvironment =
     std::unordered_map<std::string, std::int64_t>;
-/// A bounded IEEE 1800 integral constant.
+/// A resource-governed IEEE 1800 integral constant.
 ///
 /// Values remain width-bearing bit patterns until an explicitly
 /// integer-only elaboration consumer requests a checked conversion. X and Z
-/// are retained independently so legal four-state parameters can be
-/// substituted without passing through a host integer.
+/// and the complete nine-state domain are retained in owning packed storage so
+/// legal parameters can be substituted without passing through a host word.
 struct SystemVerilogConstantValue {
+    PackedLogic4 packed{32, Logic4::zero};
+    // Changes 5-8 replace these single-word arithmetic fast-path mirrors. The
+    // owning packed value above is authoritative for widths above 64 bits.
     std::uint64_t bits{};
     std::uint64_t unknown_bits{};
     std::uint64_t high_impedance_bits{};
     std::uint32_t width{32};
     bool is_signed{true};
     bool unsized{};
+    frontend::ValueDomain domain{frontend::ValueDomain::Logic4};
+    std::string nominal_type;
     frontend::SourceSpan source;
+    // Source-direction packed bounds retained for the IEEE 1800 array query
+    // system functions. Values without a declared packed type use the
+    // canonical descending [width-1:0] range.
+    std::optional<frontend::PackedRange> packed_range;
+    SystemVerilogConstantValue() = default;
+    SystemVerilogConstantValue(
+        std::uint64_t bits,
+        std::uint64_t unknown_bits,
+        std::uint64_t high_impedance_bits,
+        std::uint32_t width,
+        bool is_signed,
+        bool unsized,
+        frontend::SourceSpan source);
+    SystemVerilogConstantValue(
+        PackedLogic4 packed,
+        bool is_signed,
+        bool unsized,
+        frontend::ValueDomain domain,
+        std::string nominal_type,
+        frontend::SourceSpan source);
+    void refresh_low_word_mirrors() noexcept;
     [[nodiscard]] std::uint64_t mask() const noexcept;
     [[nodiscard]] bool known() const noexcept;
     [[nodiscard]] std::optional<bool> truth_value() const noexcept;
@@ -140,6 +166,16 @@ std::optional<SystemVerilogConstantValue>
 convert_systemverilog_parameter_value(
     const SystemVerilogConstantValue& value,
     const frontend::Type& type,
+    std::string& error);
+
+[[nodiscard]] bool is_systemverilog_nominal_packed_type(
+    const frontend::Type& type) noexcept;
+std::optional<PackedLogic4>
+evaluate_systemverilog_packed_constant(
+    const Expression& expression,
+    const frontend::Type& type,
+    const SystemVerilogConstantEnvironment& environment,
+    const ConstantEnvironment& fallback_environment,
     std::string& error);
 void substitute_systemverilog_parameters(
     Expression& expression,
@@ -660,6 +696,7 @@ struct SpecializedUnit {
     DesignUnit unit;
     ConstantEnvironment environment;
     ConstantDomainEnvironment domains;
+    SystemVerilogConstantEnvironment integral_environment;
     SystemVerilogStringEnvironment string_environment;
     SystemVerilogScalarConstantEnvironment scalar_environment;
     std::vector<std::pair<std::string, std::string>> values;
@@ -730,7 +767,9 @@ SpecializedUnit specialize_unit(
     const ConstantEnvironment& parent_environment,
     const frontend::Language association_language,
     std::vector<Diagnostic>& diagnostics,
-    bool expand_generates = true);
+    bool expand_generates = true,
+    const SystemVerilogConstantEnvironment&
+        parent_integral_environment = {});
 
 void expand_specialized_unit_generates(
     SpecializedUnit& specialized,
@@ -827,6 +866,10 @@ private:
 
     [[nodiscard]] const frontend::Type*
     enumeration_expression_type(
+        const Expression& expression) const;
+
+    [[nodiscard]] const frontend::Type*
+    systemverilog_expression_type(
         const Expression& expression) const;
 
     [[nodiscard]] bool validate_sv_nominal_assignment(
@@ -1003,9 +1046,19 @@ private:
         const Statement& statement, const bool is_break);
 
     struct PackedMemberReference {
+        struct UnionContext {
+            std::uint64_t payload_offset{};
+            std::uint64_t payload_width{};
+            std::uint64_t member_width{};
+            std::uint64_t tag_offset{};
+            std::uint64_t tag_width{};
+            std::uint64_t tag{};
+        };
+
         std::string base;
         const frontend::PackedMember* member{};
         std::uint64_t lsb_offset{};
+        std::vector<UnionContext> unions;
     };
 
     std::optional<PackedMemberReference> packed_member_reference(
@@ -1721,6 +1774,8 @@ private:
         const DesignUnit& selected,
         const std::vector<frontend::ParameterOverride>& overrides,
         const ConstantEnvironment& parent_environment,
+        const SystemVerilogConstantEnvironment&
+            parent_integral_environment,
         const ConstantDomainEnvironment& parent_domains,
         const NamedTypeEnvironment& parent_types,
         const std::vector<frontend::FunctionDeclaration>& parent_functions,
@@ -1928,6 +1983,8 @@ private:
         std::unordered_set<SignalId> read_only_signals,
         std::unordered_set<StringObjectId> read_only_strings,
         ConstantEnvironment parameter_environment,
+        SystemVerilogConstantEnvironment
+            parameter_integral_environment,
         std::vector<std::pair<std::string, std::string>>
             parameter_values,
         std::vector<std::pair<std::string, std::string>>

@@ -105,6 +105,31 @@ void ApplicationTestFixture::test_class_simulation_integration() {
           &fsim::frontend::SystemVerilogClassPropertyLayout::name);
       assert(restored_random != restored_derived->properties.end());
       assert(restored_random->is_randc && !restored_random->is_rand);
+      const auto restored_wide = std::ranges::find(
+          restored_derived->properties,
+          std::string{"wide_value"},
+          &fsim::frontend::SystemVerilogClassPropertyLayout::name);
+      assert(
+          restored_wide != restored_derived->properties.end()
+          && restored_wide->bit_width == 137
+          && restored_wide->type.width() == 137);
+      auto malformed_classes = *restored;
+      auto malformed_derived = std::ranges::find(
+          malformed_classes,
+          derived_specialization,
+          &fsim::frontend::SystemVerilogClassSpecialization::
+              specialization_identity);
+      assert(malformed_derived != malformed_classes.end());
+      auto malformed_wide = std::ranges::find(
+          malformed_derived->properties,
+          std::string{"wide_value"},
+          &fsim::frontend::SystemVerilogClassPropertyLayout::name);
+      assert(malformed_wide != malformed_derived->properties.end());
+      malformed_wide->type.packed_aggregate =
+          static_cast<fsim::frontend::PackedAggregateKind>(255);
+      fsim::diagnostic::Engine malformed_class_diagnostics;
+      assert(!fsim::app::serialize_class_state(
+          malformed_classes, malformed_class_diagnostics));
       auto trailing = *class_state;
       trailing.push_back('\0');
       fsim::diagnostic::Engine trailing_diagnostics;
@@ -124,6 +149,25 @@ void ApplicationTestFixture::test_class_simulation_integration() {
           fsim::app::serialize_systemverilog_constraint_hir_state(
               built->systemverilog_hir, class_state_diagnostics);
       assert(constraint_hir_state);
+      fsim::semantic::sv::Hir malformed_hir;
+      malformed_hir.mutable_classes() = {
+          built->systemverilog_hir.classes().begin(),
+          built->systemverilog_hir.classes().end()};
+      const auto malformed_hir_base = std::ranges::find_if(
+          malformed_hir.mutable_classes(), [](const auto& declaration) {
+            return declaration.canonical_identity.ends_with("::AppBase");
+          });
+      assert(malformed_hir_base != malformed_hir.mutable_classes().end());
+      const auto malformed_hir_wide = std::ranges::find(
+          malformed_hir_base->properties,
+          std::string{"wide_value"},
+          &fsim::semantic::sv::ClassProperty::name);
+      assert(malformed_hir_wide != malformed_hir_base->properties.end());
+      malformed_hir_wide->type.value_form =
+          static_cast<fsim::semantic::sv::TypeForm>(255);
+      fsim::diagnostic::Engine malformed_hir_diagnostics;
+      assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+          malformed_hir, malformed_hir_diagnostics));
       const auto restored_constraint_hir =
           fsim::app::deserialize_systemverilog_constraint_hir_state(
               *constraint_hir_state,
@@ -142,6 +186,18 @@ void ApplicationTestFixture::test_class_simulation_integration() {
               != restored_constraint_hir->classes().end()
           && !restored_constraint_class->constraints.empty()
           && !restored_constraint_class->composed_constraints.empty());
+      const auto restored_constraint_base = std::ranges::find_if(
+          restored_constraint_hir->classes(), [](const auto& declaration) {
+            return declaration.canonical_identity.ends_with("::AppBase");
+          });
+      assert(restored_constraint_base != restored_constraint_hir->classes().end());
+      const auto restored_constraint_wide = std::ranges::find(
+          restored_constraint_base->properties,
+          std::string{"wide_value"},
+          &fsim::semantic::sv::ClassProperty::name);
+      assert(
+          restored_constraint_wide != restored_constraint_base->properties.end()
+          && restored_constraint_wide->type.executable_width == 137);
       auto future_constraint_hir = *constraint_hir_state;
       future_constraint_hir[8] = static_cast<char>(
           fsim::app::kSystemVerilogConstraintHirStateSchema + 1U);
@@ -152,7 +208,6 @@ void ApplicationTestFixture::test_class_simulation_integration() {
           future_constraint_hir_diagnostics));
     }
     const auto virtual_slot = derived_method->virtual_slot;
-
     fsim::app::Simulation simulation(
         std::move(*built), config.run.max_deltas, engine);
     std::cerr << "application classes: engine "
@@ -261,6 +316,7 @@ void ApplicationTestFixture::test_class_simulation_integration() {
                 random.randc_used_values.size());
           }
           if (changed_handle != handle) return;
+          if (property.ends_with("::wide_value")) return;
           assert(property.ends_with("::value"));
           property_changes.emplace_back(
               time, delta, value.to_msb_string());
@@ -276,6 +332,13 @@ void ApplicationTestFixture::test_class_simulation_integration() {
           static_changes.emplace_back(
               specialization, property, value.to_msb_string());
         });
+    auto wide_service_value = fsim::runtime::PackedLogic4{
+        137, fsim::runtime::Logic4::zero};
+    wide_service_value.set(136, fsim::runtime::Logic4::one);
+    wide_service_value.set(91, fsim::runtime::Logic4::one);
+    wide_service_value.set(5, fsim::runtime::Logic4::one);
+    simulation.deposit_class_property(
+        handle, base_identity + "::wide_value", wide_service_value);
     std::size_t safe_points{};
     std::size_t safe_point_live_objects{};
     const auto safe_point = simulation.add_safe_point_hook(
@@ -313,7 +376,10 @@ void ApplicationTestFixture::test_class_simulation_integration() {
       std::uint32_t source_object_line{};
       for (std::string line; std::getline(source_input, line);) {
         ++source_object_line;
-        if (line.find("source_object = new(3);") != std::string::npos) break;
+        if (line.find("source_object = new(3, WIDE_SEED);")
+            != std::string::npos) {
+          break;
+        }
       }
       assert(source_object_line != 0 && source_input.good());
       std::ostringstream early_debug_output;
@@ -339,7 +405,7 @@ void ApplicationTestFixture::test_class_simulation_integration() {
     }
     const auto result = simulation.run();
     simulation.remove_safe_point_hook(safe_point);
-    assert(result.time == 7);
+    assert(result.time == 9);
     assert(safe_points != 0 && safe_point_live_objects >= 4);
     const auto source_object = simulation.find_signal(
         "class_top.source_object");
@@ -363,6 +429,53 @@ void ApplicationTestFixture::test_class_simulation_integration() {
         simulation.read_class_property(
             source_handle, derived_identity + "::value")
                 .packed.low_word().aval == 18);
+    auto wide_seed = fsim::runtime::PackedLogic4{
+        137, fsim::runtime::Logic4::zero};
+    wide_seed.set(136, fsim::runtime::Logic4::one);
+    wide_seed.set(73, fsim::runtime::Logic4::one);
+    wide_seed.set(3, fsim::runtime::Logic4::one);
+    auto wide_amount = fsim::runtime::PackedLogic4{
+        137, fsim::runtime::Logic4::zero};
+    wide_amount.set(128, fsim::runtime::Logic4::one);
+    wide_amount.set(7, fsim::runtime::Logic4::one);
+    wide_amount.set(0, fsim::runtime::Logic4::one);
+    assert(
+        simulation.read_class_property(
+            source_handle, base_identity + "::wide_value").packed
+        == wide_seed);
+    const auto assert_wide_signal = [&](
+        const std::string_view path,
+        const fsim::runtime::PackedLogic4& expected) {
+      const auto signal = simulation.find_signal(path);
+      assert(signal);
+      assert(simulation.read_signal(*signal) == expected);
+    };
+    for (const auto path : {
+             "class_top.source_wide_prior",
+             "class_top.source_wide_alias",
+             "class_top.source_wide_result",
+             "class_top.source_wide_recursive",
+             "class_top.source_module_wide_prior",
+             "class_top.source_module_wide_alias",
+             "class_top.source_module_wide_result"}) {
+      assert_wide_signal(path, wide_seed);
+    }
+    for (const auto path : {
+             "class_top.source_wide_accumulator",
+             "class_top.source_wide_task_observed",
+             "class_top.source_wide_task_accumulator",
+             "class_top.source_module_wide_accumulator",
+             "class_top.source_module_wide_task_observed",
+             "class_top.source_module_wide_task_accumulator"}) {
+      assert_wide_signal(path, wide_amount);
+    }
+    for (const auto path : {
+             "class_top.source_wide_static_first",
+             "class_top.source_wide_static_second",
+             "class_top.source_module_wide_static_first",
+             "class_top.source_module_wide_static_second"}) {
+      assert_wide_signal(path, wide_seed);
+    }
     assert(std::ranges::any_of(
         all_property_changes, [&](const auto& change) {
           return std::get<0>(change) == source_handle
@@ -559,6 +672,11 @@ void ApplicationTestFixture::test_class_simulation_integration() {
           && trace.value.to_msb_string() == "00010010";
     }));
     assert(std::ranges::any_of(trace_values, [&](const auto& trace) {
+      return trace.object == handle
+          && trace.path.ends_with(base_identity + "::wide_value")
+          && trace.value == wide_service_value;
+    }));
+    assert(std::ranges::any_of(trace_values, [&](const auto& trace) {
       return !trace.object
           && trace.path.ends_with(
               base->specialization_identity + ".shared")
@@ -577,6 +695,8 @@ void ApplicationTestFixture::test_class_simulation_integration() {
     }
     class_vcd.flush();
     assert(class_vcd_output.str().find("00010010") != std::string::npos);
+    assert(class_vcd_output.str().find(wide_service_value.to_msb_string())
+           != std::string::npos);
 
     std::vector<fsim::runtime::SystemVerilogClassMethodValue>
         suspended_actuals(1);
@@ -636,6 +756,7 @@ void ApplicationTestFixture::test_class_simulation_integration() {
   auto cache_config = config;
   std::cerr << "application classes: native cache\n";
   cache_config.project.name = "class-native-cache";
+  cache_config.project.top = "sv:work.class_cache_top";
   cache_config.build.cache_path = directory / "class-native-cache";
   const auto cached_run = [&]() {
     fsim::diagnostic::Engine diagnostics;
@@ -670,9 +791,11 @@ void ApplicationTestFixture::test_class_simulation_integration() {
         std::istreambuf_iterator<char>{}};
   }();
   auto edited_source = original_source;
-  const auto edited_delay = edited_source.find("#3 $finish;");
+  const auto edited_delay = edited_source.find(
+      "#1 $finish; // class-cache-delay");
   assert(edited_delay != std::string::npos);
-  edited_source.replace(edited_delay, 11, "#4 $finish;");
+  edited_source.replace(
+      edited_delay, 32, "#2 $finish; // class-cache-delay");
   {
     std::ofstream edited_output(
         class_source, std::ios::binary | std::ios::trunc);
@@ -740,6 +863,16 @@ void ApplicationTestFixture::test_class_simulation_integration() {
       relocated_design, standalone_diagnostics);
   assert(standalone);
   assert(standalone->systemverilog_class_specializations.size() == 6);
+  assert(std::ranges::any_of(
+      standalone->systemverilog_class_specializations,
+      [](const auto& specialization) {
+        return std::ranges::any_of(
+            specialization.properties, [](const auto& property) {
+              return property.name == "wide_value"
+                  && property.bit_width == 137
+                  && property.type.width() == 137;
+            });
+      }));
   assert(standalone->systemverilog_hir.classes().size() == 6);
   assert(std::ranges::any_of(
       standalone->systemverilog_hir.classes(), [](const auto& declaration) {
@@ -806,7 +939,7 @@ void ApplicationTestFixture::test_class_simulation_integration() {
   const auto standalone_result = standalone_simulation.run();
   assert(
       standalone_result.status == fsim::runtime::RunStatus::stopped
-      && standalone_result.time == 7);
+      && standalone_result.time == 9);
   const auto standalone_property = standalone_simulation.find_signal(
       "class_top.source_property");
   assert(
@@ -829,13 +962,23 @@ void ApplicationTestFixture::test_class_simulation_integration() {
   auto mapped = fsim::app::build_project(mapped_config, mapped_diagnostics);
   assert(mapped);
   assert(mapped->systemverilog_class_specializations.size() == 6);
+  assert(std::ranges::any_of(
+      mapped->systemverilog_class_specializations,
+      [](const auto& specialization) {
+        return std::ranges::any_of(
+            specialization.properties, [](const auto& property) {
+              return property.name == "wide_value"
+                  && property.bit_width == 137
+                  && property.type.width() == 137;
+            });
+      }));
   fsim::app::Simulation mapped_simulation(
       std::move(*mapped), mapped_config.run.max_deltas,
       fsim::app::SimulationEngine::compiled);
   const auto mapped_result = mapped_simulation.run();
   assert(
       mapped_result.status == fsim::runtime::RunStatus::stopped
-      && mapped_result.time == 7);
+      && mapped_result.time == 9);
   const auto mapped_property = mapped_simulation.find_signal(
       "class_top.source_property");
   assert(

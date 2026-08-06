@@ -591,6 +591,10 @@ class VerilogParser final : private detail::ParserBase {
 
   Type parse_named_type();
 
+  Type parse_systemverilog_aggregate_type();
+  Type parse_systemverilog_enum_type(
+      std::vector<EnumLiteralDeclaration>* literals = nullptr);
+
   void parse_typedef(
       DesignUnit& unit,
       const Token& start);

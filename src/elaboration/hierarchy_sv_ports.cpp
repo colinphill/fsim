@@ -769,7 +769,7 @@ void HierarchyBuilder::validate_boundary_type(
   if (cross_language && (port_enumeration || actual_enumeration)) {
     report(
         "FSIM-ELAB-BIND-052",
-        "VHDL enumeration boundary '" + path + "." + port.name
+        "enumeration boundary '" + path + "." + port.name
             + "' requires a same-language scalar/vector wrapper",
         source);
     return;
@@ -780,7 +780,7 @@ void HierarchyBuilder::validate_boundary_type(
           || port.type.nominal_type != actual.nominal_type)) {
     report(
         "FSIM-ELAB-BIND-053",
-        "VHDL enumeration boundary '" + path + "." + port.name
+        "enumeration boundary '" + path + "." + port.name
             + "' requires the same nominal enumeration type",
         source);
     return;
@@ -857,8 +857,7 @@ void HierarchyBuilder::validate_boundary_type(
   const bool adaptable_width =
       cross_language
       && !boolean_involved && !integer_involved
-      && adaptable_direction
-      && width <= 64 && actual.width <= 64;
+      && adaptable_direction;
   if (width != actual.width && !adaptable_width) {
     report(
         "FSIM-ELAB-BIND-020",
@@ -885,8 +884,7 @@ void HierarchyBuilder::validate_boundary_type(
   const bool adaptable_signedness =
       cross_language
       && !boolean_involved && !integer_involved
-      && adaptable_direction
-      && width <= 64 && actual.width <= 64;
+      && adaptable_direction;
   if (port.type.is_signed != actual.is_signed && width > 1
       && !adaptable_signedness) {
     report(

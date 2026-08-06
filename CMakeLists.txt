@@ -466,6 +466,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/elaboration_vhdl_generate_choice.cpp
       src/elaboration/elaboration_vhdl_local.cpp
   src/elaboration/elaboration_sv_constants.cpp
+  src/elaboration/elaboration_sv_constant_services.cpp
   src/elaboration/elaboration_sv_scalars.cpp
       src/elaboration/elaboration_sv_functions.cpp
       src/elaboration/elaboration_sv_generate.cpp

@@ -25,7 +25,7 @@ runtime evidence, and names evidence paths that exist in the checkout.
 | Common release contract | `V1-CM` | 10 | Tasks 5 through 9 |
 
 The Task 1 baseline matrix digest is
-`6fc44b8a9b96a88f80be077393e080f5e1703e0ba363e8e1d7341e7e5da761aa`.
+`97da9b1e1135bfea5bb7c2879dce2e1196e448d5ffd5bfd05daff25e65aa4021`.
 Changing any row requires an intentional audit update and the owning focused
 gate; the digest is evidence of review, not a substitute for semantic tests.
 Corrective Batch 131 re-reviewed the affected container rows after replacing
@@ -51,7 +51,7 @@ recursive values, file I/O, artifacts, and transactional differential closure.
 The composed local gates currently establish:
 
 - 1,876 production diagnostics are cataloged;
-- 559 authored C/C++ sources remain within the 2,500-line hard limit; any file
+- 560 authored C/C++ sources remain within the 2,500-line hard limit; any file
   that exceeds it must be refactored below the 2,000-line target;
 - all 1,162 required matrix rows are executable with no explicit evidence gap;
 - 105 independently authored conformance expectations in 28 fixtures are

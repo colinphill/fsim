@@ -65,10 +65,14 @@ class AppBase;
   AppBase queued_handles[$:2];
   AppBase associative_handles[int];
   logic [7:0] value;
+  logic [136:0] wide_value;
   int hook_pre;
   int hook_post;
-  function new(int initial_value = 0);
+  function new(
+      int initial_value = 0,
+      logic [136:0] initial_wide = 0);
     value = initial_value;
+    wide_value = initial_wide;
     hook_pre = 0;
     hook_post = 0;
   endfunction
@@ -112,8 +116,10 @@ class AppDerived extends AppBase;
   constraint generated_small {
     generated_value inside {[1:3]};
   }
-  function new(int initial_value = 0);
-    super.new(initial_value);
+  function new(
+      int initial_value = 0,
+      logic [136:0] initial_wide = 0);
+    super.new(initial_value, initial_wide);
     value = initial_value;
   endfunction
   function void pre_randomize();
@@ -140,6 +146,34 @@ class AppDerived extends AppBase;
     if (count == 0) return value;
     return recurse(count - 1);
   endfunction
+  function automatic logic [136:0] wide_transfer(
+      input logic [136:0] amount,
+      output logic [136:0] prior,
+      inout logic [136:0] accumulator,
+      ref logic [136:0] alias_value);
+    logic [136:0] local_value;
+    local_value = wide_value;
+    prior = local_value;
+    accumulator = amount;
+    alias_value = local_value;
+    return local_value;
+  endfunction
+  function automatic logic [136:0] wide_recurse(
+      input int count,
+      input logic [136:0] retained);
+    if (count == 0) return retained;
+    return wide_recurse(count - 1, retained);
+  endfunction
+  function static logic [136:0] wide_remember(
+      input logic [136:0] candidate);
+    logic initialized = 0;
+    logic [136:0] retained = 0;
+    if (!initialized) begin
+      retained = candidate;
+      initialized = 1;
+    end
+    return retained;
+  endfunction
   function static int next_count();
     int calls = 0;
     calls = calls + 1;
@@ -158,6 +192,16 @@ class AppDerived extends AppBase;
     accumulator = accumulator + value;
     observed = value;
     assert (value == retained_across_delay);
+  endtask
+  task automatic wide_delayed_update(
+      input logic [136:0] amount,
+      output logic [136:0] observed,
+      inout logic [136:0] accumulator);
+    logic [136:0] retained_across_delay;
+    retained_across_delay = amount;
+    #1;
+    accumulator = retained_across_delay;
+    observed = retained_across_delay;
   endtask
 endclass
 
@@ -180,6 +224,10 @@ class BrokenPostDerived extends AppDerived;
 endclass
 
 module class_top;
+  localparam logic [136:0] WIDE_SEED =
+      {1'b1, 62'b0, 1'b1, 69'b0, 4'b1000};
+  localparam logic [136:0] WIDE_AMOUNT =
+      {9'b000000001, 120'b0, 8'b10000001};
   logic task_trigger;
   logic task_event_observed;
   class LocalWaiter;
@@ -212,6 +260,23 @@ module class_top;
   int source_virtual_result;
   logic [31:0] source_task_observed;
   logic [31:0] source_task_accumulator;
+  logic [136:0] source_wide_prior;
+  logic [136:0] source_wide_accumulator;
+  logic [136:0] source_wide_alias;
+  logic [136:0] source_wide_result;
+  logic [136:0] source_wide_recursive;
+  logic [136:0] source_wide_static_first;
+  logic [136:0] source_wide_static_second;
+  logic [136:0] source_wide_task_observed;
+  logic [136:0] source_wide_task_accumulator;
+  logic [136:0] source_module_wide_prior;
+  logic [136:0] source_module_wide_accumulator;
+  logic [136:0] source_module_wide_alias;
+  logic [136:0] source_module_wide_result;
+  logic [136:0] source_module_wide_task_observed;
+  logic [136:0] source_module_wide_task_accumulator;
+  logic [136:0] source_module_wide_static_first;
+  logic [136:0] source_module_wide_static_second;
   int source_static_result;
   int source_static_task_observed;
   int source_static_property;
@@ -257,16 +322,69 @@ module class_top;
   function automatic AppBase pass_handle(input AppBase candidate);
     return candidate;
   endfunction
+  function automatic logic [136:0] pass_wide(
+      input logic [136:0] source,
+      output logic [136:0] copied,
+      inout logic [136:0] accumulated,
+      ref logic [136:0] aliased);
+    logic [136:0] temporary;
+    temporary = source;
+    copied = temporary;
+    accumulated = WIDE_AMOUNT;
+    aliased = temporary;
+    return temporary;
+  endfunction
+  function static logic [136:0] module_wide_remember(
+      input logic [136:0] candidate);
+    logic initialized = 0;
+    logic [136:0] retained = 0;
+    if (!initialized) begin
+      retained = candidate;
+      initialized = 1;
+    end
+    return retained;
+  endfunction
   task automatic delayed_handle(input AppBase candidate,
                                 output AppBase observed);
     #1;
     observed = candidate;
   endtask
+  task automatic delayed_wide(
+      input logic [136:0] source,
+      output logic [136:0] copied,
+      inout logic [136:0] accumulated);
+    logic [136:0] temporary;
+    temporary = source;
+    #1;
+    copied = temporary;
+    accumulated = temporary;
+  endtask
   initial begin
+    logic [136:0] wide_alias_local;
+    logic [136:0] module_wide_alias_local;
     source_accumulator = 4;
     source_alias = 5;
-    source_object = new(3);
+    source_object = new(3, WIDE_SEED);
     source_other = new(9);
+    source_wide_accumulator = '1;
+    wide_alias_local = '0;
+    source_wide_result = source_object.wide_transfer(
+        WIDE_AMOUNT, source_wide_prior,
+        source_wide_accumulator, wide_alias_local);
+    source_wide_alias = wide_alias_local;
+    source_wide_recursive = source_object.wide_recurse(3, WIDE_SEED);
+    source_wide_static_first = source_object.wide_remember(WIDE_SEED);
+    source_wide_static_second = source_object.wide_remember(WIDE_AMOUNT);
+    source_wide_task_accumulator = '0;
+    source_module_wide_accumulator = '1;
+    module_wide_alias_local = '0;
+    source_module_wide_result = pass_wide(
+        WIDE_SEED, source_module_wide_prior,
+        source_module_wide_accumulator, module_wide_alias_local);
+    source_module_wide_alias = module_wide_alias_local;
+    source_module_wide_static_first = module_wide_remember(WIDE_SEED);
+    source_module_wide_static_second = module_wide_remember(WIDE_AMOUNT);
+    source_module_wide_task_accumulator = '0;
     source_cast = null;
     source_cast_alias =
         $cast(source_cast, source_object) && source_cast == source_object;
@@ -310,6 +428,12 @@ module class_top;
     source_object.delayed_update(
         4, source_task_observed, source_task_accumulator);
     source_waiter.wait_for_trigger(task_event_observed);
+    source_object.wide_delayed_update(
+        WIDE_AMOUNT, source_wide_task_observed,
+        source_wide_task_accumulator);
+    delayed_wide(
+        WIDE_AMOUNT, source_module_wide_task_observed,
+        source_module_wide_task_accumulator);
     delayed_handle(source_other, source_task_returned);
     source_module_task_handle_alias = source_task_returned == source_other;
     source_base_view = source_object;
@@ -359,6 +483,14 @@ module class_top;
   end
   final begin
     source_final_seen = source_object != null;
+  end
+endmodule
+
+module class_cache_top;
+  logic result;
+  initial begin
+    result = 1'b1;
+    #1 $finish; // class-cache-delay
   end
 endmodule
 

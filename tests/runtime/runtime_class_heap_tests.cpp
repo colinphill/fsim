@@ -364,7 +364,10 @@ void test_systemverilog_class_heap() {
 void test_systemverilog_class_methods() {
   using namespace fsim::runtime;
   SystemVerilogClassHeap heap;
-  const auto instance = heap.allocate(descriptor());
+  auto method_descriptor = descriptor();
+  method_descriptor.properties.push_back(
+      {"wide", SystemVerilogClassPropertyKind::Logic4, 137});
+  const auto instance = heap.allocate(method_descriptor);
   heap.property(instance, "count").packed =
       PackedLogic4::from_aval_bval(64, 4, 0);
   SystemVerilogClassMethodRuntime methods{
@@ -395,6 +398,35 @@ void test_systemverilog_class_methods() {
           && heap.property(instance, "count").packed.low_word().aval == 7,
       "this, implicit properties, automatic locals, base views, and copy-out must execute");
 
+  auto wide_value = PackedLogic4{137, Logic4::zero};
+  wide_value.set(136, Logic4::one);
+  wide_value.set(73, Logic4::one);
+  wide_value.set(3, Logic4::one);
+  auto wide_expected = wide_value;
+  wide_expected.set(96, Logic4::one);
+  SystemVerilogClassMethodDescriptor wide_method;
+  wide_method.canonical_identity = "work::Base::wide";
+  wide_method.owner_type = "work::Base";
+  wide_method.arguments = {SystemVerilogClassArgumentMode::Inout};
+  wide_method.automatic_value_count = 1;
+  wide_method.entry = [](SystemVerilogClassMethodFrame& frame) {
+    frame.local(0) = frame.argument(0);
+    frame.local(0).packed.set(96, Logic4::one);
+    frame.property("wide") = frame.local(0);
+    frame.argument(0) = frame.local(0);
+    return SystemVerilogClassMethodStatus::Completed;
+  };
+  methods.register_method(std::move(wide_method));
+  std::vector<SystemVerilogClassMethodValue> wide_actuals(1);
+  wide_actuals.front().packed = wide_value;
+  const auto wide_result = methods.invoke(
+      "work::Base::wide", instance, wide_actuals);
+  require(
+      wide_result.status == SystemVerilogClassMethodStatus::Completed
+          && wide_actuals.front().packed == wide_expected
+          && heap.property(instance, "wide").packed == wide_expected,
+      "class method arguments, automatic locals, copy-out, and object properties must preserve arbitrary-width packed values");
+
   SystemVerilogClassMethodDescriptor task;
   task.canonical_identity = "work::Derived::delayed";
   task.owner_type = "work::Derived";
@@ -403,7 +435,9 @@ void test_systemverilog_class_methods() {
   task.is_task = true;
   task.entry = [](SystemVerilogClassMethodFrame& frame) {
     if (frame.continuation_point() == 0) {
-      frame.local(0).packed = PackedLogic4::from_aval_bval(64, 11, 0);
+      frame.local(0).packed = PackedLogic4{137, Logic4::zero};
+      frame.local(0).packed.set(136, Logic4::one);
+      frame.local(0).packed.set(11, Logic4::one);
       frame.suspend_at(1);
       return SystemVerilogClassMethodStatus::Suspended;
     }
@@ -422,9 +456,11 @@ void test_systemverilog_class_methods() {
   const auto resumed = methods.resume(suspended.continuation, delayed);
   require(
       resumed.status == SystemVerilogClassMethodStatus::Completed
-          && delayed.front().packed.low_word().aval == 11
+          && delayed.front().packed.width() == 137
+          && delayed.front().packed.get(136) == Logic4::one
+          && delayed.front().packed.get(11) == Logic4::one
           && methods.suspended_invocations() == 0,
-      "suspended class tasks must preserve automatic locals and copy-out");
+      "suspended class tasks must preserve arbitrary-width automatic locals and copy-out");
   bool stale_continuation_failed = false;
   try {
     (void)methods.resume(suspended.continuation, delayed);
@@ -475,6 +511,40 @@ void test_systemverilog_class_methods() {
   } catch (const std::logic_error&) {
     pure_failed = true;
   }
+
+  SystemVerilogClassMethodDescriptor bounded_recursive;
+  bounded_recursive.canonical_identity = "work::Derived::bounded_recursive";
+  bounded_recursive.owner_type = "work::Derived";
+  bounded_recursive.arguments = {
+      SystemVerilogClassArgumentMode::Inout,
+      SystemVerilogClassArgumentMode::Input};
+  bounded_recursive.entry = [](SystemVerilogClassMethodFrame& frame) {
+    const auto remaining = frame.argument(1).packed.low_word().aval;
+    if (remaining == 0) {
+      frame.argument(0).packed.set(128, Logic4::one);
+      return SystemVerilogClassMethodStatus::Completed;
+    }
+    std::vector<SystemVerilogClassMethodValue> nested{
+        frame.argument(0), frame.argument(1)};
+    nested[1].packed = PackedLogic4::from_aval_bval(
+        32, remaining - 1, 0);
+    (void)frame.call_nonvirtual(
+        "work::Derived::bounded_recursive", nested);
+    frame.argument(0) = nested[0];
+    return SystemVerilogClassMethodStatus::Completed;
+  };
+  methods.register_method(std::move(bounded_recursive));
+  std::vector<SystemVerilogClassMethodValue> recursive_actuals(2);
+  recursive_actuals[0].packed = wide_value;
+  recursive_actuals[1].packed = PackedLogic4::from_aval_bval(32, 2, 0);
+  (void)methods.invoke(
+      "work::Derived::bounded_recursive", instance, recursive_actuals);
+  require(
+      recursive_actuals[0].packed.width() == 137
+          && recursive_actuals[0].packed.get(136) == Logic4::one
+          && recursive_actuals[0].packed.get(128) == Logic4::one
+          && recursive_actuals[0].packed.get(73) == Logic4::one,
+      "bounded recursive method frames must preserve arbitrary-width values");
 
   SystemVerilogClassMethodDescriptor recursive;
   recursive.canonical_identity = "work::Derived::recursive";

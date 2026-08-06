@@ -7,6 +7,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 
 namespace {
 
@@ -123,6 +124,16 @@ int main() {
   fsim::diagnostic::Engine overwrite_diagnostics;
   assert(!fsim::artifact::publish_design(
       directory, metadata, payloads, overwrite_diagnostics));
+  fsim::diagnostic::Engine rollback_diagnostics;
+  assert(fsim::artifact::load_design_metadata(
+      directory, rollback_diagnostics) == metadata);
+  {
+    std::ifstream input(
+        directory / metadata.payloads.front().artifact, std::ios::binary);
+    assert((std::string{
+        std::istreambuf_iterator<char>{input},
+        std::istreambuf_iterator<char>{}} == state_bytes));
+  }
   auto mismatch = payloads;
   mismatch.front().bytes.push_back('x');
   const auto mismatch_directory = directory.parent_path()

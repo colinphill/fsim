@@ -308,7 +308,7 @@ std::optional<std::string> validate_file_binary_metadata(
     std::vector<PackedRegisterValidation>& registers) {
   using namespace runtime::simir;
   if (operation.target_kind > FileBinaryTargetKind::container_object
-      || operation.width == 0 || operation.width > 64
+      || operation.width == 0
       || (operation.has_count && !operation.has_start))
     return "FileBinaryRead metadata is invalid";
   const auto scalar = operation.scalar_kind;

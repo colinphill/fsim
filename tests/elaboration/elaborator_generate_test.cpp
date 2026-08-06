@@ -196,7 +196,7 @@ endmodule
 module generated_sv_wide_constant;
   generate
     if (1) begin : selected
-      localparam logic [64:0] WIDE_VALUE = 0;
+      localparam logic [16777216:0] WIDE_VALUE = 0;
     end
   endgenerate
 endmodule

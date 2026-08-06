@@ -2,6 +2,8 @@
 #include "elaborator_test_support.hpp"
 
 #include <algorithm>
+#include <iostream>
+#include <string>
 
 namespace fsim::tests::elaboration {
 
@@ -124,6 +126,65 @@ endmodule
   const auto scalar_callable_result = fsim::elaboration::elaborate(
       scalar_callable.design, "sv:work.scalar_service_top");
   assert(scalar_callable_result.ok());
+
+  const auto wide_interface = fsim::frontend::parse_text(
+      "wide-interface-values.sv",
+      R"(
+interface wide_value_if #(
+    parameter logic [136:0] RESET =
+        137'h10000000000000000000000000000000001
+);
+  struct packed {
+    logic [72:0] upper;
+    logic [63:0] lower;
+  } value;
+  initial value = '{
+    upper: RESET[136:64],
+    lower: RESET[63:0]
+  };
+  modport consumer(input value);
+endinterface
+module wide_value_sink(
+    wide_value_if.consumer bus,
+    output logic [136:0] observed
+);
+  assign observed = bus.value;
+endmodule
+module wide_interface_top;
+  localparam logic [136:0] ROOT_VALUE =
+      137'h10000000000000000000000000000000001;
+  wide_value_if #(.RESET(ROOT_VALUE)) link();
+  logic [136:0] observed;
+  wide_value_sink sink(link, observed);
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(wide_interface.ok());
+  const auto wide_interface_result = fsim::elaboration::elaborate(
+      wide_interface.design, "sv:work.wide_interface_top");
+  if (!wide_interface_result.ok()) {
+    for (const auto& diagnostic : wide_interface_result.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(wide_interface_result.ok());
+  const auto wide_observed =
+      wide_interface_result.design->find_signal(
+          "wide_interface_top.observed");
+  assert(wide_observed);
+  assert(
+      wide_interface_result.design->signals().at(*wide_observed).width
+      == 137);
+  auto wide_interface_interpreter =
+      wide_interface_result.design->create_interpreter();
+  assert(
+      wide_interface_interpreter->run().status
+      == fsim::runtime::RunStatus::completed);
+  assert(
+      wide_interface_interpreter
+          ->signal_value(*wide_observed)
+          .to_msb_string()
+      == "1" + std::string(135, '0') + "1");
 
   const auto mismatched_scalar_callable = fsim::frontend::parse_text(
       "scalar-interface-callable-mismatch.sv",

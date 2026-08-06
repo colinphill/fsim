@@ -175,7 +175,7 @@ services, recursive scalar-container ownership, SystemC specialization
 partitioning, scalar interpreter/application adapters, and focused frontend,
 elaboration, runtime, and application owners as twenty-two SPDX-owned bounded
 C++ sources. Six scalar parse/elaboration diagnostics advance the reviewed
-totals to 1,876 diagnostics, 559 bounded C/C++ sources, 649 authored artifacts,
+totals to 1,877 diagnostics, 560 bounded C/C++ sources, 650 authored artifacts,
 and 217 authored test/control files. The real/time/string/chandle algorithms,
 fixtures, artifact payloads, and documentation are clean-room code; no UVM
 source, foreign runtime, external Unicode/number library, third-party scalar

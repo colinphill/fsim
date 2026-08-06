@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
 #include "fsim/app/design_artifact.hpp"
+#include "fsim/runtime/vcd_writer.hpp"
 #include "path_test_support.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -786,6 +790,207 @@ end architecture;
     verify_vhdl_textio_failure(
         directory.path, vhdl_source, optimization,
         fsim::app::SimulationEngine::compiled);
+  }
+
+  const auto wide_source = directory.path / "wide-file.sv";
+  write_text(
+      wide_source,
+      R"(
+module wide_file_top;
+  integer reader;
+  integer packed_count;
+  integer memory_count;
+  integer rewind_status;
+  logic [136:0] debug_value;
+  logic [136:0] packed_word;
+  logic [136:0] wide_memory [1:0];
+  initial begin
+    reader = $fopen("wide.bin", "rb");
+    packed_count = $fread(packed_word, reader);
+    rewind_status = $rewind(reader);
+    memory_count = $fread(wide_memory, reader, 1, 2);
+    $fclose(reader);
+    $writememh("wide-fread.hex", wide_memory);
+    $readmemh("wide-read.hex", wide_memory);
+    $writememb("wide-read.bin", wide_memory);
+    #1 $finish;
+  end
+endmodule
+)");
+  std::string wide_binary;
+  const std::array<std::uint8_t, 18> wide_seed_bytes{
+      0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08};
+  const std::array<std::uint8_t, 18> wide_amount_bytes{
+      0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x81};
+  for (const auto byte : wide_seed_bytes) {
+    wide_binary.push_back(static_cast<char>(byte));
+  }
+  for (const auto byte : wide_amount_bytes) {
+    wide_binary.push_back(static_cast<char>(byte));
+  }
+  write_text(directory.path / "wide.bin", wide_binary);
+  std::string seed_hex(35, '0');
+  seed_hex[0] = '1';
+  seed_hex[16] = '2';
+  seed_hex[34] = '8';
+  std::string amount_hex(35, '0');
+  amount_hex[2] = '1';
+  amount_hex[33] = '8';
+  amount_hex[34] = '1';
+  write_text(
+      directory.path / "wide-read.hex",
+      seed_hex + "\n" + amount_hex + "\n");
+  auto wide_config = make_config(
+      directory.path, stable, wide_source,
+      fsim::project::Optimization::o0);
+  wide_config.project.name = "sv-wide-files";
+  wide_config.project.top = "sv:work.wide_file_top";
+  wide_config.build.cache_path = directory.path / "wide-file-cache";
+  fsim::diagnostic::Engine wide_diagnostics;
+  auto wide_project = fsim::app::build_project(
+      wide_config, wide_diagnostics);
+  if (!wide_project) {
+    for (const auto& diagnostic : wide_diagnostics.diagnostics()) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(wide_project);
+  fsim::app::Simulation wide_simulation{
+      std::move(*wide_project), wide_config.run.max_deltas,
+      fsim::app::SimulationEngine::interpreter};
+  const auto debug_value = wide_simulation.find_signal(
+      "wide_file_top.debug_value");
+  assert(debug_value);
+  auto wide_seed = fsim::runtime::PackedLogic4{
+      137, fsim::runtime::Logic4::zero};
+  wide_seed.set(136, fsim::runtime::Logic4::one);
+  wide_seed.set(73, fsim::runtime::Logic4::one);
+  wide_seed.set(3, fsim::runtime::Logic4::one);
+  auto wide_amount = fsim::runtime::PackedLogic4{
+      137, fsim::runtime::Logic4::zero};
+  wide_amount.set(128, fsim::runtime::Logic4::one);
+  wide_amount.set(7, fsim::runtime::Logic4::one);
+  wide_amount.set(0, fsim::runtime::Logic4::one);
+  std::vector<fsim::runtime::PackedLogic4> callback_values;
+  std::ostringstream vcd_output;
+  fsim::runtime::VcdWriter vcd{vcd_output, "1ns", 256};
+  const auto trace = vcd.declare_signal(
+      "wide_file_top.debug_value", 137);
+  vcd.begin(wide_simulation.now());
+  wide_simulation.set_signal_change_hook(
+      [&](const auto signal, const auto& value, const auto time, const auto) {
+        if (signal == *debug_value) {
+          callback_values.push_back(value);
+          vcd.set_time(time);
+          vcd.change(trace, value);
+        }
+      });
+  std::ostringstream debug_output;
+  std::ostringstream debug_error;
+  fsim::app::DebuggerControl debugger{
+      wide_simulation, debug_output, debug_error};
+  debugger.execute({"deposit", "debug_value", wide_seed.to_msb_string()});
+  const auto snapshot = wide_simulation.read_signal(*debug_value);
+  debugger.execute({"show", "debug_value"});
+  debugger.execute({"force", "debug_value", wide_amount.to_msb_string()});
+  debugger.execute({"show", "debug_value"});
+  debugger.execute({"deposit", "debug_value", wide_seed.to_msb_string()});
+  debugger.execute({"release", "debug_value"});
+  debugger.execute({"show", "debug_value"});
+  assert(debug_error.str().empty());
+  assert(snapshot == wide_seed);
+  assert(wide_simulation.read_signal(*debug_value) == wide_seed);
+  assert(debug_output.str().find(wide_seed.to_msb_string())
+         != std::string::npos);
+  assert(debug_output.str().find(
+             wide_amount.to_msb_string() + " (forced)")
+         != std::string::npos);
+  const auto wide_result = wide_simulation.run();
+  assert(wide_result.status == fsim::runtime::RunStatus::stopped);
+  assert(wide_result.time == 1);
+  vcd.flush();
+  assert(std::ranges::find(callback_values, wide_seed)
+         != callback_values.end());
+  assert(std::ranges::find(callback_values, wide_amount)
+         != callback_values.end());
+  assert(vcd_output.str().find(wide_seed.to_msb_string())
+         != std::string::npos);
+  assert(vcd_output.str().find(wide_amount.to_msb_string())
+         != std::string::npos);
+  const auto packed_word = wide_simulation.find_signal(
+      "wide_file_top.packed_word");
+  const auto wide_memory = wide_simulation.design().find_container(
+      "wide_file_top.wide_memory");
+  assert(packed_word && wide_memory);
+  assert(wide_simulation.read_signal(*packed_word) == wide_seed);
+  const auto memory = wide_simulation.read_container_object(*wide_memory);
+  assert(memory.elements.size() == 2);
+  assert(memory.elements[0] == wide_amount);
+  assert(memory.elements[1] == wide_seed);
+  assert(read_text(directory.path / "wide-fread.hex")
+         == amount_hex + "\n" + seed_hex + "\n");
+  assert(read_text(directory.path / "wide-read.bin")
+         == wide_seed.to_msb_string() + "\n"
+             + wide_amount.to_msb_string() + "\n");
+
+  const auto run_wide_compiled = [&](
+      const fsim::project::Optimization optimization) {
+    auto compiled_config = make_config(
+        directory.path, stable, wide_source, optimization);
+    compiled_config.project.name = "sv-wide-files";
+    compiled_config.project.top = "sv:work.wide_file_top";
+    compiled_config.build.cache_path =
+        directory.path
+        / (optimization == fsim::project::Optimization::o0
+               ? "wide-file-compiled-o0"
+               : "wide-file-compiled-o2");
+    fsim::diagnostic::Engine diagnostics;
+    auto project = fsim::app::build_project(
+        compiled_config, diagnostics);
+    if (!project) {
+      for (const auto& diagnostic : diagnostics.diagnostics()) {
+        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+      }
+    }
+    assert(project);
+    fsim::app::Simulation simulation{
+        std::move(*project), compiled_config.run.max_deltas,
+        fsim::app::SimulationEngine::compiled};
+#if defined(FSIM_HAS_LLVM)
+    assert(simulation.compiled_process_count() == 1);
+#endif
+    assert(simulation.run().status == fsim::runtime::RunStatus::stopped);
+    const auto packed = simulation.find_signal(
+        "wide_file_top.packed_word");
+    const auto container = simulation.design().find_container(
+        "wide_file_top.wide_memory");
+    assert(packed && container);
+    assert(simulation.read_signal(*packed) == wide_seed);
+    const auto values = simulation.read_container_object(*container);
+    assert(values.elements.size() == 2);
+    assert(values.elements[0] == wide_amount);
+    assert(values.elements[1] == wide_seed);
+    assert(read_text(directory.path / "wide-fread.hex")
+           == amount_hex + "\n" + seed_hex + "\n");
+    assert(read_text(directory.path / "wide-read.bin")
+           == wide_seed.to_msb_string() + "\n"
+               + wide_amount.to_msb_string() + "\n");
+    return simulation.native_cache_statistics();
+  };
+  for (const auto optimization : {
+           fsim::project::Optimization::o0,
+           fsim::project::Optimization::o2}) {
+    const auto cold = run_wide_compiled(optimization);
+    const auto warm = run_wide_compiled(optimization);
+#if defined(FSIM_HAS_LLVM)
+    assert(cold.hits == 0 && cold.misses == 1 && cold.stores == 1);
+    assert(warm.hits == 1 && warm.misses == 0);
+#else
+    static_cast<void>(cold);
+    static_cast<void>(warm);
+#endif
   }
   return 0;
 }

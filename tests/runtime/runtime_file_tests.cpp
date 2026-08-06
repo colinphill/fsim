@@ -5,7 +5,9 @@
 #include "fsim/runtime/file_scanning.hpp"
 #include "fsim/runtime/simir.hpp"
 
+#include <array>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -263,6 +265,27 @@ void test_simir_text_files() {
       rejected_binary_chandle,
       "binary input cannot fabricate a non-null chandle identity");
 
+  const std::array<std::uint8_t, 18> wide_bytes{
+      0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08};
+  std::size_t wide_byte{};
+  const auto wide_binary = read_binary_file(
+      FileBinaryRead{0, 0, 0, FileBinaryTargetKind::packed_register,
+          137, false, 0, 0, false, false},
+      std::nullopt, std::nullopt, std::nullopt,
+      [&]() -> std::int32_t {
+        return wide_byte < wide_bytes.size()
+            ? wide_bytes[wide_byte++] : -1;
+      });
+  auto expected_wide = PackedLogic4{137, Logic4::zero};
+  expected_wide.set(136, Logic4::one);
+  expected_wide.set(73, Logic4::one);
+  expected_wide.set(3, Logic4::one);
+  require(
+      wide_binary.bytes == wide_bytes.size()
+          && wide_binary.packed == expected_wide,
+      "binary input preserves arbitrary-width packed values and byte order");
+
   {
     std::ofstream binary(
         files.path / "binary.bin",
@@ -404,6 +427,8 @@ void test_simir_text_files() {
   bounded.set_file_root(files.path);
   const auto bounded_error =
       bounded.add_string_object({"bounded-error", {}});
+  const auto bounded_value =
+      bounded.add_string_object({"bounded-value", "sentinel"});
   Process bounded_reader;
   bounded_reader.id = 0;
   bounded_reader.name = "bounded_file_reader";
@@ -412,9 +437,11 @@ void test_simir_text_files() {
   bounded_reader.operations = {
       LoadStringConstant{0, "oversized.txt"},
       LoadStringConstant{1, "r"},
+      LoadStringConstant{2, "sentinel"},
       FileOpen{0, 0, 1},
       FileReadLine{1, 0, 2, 0, FileReadKind::line},
       FileErrorStatus{2, 0, 3},
+      WriteStringObject{bounded_value, 2},
       WriteStringObject{bounded_error, 3},
       FileClose{0},
       Halt{}};
@@ -427,6 +454,9 @@ void test_simir_text_files() {
           "4096-byte limit")
       != std::string::npos,
       "overlong input retains a bounded error message");
+  require(
+      bounded.string_object_value(bounded_value) == "sentinel",
+      "overlong input rejects before publishing partial string storage");
 
   const auto expect_failure =
       [&](std::vector<Operation> operations,

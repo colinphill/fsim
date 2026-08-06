@@ -554,7 +554,8 @@ frontend::Type vital_record_type(
         std::move(field_name), field_type.domain, field_type.spelling,
         field_type.packed_range, field_type.is_signed,
         field_type.packed_range_expression, 0, span,
-        std::vector<frontend::Type>{std::move(field_type)}});
+        std::vector<frontend::Type>{std::move(field_type)},
+        std::nullopt});
     width += *field_width;
   }
   if (width != 0) {

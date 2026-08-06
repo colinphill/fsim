@@ -717,6 +717,7 @@ using namespace elaboration_detail;
                     {},
                     {},
                     {},
+                    {},
                     selected->language);
             auto child_aliases = connect_foreign_child(
                 child, specialized.unit, child_path, objects);
@@ -760,6 +761,7 @@ using namespace elaboration_detail;
                 {},
                 {},
                 std::move(specialized.environment),
+                std::move(specialized.integral_environment),
                 std::move(specialized.values),
                 std::move(specialized.identity_values),
                 std::move(specialized.packages));

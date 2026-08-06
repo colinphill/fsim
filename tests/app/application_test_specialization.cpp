@@ -816,10 +816,10 @@ initial begin
   xnor_reduction = ^~xnor_value;
   overlay.payload = overlay.payload <<< 0;
 end
-assign observed = {
+assign observed = result_t'({
   overlay.mirror[WIDTH-1:1],
   packet.payload[0]
-};
+});
 endmodule
 )";
 }

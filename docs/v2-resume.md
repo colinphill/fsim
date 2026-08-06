@@ -8,17 +8,112 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
 ## Batch 151 start checkpoint - 2026-08-05
 
 1. Start in `/home/colin/projects/fsim`, read this file and the locked Batch
-   151 allocation in `implementation_plan_v2.md`, and verify that
-   `codex/v2` is clean and synchronized with `origin/codex/v2`.
+   151 allocation in `implementation_plan_v2.md`, and verify `codex/v2` remains
+   based on pushed Batch 150 closeout `9612507`. Batch 151 Changes 1-20 are
+   complete in one accumulated closeout commit; verify the current commit with
+   `git log -1 --oneline` before beginning Batch 152.
 2. Batch 150 is complete. Final implementation repair `0005462` closes the
    Windows class-artifact input stream before renaming its source. Replacement
    hosted run `31054730031` passes all eleven jobs, including the Windows MSVC
    and clang-cl Debug/Release test suites.
-3. Begin Batch 151 Change 1 by replacing the remaining executable 64-bit
-   SystemVerilog constant-storage assumptions with resource-governed
-   arbitrary-width packed storage while preserving exact width, signedness,
-   state domain, source, and canonical identity. Use at least eight workers for
-   builds and retain focused wide two-/four-/nine-state evidence.
+3. Batch 151 Change 1 is complete: SystemVerilog constants now own the shared
+   arbitrary-width packed representation, retain exact domain/type identity,
+   and reject materialization above 16,777,216 bits before resize/allocation.
+   Change 2 is also complete: portable arbitrary-width decimal conversion,
+   binary/octal/hex materialization, concatenation/replication, and separate
+   width/work limits pass exact 128-bit positives and a bounded 10,000,000-bit
+   work rejection. Change 3 is complete as well: wildcard/qualified package
+   imports, wide specparams, distinct specializations, generate cases, checked
+   range projection, and a lossless SystemVerilog-to-VHDL generic boundary
+   retain the full packed value. Change 4 is complete: exact 128-bit two-/four-
+   state and 96-bit Z profiles cross elaborated signals, SimIR, runtime, and
+   interpreter admission while runtime/LLVM validation remains green. Change 5
+   is complete: exact resource-bounded 128-bit arithmetic, unary operations,
+   signed divide/modulo and negative-power rules, checked wrap/truncation,
+   unknown propagation, signed-overflow rejection, and a 9,000-bit work-limit
+   rejection pass eleven focused gates. Change 6 is complete: exact wide
+   logical/bitwise, ordinary/case/wildcard equality, signed/unsigned comparison,
+   saturating shifts, unknown counts, and Logic4/Logic9 sign fill pass eleven
+   focused gates. Change 7 is complete: the policy-triggered service split
+   reduced the evaluator from 2,493 to 1,984 lines before new work (2,135 after
+   completion), and exact wide streaming, reductions, selectors, out-of-range
+   Xs, selected constant-function writes, conditional merges, and positional/
+   default flat patterns pass eleven focused gates. Change 8 is complete:
+   governed builtin and named wide casts, exact ascending/descending packed
+   queries, arbitrary-width `$clog2`, deliberate unknown-state conversion,
+   128-bit interpreter casting, and a 58-output interpreter/compiled O0/O2
+   differential pass eleven focused gates. Change 9 is complete: recursive
+   parsing and exact layout now cover 137-bit nested anonymous packed structs,
+   recursive Logic4-X/Bit2-zero defaults, nested inner/outer `default:`
+   assignment patterns, dotted selectors, and selected updates through the
+   interpreter and cold/warm LLVM O0/O2. Member initializers remain assigned to
+   Change 11, and anonymous unpacked structs remain assigned to Batch 152.
+   Thirteen focused gates pass. Change 10 is complete: unequal-width packed
+   unions use maximum-width low-bit payloads and canonical zero padding, tagged
+   unions add compact ordinal discriminators, and defaults, constructors,
+   patterns, selected reads/writes, comparisons, casts, semantic HIR, and
+   invalid timing/context cases pass a 23-output interpreter and cold/warm LLVM
+   O0/O2 differential plus thirteen focused gates. The new aggregate-kind
+   enumerator is append-only; artifact schema work remains assigned to Change
+   16. Change 11 is complete: anonymous/default-base enums, explicit integral
+   bases/ranges, recursive member initializers, contextual nested aggregate
+   constants, semantic-HIR initializer identity, and aggregate type/object
+   query forms pass a 32-output interpreter and cold/warm LLVM O0/O2
+   differential plus thirteen focused gates. Invalid nested defaults diagnose
+   through `FSIM-ELAB-SVAGG-007`. Artifact retention for the appended frontend
+   metadata remains assigned to Change 16. Change 12 is complete: canonical
+   packed struct/union/enum identity now governs assignments, initialization,
+   parameters, nested patterns, function/task flows and copy-out, equality,
+   explicit casts, and same-language ports. Enum literal sizing preserves raw
+   range validation and executable nominal identity; integer/logic substitution
+   and static-array element selection retain the identity needed by downstream
+   checks. A focused acceptance/rejection matrix plus sixteen gates pass.
+   Change 13 is complete: exact packed environments now cross prepared and
+   ordinary roots plus recursive hierarchy specialization, >64-bit
+   cross-language width/signedness adapters use the existing arbitrary-width
+   packed operations, and focused 137-bit nominal aggregate, multiple-root,
+   interface/modport, net/variable, and 129/137-bit mixed-boundary proofs pass.
+   Change 14 is complete: the remaining callable/class admission caps are
+   removed, and exact 137-bit constructor/default actuals, module and class
+   functions/tasks, automatic/static locals, bounded method recursion,
+   ref/inout/output copy-out, suspended continuations, processes, and object
+   properties pass full application and focused runtime gates. The existing
+   native cache contract uses a narrow cache-only top while complete wide LLVM
+   compilation remains assigned to Change 18. Change 15 is complete: direct
+   arbitrary-width `$fread`, wide packed memory elements, debugger show/
+   deposit/force/release, snapshots, callbacks, VCD/class traces, read/write
+   memory text, and public C API services retain exact 137-bit values through
+   fourteen green gates. Change 16 is complete: synchronized owning-unit,
+   portable-library, runtime, class, and constraint-HIR schemas preserve
+   arbitrary-width enum values, tagged/member-initialized profiles, exact
+   137-bit artifact values, and class widths through `.fsimobj`, standalone
+   `.fsimdesign`, mapped/relocated `.fsimlib`, O0/O2 interpreter/compiled
+   service boundaries, and native cold/warm/edit caches. Twelve focused gates
+   pass. Change 17 is complete: cataloged width/work/storage, malformed-type,
+   unsupported-wide-scan, lossy-boundary, stale-schema, and corrupt-artifact
+   negatives reject transactionally. Oversized line input no longer clears
+   its destination, malformed retained enums reject in portable/design-state
+   writers, and failed object/design/library overwrites preserve existing
+   metadata and payload bytes. Change 18 is complete: LLVM file-operation
+   validation admits governed arbitrary-width `$fread`, and the exact 137-bit
+   packed signal/memory fixture is a fully compiled one-process O0/O2 cold/warm
+   cache differential while its interpreter run retains debugger, callback,
+   snapshot, and VCD evidence. Fifteen LLVM, application, callable/scheduling,
+   aggregate, mixed-boundary, artifact/library, catalog, and source gates pass.
+   Change 19 is complete: public architecture/language/README/mixed-boundary
+   contracts now distinguish arbitrary-width owning services from the native
+   word fast path, four executable feature rows cover Batch 151, the generated-
+   constant catalog wording is current, and UVM plus other later surfaces keep
+   their locked ownership. The reviewed matrix digest is
+   `97da9b1e1135bfea5bb7c2879dce2e1196e448d5ffd5bfd05daff25e65aa4021`;
+   inventories are 1,877 diagnostics, 560 bounded sources, and 650 SPDX-owned
+   artifacts. All 26 documentation/release/portability contracts pass. Change
+   20 is complete: exact LLVM 22.1.8 Debug passes 112/112 in 349.27 seconds;
+   exact LLVM 22.1.8 Release rebuilds all 383 steps with eight workers and
+   passes 112/112 in 307.98 seconds. No sanitizer ran and no hosted CI was
+   inspected because Batch 151 is not a monitoring boundary. Begin Batch 152
+   Change 1 from the locked allocation in `implementation_plan_v2.md`, using at
+   least eight workers for builds.
 4. Batch 151 is not a sanitizer or hosted-CI boundary. Run the local sanitizer
    again at Batch 160 Change 20 under the ten-batch cadence; do not inspect
    documentation-only hosted runs.
@@ -281,9 +376,33 @@ scope.
 
 - Branch: `codex/v2`, tracking `origin/codex/v2`.
 - Baseline: `1462f18`; annotated `v1.0.0` points to `6450599`.
-- Current unit: Batch 151, exactly 20 locked changes. Change 1 is next; start
-  with the remaining executable 64-bit SystemVerilog constant representation
-  and preserve resource limits plus exact width/signed/domain/type identity.
+- Current unit: Batch 151, exactly 20 expanded changes. Changes 1-7 are complete:
+  the owning packed constant representation, `svconst-v2` width/signed/domain/
+  type identity, 128-bit two-/four-state and 96-bit Z evidence, and the checked
+  16,777,216-bit limit pass seven focused exact-LLVM Debug gates after an
+  eight-worker build. Change 2 adds portable arbitrary-width decimal,
+  binary/octal/hex, concatenation/replication, and checked width/work/storage
+  accounting with exact 128-bit positives and a bounded large-work rejection.
+  Change 3 adds exact wildcard/qualified package import, specparam, distinct
+  specialization, wide generate-case, checked range, and lossless mixed-
+  generic propagation; nine focused gates pass. Change 4 carries exact wide
+  two-/four-state profiles and values through elaborated signals, SimIR, and
+  interpreter admission with runtime/LLVM validation; eleven gates pass.
+  Change 5 adds exact bounded wide arithmetic/unary semantics, signed divide/
+  modulo and negative-power handling, checked destination sizing, unknown
+  propagation, signed-overflow rejection, and a multiplicative work-limit
+  negative; eleven focused gates pass. Change 6 adds exact wide logical/
+  bitwise, equality/wildcard, signed/unsigned comparison, saturating shifts,
+  unknown-count, and Logic4/Logic9 sign-extension behavior; eleven focused
+  gates pass. Change 7 performs the required below-2,000-line evaluator split,
+  then adds exact wide streaming, reductions, all packed selector forms,
+  out-of-range Xs, selected constant-function writes, wide conditional merging,
+  and positional/default flat patterns; eleven focused gates pass. Change 8
+  adds governed builtin/named packed casts, declared-range query preservation,
+  arbitrary-width `$clog2`, exact unknown-state policy, a 128-bit interpreter
+  cast, and a 58-output interpreter/compiled O0/O2 differential; eleven focused
+  gates pass. Change 9 is next: nested packed structs and anonymous packed
+  aggregates.
 - Completed unit: Batch 150, exactly 20 expanded changes, complete after pushed
   Batch 149 closeout `6279f0b`. Change 1 is complete: exact scalar identities,
   canonical decimal/time literal payloads, declaration/port/callable/class/type

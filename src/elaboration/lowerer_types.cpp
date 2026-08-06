@@ -478,6 +478,13 @@ using namespace elaboration_detail;
                     return static_cast<std::size_t>(*width);
                 }
             }
+            if (const auto* type = visible_type_mark(expression.text)) {
+                const auto width = type->width();
+                if (width
+                    && *width <= std::numeric_limits<std::size_t>::max()) {
+                    return static_cast<std::size_t>(*width);
+                }
+            }
         }
         for (const auto& operand : expression.operands) {
             if (const auto width = infer_width(operand)) {
@@ -519,6 +526,10 @@ using namespace elaboration_detail;
                 selected
                 && selected->member->packed_range) {
                 return *selected->member->packed_range;
+            }
+            if (const auto* type = visible_type_mark(expression.text);
+                type != nullptr && type->packed_range) {
+                return *type->packed_range;
             }
         }
         if (language_ == frontend::Language::Vhdl2008) {
@@ -1419,36 +1430,44 @@ using namespace elaboration_detail;
         const Expression& value) {
         if (language_ != frontend::Language::SystemVerilog2017
             || target_type == nullptr
-            || target_type->packed_members.empty()
-            || target_type->nominal_type.empty()
-            || value.kind == ExpressionKind::Aggregate) {
+            || !is_systemverilog_nominal_packed_type(*target_type)) {
             return true;
         }
-        const frontend::Type* source_type = nullptr;
-        if (value.kind == ExpressionKind::Identifier) {
-            source_type = object_type(value.text);
-        } else if (
-            value.kind == ExpressionKind::Call
-            && value.text.starts_with("@sv-cast:")) {
-            source_type = visible_type_mark(
-                std::string_view{value.text}.substr(
-                    std::string_view{"@sv-cast:"}.size()));
-        } else if (value.kind == ExpressionKind::Call) {
-            if (const auto* function = visible_function(value.text)) {
-                source_type = &function->return_type;
-            }
+        const bool aggregate_target =
+            target_type->packed_aggregate
+                != frontend::PackedAggregateKind::None;
+        if ((aggregate_target
+             && value.kind == ExpressionKind::Aggregate)
+            || (target_type->packed_aggregate
+                    == frontend::PackedAggregateKind::TaggedUnion
+                && value.kind == ExpressionKind::Call
+                && value.text.starts_with("@sv-tagged:"))) {
+            return true;
         }
+        const auto* source_type =
+            systemverilog_expression_type(value);
         if (source_type != nullptr
-            && !source_type->packed_members.empty()
+            && is_systemverilog_nominal_packed_type(*source_type)
             && source_type->nominal_type
                 == target_type->nominal_type) {
             return true;
         }
+        const auto kind = aggregate_target
+            ? std::string_view{"aggregate"}
+            : std::string_view{"enumeration"};
         report(
             "FSIM-ELAB-SVTYPE-004",
-            "assignment to aggregate '" + target_type->spelling
+            "assignment to " + std::string{kind} + " '"
+                + target_type->spelling
                 + "' requires the same nominal type, a matching explicit "
-                  "cast, or a contextual assignment pattern",
+                  "cast, or a contextual assignment pattern (expected '"
+                + target_type->nominal_type + "', received '"
+                + (source_type != nullptr
+                    ? source_type->nominal_type
+                    : value.nominal_type.empty()
+                        ? std::string{"<none>"}
+                        : value.nominal_type)
+                + "')",
             value.span);
         return false;
     }
@@ -1777,6 +1796,10 @@ using namespace elaboration_detail;
         for (const auto& local : pending) {
             const auto& variable = *local.declaration;
             if (variable.initializer) {
+                if (!validate_sv_nominal_assignment(
+                        &variable.type, *variable.initializer)) {
+                    continue;
+                }
                 if (variable.type.domain
                         == frontend::ValueDomain::Integer
                     && !is_integer_expression(

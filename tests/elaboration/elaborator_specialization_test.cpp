@@ -535,8 +535,8 @@ module systemverilog_package_user #(
     ascending_packet.payload[0 +: 2] = 2'b01;
     ascending_packet.payload[3 -: 2] =
       ascending_packet.payload[0 +: 2];
-    replicated = {WIDTH/2{1'b1, 1'b0}};
-    replicated = {2'd2{2'b10}};
+    replicated = result_t'({WIDTH/2{1'b1, 1'b0}});
+    replicated = result_t'({2'd2{2'b10}});
     signed_shift = 4'b1000;
     signed_shift = signed_shift >>> 1;
     unsigned_shift = 4'b1000;
@@ -547,17 +547,17 @@ module systemverilog_package_user #(
     .packet(packet),
     .payload(struct_payload)
   );
-  assign observed = {
+  assign observed = result_t'({
     overlay.mirror[base_values::WIDTH-1:1],
     packet.payload[0]
-  };
+  });
 endmodule
 
 module packet_passthrough(
   input packet_t packet,
   output result_t payload
 );
-  assign payload = packet.payload;
+  assign payload = result_t'(packet.payload);
 endmodule
 )",
             fsim::frontend::Language::SystemVerilog2017);
@@ -822,7 +822,6 @@ endmodule
              "FSIM-ELAB-SVENUM-002",
              "FSIM-ELAB-SVSTRUCT-001",
              "FSIM-ELAB-SVSTRUCT-002",
-             "FSIM-ELAB-SVUNION-001",
              "FSIM-ELAB-SVREPL-001",
              "FSIM-ELAB-068"}) {
         assert(has_diagnostic(
@@ -1777,6 +1776,186 @@ endmodule
             .to_msb_string()
         == "110101");
 
+    const auto nominal_legality = fsim::frontend::parse_text(
+        "nominal_legality.sv",
+        R"(
+package nominal_legality_types;
+  typedef struct packed { logic [1:0] value; } first_t;
+  typedef struct packed { logic [1:0] value; } second_t;
+  typedef enum logic [1:0] { FIRST_ZERO, FIRST_ONE } first_e;
+  typedef enum logic [1:0] { SECOND_ZERO, SECOND_ONE } second_e;
+  typedef struct packed {
+    first_t nested;
+    first_e code;
+  } wrapper_t;
+endpackage
+
+import nominal_legality_types::*;
+
+module nominal_legality_positive #(
+  parameter first_t PACKED_DEFAULT = '{value: 2'b01},
+  parameter first_e ENUM_DEFAULT = FIRST_ONE
+)(
+  input first_t incoming,
+  output first_t outgoing
+);
+  function automatic first_t pass(input first_t value);
+    return value;
+  endfunction
+  task automatic copy(
+    input first_t source,
+    output first_t destination
+  );
+    destination = source;
+  endtask
+  first_t local_value;
+  first_e enum_value;
+  wrapper_t wrapped;
+  logic same;
+  initial begin
+    local_value = pass(incoming);
+    copy(local_value, outgoing);
+    wrapped = '{nested: local_value, code: FIRST_ONE};
+    enum_value = ENUM_DEFAULT;
+    same = local_value == first_t'(2'b01);
+    same = enum_value == first_e'(1);
+    same = enum_value == FIRST_ONE;
+  end
+endmodule
+
+module nominal_legality_host;
+  first_t incoming;
+  first_t outgoing;
+  first_t default_outgoing;
+  nominal_legality_positive #(
+    .PACKED_DEFAULT(first_t'(2'b11)),
+    .ENUM_DEFAULT(FIRST_ONE)
+  ) child(
+    .incoming(incoming),
+    .outgoing(outgoing)
+  );
+  nominal_legality_positive defaults(
+    .incoming(incoming),
+    .outgoing(default_outgoing)
+  );
+endmodule
+
+module nominal_first_port(input first_t value); endmodule
+module nominal_first_enum_port(input first_e value); endmodule
+
+module invalid_nominal_parameter #(
+  parameter second_t OTHER = '{value: 2'b10},
+  parameter first_t BAD = OTHER
+)(); endmodule
+
+module invalid_enum_parameter #(
+  parameter second_e OTHER = SECOND_ONE,
+  parameter first_e BAD = OTHER
+)(); endmodule
+
+module invalid_enum_assignment;
+  first_e first;
+  second_e second;
+  initial first = second;
+endmodule
+
+module invalid_enum_raw_assignment;
+  first_e first;
+  initial first = 2'b01;
+endmodule
+
+module invalid_function_argument;
+  function automatic first_t pass(input first_t value);
+    return value;
+  endfunction
+  first_t first;
+  second_t second;
+  initial first = pass(second);
+endmodule
+
+module invalid_function_return;
+  function automatic first_t bad();
+    second_t second;
+    return second;
+  endfunction
+  first_t first;
+  initial first = bad();
+endmodule
+
+module invalid_task_copyout;
+  task automatic produce(output first_t value);
+    value = '{value: 2'b01};
+  endtask
+  second_t second;
+  initial produce(second);
+endmodule
+
+module invalid_nested_pattern;
+  wrapper_t wrapped;
+  second_t second;
+  initial wrapped = '{nested: second, code: FIRST_ZERO};
+endmodule
+
+module invalid_enum_equality;
+  first_e first;
+  second_e second;
+  logic same;
+  initial same = first == second;
+endmodule
+
+module invalid_explicit_cast;
+  first_t first;
+  second_t second;
+  initial first = second_t'(second);
+endmodule
+
+module invalid_nominal_port;
+  second_t value;
+  nominal_first_port child(.value(value));
+endmodule
+
+module invalid_enum_port;
+  second_e value;
+  nominal_first_enum_port child(.value(value));
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(nominal_legality.ok());
+    const auto nominal_positive = fsim::elaboration::elaborate(
+        nominal_legality.design,
+        "sv:work.nominal_legality_host");
+    if (!nominal_positive.ok()) {
+        for (const auto& diagnostic : nominal_positive.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(nominal_positive.ok());
+    const auto rejects = [&](const std::string_view top,
+                             const std::string_view code) {
+      const auto result = fsim::elaboration::elaborate(
+          nominal_legality.design, "sv:work." + std::string{top});
+      if (result.ok() || !has_diagnostic(result, code)) {
+        for (const auto& diagnostic : result.diagnostics) {
+          std::cerr << top << ": " << diagnostic.code << ": "
+                    << diagnostic.message << '\n';
+        }
+      }
+      assert(!result.ok() && has_diagnostic(result, code));
+    };
+    rejects("invalid_nominal_parameter", "FSIM-ELAB-SVCONST-001");
+    rejects("invalid_enum_parameter", "FSIM-ELAB-SVCONST-001");
+    rejects("invalid_enum_assignment", "FSIM-ELAB-SVTYPE-004");
+    rejects("invalid_enum_raw_assignment", "FSIM-ELAB-SVTYPE-004");
+    rejects("invalid_function_argument", "FSIM-ELAB-SVTYPE-004");
+    rejects("invalid_function_return", "FSIM-ELAB-SVTYPE-004");
+    rejects("invalid_task_copyout", "FSIM-ELAB-SVTYPE-004");
+    rejects("invalid_nested_pattern", "FSIM-ELAB-SVTYPE-004");
+    rejects("invalid_enum_equality", "FSIM-ELAB-SVTYPE-005");
+    rejects("invalid_explicit_cast", "FSIM-ELAB-SVTYPE-004");
+    rejects("invalid_nominal_port", "FSIM-ELAB-BIND-057");
+    rejects("invalid_enum_port", "FSIM-ELAB-BIND-053");
+
     const auto invalid_aggregate = fsim::frontend::parse_text(
         "invalid_nested_aggregate.sv",
         R"(
@@ -1828,6 +2007,40 @@ module invalid_multidimensional_pattern;
   logic [3:0] matrix[1:0][0:2];
   initial matrix = '{'{4'h1, 4'h2, 4'h3}};
 endmodule
+
+module invalid_tagged_member;
+  typedef union tagged packed {
+    logic [15:0] wide;
+    logic [7:0] narrow;
+  } tagged_t;
+  tagged_t value;
+  initial value = tagged missing 8'h01;
+endmodule
+
+module invalid_tagged_context;
+  logic [16:0] raw;
+  initial raw = tagged narrow 8'h01;
+endmodule
+
+module invalid_delayed_union_write;
+  typedef union tagged packed {
+    logic [15:0] wide;
+    logic [7:0] narrow;
+  } tagged_t;
+  tagged_t value;
+  initial value.narrow = #1 8'h01;
+endmodule
+
+module invalid_member_initializer;
+  typedef struct packed {
+    logic [3:0] payload;
+    logic valid;
+  } inner_t;
+  typedef struct packed {
+    inner_t nested = '{payload: 4'h1};
+  } outer_t;
+  outer_t value;
+endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_aggregate.ok());
@@ -1851,6 +2064,18 @@ endmodule
         fsim::elaboration::elaborate(
             invalid_aggregate.design,
             "sv:work.invalid_multidimensional_pattern");
+    const auto invalid_tagged_member = fsim::elaboration::elaborate(
+        invalid_aggregate.design, "sv:work.invalid_tagged_member");
+    const auto invalid_tagged_context = fsim::elaboration::elaborate(
+        invalid_aggregate.design, "sv:work.invalid_tagged_context");
+    const auto invalid_delayed_union_write =
+        fsim::elaboration::elaborate(
+            invalid_aggregate.design,
+            "sv:work.invalid_delayed_union_write");
+    const auto invalid_member_initializer =
+        fsim::elaboration::elaborate(
+            invalid_aggregate.design,
+            "sv:work.invalid_member_initializer");
     assert(
         !invalid_nominal.ok()
         && has_diagnostic(
@@ -1882,6 +2107,24 @@ endmodule
         && has_diagnostic(
             invalid_multidimensional_pattern,
             "FSIM-ELAB-SVPATTERN-002"));
+    assert(
+        !invalid_tagged_member.ok()
+        && has_diagnostic(
+            invalid_tagged_member, "FSIM-ELAB-SVAGG-002"));
+    assert(
+        !invalid_tagged_context.ok()
+        && has_diagnostic(
+            invalid_tagged_context, "FSIM-ELAB-SVUNION-001"));
+    assert(
+        !invalid_delayed_union_write.ok()
+        && has_diagnostic(
+            invalid_delayed_union_write,
+            "FSIM-ELAB-SVUNION-001"));
+    assert(
+        !invalid_member_initializer.ok()
+        && has_diagnostic(
+            invalid_member_initializer,
+            "FSIM-ELAB-SVAGG-007"));
 
     const auto multidimensional = fsim::frontend::parse_text(
         "multidimensional_static.sv",

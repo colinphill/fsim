@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_internal.hpp"
 
+#include <bit>
+
 namespace fsim::elaboration::elaboration_detail {
 
 [[nodiscard]] bool substitute_vhdl_array_layout(
@@ -1134,12 +1136,10 @@ void substitute_parameters(
                     : domain->second.domain,
                 language,
                 domain != domains.end()
-                    && domain->second.vhdl_enumeration);
-            if (domain != domains.end()
-                && domain->second.vhdl_enumeration) {
-                expression.nominal_type =
-                    domain->second.nominal_type;
-            }
+                    && domain->second.vhdl_enumeration,
+                domain == domains.end()
+                    ? std::string{}
+                    : domain->second.nominal_type);
             return;
         }
     }
@@ -1164,6 +1164,9 @@ void substitute_parameters(
     const ConstantDomainEnvironment& domains,
     std::vector<Diagnostic>& diagnostics,
     const frontend::Language language) {
+    for (auto& value : type.systemverilog_enumeration_values) {
+        substitute_parameters(value, environment, domains, language);
+    }
     if (type.systemverilog_container) {
         auto& container = *type.systemverilog_container;
         for (auto& element : container.element_types) {
@@ -1518,7 +1521,12 @@ void substitute_parameters(
     if (!type.packed_members.empty()) {
         const bool is_union =
             type.packed_aggregate
-            == frontend::PackedAggregateKind::Union;
+                == frontend::PackedAggregateKind::Union
+            || type.packed_aggregate
+                == frontend::PackedAggregateKind::TaggedUnion;
+        const bool tagged_union =
+            type.packed_aggregate
+            == frontend::PackedAggregateKind::TaggedUnion;
         const bool vhdl_record =
             language == frontend::Language::Vhdl2008
             && type.packed_aggregate
@@ -1570,6 +1578,13 @@ void substitute_parameters(
         std::optional<std::uint64_t> union_width;
         bool valid = true;
         for (auto& member : type.packed_members) {
+            if (member.initializer) {
+                substitute_parameters(
+                    *member.initializer,
+                    environment,
+                    domains,
+                    language);
+            }
             if (!member.nested_types.empty()) {
                 substitute_parameters(
                     member.nested_types.front(),
@@ -1634,20 +1649,9 @@ void substitute_parameters(
                 continue;
             }
             if (is_union) {
-                if (union_width && *union_width != *width) {
-                    diagnostics.push_back({
-                        "FSIM-ELAB-SVUNION-001",
-                        "packed union member '" + member.name
-                            + "' has width "
-                            + std::to_string(*width)
-                            + " but every member must have width "
-                            + std::to_string(*union_width),
-                        member.span});
-                    valid = false;
-                    continue;
-                }
-                union_width = *width;
-                total_width = *width;
+                union_width = std::max(
+                    union_width.value_or(0), *width);
+                total_width = *union_width;
             } else {
                 if (*width
                     > std::numeric_limits<std::uint64_t>::max()
@@ -1669,8 +1673,19 @@ void substitute_parameters(
                 total_width += *width;
             }
         }
+        const auto tag_width =
+            tagged_union && !type.packed_members.empty()
+                ? std::max<std::uint64_t>(
+                      1U,
+                      std::bit_width(
+                          type.packed_members.size() - 1U))
+                : 0U;
         if (!valid || total_width == 0
-            || total_width - 1U
+            || tag_width
+                > static_cast<std::uint64_t>(
+                    std::numeric_limits<std::int64_t>::max())
+                    - (total_width - 1U)
+            || total_width + tag_width - 1U
                 > static_cast<std::uint64_t>(
                     std::numeric_limits<std::int64_t>::max())) {
             if (valid) {
@@ -1698,10 +1713,54 @@ void substitute_parameters(
             }
         }
         type.packed_range = frontend::PackedRange{
-            static_cast<std::int64_t>(total_width - 1U),
+            static_cast<std::int64_t>(
+                total_width + tag_width - 1U),
             0,
             true};
         type.packed_range_expression.reset();
+        if (language == frontend::Language::SystemVerilog2017) {
+            for (auto& member : type.packed_members) {
+                if (!member.initializer) {
+                    continue;
+                }
+                frontend::Type scalar_type;
+                const frontend::Type* member_type = &scalar_type;
+                if (!member.nested_types.empty()) {
+                    member_type = &member.nested_types.front();
+                } else {
+                    scalar_type.domain = member.domain;
+                    scalar_type.spelling = member.spelling;
+                    scalar_type.packed_range = member.packed_range;
+                    scalar_type.is_signed = member.is_signed;
+                }
+                std::string error;
+                const auto packed =
+                    evaluate_systemverilog_packed_constant(
+                        *member.initializer,
+                        *member_type,
+                        {},
+                        environment,
+                        error);
+                if (!packed) {
+                    if (error.find("unknown") == std::string::npos) {
+                        diagnostics.push_back({
+                            "FSIM-ELAB-SVAGG-007",
+                            "cannot evaluate initializer for packed member '"
+                                + member.name + "': " + error,
+                            member.initializer->span});
+                    }
+                    continue;
+                }
+                member.initializer = SystemVerilogConstantValue{
+                    *packed,
+                    member_type->is_signed,
+                    false,
+                    member_type->domain,
+                    member_type->nominal_type,
+                    member.initializer->span}
+                    .expression(member.initializer->span);
+            }
+        }
         return;
     }
     if (substitute_vhdl_array_layout(

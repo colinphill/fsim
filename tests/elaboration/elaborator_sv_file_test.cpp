@@ -233,6 +233,7 @@ module file_invalid;
   string value;
   real real_value;
   logic [7:0] bits;
+  logic [136:0] unsupported_wide_scan;
   logic [7:0] memory [3:0];
   logic [7:0] matrix [1:0][0:1];
   initial begin
@@ -243,6 +244,7 @@ module file_invalid;
     result = $fscanf(value, "%d", result);
     result = $sscanf(value, "%d", value);
     result = $sscanf(value, "%q", result);
+    result = $sscanf("1", "%h", unsupported_wide_scan);
     $fdisplay(handle, "%g", result);
     result = $sscanf("1", "%d", real_value);
     result = $fread(value, handle);
@@ -273,6 +275,12 @@ endmodule
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVFILE-015"));
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVFILE-016"));
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVMEMORY-003"));
+  assert(std::ranges::any_of(
+      rejected.diagnostics, [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-ELAB-SVFILE-012"
+            && diagnostic.message.find("1 through 64")
+                != std::string::npos;
+      }));
 }
 
 }  // namespace fsim::tests::elaboration
