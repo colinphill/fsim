@@ -5,6 +5,274 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
+## Batch 153 completed checkpoint - 2026-08-06
+
+1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
+   Batch 153 allocation in `implementation_plan_v2.md`, and verify branch
+   `codex/v2` remains based on pushed Batch 152 closeout
+   `ebf527d6f661506ddf25b1988509bf12fb11c415`. Preserve the dirty accumulated
+   Batch 153 worktree described below; do not reset, commit, push, inspect
+   hosted CI, or run a sanitizer before Change 20.
+2. Batch 153 Change 1 is complete in the dirty worktree. Explicit
+   `program ... endprogram` declarations use the shared SystemVerilog unit
+   parser and retain distinct append-only `SystemVerilogProgram`,
+   `systemverilog_program`, and `sv::UnitKind::program` identities across the
+   frontend design, general semantic model, and SystemVerilog HIR. Parameters,
+   ports, typedefs, functions, tasks, initial/final processes, source spans,
+   and matching end labels remain owned by the program. Library/object/compiler
+   identity renderers use the stable `program` spelling.
+3. Change 2 is complete in the same dirty worktree. SystemVerilog program
+   design units participate in qualified and simple top selection,
+   logical-library candidate resolution, same-language instance binding,
+   specialization, and named-type/package-import preparation. A Verilog top
+   request cannot select a program. The focused fixture elaborates a
+   parameterized program child with exact port width, imported typedef,
+   parameter value, child path, and stable `sv:work.program(driver)`
+   specialization identity, then selects a standalone program through both
+   qualified and simple root requests. Initialization/final behavior and
+   hierarchy/debug closure remain assigned to Change 4.
+4. Validation completed before this handoff: `fsim_elaboration_tests` built
+   with eight workers and `fsim.elaboration` passes after the final
+   wrong-language negative. The complete exact-LLVM Debug tree rebuilt its 22
+   affected steps with eight workers. The SystemVerilog-HIR, diagnostic
+   catalog, 2,500-line source-policy, and elaboration gates all pass, and
+   `git diff --check` is clean.
+5. Change 3 is complete in the same dirty worktree. `SchedulerPhase::reactive`
+   is ordered after update and before postponed work. Program-owned SimIR and
+   DesignIR processes carry explicit reactive ownership, and initial, timed,
+   event, sensitivity, delta, fork, and zero-delay resumes preserve that
+   region. Ordinary module processes remain active/inactive. The C API appends
+   `FSIM_SCHEDULER_PHASE_REACTIVE = 5` while retaining update 3 and postponed
+   4. The end-to-end fixture proves a module NBA commits before the program
+   child samples it and exposes exactly one reactive runtime process.
+6. Validation completed before this handoff: the focused runtime and
+   elaboration targets rebuilt with eight workers and pass 2/2. The first full
+   exact-LLVM Debug build found the exhaustive public phase converter; after
+   appending the C value and converter case, the complete remaining 182-step
+   build succeeds with eight workers. Runtime, elaboration, public API, C
+   header, SystemVerilog-HIR, diagnostic-catalog, and 2,500-line source-policy
+   gates pass, and `git diff --check` is clean.
+7. Change 4 is complete in the same dirty worktree. Program initial and final
+   processes retain reactive ownership while module lifecycle processes remain
+   active. Both final blocks run exactly once after ordinary completion in
+   deterministic module/program phase order. Output callbacks resolve to the
+   stable `program_host.active_driver.*` process hierarchy, and statement
+   execution points retain the physical `program-instances.sv` source plus the
+   program child scope. The final observed NBA-sampled value remains exact.
+8. Validation completed before this handoff: `fsim_elaboration_tests` rebuilt
+   with eight workers after both lifecycle and debugger additions, and
+   `fsim.elaboration` passes. The prior complete exact-LLVM Debug build remains
+   current for all implementation files; the final focused test binary is
+   rebuilt and green.
+9. Change 5 is complete in the same dirty worktree. The frontend design owns
+   append-only named clocking blocks on modules, interfaces, and programs.
+   Each block retains its event, input/output/inout signal declarations,
+   optional alias expressions, source spans, and matching end label.
+   Cataloged negatives reject missing directions, duplicate members and
+   blocks, undeclared unaliased signals, and mismatched end labels.
+10. Validation completed before this handoff: `fsim_frontend_tests` and the
+    complete exact-LLVM Debug tree rebuilt warning-clean with eight workers.
+    `fsim.frontend`, `fsim.diagnostics-catalog`, and
+    `fsim.source-line-budget` pass 3/3, and `git diff --check` is clean.
+11. Change 6 is complete in the same dirty worktree. Clocking blocks retain
+    default and per-signal input/output skews, posedge/negedge qualifiers,
+    exact `#1step`, and time-qualified delays. Procedural `##` controls are
+    conservative wait nodes with an explicit literal or expression-valued
+    cycle count, kept distinct from project-time delays. Cataloged negatives
+    cover incomplete and duplicate default skews, illegal inout skews, and
+    cycle delays outside SystemVerilog-2017.
+12. Validation completed before this handoff: `fsim_frontend_tests` and all
+    307 affected full-tree steps rebuilt warning-clean with eight workers.
+    `fsim.frontend`, `fsim.diagnostics-catalog`, and
+    `fsim.source-line-budget` pass 3/3, and `git diff --check` is clean.
+13. Change 7 is complete in the same dirty worktree. A clocking block name is
+    an event wait alias. Input members own hidden sampled storage updated by an
+    ordinary active process, while output members resolve to the underlying
+    driven signal. The program process remains reactive and therefore observes
+    the completed sample before driving its output. Stable hierarchy names
+    expose both the sampled member and driven alias. A cataloged elaboration
+    negative rejects expression-shaped members outside this bounded signal
+    path.
+14. Validation completed before this handoff: the focused elaboration target
+    and complete exact-LLVM Debug tree rebuilt warning-clean with eight workers.
+    `fsim.frontend`, `fsim.application.systemverilog_hir`,
+    `fsim.elaboration`, `fsim.runtime`, `fsim.diagnostics-catalog`, and
+    `fsim.source-line-budget` pass 6/6, and `git diff --check` is clean.
+15. Change 8 is complete in the same dirty worktree. A design unit retains one
+    named default clocking block. Procedural `##` waits lower to an executable
+    repeated-event loop over that block. Input `#1step` and time skews use
+    delayed history signals, output time skews use request-to-signal projected
+    drivers, and edge qualifiers select the sampler or driver sensitivity edge.
+    The focused program counts two positive edges, changes the source in the
+    second edge's slot, samples the one-step-old value, waits for a negative
+    output edge, and drives one nanosecond later. Cataloged negatives cover
+    repeated, unknown, malformed, and missing default clocking plus unavailable
+    one-step precision.
+16. Validation completed before this handoff: the complete exact-LLVM Debug
+    tree rebuilt 151 downstream steps warning-clean with eight workers.
+    `fsim.frontend`, `fsim.application.systemverilog_hir`,
+    `fsim.elaboration`, `fsim.runtime`, `fsim.diagnostics-catalog`, and
+    `fsim.source-line-budget` pass 6/6, and `git diff --check` is clean.
+17. Change 9 is complete in the same dirty worktree. Design-unit variables and
+    class properties retain nullable virtual-interface types with optional
+    `interface` syntax, parameter actuals, modport restrictions, and
+    initializers. Interface design-unit names bypass typedef and class-handle
+    resolution. Elaboration checks the interface definition and modport,
+    allocates 64-bit nullable storage, and resolves a direct instance
+    initializer after child interface elaboration to a deterministic nonzero
+    pointer-free identity. Positive coverage observes both concrete and null
+    values through interpreter state; stable negatives cover missing types,
+    modports, instances, wrong interface types, expression initializers, and
+    duplicate declarations.
+18. Validation completed before this handoff: the focused elaboration target
+    and complete 155-step exact-LLVM Debug tree rebuilt warning-clean with
+    eight workers. `fsim.frontend`,
+    `fsim.application.systemverilog_hir`, `fsim.elaboration`, `fsim.runtime`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 6/6, and
+    `git diff --check` is clean.
+19. Change 10 is complete in the same dirty worktree. Existing bounded
+    instance-array expansion now has explicit interface coverage: declared
+    element order produces distinct indexed hierarchy and member-signal paths.
+    Static indexed elements bind through interface/modport ports and initialize
+    virtual-interface variables with distinct pointer-free identities. Two
+    selections of the same element compare equal, a different element compares
+    unequal, and out-of-range or runtime-dynamic selectors reject.
+20. Validation completed before this handoff: the focused elaboration target
+    rebuilt with eight workers, the complete downstream Debug tree relinked
+    warning-clean, and `fsim.frontend`,
+    `fsim.application.systemverilog_hir`, `fsim.elaboration`, `fsim.runtime`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 6/6.
+    `git diff --check` is clean.
+21. Change 11 is complete in the same dirty worktree. Interface-class identity
+    and `implements` composition are covered with an implementing class that
+    owns a modport-restricted virtual-interface property. Generic `interface`
+    ports now forward both the concrete interface design-unit identity and its
+    pointer-free handle into child virtual-interface initializers. The
+    forwarded alias equals the selected source array element in interpreter
+    state.
+22. Validation completed before this handoff: focused frontend and elaboration
+    targets rebuilt with eight workers, the full Debug tree relinked cleanly,
+    and all six frontend, SystemVerilog-HIR, elaboration, runtime, catalog, and
+    source-policy gates pass. `git diff --check` is clean.
+23. Change 12 is complete in the same dirty worktree. Existing modport
+    function/task materialization now has direct virtual-interface fixture
+    coverage, and a modport clocking member retains an append-only frontend and
+    SystemVerilog-HIR kind while forwarding the block event alias plus sampled
+    member aliases through a restricted interface port. Generic interface ports
+    forward the concrete specialization identity alongside the design-unit and
+    pointer-free handle. A parameterized virtual-interface declaration uses the
+    ordinary unit specializer for named or positional actuals and requires its
+    canonical identity to equal the selected concrete instance; matching
+    defaults/actuals preserve handle equality and a width mismatch emits stable
+    `FSIM-ELAB-SVIFACE-010`.
+24. Validation completed before this handoff: focused frontend/elaboration
+    targets rebuilt with eight workers and their three focused gates passed.
+    The first full build exposed the exhaustive SystemVerilog-HIR enum
+    converter; after appending the semantic clocking-member value and assertion,
+    the complete 154-step downstream exact-LLVM Debug rebuild succeeded
+    warning-clean with eight workers. Frontend, SystemVerilog-HIR, elaboration,
+    runtime, diagnostic-catalog, and source-policy gates pass 6/6, and
+    `git diff --check` is clean.
+25. Change 13 is complete in the same dirty worktree. A parameterized interface
+    carrying an imported function and clocking member crosses two recursively
+    instantiated modport-restricted module ports. Both boundaries preserve the
+    concrete interface unit, canonical specialization identity, pointer-free
+    handle, callable view, clocking event alias, and sampled member alias. The
+    root and twice-forwarded virtual variables compare equal. A simultaneously
+    elaborated program root owns an eight-bit specialization and a distinct
+    nonzero handle, proving builder state remains root-qualified.
+26. Validation completed before this handoff: the focused elaboration target
+    rebuilt with eight workers and passed after retaining the restricted view
+    at both recursive boundaries. The complete incremental Debug tree has no
+    remaining work. Frontend, SystemVerilog-HIR, elaboration, runtime,
+    diagnostic-catalog, and source-policy gates pass 6/6, and `git diff
+    --check` is clean.
+27. Change 14 is complete in the same dirty worktree. Semantic checking now
+    recognizes virtual-interface initializers as hierarchy-object references
+    rather than ordinary chandle assignments; elaboration remains the sole
+    validator of the concrete interface instance, type, specialization, and
+    modport. The dedicated application differential observes equal nonzero
+    direct/twice-forwarded handles and a clocking sample through interpreter and
+    cold/warm LLVM execution at O0 and O2.
+28. Change 15 is complete in the same dirty worktree. The application
+    signal-change hook and VCD capture include the direct and recursive virtual
+    handles plus the forwarded read-only clocking sample. Final state and VCD
+    remain byte-identical between interpreter and compiled engines. Cold native
+    builds miss and warm builds hit at both optimization levels, and source
+    edits still invalidate the affected callable/export cache entries.
+29. Validation completed before this handoff: the dedicated application target
+    rebuilt warning-clean after the semantic and fixture corrections and its
+    full differential passes. The complete incremental Debug tree relinked 18
+    downstream targets with eight workers. The dedicated differential plus all
+    six frontend, SystemVerilog-HIR, elaboration, runtime, catalog, and
+    source-policy gates pass 7/7, and `git diff --check` is clean.
+30. Change 16 is complete in the same dirty worktree. Portable owning-unit and
+    design-state Type archives now serialize, in identical declaration order,
+    the virtual-interface marker, concrete interface name, modport, and retained
+    parameter actuals. The new frontend and semantic clocking-member enum values
+    are bounded during archive validation. Owning-unit schema is 10,
+    portable-library schema is 7, runtime state is 17, semantic state is 2,
+    DesignIR state is 2, and class state is 7; tests pin each value and reject a
+    future owning-unit/class schema.
+31. Direct owning-unit round-trip evidence retains named WIDTH actual 4 and the
+    exact `unit_if.view` virtual type. Class-state round-trip evidence retains a
+    64-bit `class_view_if#(.WIDTH(4)).view` property. The CLI artifact phase
+    compiles and reloads a program-owned interface through `.fsimobj`, publishes
+    and reloads `.fsimdesign`, observes equal direct/forwarded nonzero handles
+    plus clocking sample `1010`, renames the design, and repeats interpreter,
+    compiled, trace, and warm-cache execution unchanged.
+32. Validation completed before this handoff: direct library codec and the main
+    application shard pass after a warning-policy rename and qualified program
+    selector correction. The complete exact-LLVM Debug tree rebuilt/relinked 21
+    downstream steps with eight workers. All eleven standard, interface,
+    application, library, object-artifact, and design-artifact gates pass, and
+    `git diff --check` is clean.
+33. Change 17 is complete in the same dirty worktree. Every interface hierarchy
+    alias now retains its selected modport view. A restricted actual can cross
+    recursive boundaries only through the same restricted view; binding it to
+    a generic interface port or a different modport emits stable
+    `FSIM-ELAB-SVIFACE-011` immediately. The portable owning-unit round trip
+    also retains the append-only clocking modport-member kind and rejects a
+    corrupt kind value of 255 before publication.
+34. Validation completed before this handoff: the focused elaboration and
+    direct library targets rebuilt with eight workers, the complete incremental
+    exact-LLVM Debug tree relinked warning-clean, and all eleven frontend,
+    SystemVerilog-HIR, library/artifact, diagnostics, source-policy,
+    elaboration, application, interface-differential, and runtime gates pass.
+    `git diff --check` is clean.
+35. Preserve all accumulated Batch 153 implementation, test, plan, diagnostic,
+    and handoff edits. Change 18 publishes Batch 153 language-support and
+    architecture sections and feature rows `SV-741` through `SV-750`, covering
+    program/reactive scheduling, clocking HIR and execution, cycle controls,
+    virtual-interface identity and recursive forwarding, restricted views,
+    full engine/VCD/cache differentials, and portable artifacts. The current
+    deferred matrix no longer lists program or clocking blocks; the historical
+    v1 target note remains explicit.
+36. Change 19 advances every affected release audit together. The reviewed
+    matrix contains 1,180 execute rows and 4,720 evidence cells across 414 exact
+    paths, with 1,905 production diagnostics, 570 bounded sources, and 113
+    runtime owners. The matrix digest is
+    `28623705ee34643f345c98f226b513af67d217adf84618b7c5d89a6160c18cb2`;
+    the unchanged sorted evidence-path digest is
+    `c76f1dbfecd0fc5392f2f7108da2f2d5c06830cd2777952d833821241d8e1fa5`.
+37. Validation completed before this handoff: catalog, source-line, release
+    audit, SystemVerilog release, differential release, public release,
+    inventory release, installed-public contract, and release-candidate gates
+    pass 9/9. `git diff --check` is clean.
+38. Change 20 is complete. The exact-LLVM Debug tree is current and its full
+    suite passes 114/114 in 144.53 seconds. The exact-LLVM Release tree rebuilt
+    all 457 affected steps warning-clean with eight workers and its full suite
+    passes 114/114 in 116.53 seconds. Both runs include all release,
+    differential, inventory, public, portability, artifact, API/ABI, interface,
+    and runtime gates.
+39. No sanitizer or hosted CI monitoring ran because Batch 153 is neither
+    boundary. The next local sanitizer remains Batch 160 Change 20 under the
+    ten-batch cadence, and hosted CI continues to exclude sanitizer jobs.
+40. Land this accumulated work as the single Batch 153 closeout commit and push
+    `codex/v2`. On restart, verify the branch and `origin/codex/v2` match this
+    completed checkpoint, preserve a clean synchronized worktree, and begin
+    Batch 154 Change 1's concurrent-assertion declaration ownership.
+
 ## Batch 152 completed checkpoint - 2026-08-06
 
 1. Start in `/home/colin/projects/fsim`, read this file and the locked Batch

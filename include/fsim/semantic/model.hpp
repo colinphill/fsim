@@ -141,6 +141,7 @@ enum class UnitKind : std::uint8_t {
     systemverilog_interface,
     verilog_module,
     systemc_factory,
+    systemverilog_program,
 };
 
 enum class TypeKind : std::uint8_t {

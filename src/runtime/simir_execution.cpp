@@ -199,15 +199,19 @@ void Interpreter::Impl::handle_boundary(
     }
     if (delay == 0) {
       process.status = ProcessStatus::waiting;
-      process.queued = true;
-      scheduler.schedule(
-          SchedulerPhase::inactive,
-          process.program.id,
-          [this, id = process.program.id](Scheduler&) {
-            auto& state = get_process(id);
-            state.queued = false;
-            execute(id);
-          });
+      if (process.program.reactive) {
+        queue_next_delta(process.program.id);
+      } else {
+        process.queued = true;
+        scheduler.schedule(
+            SchedulerPhase::inactive,
+            process.program.id,
+            [this, id = process.program.id](Scheduler&) {
+              auto& state = get_process(id);
+              state.queued = false;
+              execute(id);
+            });
+      }
       notify_execution_point(
           process, instruction, ExecutionPointKind::process_suspend,
           process.current_source);

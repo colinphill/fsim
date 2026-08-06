@@ -515,6 +515,9 @@ void test_scheduler_phase_order() {
             events.emplace_back("next-delta");
           });
         });
+        runtime.schedule(SchedulerPhase::reactive, 2, [&](Scheduler &) {
+          events.emplace_back("reactive");
+        });
         runtime.schedule(SchedulerPhase::postponed, 2, [&](Scheduler &) {
           events.emplace_back("postponed");
         });
@@ -531,7 +534,7 @@ void test_scheduler_phase_order() {
   require(result.time == 4, "scheduler must advance to future event");
   const std::vector<std::string> expected = {
       "active-1", "active-2", "inactive", "update",
-      "postponed", "next-delta", "time-4"};
+      "reactive", "postponed", "next-delta", "time-4"};
   require(events == expected, "scheduler phase ordering");
 }
 

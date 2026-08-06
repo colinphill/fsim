@@ -14,6 +14,7 @@ enum class UnitKind : std::uint8_t {
     module,
     package,
     interface,
+    program,
 };
 
 enum class DeclarationForm : std::uint8_t {
@@ -70,6 +71,7 @@ enum class ModportMemberKind : std::uint8_t {
     function_export,
     task_import,
     task_export,
+    clocking,
 };
 
 enum class GenerateKind : std::uint8_t {

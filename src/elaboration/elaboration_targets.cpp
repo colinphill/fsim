@@ -32,7 +32,9 @@ bool vhdl_name_equal(
 const DesignUnit* choose_unit(
     const frontend::ParsedDesign& parsed, const std::string& requested) {
     for (const auto& unit : parsed.units) {
-        if (unit.kind == frontend::UnitKind::VerilogModule && unit.name == requested) {
+        if ((unit.kind == frontend::UnitKind::VerilogModule
+             || unit.kind == frontend::UnitKind::SystemVerilogProgram)
+            && unit.name == requested) {
             return &unit;
         }
     }
@@ -119,7 +121,10 @@ const DesignUnit* choose_bound_unit(
     const TargetSpec& target) {
     if (target.language == "sv" || target.language == "verilog") {
         for (const auto& unit : parsed.units) {
-            if (unit.kind == frontend::UnitKind::VerilogModule
+            if ((unit.kind == frontend::UnitKind::VerilogModule
+                 || (target.language == "sv"
+                     && unit.kind
+                         == frontend::UnitKind::SystemVerilogProgram))
                 && unit.name == target.unit
                 && (target.library.empty() || unit.library.empty()
                     || unit.library == target.library)) {
@@ -195,6 +200,9 @@ std::vector<UnitResolutionCandidate> resolve_unit_candidates(
         const bool systemverilog_interface =
             unit.kind == frontend::UnitKind::SystemVerilogInterface
             && unit.name == name;
+        const bool systemverilog_program =
+            unit.kind == frontend::UnitKind::SystemVerilogProgram
+            && unit.name == name;
         const bool vhdl_architecture =
             unit.kind == frontend::UnitKind::VhdlArchitecture
             && vhdl_name_equal(unit.primary_name, name);
@@ -203,6 +211,7 @@ std::vector<UnitResolutionCandidate> resolve_unit_candidates(
             && unit.kind == frontend::UnitKind::VhdlConfiguration
             && vhdl_name_equal(unit.name, name);
         if (!verilog_module && !systemverilog_interface
+            && !systemverilog_program
             && !vhdl_architecture
             && !vhdl_configuration) {
             continue;
@@ -329,7 +338,9 @@ const DesignUnit* choose_same_language_instance(
     for (const auto& unit : parsed.units) {
         if ((unit.kind == frontend::UnitKind::VerilogModule
              || unit.kind
-                 == frontend::UnitKind::SystemVerilogInterface)
+                 == frontend::UnitKind::SystemVerilogInterface
+             || unit.kind
+                 == frontend::UnitKind::SystemVerilogProgram)
             && unit.language == parent.language && unit.name == name) {
             if (!unit.library.empty() && !parent.library.empty()
                 && unit.library != parent.library) {
@@ -359,6 +370,10 @@ std::string unit_identity(const DesignUnit& unit) {
     }
     if (unit.kind == frontend::UnitKind::SystemVerilogInterface) {
         return "sv:" + std::string{library} + ".interface(" + unit.name
+            + ")";
+    }
+    if (unit.kind == frontend::UnitKind::SystemVerilogProgram) {
+        return "sv:" + std::string{library} + ".program(" + unit.name
             + ")";
     }
     return "sv:" + std::string{library} + "." + unit.name;

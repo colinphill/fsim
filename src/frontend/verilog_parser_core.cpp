@@ -32,8 +32,13 @@ ParseResult VerilogParser::run() {
             parse_class(previous(), "$unit", false, true),
             interface_token);
       } else {
-        design.units.push_back(parse_module(interface_token, true));
+        design.units.push_back(parse_module(
+            interface_token, UnitKind::SystemVerilogInterface));
       }
+    } else if (match_keyword("program")) {
+      compilation_unit_has_design_item_ = true;
+      design.units.push_back(parse_module(
+          previous(), UnitKind::SystemVerilogProgram));
     } else if (match_keyword("virtual")) {
       compilation_unit_has_design_item_ = true;
       const auto qualifier = previous();
@@ -814,6 +819,9 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
   for (const auto& instance : unit.instances) {
     known.insert(instance.name);
   }
+  for (const auto& block : unit.systemverilog_clocking_blocks) {
+    known.insert(block.name);
+  }
   std::unordered_set<std::string> rejected;
   for (const auto& reference : implicit_net_references_) {
     const auto member_separator = reference.name.find('.');
@@ -864,7 +872,7 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
 
 DesignUnit VerilogParser::parse_module(
     const Token& start,
-    const bool interface_unit) {
+    const UnitKind kind) {
   non_ansi_ports_.clear();
   body_port_declarations_.clear();
   port_type_refinements_.clear();
@@ -892,9 +900,15 @@ DesignUnit VerilogParser::parse_module(
   module_time_precision_declared_ = false;
   module_has_non_time_item_ = false;
   DesignUnit unit;
-  unit.kind = interface_unit
-      ? UnitKind::SystemVerilogInterface
-      : UnitKind::VerilogModule;
+  unit.kind = kind;
+  const bool interface_unit =
+      kind == UnitKind::SystemVerilogInterface;
+  const bool program_unit =
+      kind == UnitKind::SystemVerilogProgram;
+  const auto unit_kind = interface_unit
+      ? std::string_view{"interface"}
+      : program_unit ? std::string_view{"program"}
+                     : std::string_view{"module"};
   unit.language = language_;
   unit.systemverilog_imports =
       compilation_unit_imports_;
@@ -903,7 +917,8 @@ DesignUnit VerilogParser::parse_module(
   unit.default_nettype = current_default_nettype_;
   unit.is_cell = current_cell_define_;
   update_unit_time(unit);
-  const auto name = expect_identifier("module name");
+  const auto name = expect_identifier(
+      std::string{unit_kind} + " name");
   unit.name = name.text;
 
   if (match(TokenKind::Hash)) {
@@ -915,12 +930,14 @@ DesignUnit VerilogParser::parse_module(
     expect(TokenKind::RightParen, "')' after module ports",
            "FSIM-SV-PARSE-002");
   }
-  expect(TokenKind::Semicolon, "';' after module header",
+  expect(TokenKind::Semicolon,
+         "';' after " + std::string{unit_kind} + " header",
          "FSIM-SV-PARSE-003");
 
   const auto terminator = interface_unit
       ? std::string_view{"endinterface"}
-      : std::string_view{"endmodule"};
+      : program_unit ? std::string_view{"endprogram"}
+                     : std::string_view{"endmodule"};
   while (!at_end() && !keyword(terminator)) {
     if (time_declaration_start()) {
       const auto declaration = advance();
@@ -957,11 +974,8 @@ DesignUnit VerilogParser::parse_module(
             parse_class(previous(), unit.name, true),
             qualifier);
       } else {
-        error(
-            qualifier,
-            "FSIM-SV-PARSE-254",
-            "module or interface 'virtual' must introduce a class");
-        skip_to_semicolon();
+        parse_virtual_interface_declaration(
+            unit, qualifier);
       }
     } else if (match_keyword("interface")) {
       module_has_non_time_item_ = true;
@@ -995,6 +1009,21 @@ DesignUnit VerilogParser::parse_module(
         skip_to_semicolon();
       } else {
         parse_modport(unit, previous());
+      }
+    } else if (match_keyword("clocking")) {
+      module_has_non_time_item_ = true;
+      parse_clocking_block(unit, previous());
+    } else if (match_keyword("default")) {
+      module_has_non_time_item_ = true;
+      const auto default_start = previous();
+      if (!match_keyword("clocking")) {
+        error(
+            default_start,
+            "FSIM-SV-SEM-187",
+            "a design-unit default declaration must select a clocking block");
+        skip_to_semicolon();
+      } else {
+        parse_default_clocking(unit, default_start);
       }
     } else if (match_keyword("function")) {
       module_has_non_time_item_ = true;
@@ -1046,7 +1075,7 @@ DesignUnit VerilogParser::parse_module(
       parse_event_declaration(unit, previous());
     } else if (match_keyword("specify")) {
       module_has_non_time_item_ = true;
-      if (interface_unit) {
+      if (interface_unit || program_unit) {
         error(
             previous(),
             "FSIM-SV-SEM-164",
@@ -1145,8 +1174,7 @@ DesignUnit VerilogParser::parse_module(
       error(
           unexpected,
           "FSIM-SV-UNSUPPORTED-004",
-          "unsupported "
-              + std::string{interface_unit ? "interface" : "module"}
+          "unsupported " + std::string{unit_kind}
               + " item starting with '" + unexpected.text + "'");
       skip_to_semicolon();
     }
@@ -1154,14 +1182,13 @@ DesignUnit VerilogParser::parse_module(
   expect_keyword(terminator, false, "FSIM-SV-PARSE-004");
   if (match(TokenKind::Colon)) {
     const auto end_name = expect_identifier(
-        interface_unit
-            ? "interface name after endinterface"
-            : "module name after endmodule");
+        std::string{unit_kind} + " name after "
+            + std::string{terminator});
     if (end_name.text != unit.name) {
       error(
           end_name,
           "FSIM-SV-SEM-129",
-          std::string{interface_unit ? "interface" : "module"}
+          std::string{unit_kind}
               + " end name does not match '" + unit.name + "'");
     }
   }

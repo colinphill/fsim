@@ -34,6 +34,10 @@ int main(void) {
   options.struct_size = FSIM_STRUCT_HEADER_SIZE;
   options.api_version = FSIM_API_VERSION;
 
+  assert(FSIM_SCHEDULER_PHASE_UPDATE == 3);
+  assert(FSIM_SCHEDULER_PHASE_POSTPONED == 4);
+  assert(FSIM_SCHEDULER_PHASE_REACTIVE == 5);
+
   assert(fsim_get_api_version() == FSIM_API_VERSION);
   assert(fsim_session_create(&options, &session) == FSIM_STATUS_OK);
   assert(session != FSIM_INVALID_SESSION);

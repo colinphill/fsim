@@ -2099,8 +2099,23 @@ private:
     // bind modport members through this exact instance identity.
     std::unordered_map<std::string, DesignUnit>
         systemverilog_interface_instances_;
+    // Virtual-interface values use deterministic, nonzero identities. Zero
+    // remains the language null value; identities never expose host pointers.
+    std::unordered_map<std::string, std::uint64_t>
+        systemverilog_interface_handles_;
+    // The canonical specialization identity travels with concrete instances
+    // and forwarded generic interface ports. Virtual-interface declarations
+    // with parameter actuals compare against this exact identity.
+    std::unordered_map<std::string,
+        std::vector<std::pair<std::string, std::string>>>
+        systemverilog_interface_parameter_identities_;
+    std::uint64_t next_systemverilog_interface_handle_{1};
     std::unordered_set<std::string>
         systemverilog_interface_port_paths_;
+    // Non-empty only when a hierarchy alias exposes a restricted modport
+    // rather than the complete concrete interface instance.
+    std::unordered_map<std::string, std::string>
+        systemverilog_interface_modport_views_;
     std::unordered_set<std::string>
         systemverilog_read_only_interface_member_paths_;
     std::vector<std::string> stack_;

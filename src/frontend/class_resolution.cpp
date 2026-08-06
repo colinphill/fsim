@@ -218,6 +218,9 @@ void resolve_type(
           diagnostics);
     }
   }
+  if (type.systemverilog_virtual_interface) {
+    return;
+  }
   if (type.named_type.empty()
       || (type.named_type.find("::") == std::string::npos
           && shadowed_types.contains(type.named_type))) {

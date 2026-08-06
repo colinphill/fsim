@@ -102,7 +102,8 @@ typedef enum fsim_scheduler_phase {
   FSIM_SCHEDULER_PHASE_ACTIVE = 1,
   FSIM_SCHEDULER_PHASE_INACTIVE = 2,
   FSIM_SCHEDULER_PHASE_UPDATE = 3,
-  FSIM_SCHEDULER_PHASE_POSTPONED = 4
+  FSIM_SCHEDULER_PHASE_POSTPONED = 4,
+  FSIM_SCHEDULER_PHASE_REACTIVE = 5
 } fsim_scheduler_phase_t;
 
 typedef struct fsim_session_options {

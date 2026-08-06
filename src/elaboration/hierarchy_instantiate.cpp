@@ -638,6 +638,59 @@ void adapt_vhdl_array_port_shapes(
                 }
                 continue;
             }
+            if (variable.type.systemverilog_virtual_interface) {
+                const auto interface = std::ranges::find_if(
+                    parsed_.units,
+                    [&](const frontend::DesignUnit& candidate) {
+                      return candidate.kind
+                              == frontend::UnitKind::SystemVerilogInterface
+                          && candidate.name
+                              == variable.type
+                                     .systemverilog_interface_type;
+                    });
+                if (interface == parsed_.units.end()) {
+                    report(
+                        "FSIM-ELAB-SVIFACE-003",
+                        "virtual interface '" + path + "."
+                            + variable.name + "' requires unknown type '"
+                            + variable.type.systemverilog_interface_type
+                            + "'",
+                        variable.span);
+                    continue;
+                }
+                if (!variable.type.systemverilog_interface_modport.empty()
+                    && std::ranges::none_of(
+                        interface->systemverilog_modports,
+                        [&](const frontend::SystemVerilogModport& modport) {
+                          return modport.name
+                              == variable.type
+                                     .systemverilog_interface_modport;
+                        })) {
+                    report(
+                        "FSIM-ELAB-SVIFACE-004",
+                        "virtual interface '" + path + "."
+                            + variable.name + "' selects unknown modport '"
+                            + variable.type.systemverilog_interface_modport
+                            + "' on interface type '"
+                            + variable.type.systemverilog_interface_type
+                            + "'",
+                        variable.span);
+                    continue;
+                }
+                const frontend::SignalDeclaration declaration{
+                    variable.name,
+                    variable.type,
+                    frontend::PortDirection::Unknown,
+                    false,
+                    variable.span};
+                const auto signal =
+                    add_owned_signal(declaration, path, local);
+                if (signal) {
+                    design_.signals_[*signal].initial_value =
+                        PackedLogic4::from_aval_bval(64, 0, 0);
+                }
+                continue;
+            }
             if (!variable.type.systemverilog_class_declaration.empty()) {
                 const frontend::SignalDeclaration declaration{
                     variable.name,
@@ -777,6 +830,277 @@ void adapt_vhdl_array_port_shapes(
                 variable.name, std::move(initial));
         }
 
+        const auto clocking_one_step_delay =
+            [&](const frontend::SourceSpan& span)
+                -> std::optional<frontend::Delay> {
+              std::uint64_t magnitude = 0;
+              std::size_t split = 0;
+              while (split < unit.time_precision.size()
+                     && unit.time_precision[split] >= '0'
+                     && unit.time_precision[split] <= '9') {
+                  magnitude = magnitude * 10
+                      + static_cast<std::uint64_t>(
+                          unit.time_precision[split] - '0');
+                  ++split;
+              }
+              if (magnitude == 0
+                  || split == unit.time_precision.size()) {
+                  report(
+                      "FSIM-ELAB-CLOCK-006",
+                      "clocking #1step requires a concrete design-unit "
+                      "time precision",
+                      span);
+                  return std::nullopt;
+              }
+              frontend::Delay delay;
+              delay.magnitude = magnitude;
+              delay.unit = unit.time_precision.substr(split);
+              delay.span = span;
+              return delay;
+            };
+        std::vector<frontend::Statement> clocking_skew_statements;
+        std::vector<frontend::Process> clocking_sample_processes;
+        for (const auto& block : unit.systemverilog_clocking_blocks) {
+            if (block.event.size() != 1
+                || block.event.front().signal.empty()) {
+                report(
+                    "FSIM-ELAB-CLOCK-001",
+                    "clocking block '" + path + "." + block.name
+                        + "' requires one signal event",
+                    block.span);
+                continue;
+            }
+            const auto event =
+                local.find(block.event.front().signal);
+            if (event == local.end()) {
+                report(
+                    "FSIM-ELAB-CLOCK-002",
+                    "unknown event signal '"
+                        + block.event.front().signal
+                        + "' for clocking block '" + path + "."
+                        + block.name + "'",
+                    block.event.front().span);
+                continue;
+            }
+            local.insert_or_assign(block.name, event->second);
+            local.insert_or_assign(
+                path + "." + block.name, event->second);
+            design_.signal_by_name_.emplace(
+                path + "." + block.name, event->second);
+
+            for (const auto& member : block.signals) {
+                const auto actual_name = member.expression
+                    ? member.expression->text : member.name;
+                if (member.expression
+                    && member.expression->kind
+                        != frontend::ExpressionKind::Identifier) {
+                    report(
+                        "FSIM-ELAB-CLOCK-003",
+                        "clocking member '" + block.name + "."
+                            + member.name
+                            + "' requires a signal identifier expression",
+                        member.expression->span);
+                    continue;
+                }
+                const auto actual = local.find(actual_name);
+                const auto type = visible_types.find(actual_name);
+                if (actual == local.end()
+                    || type == visible_types.end()) {
+                    report(
+                        "FSIM-ELAB-CLOCK-004",
+                        "unknown signal '" + actual_name
+                            + "' for clocking member '" + block.name + "."
+                            + member.name + "'",
+                        member.span);
+                    continue;
+                }
+                const auto member_name =
+                    block.name + "." + member.name;
+                const auto* selected_skew = member.skew
+                    ? &*member.skew
+                    : member.direction
+                              == frontend::PortDirection::Input
+                          ? block.default_input_skew
+                                ? &*block.default_input_skew
+                                : nullptr
+                      : member.direction
+                                == frontend::PortDirection::Output
+                          && block.default_output_skew
+                          ? &*block.default_output_skew
+                          : nullptr;
+                std::optional<frontend::Delay> skew_delay;
+                if (selected_skew && selected_skew->delay) {
+                    skew_delay = selected_skew->delay;
+                }
+                if (member.direction
+                        == frontend::PortDirection::Input
+                    && ((!selected_skew)
+                        || selected_skew->one_step
+                        || !selected_skew->delay)) {
+                    skew_delay =
+                        clocking_one_step_delay(member.span);
+                }
+                if (member.direction
+                        == frontend::PortDirection::Output
+                    && skew_delay && skew_delay->magnitude != 0) {
+                    const frontend::SignalDeclaration request{
+                        member_name,
+                        *type->second,
+                        frontend::PortDirection::Unknown,
+                        false,
+                        member.span};
+                    const auto request_signal =
+                        add_owned_signal(request, path, local);
+                    if (!request_signal) continue;
+                    visible_types.insert_or_assign(
+                        member_name, type->second);
+                    visible_types.insert_or_assign(
+                        path + "." + member_name, type->second);
+
+                    frontend::Statement drive;
+                    drive.kind = frontend::StatementKind::Assignment;
+                    drive.assignment_kind =
+                        frontend::AssignmentKind::Blocking;
+                    drive.label = "$clocking$" + block.name + "$"
+                        + member.name + "$drive";
+                    drive.target = frontend::Expression{
+                        frontend::ExpressionKind::Identifier,
+                        actual_name,
+                        {},
+                        member.span};
+                    drive.value = frontend::Expression{
+                        frontend::ExpressionKind::Identifier,
+                        member_name,
+                        {},
+                        member.span};
+                    drive.delay = std::move(skew_delay);
+                    drive.span = member.span;
+                    if (selected_skew->edge
+                        != frontend::EdgeKind::Any) {
+                        frontend::Process driver;
+                        driver.kind =
+                            frontend::ProcessKind::VerilogAlways;
+                        driver.name = "$clocking$" + block.name
+                            + "$" + member.name + "$drive";
+                        driver.sensitivities = block.event;
+                        driver.sensitivities.front().edge =
+                            selected_skew->edge;
+                        driver.statements.push_back(std::move(drive));
+                        driver.span = member.span;
+                        clocking_sample_processes.push_back(
+                            std::move(driver));
+                    } else {
+                        clocking_skew_statements.push_back(
+                            std::move(drive));
+                    }
+                    continue;
+                }
+                if (member.direction
+                    != frontend::PortDirection::Input) {
+                    local.insert_or_assign(
+                        member_name, actual->second);
+                    local.insert_or_assign(
+                        path + "." + member_name, actual->second);
+                    visible_types.insert_or_assign(
+                        member_name, type->second);
+                    visible_types.insert_or_assign(
+                        path + "." + member_name, type->second);
+                    design_.signal_by_name_.emplace(
+                        path + "." + member_name, actual->second);
+                }
+                if (member.direction
+                    == frontend::PortDirection::Output) {
+                    continue;
+                }
+
+                const frontend::SignalDeclaration sampled{
+                    member_name,
+                    *type->second,
+                    frontend::PortDirection::Unknown,
+                    false,
+                    member.span};
+                const auto sample =
+                    add_owned_signal(sampled, path, local);
+                if (!sample) continue;
+                visible_types.insert_or_assign(
+                    member_name, type->second);
+                visible_types.insert_or_assign(
+                    path + "." + member_name, type->second);
+
+                std::string sample_source = actual_name;
+                if (skew_delay && skew_delay->magnitude != 0) {
+                    const auto skew_name = "$clocking$"
+                        + block.name + "$" + member.name + "$skew";
+                    const frontend::SignalDeclaration delayed{
+                        skew_name,
+                        *type->second,
+                        frontend::PortDirection::Unknown,
+                        false,
+                        member.span};
+                    const auto delayed_signal =
+                        add_owned_signal(delayed, path, local);
+                    if (!delayed_signal) continue;
+                    visible_types.insert_or_assign(
+                        skew_name, type->second);
+                    visible_types.insert_or_assign(
+                        path + "." + skew_name, type->second);
+                    frontend::Statement history;
+                    history.kind =
+                        frontend::StatementKind::Assignment;
+                    history.assignment_kind =
+                        frontend::AssignmentKind::Blocking;
+                    history.label = "$clocking$" + block.name + "$"
+                        + member.name + "$history";
+                    history.target = frontend::Expression{
+                        frontend::ExpressionKind::Identifier,
+                        skew_name,
+                        {},
+                        member.span};
+                    history.value = member.expression.value_or(
+                        frontend::Expression{
+                            frontend::ExpressionKind::Identifier,
+                            member.name,
+                            {},
+                            member.span});
+                    history.delay = std::move(skew_delay);
+                    history.span = member.span;
+                    clocking_skew_statements.push_back(
+                        std::move(history));
+                    sample_source = skew_name;
+                }
+                frontend::Statement assignment;
+                assignment.kind = frontend::StatementKind::Assignment;
+                assignment.assignment_kind =
+                    frontend::AssignmentKind::Blocking;
+                assignment.target = frontend::Expression{
+                    frontend::ExpressionKind::Identifier,
+                    member_name,
+                    {},
+                    member.span};
+                assignment.value = frontend::Expression{
+                    frontend::ExpressionKind::Identifier,
+                    std::move(sample_source),
+                    {},
+                    member.span};
+                assignment.span = member.span;
+                frontend::Process sampler;
+                sampler.kind =
+                    frontend::ProcessKind::VerilogAlways;
+                sampler.name = "$clocking$" + block.name + "$"
+                    + member.name + "$sample";
+                sampler.sensitivities = block.event;
+                if (selected_skew
+                    && selected_skew->edge
+                        != frontend::EdgeKind::Any) {
+                    sampler.sensitivities.front().edge =
+                        selected_skew->edge;
+                }
+                sampler.statements.push_back(std::move(assignment));
+                sampler.span = member.span;
+                clocking_sample_processes.push_back(std::move(sampler));
+            }
+        }
+
         const auto specialization_index = design_.specializations_.size();
         const auto specialization_id =
             static_cast<SpecializationId>(specialization_index);
@@ -825,6 +1149,46 @@ void adapt_vhdl_array_port_shapes(
         validate_verilog_specify(
             unit, path, local, parameter_environment);
 
+        const frontend::SystemVerilogClockingBlock*
+            default_clocking = nullptr;
+        if (unit.systemverilog_default_clocking_block) {
+            const auto selected = std::ranges::find(
+                unit.systemverilog_clocking_blocks,
+                *unit.systemverilog_default_clocking_block,
+                &frontend::SystemVerilogClockingBlock::name);
+            if (selected
+                != unit.systemverilog_clocking_blocks.end()) {
+                default_clocking = &*selected;
+            }
+        }
+        const auto prepare_clocking_cycle_waits =
+            [&](auto&& self,
+                std::vector<frontend::Statement>& statements) -> void {
+              for (auto& statement : statements) {
+                if (statement.clocking_cycle_delay) {
+                    if (default_clocking == nullptr) {
+                        report(
+                            "FSIM-ELAB-CLOCK-005",
+                            "a ## cycle delay requires a default "
+                            "clocking block",
+                            statement.span);
+                    } else {
+                        statement.sensitivities =
+                            default_clocking->event;
+                        statement.procedural_assignment_repeat = true;
+                        statement.loop_limit =
+                            statement.clocking_cycle_count;
+                    }
+                }
+                self(self, statement.statements);
+                self(self, statement.else_statements);
+                for (auto& alternative :
+                     statement.case_alternatives) {
+                    self(self, alternative.statements);
+                }
+              }
+            };
+
         Lowerer lowerer{
             design_,
             local,
@@ -840,6 +1204,31 @@ void adapt_vhdl_array_port_shapes(
             unit.procedures,
             diagnostics_};
         for (std::size_t index = 0;
+             index < clocking_skew_statements.size(); ++index) {
+            auto process = lowerer.lower_concurrent(
+                clocking_skew_statements[index],
+                unit.language,
+                path,
+                unit.concurrent_statements.size() + index);
+            specialization.processes.push_back(process.id);
+            design_.processes_.push_back(std::move(process));
+            for (auto& generated :
+                 lowerer.take_generated_processes()) {
+                specialization.processes.push_back(generated.id);
+                design_.processes_.push_back(std::move(generated));
+            }
+        }
+        for (const auto& process : clocking_sample_processes) {
+            auto lowered = lowerer.lower_process(
+                process, unit.language, path);
+            specialization.processes.push_back(lowered.id);
+            design_.processes_.push_back(std::move(lowered));
+            for (auto& generated : lowerer.take_generated_processes()) {
+                specialization.processes.push_back(generated.id);
+                design_.processes_.push_back(std::move(generated));
+            }
+        }
+        for (std::size_t index = 0;
              index < unit.concurrent_statements.size(); ++index) {
             auto process = lowerer.lower_concurrent(
                 unit.concurrent_statements[index],
@@ -853,9 +1242,14 @@ void adapt_vhdl_array_port_shapes(
                 design_.processes_.push_back(std::move(generated));
             }
         }
-        for (const auto& process : unit.processes) {
+        for (const auto& source_process : unit.processes) {
+            auto process = source_process;
+            prepare_clocking_cycle_waits(
+                prepare_clocking_cycle_waits, process.statements);
             auto lowered =
                 lowerer.lower_process(process, unit.language, path);
+            lowered.reactive = unit.kind
+                == frontend::UnitKind::SystemVerilogProgram;
             specialization.processes.push_back(lowered.id);
             design_.processes_.push_back(std::move(lowered));
             for (auto& generated : lowerer.take_generated_processes()) {
@@ -1085,6 +1479,12 @@ void adapt_vhdl_array_port_shapes(
                 vhdl_configurations_by_path_[child_path] =
                     configured.referenced_configuration;
             }
+            auto interface_parameter_identities =
+                target->kind
+                        == frontend::UnitKind::SystemVerilogInterface
+                    ? child_specialized.identity_values
+                    : std::vector<
+                          std::pair<std::string, std::string>>{};
             instantiate(
                 child_specialized.unit,
                 child_path,
@@ -1102,7 +1502,153 @@ void adapt_vhdl_array_port_shapes(
                 == frontend::UnitKind::SystemVerilogInterface) {
                 systemverilog_interface_instances_.insert_or_assign(
                     child_path, child_specialized.unit);
+                systemverilog_interface_handles_.try_emplace(
+                    child_path,
+                    next_systemverilog_interface_handle_++);
+                systemverilog_interface_parameter_identities_
+                    .insert_or_assign(
+                        child_path, std::move(interface_parameter_identities));
             }
+        }
+        for (const auto& variable : unit.variables) {
+          if (!variable.type.systemverilog_virtual_interface
+              || !variable.initializer
+              || (variable.initializer->kind
+                      == frontend::ExpressionKind::Call
+                  && variable.initializer->text == "@sv-null")) {
+            continue;
+          }
+          const auto signal = local.find(variable.name);
+          if (signal == local.end()) continue;
+          std::string actual_name;
+          if (variable.initializer->kind
+              == frontend::ExpressionKind::Identifier) {
+            actual_name = variable.initializer->text;
+          } else if (variable.initializer->kind
+                         == frontend::ExpressionKind::Index
+                     && variable.initializer->operands.size() == 2
+                     && variable.initializer->operands[0].kind
+                         == frontend::ExpressionKind::Identifier
+                     && variable.initializer->operands[1].kind
+                         == frontend::ExpressionKind::IntegerLiteral) {
+            actual_name = variable.initializer->operands[0].text
+                + "[" + variable.initializer->operands[1].text + "]";
+          }
+          if (actual_name.empty()) {
+            report(
+                "FSIM-ELAB-SVIFACE-002",
+                "virtual-interface initializer for '" + path + "."
+                    + variable.name
+                    + "' must name a scalar or statically selected "
+                      "interface instance, or null",
+                variable.initializer->span);
+            continue;
+          }
+          auto actual_path = path.empty()
+              ? actual_name
+              : path + "." + actual_name;
+          auto actual =
+              systemverilog_interface_instances_.find(actual_path);
+          auto lexical_path = path;
+          while (actual == systemverilog_interface_instances_.end()
+                 && lexical_path.find('.') != std::string::npos) {
+            lexical_path.resize(lexical_path.rfind('.'));
+            actual_path = lexical_path + "." + actual_name;
+            actual = systemverilog_interface_instances_.find(actual_path);
+          }
+          if (actual == systemverilog_interface_instances_.end()) {
+            report(
+                "FSIM-ELAB-SVIFACE-002",
+                "virtual-interface initializer '" + actual_path
+                    + "' must name an elaborated interface instance",
+                variable.initializer->span);
+            continue;
+          }
+          if (actual->second.name
+              != variable.type.systemverilog_interface_type) {
+            report(
+                "FSIM-ELAB-SVIFACE-003",
+                "virtual interface '" + path + "." + variable.name
+                    + "' requires type '"
+                    + variable.type.systemverilog_interface_type
+                    + "' but initializer '" + actual_path
+                    + "' has type '" + actual->second.name + "'",
+                variable.initializer->span);
+            continue;
+          }
+          if (!variable.type.systemverilog_class_parameter_actuals.empty()) {
+            const auto declaration = std::ranges::find_if(
+                parsed_.units,
+                [&](const DesignUnit& candidate) {
+                  return candidate.kind
+                          == frontend::UnitKind::SystemVerilogInterface
+                      && candidate.name
+                          == variable.type.systemverilog_interface_type
+                      && candidate.library == actual->second.library;
+                });
+            const auto actual_identity =
+                systemverilog_interface_parameter_identities_.find(
+                    actual_path);
+            if (declaration == parsed_.units.end()
+                || actual_identity
+                    == systemverilog_interface_parameter_identities_.end()) {
+              report(
+                  "FSIM-ELAB-SVIFACE-010",
+                  "virtual interface '" + path + "." + variable.name
+                      + "' cannot resolve the specialization identity of '"
+                      + actual_path + "'",
+                  variable.initializer->span);
+              continue;
+            }
+            std::vector<frontend::ParameterOverride> overrides;
+            overrides.reserve(
+                variable.type.systemverilog_class_parameter_actuals.size());
+            for (const auto& retained :
+                 variable.type.systemverilog_class_parameter_actuals) {
+              frontend::ParameterOverride override;
+              override.name = retained.name;
+              override.value = retained.value;
+              if (retained.type_actual) {
+                override.type_value = *retained.type_actual;
+              }
+              override.span = retained.span;
+              overrides.push_back(std::move(override));
+            }
+            auto required = specialize_selected_unit(
+                *declaration,
+                overrides,
+                parameter_environment,
+                parameter_integral_environment,
+                parent_domains,
+                parent_types,
+                unit.functions,
+                unit.procedures,
+                package_environment,
+                unit.language);
+            if (required.identity_values
+                != actual_identity->second) {
+              report(
+                  "FSIM-ELAB-SVIFACE-010",
+                  "virtual interface '" + path + "." + variable.name
+                      + "' requires a different specialization of interface '"
+                      + variable.type.systemverilog_interface_type
+                      + "' than initializer '" + actual_path + "'",
+                  variable.initializer->span);
+              continue;
+            }
+          }
+          const auto handle =
+              systemverilog_interface_handles_.find(actual_path);
+          if (handle == systemverilog_interface_handles_.end()) {
+            report(
+                "FSIM-ELAB-SVIFACE-002",
+                "virtual-interface initializer '" + actual_path
+                    + "' has no owned interface identity",
+                variable.initializer->span);
+            continue;
+          }
+          design_.signals_[signal->second].initial_value =
+              PackedLogic4::from_aval_bval(64, handle->second, 0);
         }
         stack_.pop_back();
     }

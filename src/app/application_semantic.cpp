@@ -40,6 +40,8 @@ namespace {
       return semantic::UnitKind::systemverilog_interface;
     case frontend::UnitKind::VerilogModule:
       return semantic::UnitKind::verilog_module;
+    case frontend::UnitKind::SystemVerilogProgram:
+      return semantic::UnitKind::systemverilog_program;
   }
   return semantic::UnitKind::verilog_module;
 }

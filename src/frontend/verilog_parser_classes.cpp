@@ -84,6 +84,7 @@ bool VerilogParser::parse_class_property(
   bool is_rand = false;
   bool is_randc = false;
   bool saw_qualifier = false;
+  bool virtual_interface = false;
   for (;;) {
     if (match_keyword("local")) {
       visibility = SystemVerilogClassVisibility::Local;
@@ -107,6 +108,10 @@ bool VerilogParser::parse_class_property(
       break;
     }
   }
+  if (match_keyword("virtual")) {
+    virtual_interface = true;
+    saw_qualifier = true;
+  }
   (void)match_keyword("var");
   if (is_rand && is_randc) {
     error(
@@ -124,7 +129,8 @@ bool VerilogParser::parse_class_property(
       || keyword("int") || keyword("logic") || keyword("reg")
       || keyword("bit") || keyword("signed") || keyword("unsigned")
       || at(TokenKind::LeftBracket);
-  if (!built_in && !is_named_type_reference_start()) {
+  if (!virtual_interface
+      && !built_in && !is_named_type_reference_start()) {
     if (saw_qualifier) {
       error(
           current(),
@@ -134,9 +140,11 @@ bool VerilogParser::parse_class_property(
     return false;
   }
 
-  Type common_type = built_in
-      ? parse_parameter_type()
-      : parse_named_type();
+  Type common_type = virtual_interface
+      ? parse_virtual_interface_type(start)
+      : built_in
+          ? parse_parameter_type()
+          : parse_named_type();
   for (;;) {
     const auto name = expect_identifier("class property name");
     auto type = common_type;

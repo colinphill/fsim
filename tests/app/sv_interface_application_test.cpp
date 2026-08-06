@@ -79,12 +79,15 @@ Capture execute(
   capture.compiled_processes = simulation.compiled_process_count();
   capture.cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 5> names{
+  constexpr std::array<std::string_view, 8> names{
       "interface_top.link[0].data",
       "interface_top.link[0].valid",
       "interface_top.link[0].ready",
       "interface_top.link[1].data",
-      "interface_top.result"};
+      "interface_top.result",
+      "interface_top.selected",
+      "interface_top.virtuals.leaf.selected",
+      "interface_top.virtuals.bus.cb.data"};
   std::array<fsim::runtime::simir::SignalId, names.size()> signals{};
   std::array<fsim::runtime::VcdSignal, names.size()> traces{};
   std::ostringstream vcd_text;
@@ -95,7 +98,9 @@ Capture execute(
     signals[index] = *signal;
     traces[index] = vcd.declare_signal(
         std::string{names[index]},
-        index == 0 || index == 3 || index == 4 ? 4U : 1U);
+        index == 5 || index == 6 ? 64U
+        : index == 0 || index == 3 || index == 4 || index == 7
+            ? 4U : 1U);
   }
   assert(
       simulation.find_signal("interface_top.source.bus.data")
@@ -135,10 +140,17 @@ Capture execute(
 
 void verify(const Capture& capture) {
   assert(capture.result.status == fsim::runtime::RunStatus::stopped);
-  assert(capture.result.time == 1);
+  assert(capture.result.time == 2);
   const auto expected = std::vector<std::string>{
       "1010", "1", "1", "XXXX", "1011"};
-  assert(capture.final_values == expected);
+  assert(capture.final_values.size() == 8);
+  assert(std::equal(
+      expected.begin(), expected.end(), capture.final_values.begin()));
+  assert(capture.final_values[5] == capture.final_values[6]);
+  assert(capture.final_values[5] != std::string(64, '0'));
+  assert(capture.final_values[5].find_first_of("XZ")
+         == std::string::npos);
+  assert(capture.final_values[7] == "1010");
   assert(capture.vcd.find("b1010") != std::string::npos);
   assert(capture.vcd.find("b1011") != std::string::npos);
 }
@@ -146,6 +158,12 @@ void verify(const Capture& capture) {
 void verify_systemverilog_hir(const fsim::project::Config& config) {
   fsim::diagnostic::Engine diagnostics;
   auto checked = fsim::app::check_project(config, diagnostics);
+  if (!checked) {
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
   assert(checked);
   const auto package = std::ranges::find_if(
       checked->systemverilog_hir.units(), [](const auto& unit) {
@@ -167,13 +185,18 @@ void verify_systemverilog_hir(const fsim::project::Config& config) {
   assert(interface_unit != checked->systemverilog_hir.units().end());
   assert(public_package->imports.size() == 1);
   assert(public_package->exports.size() == 3);
-  assert(interface_unit->modports.size() == 3);
+  assert(interface_unit->modports.size() == 4);
   assert(interface_unit->modports[0].name == "initiator");
-  assert(interface_unit->modports[0].members.size() == 6);
+  assert(interface_unit->modports[0].members.size() == 7);
   assert(std::ranges::any_of(
       interface_unit->modports[0].members, [](const auto& member) {
         return member.kind
             == fsim::semantic::sv::ModportMemberKind::function_import;
+      }));
+  assert(std::ranges::any_of(
+      interface_unit->modports[0].members, [](const auto& member) {
+        return member.kind
+            == fsim::semantic::sv::ModportMemberKind::clocking;
       }));
   assert(std::ranges::any_of(
       interface_unit->modports[0].members, [](const auto& member) {
@@ -245,6 +268,7 @@ interface bus_if #(parameter int WIDTH = 4);
   logic valid;
   logic ready;
   logic cfg;
+  logic clock;
   function automatic logic [WIDTH-1:0] sample(
       input logic [WIDTH-1:0] increment);
     return data + increment;
@@ -253,11 +277,20 @@ interface bus_if #(parameter int WIDTH = 4);
     data = value;
     valid = 1'b1;
   endtask
+  initial begin
+    clock = 1'b0;
+    #1 clock = 1'b1;
+  end
+  clocking cb @(posedge clock);
+    input #0 data;
+  endclocking
   modport initiator(output data, valid, input ready,
                     ref cfg, import function sample,
-                    import task drive);
+                    import task drive, clocking cb);
   modport target(input data, valid, output ready);
   modport service(export function sample, export task drive);
+  modport observer(input data, valid, ready, cfg,
+                   import function sample, clocking cb);
 endinterface
 
 module producer(bus_if.initiator bus);
@@ -274,6 +307,14 @@ module producer_mid(bus_if.initiator bus);
       producer source(bus);
     end
   endgenerate
+endmodule
+
+module virtual_leaf(bus_if.observer bus);
+  virtual bus_if #(.WIDTH(4)).observer selected = bus;
+endmodule
+
+module virtual_mid(bus_if.observer bus);
+  virtual_leaf leaf(bus);
 endmodule
 
 module service_impl(bus_if.service bus);
@@ -305,7 +346,9 @@ module interface_top;
   producer_mid source(link[0]);
   consumer sink(.bus(link[0]), .result(result));
   service_impl service(.bus(link[1]));
-  initial #1 $finish;
+  virtual_mid virtuals(link[0]);
+  virtual bus_if #(.WIDTH(4)).observer selected = link[0];
+  initial #2 $finish;
 endmodule
 )";
     assert(output.good());
@@ -333,7 +376,7 @@ endmodule
     assert(reference.vcd == cold.vcd);
     assert(cold.vcd == warm.vcd);
 #if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 3);
+    assert(cold.compiled_processes == 7);
     assert(cold.cache.misses > 0);
     assert(warm.cache.hits > 0);
 #else

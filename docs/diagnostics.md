@@ -751,6 +751,13 @@ are therefore excluded.
 | `FSIM-SV-PARSE-280` | error | A solve-before constraint omits its terminating semicolon. |
 | `FSIM-SV-PARSE-281` | error | A SystemVerilog real/time literal has a malformed mantissa or an unrepresentable source exponent. |
 | `FSIM-SV-PARSE-282` | error | A decimal real literal is immediately followed by an unrecognized time-unit spelling. |
+| `FSIM-SV-PARSE-283` | error | Expected `@` before a clocking-block event. |
+| `FSIM-SV-PARSE-284` | error | Expected `;` after a clocking-block event. |
+| `FSIM-SV-PARSE-285` | error | Expected `;` after a clocking signal declaration. |
+| `FSIM-SV-PARSE-286` | error | Expected `endclocking` after a clocking block. |
+| `FSIM-SV-PARSE-287` | error | Expected `;` after default clocking skews. |
+| `FSIM-SV-PARSE-288` | error | Expected `;` after a default clocking declaration. |
+| `FSIM-SV-PARSE-289` | error | Expected `;` after a virtual-interface declaration. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -915,7 +922,7 @@ are therefore excluded.
 | `FSIM-SV-SEM-126` | error | A bounded static unpacked array declares more than four dimensions. |
 | `FSIM-SV-SEM-127` | error | A bounded SystemVerilog string method has the wrong number of arguments. |
 | `FSIM-SV-SEM-128` | error | A dynamic-array `new[size](initializer)` expression has other than one initializer. |
-| `FSIM-SV-SEM-129` | error | A module or interface declaration end name does not match its opening name. |
+| `FSIM-SV-SEM-129` | error | A module, interface, or program declaration end name does not match its opening name. |
 | `FSIM-SV-SEM-130` | error | A user-defined primitive declares more than one output terminal. |
 | `FSIM-SV-SEM-131` | error | A sequential user-defined primitive `reg` refinement does not name its output. |
 | `FSIM-SV-SEM-132` | error | A user-defined primitive initial statement does not assign its output. |
@@ -957,6 +964,21 @@ are therefore excluded.
 | `FSIM-SV-SEM-173` | error | A class repeats a constraint declaration name. |
 | `FSIM-SV-SEM-174` | error | A `chandle` assignment or cast has a numeric, aggregate, or otherwise incompatible source or destination. |
 | `FSIM-SV-SEM-175` | error | A `chandle` is used for arithmetic or logical truth, or compared with a non-`chandle` value. |
+| `FSIM-SV-SEM-176` | error | A clocking signal declaration omits its input, output, or inout direction. |
+| `FSIM-SV-SEM-177` | error | A clocking block repeats a clocking signal name. |
+| `FSIM-SV-SEM-178` | error | An unaliased clocking signal is not declared by its design unit. |
+| `FSIM-SV-SEM-179` | error | The identifier following `endclocking` does not match the clocking block name. |
+| `FSIM-SV-SEM-180` | error | A design unit repeats a clocking block name. |
+| `FSIM-SV-SEM-181` | error | A default clocking declaration omits its direction or skew. |
+| `FSIM-SV-SEM-182` | error | A clocking block repeats its default input or output skew. |
+| `FSIM-SV-SEM-183` | error | An inout clocking signal declares an illegal skew. |
+| `FSIM-SV-SEM-184` | error | A procedural `##` cycle delay is used outside SystemVerilog-2017. |
+| `FSIM-SV-SEM-185` | error | A design unit declares more than one default clocking block. |
+| `FSIM-SV-SEM-186` | error | A default clocking declaration selects an undeclared block. |
+| `FSIM-SV-SEM-187` | error | A design-unit `default` declaration does not select a clocking block. |
+| `FSIM-SV-SEM-188` | error | A virtual interface has no interface type name. |
+| `FSIM-SV-SEM-189` | error | A virtual-interface variable conflicts with another design-unit object. |
+| `FSIM-SV-SEM-190` | error | A modport clocking member does not name a clocking block declared by its interface. |
 | `FSIM-SV-CLASS-001` | error | A class forward declaration has no defining declaration. |
 | `FSIM-SV-CLASS-002` | error | A named base class is not visible from the declaring class scope. |
 | `FSIM-SV-CLASS-003` | error | A named base class is ambiguous in lexical or import scope. |
@@ -1011,6 +1033,13 @@ are therefore excluded.
 | `FSIM-ELAB-SVCLASS-015` | error | A class-handle queue operation has an invalid argument profile. |
 | `FSIM-ELAB-SVCLASS-016` | error | A class-handle container expression is not a supported `pop_front` or `size` call. |
 | `FSIM-ELAB-SVCLASS-017` | error | `$cast` lacks a resolved destination class handle or source during lowering. |
+| `FSIM-ELAB-CLOCK-001` | error | A clocking block does not have exactly one signal event. |
+| `FSIM-ELAB-CLOCK-002` | error | A clocking block event signal cannot be resolved. |
+| `FSIM-ELAB-CLOCK-003` | error | A clocking member alias is not a signal identifier expression. |
+| `FSIM-ELAB-CLOCK-004` | error | A clocking member signal or its executable packed type cannot be resolved. |
+| `FSIM-ELAB-CLOCK-005` | error | A procedural `##` cycle delay has no default clocking block. |
+| `FSIM-ELAB-CLOCK-006` | error | A `#1step` input skew has no concrete design-unit time precision. |
+| `FSIM-ELAB-CLOCK-007` | error | A modport clocking member is absent from its retained interface HIR. |
 | `FSIM-ELAB-SVRAND-001` | error | `std::randomize` has no arguments or appears outside SystemVerilog execution. |
 | `FSIM-ELAB-SVRAND-002` | error | A `std::randomize` argument is not a writable local identifier. |
 | `FSIM-ELAB-SVRAND-003` | error | A `std::randomize` argument is not a supported packed scalar local. |
@@ -1019,6 +1048,8 @@ are therefore excluded.
 | `FSIM-ELAB-SVIFACE-007` | error | A retained interface callable cannot be materialized at its same-language module boundary. |
 | `FSIM-ELAB-SVIFACE-008` | error | An interface callable is visible more than once through the same module port. |
 | `FSIM-ELAB-SVIFACE-009` | error | A modport export has no matching callable implementation in the connected module. |
+| `FSIM-ELAB-SVIFACE-010` | error | A parameterized virtual-interface view does not match the connected interface specialization identity. |
+| `FSIM-ELAB-SVIFACE-011` | error | A restricted modport actual is widened to a generic interface port or rebound to a different modport. |
 | `FSIM-SV-SEM-030` | error | A reachable `forever` path can take its backedge without suspending, exiting, or terminating the simulation. |
 | `FSIM-SV-SEM-031` | error | A SystemVerilog `break` or `continue` statement appears outside a procedural loop. |
 | `FSIM-SV-SEM-032` | error | A SystemVerilog `final` procedure contains a timing control, wait, or `$finish`. |
@@ -1113,7 +1144,6 @@ are therefore excluded.
 | `FSIM-SV-UNSUPPORTED-041` | error | `reverse` or deterministic `shuffle` uses an excluded container-ordering `with` clause. |
 | `FSIM-SV-UNSUPPORTED-042` | error | A bounded `case matches` item uses a deferred variable-binding, tagged, or structured pattern. |
 | `FSIM-SV-UNSUPPORTED-043` | error | A bounded `case matches` item uses a deferred `&&&` guard. |
-| `FSIM-SV-UNSUPPORTED-044` | error | A modport uses a deferred ref, clocking, or callable import/export member instead of a bounded signal direction. |
 | `FSIM-SV-UNSUPPORTED-045` | error | A class member is outside the current property, method, constraint, typedef, or nested-class foundation. |
 
 ## Elaboration and SimIR lowering

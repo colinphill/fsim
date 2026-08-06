@@ -1038,6 +1038,13 @@ class Resolver final {
       Expression& expression,
       const Scope& scope,
       const Type& expected) {
+    if (expected.systemverilog_virtual_interface) {
+      // Interface instances are hierarchy objects rather than ordinary
+      // chandle-valued expressions. The hierarchy builder validates the
+      // concrete interface type, specialization, modport, and selected
+      // instance after child interfaces have been elaborated.
+      return expected;
+    }
     if (expression.text == "@sv-new"
         && (expected.spelling == "mailbox"
             || expected.spelling == "semaphore")) {

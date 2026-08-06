@@ -253,12 +253,37 @@ void VerilogParser::parse_modport(
         callable_access = CallableAccess::Export;
         direction = PortDirection::Unknown;
       }
-      if (keyword("clocking")) {
-        error(
-            current(),
-            "FSIM-SV-UNSUPPORTED-044",
-            "bounded modports do not admit clocking-block members");
-        skip_to_port_delimiter();
+      if (match_keyword("clocking")) {
+        const auto member =
+            expect_identifier("modport clocking-block name");
+        const bool duplicate = std::ranges::any_of(
+            declaration.members,
+            [&](const SystemVerilogModportMember& existing) {
+              return existing.name == member.text;
+            });
+        if (duplicate) {
+          error(
+              member,
+              "FSIM-SV-SEM-117",
+              "duplicate modport member '" + member.text + "'");
+        } else {
+          const auto block = std::ranges::find(
+              unit.systemverilog_clocking_blocks,
+              member.text,
+              &SystemVerilogClockingBlock::name);
+          if (block == unit.systemverilog_clocking_blocks.end()) {
+            error(
+                member,
+                "FSIM-SV-SEM-190",
+                "modport clocking member '" + member.text
+                    + "' is not declared by the interface");
+          }
+          declaration.members.push_back({
+              member.text, PortDirection::Unknown, member.span,
+              SystemVerilogModportMemberKind::Clocking});
+        }
+        direction = PortDirection::Unknown;
+        callable_access = CallableAccess::None;
       } else if (!at(TokenKind::RightParen)) {
         std::optional<bool> explicit_function;
         if (callable_access != CallableAccess::None
@@ -514,6 +539,85 @@ Type VerilogParser::parse_named_type() {
     type.named_type_span = cover(type.named_type_span, previous().span);
   }
   return type;
+}
+
+Type VerilogParser::parse_virtual_interface_type(
+    const Token& start) {
+  (void)match_keyword("interface");
+  auto type = parse_named_type();
+  type.domain = ValueDomain::Bit2;
+  type.systemverilog_scalar =
+      SystemVerilogScalarKind::Chandle;
+  type.systemverilog_virtual_interface = true;
+  type.systemverilog_interface_type = type.named_type;
+  if (match(TokenKind::Dot)) {
+    const auto modport =
+        expect_identifier("virtual-interface modport name");
+    type.systemverilog_interface_modport = modport.text;
+    type.named_type_span =
+        cover(type.named_type_span, modport.span);
+  }
+  type.spelling = "virtual interface "
+      + type.systemverilog_interface_type;
+  if (!type.systemverilog_interface_modport.empty()) {
+    type.spelling += "."
+        + type.systemverilog_interface_modport;
+  }
+  if (type.systemverilog_interface_type.empty()) {
+    error(
+        start,
+        "FSIM-SV-SEM-188",
+        "a virtual interface requires an interface type name");
+  }
+  return type;
+}
+
+void VerilogParser::parse_virtual_interface_declaration(
+    DesignUnit& unit,
+    const Token& start) {
+  const auto common_type =
+      parse_virtual_interface_type(start);
+  for (;;) {
+    const auto name =
+        expect_identifier("virtual-interface variable name");
+    std::optional<Expression> initializer;
+    if (match(TokenKind::Assign)) {
+      initializer = parse_expression();
+    }
+    const bool duplicate = std::ranges::any_of(
+        unit.variables,
+        [&](const VariableDeclaration& variable) {
+          return variable.name == name.text;
+        })
+        || std::ranges::any_of(
+            unit.signals,
+            [&](const SignalDeclaration& signal) {
+              return signal.name == name.text;
+            })
+        || std::ranges::any_of(
+            unit.ports,
+            [&](const SignalDeclaration& port) {
+              return port.name == name.text;
+            });
+    if (duplicate) {
+      error(
+          name,
+          "FSIM-SV-SEM-189",
+          "duplicate virtual-interface variable '"
+              + name.text + "'");
+    } else {
+      unit.variables.push_back(VariableDeclaration{
+          name.text,
+          common_type,
+          std::move(initializer),
+          span_from(start, previous())});
+    }
+    if (!match(TokenKind::Comma)) break;
+  }
+  expect(
+      TokenKind::Semicolon,
+      "';' after a virtual-interface declaration",
+      "FSIM-SV-PARSE-289");
 }
 
 Type VerilogParser::parse_systemverilog_aggregate_type() {

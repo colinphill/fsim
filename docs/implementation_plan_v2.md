@@ -2968,20 +2968,192 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 153 - Program, clocking, and interface closure
 
-- **Changes 1-4:** implement program blocks, program instances, reactive-region
-  scheduling, initialization/final behavior, and hierarchy/debug identities.
-- **Changes 5-8:** implement clocking blocks, input/output skews, cycle delays,
-  sampled/driven values, default clocking, and race-free scheduler integration.
-- **Changes 9-12:** close virtual interfaces, interface arrays, interface
-  classes, generic interface expressions, modport callables, clocking members,
-  and parameterized interface typing.
-- **Changes 13-16:** preserve these constructs through recursive/multiple-root
-  mixed hierarchy, interpreter/LLVM, callbacks/traces, artifacts, relocation,
-  and caches.
-- **Changes 17-19:** add legality/race/resource negatives, full differentials,
-  docs, diagnostics, matrices, inventories, and handoff.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+1. **Complete.** Parse explicit `program ... endprogram` declarations through
+   the shared SystemVerilog unit parser while retaining a distinct append-only
+   frontend, general-semantic, and SystemVerilog-HIR unit kind. Program-owned
+   parameters, ports, typedefs, functions, tasks, initial/final processes,
+   source spans, and matching end labels remain scoped to the program. Focused
+   frontend and SystemVerilog-HIR application tests pass, and the complete
+   exact-LLVM Debug tree rebuilds warning-clean with eight workers.
+2. **Complete.** Admit program design units to SystemVerilog qualified and
+   simple top selection, logical-library candidate resolution, same-language
+   instance binding, specialization, and named-type/package-import
+   preparation while keeping Verilog top requests ineligible. A parameterized
+   child program retains its port widths, imported typedef, specialization
+   value, hierarchy path, and stable `sv:work.program(name)` identity; both
+   qualified and simple standalone program roots elaborate with the same
+   identity. The full exact-LLVM Debug tree builds with eight workers, and the
+   focused elaboration, SystemVerilog-HIR, diagnostic-catalog, and source-policy
+   gates pass.
+3. **Complete.** Insert an append-only reactive scheduler phase after updates
+   and before postponed observation, carry explicit reactive ownership on
+   program SimIR and DesignIR processes, and route initial, timed, event,
+   sensitivity, delta, fork, and zero-delay resumptions without moving ordinary
+   module processes out of active/inactive scheduling. A module NBA commits
+   before a program child samples it in the reactive region. Scheduler phase
+   ordering, runtime routing, program elaboration/execution, and the append-only
+   C API phase value pass focused tests. The complete exact-LLVM Debug tree
+   rebuilds with eight workers; runtime, elaboration, API, C-header,
+   SystemVerilog-HIR, diagnostic-catalog, and source-policy gates pass.
+4. **Complete.** Integrate program initial/final lifecycle behavior with the
+   reactive process ownership from Change 3 while ordinary module lifecycle
+   callbacks remain active. Program and module final blocks execute exactly
+   once after ordinary completion in deterministic active/reactive order.
+   Stable child process names, specialization hierarchy, source locations,
+   scopes, and debugger execution points retain the program instance identity.
+   Focused elaboration/runtime execution proves module/program initial and
+   final phase order, the NBA-to-reactive boundary, final signal state, and
+   hierarchical debug source identity.
+5. **Complete.** Add append-only frontend clocking-block and clocking-signal
+   ownership to the shared module/interface/program design-unit model. Named
+   blocks retain their event, input/output/inout declarations, optional signal
+   aliases, spans, and matching end labels. Focused positive coverage proves
+   ownership for all three unit kinds; negatives reject missing directions,
+   duplicate members and blocks, undeclared unaliased signals, and mismatched
+   end labels with cataloged diagnostics. The exact-LLVM Debug tree rebuilds
+   warning-clean with eight workers, and the focused frontend,
+   diagnostic-catalog, and source-policy gates pass.
+6. **Complete.** Extend the append-only frontend clocking model with exact
+   default and per-signal input/output skews, edge qualifiers, `#1step`, and
+   ordinary time-qualified delays. Procedural `##` controls retain literal or
+   expression-valued cycle counts as explicit wait metadata without conflating
+   cycles with project ticks. Focused positives cover all forms and negatives
+   reject incomplete/repeated defaults, inout skews, and non-SystemVerilog
+   cycle controls with cataloged diagnostics. The complete exact-LLVM Debug
+   tree rebuilds warning-clean with eight workers, and the frontend,
+   diagnostic-catalog, and source-policy gates pass.
+7. **Complete.** Elaborate each clocking-block event as a stable wait alias,
+   materialize input members as owned sampled storage updated by an ordinary
+   active-region process, and resolve output members as aliases of their driven
+   signals. Program code remains reactive, so an event updates sampled storage
+   before the waiting program reads it and drives the output. Focused execution
+   proves aliased input sampling, event-name suspension, active sampler
+   ownership, reactive consumption, output identity, and final values. The
+   exact-LLVM Debug tree rebuilds with eight workers, and all six focused gates
+   pass.
+8. **Complete.** Own one explicit default clocking selection per design unit
+   and lower `##` controls as repeated occurrences of its event rather than
+   time ticks. Input skews use transport-delayed history signals, including
+   `#1step` at the unit time precision; output skews use request signals and
+   delayed drivers. Edge-qualified skews select their own executable sampling
+   or drive edge. The end-to-end program changes its input in the clock slot,
+   observes the one-step-old value after exactly two positive edges, waits for
+   the next negative output edge, and drives one nanosecond later. Cataloged
+   negatives reject repeated, undeclared, malformed, or absent default clocks
+   and unavailable one-step precision. The complete exact-LLVM Debug tree
+   rebuilds warning-clean with eight workers, and frontend,
+   SystemVerilog-HIR, elaboration, runtime, diagnostic-catalog, and source-policy
+   gates pass.
+9. **Complete.** Add append-only virtual-interface type ownership for
+   design-unit variables and class properties, including the optional
+   `interface` qualifier, named interface type, parameter actual syntax,
+   modport restriction, initializer, and null value. Named-type resolution
+   keeps interface design-unit types distinct from typedefs and class handles.
+   Hierarchy elaboration validates declared interface and modport identities,
+   allocates nullable 64-bit storage, resolves direct instance initializers
+   after child interface elaboration, and assigns deterministic nonzero,
+   pointer-free identities. Focused positives prove concrete and null values
+   through interpreter-visible state; negatives cover missing types, missing
+   modports, unknown or wrong-type instances, expression-shaped initializers,
+   and duplicate declarations. The complete exact-LLVM Debug tree rebuilds
+   warning-clean with eight workers, and frontend, SystemVerilog-HIR,
+   elaboration, runtime, diagnostic-catalog, and source-policy gates pass.
+10. **Complete.** Reuse bounded instance-array ownership and post-specialization
+    expansion for SystemVerilog interface arrays. Each element retains declared
+    index order and a distinct hierarchy path, signal namespace, interface
+    identity, and pointer-free virtual handle. Static indexed elements bind
+    through interface/modport ports and initialize virtual-interface variables;
+    repeated selection of one element compares equal while a different element
+    compares unequal. Out-of-range and runtime-dynamic virtual selectors reject
+    through the stable interface-actual diagnostic. The full Debug build and
+    six focused gates pass.
+11. **Complete.** Compose the existing interface-class identity and
+    `implements` resolution with classes that own virtual-interface properties.
+    Generic `interface` ports forward the exact concrete interface design-unit
+    and pointer-free handle identity into child virtual-interface initializers,
+    including indexed array elements and modport-restricted destination types.
+    The forwarded alias compares equal to its source selection through
+    interpreter-visible state. The full Debug build and six focused gates pass.
+- **Change 12: Complete.** Modport function/task callables retain their exact
+  import/export profiles through generic and modport-restricted boundaries.
+  Modports may name a retained clocking block; elaboration forwards its event
+  alias and directional sampled/driven members, and the append-only clocking
+  member kind propagates into SystemVerilog semantic HIR. Parameterized
+  virtual-interface declarations specialize named or positional actuals with
+  the ordinary unit specializer and compare the resulting canonical identity
+  against concrete instances and forwarded generic interface ports. Matching
+  defaults/actuals preserve the pointer-free handle while a different
+  specialization rejects with a stable cataloged diagnostic. The complete
+  exact-LLVM Debug tree rebuilds warning-clean with eight workers, all six
+  focused gates pass, and `git diff --check` is clean.
+- **Change 13: Complete.** Preserve parameterized virtual-interface identity,
+  imported callable visibility, and clocking-block event/member aliases through
+  two recursive modport-restricted module boundaries without widening the
+  selected view. In one multiple-root elaboration, a module hierarchy's direct
+  and twice-forwarded virtual handles compare equal while a program root using
+  a different interface specialization owns a distinct nonzero handle. The
+  complete incremental Debug tree is current, all six focused gates pass, and
+  `git diff --check` is clean.
+- **Change 14: Complete.** Treat a virtual-interface initializer as a hierarchy
+  object reference rather than an ordinary chandle assignment during semantic
+  checking, while leaving exact instance/type/modport/specialization validation
+  in elaboration. The dedicated interface application matrix proves direct and
+  twice-forwarded nonzero handle equality plus an executable clocking sample
+  identically through the interpreter and cold/warm LLVM at O0 and O2.
+- **Change 15: Complete.** Add the direct and recursive virtual handles plus the
+  forwarded clocking sample to the application signal-change/VCD capture. The
+  interpreter and compiled engines produce identical final values and VCD,
+  while cold builds miss and warm builds hit the native cache at both
+  optimization levels. The full incremental Debug tree rebuilds warning-clean,
+  the dedicated differential and all six focused gates pass, and `git diff
+  --check` is clean.
+- **Change 16: Complete.** Serialize the virtual-interface marker, concrete
+  interface name, modport, and parameter actuals in exactly the same order in
+  both portable owning-unit and design-state Type archives. Validate the new
+  frontend and semantic modport-member enumerators. Bump owning-unit schema 10,
+  portable-library schema 7, runtime-state schema 17, semantic-state schema 2,
+  DesignIR-state schema 2, and class-state schema 7 with exact assertions and
+  future-schema rejection. Direct codec coverage round-trips all virtual Type
+  fields; class-state coverage retains a parameterized virtual property. The
+  object/design artifact phase reloads a program-owned parameterized interface,
+  forwarded virtual handle, and clocking sample, then preserves them through
+  relocation, interpreter/compiled execution, VCD, and warm native-cache reuse.
+  The complete exact-LLVM Debug tree rebuilds warning-clean; all eleven focused
+  interface/application/artifact and standard gates pass, and `git diff
+  --check` is clean.
+- **Change 17: Complete.** Retain the selected modport view on every interface
+  hierarchy alias. A restricted actual may bind only the same restricted view;
+  widening it through a generic interface port or rebinding it to another
+  modport rejects immediately with stable `FSIM-ELAB-SVIFACE-011` instead of
+  producing later missing-member noise. Direct portable-unit round-trip
+  coverage retains the append-only clocking modport-member kind, and a corrupt
+  kind value rejects before publication. The complete incremental exact-LLVM
+  Debug tree is current, all eleven focused interface, artifact, application,
+  catalog, and source-policy gates pass, and `git diff --check` is clean.
+- **Change 18: Complete.** Publish the v2 program/reactive, clocking, and
+  virtual-interface capability in language-support and architecture references.
+  Add `SV-741` through `SV-750` with positive, negative, elaboration, and runtime
+  evidence for program ownership, reactive scheduling, clocking HIR/execution,
+  cycle controls, virtual identities, recursive forwarding, restricted views,
+  interpreter/LLVM/VCD/cache parity, and portable artifacts. Remove program and
+  clocking blocks from the current deferred matrix while retaining the explicit
+  historical v1-scope note.
+- **Change 19: Complete.** Freeze the reviewed release inventory at 1,180
+  execute rows, 4,720 evidence cells, 414 exact paths, 1,905 production
+  diagnostics, 570 bounded sources, and 113 runtime owners. Advance the
+  SystemVerilog, legality, differential, inventory, public, and candidate audit
+  baselines plus the reviewed matrix digest
+  `28623705ee34643f345c98f226b513af67d217adf84618b7c5d89a6160c18cb2`.
+  All nine focused catalog, source, public, inventory, installed-contract,
+  SystemVerilog, differential, release-audit, and candidate gates pass.
+- **Change 20: Complete.** The exact-LLVM Debug tree is current and its complete
+  suite passes 114/114 in 144.53 seconds. The exact-LLVM Release tree rebuilds
+  all 457 affected steps warning-clean with eight workers and its complete
+  suite passes 114/114 in 116.53 seconds. Both suites include every release,
+  differential, inventory, public, portability, artifact, API/ABI, interface,
+  and runtime gate. No sanitizer or hosted CI monitoring ran because Batch 153
+  is neither boundary. Commit and push the accumulated batch once, then begin
+  Batch 154.
 
 ### Batch 154 - SystemVerilog concurrent assertion closure
 

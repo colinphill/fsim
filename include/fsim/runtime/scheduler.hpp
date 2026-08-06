@@ -21,7 +21,8 @@ enum class SchedulerPhase : std::uint8_t {
   active = 0,
   inactive = 1,
   update = 2,
-  postponed = 3,
+  reactive = 3,
+  postponed = 4,
 };
 
 [[nodiscard]] const char *phase_name(SchedulerPhase phase) noexcept;

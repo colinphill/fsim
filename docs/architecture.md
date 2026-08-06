@@ -904,6 +904,32 @@ append-only operation set. Standalone designs, relocated mapped libraries,
 debugger/callback/VCD paths, and cold/warm LLVM O0/O2 reuse validate the same
 state before publication.
 
+### SystemVerilog program, clocking, and virtual-interface model
+
+Programs retain their own frontend, semantic, and SystemVerilog-HIR unit kind,
+but reuse ordinary specialization, hierarchy, process, and artifact ownership.
+Their executable distinction is explicit reactive process metadata. The
+scheduler orders reactive work after active/inactive updates and before
+postponed observation, and every resume path carries the owning process phase
+instead of inferring it from a source construct at runtime.
+
+Each clocking block materializes one event alias, active-region input sampler,
+owned sampled storage, and output request/driver paths as required by its
+members. Default and member skews become checked transport history or projected
+driver delays; edge qualifiers select the sampler or driver sensitivity.
+Procedural cycle waits reference the selected default clocking event and count
+occurrences rather than converting cycles into ticks. A modport clocking member
+forwards the same event and directional member aliases used by direct access.
+
+Virtual-interface values are deterministic 64-bit simulation identities, not
+host pointers. The hierarchy builder keys them by concrete interface instance
+and canonical specialization, then records the selected modport view on every
+forwarded alias. A restricted alias may preserve the same view but cannot widen
+to a generic port or rebind another view. Portable Type archives serialize the
+virtual marker, interface name, modport, and parameter actuals in one canonical
+order, while enum and schema validation rejects malformed state before it can
+become executable.
+
 ## Runtime values
 
 The runtime distinguishes three logic domains:

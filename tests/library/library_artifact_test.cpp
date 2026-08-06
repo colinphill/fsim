@@ -52,8 +52,8 @@ fsim::library::Metadata example_metadata() {
 }  // namespace
 
 int main() {
-  static_assert(fsim::library::kOwningUnitSchemaVersion == 9);
-  static_assert(fsim::library::kPortableSchemaVersion == 6);
+  static_assert(fsim::library::kOwningUnitSchemaVersion == 10);
+  static_assert(fsim::library::kPortableSchemaVersion == 7);
   const auto expected = example_metadata();
   const auto serialized = fsim::library::serialize_metadata(expected);
   assert(serialized.starts_with(
@@ -139,7 +139,16 @@ int main() {
 
   const auto parsed_source = fsim::frontend::parse_text(
       "sources/stage.sv",
-      R"sv(module stage #(parameter int WIDTH = 4) (
+      R"sv(interface unit_if #(parameter int WIDTH = 4);
+  logic clock;
+  logic [WIDTH-1:0] value;
+  clocking cb @(posedge clock);
+    input #0 value;
+  endclocking
+  modport view(input value, clocking cb);
+endinterface
+
+module stage #(parameter int WIDTH = 4) (
   input logic clock,
   input logic [WIDTH-1:0] value,
   output logic [WIDTH-1:0] result
@@ -167,6 +176,7 @@ int main() {
   realtime realtime_value;
   time tick_value;
   chandle handle_value;
+  virtual unit_if #(.WIDTH(4)).view interface_view;
   specify
     (value[0] => result[0]) = (1:2:3);
     $setup(posedge value[0], posedge clock, 2, notifier);
@@ -192,8 +202,18 @@ endmodule
 )sv",
       fsim::frontend::Language::SystemVerilog2017);
   assert(parsed_source.ok());
-  assert(parsed_source.design.units.size() == 1);
-  auto source_unit = parsed_source.design.units.front();
+  assert(parsed_source.design.units.size() == 2);
+  const auto stage_unit = std::ranges::find(
+      parsed_source.design.units,
+      std::string{"stage"},
+      &fsim::frontend::DesignUnit::name);
+  const auto interface_unit = std::ranges::find(
+      parsed_source.design.units,
+      std::string{"unit_if"},
+      &fsim::frontend::DesignUnit::name);
+  assert(stage_unit != parsed_source.design.units.end());
+  assert(interface_unit != parsed_source.design.units.end());
+  auto source_unit = *stage_unit;
   source_unit.library = "vendor";
   source_unit.compilation_unit_identity = "fixture-compilation-unit";
   fsim::diagnostic::Engine unit_write_diagnostics;
@@ -212,6 +232,32 @@ endmodule
   assert(restored_unit->name == "stage");
   assert(restored_unit->parameters.size() == 3);
   assert(restored_unit->functions.size() == 1);
+  auto portable_interface = *interface_unit;
+  portable_interface.library = "vendor";
+  portable_interface.compilation_unit_identity =
+      "fixture-compilation-unit";
+  fsim::diagnostic::Engine interface_write_diagnostics;
+  const auto interface_bytes = fsim::library::serialize_portable_unit(
+      portable_interface, interface_write_diagnostics);
+  assert(interface_bytes && !interface_write_diagnostics.has_error());
+  fsim::diagnostic::Engine interface_read_diagnostics;
+  const auto restored_interface_unit =
+      fsim::library::deserialize_portable_unit(
+          *interface_bytes,
+          "units/unit-if.fsimir",
+          interface_read_diagnostics);
+  assert(restored_interface_unit && !interface_read_diagnostics.has_error());
+  assert(
+      restored_interface_unit->systemverilog_modports.size() == 1
+      && restored_interface_unit->systemverilog_modports.front()
+             .members.back().kind
+          == fsim::frontend::SystemVerilogModportMemberKind::Clocking);
+  auto invalid_modport_unit = *restored_interface_unit;
+  invalid_modport_unit.systemverilog_modports.front().members.back().kind =
+      static_cast<fsim::frontend::SystemVerilogModportMemberKind>(255);
+  fsim::diagnostic::Engine invalid_modport_diagnostics;
+  assert(!fsim::library::serialize_portable_unit(
+      invalid_modport_unit, invalid_modport_diagnostics));
   const auto type_alias = [&](const std::string_view name)
       -> const fsim::frontend::Type* {
     const auto alias = std::ranges::find_if(
@@ -286,6 +332,21 @@ endmodule
       scalar_type("handle_value") != nullptr
       && scalar_type("handle_value")->systemverilog_scalar
           == fsim::frontend::SystemVerilogScalarKind::Chandle);
+  assert(
+      scalar_type("interface_view") != nullptr
+      && scalar_type("interface_view")->systemverilog_virtual_interface
+      && scalar_type("interface_view")->systemverilog_interface_type
+          == "unit_if"
+      && scalar_type("interface_view")->systemverilog_interface_modport
+          == "view"
+      && scalar_type("interface_view")
+             ->systemverilog_class_parameter_actuals.size() == 1
+      && scalar_type("interface_view")
+             ->systemverilog_class_parameter_actuals.front().name
+          == std::optional<std::string>{"WIDTH"}
+      && scalar_type("interface_view")
+             ->systemverilog_class_parameter_actuals.front().value.text
+          == "4");
   const auto scalar_process = std::ranges::find_if(
       restored_unit->processes, [](const auto& process) {
         return std::ranges::any_of(

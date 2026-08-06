@@ -56,6 +56,11 @@ class_source = directory / "classes.sv";
 {
   std::ofstream output(class_source);
   output << R"(
+interface class_view_if #(parameter int WIDTH = 4);
+  logic [WIDTH-1:0] value;
+  modport view(input value);
+endinterface
+
 class AppBase;
   static int shared = 2;
   static AppBase shared_peer;
@@ -113,6 +118,7 @@ endclass
 class AppDerived extends AppBase;
   rand logic [7:0] value;
   randc logic [3:0] generated_value;
+  virtual class_view_if #(.WIDTH(4)).view interface_view;
   constraint generated_small {
     generated_value inside {[1:3]};
   }

@@ -635,6 +635,8 @@ std::string unit_key(const frontend::DesignUnit& unit)  {
           + unit.name;
     case frontend::UnitKind::VerilogModule:
       return "verilog:" + unit.library + ":module:" + unit.name;
+    case frontend::UnitKind::SystemVerilogProgram:
+      return "systemverilog:" + unit.library + ":program:" + unit.name;
   }
   return {};
 }

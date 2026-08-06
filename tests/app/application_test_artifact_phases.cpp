@@ -19,8 +19,10 @@
 namespace fsim::test {
 
 void ApplicationTestFixture::test_artifact_phase_semantics() {
-  static_assert(app::kRuntimeStateSchema == 16);
-  static_assert(app::kClassStateSchema == 6);
+  static_assert(app::kRuntimeStateSchema == 17);
+  static_assert(app::kSemanticStateSchema == 2);
+  static_assert(app::kDesignIrStateSchema == 2);
+  static_assert(app::kClassStateSchema == 7);
   static_assert(app::kSystemVerilogConstraintHirStateSchema == 3);
   const auto sv_source = directory / "artifact_phase.sv";
   const auto vhdl_source = directory / "artifact_phase.vhd";
@@ -114,6 +116,30 @@ module scalar_artifact;
     checks[4] = handle == null;
   end
 endmodule
+
+interface artifact_if #(parameter int WIDTH = 4);
+  logic clock;
+  logic [WIDTH-1:0] data;
+  initial begin
+    clock = 1'b0;
+    data = 4'ha;
+    #1 clock = 1'b1;
+  end
+  clocking cb @(posedge clock);
+    input #0 data;
+  endclocking
+  modport view(input data, clocking cb);
+endinterface
+
+module artifact_virtual_leaf(artifact_if.view bus);
+  virtual artifact_if #(.WIDTH(4)).view selected = bus;
+endmodule
+
+program interface_artifact;
+  artifact_if #(.WIDTH(4)) link();
+  artifact_virtual_leaf leaf(link);
+  virtual artifact_if #(.WIDTH(4)).view selected = link;
+endprogram
 )";
   }
   {
@@ -243,6 +269,7 @@ end architecture;
       "--object", sv_object_text.c_str(), "--top",
       "main=sv:work.phase_tb", "--top", "observer=sv:work.phase_watch",
       "--top", "scalar=sv:work.scalar_artifact",
+      "--top", "virtual=sv:work.interface_artifact",
       "--output", design_text.c_str(), "--seed", "23"};
   const auto elaborate_result = cli::run(
       static_cast<int>(elaborate.size()), elaborate.data(), services,
@@ -260,7 +287,8 @@ end architecture;
   assert(design_inspection->compatible);
   assert(design_inspection->runtime_abi == runtime_abi_version);
   assert(design_inspection->roots
-      == std::vector<std::string>({"main", "observer", "scalar"}));
+      == std::vector<std::string>(
+          {"main", "observer", "scalar", "virtual"}));
   assert(design_inspection->process_count != 0);
   auto active_design = design;
 
@@ -296,7 +324,8 @@ end architecture;
     auto built = app::load_design_artifact(active_design, diagnostics);
     assert(built && !diagnostics.has_error());
     assert(built->design.roots()
-        == std::vector<std::string>({"main", "observer", "scalar"}));
+        == std::vector<std::string>(
+            {"main", "observer", "scalar", "virtual"}));
     assert(built->semantics.source_files().size() >= 2);
     assert(built->design.verilog_specify_paths().size() == 1);
     assert(built->design.verilog_timing_checks().size() == 1);
@@ -319,9 +348,16 @@ end architecture;
     const auto scalar_time = simulation.find_signal("scalar.ticks");
     const auto scalar_handle = simulation.find_signal("scalar.handle");
     const auto scalar_wide = simulation.find_signal("scalar.wide_value");
+    const auto virtual_selected =
+        simulation.find_signal("virtual.selected");
+    const auto forwarded_selected =
+        simulation.find_signal("virtual.leaf.selected");
+    const auto clocking_sample =
+        simulation.find_signal("virtual.leaf.bus.cb.data");
     assert(counter && watch && stable_probe && vital_probe && scalar_checks
         && scalar_real && scalar_short && scalar_realtime && scalar_time
-        && scalar_handle && scalar_wide);
+        && scalar_handle && scalar_wide && virtual_selected
+        && forwarded_selected && clocking_sample);
     std::size_t callbacks{};
     simulation.set_signal_change_hook(
         [&](runtime::simir::SignalId, const runtime::PackedLogic4&,
@@ -345,6 +381,13 @@ end architecture;
     assert(simulation.read_scalar_signal(*scalar_time).as_time()
         == UINT64_C(9007199254740993));
     assert(simulation.read_scalar_signal(*scalar_handle).as_chandle() == 0);
+    const auto virtual_handle =
+        simulation.read_signal(*virtual_selected).low_word();
+    assert(virtual_handle.aval != 0 && virtual_handle.bval == 0);
+    assert(simulation.read_signal(*forwarded_selected).low_word()
+           == virtual_handle);
+    assert(simulation.read_signal(*clocking_sample).to_msb_string()
+           == "1010");
     std::ostringstream debugger_output;
     std::ostringstream debugger_error;
     app::DebuggerControl debugger{
@@ -378,7 +421,7 @@ end architecture;
       "fsim", "simulate", "--design", active_design_text.c_str(), "--engine",
       "compiled", "--trace", trace_text.c_str(), "--trace-filter",
       "main.*", "--trace-filter", "observer.*", "--trace-filter",
-      "scalar.*"};
+      "scalar.*", "--trace-filter", "virtual.*"};
   assert(cli::run(
       static_cast<int>(simulate.size()), simulate.data(), services,
       output, error) == 0);
@@ -396,6 +439,8 @@ end architecture;
   assert(trace_bytes.find("scalar") != std::string::npos);
   assert(trace_bytes.find("ticks") != std::string::npos);
   assert(trace_bytes.find("handle") != std::string::npos);
+  assert(trace_bytes.find("virtual") != std::string::npos);
+  assert(trace_bytes.find("selected") != std::string::npos);
   assert(
       trace_bytes.find("attribute_source'stable(1)")
       != std::string::npos);

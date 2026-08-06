@@ -32,6 +32,7 @@ int main() {
   test_systemverilog_static_slice_ordering();
   test_systemverilog_static_slice_ports();
   test_systemverilog_interfaces();
+  test_systemverilog_program_instances();
   test_systemverilog_public_conformance_elaboration();
   test_msvc_debug_elaboration_portability();
   test_case_and_expression_lowering();

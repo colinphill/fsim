@@ -62,6 +62,7 @@ interface bus_if #(
     parameter int WIDTH = 4);
   ITEM data;
   logic valid;
+  logic clock;
   int dynamic_values[];
   byte bounded_values[$:3];
   logic [15:0] scores[values::key_t];
@@ -72,9 +73,18 @@ interface bus_if #(
   task automatic drive(input ITEM value);
     data = value;
   endtask
+  clocking cb @(posedge clock);
+    input #0 data;
+  endclocking
   modport initiator(output data, valid, import function sample,
-                    import task drive);
+                    import task drive, clocking cb);
 endinterface
+
+program semantic_hir_program(input logic clock);
+  integer observed;
+  initial observed = clock;
+  final observed = 0;
+endprogram : semantic_hir_program
 
 module semantic_hir_top;
   import values::*;
@@ -127,6 +137,20 @@ endmodule
   fsim::diagnostic::Engine diagnostics;
   auto checked = fsim::app::check_project(config, diagnostics);
   assert(checked);
+  const auto semantic_program = std::ranges::find_if(
+      checked->semantics.units(), [](const auto& unit) {
+        return unit.kind
+                == fsim::semantic::UnitKind::systemverilog_program
+            && unit.name == "semantic_hir_program";
+      });
+  assert(semantic_program != checked->semantics.units().end());
+  const auto program_unit = std::ranges::find_if(
+      checked->systemverilog_hir.units(), [](const auto& unit) {
+        return unit.kind == fsim::semantic::sv::UnitKind::program
+            && unit.name == "semantic_hir_program";
+      });
+  assert(program_unit != checked->systemverilog_hir.units().end());
+  assert(program_unit->processes.size() == 2);
   const auto interface_unit = std::ranges::find_if(
       checked->systemverilog_hir.units(), [](const auto& unit) {
         return unit.kind == fsim::semantic::sv::UnitKind::interface
@@ -137,7 +161,9 @@ endmodule
   assert(interface_unit->compilation.time_precision == "1ps");
   assert(interface_unit->compilation.default_nettype == "tri0");
   assert(interface_unit->modports.size() == 1);
-  assert(interface_unit->modports.front().members.size() == 4);
+  assert(interface_unit->modports.front().members.size() == 5);
+  assert(interface_unit->modports.front().members.back().kind
+         == fsim::semantic::sv::ModportMemberKind::clocking);
 
   const auto declaration_for = [&](const std::string_view declaration_name) {
     return std::ranges::find_if(
@@ -225,8 +251,9 @@ endmodule
   assert(top->instances.size() == 1);
   assert(top->generates.size() == 1);
   assert(top->processes.size() == 1);
-  assert(checked->systemverilog_hir.processes().size() == 1);
-  const auto& process = checked->systemverilog_hir.processes().front();
+  assert(checked->systemverilog_hir.processes().size() == 3);
+  const auto& process = checked->systemverilog_hir.processes()[
+      top->processes.front().value()];
   assert(process.kind == fsim::semantic::sv::ProcessKind::initial);
   assert(process.statements.size() == 1);
   const auto statement_for = [&](const fsim::semantic::StatementId id)

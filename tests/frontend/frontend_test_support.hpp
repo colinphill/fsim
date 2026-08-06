@@ -50,6 +50,8 @@ void test_systemverilog_compiler_directives();
 void test_systemverilog_parameters();
 void test_systemverilog_packages();
 void test_systemverilog_interfaces();
+void test_systemverilog_programs();
+void test_systemverilog_clocking_blocks();
 void test_vhdl_function_declarations();
 void test_vhdl_procedure_declarations();
 void test_vhdl_generic_subprogram_declarations();

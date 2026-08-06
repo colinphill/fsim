@@ -8,7 +8,9 @@ using namespace elaboration_detail;
         const DesignUnit* entity_override) {
         auto result = selected;
         if (selected.kind
-            == frontend::UnitKind::VerilogModule) {
+                == frontend::UnitKind::VerilogModule
+            || selected.kind
+                == frontend::UnitKind::SystemVerilogProgram) {
             std::vector<const DesignUnit*> import_stack;
             NamedTypeEnvironment type_environment;
             import_systemverilog_package_items(
@@ -1116,10 +1118,50 @@ using namespace elaboration_detail;
                         connection.span);
                     continue;
                 }
+                const auto actual_view =
+                    systemverilog_interface_modport_views_.find(actual_path);
+                if (actual_view
+                        != systemverilog_interface_modport_views_.end()
+                    && !actual_view->second.empty()
+                    && (port.modport.empty()
+                        || port.modport != actual_view->second)) {
+                  report(
+                      "FSIM-ELAB-SVIFACE-011",
+                      "restricted interface actual '" + actual_path
+                          + "' exposes modport '" + actual_view->second
+                          + "' and cannot bind "
+                          + (port.modport.empty()
+                                 ? "an unrestricted interface port"
+                                 : "different modport '" + port.modport + "'"),
+                      connection.span);
+                  continue;
+                }
                 systemverilog_interface_instances_.insert_or_assign(
                     path + "." + port.name, interface_unit);
+                if (const auto handle =
+                        systemverilog_interface_handles_.find(actual_path);
+                    handle != systemverilog_interface_handles_.end()) {
+                  systemverilog_interface_handles_.insert_or_assign(
+                      path + "." + port.name, handle->second);
+                }
+                if (const auto identity =
+                        systemverilog_interface_parameter_identities_.find(
+                            actual_path);
+                    identity
+                        != systemverilog_interface_parameter_identities_.end()) {
+                  systemverilog_interface_parameter_identities_
+                      .insert_or_assign(path + "." + port.name,
+                                        identity->second);
+                }
                 systemverilog_interface_port_paths_.insert(
                     path + "." + port.name);
+                systemverilog_interface_modport_views_.insert_or_assign(
+                    path + "." + port.name,
+                    !port.modport.empty()
+                        ? port.modport
+                        : actual_view
+                                  != systemverilog_interface_modport_views_.end()
+                            ? actual_view->second : std::string{});
                 const bool forwarded_interface_port =
                     systemverilog_interface_port_paths_.contains(
                         actual_path);
@@ -1307,6 +1349,31 @@ using namespace elaboration_detail;
                     if (member.kind == Kind::Signal) {
                       connect_member(
                           member.name, member.direction, member.span);
+                    } else if (member.kind == Kind::Clocking) {
+                      const auto block = std::ranges::find(
+                          interface_unit.systemverilog_clocking_blocks,
+                          member.name,
+                          &frontend::SystemVerilogClockingBlock::name);
+                      if (block ==
+                          interface_unit.systemverilog_clocking_blocks.end()) {
+                        report(
+                            "FSIM-ELAB-CLOCK-007",
+                            "modport clocking member '" + member.name
+                                + "' was not retained by interface '"
+                                + interface_unit.name + "'",
+                            member.span);
+                        continue;
+                      }
+                      connect_member(
+                          block->name,
+                          frontend::PortDirection::Input,
+                          block->span);
+                      for (const auto& clocking_signal : block->signals) {
+                        connect_member(
+                            block->name + "." + clocking_signal.name,
+                            clocking_signal.direction,
+                            clocking_signal.span);
+                      }
                     } else {
                       connect_callable(
                           member.name,

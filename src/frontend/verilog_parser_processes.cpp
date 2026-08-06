@@ -992,6 +992,28 @@ std::optional<Statement> VerilogParser::parse_statement() {
     return statement;
   }
 
+  if (at(TokenKind::Hash) && at(TokenKind::Hash, 1)) {
+    const auto start = advance();
+    advance();
+    Statement statement;
+    statement.kind = StatementKind::WaitOn;
+    statement.clocking_cycle_delay = true;
+    statement.clocking_cycle_count = parse_expression();
+    if (language_ != Language::SystemVerilog2017) {
+      error(
+          start,
+          "FSIM-SV-SEM-184",
+          "a ## cycle delay requires SystemVerilog-2017");
+    }
+    if (!match(TokenKind::Semicolon)) {
+      if (auto controlled = parse_statement()) {
+        statement.statements.push_back(std::move(*controlled));
+      }
+    }
+    statement.span = span_from(start, previous());
+    return statement;
+  }
+
   if (match(TokenKind::Hash)) {
     const auto start = previous();
     Statement statement;

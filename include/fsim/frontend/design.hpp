@@ -24,6 +24,7 @@ enum class UnitKind {
   SystemVerilogPackage,
   SystemVerilogInterface,
   VerilogModule,
+  SystemVerilogProgram,
 };
 enum class PortDirection {
   Unknown,
@@ -520,6 +521,11 @@ struct Type {
   // Resolved SystemVerilog class handles are nullable and never host pointers.
   std::string systemverilog_class_name;
   std::string systemverilog_class_declaration;
+  // A virtual-interface variable is a nullable handle to one interface
+  // instance, optionally restricted to a named modport view.
+  bool systemverilog_virtual_interface{};
+  std::string systemverilog_interface_type;
+  std::string systemverilog_interface_modport;
   std::vector<SystemVerilogClassTypeActual>
       systemverilog_class_parameter_actuals;
 
@@ -1211,6 +1217,11 @@ struct Statement {
       ProceduralUpdateKind::None};
   std::string procedural_update_operator;
   std::optional<Delay> delay;
+  // A SystemVerilog ## control counts occurrences of the enclosing/default
+  // clocking event rather than project-time ticks. It remains a WaitOn node
+  // so existing suspension and callable-legality checks stay conservative.
+  bool clocking_cycle_delay{};
+  Expression clocking_cycle_count;
   // Static strength for a Verilog continuous/gate/UDP driver. Empty denotes
   // the language default strong0/strong1 contribution.
   std::optional<VerilogDriveStrength> verilog_drive_strength;
@@ -1702,6 +1713,7 @@ enum class SystemVerilogModportMemberKind {
   FunctionExport,
   TaskImport,
   TaskExport,
+  Clocking,
 };
 
 struct SystemVerilogModportMember {
@@ -1715,6 +1727,30 @@ struct SystemVerilogModportMember {
 struct SystemVerilogModport {
   std::string name;
   std::vector<SystemVerilogModportMember> members;
+  SourceSpan span;
+};
+
+struct SystemVerilogClockingSkew {
+  EdgeKind edge{EdgeKind::Any};
+  std::optional<Delay> delay;
+  bool one_step{};
+  SourceSpan span;
+};
+
+struct SystemVerilogClockingSignal {
+  std::string name;
+  PortDirection direction{PortDirection::Unknown};
+  std::optional<SystemVerilogClockingSkew> skew;
+  std::optional<Expression> expression;
+  SourceSpan span;
+};
+
+struct SystemVerilogClockingBlock {
+  std::string name;
+  std::vector<Sensitivity> event;
+  std::optional<SystemVerilogClockingSkew> default_input_skew;
+  std::optional<SystemVerilogClockingSkew> default_output_skew;
+  std::vector<SystemVerilogClockingSignal> signals;
   SourceSpan span;
 };
 
@@ -1948,6 +1984,13 @@ struct DesignUnit {
   // Package export/re-export declarations and interface modport views.
   std::vector<SystemVerilogExport> systemverilog_exports;
   std::vector<SystemVerilogModport> systemverilog_modports;
+  // Clocking declarations are unit-owned for modules, interfaces, and
+  // programs. Later semantic lowering preserves their event and signal view.
+  std::vector<SystemVerilogClockingBlock>
+      systemverilog_clocking_blocks;
+  std::optional<std::string>
+      systemverilog_default_clocking_block;
+  SourceSpan systemverilog_default_clocking_span;
   // Package, module, and interface class declarations in lexical order.
   // Compilation-unit declarations instead live on ParsedDesign.
   std::vector<SystemVerilogClassDeclaration> systemverilog_classes;

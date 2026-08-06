@@ -1358,6 +1358,9 @@ struct Process {
   bool switch_resistive{};
   std::vector<ValueKind> register_value_kinds;
   bool initialize{true};
+  // Program-owned processes execute in the SystemVerilog reactive region
+  // after active/inactive updates and before postponed observation.
+  bool reactive{};
   // A SystemVerilog final process is excluded from ordinary initialization
   // and queued exactly once when ordinary simulation terminates.
   bool final{};

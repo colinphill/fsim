@@ -152,9 +152,10 @@ ownership, and imported callables execute through specialized dotted views.
 Package `export` supports selective, `package::*`, and `*::*` re-export of
 explicitly imported constants, packed types, functions, and tasks with
 transitive visibility, collision checks, cycle rejection, and source/cache
-provenance. Clocking-block modport entries, virtual interfaces, dynamic
-interface arrays, interface classes, and general interface-type expressions
-remain outside this bounded slice.
+provenance. Dynamic interface arrays and general interface-type expressions
+remain outside this bounded slice. Batch 153 supersedes the earlier exclusions
+for clocking-block modport entries, bounded static interface arrays, interface
+classes, and virtual interfaces.
 
 Batch 108 preprocessing/generate status update: the Verilog/SV unit row's
 earlier exclusions for genvar-dependent typed constants and generated type
@@ -1236,8 +1237,9 @@ stale schema, corrupt artifact, and oversized input failures are cataloged and
 transactional.
 
 This is prerequisite value/type infrastructure for UVM, not UVM completion.
-Programs, clocking, SVA/coverage, DPI/VPI, and UVM library/runtime work retain
-their locked Batch 153-162 ownership.
+SVA/coverage, DPI/VPI, and UVM library/runtime work retain their locked
+Batch 154-162 ownership. Program, clocking, and interface closure is complete
+in Batch 153.
 
 ### SystemVerilog class foundation in v2
 
@@ -1371,10 +1373,45 @@ relocated mapped libraries, debugger/callback/VCD surfaces, and cold/warm LLVM
 O0/O2 cache execution preserve this completed substrate.
 
 This is governed procedural infrastructure, not complete SystemVerilog/UVM.
-Programs, clocking blocks and interfaces, SVA/coverage, foreign interfaces,
-and UVM retain their locked later-batch ownership; unrestricted allocation,
-standard descriptor aliases, and ordering `with` clauses on `shuffle()` remain
-outside this slice.
+Batch 153 supersedes this slice's program, clocking-block, and interface
+exclusions. SVA/coverage, foreign interfaces, and UVM retain their locked
+later-batch ownership; unrestricted allocation, standard descriptor aliases,
+and ordering `with` clauses on `shuffle()` remain outside this slice.
+
+### SystemVerilog program, clocking, and interface closure in v2
+
+Batch 153 makes `program` a distinct design-unit kind throughout parsing,
+semantic HIR, root selection, specialization, hierarchy, artifacts, and debug
+identity. Program processes execute in the append-only reactive scheduler
+phase after module updates and before postponed observation. Initial, timed,
+event, sensitivity, delta, fork, and zero-delay resumes retain that ownership;
+module and program final blocks execute exactly once in deterministic
+active/reactive order.
+
+Clocking blocks retain their event, default and per-signal input/output skews,
+edge qualifiers, `#1step`, time delays, aliases, and declared directions on
+modules, interfaces, and programs. Input members sample into owned storage in
+the active region; output members project delayed requests to their driven
+signals. A declared default clock lowers procedural `##` controls to repeated
+clock-event occurrences. Modports may expose the clocking block while
+preserving its event and sampled/driven member views through recursive module
+boundaries.
+
+Virtual-interface variables and class properties retain the concrete
+interface type, parameter actuals, and optional modport restriction. Static
+interface-array elements and recursively forwarded generic or restricted
+ports preserve a deterministic nonzero pointer-free identity. Repeated views
+of one specialization compare equal, distinct elements or specializations
+compare unequal, and a restricted actual cannot widen through a generic port
+or rebind to another modport.
+
+Interpreter and cold/warm LLVM O0/O2 execution agree on program scheduling,
+clock samples, direct and forwarded virtual handles, callbacks, debugger
+identity, and VCD. Owning `.fsimobj`, standalone `.fsimdesign`, relocated
+artifacts, and native-cache reuse preserve the same state. Owning-unit schema
+10, portable-library schema 7, runtime-state schema 17, semantic-state schema
+2, DesignIR-state schema 2, and class-state schema 7 reject future or corrupt
+payloads before publication.
 
 ## v1 target
 
@@ -1414,7 +1451,8 @@ Required for v1:
 - immediate assertions.
 
 Deferred beyond v1: classes, constraints and UVM; concurrent SVA; covergroups;
-DPI/VPI; program and clocking blocks; and SDF annotation.
+DPI/VPI; program and clocking blocks; and SDF annotation. Program and clocking
+blocks are implemented by the v2 Batch 153 profile described above.
 
 ### SystemC
 

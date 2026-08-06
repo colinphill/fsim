@@ -70,6 +70,8 @@ fsim_scheduler_phase_t convert_scheduler_phase(
       return FSIM_SCHEDULER_PHASE_INACTIVE;
     case Phase::update:
       return FSIM_SCHEDULER_PHASE_UPDATE;
+    case Phase::reactive:
+      return FSIM_SCHEDULER_PHASE_REACTIVE;
     case Phase::postponed:
       return FSIM_SCHEDULER_PHASE_POSTPONED;
   }

@@ -52,6 +52,8 @@ std::string unit_kind(const frontend::UnitKind kind) {
       return "interface";
     case frontend::UnitKind::VerilogModule:
       return "module";
+    case frontend::UnitKind::SystemVerilogProgram:
+      return "program";
   }
   return "unit";
 }

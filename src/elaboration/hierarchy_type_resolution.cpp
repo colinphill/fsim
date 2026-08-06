@@ -584,6 +584,12 @@ using namespace elaboration_detail;
                     type.vhdl_resolution_function = element.vhdl_resolution_function;
                 }
             }
+            // A virtual-interface name denotes an interface design-unit type,
+            // not a typedef. Hierarchy elaboration validates its definition,
+            // optional modport, and instance initializer.
+            if (!vhdl && type.systemverilog_virtual_interface) {
+                return true;
+            }
             if (type.named_type.empty()) {
                 return !vhdl
                     || validate_direct_constraints(type);

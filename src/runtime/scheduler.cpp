@@ -11,7 +11,7 @@
 namespace fsim::runtime {
 namespace {
 
-constexpr std::size_t phase_count = 4;
+constexpr std::size_t phase_count = 5;
 
 [[nodiscard]] constexpr std::size_t phase_index(SchedulerPhase phase) {
   return static_cast<std::size_t>(phase);
@@ -127,6 +127,8 @@ const char *phase_name(SchedulerPhase phase) noexcept {
     return "inactive";
   case SchedulerPhase::update:
     return "update";
+  case SchedulerPhase::reactive:
+    return "reactive";
   case SchedulerPhase::postponed:
     return "postponed";
   }

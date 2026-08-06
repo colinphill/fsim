@@ -72,6 +72,86 @@ endmodule
     assert(repeated_result.ok());
     assert(repeated_result.design->specializations().size() == 2);
 
+    auto interface_roots = fsim::frontend::parse_text(
+        "multiple-root-interfaces.sv",
+        R"(
+interface recursive_if #(parameter int WIDTH = 4);
+  logic clock;
+  logic [WIDTH-1:0] data;
+  function automatic logic [WIDTH-1:0] sample();
+    return data;
+  endfunction
+  clocking cb @(posedge clock);
+    input #0 data;
+  endclocking
+  modport view(input data, import function sample, clocking cb);
+endinterface
+module recursive_leaf(recursive_if.view bus);
+  virtual recursive_if #(.WIDTH(4)).view selected = bus;
+endmodule
+module recursive_mid(recursive_if.view bus);
+  recursive_leaf leaf(bus);
+endmodule
+module interface_root;
+  recursive_if #(.WIDTH(4)) link();
+  recursive_mid mid(link);
+  virtual recursive_if #(.WIDTH(4)).view selected = link;
+endmodule
+program program_interface_root;
+  recursive_if #(.WIDTH(8)) link();
+  virtual recursive_if #(.WIDTH(8)).view selected = link;
+endprogram
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    if (!interface_roots.ok()) {
+        for (const auto& diagnostic : interface_roots.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(interface_roots.ok());
+    const std::array interface_root_selection{
+        Root{"interface_root", "module_side"},
+        Root{"program_interface_root", "program_side"}};
+    const auto interface_root_result = elaborate_roots(
+        interface_roots.design, interface_root_selection);
+    if (!interface_root_result.ok()) {
+        for (const auto& diagnostic : interface_root_result.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(interface_root_result.ok());
+    assert((interface_root_result.design->roots()
+            == std::vector<std::string>{"module_side", "program_side"}));
+    const auto module_selected = interface_root_result.design->find_signal(
+        "module_side.selected");
+    const auto recursive_selected = interface_root_result.design->find_signal(
+        "module_side.mid.leaf.selected");
+    const auto program_selected = interface_root_result.design->find_signal(
+        "program_side.selected");
+    const auto forwarded_clock = interface_root_result.design->find_signal(
+        "module_side.mid.bus.cb");
+    const auto forwarded_sample = interface_root_result.design->find_signal(
+        "module_side.mid.bus.cb.data");
+    assert(module_selected);
+    assert(recursive_selected);
+    assert(program_selected);
+    assert(forwarded_clock);
+    assert(forwarded_sample);
+    auto interface_root_interpreter =
+        interface_root_result.design->create_interpreter();
+    const auto module_handle = interface_root_interpreter
+        ->signal_value(*module_selected).low_word();
+    assert(module_handle.aval != 0 && module_handle.bval == 0);
+    assert(interface_root_interpreter
+               ->signal_value(*recursive_selected).low_word()
+           == module_handle);
+    const auto program_handle = interface_root_interpreter
+        ->signal_value(*program_selected).low_word();
+    assert(program_handle.aval != 0 && program_handle.bval == 0
+           && program_handle != module_handle);
+
     auto scalar_roots = fsim::frontend::parse_text(
         "multiple-root-scalars.sv",
         R"(

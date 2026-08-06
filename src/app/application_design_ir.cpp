@@ -1064,6 +1064,7 @@ class DesignIrBuilder final {
       output.name = input.name;
       output.runtime_index = input.id;
       output.initialize = input.initialize;
+      output.reactive = input.reactive;
       output.final = input.final;
       if (source_id) {
         output.source = model_.process_identities()[source_id->value()].source;

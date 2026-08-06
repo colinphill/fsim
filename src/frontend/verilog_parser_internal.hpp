@@ -401,9 +401,17 @@ class VerilogParser final : private detail::ParserBase {
 
   DesignUnit parse_module(
       const Token& start,
-      bool interface_unit = false);
+      UnitKind kind = UnitKind::VerilogModule);
 
   void parse_modport(DesignUnit& unit, const Token& start);
+
+  void parse_clocking_block(DesignUnit& unit, const Token& start);
+
+  void parse_default_clocking(
+      DesignUnit& unit,
+      const Token& start);
+
+  SystemVerilogClockingSkew parse_clocking_skew();
 
   void parse_import_clause(
       std::vector<SystemVerilogImport>& imports,
@@ -590,6 +598,13 @@ class VerilogParser final : private detail::ParserBase {
       const std::size_t offset = 0) const;
 
   Type parse_named_type();
+
+  Type parse_virtual_interface_type(
+      const Token& start);
+
+  void parse_virtual_interface_declaration(
+      DesignUnit& unit,
+      const Token& start);
 
   Type parse_systemverilog_aggregate_type();
   Type parse_systemverilog_enum_type(

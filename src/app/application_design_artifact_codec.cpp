@@ -69,6 +69,14 @@ constexpr bool valid_archive_enum(const T value) noexcept {
   } else if constexpr (std::same_as<T, frontend::PackedAggregateKind>) {
     return value >= frontend::PackedAggregateKind::None
         && value <= frontend::PackedAggregateKind::TaggedUnion;
+  } else if constexpr (
+      std::same_as<T, frontend::SystemVerilogModportMemberKind>) {
+    return value >= frontend::SystemVerilogModportMemberKind::Signal
+        && value <= frontend::SystemVerilogModportMemberKind::Clocking;
+  } else if constexpr (
+      std::same_as<T, semantic::sv::ModportMemberKind>) {
+    return value >= semantic::sv::ModportMemberKind::signal
+        && value <= semantic::sv::ModportMemberKind::clocking;
   } else if constexpr (std::same_as<T, semantic::sv::TypeForm>) {
     return value >= semantic::sv::TypeForm::unresolved
         && value <= semantic::sv::TypeForm::tagged_union;
@@ -115,6 +123,9 @@ auto archive_fields(T& value) {
       value.vhdl_array_constraints, value.systemverilog_container,
       value.systemverilog_class_name,
       value.systemverilog_class_declaration,
+      value.systemverilog_virtual_interface,
+      value.systemverilog_interface_type,
+      value.systemverilog_interface_modport,
       value.systemverilog_class_parameter_actuals);
 }
 

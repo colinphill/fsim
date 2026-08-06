@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Batch 130 Task 9 final release-candidate corpus.
 # Every required row is classified execute and owns nonempty P+/P-/E/R links.
-# matrix-rows: 1170
-# matrix-sha256: 4c9bc37c9076a6e331ab09386c6d2a9437bdf001b7f5a6857208386bcc274ba6
-# evidence-slots: 4680
+# matrix-rows: 1180
+# matrix-sha256: 28623705ee34643f345c98f226b513af67d217adf84618b7c5d89a6160c18cb2
+# evidence-slots: 4720
 # evidence-paths: 414
 # evidence-sha256: c76f1dbfecd0fc5392f2f7108da2f2d5c06830cd2777952d833821241d8e1fa5
 # test-evidence-paths: 187
 # production-evidence-paths: 211
 # release-evidence-paths: 16
-# runtime-evidence-paths: 112
+# runtime-evidence-paths: 113
 # corpus-ctests: 36
 # required-status: execute
 #
@@ -34,3 +34,8 @@
 # Batch 152 advances the frozen matrix to 1170 rows. LLVM-disabled ASan/UBSan
 # passes 109/109, and exact LLVM 22.1.8 Debug/Release pass 112/112. Hosted-CI
 # inspection remains the final Change 20 monitoring-boundary action.
+#
+# Batch 153 advances the reviewed matrix to 1180 rows and 4720 evidence cells
+# across the same 414 exact paths, with 113 runtime owners. Its Change 20 gate
+# is local non-sanitized Debug/Release; hosted CI is intentionally not
+# monitored at this batch boundary.

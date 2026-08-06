@@ -113,6 +113,26 @@ void ApplicationTestFixture::test_class_simulation_integration() {
           restored_wide != restored_derived->properties.end()
           && restored_wide->bit_width == 137
           && restored_wide->type.width() == 137);
+      const auto restored_interface = std::ranges::find(
+          restored_derived->properties,
+          std::string{"interface_view"},
+          &fsim::frontend::SystemVerilogClassPropertyLayout::name);
+      assert(
+          restored_interface != restored_derived->properties.end()
+          && restored_interface->bit_width == 64
+          && restored_interface->type.systemverilog_virtual_interface
+          && restored_interface->type.systemverilog_interface_type
+              == "class_view_if"
+          && restored_interface->type.systemverilog_interface_modport
+              == "view"
+          && restored_interface->type
+                 .systemverilog_class_parameter_actuals.size() == 1
+          && restored_interface->type
+                 .systemverilog_class_parameter_actuals.front().name
+              == std::optional<std::string>{"WIDTH"}
+          && restored_interface->type
+                 .systemverilog_class_parameter_actuals.front().value.text
+              == "4");
       auto malformed_classes = *restored;
       auto malformed_derived = std::ranges::find(
           malformed_classes,

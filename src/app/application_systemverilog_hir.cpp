@@ -16,6 +16,8 @@ namespace sv = semantic::sv;
       return sv::UnitKind::package;
     case frontend::UnitKind::SystemVerilogInterface:
       return sv::UnitKind::interface;
+    case frontend::UnitKind::SystemVerilogProgram:
+      return sv::UnitKind::program;
     default:
       return sv::UnitKind::module;
   }
@@ -1503,6 +1505,9 @@ class SystemVerilogHirBuilder final {
             break;
           case frontend::SystemVerilogModportMemberKind::TaskExport:
             kind = sv::ModportMemberKind::task_export;
+            break;
+          case frontend::SystemVerilogModportMemberKind::Clocking:
+            kind = sv::ModportMemberKind::clocking;
             break;
         }
         modport.members.push_back({
