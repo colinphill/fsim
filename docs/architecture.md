@@ -866,9 +866,43 @@ invalid scalar enumeration values before publishing an artifact. Standalone
 flows therefore share producer-independent canonical identities.
 
 This closes the scalar substrate needed by later language work, but it is not
-UVM closure. Arbitrary-width packed values, remaining aggregate/procedural
-surface, SVA, covergroups, DPI/VPI/VHPI, and the UVM library/runtime are owned
-by locked Batches 151-162.
+UVM closure. Arbitrary-width packed values are closed by Batch 151 and the
+remaining governed unpacked-data/file/procedural substrate by Batch 152. SVA,
+covergroups, DPI/VPI/VHPI, and the UVM library/runtime retain their locked
+later-batch ownership.
+
+### SystemVerilog unpacked data and procedural closure
+
+Batch 152 extends the owning runtime value graph instead of flattening
+unpacked values into host memory. Multidimensional prefix selections retain
+their remaining rank and declared shapes; range and indexed slices adapt equal
+dimension counts and snapshot overlapping copies before publication. Named
+and anonymous unpacked structs/unions, strings, nested containers, and
+assignment-pattern defaults remain recursively typed. Integral- and
+strict-UTF-8-string-index associative arrays keep deterministic key order and
+checked storage ownership. The same profile walker provides recursive
+packing for admitted VHDL/SystemVerilog fixed-container ports and for bounded
+aggregate memory-file transfers.
+
+Runtime-valued integral and real delays carry a typed source register,
+timeunit scale, and timeprecision quantum into `WaitFor`. General edge
+expressions retain deduplicated signal dependencies and a four-state baseline;
+runtime-selected force/release captures one checked declared-range offset.
+Callable activations capture nonlocal ref selections once, nested static locals
+bind by declaration identity, and simultaneous fork-site activations use
+generation-safe process handles. Typed mailbox and semaphore handles own
+bounded FIFO storage and waiter queues. Named-event wakeups and deterministic
+container `shuffle()` share stable scheduler order and the process random
+stream.
+
+Cancelable scheduler handles carry an owner token and remain live only while
+their task is pending. Execution, cancellation, discard, and owner destruction
+invalidate them; foreign or moved-from schedulers cannot cancel work. Callback
+failure restores the scheduler run state and leaves later callbacks resumable.
+Runtime-state schema 16 and native-object schema 87 preserve and separate this
+append-only operation set. Standalone designs, relocated mapped libraries,
+debugger/callback/VCD paths, and cold/warm LLVM O0/O2 reuse validate the same
+state before publication.
 
 ## Runtime values
 

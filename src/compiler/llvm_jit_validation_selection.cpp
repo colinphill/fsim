@@ -147,14 +147,20 @@ validate_selection_operation_bounds(
                    fsim::runtime::simir::operation_get_if<ForceSignalSlice>(&operation)) {
       const auto target_width = signal_widths[force->signal];
       const auto source_width = register_widths[force->source];
-      if (force->offset > target_width
+      if (force->selection) {
+        error = validate_dynamic_index_bounds(
+            *force->selection, target_width);
+      } else if (force->offset > target_width
           || source_width > target_width - force->offset) {
         error = "ForceSignalSlice range is outside its signal";
       }
     } else if (const auto* release =
                    fsim::runtime::simir::operation_get_if<ReleaseSignalSlice>(&operation)) {
       const auto target_width = signal_widths[release->signal];
-      if (release->offset > target_width
+      if (release->selection) {
+        error = validate_dynamic_index_bounds(
+            *release->selection, target_width);
+      } else if (release->offset > target_width
           || release->width > target_width - release->offset) {
         error = "ReleaseSignalSlice range is outside its signal";
       }

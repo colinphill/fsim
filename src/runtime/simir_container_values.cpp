@@ -9,7 +9,7 @@ namespace {
 
 [[nodiscard]] bool aggregate_box(const ContainerType& type) noexcept {
   return type.element_kind == ContainerElementKind::Aggregate
-      && !type.queue && !type.associative && !type.fixed;
+      && type.aggregate_value;
 }
 
 [[nodiscard]] ContainerType aggregate_element_type(
@@ -18,6 +18,7 @@ namespace {
   result.queue = false;
   result.associative = false;
   result.fixed = false;
+  result.aggregate_value = true;
   result.maximum_elements.reset();
   result.dimensions.clear();
   result.index_left = 0;
@@ -132,6 +133,11 @@ std::size_t container_value_storage_bytes(const ContainerValue& value) {
       value.elements.size() * sizeof(PackedLogic4),
       value.keys.size() * sizeof(PackedLogic4));
   result = checked_storage_add(
+      result, value.string_keys.size() * sizeof(std::string));
+  for (const auto& key : value.string_keys) {
+    result = checked_storage_add(result, key.size());
+  }
+  result = checked_storage_add(
       result, value.string_elements.size() * sizeof(std::string));
   for (const auto& element : value.string_elements) {
     result = checked_storage_add(result, element.size());
@@ -178,6 +184,14 @@ void validate_container_value(const ContainerValue& value) {
     throw std::invalid_argument{
         "SimIR aggregate container member profile is invalid"};
   }
+  if (value.type.aggregate_value
+      && (value.type.element_kind != ContainerElementKind::Aggregate
+          || value.type.queue || value.type.associative
+          || value.type.fixed || value.type.maximum_elements
+          || !value.type.dimensions.empty())) {
+    throw std::invalid_argument{
+        "SimIR aggregate value profile is invalid"};
+  }
   const auto size = active_element_count(value);
   if (size > maximum_container_elements(value.type)
       || (value.type.maximum_elements
@@ -207,28 +221,56 @@ void validate_container_value(const ContainerValue& value) {
     }
   }
   if (value.type.associative) {
-    if (value.type.index_width == 0 || value.type.index_width > 64) {
+    if (!value.type.string_indices
+        && (value.type.index_width == 0
+            || value.type.index_width > 64)) {
       throw std::invalid_argument{
           "SimIR associative-array index width must be in 1..64"};
     }
-    if (value.keys.size() != size) {
+    if ((value.type.string_indices
+             ? value.string_keys.size() : value.keys.size()) != size) {
       throw std::invalid_argument{
           "SimIR associative-array keys and elements must be paired"};
     }
-    for (std::size_t index = 0; index < value.keys.size(); ++index) {
-      const auto& key = value.keys[index];
-      if (key.width() != value.type.index_width
-          || key.is_logic9() || key.low_word().bval != 0) {
+    if (value.type.string_indices) {
+      if (!value.keys.empty()) {
         throw std::invalid_argument{
-            "SimIR associative-array key does not match its type"};
+            "string-indexed SimIR associative array has packed keys"};
       }
-      if (index != 0
-          && !key_less(value.type, value.keys[index - 1], key)) {
+      for (std::size_t index = 0;
+           index < value.string_keys.size(); ++index) {
+        const auto& key = value.string_keys[index];
+        if (key.size() > maximum_string_bytes
+            || !runtime::systemverilog_string_is_valid(key)) {
+          throw std::invalid_argument{
+              "SimIR associative-array string key is invalid"};
+        }
+        if (index != 0
+            && !(value.string_keys[index - 1] < key)) {
+          throw std::invalid_argument{
+              "SimIR associative-array string keys must be unique and ordered"};
+        }
+      }
+    } else {
+      if (!value.string_keys.empty()) {
         throw std::invalid_argument{
-            "SimIR associative-array keys must be unique and ordered"};
+            "integral-indexed SimIR associative array has string keys"};
+      }
+      for (std::size_t index = 0; index < value.keys.size(); ++index) {
+        const auto& key = value.keys[index];
+        if (key.width() != value.type.index_width
+            || key.is_logic9() || key.low_word().bval != 0) {
+          throw std::invalid_argument{
+              "SimIR associative-array key does not match its type"};
+        }
+        if (index != 0
+            && !key_less(value.type, value.keys[index - 1], key)) {
+          throw std::invalid_argument{
+              "SimIR associative-array keys must be unique and ordered"};
+        }
       }
     }
-  } else if (!value.keys.empty()) {
+  } else if (!value.keys.empty() || !value.string_keys.empty()) {
     throw std::invalid_argument{
         "non-associative SimIR containers cannot contain keys"};
   }

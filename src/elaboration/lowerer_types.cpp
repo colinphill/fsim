@@ -1649,7 +1649,15 @@ using namespace elaboration_detail;
                                 variable.span.begin.column)}});
                 if (variable.initializer) {
                     const auto value =
-                        type->fixed
+                        variable.initializer->kind
+                                    == ExpressionKind::Aggregate
+                                && variable.initializer->text
+                                    == "sv-pattern"
+                            ? lower_container_pattern(
+                                  *variable.initializer,
+                                  variable.type,
+                                  *type)
+                            : type->fixed
                             ? lower_static_container_assignment_value(
                                   *variable.initializer, *type)
                             : lower_container_expression(

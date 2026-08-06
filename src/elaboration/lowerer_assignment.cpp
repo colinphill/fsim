@@ -222,8 +222,111 @@ void Lowerer::validate_read_only_signal_writes(
                     ? std::optional<ContainerObjectId>{
                           container_object->second}
                     : std::nullopt;
+            if (lower_unpacked_aggregate_assignment(
+                    statement, *source_type, target, object)) {
+                return;
+            }
             if (lower_multidimensional_container_assignment(
                     statement, *source_type, target, object)) {
+                return;
+            }
+            if (statement.target.kind == ExpressionKind::Index
+                && statement.target.operands.size() == 2
+                && statement.target.operands.front().kind
+                    == ExpressionKind::Index
+                && statement.target.operands.front().operands.size() == 2
+                && runtime_type->element_kind
+                    == ContainerElementKind::Container
+                && runtime_type->element_types.size() == 1
+                && runtime_type->element_types.front().element_kind
+                    == ContainerElementKind::String) {
+                const auto& nested_type =
+                    runtime_type->element_types.front();
+                const auto& outer_index_expression =
+                    statement.target.operands.front().operands[1];
+                const auto& inner_index_expression =
+                    statement.target.operands[1];
+                const auto outer_index_width =
+                    runtime_type->associative
+                        ? static_cast<std::size_t>(
+                              runtime_type->index_width)
+                        : runtime_type->fixed
+                              ? std::size_t{32}
+                              : infer_width(outer_index_expression)
+                                    .value_or(32U);
+                auto outer_index = lower_expression(
+                    outer_index_expression,
+                    outer_index_width,
+                    runtime_type->associative
+                        ? source_type->systemverilog_container
+                              ->associative_index_type.get()
+                        : nullptr);
+                const auto inner_index_width = nested_type.associative
+                    ? static_cast<std::size_t>(nested_type.index_width)
+                    : nested_type.fixed
+                          ? std::size_t{32}
+                          : infer_width(inner_index_expression)
+                                .value_or(32U);
+                const auto& nested_source_type =
+                    source_type->systemverilog_container
+                        ->element_types.front();
+                auto inner_index = lower_expression(
+                    inner_index_expression,
+                    inner_index_width,
+                    nested_type.associative
+                            && nested_source_type.systemverilog_container
+                        ? nested_source_type.systemverilog_container
+                              ->associative_index_type.get()
+                        : nullptr);
+                const auto value =
+                    lower_string_expression(statement.value);
+                if (!outer_index || !inner_index || !value) {
+                    return;
+                }
+                if (runtime_type->associative
+                    && register_width(*outer_index)
+                        != runtime_type->index_width) {
+                    *outer_index = resize_register(
+                        *outer_index,
+                        runtime_type->index_width,
+                        runtime_type->signed_indices);
+                }
+                if (nested_type.associative
+                    && register_width(*inner_index)
+                        != nested_type.index_width) {
+                    *inner_index = resize_register(
+                        *inner_index,
+                        nested_type.index_width,
+                        nested_type.signed_indices);
+                }
+                const auto nested =
+                    allocate_container_register(nested_type);
+                const auto outer_signed = runtime_type->associative
+                    ? runtime_type->signed_indices
+                    : runtime_type->fixed
+                          || is_signed_expression(
+                              outer_index_expression);
+                process_.operations.emplace_back(
+                    ContainerElementRead{
+                        nested, target, *outer_index,
+                        outer_signed});
+                process_.operations.emplace_back(
+                    ContainerStringWrite{
+                        nested, *inner_index, *value,
+                        nested_type.associative
+                            ? nested_type.signed_indices
+                            : nested_type.fixed
+                                  || is_signed_expression(
+                                      inner_index_expression),
+                        false});
+                process_.operations.emplace_back(
+                    ContainerElementWrite{
+                        target, *outer_index, nested,
+                        outer_signed});
+                if (object) {
+                    process_.operations.emplace_back(
+                        WriteContainerObject{*object, target});
+                }
                 return;
             }
             if (packed_selections.size() > 1) {
@@ -289,7 +392,56 @@ void Lowerer::validate_read_only_signal_writes(
             } else if (
                 statement.target.kind == ExpressionKind::Index
                 && statement.target.operands.size() == 2) {
-                if (!element_width) {
+                if (runtime_type->element_kind
+                        == ContainerElementKind::Container
+                    && runtime_type->element_types.size() == 1) {
+                    const auto index_width = runtime_type->associative
+                        ? static_cast<std::size_t>(
+                              runtime_type->index_width)
+                        : runtime_type->fixed
+                              ? std::size_t{32}
+                              : infer_width(
+                                    statement.target.operands[1])
+                                    .value_or(32U);
+                    auto index = lower_expression(
+                        statement.target.operands[1], index_width,
+                        runtime_type->associative
+                            ? source_type->systemverilog_container
+                                  ->associative_index_type.get()
+                            : nullptr);
+                    if (!index) {
+                        return;
+                    }
+                    if (runtime_type->associative
+                        && register_width(*index)
+                            != runtime_type->index_width) {
+                        *index = resize_register(
+                            *index,
+                            runtime_type->index_width,
+                            runtime_type->signed_indices);
+                    }
+                    const auto nested = allocate_container_register(
+                        runtime_type->element_types.front());
+                    lower_nonstatic_container_assignment(
+                        nested, statement.value,
+                        runtime_type->element_types.front());
+                    process_.operations.emplace_back(
+                        ContainerElementWrite{
+                            target, *index, nested,
+                            runtime_type->associative
+                                ? runtime_type->signed_indices
+                                : runtime_type->fixed
+                                      || is_signed_expression(
+                                          statement.target.operands[1])});
+                    if (object) {
+                        process_.operations.emplace_back(
+                            WriteContainerObject{*object, target});
+                    }
+                    return;
+                }
+                if (!element_width
+                    && runtime_type->element_kind
+                        != ContainerElementKind::String) {
                     report(
                         "FSIM-ELAB-SVCONTAINER-024",
                         "selected string, nested-container, and unpacked "
@@ -312,10 +464,51 @@ void Lowerer::validate_read_only_signal_writes(
                         ? source_type->systemverilog_container
                               ->associative_index_type.get()
                         : nullptr;
-                auto index = lower_expression(
-                    statement.target.operands[1],
-                    index_width,
-                    index_type);
+                const bool string_index =
+                    runtime_type->associative
+                    && runtime_type->string_indices;
+                auto index = string_index
+                    ? lower_string_expression(
+                          statement.target.operands[1])
+                    : lower_expression(
+                          statement.target.operands[1],
+                          index_width, index_type);
+                if (runtime_type->element_kind
+                    == ContainerElementKind::String) {
+                    const auto value =
+                        lower_string_expression(statement.value);
+                    if (!index || !value) {
+                        return;
+                    }
+                    if (runtime_type->associative
+                        && !string_index
+                        && register_width(*index)
+                            != runtime_type->index_width) {
+                        *index = resize_register(
+                            *index,
+                            runtime_type->index_width,
+                            runtime_type->signed_indices);
+                    }
+                    process_.operations.emplace_back(
+                        ContainerStringWrite{
+                            target,
+                            *index,
+                            *value,
+                            runtime_type->associative
+                                ? runtime_type->signed_indices
+                                : runtime_type->fixed
+                                      || is_signed_expression(
+                                          statement.target.operands[1]),
+                            false,
+                            string_index});
+                    if (container_object
+                        != container_objects_.end()) {
+                        process_.operations.emplace_back(
+                            WriteContainerObject{
+                                container_object->second, target});
+                    }
+                    return;
+                }
                 auto element_type = *source_type;
                 if (source_type->systemverilog_container
                     && source_type->systemverilog_container
@@ -325,18 +518,23 @@ void Lowerer::validate_read_only_signal_writes(
                 } else {
                     element_type.systemverilog_container.reset();
                 }
+                const auto packed_element_width =
+                    runtime_type->element_width;
                 auto value = lower_expression(
-                    statement.value, *element_width, &element_type);
+                    statement.value,
+                    packed_element_width,
+                    &element_type);
                 if (!index || !value) {
                     return;
                 }
-                if (register_width(*value) != *element_width) {
+                if (register_width(*value) != packed_element_width) {
                     *value = resize_register(
                         *value,
-                        *element_width,
+                        packed_element_width,
                         is_signed_expression(statement.value));
                 }
                 if (runtime_type->associative
+                    && !string_index
                     && register_width(*index)
                         != runtime_type->index_width) {
                     *index = resize_register(
@@ -353,7 +551,9 @@ void Lowerer::validate_read_only_signal_writes(
                             ? runtime_type->signed_indices
                             : runtime_type->fixed
                                   || is_signed_expression(
-                                      statement.target.operands[1])});
+                                      statement.target.operands[1]),
+                        false,
+                        string_index});
             } else if (
                 statement.target.kind == ExpressionKind::Slice
                 && statement.target.operands.size() == 3) {
@@ -864,8 +1064,9 @@ void Lowerer::validate_read_only_signal_writes(
             if (procedural_delay) {
                 emit_debug_point(
                     DebugPointKind::wait, statement.span);
-                process_.operations.emplace_back(
-                    WaitFor{statement.delay->magnitude});
+                if (!lower_delay_wait(*statement.delay, statement.span)) {
+                    return;
+                }
             }
             if (dynamic_part_selection) {
                 process_.operations.emplace_back(DynamicPartInsert{
@@ -1278,8 +1479,9 @@ void Lowerer::validate_read_only_signal_writes(
             && statement.assignment_kind == AssignmentKind::Blocking) {
             emit_debug_point(
                 DebugPointKind::wait, statement.span);
-            process_.operations.emplace_back(
-                WaitFor{statement.delay->magnitude});
+            if (!lower_delay_wait(*statement.delay, statement.span)) {
+                return;
+            }
             if (dynamic_part_selection) {
                 process_.operations.emplace_back(
                     WriteBlockingDynamicPartSlice{

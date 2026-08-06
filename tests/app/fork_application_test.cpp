@@ -27,6 +27,7 @@ struct TemporaryDirectory {
 struct Capture {
   fsim::runtime::RunResult result;
   std::string value;
+  std::string lifecycle;
   std::string local;
   std::string vcd;
   std::vector<fsim::runtime::simir::ExecutionPoint> points;
@@ -77,6 +78,9 @@ Capture execute(
   const auto result =
       simulation.find_signal("fork_processes.result");
   assert(result);
+  const auto lifecycle =
+      simulation.find_signal("fork_processes.lifecycle");
+  assert(lifecycle);
   const auto& process = simulation.design().processes().front();
   const auto local = std::find_if(
       process.debug_locals.begin(), process.debug_locals.end(),
@@ -119,6 +123,8 @@ Capture execute(
       });
   capture.result = simulation.run();
   capture.value = simulation.read_signal(*result).to_msb_string();
+  capture.lifecycle =
+      simulation.read_signal(*lifecycle).to_msb_string();
   capture.local =
       simulation.read_process_local(0, local_index).to_msb_string();
   vcd.flush();
@@ -142,6 +148,7 @@ void test_optimization(
         capture->result.status == fsim::runtime::RunStatus::stopped
         && capture->result.time == 11
         && capture->value == "10111111"
+        && capture->lifecycle == "0001110010000010"
         && capture->local == "10111111"
         && capture->child_debug_safe);
     assert(std::any_of(
@@ -174,6 +181,9 @@ int main() {
     output << R"(
 module fork_processes;
   logic [7:0] result;
+  logic [15:0] lifecycle;
+  process handle;
+  process killed_handle;
   initial begin : root
     logic [7:0] shared = 0;
     result = 0;
@@ -194,7 +204,36 @@ module fork_processes;
     shared[7] = 1;
     disable fork;
     result = shared;
-    #6;
+    lifecycle = 0;
+    fork
+      begin
+        handle = process::self();
+        #2;
+      end
+    join_none
+    #0;
+    lifecycle[2:0] = handle.status();
+    lifecycle[3] = handle.completed();
+    handle.await();
+    lifecycle[6:4] = handle.status();
+    lifecycle[7] = handle.completed();
+    fork
+      begin
+        killed_handle = process::self();
+        #10;
+      end
+    join_none
+    #0;
+    killed_handle.kill();
+    lifecycle[10:8] = killed_handle.status();
+    lifecycle[11] = killed_handle.completed();
+    repeat (2) begin
+      fork
+        #3 lifecycle[12] = 1;
+      join_none
+    end
+    wait fork;
+    #1;
     $finish;
   end
 endmodule

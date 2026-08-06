@@ -1274,7 +1274,7 @@ endmodule
           [](const fsim::diagnostic::Diagnostic& diagnostic) {
             return diagnostic.code == "FSIM-ELAB-SVDELAY-001";
           })
-      == 2);
+      == 1);
   assert(
       std::ranges::any_of(
           diagnostics.diagnostics(),

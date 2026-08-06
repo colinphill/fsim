@@ -56,12 +56,6 @@ std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
       }
     } else {
       sensitivity.expression = std::move(expression);
-      if (edge != EdgeKind::Any) {
-        error(
-            previous(), "FSIM-SV-SEM-104",
-            "edge-qualified event expressions must be direct scalar "
-            "signals in this bounded event-control slice");
-      }
     }
     sensitivities.push_back(std::move(sensitivity));
     if (match(TokenKind::Comma) || match_keyword("or")) {
@@ -75,17 +69,6 @@ std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
     error(
         previous(), "FSIM-SV-PARSE-136",
         "an event control requires at least one event expression");
-  }
-  if (sensitivities.size() != 1
-      && std::ranges::any_of(
-          sensitivities,
-          [](const Sensitivity& sensitivity) {
-            return sensitivity.expression.valid();
-          })) {
-    error(
-        previous(), "FSIM-SV-SEM-105",
-        "a general packed event expression cannot be mixed with other "
-        "event-list items in this bounded slice");
   }
   return sensitivities;
 }

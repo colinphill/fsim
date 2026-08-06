@@ -16,6 +16,16 @@ bool Lowerer::is_string_expression(
             && object_type(expression.text)->domain
                 == frontend::ValueDomain::String);
   }
+  if (expression.kind == ExpressionKind::Index
+      && expression.operands.size() == 2
+      && container_expression_type(expression) == nullptr) {
+    const auto* type =
+        container_expression_type(expression.operands.front());
+    return type != nullptr && type->systemverilog_container
+        && type->systemverilog_container->element_types.size() == 1
+        && type->systemverilog_container->element_types.front().domain
+            == frontend::ValueDomain::String;
+  }
   if (expression.kind == ExpressionKind::Concatenation
       || (expression.kind == ExpressionKind::Binary
           && expression.text == "&")) {
@@ -99,6 +109,86 @@ Lowerer::lower_string_expression(
         "unknown string object '" + expression.text + "'",
         expression.span);
     return std::nullopt;
+  }
+  if (expression.kind == ExpressionKind::Index
+      && expression.operands.size() == 2
+      && is_string_expression(expression)) {
+    const auto* type =
+        container_expression_type(expression.operands.front());
+    if (type == nullptr || !type->systemverilog_container) {
+      return std::nullopt;
+    }
+    const auto rank =
+        type->systemverilog_container->static_range_expressions.size();
+    std::size_t selected_dimensions{};
+    for (const Expression* selected = &expression;
+         selected->kind == ExpressionKind::Index
+             && selected->operands.size() == 2;
+         selected = &selected->operands.front()) {
+      ++selected_dimensions;
+    }
+    if (rank > 1 && selected_dimensions == rank) {
+      const Expression* base = &expression;
+      while (base->kind == ExpressionKind::Index
+             && base->operands.size() == 2) {
+        base = &base->operands.front();
+      }
+      const auto source = lower_container_expression(*base);
+      const auto index =
+          lower_multidimensional_index(expression, *type);
+      if (!source || !index) {
+        return std::nullopt;
+      }
+      const auto destination = allocate_string_register();
+      process_.operations.emplace_back(ContainerStringRead{
+          destination, *source, *index, true, true});
+      return destination;
+    }
+    const auto runtime_type =
+        container_expression_runtime_type(expression.operands.front());
+    const auto source =
+        lower_container_expression(expression.operands.front());
+    if (!runtime_type || !source
+        || runtime_type->element_kind
+            != ContainerElementKind::String) {
+      return std::nullopt;
+    }
+    const auto index_width = runtime_type->associative
+        ? static_cast<std::size_t>(runtime_type->index_width)
+        : runtime_type->fixed
+              ? std::size_t{32}
+              : infer_width(expression.operands[1]).value_or(32U);
+    const bool string_index =
+        runtime_type->associative
+        && runtime_type->string_indices;
+    auto index = string_index
+        ? lower_string_expression(expression.operands[1])
+        : lower_expression(
+              expression.operands[1], index_width,
+              runtime_type->associative
+                  ? type->systemverilog_container
+                        ->associative_index_type.get()
+                  : nullptr);
+    if (!index) {
+      return std::nullopt;
+    }
+    if (runtime_type->associative
+        && !string_index
+        && register_width(*index) != runtime_type->index_width) {
+      *index = resize_register(
+          *index, runtime_type->index_width,
+          runtime_type->signed_indices);
+    }
+    const auto destination = allocate_string_register();
+    process_.operations.emplace_back(ContainerStringRead{
+        destination, *source, *index,
+        runtime_type->associative
+            ? runtime_type->signed_indices
+            : runtime_type->fixed
+                  || is_signed_expression(expression.operands[1]),
+        false,
+        string_index});
+    return destination;
   }
   if (expression.kind == ExpressionKind::Concatenation
       || (expression.kind == ExpressionKind::Binary

@@ -39,19 +39,45 @@ namespace {
       && lhs.signed_elements == rhs.signed_elements;
 }
 
+[[nodiscard]] std::uint64_t dimension_count(
+    const ContainerDimension& dimension) {
+  return static_cast<std::uint64_t>(
+      static_cast<std::int64_t>(
+          std::max(dimension.first, dimension.second))
+      - std::min(dimension.first, dimension.second) + 1);
+}
+
+[[nodiscard]] bool same_static_shape(
+    const ContainerType& lhs,
+    const ContainerType& rhs) {
+  if (!lhs.fixed || !rhs.fixed
+      || lhs.dimensions.size() != rhs.dimensions.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < lhs.dimensions.size(); ++index) {
+    if (dimension_count(lhs.dimensions[index])
+        != dimension_count(rhs.dimensions[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 bool Lowerer::is_static_container_slice_candidate(
     const Expression& expression) const {
   if (expression.kind != ExpressionKind::Slice
-      || expression.operands.size() != 3
-      || expression.operands.front().kind
-          != ExpressionKind::Identifier) {
+      || expression.operands.size() != 3) {
     return false;
   }
-  const auto& base = expression.operands.front().text;
-  return container_locals_.contains(base)
-      || container_objects_.contains(base);
+  if (expression.operands.front().kind
+          != ExpressionKind::Identifier
+      && expression.operands.front().kind
+          != ExpressionKind::Index) {
+    return false;
+  }
+  return container_expression_type(expression.operands.front()) != nullptr;
 }
 
 std::optional<Lowerer::StaticContainerSlice>
@@ -61,9 +87,7 @@ Lowerer::static_container_slice(
       || (expression.text != ":"
           && expression.text != "+:"
           && expression.text != "-:")
-      || expression.operands.size() != 3
-      || expression.operands.front().kind
-          != ExpressionKind::Identifier) {
+      || expression.operands.size() != 3) {
     report(
         "FSIM-ELAB-SVSLICE-001",
         "an unpacked-array slice requires a direct static-array "
@@ -73,31 +97,14 @@ Lowerer::static_container_slice(
   }
 
   const auto& base = expression.operands.front();
-  const auto* frontend_type = object_type(base.text);
-  if (frontend_type == nullptr
-      || !frontend_type->systemverilog_container) {
-    report(
-        "FSIM-ELAB-SVSLICE-001",
-        "an unpacked-array slice requires a direct static-array "
-        "object",
-        base.span);
-    return std::nullopt;
-  }
   const auto base_type =
-      container_type(*frontend_type, base.span);
+      container_expression_runtime_type(base);
   if (!base_type || !base_type->fixed) {
     report(
         "FSIM-ELAB-SVSLICE-001",
-        "unpacked slicing is limited to one-dimensional static "
-        "arrays",
-        expression.span);
-    return std::nullopt;
-  }
-  if (base_type->dimensions.size() > 1) {
-    report(
-        "FSIM-ELAB-SVSLICE-001",
-        "unpacked slicing is limited to one-dimensional static arrays",
-        expression.span);
+        "an unpacked-array slice requires a fixed static-array or "
+        "remaining-rank subarray value",
+        base.span);
     return std::nullopt;
   }
   if (base_type->element_kind != ContainerElementKind::Packed
@@ -213,10 +220,9 @@ Lowerer::static_container_slice(
       static_cast<std::int32_t>(left);
   selected_type.index_right =
       static_cast<std::int32_t>(right);
-  selected_type.dimensions = {
-      ContainerDimension{
-          selected_type.index_left,
-          selected_type.index_right}};
+  selected_type.dimensions.front() = ContainerDimension{
+      selected_type.index_left,
+      selected_type.index_right};
   return StaticContainerSlice{
       *base_type, std::move(selected_type)};
 }
@@ -226,42 +232,86 @@ void Lowerer::copy_static_container_ordinals(
     const ContainerType& destination_range,
     const ContainerRegisterId source,
     const ContainerType& source_range) {
-  const auto count = static_element_count(source_range);
-  for (std::uint64_t ordinal = 0;
-       ordinal < count;
-       ++ordinal) {
-    const auto source_index =
-        allocate_register(32, frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(LoadConstant{
-        source_index,
-        unsigned_value(
-            static_cast<std::uint32_t>(
-                ordinal_index(source_range, ordinal)),
-            32)});
-    const auto value = allocate_register(
-        source_range.element_width,
-        source_range.two_state
-            ? frontend::ValueDomain::Bit2
-            : frontend::ValueDomain::Logic4);
-    process_.operations.emplace_back(ContainerRead{
-        value, source, source_index, true});
-
-    const auto destination_index =
-        allocate_register(32, frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(LoadConstant{
-        destination_index,
-        unsigned_value(
-            static_cast<std::uint32_t>(
-                ordinal_index(destination_range, ordinal)),
-            32)});
-    process_.operations.emplace_back(ContainerWrite{
-        destination, destination_index, value, true});
+  const auto& destination_type =
+      process_.container_register_types.at(destination);
+  const auto& source_type =
+      process_.container_register_types.at(source);
+  if (destination_type.dimensions.size() <= 1
+      && source_type.dimensions.size() <= 1) {
+    const auto count = static_element_count(source_range);
+    for (std::uint64_t ordinal = 0; ordinal < count; ++ordinal) {
+      const auto source_index =
+          allocate_register(32, frontend::ValueDomain::Bit2);
+      process_.operations.emplace_back(LoadConstant{
+          source_index,
+          unsigned_value(
+              static_cast<std::uint32_t>(
+                  ordinal_index(source_range, ordinal)),
+              32)});
+      const auto value = allocate_register(
+          source_range.element_width,
+          source_range.two_state
+              ? frontend::ValueDomain::Bit2
+              : frontend::ValueDomain::Logic4);
+      process_.operations.emplace_back(ContainerRead{
+          value, source, source_index, true});
+      const auto destination_index =
+          allocate_register(32, frontend::ValueDomain::Bit2);
+      process_.operations.emplace_back(LoadConstant{
+          destination_index,
+          unsigned_value(
+              static_cast<std::uint32_t>(
+                  ordinal_index(destination_range, ordinal)),
+              32)});
+      process_.operations.emplace_back(ContainerWrite{
+          destination, destination_index, value, true});
+    }
+    return;
   }
+  const auto trailing_count = [](const ContainerType& type) {
+    std::uint64_t result = 1;
+    for (std::size_t index = 1;
+         index < type.dimensions.size(); ++index) {
+      result *= dimension_count(type.dimensions[index]);
+    }
+    return result;
+  };
+  const auto linear_base =
+      [&](const ContainerType& actual,
+          const ContainerType& selected) {
+        const auto outer_ordinal = static_cast<std::uint64_t>(
+            actual.index_left >= actual.index_right
+                ? static_cast<std::int64_t>(actual.index_left)
+                      - selected.index_left
+                : static_cast<std::int64_t>(selected.index_left)
+                      - actual.index_left);
+        const auto result =
+            allocate_register(32, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(LoadConstant{
+            result,
+            integer_value(static_cast<std::int64_t>(
+                outer_ordinal * trailing_count(actual)))});
+        return result;
+      };
+  copy_multidimensional_container_elements(
+      destination, linear_base(destination_type, destination_range),
+      source, linear_base(source_type, source_range),
+      source_range);
 }
 
 std::optional<Lowerer::LoweredStaticContainer>
 Lowerer::lower_static_container_value(
     const Expression& expression) {
+  if (expression.kind == ExpressionKind::Index) {
+    const auto type =
+        multidimensional_container_subarray_type(expression);
+    const auto value =
+        lower_multidimensional_container_subarray(expression);
+    if (!type || !value) {
+      return std::nullopt;
+    }
+    return LoweredStaticContainer{*value, *type};
+  }
   if (expression.kind == ExpressionKind::Call) {
     const auto* function = visible_function(expression.text);
     if (function == nullptr
@@ -368,18 +418,20 @@ Lowerer::lower_static_container_assignment_value(
   }
   if (source->type.dimensions.size() > 1
       || destination_type.dimensions.size() > 1) {
-    if (source->type != destination_type) {
+    if (!same_static_shape(source->type, destination_type)
+        || !same_element_profile(source->type, destination_type)) {
       report(
           "FSIM-ELAB-SVSLICE-006",
-          "multidimensional static-array assignment requires an exact "
-          "rank, range, direction, and element profile match",
+          "multidimensional static-array assignment requires equal rank, "
+          "per-dimension counts, and element profiles",
           expression.span);
       return std::nullopt;
     }
     const auto destination =
         allocate_container_register(destination_type);
-    process_.operations.emplace_back(
-        CopyContainerRegister{destination, source->value});
+    copy_static_container_ordinals(
+        destination, destination_type,
+        source->value, source->type);
     return destination;
   }
   if (static_element_count(source->type)
@@ -435,12 +487,12 @@ bool Lowerer::lower_static_container_slice_assignment(
   if (!source) {
     return false;
   }
-  if (static_element_count(source->type)
-      != static_element_count(selection->selected_type)) {
+  if (!same_static_shape(
+          source->type, selection->selected_type)) {
     report(
         "FSIM-ELAB-SVSLICE-005",
-        "static-array slice assignment requires equal source and "
-        "destination element counts",
+        "static-array slice assignment requires equal rank and "
+        "per-dimension element counts",
         value_expression.span);
     return false;
   }

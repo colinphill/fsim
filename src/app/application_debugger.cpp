@@ -70,8 +70,7 @@ namespace {
   const bool aggregate_value =
       value.type.element_kind
           == runtime::simir::ContainerElementKind::Aggregate
-      && !value.type.fixed && !value.type.queue
-      && !value.type.associative;
+      && value.type.aggregate_value;
   if (aggregate_value) {
     std::string result{"{"};
     for (std::size_t index = 0;
@@ -96,7 +95,9 @@ namespace {
       result += ", ";
     }
     if (value.type.associative) {
-      result += value.keys[index].to_msb_string();
+      result += value.type.string_indices
+          ? escaped_string(value.string_keys[index])
+          : value.keys[index].to_msb_string();
       result += "=>";
     } else if (value.type.fixed) {
       const auto declared_index =

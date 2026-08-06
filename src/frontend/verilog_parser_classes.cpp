@@ -119,6 +119,7 @@ bool VerilogParser::parse_class_property(
       keyword("string") || keyword("byte") || keyword("shortint")
       || keyword("shortreal") || keyword("real")
       || keyword("realtime") || keyword("chandle")
+      || keyword("process")
       || keyword("longint") || keyword("time") || keyword("integer")
       || keyword("int") || keyword("logic") || keyword("reg")
       || keyword("bit") || keyword("signed") || keyword("unsigned")

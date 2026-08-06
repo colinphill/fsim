@@ -1832,7 +1832,12 @@ void test_container_ordering_cache_identity(
           true, 1, ContainerPredicateValueKind::element,
           false, ContainerOrderingOperator::descending),
       0, 1);
-  assert(cached_object_paths(cache_directory).size() == 6);
+  materialize(
+      make_process(
+          false, 0, ContainerPredicateValueKind::index,
+          false, ContainerOrderingOperator::shuffle),
+      0, 1);
+  assert(cached_object_paths(cache_directory).size() == 7);
 }
 
 void test_container_locator_transformation_cache_identity(

@@ -1038,6 +1038,17 @@ class Resolver final {
       Expression& expression,
       const Scope& scope,
       const Type& expected) {
+    if (expression.text == "@sv-new"
+        && (expected.spelling == "mailbox"
+            || expected.spelling == "semaphore")) {
+      expression.text = "@sv-sync-new:" + expected.spelling;
+      expression.systemverilog_scalar_kind =
+          SystemVerilogScalarKind::Chandle;
+      for (auto& operand : expression.operands) {
+        resolve_expression(operand, scope);
+      }
+      return expected;
+    }
     const auto resolved = resolve_expression(
         expression, scope, class_identity(expected),
         expected.systemverilog_scalar);
@@ -1202,11 +1213,14 @@ class Resolver final {
         ? return_scalar
         : target_type ? target_type->systemverilog_scalar
                       : SystemVerilogScalarKind::None;
-    const auto value_type = resolve_expression(
-        statement.value, scope, expected_class, expected_scalar);
     const bool typed_assignment = statement.kind == StatementKind::Assignment
         || statement.kind == StatementKind::Force
         || statement.kind == StatementKind::Return;
+    const auto value_type = statement.kind == StatementKind::Assignment
+            && target_type
+        ? resolve_typed_expression(statement.value, scope, *target_type)
+        : resolve_expression(
+              statement.value, scope, expected_class, expected_scalar);
     const bool expected_chandle =
         expected_scalar == SystemVerilogScalarKind::Chandle;
     if (typed_assignment && statement.value.valid()

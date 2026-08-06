@@ -235,20 +235,30 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
             && expression.text == "$fopen") {
           if (language_
                   != frontend::Language::SystemVerilog2017
-              || expression.operands.size() != 2
+              || expression.operands.empty()
+              || expression.operands.size() > 2
               || !is_string_expression(expression.operands[0])
-              || !is_string_expression(expression.operands[1])) {
+              || (expression.operands.size() == 2
+                  && !is_string_expression(
+                      expression.operands[1]))) {
             report(
                 "FSIM-ELAB-SVFILE-003",
-                "$fopen requires SystemVerilog byte-string filename and "
-                "mode expressions",
+                "$fopen requires a SystemVerilog byte-string filename "
+                "and optional mode expression",
                 expression.span);
             return std::nullopt;
           }
           const auto path =
               lower_string_expression(expression.operands[0]);
-          const auto mode =
-              lower_string_expression(expression.operands[1]);
+          std::optional<StringRegisterId> mode;
+          if (expression.operands.size() == 2) {
+            mode = lower_string_expression(expression.operands[1]);
+          } else {
+            mode = allocate_string_register();
+            process_.operations.emplace_back(
+                LoadStringConstant{
+                    *mode, "\x1f" "fsim-multichannel-write"});
+          }
           if (!path || !mode) {
             return std::nullopt;
           }

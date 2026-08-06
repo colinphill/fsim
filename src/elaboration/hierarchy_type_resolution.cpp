@@ -588,6 +588,12 @@ using namespace elaboration_detail;
                 return !vhdl
                     || validate_direct_constraints(type);
             }
+            if (!vhdl
+                && (type.named_type == "mailbox"
+                    || type.named_type == "semaphore")) {
+                type.named_type.clear();
+                return true;
+            }
             const auto name = type.named_type;
             const auto use_span = type.named_type_span;
             const auto derived = type;

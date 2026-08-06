@@ -556,6 +556,79 @@ void test_scheduler_stop_resume() {
   require(count == 2, "retained callback must execute after resume");
 }
 
+void test_scheduler_ownership_and_failure_containment() {
+  using namespace fsim::runtime;
+
+  Scheduler owner;
+  Scheduler unrelated;
+  int count = 0;
+  const auto throwing = owner.schedule_after_cancelable(
+      0, SchedulerPhase::active, 0,
+      [](Scheduler&) { throw std::runtime_error("scheduled failure"); });
+  const auto retained = owner.schedule_after_cancelable(
+      0, SchedulerPhase::active, 1,
+      [&](Scheduler&) { count += 10; });
+  const auto cross_owner = owner.schedule_after_cancelable(
+      0, SchedulerPhase::active, 2,
+      [&](Scheduler&) { ++count; });
+  const auto cancelled = owner.schedule_after_cancelable(
+      0, SchedulerPhase::active, 3,
+      [&](Scheduler&) { count += 100; });
+  unrelated.cancel(cross_owner);
+  owner.cancel(cancelled);
+  require(
+      throwing && retained && cross_owner && !cancelled,
+      "cancelable handles retain owner identity before execution");
+
+  bool caught = false;
+  try {
+    (void)owner.run();
+  } catch (const std::runtime_error& error) {
+    caught = std::string_view{error.what()} == "scheduled failure";
+  }
+  require(
+      caught && !throwing && retained && cross_owner && !owner.running(),
+      "callback failures propagate once and release scheduler run state");
+  require(
+      owner.run().status == RunStatus::completed && count == 11
+          && !retained && !cross_owner,
+      "pending callbacks survive a contained failure in stable order");
+
+  const auto discarded = owner.schedule_after_cancelable(
+      1, SchedulerPhase::active, 0,
+      [&](Scheduler&) { ++count; });
+  require(discarded && owner.has_pending(),
+          "future cancelable work exposes a live handle");
+  owner.discard_pending();
+  require(
+      !discarded && !owner.has_pending(),
+      "discarding work invalidates every pending handle");
+
+  ScheduledTaskHandle expired;
+  {
+    Scheduler transient;
+    expired = transient.schedule_after_cancelable(
+        1, SchedulerPhase::active, 0,
+        [](Scheduler&) {});
+    require(
+        static_cast<bool>(expired),
+        "a scheduled handle is live while its owner exists");
+  }
+  require(!expired, "a handle expires with its owning scheduler");
+
+  Scheduler moving;
+  const auto moved = moving.schedule_after_cancelable(
+      1, SchedulerPhase::active, 0,
+      [](Scheduler&) {});
+  Scheduler destination = std::move(moving);
+  moving.cancel(moved);
+  require(
+      static_cast<bool>(moved),
+      "a moved-from scheduler cannot cancel transferred work");
+  destination.cancel(moved);
+  require(!moved, "scheduler moves preserve cancelable-work ownership");
+}
+
 void test_scheduler_time_limit_before_future_event() {
   using namespace fsim::runtime;
 

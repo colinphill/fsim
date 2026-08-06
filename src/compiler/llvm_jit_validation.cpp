@@ -442,6 +442,17 @@ using runtime::Logic9; using namespace runtime::simir;
             if (operation.initializer) validate_container_register(*operation.initializer, index, "initializer");
             record_use(operation.size, index);
             constrain_width(operation.size, 32U, index);
+            if (operation.allow_queue
+                && operation.target
+                    < process.container_register_types.size()
+                && (!process.container_register_types[
+                         operation.target].queue
+                    || operation.initializer)) {
+              reject(
+                  process, index,
+                  "internal queue resize requires a queue target "
+                  "without an initializer");
+            }
           } else if constexpr (std::is_same_v<OperationType, CopyContainerRegister>) {
             result.uses_containers = true;
             validate_container_register(
@@ -532,7 +543,7 @@ using runtime::Logic9; using namespace runtime::simir;
             validate_container_register(operation.target, index, "target");
             if (static_cast<std::uint8_t>(operation.operation) >
                 static_cast<std::uint8_t>(
-                    ContainerOrderingOperator::descending)) {
+                    ContainerOrderingOperator::shuffle)) {
               reject(process, index, "OrderContainer has an invalid operator");
             }
             if (operation.target < process.container_register_types.size()
@@ -581,21 +592,27 @@ using runtime::Logic9; using namespace runtime::simir;
             result.uses_containers = true;
             validate_container_register(
                 operation.source, index, "source");
-            record_use(operation.index, index);
+            if (operation.string_index) {
+              result.uses_strings = true;
+              validate_string_register(
+                  operation.index, index, "index");
+            } else {
+              record_use(operation.index, index);
+            }
             if (operation.source
-                < process.container_register_types.size()
-                && (process.container_register_types[
-                        operation.source].associative
-                    || process.container_register_types[
-                           operation.source].fixed)) {
-              constrain_width(
-                  operation.index,
-                  process.container_register_types[
-                          operation.source].fixed
-                      ? 32U
-                      : process.container_register_types[
-                            operation.source].index_width,
-                  index);
+                < process.container_register_types.size()) {
+              const auto& type =
+                  process.container_register_types[operation.source];
+              if (type.string_indices != operation.string_index) {
+                reject(process, index,
+                       "container read index kind does not match its profile");
+              }
+              if (!operation.string_index
+                  && (type.associative || type.fixed)) {
+                constrain_width(
+                    operation.index,
+                    type.fixed ? 32U : type.index_width, index);
+              }
             }
             record_definition(operation.destination, index);
             constrain_width(
@@ -607,21 +624,27 @@ using runtime::Logic9; using namespace runtime::simir;
             result.uses_containers = true;
             validate_container_register(
                 operation.target, index, "target");
-            record_use(operation.index, index);
+            if (operation.string_index) {
+              result.uses_strings = true;
+              validate_string_register(
+                  operation.index, index, "index");
+            } else {
+              record_use(operation.index, index);
+            }
             if (operation.target
-                < process.container_register_types.size()
-                && (process.container_register_types[
-                        operation.target].associative
-                    || process.container_register_types[
-                           operation.target].fixed)) {
-              constrain_width(
-                  operation.index,
-                  process.container_register_types[
-                          operation.target].fixed
-                      ? 32U
-                      : process.container_register_types[
-                            operation.target].index_width,
-                  index);
+                < process.container_register_types.size()) {
+              const auto& type =
+                  process.container_register_types[operation.target];
+              if (type.string_indices != operation.string_index) {
+                reject(process, index,
+                       "container write index kind does not match its profile");
+              }
+              if (!operation.string_index
+                  && (type.associative || type.fixed)) {
+                constrain_width(
+                    operation.index,
+                    type.fixed ? 32U : type.index_width, index);
+              }
             }
             record_use(operation.source, index);
             constrain_width(
@@ -629,51 +652,283 @@ using runtime::Logic9; using namespace runtime::simir;
                 process.container_register_types[
                     operation.target].element_width,
                 index);
+          } else if constexpr (
+              std::is_same_v<OperationType, ContainerStringRead>
+              || std::is_same_v<
+                  OperationType, ContainerStringWrite>) {
+            result.uses_containers = true;
+            result.uses_strings = true;
+            const auto container = [&] {
+              if constexpr (std::is_same_v<
+                                OperationType,
+                                ContainerStringRead>) {
+                return operation.source;
+              } else {
+                return operation.target;
+              }
+            }();
+            validate_container_register(
+                container, index,
+                std::is_same_v<OperationType, ContainerStringRead>
+                    ? "source" : "target");
+            if (operation.string_index) {
+              validate_string_register(
+                  operation.index, index, "index");
+            } else {
+              record_use(operation.index, index);
+            }
+            if (container < process.container_register_types.size()) {
+              const auto& type =
+                  process.container_register_types[container];
+              if (type.string_indices != operation.string_index) {
+                reject(process, index,
+                       "string element index kind does not match its profile");
+              }
+              if (!operation.string_index
+                  && (type.fixed || type.associative)) {
+                constrain_width(
+                    operation.index,
+                    type.fixed ? 32U : type.index_width,
+                    index);
+              }
+              if (type.element_kind != ContainerElementKind::String) {
+                reject(
+                    process, index,
+                    "string element operation requires a string container");
+              }
+            }
+            if constexpr (std::is_same_v<
+                              OperationType,
+                              ContainerStringRead>) {
+              validate_string_register(
+                  operation.destination, index, "destination");
+            } else {
+              validate_string_register(
+                  operation.source, index, "source");
+            }
+          } else if constexpr (
+              std::is_same_v<OperationType, ContainerElementRead>
+              || std::is_same_v<
+                  OperationType, ContainerElementWrite>) {
+            result.uses_containers = true;
+            const auto container = [&] {
+              if constexpr (std::is_same_v<
+                                OperationType,
+                                ContainerElementRead>) {
+                return operation.source;
+              } else {
+                return operation.target;
+              }
+            }();
+            const auto element = [&] {
+              if constexpr (std::is_same_v<
+                                OperationType,
+                                ContainerElementRead>) {
+                return operation.destination;
+              } else {
+                return operation.source;
+              }
+            }();
+            validate_container_register(container, index, "outer");
+            validate_container_register(element, index, "nested");
+            record_use(operation.index, index);
+            if (container < process.container_register_types.size()
+                && element < process.container_register_types.size()) {
+              const auto& outer =
+                  process.container_register_types[container];
+              if (outer.fixed || outer.associative) {
+                constrain_width(
+                    operation.index,
+                    outer.fixed ? 32U : outer.index_width,
+                    index);
+              }
+              if (outer.element_kind != ContainerElementKind::Container
+                  || outer.element_types.size() != 1
+                  || outer.element_types.front()
+                      != process.container_register_types[element]) {
+                reject(
+                    process, index,
+                    "nested container element profiles differ");
+              }
+            }
+          } else if constexpr (
+              std::is_same_v<OperationType, ContainerAggregateRead>
+              || std::is_same_v<
+                  OperationType, ContainerAggregateWrite>) {
+            result.uses_containers = true;
+            const auto container = [&] {
+              if constexpr (std::is_same_v<
+                                OperationType,
+                                ContainerAggregateRead>) {
+                return operation.source;
+              } else {
+                return operation.target;
+              }
+            }();
+            validate_container_register(
+                container, index,
+                std::is_same_v<
+                    OperationType, ContainerAggregateRead>
+                    ? "source" : "target");
+            record_use(operation.index, index);
+            if (container < process.container_register_types.size()) {
+              const auto& type =
+                  process.container_register_types[container];
+              if (type.fixed || type.associative) {
+                constrain_width(
+                    operation.index,
+                    type.fixed ? 32U : type.index_width,
+                    index);
+              }
+              const ContainerType* selected = &type;
+              for (const auto member : operation.members) {
+                if (selected->element_kind
+                        != ContainerElementKind::Aggregate
+                    || member >= selected->element_types.size()) {
+                  reject(
+                      process, index,
+                      "aggregate member operation path is invalid");
+                }
+                selected = &selected->element_types[member];
+              }
+              if (operation.members.empty()
+                  || !selected->fixed
+                  || selected->element_width == 0) {
+                reject(
+                    process, index,
+                    "aggregate member operation requires a packed or "
+                    "scalar leaf");
+              }
+              if constexpr (std::is_same_v<
+                                OperationType,
+                                ContainerAggregateRead>) {
+                record_definition(operation.destination, index);
+                constrain_width(
+                    operation.destination,
+                    selected->element_width, index);
+              } else {
+                record_use(operation.source, index);
+                constrain_width(
+                    operation.source,
+                    selected->element_width, index);
+              }
+            }
+          } else if constexpr (std::is_same_v<
+              OperationType, CopyContainerAggregateElement>) {
+            result.uses_containers = true;
+            validate_container_register(
+                operation.target, index, "target");
+            validate_container_register(
+                operation.source, index, "source");
+            record_use(operation.target_index, index);
+            record_use(operation.source_index, index);
+            if (operation.target
+                    < process.container_register_types.size()
+                && operation.source
+                    < process.container_register_types.size()) {
+              const auto& target_type =
+                  process.container_register_types[operation.target];
+              const auto& source_type =
+                  process.container_register_types[operation.source];
+              if (target_type.fixed || target_type.associative) {
+                constrain_width(
+                    operation.target_index,
+                    target_type.fixed ? 32U : target_type.index_width,
+                    index);
+              }
+              if (source_type.fixed || source_type.associative) {
+                constrain_width(
+                    operation.source_index,
+                    source_type.fixed ? 32U : source_type.index_width,
+                    index);
+              }
+              if (target_type != source_type
+                  || target_type.element_kind
+                      != ContainerElementKind::Aggregate) {
+                reject(
+                    process, index,
+                    "aggregate element copy profiles differ");
+              }
+            }
           } else if constexpr (std::is_same_v<OperationType, DeleteContainer>) {
             result.uses_containers = true;
             validate_container_register(
                 operation.target, index, "target");
             if (operation.index) {
-              record_use(*operation.index, index);
+              if (operation.string_index) {
+                result.uses_strings = true;
+                validate_string_register(
+                    *operation.index, index, "index");
+              } else {
+                record_use(*operation.index, index);
+              }
               if (operation.target
                   < process.container_register_types.size()) {
-                constrain_width(
-                    *operation.index,
-                    process.container_register_types[
-                        operation.target].index_width,
-                    index);
+                const auto& type =
+                    process.container_register_types[operation.target];
+                if (type.string_indices != operation.string_index) {
+                  reject(process, index,
+                         "container delete index kind does not match its profile");
+                }
+                if (!operation.string_index) {
+                  constrain_width(
+                      *operation.index, type.index_width, index);
+                }
               }
+            } else if (operation.string_index) {
+              reject(process, index,
+                     "container delete string index is missing");
             }
           } else if constexpr (std::is_same_v<OperationType, ContainerExists>) {
             result.uses_containers = true;
             validate_container_register(
                 operation.source, index, "source");
-            record_use(operation.index, index);
+            if (operation.string_index) {
+              result.uses_strings = true;
+              validate_string_register(
+                  operation.index, index, "index");
+            } else {
+              record_use(operation.index, index);
+            }
             record_definition(operation.destination, index);
             constrain_width(operation.destination, 32U, index);
             if (operation.source
                 < process.container_register_types.size()) {
-              constrain_width(
-                  operation.index,
-                  process.container_register_types[
-                      operation.source].index_width,
-                  index);
+              const auto& type =
+                  process.container_register_types[operation.source];
+              if (type.string_indices != operation.string_index) {
+                reject(process, index,
+                       "container exists index kind does not match its profile");
+              }
+              if (!operation.string_index) {
+                constrain_width(operation.index, type.index_width, index);
+              }
             }
           } else if constexpr (std::is_same_v<OperationType, TraverseContainer>) {
             result.uses_containers = true;
             validate_container_register(
                 operation.source, index, "source");
-            record_use(operation.index, index);
-            record_definition(operation.index, index);
+            if (operation.string_index) {
+              result.uses_strings = true;
+              validate_string_register(
+                  operation.index, index, "index");
+            } else {
+              record_use(operation.index, index);
+              record_definition(operation.index, index);
+            }
             record_definition(operation.destination, index);
             constrain_width(operation.destination, 32U, index);
             if (operation.source
                 < process.container_register_types.size()) {
-              constrain_width(
-                  operation.index,
-                  process.container_register_types[
-                      operation.source].index_width,
-                  index);
+              const auto& type =
+                  process.container_register_types[operation.source];
+              if (type.string_indices != operation.string_index) {
+                reject(process, index,
+                       "container traversal index kind does not match its profile");
+              }
+              if (!operation.string_index) {
+                constrain_width(operation.index, type.index_width, index);
+              }
             }
           } else if constexpr (std::is_same_v<OperationType, LoadMemory>) {
             result.uses_containers = true;
@@ -688,8 +943,6 @@ using runtime::Logic9; using namespace runtime::simir;
                   process.container_register_types[operation.target];
               if (!type.fixed) reject(process, index,
                   "LoadMemory target must be a fixed static array");
-              if (type.dimensions.size() > 1U) reject(process, index,
-                  "LoadMemory target must be one-dimensional");
             }
             for (const auto source :
                  {operation.start, operation.finish}) {
@@ -1505,14 +1758,28 @@ using runtime::Logic9; using namespace runtime::simir;
             result.uses_write_after_slice = true;
           } else if constexpr (std::is_same_v<OperationType, ForceSignalSlice>) {
             record_use(operation.source, index);
-            (void)signal_width(operation.signal, index);
+            const auto target_width = signal_width(operation.signal, index);
+            if (operation.selection) {
+              constrain_width(operation.source, 1U, index);
+              validate_dynamic_selection(
+                  *operation.selection, target_width, index);
+            }
             result.uses_force_signal_slice = true;
           } else if constexpr (std::is_same_v<OperationType, ReleaseSignalSlice>) {
-            (void)signal_width(operation.signal, index);
+            const auto target_width = signal_width(operation.signal, index);
             if (operation.width == 0) {
               reject(
                   process, index,
                   "ReleaseSignalSlice width must be greater than zero");
+            }
+            if (operation.selection) {
+              if (operation.width != 1) {
+                reject(
+                    process, index,
+                    "dynamic ReleaseSignalSlice width must be one");
+              }
+              validate_dynamic_selection(
+                  *operation.selection, target_width, index);
             }
             result.uses_release_signal_slice = true;
           } else if constexpr (std::is_same_v<OperationType, WriteInertialDynamicSlice>) {
@@ -1623,7 +1890,56 @@ using runtime::Logic9; using namespace runtime::simir;
                   "mode");
             }
             result.uses_write_projected_waveform_slice = true;
-          } else if constexpr (std::is_same_v<OperationType, WaitFor>) {} else if constexpr (std::is_same_v<OperationType, WaitOn>) {
+          } else if constexpr (std::is_same_v<OperationType, WaitFor>) {
+            if (operation.rounding_quantum == 0) {
+              reject(
+                  process, index,
+                  "WaitFor rounding quantum must be greater than zero");
+            }
+            if (operation.source) {
+              if (operation.source_width == 0
+                  || operation.source_width > 64) {
+                reject(
+                    process, index,
+                    "dynamic WaitFor source width must be in [1, 64]");
+              }
+              switch (operation.source_kind) {
+              case runtime::SystemVerilogScalarKind::None:
+                break;
+              case runtime::SystemVerilogScalarKind::ShortReal:
+                if (operation.source_width != 32) {
+                  reject(
+                      process, index,
+                      "dynamic shortreal WaitFor source must be 32 bits");
+                }
+                break;
+              case runtime::SystemVerilogScalarKind::Real:
+              case runtime::SystemVerilogScalarKind::Realtime:
+              case runtime::SystemVerilogScalarKind::Time:
+                if (operation.source_width != 64) {
+                  reject(
+                      process, index,
+                      "dynamic scalar WaitFor source must be 64 bits");
+                }
+                break;
+              default:
+                reject(
+                    process, index,
+                    "dynamic WaitFor has an invalid scalar kind");
+              }
+              record_use(*operation.source, index);
+              constrain_width(
+                  *operation.source, operation.source_width, index);
+            } else if (operation.source_width != 0
+                       || operation.source_kind
+                              != runtime::SystemVerilogScalarKind::None
+                       || operation.source_signed
+                       || operation.rounding_quantum != 1) {
+              reject(
+                  process, index,
+                  "static WaitFor has dynamic-delay metadata");
+            }
+          } else if constexpr (std::is_same_v<OperationType, WaitOn>) {
             if (operation.signals.empty()
                 && !operation.timeout) {
               reject(
@@ -1717,7 +2033,92 @@ using runtime::Logic9; using namespace runtime::simir;
             }
           } else if constexpr (std::is_same_v<OperationType, WaitForever>) {} else if constexpr (std::is_same_v<OperationType, Yield>) {} else if constexpr (std::is_same_v<OperationType, Fork>) {
             validate_fork_operation(process, index, operation);
-          } else if constexpr (std::is_same_v<OperationType, ForkEnd>) {} else if constexpr (std::is_same_v<OperationType, WaitFork>) {} else if constexpr (std::is_same_v<OperationType, DisableFork>) {} else if constexpr (std::is_same_v<OperationType, Pause>) {} else if constexpr (std::is_same_v<OperationType, Stop>) {}
+          } else if constexpr (std::is_same_v<OperationType, ForkEnd>) {} else if constexpr (std::is_same_v<OperationType, WaitFork>) {} else if constexpr (std::is_same_v<OperationType, DisableFork>) {
+          } else if constexpr (std::is_same_v<OperationType, ProcessSelf>) {
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 64U, index);
+          } else if constexpr (
+              std::is_same_v<OperationType, ProcessStatusQuery>) {
+            record_use(operation.source, index);
+            constrain_width(operation.source, 64U, index);
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 32U, index);
+          } else if constexpr (
+              std::is_same_v<OperationType, ProcessCompleted>) {
+            record_use(operation.source, index);
+            constrain_width(operation.source, 64U, index);
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 1U, index);
+          } else if constexpr (
+              std::is_same_v<OperationType, ProcessAwait>
+              || std::is_same_v<OperationType, ProcessKill>) {
+            record_use(operation.source, index);
+            constrain_width(operation.source, 64U, index);
+          } else if constexpr (
+              std::is_same_v<OperationType, MailboxCreate>) {
+            if (operation.element_width == 0) {
+              reject(process, index, "MailboxCreate requires a positive element width");
+            }
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 64U, index);
+            record_use(operation.capacity, index);
+            constrain_width(operation.capacity, 32U, index);
+          } else if constexpr (
+              std::is_same_v<OperationType, MailboxPut>) {
+            if (operation.element_width == 0) {
+              reject(process, index, "MailboxPut requires a positive element width");
+            }
+            record_use(operation.receiver, index);
+            constrain_width(operation.receiver, 64U, index);
+            record_use(operation.source, index);
+            constrain_width(operation.source, operation.element_width, index);
+            if (operation.result) {
+              record_definition(*operation.result, index);
+              constrain_width(*operation.result, 32U, index);
+            }
+          } else if constexpr (
+              std::is_same_v<OperationType, MailboxGet>) {
+            if (operation.element_width == 0) {
+              reject(process, index, "MailboxGet requires a positive element width");
+            }
+            record_use(operation.receiver, index);
+            constrain_width(operation.receiver, 64U, index);
+            record_definition(operation.destination, index);
+            constrain_width(
+                operation.destination, operation.element_width, index);
+            if (operation.result) {
+              record_definition(*operation.result, index);
+              constrain_width(*operation.result, 32U, index);
+            }
+          } else if constexpr (
+              std::is_same_v<OperationType, MailboxNum>) {
+            record_use(operation.receiver, index);
+            constrain_width(operation.receiver, 64U, index);
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 32U, index);
+          } else if constexpr (
+              std::is_same_v<OperationType, SemaphoreCreate>) {
+            record_definition(operation.destination, index);
+            constrain_width(operation.destination, 64U, index);
+            record_use(operation.keys, index);
+            constrain_width(operation.keys, 32U, index);
+          } else if constexpr (
+              std::is_same_v<OperationType, SemaphoreGet>) {
+            record_use(operation.receiver, index);
+            constrain_width(operation.receiver, 64U, index);
+            record_use(operation.keys, index);
+            constrain_width(operation.keys, 32U, index);
+            if (operation.result) {
+              record_definition(*operation.result, index);
+              constrain_width(*operation.result, 32U, index);
+            }
+          } else if constexpr (
+              std::is_same_v<OperationType, SemaphorePut>) {
+            record_use(operation.receiver, index);
+            constrain_width(operation.receiver, 64U, index);
+            record_use(operation.keys, index);
+            constrain_width(operation.keys, 32U, index);
+          } else if constexpr (std::is_same_v<OperationType, Pause>) {} else if constexpr (std::is_same_v<OperationType, Stop>) {}
         },
         process.operations[index]);
   }

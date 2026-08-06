@@ -97,8 +97,8 @@ void Lowerer::initialize_task_support() {
             frame.static_variables =
                 allocate_static_callable_variables(
                     task.variables,
-                    "FSIM-ELAB-SVTASK-015",
-                    "task");
+                    task.statements,
+                    task.name);
         }
         task_frames_.push_back(std::move(frame));
     };
@@ -154,18 +154,6 @@ void Lowerer::initialize_task_support() {
             }
         }
     } while (changed);
-    for (std::size_t index = 0;
-         index < task_frames_.size(); ++index) {
-        if (!task_frames_[index].source->automatic
-            && task_suspending_[index]) {
-            report(
-                "FSIM-ELAB-SVTASK-014",
-                "static or implicit-lifetime task '"
-                    + task_frames_[index].source->name
-                    + "' cannot suspend in the bounded v1 subset",
-                task_frames_[index].source->span);
-        }
-    }
     if (task_frames_.empty()) {
         return;
     }
@@ -281,17 +269,26 @@ void Lowerer::lower_task_call(const Statement& statement) {
             continue;
         }
         const auto& actual = *(*actuals)[index];
-        const bool direct_local =
-            actual.kind == ExpressionKind::Identifier
-            && (locals_.contains(actual.text)
-                || string_locals_.contains(actual.text)
-                || container_locals_.contains(actual.text));
-        if (!task.automatic || task_suspending_[task_index]
-            || !direct_local) {
+        const auto writable = [&](const auto& self,
+                                  const Expression& candidate) -> bool {
+            if (candidate.kind == ExpressionKind::Identifier) {
+                return locals_.contains(candidate.text)
+                    || string_locals_.contains(candidate.text)
+                    || container_locals_.contains(candidate.text)
+                    || signals_.contains(candidate.text)
+                    || packed_member_reference(candidate.text).has_value();
+            }
+            return ((candidate.kind == ExpressionKind::Index
+                     && candidate.operands.size() == 2)
+                    || (candidate.kind == ExpressionKind::Slice
+                        && candidate.operands.size() == 3))
+                && self(self, candidate.operands.front());
+        };
+        if (!task.automatic || !writable(writable, actual)) {
             report(
                 "FSIM-ELAB-SVTASK-013",
-                "ref task arguments require an automatic nonsuspending "
-                "task and a direct caller-local variable actual",
+                "ref task arguments require an automatic task and a "
+                "writable variable actual",
                 actual.span);
             return;
         }
@@ -359,6 +356,24 @@ void Lowerer::lower_task_call(const Statement& statement) {
             frame.argument_is_container.push_back(false);
         }
         frame.allocated = true;
+    }
+
+    std::vector<Expression> copy_out_targets(task.arguments.size());
+    for (std::size_t index = 0;
+         index < task.arguments.size(); ++index) {
+        if (task.arguments[index].direction
+            == frontend::PortDirection::Input) {
+            continue;
+        }
+        auto target = capture_callable_copy_out_target(
+            *(*actuals)[index],
+            "@task_target_" + std::to_string(task_index)
+                + "_" + std::to_string(index)
+                + "_" + std::to_string(process_.operations.size()));
+        if (!target) {
+            return;
+        }
+        copy_out_targets[index] = std::move(*target);
     }
 
     for (std::size_t index = 0;
@@ -485,7 +500,7 @@ void Lowerer::lower_task_call(const Statement& statement) {
             continue;
         }
         lower_callable_copy_out(
-            *(*actuals)[index],
+            copy_out_targets[index],
             formal.type,
             frame.arguments[index],
             frame.string_arguments[index],

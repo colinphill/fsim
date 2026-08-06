@@ -327,7 +327,7 @@ endmodule
 module invalid_force;
   logic [3:0] four_state;
   bit [3:0] two_state;
-  logic [1:0] index;
+  logic signed [31:0] index;
   initial begin
     logic [3:0] local_value;
     force local_value = 4'h1;
@@ -341,9 +341,66 @@ endmodule
     const auto rejected_force = fsim::elaboration::elaborate(
         invalid_force.design, "invalid_force");
     assert(!rejected_force.ok());
-    assert(has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-001"));
+    assert(!has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-001"));
     assert(has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-002"));
     assert(has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-003"));
+
+    const auto dynamic_force = fsim::frontend::parse_text(
+        "dynamic_force.sv",
+        R"(
+module dynamic_force;
+  logic [3:0] value;
+  logic signed [31:0] index;
+  initial begin
+    force value[index] = 1'b1;
+    release value[index];
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(dynamic_force.ok());
+    const auto elaborated_dynamic_force = fsim::elaboration::elaborate(
+        dynamic_force.design, "dynamic_force");
+    if (!elaborated_dynamic_force.ok()) {
+      for (const auto& diagnostic : elaborated_dynamic_force.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(elaborated_dynamic_force.ok());
+    const auto& dynamic_force_operations =
+        elaborated_dynamic_force.design->processes().front().operations;
+    const auto dynamic_force_operation = std::ranges::find_if(
+        dynamic_force_operations,
+        [](const fsim::runtime::simir::Operation& operation) {
+          return fsim::runtime::simir::operation_holds<
+              fsim::runtime::simir::ForceSignalSlice>(operation);
+        });
+    const auto dynamic_release_operation = std::ranges::find_if(
+        dynamic_force_operations,
+        [](const fsim::runtime::simir::Operation& operation) {
+          return fsim::runtime::simir::operation_holds<
+              fsim::runtime::simir::ReleaseSignalSlice>(operation);
+        });
+    assert(
+        dynamic_force_operation != dynamic_force_operations.end()
+        && dynamic_release_operation != dynamic_force_operations.end());
+    const auto& force_selection =
+        fsim::runtime::simir::operation_get<
+            fsim::runtime::simir::ForceSignalSlice>(
+            *dynamic_force_operation).selection;
+    const auto& release_selection =
+        fsim::runtime::simir::operation_get<
+            fsim::runtime::simir::ReleaseSignalSlice>(
+            *dynamic_release_operation).selection;
+    assert(
+        force_selection && release_selection
+        && force_selection->left == 3
+        && force_selection->right == 0
+        && force_selection->base_offset == 0
+        && release_selection->left == 3
+        && release_selection->right == 0
+        && release_selection->base_offset == 0);
 
     const auto width_conversion = fsim::frontend::parse_text(
         "width_conversion.sv",

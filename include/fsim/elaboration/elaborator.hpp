@@ -630,6 +630,8 @@ private:
     std::vector<runtime::simir::StringObject> string_objects_;
     std::vector<ContainerObjectInfo> container_object_info_;
     std::vector<runtime::simir::ContainerObject> container_objects_;
+    std::vector<runtime::simir::ContainerSignalAlias>
+        container_signal_aliases_;
     std::vector<VhdlProtectedObjectInfo> vhdl_protected_object_info_;
     std::vector<runtime::simir::Process> processes_;
     std::vector<SpecializationInfo> specializations_;

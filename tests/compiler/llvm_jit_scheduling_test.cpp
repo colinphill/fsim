@@ -1266,12 +1266,17 @@ void test_class_service_boundaries_at_level(
   Process process;
   process.id = 0;
   process.name = std::string{symbol};
-  process.register_count = 3;
+  process.register_count = 5;
   process.operations = {
       LoadConstant{0, PackedLogic4::from_aval_bval(32, 7, 0)},
       ClassAllocate{1, "work::Item<WIDTH=8>", "work::Item", {0}, {"value"}},
       ClassPropertyRead{2, 1, "work::Item::value", 8},
       ClassStaticPropertyWrite{2, "work::Item::shared"},
+      ProcessSelf{1},
+      ProcessStatusQuery{3, 1},
+      ProcessCompleted{4, 1},
+      ProcessAwait{1},
+      ProcessKill{1},
       Halt{},
   };
   const std::array<std::uint32_t, 0> widths{};
@@ -1312,9 +1317,16 @@ void test_class_service_boundaries_at_level(
   assert(jit.resume(handle, descriptor, frame, result)
          == JitResumeStatus::simir_boundary);
   assert(result.instruction == 3 && frame.program_counter == 4);
+  for (std::uint32_t instruction = 4; instruction <= 8; ++instruction) {
+    assert(jit.resume(handle, descriptor, frame, result)
+           == JitResumeStatus::simir_boundary);
+    assert(
+        result.instruction == instruction
+        && frame.program_counter == instruction + 1U);
+  }
   assert(jit.resume(handle, descriptor, frame, result)
          == JitResumeStatus::completed);
-  assert(result.instruction == 4 && frame.program_counter == 5);
+  assert(result.instruction == 9 && frame.program_counter == 10);
 
   Process malformed;
   malformed.id = 1;
@@ -1335,6 +1347,24 @@ void test_class_service_boundaries_at_level(
       },
       "ClassMethodCall requires aligned method actual metadata");
   expect_error([&] { (void)jit.lookup(malformed.name); }, "was not added");
+
+  Process malformed_handle;
+  malformed_handle.id = 2;
+  malformed_handle.name = std::string{symbol} + "_malformed_handle";
+  malformed_handle.register_count = 1;
+  malformed_handle.operations = {ProcessStatusQuery{0, 1}, Halt{}};
+  const std::array malformed_handle_entry{
+      JitProcessModuleEntry{malformed_handle.name, &malformed_handle}};
+  expect_fatal_error(
+      [&] {
+        jit.add_process_module(
+            std::string{symbol} + "_malformed_handle_module",
+            malformed_handle_entry,
+            widths);
+      },
+      "source register ID is out of range");
+  expect_error(
+      [&] { (void)jit.lookup(malformed_handle.name); }, "was not added");
 }
 
 [[nodiscard]] Process make_signal_wait_process() {

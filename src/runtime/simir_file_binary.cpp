@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/file_binary.hpp"
+#include "simir_internal.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -82,22 +83,46 @@ FileBinaryReadResult read_binary_file(
     return result;
   }
   if (!container || !container->type.fixed || container->type.associative
-      || container->type.dimensions.size() != 1U
-      || container->type.element_width != operation.width) {
+      || container_packed_element_width(container->type)
+          != operation.width) {
     throw std::invalid_argument{"$fread target memory metadata is invalid"};
   }
   if (count && *count < 0) {
     throw std::invalid_argument{"$fread count cannot be negative"};
   }
-  const auto direction = container->type.index_left >= container->type.index_right
-      ? -1 : 1;
-  auto index = start.value_or(container->type.index_left);
-  auto offset = fixed_offset(container->type, index);
+  const bool linear = container->type.dimensions.size() > 1U;
+  const auto direction = linear ? 1
+      : container->type.index_left >= container->type.index_right ? -1 : 1;
+  auto index = start.value_or(
+      linear ? 0 : container->type.index_left);
+  auto offset = linear
+      ? index < 0
+          ? throw std::out_of_range{
+                "$fread start is outside the target memory"}
+          : static_cast<std::size_t>(index)
+      : fixed_offset(container->type, index);
+  const auto element_count = [&]() {
+    switch (container->type.element_kind) {
+    case ContainerElementKind::Packed:
+    case ContainerElementKind::Scalar:
+      return container->elements.size();
+    case ContainerElementKind::String:
+      return container->string_elements.size();
+    case ContainerElementKind::Container:
+    case ContainerElementKind::Aggregate:
+      return container->nested_elements.size();
+    }
+    return std::size_t{};
+  }();
+  if (offset >= element_count) {
+    throw std::out_of_range{
+        "$fread start is outside the target memory"};
+  }
   const auto maximum = count
       ? static_cast<std::size_t>(*count)
-      : container->elements.size() - offset;
+      : element_count - offset;
   for (std::size_t element = 0; element < maximum; ++element) {
-    if (offset >= container->elements.size()) break;
+    if (offset >= element_count) break;
     const auto [value, consumed] = read_word(operation.width, read);
     if (consumed == 0) break;
     require_safe_chandle(operation, value);
@@ -105,11 +130,27 @@ FileBinaryReadResult read_binary_file(
       throw std::length_error{"$fread exceeds the bounded file byte limit"};
     }
     result.bytes += consumed;
-    container->elements[offset] = std::move(value);
-    if (index == container->type.index_right) break;
+    switch (container->type.element_kind) {
+    case ContainerElementKind::Packed:
+    case ContainerElementKind::Scalar:
+      container->elements[offset] = std::move(value);
+      break;
+    case ContainerElementKind::Container:
+    case ContainerElementKind::Aggregate:
+      unpack_container_signal_value(
+          container->nested_elements[offset], value);
+      break;
+    case ContainerElementKind::String:
+      throw std::invalid_argument{
+          "$fread does not accept variable-width string elements"};
+    }
+    if (!linear && index == container->type.index_right) break;
     index = static_cast<std::int32_t>(index + direction);
-    offset = fixed_offset(container->type, index);
+    offset = linear
+        ? offset + 1U
+        : fixed_offset(container->type, index);
   }
+  validate_container_value(*container);
   result.container = std::move(container);
   return result;
 }

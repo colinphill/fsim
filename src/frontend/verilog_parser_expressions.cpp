@@ -645,7 +645,19 @@ Expression VerilogParser::parse_primary() {
             }
           };
       if (canonical == "$fopen") {
-        require_file_call(2, "a filename and text mode");
+        if (language_ != Language::SystemVerilog2017) {
+          error(
+              name,
+              "FSIM-SV-SEM-074",
+              "$fopen requires SystemVerilog-2017");
+        }
+        if (expression.operands.size() < 1U
+            || expression.operands.size() > 2U) {
+          error(
+              name,
+              "FSIM-SV-SEM-075",
+              "$fopen requires a filename and optional text mode");
+        }
       } else if (canonical == "$fgets") {
         require_file_call(2, "a string target and file handle");
       } else if (canonical == "$fgetc") {

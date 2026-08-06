@@ -447,7 +447,8 @@ void test_rejections() {
       [&] {
         jit.add_process(
             "outside_force_slice",
-            force_release_process(ForceSignalSlice{0, 0, 1}),
+            force_release_process(
+                ForceSignalSlice{0, 0, 1, std::nullopt}),
             four_bit_signal);
       },
       "ForceSignalSlice range is outside its signal");
@@ -455,7 +456,8 @@ void test_rejections() {
       [&] {
         jit.add_process(
             "zero_width_release_slice",
-            force_release_process(ReleaseSignalSlice{0, 0, 0}),
+            force_release_process(
+                ReleaseSignalSlice{0, 0, 0, std::nullopt}),
             four_bit_signal);
       },
       "ReleaseSignalSlice width must be greater than zero");
@@ -463,7 +465,8 @@ void test_rejections() {
       [&] {
         jit.add_process(
             "outside_release_slice",
-            force_release_process(ReleaseSignalSlice{0, 3, 2}),
+            force_release_process(
+                ReleaseSignalSlice{0, 3, 2, std::nullopt}),
             four_bit_signal);
       },
       "ReleaseSignalSlice range is outside its signal");

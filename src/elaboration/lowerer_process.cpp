@@ -39,6 +39,53 @@ namespace {
 
 }  // namespace
 
+bool Lowerer::lower_delay_wait(
+    const frontend::Delay& delay,
+    const frontend::SourceSpan& span) {
+  if (!delay.expression) {
+    process_.operations.emplace_back(WaitFor{delay.magnitude});
+    return true;
+  }
+  const auto& expression = *delay.expression;
+  const auto* type = expression.kind == frontend::ExpressionKind::Identifier
+      ? object_type(expression.text) : nullptr;
+  const auto scalar_kind = type != nullptr
+      ? type->systemverilog_scalar
+      : expression.systemverilog_scalar_kind;
+  if (scalar_kind == frontend::SystemVerilogScalarKind::Chandle) {
+    report(
+        "FSIM-ELAB-SVDELAY-004",
+        "a runtime delay requires an integral, time, real, shortreal, or "
+        "realtime expression",
+        span);
+    return false;
+  }
+  const auto width = scalar_kind == frontend::SystemVerilogScalarKind::ShortReal
+      ? std::size_t{32}
+      : scalar_kind == frontend::SystemVerilogScalarKind::Real
+              || scalar_kind == frontend::SystemVerilogScalarKind::Realtime
+              || scalar_kind == frontend::SystemVerilogScalarKind::Time
+          ? std::size_t{64}
+          : infer_width(expression).value_or(std::size_t{32});
+  const auto source = lower_expression(expression, width);
+  if (!source) {
+    report(
+        "FSIM-ELAB-SVDELAY-004",
+        "runtime delay expression cannot be lowered to a packed scalar",
+        span);
+    return false;
+  }
+  WaitFor wait;
+  wait.delay = delay.magnitude;
+  wait.source = *source;
+  wait.source_width = static_cast<std::uint32_t>(register_width(*source));
+  wait.source_kind = scalar_kind;
+  wait.source_signed = is_signed_expression(expression);
+  wait.rounding_quantum = delay.rounding_quantum;
+  process_.operations.emplace_back(wait);
+  return true;
+}
+
 Lowerer::Lowerer(
         ElaboratedDesign& design,
         const std::unordered_map<std::string, SignalId>& signals,
@@ -871,7 +918,20 @@ bool Lowerer::report_unsupported_cross_root_reference(
         auto outer_members = local_members_;
         auto outer_types = local_types_;
         local_scope_.push_back(block_scope_name(statement));
-        initialize_variables(statement.declarations);
+        if (active_function_
+            && !function_frames_[*active_function_].source->automatic) {
+            bind_static_callable_variables(
+                statement.declarations,
+                function_frames_[*active_function_].static_variables);
+        } else if (
+            active_task_
+            && !task_frames_[*active_task_].source->automatic) {
+            bind_static_callable_variables(
+                statement.declarations,
+                task_frames_[*active_task_].static_variables);
+        } else {
+            initialize_variables(statement.declarations);
+        }
         lower_statements(statement.statements);
         for (const auto& variable : statement.declarations) {
             if (variable.vhdl_file || variable.type.vhdl_file) {
@@ -1059,7 +1119,10 @@ bool Lowerer::report_unsupported_cross_root_reference(
             }
             break;
         case StatementKind::TaskCall:
-            lower_task_call(statement);
+            if (!lower_synchronization_method_statement(statement)
+                && !lower_process_method_statement(statement)) {
+                lower_task_call(statement);
+            }
             break;
         case StatementKind::ProcedureCall:
             lower_procedure_call(statement);
@@ -1072,8 +1135,9 @@ bool Lowerer::report_unsupported_cross_root_reference(
                 report("FSIM-ELAB-030", "delay statement has no delay", statement.span);
                 break;
             }
-            process_.operations.emplace_back(WaitFor{statement.delay->magnitude});
-            lower_statements(statement.statements);
+            if (lower_delay_wait(*statement.delay, statement.span)) {
+                lower_statements(statement.statements);
+            }
             break;
         case StatementKind::WaitOn: {
             (void)emit_event_control_wait(statement);
@@ -1321,12 +1385,11 @@ bool Lowerer::report_unsupported_cross_root_reference(
             if (!target || !runtime_type) {
                 break;
             }
-            if (!runtime_type->fixed
-                || runtime_type->dimensions.size() != 1U) {
+            if (!runtime_type->fixed) {
                 report(
                     "FSIM-ELAB-SVMEMORY-003",
                     "$readmem*/$writemem* requires a bounded "
-                    "one-dimensional static unpacked array",
+                    "static unpacked array",
                     statement.target.span);
                 break;
             }

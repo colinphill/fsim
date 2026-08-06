@@ -152,11 +152,59 @@ void ContainerOperationLowerer::lower(
 }
 void ContainerOperationLowerer::lower(
     const runtime::simir::ContainerRead& value) {
-  invoke(value.index, std::nullopt, value.destination, "container.read");
+  invoke(
+      value.string_index ? std::nullopt : std::optional{value.index},
+      std::nullopt, value.destination, "container.read");
 }
 void ContainerOperationLowerer::lower(
     const runtime::simir::ContainerWrite& value) {
-  invoke(value.index, value.source, std::nullopt, "container.write");
+  invoke(
+      value.string_index ? std::nullopt : std::optional{value.index},
+      value.source, std::nullopt, "container.write");
+}
+void ContainerOperationLowerer::lower(
+    const runtime::simir::ContainerStringRead& value) {
+  invoke(
+      value.string_index ? std::nullopt : std::optional{value.index},
+      std::nullopt, std::nullopt,
+      "container.string-read");
+}
+void ContainerOperationLowerer::lower(
+    const runtime::simir::ContainerStringWrite& value) {
+  invoke(
+      value.string_index ? std::nullopt : std::optional{value.index},
+      std::nullopt, std::nullopt,
+      "container.string-write");
+}
+void ContainerOperationLowerer::lower(
+    const runtime::simir::ContainerElementRead& value) {
+  invoke(
+      value.index, std::nullopt, std::nullopt,
+      "container.element-read");
+}
+void ContainerOperationLowerer::lower(
+    const runtime::simir::ContainerElementWrite& value) {
+  invoke(
+      value.index, std::nullopt, std::nullopt,
+      "container.element-write");
+}
+void ContainerOperationLowerer::lower(
+    const runtime::simir::ContainerAggregateRead& value) {
+  invoke(
+      value.index, std::nullopt, value.destination,
+      "container.aggregate-read");
+}
+void ContainerOperationLowerer::lower(
+    const runtime::simir::ContainerAggregateWrite& value) {
+  invoke(
+      value.index, value.source, std::nullopt,
+      "container.aggregate-write");
+}
+void ContainerOperationLowerer::lower(
+    const runtime::simir::CopyContainerAggregateElement& value) {
+  invoke(
+      value.target_index, value.source_index, std::nullopt,
+      "container.aggregate-copy");
 }
 void ContainerOperationLowerer::lower(
     const runtime::simir::StringMethod& value) {
@@ -186,14 +234,24 @@ void ContainerOperationLowerer::lower(
 }
 void ContainerOperationLowerer::lower(
     const runtime::simir::DeleteContainer& value) {
-  invoke(value.index, std::nullopt, std::nullopt, "container.delete");
+  invoke(
+      value.string_index ? std::nullopt : value.index,
+      std::nullopt, std::nullopt, "container.delete");
 }
 void ContainerOperationLowerer::lower(
     const runtime::simir::ContainerExists& value) {
-  invoke(value.index, std::nullopt, value.destination, "container.exists");
+  invoke(
+      value.string_index ? std::nullopt : std::optional{value.index},
+      std::nullopt, value.destination, "container.exists");
 }
 void ContainerOperationLowerer::lower(
     const runtime::simir::TraverseContainer& value) {
+  if (value.string_index) {
+    invoke(
+        std::nullopt, std::nullopt, value.destination,
+        "container.traverse-string");
+    return;
+  }
   const auto input =
       load_register(builder, registers, value.index);
   auto* zero = constant_i64(context, 0);

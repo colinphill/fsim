@@ -421,13 +421,17 @@ int main() {
     output << R"(timeunit 1ns / 1ps;
 module time_rounding;
   logic [3:0] marker;
+  realtime rounded_step;
+  int variable_step;
   initial begin
+    rounded_step = 0.0005;
+    variable_step = 1;
     marker = 0;
     #0.0004 marker = 1;
-    #0.0005 marker = 2;
+    #(rounded_step) marker = 2;
     #1.2344ns marker = 3;
     #0.0006us marker = 4;
-    #1 marker = 5;
+    #(variable_step) marker = 5;
     $finish;
   end
 endmodule

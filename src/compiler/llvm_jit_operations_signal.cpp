@@ -219,28 +219,34 @@ void SignalOperationLowerer::lower(const ForceSignalSlice& operation) {
   const auto source = coerce_value_kind(
       builder, load_register(builder, registers, operation.source),
       signal_kind);
+  auto* offset = operation.selection
+      ? builder.CreateTrunc(dynamic_offset(*operation.selection), i32)
+      : llvm::ConstantInt::get(i32, operation.offset);
   if (signal_kind == ValueKind::logic9) {
     store_logic9_word(logic9_word_slot, source);
     builder.CreateCall(
         write_slice_logic9_type, force_signal_slice_logic9_callback,
         {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
-         llvm::ConstantInt::get(i32, operation.offset),
+         offset,
          llvm::ConstantInt::get(i32, source.width), logic9_word_slot});
   } else {
     builder.CreateCall(
         write_slice_type, force_signal_slice_callback,
         {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
-         llvm::ConstantInt::get(i32, operation.offset),
+         offset,
          llvm::ConstantInt::get(i32, source.width), source.aval, source.bval});
   }
   branch_to_next();
 }
 
 void SignalOperationLowerer::lower(const ReleaseSignalSlice& operation) {
+  auto* offset = operation.selection
+      ? builder.CreateTrunc(dynamic_offset(*operation.selection), i32)
+      : llvm::ConstantInt::get(i32, operation.offset);
   builder.CreateCall(
       release_slice_type, release_signal_slice_callback,
       {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
-       llvm::ConstantInt::get(i32, operation.offset),
+       offset,
        llvm::ConstantInt::get(i32, operation.width)});
   branch_to_next();
 }

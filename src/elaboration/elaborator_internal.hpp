@@ -950,6 +950,9 @@ private:
     void emit_debug_point(
         const DebugPointKind kind,
         const frontend::SourceSpan& span);
+    [[nodiscard]] bool lower_delay_wait(
+        const frontend::Delay& delay,
+        const frontend::SourceSpan& span);
     void lower_wait_until(const Statement& statement);
     void lower_immediate_condition_wait(
         const Statement& statement);
@@ -1125,6 +1128,16 @@ private:
         const Expression& expression,
         std::size_t expected_width,
         const frontend::Type* expected_type);
+    ExpressionAttempt lower_process_expression(
+        const Expression& expression);
+    ExpressionAttempt lower_synchronization_expression(
+        const Expression& expression,
+        std::size_t expected_width,
+        const frontend::Type* expected_type);
+    bool lower_process_method_statement(
+        const Statement& statement);
+    bool lower_synchronization_method_statement(
+        const Statement& statement);
 
     std::optional<StringRegisterId> lower_string_expression(
         const Expression& expression);
@@ -1199,6 +1212,18 @@ private:
         const Expression& expression,
         const frontend::Type& source_type,
         const ContainerType& runtime_type);
+    [[nodiscard]] std::optional<ContainerType>
+    multidimensional_container_subarray_type(
+        const Expression& expression);
+    std::optional<ContainerRegisterId>
+    lower_multidimensional_container_subarray(
+        const Expression& expression);
+    void copy_multidimensional_container_elements(
+        ContainerRegisterId destination,
+        RegisterId destination_base,
+        ContainerRegisterId source,
+        RegisterId source_base,
+        const ContainerType& selected_type);
     bool lower_container_locator(
         const Expression& expression,
         ContainerRegisterId destination,
@@ -1231,6 +1256,34 @@ private:
         const frontend::Type* expected_type);
     ExpressionAttempt lower_multidimensional_container_read(
         const Expression& expression);
+    struct UnpackedAggregateMemberReference {
+        const frontend::Type* container_type{};
+        const frontend::Type* leaf_type{};
+        std::vector<std::uint32_t> members;
+    };
+    [[nodiscard]] std::optional<UnpackedAggregateMemberReference>
+    unpacked_aggregate_member_reference(
+        const Expression& expression) const;
+    ExpressionAttempt lower_unpacked_aggregate_member_read(
+        const Expression& expression);
+    std::optional<ContainerRegisterId>
+    lower_unpacked_aggregate_pattern(
+        const Expression& expression,
+        const frontend::Type& source_type,
+        const ContainerType& runtime_type);
+    bool lower_unpacked_aggregate_pattern_value(
+        const Expression& expression,
+        const frontend::Type& aggregate_type,
+        ContainerRegisterId target,
+        RegisterId index,
+        std::vector<std::uint32_t> members,
+        bool signed_index,
+        bool linear_index);
+    bool lower_unpacked_aggregate_assignment(
+        const Statement& statement,
+        const frontend::Type& type,
+        ContainerRegisterId target,
+        std::optional<ContainerObjectId> object);
     bool lower_multidimensional_container_assignment(
         const Statement& statement,
         const frontend::Type& type,
@@ -1239,7 +1292,8 @@ private:
     std::optional<RegisterId>
     lower_multidimensional_index(
         const Expression& expression,
-        const frontend::Type& type);
+        const frontend::Type& type,
+        bool require_complete = true);
     ExpressionAttempt lower_unary_attribute_expression(
         const Expression& expression,
         std::size_t expected_width,
@@ -1343,17 +1397,21 @@ private:
         bool is_string,
         bool is_container,
         std::string temporary);
+    std::optional<Expression> capture_callable_copy_out_target(
+        const Expression& target,
+        std::string temporary_prefix);
 
     struct CallableVariableRegister;
-    std::vector<CallableVariableRegister>
+    std::unordered_map<std::string, CallableVariableRegister>
     allocate_static_callable_variables(
         const std::vector<frontend::VariableDeclaration>& variables,
-        std::string_view diagnostic_code,
-        std::string_view callable_kind);
+        const std::vector<frontend::Statement>& statements,
+        std::string_view callable_name);
 
     void bind_static_callable_variables(
         const std::vector<frontend::VariableDeclaration>& variables,
-        const std::vector<CallableVariableRegister>& registers);
+        const std::unordered_map<
+            std::string, CallableVariableRegister>& registers);
 
     void lower_task_call(const Statement& statement);
     void lower_pending_tasks();
@@ -1467,7 +1525,9 @@ private:
     struct CallableVariableRegister {
         RegisterId packed{};
         StringRegisterId string{};
+        ContainerRegisterId container{};
         bool is_string{};
+        bool is_container{};
     };
     struct FunctionFrame {
         const frontend::FunctionDeclaration* source{};
@@ -1482,7 +1542,8 @@ private:
         std::vector<ContainerRegisterId> container_arguments;
         std::vector<bool> argument_is_string;
         std::vector<bool> argument_is_container;
-        std::vector<CallableVariableRegister> static_variables;
+        std::unordered_map<std::string, CallableVariableRegister>
+            static_variables;
         std::optional<InstructionIndex> target;
         std::vector<InstructionIndex> call_sites;
         bool allocated{};
@@ -1508,7 +1569,8 @@ private:
             container_output_defaults;
         std::vector<bool> argument_is_string;
         std::vector<bool> argument_is_container;
-        std::vector<CallableVariableRegister> static_variables;
+        std::unordered_map<std::string, CallableVariableRegister>
+            static_variables;
         std::optional<InstructionIndex> target;
         std::vector<InstructionIndex> call_sites;
         bool allocated{};
@@ -1848,10 +1910,19 @@ private:
         const frontend::SignalDeclaration& port,
         const frontend::PortConnection& connection,
         const std::string& path,
+        const SignalMap& parent_signals,
         const ContainerMap& parent_containers,
         const std::unordered_set<std::string>&
             parent_read_only_containers,
         bool cross_language);
+
+    std::optional<ContainerObjectId>
+    connect_cross_language_container_port(
+        const frontend::SignalDeclaration& port,
+        const frontend::PortConnection& connection,
+        const std::string& path,
+        const SignalMap& parent_signals,
+        const ContainerType& expected);
 
     const Binding* binding_for(const std::string& path);
 

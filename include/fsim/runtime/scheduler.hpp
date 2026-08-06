@@ -49,16 +49,19 @@ public:
   ScheduledTaskHandle() = default;
 
   [[nodiscard]] explicit operator bool() const noexcept {
-    return static_cast<bool>(cancelled_);
+    return active_ && *active_ && !owner_.expired();
   }
 
 private:
   friend class Scheduler;
 
-  explicit ScheduledTaskHandle(std::shared_ptr<bool> cancelled)
-      : cancelled_(std::move(cancelled)) {}
+  explicit ScheduledTaskHandle(
+      std::shared_ptr<bool> active,
+      std::weak_ptr<const void> owner)
+      : active_(std::move(active)), owner_(std::move(owner)) {}
 
-  std::shared_ptr<bool> cancelled_;
+  std::shared_ptr<bool> active_;
+  std::weak_ptr<const void> owner_;
 };
 
 /// Raised before executing a delta cycle beyond max_delta_cycles.

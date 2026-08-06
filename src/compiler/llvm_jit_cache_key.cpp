@@ -141,6 +141,18 @@ using runtime::simir::ForkEnd;
 using runtime::simir::ForkJoinKind;
 using runtime::simir::WaitFork;
 using runtime::simir::DisableFork;
+using runtime::simir::ProcessAwait;
+using runtime::simir::ProcessCompleted;
+using runtime::simir::ProcessKill;
+using runtime::simir::ProcessSelf;
+using runtime::simir::ProcessStatusQuery;
+using runtime::simir::MailboxCreate;
+using runtime::simir::MailboxPut;
+using runtime::simir::MailboxGet;
+using runtime::simir::MailboxNum;
+using runtime::simir::SemaphoreCreate;
+using runtime::simir::SemaphoreGet;
+using runtime::simir::SemaphorePut;
 using runtime::simir::ClassAllocate;
 using runtime::simir::ClassMethodCall;
 using runtime::simir::ClassPropertyRead;
@@ -151,7 +163,7 @@ using runtime::simir::ClassStaticPropertyWrite;
 
 
 constexpr std::string_view kNativeObjectCacheSchema =
-    "fsim-llvm-native-object-v84";
+    "fsim-llvm-native-object-v87";
 
 void add_key_u64(CacheKeyBuilder &builder, const std::string_view label,
                  const std::uint64_t value) {
@@ -217,6 +229,12 @@ void add_container_type_key(
   add_key_u64(builder, "container-two-state", type.two_state ? 1U : 0U);
   add_key_u64(
       builder, "container-signed", type.signed_elements ? 1U : 0U);
+  add_key_u64(
+      builder, "container-union-aggregate",
+      type.union_aggregate ? 1U : 0U);
+  add_key_u64(
+      builder, "container-aggregate-value",
+      type.aggregate_value ? 1U : 0U);
   add_key_u64(builder, "container-queue", type.queue ? 1U : 0U);
   add_key_u64(
       builder, "container-associative", type.associative ? 1U : 0U);
@@ -227,6 +245,8 @@ void add_container_type_key(
       type.two_state_indices ? 1U : 0U);
   add_key_u64(
       builder, "container-index-signed", type.signed_indices ? 1U : 0U);
+  add_key_u64(
+      builder, "container-index-string", type.string_indices ? 1U : 0U);
   add_key_u64(
       builder, "container-index-left",
       static_cast<std::uint32_t>(type.index_left));
@@ -679,6 +699,9 @@ void add_container_type_key(
             add_key_u64(
                 builder, "initializer",
                 value.initializer.value_or(0));
+            add_key_u64(
+                builder, "allow-queue",
+                value.allow_queue ? 1U : 0U);
           } else if constexpr (std::is_same_v<OperationType, runtime::simir::CopyContainerRegister>) {
             builder.add("operation", "CopyContainerRegister");
             add_key_u64(builder, "destination", value.destination);
@@ -862,6 +885,9 @@ void add_container_type_key(
             add_key_u64(
                 builder, "signed-index",
                 value.signed_index ? 1U : 0U);
+            add_key_u64(
+                builder, "string-index",
+                value.string_index ? 1U : 0U);
           } else if constexpr (std::is_same_v<OperationType, runtime::simir::ContainerWrite>) {
             builder.add("operation", "ContainerWrite");
             add_key_u64(builder, "target", value.target);
@@ -873,6 +899,109 @@ void add_container_type_key(
             add_key_u64(
                 builder, "signed-index",
                 value.signed_index ? 1U : 0U);
+            add_key_u64(
+                builder, "string-index",
+                value.string_index ? 1U : 0U);
+          } else if constexpr (std::is_same_v<
+                                   OperationType,
+                                   runtime::simir::ContainerStringRead>) {
+            builder.add("operation", "ContainerStringRead");
+            add_key_u64(builder, "destination", value.destination);
+            add_key_u64(builder, "source", value.source);
+            add_key_u64(builder, "index", value.index);
+            add_key_u64(
+                builder, "linear-index",
+                value.linear_index ? 1U : 0U);
+            add_key_u64(
+                builder, "signed-index",
+                value.signed_index ? 1U : 0U);
+            add_key_u64(
+                builder, "string-index",
+                value.string_index ? 1U : 0U);
+          } else if constexpr (std::is_same_v<
+                                   OperationType,
+                                   runtime::simir::ContainerStringWrite>) {
+            builder.add("operation", "ContainerStringWrite");
+            add_key_u64(builder, "target", value.target);
+            add_key_u64(builder, "index", value.index);
+            add_key_u64(builder, "source", value.source);
+            add_key_u64(
+                builder, "linear-index",
+                value.linear_index ? 1U : 0U);
+            add_key_u64(
+                builder, "signed-index",
+                value.signed_index ? 1U : 0U);
+            add_key_u64(
+                builder, "string-index",
+                value.string_index ? 1U : 0U);
+          } else if constexpr (std::is_same_v<
+                                   OperationType,
+                                   runtime::simir::ContainerElementRead>) {
+            builder.add("operation", "ContainerElementRead");
+            add_key_u64(builder, "destination", value.destination);
+            add_key_u64(builder, "source", value.source);
+            add_key_u64(builder, "index", value.index);
+            add_key_u64(
+                builder, "signed-index",
+                value.signed_index ? 1U : 0U);
+          } else if constexpr (std::is_same_v<
+                                   OperationType,
+                                   runtime::simir::ContainerElementWrite>) {
+            builder.add("operation", "ContainerElementWrite");
+            add_key_u64(builder, "target", value.target);
+            add_key_u64(builder, "index", value.index);
+            add_key_u64(builder, "source", value.source);
+            add_key_u64(
+                builder, "signed-index",
+                value.signed_index ? 1U : 0U);
+          } else if constexpr (std::is_same_v<
+                                   OperationType,
+                                   runtime::simir::ContainerAggregateRead>) {
+            builder.add("operation", "ContainerAggregateRead");
+            add_key_u64(builder, "destination", value.destination);
+            add_key_u64(builder, "source", value.source);
+            add_key_u64(builder, "index", value.index);
+            add_key_u64(builder, "member-count", value.members.size());
+            for (const auto member : value.members) {
+              add_key_u64(builder, "member", member);
+            }
+            add_key_u64(
+                builder, "linear-index",
+                value.linear_index ? 1U : 0U);
+            add_key_u64(
+                builder, "signed-index",
+                value.signed_index ? 1U : 0U);
+          } else if constexpr (std::is_same_v<
+                                   OperationType,
+                                   runtime::simir::ContainerAggregateWrite>) {
+            builder.add("operation", "ContainerAggregateWrite");
+            add_key_u64(builder, "target", value.target);
+            add_key_u64(builder, "index", value.index);
+            add_key_u64(builder, "source", value.source);
+            add_key_u64(builder, "member-count", value.members.size());
+            for (const auto member : value.members) {
+              add_key_u64(builder, "member", member);
+            }
+            add_key_u64(
+                builder, "linear-index",
+                value.linear_index ? 1U : 0U);
+            add_key_u64(
+                builder, "signed-index",
+                value.signed_index ? 1U : 0U);
+          } else if constexpr (std::is_same_v<
+                                   OperationType,
+                                   runtime::simir::CopyContainerAggregateElement>) {
+            builder.add("operation", "CopyContainerAggregateElement");
+            add_key_u64(builder, "target", value.target);
+            add_key_u64(builder, "target-index", value.target_index);
+            add_key_u64(builder, "source", value.source);
+            add_key_u64(builder, "source-index", value.source_index);
+            add_key_u64(
+                builder, "target-signed-index",
+                value.target_signed_index ? 1U : 0U);
+            add_key_u64(
+                builder, "source-signed-index",
+                value.source_signed_index ? 1U : 0U);
           } else if constexpr (std::is_same_v<OperationType, runtime::simir::DeleteContainer>) {
             builder.add("operation", "DeleteContainer");
             add_key_u64(builder, "target", value.target);
@@ -880,18 +1009,27 @@ void add_container_type_key(
                 builder, "has-index", value.index ? 1U : 0U);
             add_key_u64(
                 builder, "index", value.index.value_or(0));
+            add_key_u64(
+                builder, "string-index",
+                value.string_index ? 1U : 0U);
           } else if constexpr (std::is_same_v<OperationType, runtime::simir::ContainerExists>) {
             builder.add("operation", "ContainerExists");
             add_key_u64(
                 builder, "destination", value.destination);
             add_key_u64(builder, "source", value.source);
             add_key_u64(builder, "index", value.index);
+            add_key_u64(
+                builder, "string-index",
+                value.string_index ? 1U : 0U);
           } else if constexpr (std::is_same_v<OperationType, runtime::simir::TraverseContainer>) {
             builder.add("operation", "TraverseContainer");
             add_key_u64(
                 builder, "destination", value.destination);
             add_key_u64(builder, "source", value.source);
             add_key_u64(builder, "index", value.index);
+            add_key_u64(
+                builder, "string-index",
+                value.string_index ? 1U : 0U);
             add_key_u64(
                 builder, "traversal",
                 static_cast<std::uint64_t>(value.traversal));
@@ -1429,6 +1567,10 @@ void add_container_type_key(
                 builder, "signal-width", signal_widths[value.signal]);
             add_key_u64(builder, "source", value.source);
             add_key_u64(builder, "offset", value.offset);
+            add_key_u64(builder, "dynamic", value.selection.has_value());
+            if (value.selection) {
+              add_dynamic_index_key(builder, *value.selection);
+            }
           } else if constexpr (std::is_same_v<OperationType, ReleaseSignalSlice>) {
             builder.add("operation", "ReleaseSignalSlice");
             add_key_u64(builder, "signal", value.signal);
@@ -1436,6 +1578,10 @@ void add_container_type_key(
                 builder, "signal-width", signal_widths[value.signal]);
             add_key_u64(builder, "offset", value.offset);
             add_key_u64(builder, "width", value.width);
+            add_key_u64(builder, "dynamic", value.selection.has_value());
+            if (value.selection) {
+              add_dynamic_index_key(builder, *value.selection);
+            }
           } else if constexpr (std::is_same_v<OperationType, WriteInertialDynamicSlice>) {
             builder.add(
                 "operation", "WriteInertialDynamicSlice");
@@ -1745,6 +1891,20 @@ void add_container_type_key(
           } else if constexpr (std::is_same_v<OperationType, WaitFor>) {
             builder.add("operation", "WaitFor");
             add_key_u64(builder, "delay", value.delay);
+            add_key_u64(
+                builder, "dynamic-source",
+                value.source.value_or(
+                    std::numeric_limits<RegisterId>::max()));
+            add_key_u64(builder, "dynamic-source-width", value.source_width);
+            add_key_u64(
+                builder, "dynamic-source-kind",
+                static_cast<std::underlying_type_t<
+                    runtime::SystemVerilogScalarKind>>(
+                    value.source_kind));
+            add_key_u64(builder, "dynamic-source-signed", value.source_signed);
+            add_key_u64(
+                builder, "dynamic-rounding-quantum",
+                value.rounding_quantum);
           } else if constexpr (std::is_same_v<OperationType, WaitOn>) {
             builder.add("operation", "WaitOn");
             add_key_u64(
@@ -1897,6 +2057,81 @@ void add_container_type_key(
             builder.add("operation", "WaitFork");
           } else if constexpr (std::is_same_v<OperationType, DisableFork>) {
             builder.add("operation", "DisableFork");
+          } else if constexpr (std::is_same_v<OperationType, ProcessSelf>) {
+            builder.add("operation", "ProcessSelf");
+            add_key_u64(
+                builder, "destination", value.destination);
+          } else if constexpr (
+              std::is_same_v<OperationType, ProcessStatusQuery>) {
+            builder.add("operation", "ProcessStatusQuery");
+            add_key_u64(
+                builder, "destination", value.destination);
+            add_key_u64(builder, "source", value.source);
+          } else if constexpr (
+              std::is_same_v<OperationType, ProcessCompleted>) {
+            builder.add("operation", "ProcessCompleted");
+            add_key_u64(
+                builder, "destination", value.destination);
+            add_key_u64(builder, "source", value.source);
+          } else if constexpr (
+              std::is_same_v<OperationType, ProcessAwait>) {
+            builder.add("operation", "ProcessAwait");
+            add_key_u64(builder, "source", value.source);
+          } else if constexpr (
+              std::is_same_v<OperationType, ProcessKill>) {
+            builder.add("operation", "ProcessKill");
+            add_key_u64(builder, "source", value.source);
+          } else if constexpr (
+              std::is_same_v<OperationType, MailboxCreate>) {
+            builder.add("operation", "MailboxCreate");
+            add_key_u64(builder, "destination", value.destination);
+            add_key_u64(builder, "capacity", value.capacity);
+            add_key_u64(builder, "element-width", value.element_width);
+          } else if constexpr (
+              std::is_same_v<OperationType, MailboxPut>) {
+            builder.add("operation", "MailboxPut");
+            add_key_u64(builder, "receiver", value.receiver);
+            add_key_u64(builder, "source", value.source);
+            add_key_u64(builder, "element-width", value.element_width);
+            add_key_u64(
+                builder, "result",
+                value.result.value_or(
+                    std::numeric_limits<RegisterId>::max()));
+          } else if constexpr (
+              std::is_same_v<OperationType, MailboxGet>) {
+            builder.add("operation", "MailboxGet");
+            add_key_u64(builder, "receiver", value.receiver);
+            add_key_u64(builder, "destination", value.destination);
+            add_key_u64(builder, "element-width", value.element_width);
+            add_key_u64(
+                builder, "result",
+                value.result.value_or(
+                    std::numeric_limits<RegisterId>::max()));
+            add_key_u64(builder, "peek", value.peek ? 1U : 0U);
+          } else if constexpr (
+              std::is_same_v<OperationType, MailboxNum>) {
+            builder.add("operation", "MailboxNum");
+            add_key_u64(builder, "destination", value.destination);
+            add_key_u64(builder, "receiver", value.receiver);
+          } else if constexpr (
+              std::is_same_v<OperationType, SemaphoreCreate>) {
+            builder.add("operation", "SemaphoreCreate");
+            add_key_u64(builder, "destination", value.destination);
+            add_key_u64(builder, "keys", value.keys);
+          } else if constexpr (
+              std::is_same_v<OperationType, SemaphoreGet>) {
+            builder.add("operation", "SemaphoreGet");
+            add_key_u64(builder, "receiver", value.receiver);
+            add_key_u64(builder, "keys", value.keys);
+            add_key_u64(
+                builder, "result",
+                value.result.value_or(
+                    std::numeric_limits<RegisterId>::max()));
+          } else if constexpr (
+              std::is_same_v<OperationType, SemaphorePut>) {
+            builder.add("operation", "SemaphorePut");
+            add_key_u64(builder, "receiver", value.receiver);
+            add_key_u64(builder, "keys", value.keys);
           } else if constexpr (std::is_same_v<OperationType, Pause>) {
             builder.add("operation", "Pause");
           } else if constexpr (std::is_same_v<OperationType, Stop>) {

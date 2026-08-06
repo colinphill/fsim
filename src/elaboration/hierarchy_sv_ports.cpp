@@ -118,173 +118,29 @@ std::optional<ContainerType> HierarchyBuilder::container_port_type(
     const frontend::Type& type,
     const frontend::SourceSpan& source,
     const ConstantEnvironment& environment) {
-  const auto width = type.width();
-  if (!type.systemverilog_container
-      || !width || *width == 0 || *width > 64
-      || type.packed_aggregate
-          == frontend::PackedAggregateKind::UnpackedStruct
-      || type.domain == frontend::ValueDomain::String
-      || type.domain == frontend::ValueDomain::Unknown) {
-    report(
-        "FSIM-ELAB-SVPORT-001",
-        "SystemVerilog container ports require bounded integral, enum, or "
-        "packed aggregate elements with width in 1..64",
-        source);
-    return std::nullopt;
-  }
-  ContainerType result;
-  result.element_width = static_cast<std::uint32_t>(*width);
-  result.element_nominal_type = type.nominal_type;
-  result.two_state = is_two_state_domain(type.domain);
-  result.signed_elements = type.is_signed;
-  result.queue =
-      type.systemverilog_container->kind
-      == frontend::SystemVerilogContainerKind::Queue;
-  result.associative =
-      type.systemverilog_container->kind
-      == frontend::SystemVerilogContainerKind::AssociativeArray;
-  result.fixed =
-      type.systemverilog_container->kind
-      == frontend::SystemVerilogContainerKind::StaticArray;
-  if (result.associative) {
-    const auto& index_type =
-        type.systemverilog_container->associative_index_type;
-    const auto index_width =
-        index_type ? index_type->width() : std::nullopt;
-    if (!index_type || !index_width || *index_width == 0
-        || *index_width > 64
-        || index_type->domain == frontend::ValueDomain::String
-        || index_type->domain == frontend::ValueDomain::Unknown
-        || !index_type->packed_members.empty()
-        || index_type->vhdl_array) {
-      report(
-          "FSIM-ELAB-SVPORT-001",
-          "associative-array ports require a resolved integral index "
-          "type with width in 1..64",
-          type.systemverilog_container->span);
-      return std::nullopt;
-    }
-    result.index_width =
-        static_cast<std::uint32_t>(*index_width);
-    result.two_state_indices =
-        is_two_state_domain(index_type->domain);
-    result.signed_indices = index_type->is_signed;
-  }
-  if (type.systemverilog_container->queue_maximum) {
-    std::string error;
-    const auto maximum =
-        evaluate_systemverilog_constant_expression(
-            *type.systemverilog_container->queue_maximum,
-            {},
-            environment,
-            error);
-    const auto maximum_index =
-        maximum ? maximum->integer_value() : std::nullopt;
-    if (!maximum_index || *maximum_index < 0) {
-      report(
-          "FSIM-ELAB-SVPORT-002",
-          "bounded queue port maximum index must specialize to a value "
-          "that is nonnegative",
-          type.systemverilog_container->queue_maximum->span);
-      return std::nullopt;
-    }
-    result.maximum_elements =
-        static_cast<std::uint64_t>(*maximum_index) + 1U;
-  }
-  if (result.fixed) {
-    const auto& ranges =
-        type.systemverilog_container->static_range_expressions;
-    const auto in_int32 =
-        [](const std::int64_t value) {
-          return value
-                  >= std::numeric_limits<std::int32_t>::min()
-              && value
-                  <= std::numeric_limits<std::int32_t>::max();
-        };
-    if (ranges.empty()) {
-      const auto& concrete =
-          type.systemverilog_container->static_range;
-      if (!concrete || !in_int32(concrete->left)
-          || !in_int32(concrete->right)) {
+  const auto evaluate =
+      [&](const frontend::Expression& expression)
+          -> std::optional<std::int64_t> {
+        std::string error;
+        const auto value =
+            evaluate_systemverilog_constant_expression(
+                expression, {}, environment, error);
+        return value ? value->integer_value()
+                     : std::optional<std::int64_t>{};
+      };
+  return materialize_systemverilog_container_type(
+      type, source, evaluate,
+      [&](std::string code,
+          std::string message,
+          frontend::SourceSpan span) {
+        const bool bound_failure =
+            code == "FSIM-ELAB-SVCONTAINER-004"
+            || code == "FSIM-ELAB-SVCONTAINER-020";
         report(
-            "FSIM-ELAB-SVPORT-002",
-            "static-array port bounds must specialize to signed 32-bit "
-            "values within the per-container owning-storage budget",
-            type.systemverilog_container->span);
-        return std::nullopt;
-      }
-      result.dimensions.push_back(ContainerDimension{
-          static_cast<std::int32_t>(concrete->left),
-          static_cast<std::int32_t>(concrete->right)});
-      result.index_left = result.dimensions.front().first;
-      result.index_right = result.dimensions.front().second;
-      const auto count = static_cast<std::uint64_t>(
-          concrete->left >= concrete->right
-              ? concrete->left - concrete->right
-              : concrete->right - concrete->left) + 1U;
-      if (count > maximum_container_elements(result)) {
-        report(
-            "FSIM-ELAB-SVPORT-002",
-            "static-array port exceeds the per-container "
-            "owning-storage budget",
-            type.systemverilog_container->span);
-        return std::nullopt;
-      }
-      return result;
-    }
-    std::uint64_t total = 1;
-    for (const auto& range : ranges) {
-      std::string left_error;
-      std::string right_error;
-      const auto left_value =
-          evaluate_systemverilog_constant_expression(
-              range.left, {}, environment, left_error);
-      const auto right_value =
-          evaluate_systemverilog_constant_expression(
-              range.right, {}, environment, right_error);
-      const auto left =
-          left_value ? left_value->integer_value() : std::nullopt;
-      const auto right =
-          right_value ? right_value->integer_value() : std::nullopt;
-      if (!left || !right || !in_int32(*left) || !in_int32(*right)) {
-        report(
-            "FSIM-ELAB-SVPORT-002",
-            "static-array port bounds must specialize to signed 32-bit "
-            "values within the per-container owning-storage budget",
-            range.span);
-        return std::nullopt;
-      }
-      const auto count =
-          static_cast<std::uint64_t>(
-              *left >= *right ? *left - *right : *right - *left)
-          + 1U;
-      const auto storage_limit = maximum_container_elements(result);
-      if (count > storage_limit
-          || total > storage_limit / count) {
-        report(
-            "FSIM-ELAB-SVPORT-002",
-            "static-array port exceeds the per-container "
-            "owning-storage budget",
-            type.systemverilog_container->span);
-        return std::nullopt;
-      }
-      total *= count;
-      result.dimensions.push_back(ContainerDimension{
-          static_cast<std::int32_t>(*left),
-          static_cast<std::int32_t>(*right)});
-    }
-    if (result.dimensions.empty()) {
-      report(
-          "FSIM-ELAB-SVPORT-002",
-          "static-array port bounds must specialize to signed 32-bit "
-          "values within the per-container owning-storage budget",
-          type.systemverilog_container->span);
-      return std::nullopt;
-    }
-    result.index_left = result.dimensions.front().first;
-    result.index_right = result.dimensions.front().second;
-  }
-  return result;
+            bound_failure ? "FSIM-ELAB-SVPORT-002"
+                          : "FSIM-ELAB-SVPORT-001",
+            std::move(message), std::move(span));
+      });
 }
 
 std::optional<ContainerObjectId>
@@ -338,22 +194,19 @@ HierarchyBuilder::connect_container_port(
     const frontend::SignalDeclaration& port,
     const frontend::PortConnection& connection,
     const std::string& path,
+    const SignalMap& parent_signals,
     const ContainerMap& parent_containers,
     const std::unordered_set<std::string>&
         parent_read_only_containers,
     const bool cross_language) {
-  if (cross_language) {
-    report(
-        "FSIM-ELAB-SVPORT-004",
-        "SystemVerilog container ports cannot cross a language "
-        "boundary at '" + path + "." + port.name + "'",
-        connection.span);
-    return std::nullopt;
-  }
   const auto expected =
       container_port_type(port.type, port.span, {});
   if (!expected) {
     return std::nullopt;
+  }
+  if (cross_language) {
+    return connect_cross_language_container_port(
+        port, connection, path, parent_signals, *expected);
   }
 
   const auto& expression = connection.value;

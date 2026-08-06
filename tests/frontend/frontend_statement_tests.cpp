@@ -77,8 +77,8 @@ endmodule
                  .sensitivities.front().expression.text == "^",
       "packed event-expression HIR");
 
-  const auto invalid_packed_events = parse_text(
-      "invalid_packed_events.sv",
+  const auto generalized_packed_events = parse_text(
+      "generalized_packed_events.sv",
       R"(
 module invalid_packed_events;
   logic left;
@@ -88,18 +88,20 @@ module invalid_packed_events;
 endmodule
 )",
       Language::SystemVerilog2017);
-  require(!invalid_packed_events.ok(), "bounded event-expression limits");
-  for (const auto code : {
-           std::string_view{"FSIM-SV-SEM-104"},
-           std::string_view{"FSIM-SV-SEM-105"}}) {
-    require(
-        std::ranges::any_of(
-            invalid_packed_events.diagnostics,
-            [&](const Diagnostic& diagnostic) {
-              return diagnostic.code == code;
-            }),
-        "packed event-expression diagnostic");
-  }
+  require(
+      generalized_packed_events.ok(),
+      "edge-qualified and mixed packed event expressions must parse");
+  const auto& generalized =
+      generalized_packed_events.design.units.front().processes;
+  require(
+      generalized.size() == 2
+          && generalized[0].sensitivities.front().edge
+              == EdgeKind::Positive
+          && generalized[0].sensitivities.front().expression.valid()
+          && generalized[1].sensitivities.size() == 2
+          && generalized[1].sensitivities.front().expression.valid()
+          && generalized[1].sensitivities.back().signal == "left",
+      "generalized packed event-expression HIR");
 
   const auto result = parse_text(
       "combinational.sv",
@@ -1128,6 +1130,7 @@ void test_fork_process_statements() {
       R"(
 module fork_processes;
   logic result;
+  process handle;
   initial begin
     fork : workers
       logic local_value = 1'b0;
@@ -1146,6 +1149,11 @@ module fork_processes;
       #1 result = 1'b1;
     join_none
     disable fork;
+    handle = process::self();
+    result = handle.status();
+    result = handle.completed();
+    handle.await();
+    handle.kill();
   end
 endmodule
 )",
@@ -1154,7 +1162,10 @@ endmodule
   const auto& statements =
       parsed.design.units.front().processes.front().statements;
   require(
-      statements.size() == 5
+      parsed.design.units.front().signals.size() == 2
+          && parsed.design.units.front().signals[1].type.spelling
+              == "process"
+          && statements.size() == 10
           && statements[0].kind == StatementKind::Fork
           && statements[0].label == "workers"
           && statements[0].declarations.size() == 1
@@ -1165,8 +1176,13 @@ endmodule
           && statements[2].kind == StatementKind::WaitFork
           && statements[3].kind == StatementKind::Fork
           && statements[3].fork_join_kind == ForkJoinKind::None
-          && statements[4].kind == StatementKind::DisableFork,
-      "fork/join HIR retains branches, scope, and process controls");
+          && statements[4].kind == StatementKind::DisableFork
+          && statements[5].kind == StatementKind::Assignment
+          && statements[6].kind == StatementKind::Assignment
+          && statements[7].kind == StatementKind::Assignment
+          && statements[8].kind == StatementKind::TaskCall
+          && statements[9].kind == StatementKind::TaskCall,
+      "fork and process-handle HIR retains typed controls and calls");
 
   const auto verilog_join_any = parse_text(
       "fork_join_any.v",

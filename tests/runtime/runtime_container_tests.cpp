@@ -176,6 +176,7 @@ void test_simir_containers() {
 
   ContainerType aggregate_type;
   aggregate_type.element_kind = ContainerElementKind::Aggregate;
+  aggregate_type.aggregate_value = true;
   aggregate_type.element_width = 0;
   aggregate_type.element_nominal_type = "record_t";
   aggregate_type.element_types = {
@@ -183,8 +184,10 @@ void test_simir_containers() {
       fixed_type(string_element_type, 0, 0),
       fixed_type(chandle_element_type, 0, 0)};
   aggregate_type.member_names = {"weight", "label", "cookie"};
+  auto aggregate_array_type = aggregate_type;
+  aggregate_array_type.aggregate_value = false;
   auto records = default_container_value(
-      fixed_type(aggregate_type, 1, 0));
+      fixed_type(aggregate_array_type, 1, 0));
   require(
       records.nested_elements.size() == 2
           && records.nested_elements[0].nested_elements.size() == 3
@@ -194,6 +197,16 @@ void test_simir_containers() {
               == value(1, 1),
       "unpacked aggregate container defaults retain ordered heterogeneous "
       "member profiles");
+  auto dynamic_records =
+      default_container_value(aggregate_array_type);
+  resize_container_value(dynamic_records, 2);
+  require(
+      dynamic_records.nested_elements.size() == 2
+          && dynamic_records.nested_elements.front()
+                 .type.aggregate_value
+          && dynamic_records.nested_elements.front()
+                 .nested_elements.size() == 3,
+      "dynamic unpacked aggregate arrays resize into recursive value boxes");
 
   auto dynamic_strings = default_container_value(string_element_type);
   resize_container_value(dynamic_strings, 3);
@@ -378,6 +391,48 @@ void test_simir_containers() {
       signed_order.elements.front() == value(8, 0x80)
           && signed_order.elements.back() == value(8, 0x7f),
       "reverse permutes storage without changing container metadata");
+  ContainerValue shuffled_a{
+      signed_order_type,
+      {value(8, 0), value(8, 1), value(8, 2), value(8, 3), value(8, 4)},
+      {}};
+  auto shuffled_b = shuffled_a;
+  const std::vector<std::uint32_t> shuffle_draws{1, 2, 0, 1};
+  std::size_t shuffle_a_cursor = 0;
+  std::size_t shuffle_b_cursor = 0;
+  order_container_value(
+      shuffled_a, ContainerOrderingOperator::shuffle, {},
+      [&]() { return shuffle_draws.at(shuffle_a_cursor++); });
+  order_container_value(
+      shuffled_b, ContainerOrderingOperator::shuffle, {},
+      [&]() { return shuffle_draws.at(shuffle_b_cursor++); });
+  require(
+      shuffle_a_cursor == shuffle_draws.size()
+          && shuffle_b_cursor == shuffle_draws.size()
+          && shuffled_a.elements == shuffled_b.elements
+          && shuffled_a.elements
+              == std::vector<PackedLogic4>{
+                  value(8, 3), value(8, 4), value(8, 0),
+                  value(8, 2), value(8, 1)},
+      "shuffle consumes one deterministic stream and preserves an exact "
+      "permutation");
+  try {
+    auto invalid = shuffled_a;
+    order_container_value(
+        invalid, ContainerOrderingOperator::shuffle);
+    require(false, "shuffle without a random source must reject");
+  } catch (const std::invalid_argument&) {
+  }
+  try {
+    auto invalid = shuffled_a;
+    const std::vector<ContainerPredicateNode> invalid_key{
+        {ContainerPredicateOperator::item, 0, 0,
+         PackedLogic4{}, ContainerPredicateValueKind::element}};
+    order_container_value(
+        invalid, ContainerOrderingOperator::shuffle, invalid_key,
+        []() { return std::uint32_t{}; });
+    require(false, "shuffle with an ordering key must reject");
+  } catch (const std::invalid_argument&) {
+  }
   auto four_state_order_type = queue_type;
   four_state_order_type.maximum_elements.reset();
   ContainerValue four_state_order{
@@ -1146,6 +1201,101 @@ void test_simir_containers() {
               == value(8, 2),
       "first/next/last/previous traverse canonical key order");
 
+  auto string_associative_type = associative_type;
+  string_associative_type.index_width = 0;
+  string_associative_type.signed_indices = false;
+  string_associative_type.two_state_indices = true;
+  string_associative_type.string_indices = true;
+  Interpreter string_associative;
+  const auto string_associative_object =
+      string_associative.add_container_object(
+          {"string_lookup",
+           default_container_value(string_associative_type),
+           std::nullopt});
+  Process string_associative_process;
+  string_associative_process.id = 0;
+  string_associative_process.name = "string_associative";
+  string_associative_process.register_count = 4;
+  string_associative_process.string_register_count = 2;
+  string_associative_process.container_register_count = 1;
+  string_associative_process.container_register_types = {
+      string_associative_type};
+  string_associative_process.debug_locals = {
+      {"exists", "int", 1, 32, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}},
+      {"traversed", "int", 2, 32, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}},
+      {"selected", "byte", 3, 8, {}, std::nullopt,
+       std::nullopt, ValueKind::logic4, {}}};
+  string_associative_process.debug_string_locals = {
+      {"first_key", 1, {}}};
+  string_associative_process.operations = {
+      LoadStringConstant{0, "beta"},
+      LoadConstant{0, value(8, 22)},
+      ContainerWrite{0, 0, 0, true, false, true},
+      LoadStringConstant{0, "alpha"},
+      LoadConstant{0, value(8, 11)},
+      ContainerWrite{0, 0, 0, true, false, true},
+      LoadStringConstant{0, "beta"},
+      ContainerExists{1, 0, 0, true},
+      LoadStringConstant{1, ""},
+      TraverseContainer{
+          2, 0, 1, ContainerTraversal::first, true},
+      ContainerRead{3, 0, 1, true, false, true},
+      DeleteContainer{0, 0, true},
+      WriteContainerObject{string_associative_object, 0},
+      Halt{}};
+  (void)string_associative.add_process(
+      std::move(string_associative_process));
+  require(
+      string_associative.run().status == RunStatus::completed,
+      "string-indexed associative-array process completes");
+  const auto& string_lookup =
+      string_associative.container_object_value(
+          string_associative_object);
+  require(
+      string_lookup.string_keys == std::vector<std::string>{"alpha"}
+          && string_lookup.keys.empty()
+          && string_lookup.elements
+              == std::vector<PackedLogic4>{value(8, 11)},
+      "string keys use isolated lexicographic identity and paired deletion");
+  require(
+      string_associative.read_debug_local(0, 0) == value(32, 1)
+          && string_associative.read_debug_local(0, 1)
+              == value(32, 1)
+          && string_associative.read_debug_local(0, 2)
+              == value(8, 11)
+          && string_associative.read_debug_string_local(0, 0)
+              == "alpha",
+      "string-key exists, traversal, and selection are deterministic");
+
+  const auto require_invalid_string_keys =
+      [&](ContainerValue invalid) {
+        try {
+          Interpreter rejected;
+          (void)rejected.add_container_object(
+              {"invalid_string_keys", std::move(invalid), std::nullopt});
+          require(false, "invalid associative string keys must reject");
+        } catch (const std::invalid_argument&) {
+        }
+      };
+  auto unordered_string_keys =
+      default_container_value(string_associative_type);
+  unordered_string_keys.string_keys = {"beta", "alpha"};
+  unordered_string_keys.elements = {value(8, 2), value(8, 1)};
+  require_invalid_string_keys(std::move(unordered_string_keys));
+  auto invalid_utf8_key =
+      default_container_value(string_associative_type);
+  invalid_utf8_key.string_keys = {std::string{"\xc0\x80", 2}};
+  invalid_utf8_key.elements = {value(8, 1)};
+  require_invalid_string_keys(std::move(invalid_utf8_key));
+  auto oversized_string_key =
+      default_container_value(string_associative_type);
+  oversized_string_key.string_keys = {
+      std::string(maximum_string_bytes + 1U, 'x')};
+  oversized_string_key.elements = {value(8, 1)};
+  require_invalid_string_keys(std::move(oversized_string_key));
+
   ContainerType static_type;
   static_type.element_width = 8;
   static_type.fixed = true;
@@ -1353,6 +1503,19 @@ void test_simir_containers() {
   } catch (const std::out_of_range&) {
   }
   try {
+    load_memory_text(memory, "0 2", false);
+    require(false, "partly invalid read-memory data must fail");
+  } catch (const std::invalid_argument&) {
+    require(
+        memory.elements
+            == std::vector<PackedLogic4>{
+                value(8, 0x0f),
+                PackedLogic4::from_msb_string("XXXXXXXX"),
+                PackedLogic4::from_msb_string("000010Z1"),
+                value(8, 0x03)},
+        "failed read-memory parsing leaves the complete target unchanged");
+  }
+  try {
     load_memory_text(memory, "2", false);
     require(false, "invalid binary read-memory digit must fail");
   } catch (const std::invalid_argument&) {
@@ -1365,14 +1528,73 @@ void test_simir_containers() {
     require(false, "oversized read-memory input must fail");
   } catch (const std::length_error&) {
   }
-  try {
-    auto matrix_type = memory_type;
-    matrix_type.dimensions = {{1, 0}, {0, 1}};
-    auto matrix = default_container_value(matrix_type);
-    load_memory_text(matrix, "00", true);
-    require(false, "multidimensional read-memory target must fail");
-  } catch (const std::invalid_argument&) {
-  }
+  auto matrix_type = memory_type;
+  matrix_type.dimensions = {{1, 0}, {0, 1}};
+  auto matrix = default_container_value(matrix_type);
+  load_memory_text(matrix, "11 22 33 44", true);
+  require(
+      matrix.elements
+              == std::vector<PackedLogic4>{
+                  value(8, 0x11), value(8, 0x22),
+                  value(8, 0x33), value(8, 0x44)}
+          && write_memory_text(matrix, true)
+              == "11\n22\n33\n44\n",
+      "multidimensional memory files use deterministic row-major linear "
+      "addresses");
+
+  ContainerType string_memory_type;
+  string_memory_type.element_kind = ContainerElementKind::String;
+  string_memory_type.element_width = 0;
+  string_memory_type.fixed = true;
+  string_memory_type.index_left = 0;
+  string_memory_type.index_right = 1;
+  string_memory_type.dimensions = {{0, 1}};
+  auto string_memory = default_container_value(string_memory_type);
+  load_memory_text(
+      string_memory,
+      "\"alpha beta\" \"line\\n//literal\"",
+      true);
+  require(
+      string_memory.string_elements
+              == std::vector<std::string>{
+                  "alpha beta", "line\n//literal"}
+          && write_memory_text(string_memory, false)
+              == "\"alpha beta\"\n\"line\\n//literal\"\n",
+      "string memory files retain quoted whitespace, escapes, and comment "
+      "markers");
+
+  ContainerType aggregate_leaf;
+  aggregate_leaf.element_width = 4;
+  aggregate_leaf.fixed = true;
+  aggregate_leaf.index_left = 0;
+  aggregate_leaf.index_right = 0;
+  aggregate_leaf.dimensions = {{0, 0}};
+  ContainerType aggregate_memory_type;
+  aggregate_memory_type.element_kind = ContainerElementKind::Aggregate;
+  aggregate_memory_type.element_width = 0;
+  aggregate_memory_type.fixed = true;
+  aggregate_memory_type.index_left = 0;
+  aggregate_memory_type.index_right = 1;
+  aggregate_memory_type.dimensions = {{0, 1}};
+  aggregate_memory_type.element_types = {
+      aggregate_leaf, aggregate_leaf};
+  aggregate_memory_type.member_names = {"tag", "data"};
+  auto aggregate_memory = default_container_value(
+      aggregate_memory_type);
+  load_memory_text(aggregate_memory, "a5 3c", true);
+  require(
+      aggregate_memory.nested_elements[0]
+              .nested_elements[0].elements[0] == value(4, 0xa)
+          && aggregate_memory.nested_elements[0]
+                 .nested_elements[1].elements[0] == value(4, 0x5)
+          && aggregate_memory.nested_elements[1]
+                 .nested_elements[0].elements[0] == value(4, 0x3)
+          && aggregate_memory.nested_elements[1]
+                 .nested_elements[1].elements[0] == value(4, 0xc)
+          && write_memory_text(aggregate_memory, true)
+              == "a5\n3c\n",
+      "aggregate memory files recursively pack and unpack declaration-order "
+      "members");
   try {
     (void)write_memory_text(memory, true, 7, 0);
     require(false, "out-of-range write-memory bounds must fail");

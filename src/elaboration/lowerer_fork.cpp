@@ -4,6 +4,153 @@
 namespace fsim::elaboration {
 using namespace runtime::simir;
 
+namespace {
+
+[[nodiscard]] bool is_process_type(
+    const frontend::Type* type) {
+  return type != nullptr && type->spelling == "process";
+}
+
+}  // namespace
+
+Lowerer::ExpressionAttempt Lowerer::lower_process_expression(
+    const Expression& expression) {
+  if (language_ != frontend::Language::SystemVerilog2017
+      || expression.kind != ExpressionKind::Call) {
+    return {};
+  }
+  if (expression.text == "process::self") {
+    if (!expression.operands.empty()) {
+      report(
+          "FSIM-ELAB-SVPROCESS-001",
+          "process::self() does not accept arguments",
+          expression.span);
+      return std::nullopt;
+    }
+    const auto destination = allocate_register(
+        64, frontend::ValueDomain::Logic4);
+    process_.operations.emplace_back(ProcessSelf{destination});
+    return destination;
+  }
+  if (expression.text != ".status"
+      && expression.text != ".completed") {
+    return {};
+  }
+  if (expression.operands.size() != 1U
+      || expression.operands.front().kind
+          != ExpressionKind::Identifier
+      || !is_process_type(
+          object_type(expression.operands.front().text))) {
+    report(
+        "FSIM-ELAB-SVPROCESS-001",
+        "process status queries require a direct process receiver "
+        "and no arguments",
+        expression.span);
+    return std::nullopt;
+  }
+  const auto& receiver = expression.operands.front();
+  const auto source = lower_expression(
+      receiver, 64, object_type(receiver.text));
+  if (!source || register_width(*source) != 64U) {
+    report(
+        "FSIM-ELAB-SVPROCESS-001",
+        "process status receiver has no 64-bit handle value",
+        receiver.span);
+    return std::nullopt;
+  }
+  if (expression.text == ".status") {
+    const auto destination = allocate_register(
+        32, frontend::ValueDomain::Integer);
+    process_.operations.emplace_back(
+        ProcessStatusQuery{destination, *source});
+    return destination;
+  }
+  const auto destination = allocate_register(
+      1, frontend::ValueDomain::Bit2);
+  process_.operations.emplace_back(
+      ProcessCompleted{destination, *source});
+  return destination;
+}
+
+bool Lowerer::lower_process_method_statement(
+    const Statement& statement) {
+  if (language_ == frontend::Language::SystemVerilog2017
+      && statement.kind == StatementKind::TaskCall) {
+    const auto separator = statement.task_name.rfind('.');
+    const auto method = separator == std::string::npos
+        ? std::string_view{}
+        : std::string_view{statement.task_name}.substr(separator);
+    if (method != ".await" && method != ".kill") {
+      return false;
+    }
+    const auto receiver_name = statement.task_name.substr(0, separator);
+    if (!statement.task_arguments.empty()
+        || receiver_name.find('.') != std::string::npos
+        || receiver_name.find("::") != std::string::npos
+        || !is_process_type(object_type(receiver_name))) {
+      report(
+          "FSIM-ELAB-SVPROCESS-002",
+          "process await/kill methods require a direct process receiver "
+          "and no arguments",
+          statement.span);
+      return true;
+    }
+    const Expression receiver{
+        ExpressionKind::Identifier,
+        receiver_name,
+        {},
+        statement.span};
+    const auto source = lower_expression(
+        receiver, 64, object_type(receiver_name));
+    if (!source || register_width(*source) != 64U) {
+      report(
+          "FSIM-ELAB-SVPROCESS-002",
+          "process method receiver has no 64-bit handle value",
+          statement.span);
+      return true;
+    }
+    if (method == ".await") {
+      process_.operations.emplace_back(ProcessAwait{*source});
+    } else {
+      process_.operations.emplace_back(ProcessKill{*source});
+    }
+    return true;
+  }
+  const auto& call = statement.value;
+  if (language_ != frontend::Language::SystemVerilog2017
+      || call.kind != ExpressionKind::Call
+      || (call.text != ".await" && call.text != ".kill")) {
+    return false;
+  }
+  if (call.operands.size() != 1U
+      || call.operands.front().kind != ExpressionKind::Identifier
+      || !is_process_type(
+          object_type(call.operands.front().text))) {
+    report(
+        "FSIM-ELAB-SVPROCESS-002",
+        "process await/kill methods require a direct process receiver "
+        "and no arguments",
+        call.span);
+    return true;
+  }
+  const auto& receiver = call.operands.front();
+  const auto source = lower_expression(
+      receiver, 64, object_type(receiver.text));
+  if (!source || register_width(*source) != 64U) {
+    report(
+        "FSIM-ELAB-SVPROCESS-002",
+        "process method receiver has no 64-bit handle value",
+        receiver.span);
+    return true;
+  }
+  if (call.text == ".await") {
+    process_.operations.emplace_back(ProcessAwait{*source});
+  } else {
+    process_.operations.emplace_back(ProcessKill{*source});
+  }
+  return true;
+}
+
 void Lowerer::lower_fork(const Statement& statement) {
   if (active_function_ || active_task_ || active_procedure_) {
     report(

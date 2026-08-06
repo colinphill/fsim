@@ -183,7 +183,43 @@ ContainerObjectId Interpreter::add_container_object(
     }
   }
   impl_->container_objects.push_back(std::move(object));
+  impl_->container_signal_aliases.push_back(std::nullopt);
   return id;
+}
+
+void Interpreter::add_container_signal_alias(
+    const ContainerSignalAlias alias) {
+  if (impl_->started) {
+    throw std::logic_error{
+        "cannot add a SimIR container signal alias after start"};
+  }
+  if (alias.object >= impl_->container_objects.size()
+      || alias.signal >= impl_->signals.size()) {
+    throw std::out_of_range{
+        "SimIR container signal alias identifier is out of range"};
+  }
+  if (!alias.readable && !alias.writable) {
+    throw std::invalid_argument{
+        "a SimIR container signal alias must be readable or writable"};
+  }
+  if (impl_->container_signal_aliases[alias.object]) {
+    throw std::invalid_argument{
+        "a SimIR container object has more than one signal alias"};
+  }
+  const auto& object = impl_->container_objects[alias.object];
+  if (object.slice_alias) {
+    throw std::invalid_argument{
+        "a SimIR container slice cannot alias a packed signal"};
+  }
+  const auto width =
+      container_signal_bridge_width(object.initial_value.type);
+  if (!width
+      || *width
+          != impl_->signals[alias.signal].initial_value.width()) {
+    throw std::invalid_argument{
+        "a SimIR container signal alias has incompatible width or shape"};
+  }
+  impl_->container_signal_aliases[alias.object] = alias;
 }
 
 ProcessId Interpreter::add_process(Process process) {
@@ -348,6 +384,10 @@ ProcessId Interpreter::add_process(Process process) {
   }
 
   Impl::ProcessState state;
+  if (impl_->next_process_generation == 0) {
+    throw std::overflow_error{"SimIR process generation overflow"};
+  }
+  state.generation = impl_->next_process_generation++;
   state.frame = std::make_shared<Impl::ProcessFrame>();
   state.frame->registers.assign(
       process.register_count, PackedLogic4{});
@@ -363,6 +403,9 @@ ProcessId Interpreter::add_process(Process process) {
       impl_->root_seed, id);
   state.design_process = id;
   state.waiting_on_static = !process.initialize;
+  state.status = process.initialize
+      ? ProcessStatus::running
+      : ProcessStatus::waiting;
   state.program = std::move(process);
   impl_->processes.push_back(std::move(state));
   return id;

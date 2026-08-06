@@ -30,9 +30,11 @@ namespace fsim::runtime::simir {
   if (fsim::runtime::simir::operation_holds<WaitFork>(operation)) {
     clear_wait_timeout(process);
     if (process.live_children.empty()) {
+      process.status = ProcessStatus::running;
       queue_current(process.program.id);
     } else {
       process.waiting_for_children = true;
+      process.status = ProcessStatus::waiting;
     }
     notify_execution_point(
         process, instruction, ExecutionPointKind::process_suspend,
@@ -44,7 +46,179 @@ namespace fsim::runtime::simir {
   }
   clear_wait_timeout(process);
   cancel_fork_descendants(process);
+  process.status = ProcessStatus::running;
   queue_current(process.program.id);
+  notify_execution_point(
+      process, instruction, ExecutionPointKind::process_suspend,
+      process.current_source);
+  return true;
+}
+
+std::uint64_t Interpreter::Impl::process_handle(
+    const ProcessState& process) const {
+  const auto encoded_id =
+      static_cast<std::uint64_t>(process.program.id) + 1U;
+  if (encoded_id > std::numeric_limits<std::uint32_t>::max()
+      || process.generation == 0) {
+    throw std::overflow_error{"SimIR process handle identity overflow"};
+  }
+  return (static_cast<std::uint64_t>(process.generation) << 32U)
+      | encoded_id;
+}
+
+Interpreter::Impl::ProcessState&
+Interpreter::Impl::process_from_handle(
+    ProcessState& caller,
+    const RegisterId source) {
+  const auto payload = caller.executor
+      ? caller.executor->read_register(source, 64)
+      : get_register(caller, source);
+  if (payload.width() != 64) {
+    fail(caller, "process handle register must be 64 bits");
+  }
+  const auto word = payload.low_word();
+  if (word.bval != 0 || word.aval == 0) {
+    fail(caller, "process handle is null or unknown");
+  }
+  const auto encoded_id =
+      static_cast<std::uint32_t>(word.aval);
+  const auto generation =
+      static_cast<std::uint32_t>(word.aval >> 32U);
+  if (encoded_id == 0
+      || static_cast<std::size_t>(encoded_id - 1U)
+          >= processes.size()) {
+    fail(caller, "process handle is stale");
+  }
+  auto& target = get_process(
+      static_cast<ProcessId>(encoded_id - 1U));
+  if (generation == 0 || target.generation != generation) {
+    fail(caller, "process handle generation is stale");
+  }
+  return target;
+}
+
+void Interpreter::Impl::complete_process(
+    ProcessState& process,
+    const ProcessStatus terminal_status) {
+  if (terminal_status != ProcessStatus::finished
+      && terminal_status != ProcessStatus::killed) {
+    fail(process, "process completion requires a terminal status");
+  }
+  process.halted = true;
+  process.killed = terminal_status == ProcessStatus::killed;
+  process.status = terminal_status;
+  process.waiting_on_static = false;
+  process.waiting_on_signal = false;
+  process.waiting_for_children = false;
+  process.waiting_fork_group.reset();
+  if (process.waiting_process) {
+    get_process(*process.waiting_process)
+        .process_waiters.erase(process.program.id);
+    process.waiting_process.reset();
+  }
+  remove_dynamic_wait(process);
+  clear_wait_timeout(process);
+
+  const auto waiters = std::move(process.process_waiters);
+  process.process_waiters.clear();
+  for (const auto waiter_id : waiters) {
+    auto& waiter = get_process(waiter_id);
+    if (waiter.halted
+        || waiter.waiting_process != process.program.id) {
+      continue;
+    }
+    waiter.waiting_process.reset();
+    waiter.status = ProcessStatus::running;
+    queue_active_current(waiter_id);
+  }
+}
+
+[[nodiscard]] bool Interpreter::Impl::handle_process_boundary(
+    ProcessState& process,
+    const InstructionIndex instruction,
+    const Operation& operation) {
+  if (const auto* self =
+          fsim::runtime::simir::operation_get_if<ProcessSelf>(
+              &operation)) {
+    write_process_register(
+        process,
+        self->destination,
+        PackedLogic4::from_aval_bval(
+            64, process_handle(process), 0));
+    process.status = ProcessStatus::running;
+    return true;
+  }
+  if (const auto* query =
+          fsim::runtime::simir::operation_get_if<ProcessStatusQuery>(
+              &operation)) {
+    const auto status = process_from_handle(
+        process, query->source).status;
+    write_process_register(
+        process,
+        query->destination,
+        PackedLogic4::from_aval_bval(
+            32, static_cast<std::uint32_t>(status), 0));
+    process.status = ProcessStatus::running;
+    return true;
+  }
+  if (const auto* query =
+          fsim::runtime::simir::operation_get_if<ProcessCompleted>(
+              &operation)) {
+    const auto status = process_from_handle(
+        process, query->source).status;
+    const auto completed =
+        status == ProcessStatus::finished
+        || status == ProcessStatus::killed;
+    write_process_register(
+        process,
+        query->destination,
+        PackedLogic4::from_aval_bval(1, completed ? 1U : 0U, 0));
+    process.status = ProcessStatus::running;
+    return true;
+  }
+  if (const auto* await =
+          fsim::runtime::simir::operation_get_if<ProcessAwait>(
+              &operation)) {
+    auto& target = process_from_handle(process, await->source);
+    if (target.program.id == process.program.id) {
+      process.pc = instruction;
+      fail(process, "a process cannot await itself");
+    }
+    clear_wait_timeout(process);
+    if (target.status == ProcessStatus::finished
+        || target.status == ProcessStatus::killed) {
+      process.status = ProcessStatus::running;
+      queue_current(process.program.id);
+    } else {
+      target.process_waiters.insert(process.program.id);
+      process.waiting_process = target.program.id;
+      process.status = ProcessStatus::waiting;
+    }
+    notify_execution_point(
+        process, instruction, ExecutionPointKind::process_suspend,
+        process.current_source);
+    return true;
+  }
+  const auto* kill =
+      fsim::runtime::simir::operation_get_if<ProcessKill>(
+          &operation);
+  if (kill == nullptr) {
+    return false;
+  }
+  auto& target = process_from_handle(process, kill->source);
+  clear_wait_timeout(process);
+  if (!target.halted) {
+    cancel_fork_descendants(target);
+    if (target.fork_parent) {
+      complete_fork_child(target, ProcessStatus::killed);
+    } else {
+      complete_process(target, ProcessStatus::killed);
+    }
+  }
+  if (!process.halted) {
+    process.status = ProcessStatus::running;
+    queue_current(process.program.id);
+  }
   notify_execution_point(
       process, instruction, ExecutionPointKind::process_suspend,
       process.current_source);
@@ -58,12 +232,6 @@ void Interpreter::Impl::spawn_fork(
   const auto parent_id = parent.program.id;
   if (!parent.frame) {
     fail(parent, "fork parent has no lexical frame");
-  }
-  if (parent.active_fork_sites.contains(instruction)) {
-    fail(
-        parent,
-        "a bounded fork site cannot be re-entered while one of its "
-        "children is still active");
   }
   if (instruction + 1 >= parent.program.operations.size()) {
     fail(parent, "fork parent continuation is outside the operation stream");
@@ -106,6 +274,10 @@ void Interpreter::Impl::spawn_fork(
       throw std::length_error{"too many dynamic SimIR processes"};
     }
     ProcessState child;
+    if (next_process_generation == 0) {
+      throw std::overflow_error{"SimIR process generation overflow"};
+    }
+    child.generation = next_process_generation++;
     child.program = program;
     child.design_process = design_process;
     child.program.id = child_id;
@@ -135,7 +307,9 @@ void Interpreter::Impl::spawn_fork(
   auto& current_parent = get_process(parent_id);
   current_parent.live_children.insert(children.begin(), children.end());
   if (!children.empty()) {
-    current_parent.active_fork_sites.emplace(instruction, children);
+    auto& site_children =
+        current_parent.active_fork_sites[instruction];
+    site_children.insert(children.begin(), children.end());
   }
   if (operation.join != ForkJoinKind::none && !children.empty()) {
     fork_groups.emplace(
@@ -143,6 +317,7 @@ void Interpreter::Impl::spawn_fork(
         ForkGroup{
             parent_id, instruction, operation.join, children, false});
     current_parent.waiting_fork_group = group_id;
+    current_parent.status = ProcessStatus::waiting;
   }
 
   for (const auto child : children) {
@@ -154,19 +329,18 @@ void Interpreter::Impl::spawn_fork(
     queue_active_current(child);
   }
   if (operation.join == ForkJoinKind::none || children.empty()) {
+    current_parent.status = ProcessStatus::running;
     queue_current(parent_id);
   }
 }
 
-void Interpreter::Impl::complete_fork_child(ProcessState& child) {
+void Interpreter::Impl::complete_fork_child(
+    ProcessState& child,
+    const ProcessStatus status) {
   const auto child_id = child.program.id;
   const auto parent_id = child.fork_parent;
   const auto group_id = child.fork_group;
-  child.halted = true;
-  child.waiting_on_static = false;
-  child.waiting_on_signal = false;
-  remove_dynamic_wait(child);
-  clear_wait_timeout(child);
+  complete_process(child, status);
   if (!parent_id) {
     return;
   }
@@ -184,6 +358,7 @@ void Interpreter::Impl::complete_fork_child(ProcessState& child) {
   }
   if (parent.waiting_for_children && parent.live_children.empty()) {
     parent.waiting_for_children = false;
+    parent.status = ProcessStatus::running;
     queue_active_current(*parent_id);
   }
   if (!group_id) {
@@ -204,6 +379,7 @@ void Interpreter::Impl::complete_fork_child(ProcessState& child) {
   }
   group.parent_resumed = true;
   parent.waiting_fork_group.reset();
+  parent.status = ProcessStatus::running;
   queue_active_current(group.parent);
   if (group.join == ForkJoinKind::any) {
     for (const auto remaining : group.children) {
@@ -225,7 +401,7 @@ void Interpreter::Impl::cancel_fork_descendants(ProcessState& parent) {
     auto& child = get_process(child_id);
     cancel_fork_descendants(child);
     if (!child.halted) {
-      complete_fork_child(child);
+      complete_fork_child(child, ProcessStatus::killed);
     }
   }
   parent.live_children.clear();

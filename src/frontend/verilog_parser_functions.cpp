@@ -31,6 +31,7 @@ FunctionDeclaration VerilogParser::parse_function(
       || keyword("shortint") || keyword("longint")
       || keyword("shortreal") || keyword("real")
       || keyword("realtime") || keyword("chandle")
+      || keyword("process")
       || keyword("time") || keyword("integer") || keyword("int")
       || keyword("logic") || keyword("reg") || keyword("bit")
       || keyword("signed") || keyword("unsigned")
@@ -113,7 +114,7 @@ FunctionDeclaration VerilogParser::parse_function(
           || keyword("shortint") || keyword("longint")
           || keyword("time") || keyword("shortreal")
           || keyword("real") || keyword("realtime")
-          || keyword("chandle")
+          || keyword("chandle") || keyword("process")
           || keyword("integer")
           || keyword("int") || keyword("logic")
           || keyword("reg") || keyword("bit")
@@ -325,15 +326,10 @@ void VerilogParser::validate_function_body(
     }
   }
 
-  bool unsupported_static_block_local = false;
   const auto collect_declarations =
       [&](const auto& self,
           const std::vector<Statement>& statements) -> void {
         for (const auto& statement : statements) {
-          unsupported_static_block_local =
-              unsupported_static_block_local
-              || (!function.automatic
-                  && !statement.declarations.empty());
           for (const auto& declaration : statement.declarations) {
             locals.insert(declaration.name);
           }
@@ -356,14 +352,6 @@ void VerilogParser::validate_function_body(
   }
   collect_declarations(
       collect_declarations, function.statements);
-  if (unsupported_static_block_local) {
-    error(
-        start,
-        "FSIM-SV-SEM-099",
-        "static or implicit-lifetime functions require declarations in "
-        "the function body scope");
-  }
-
   bool assigns_result = false;
   const auto inspect =
       [&](const auto& self,
@@ -522,7 +510,7 @@ TaskDeclaration VerilogParser::parse_task(
       const bool explicit_type =
           keyword("string") || keyword("byte") || keyword("shortint") ||
           keyword("longint") || keyword("time") || keyword("shortreal") ||
-          keyword("real") || keyword("realtime") || keyword("chandle") || keyword("integer") ||
+          keyword("real") || keyword("realtime") || keyword("chandle") || keyword("process") || keyword("integer") ||
           keyword("int") || keyword("logic") || keyword("reg") ||
           keyword("bit") || keyword("signed") || keyword("unsigned") ||
           at(TokenKind::LeftBracket) || is_named_type_reference_start();
@@ -694,28 +682,6 @@ void VerilogParser::validate_task_body(
             "duplicate or conflicting task local '" + variable.name + "'");
     }
   }
-
-  const auto reject_nested_static_declarations =
-      [&](const auto& self,
-          const std::vector<Statement>& statements) -> void {
-        for (const auto& statement : statements) {
-          if (!task.automatic && !statement.declarations.empty()) {
-            error(
-                start,
-                "FSIM-SV-SEM-099",
-                "static or implicit-lifetime tasks require declarations "
-                "in the task body scope");
-          }
-          self(self, statement.statements);
-          self(self, statement.else_statements);
-          for (const auto& alternative :
-               statement.case_alternatives) {
-            self(self, alternative.statements);
-          }
-        }
-      };
-  reject_nested_static_declarations(
-      reject_nested_static_declarations, task.statements);
 
   const auto inspect =
       [&](const auto& self,

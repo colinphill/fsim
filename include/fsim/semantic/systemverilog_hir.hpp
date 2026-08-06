@@ -61,6 +61,7 @@ enum class TypeForm : std::uint8_t {
     type_parameter,
     class_handle,
     tagged_union,
+    unpacked_union,
 };
 
 enum class ModportMemberKind : std::uint8_t {

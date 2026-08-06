@@ -95,8 +95,8 @@ void Lowerer::initialize_function_support() {
             frame.static_variables =
                 allocate_static_callable_variables(
                     function.variables,
-                    "FSIM-ELAB-SVFUNC-013",
-                    "function");
+                    function.statements,
+                    function.name);
         }
         function_frames_.push_back(std::move(frame));
         overloads.push_back(index);
@@ -325,6 +325,24 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
         frame.allocated = true;
     }
 
+    std::vector<Expression> copy_out_targets(function.arguments.size());
+    for (std::size_t index = 0;
+         index < function.arguments.size(); ++index) {
+        if (function.arguments[index].direction
+            == frontend::PortDirection::Input) {
+            continue;
+        }
+        auto target = capture_callable_copy_out_target(
+            *(*actuals)[index],
+            "@function_target_" + std::to_string(function_index)
+                + "_" + std::to_string(index)
+                + "_" + std::to_string(process_.operations.size()));
+        if (!target) {
+            return std::nullopt;
+        }
+        copy_out_targets[index] = std::move(*target);
+    }
+
     for (std::size_t index = 0;
          index < function.arguments.size(); ++index) {
         const auto& formal = function.arguments[index];
@@ -440,7 +458,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_user_function_expression(
             continue;
         }
         lower_callable_copy_out(
-            *(*actuals)[index],
+            copy_out_targets[index],
             formal.type,
             frame.arguments[index],
             frame.string_arguments[index],

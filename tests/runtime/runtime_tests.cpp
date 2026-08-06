@@ -21,6 +21,7 @@ int main() {
     test_systemverilog_unicode_strings();
     test_scheduler_phase_order();
     test_scheduler_stop_resume();
+    test_scheduler_ownership_and_failure_containment();
     test_scheduler_time_limit_before_future_event();
     test_scheduler_safe_point_scheduling();
     test_scheduler_delta_limit();
@@ -47,6 +48,7 @@ int main() {
     test_simir_pause_resume_lifecycle();
     test_simir_final_process_lifecycle();
     test_simir_fork_process_lifecycle();
+    test_simir_synchronization_objects();
     test_simir_alternate_executor_context_and_boundaries();
     test_simir_alternate_executor_dynamic_wait();
     test_simir_timed_dynamic_wait_rearm();
@@ -71,6 +73,7 @@ int main() {
     test_simir_display_output();
     test_deterministic_random_values();
     test_transition_delay_selection();
+    test_simir_runtime_value_delays();
     test_simir_inertial_transition_writes();
     test_simir_module_paths();
     test_simir_module_timing_checks();

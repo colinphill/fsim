@@ -180,3 +180,12 @@ and 217 authored test/control files. The real/time/string/chandle algorithms,
 fixtures, artifact payloads, and documentation are clean-room code; no UVM
 source, foreign runtime, external Unicode/number library, third-party scalar
 corpus, or provenance entry is imported.
+
+v2 Batches 151-152 add arbitrary-width packed ownership plus multidimensional
+and recursive unpacked values, string associative storage, procedural timing,
+process/synchronization services, and their focused executable owners. The
+reviewed inventory now contains 1,875 diagnostics, 570 bounded C/C++ sources,
+660 authored artifacts, and 221 authored test/control files. The algorithms,
+fixtures, artifact payloads, and documentation are clean-room code; no UVM
+source, external scheduler/container library, third-party procedural corpus,
+or provenance entry is imported.

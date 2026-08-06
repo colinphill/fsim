@@ -82,6 +82,61 @@ endmodule
       && interpreter->signal_value(*result).to_msb_string()
           == "10111111");
 
+  const auto handles = fsim::frontend::parse_text(
+      "process_handles.sv",
+      R"(
+module process_handles;
+  process handle;
+  int status_value;
+  bit completed;
+  initial begin
+    fork
+      begin
+        handle = process::self();
+        #1;
+      end
+    join_none
+    #0;
+    status_value = handle.status();
+    completed = handle.completed();
+    handle.await();
+    handle.kill();
+  end
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(handles.ok());
+  assert(
+      handles.design.units.front().signals.front().type.spelling
+      == "process");
+  const auto handles_elaborated =
+      fsim::elaboration::elaborate(handles.design, "process_handles");
+  if (!handles_elaborated.ok()) {
+    for (const auto& diagnostic : handles_elaborated.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
+  assert(handles_elaborated.ok());
+  const auto& handle_operations =
+      handles_elaborated.design->processes().front().operations;
+  const auto has_operation = [&](const auto* tag) {
+    using OperationType =
+        std::remove_cv_t<
+            std::remove_pointer_t<decltype(tag)>>;
+    return std::ranges::any_of(
+        handle_operations,
+        [](const auto& operation) {
+          return fsim::runtime::simir::operation_holds<
+              OperationType>(operation);
+        });
+  };
+  assert(has_operation(static_cast<ProcessSelf*>(nullptr)));
+  assert(has_operation(static_cast<ProcessStatusQuery*>(nullptr)));
+  assert(has_operation(static_cast<ProcessCompleted*>(nullptr)));
+  assert(has_operation(static_cast<ProcessAwait*>(nullptr)));
+  assert(has_operation(static_cast<ProcessKill*>(nullptr)));
+
   const auto callable = fsim::frontend::parse_text(
       "callable_fork.sv",
       R"(

@@ -34,12 +34,15 @@ struct ContainerType {
   std::uint32_t element_width{1};
   bool two_state{};
   bool signed_elements{};
+  bool union_aggregate{};
+  bool aggregate_value{};
   bool queue{};
   bool associative{};
   bool fixed{};
   std::uint32_t index_width{32};
   bool two_state_indices{};
   bool signed_indices{true};
+  bool string_indices{};
   std::int32_t index_left{};
   std::int32_t index_right{};
   std::optional<std::uint64_t> maximum_elements;
@@ -64,6 +67,7 @@ struct ContainerValue {
   // Associative-array keys are canonical and positionally paired with the
   // active element vector. Other container kinds keep this empty.
   std::vector<PackedLogic4> keys;
+  std::vector<std::string> string_keys;
   ContainerValue() = default;
   // Retain the original packed-container construction surface while the
   // additional storages remain an internal representation detail.
@@ -87,7 +91,10 @@ maximum_container_elements(const ContainerType& type) noexcept {
              || type.element_kind == ContainerElementKind::Aggregate) {
     bytes_per_element = sizeof(ContainerValue);
   }
-  if (type.associative) bytes_per_element += sizeof(PackedLogic4);
+  if (type.associative) {
+    bytes_per_element += type.string_indices
+        ? sizeof(std::string) : sizeof(PackedLogic4);
+  }
   return maximum_container_storage_bytes / bytes_per_element;
 }
 

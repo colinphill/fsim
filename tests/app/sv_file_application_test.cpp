@@ -31,6 +31,8 @@ struct TemporaryDirectory {
 struct Capture {
   fsim::runtime::RunResult result;
   std::string output_file;
+  std::string multichannel_first;
+  std::string multichannel_second;
   std::string saved_line;
   std::string binary_word;
   std::string positioned_word;
@@ -38,6 +40,11 @@ struct Capture {
   std::string memory_binary_dump;
   std::string packet_fread_dump;
   std::string packet_memory_dump;
+  std::string multidimensional_memory_dump;
+  std::string string_memory_dump;
+  std::string aggregate_memory_dump;
+  std::string multidimensional_fread_dump;
+  std::string aggregate_fread_dump;
   std::vector<std::string> binary_memory;
   std::vector<std::string> packet_memory;
   std::vector<std::string> keys;
@@ -155,6 +162,10 @@ Capture run_once(
     capture.packet_memory.push_back(element.to_msb_string());
   }
   capture.output_file = read_text(config.base_directory / "output.txt");
+  capture.multichannel_first =
+      read_text(config.base_directory / "multichannel-first.txt");
+  capture.multichannel_second =
+      read_text(config.base_directory / "multichannel-second.txt");
   capture.memory_hex_dump =
       read_text(config.base_directory / "dump.hex");
   capture.memory_binary_dump =
@@ -163,6 +174,16 @@ Capture run_once(
       read_text(config.base_directory / "packets-fread.hex");
   capture.packet_memory_dump =
       read_text(config.base_directory / "packets-dump.hex");
+  capture.multidimensional_memory_dump =
+      read_text(config.base_directory / "multidimensional-dump.hex");
+  capture.string_memory_dump =
+      read_text(config.base_directory / "strings-dump.mem");
+  capture.aggregate_memory_dump =
+      read_text(config.base_directory / "aggregates-dump.hex");
+  capture.multidimensional_fread_dump =
+      read_text(config.base_directory / "multidimensional-fread.hex");
+  capture.aggregate_fread_dump =
+      read_text(config.base_directory / "aggregates-fread.hex");
   return capture;
 }
 
@@ -480,6 +501,9 @@ end architecture;
             << "module file_top;\n"
             << "  stable_child stable();\n"
             << "  integer writer;\n"
+            << "  integer multichannel_first;\n"
+            << "  integer multichannel_second;\n"
+            << "  integer multichannel;\n"
             << "  integer reader;\n"
             << "  integer count;\n"
             << "  integer eof_status;\n"
@@ -515,6 +539,13 @@ end architecture;
             << "    logic [3:0] data;\n"
             << "  } packet_t;\n"
             << "  packet_t packet_memory [1:0];\n"
+            << "  logic [7:0] multidimensional_memory [1:0][0:1];\n"
+            << "  string string_memory [0:1];\n"
+            << "  typedef struct {\n"
+            << "    logic [3:0] tag;\n"
+            << "    logic [3:0] data;\n"
+            << "  } aggregate_t;\n"
+            << "  aggregate_t aggregate_memory [0:1];\n"
             << "  real scan_real_value;\n"
             << "  time scan_time_value;\n"
             << "  chandle scan_handle_value;\n"
@@ -539,6 +570,11 @@ end architecture;
             << "    $fdisplay(writer, \"" << label
             << "=%0d\", 7);\n"
             << "    $fwrite(writer, \"%s\", \"tail\");\n"
+            << "    multichannel_first = $fopen(\"multichannel-first.txt\");\n"
+            << "    multichannel_second = $fopen(\"multichannel-second.txt\");\n"
+            << "    multichannel = multichannel_first | multichannel_second;\n"
+            << "    $fdisplay(multichannel, \"shared=%0d\", 9);\n"
+            << "    $fclose(multichannel);\n"
             << "    reader = $fopen(\"input.txt\", \"r\");\n"
             << "    first_character = $fgetc(reader);\n"
             << "    pushback_status = $ungetc(first_character, reader);\n"
@@ -571,6 +607,12 @@ end architecture;
             << "    memory_count = $fread(binary_memory, binary_reader, 2, 2);\n"
             << "    rewind_status = $rewind(binary_reader);\n"
             << "    packet_count = $fread(packet_memory, binary_reader, 1, 2);\n"
+            << "    rewind_status = $rewind(binary_reader);\n"
+            << "    memory_count = $fread(multidimensional_memory, binary_reader, 1, 2);\n"
+            << "    $writememh(\"multidimensional-fread.hex\", multidimensional_memory);\n"
+            << "    rewind_status = $rewind(binary_reader);\n"
+            << "    packet_count = $fread(aggregate_memory, binary_reader, 0, 2);\n"
+            << "    $writememh(\"aggregates-fread.hex\", aggregate_memory);\n"
             << "    $fclose(binary_reader);\n"
             << "    binary_reader = $fopen(\"scalar.bin\", \"rb\");\n"
             << "    binary_real_count = $fread(binary_real_value, binary_reader);\n"
@@ -582,6 +624,12 @@ end architecture;
             << "    $writememh(\"packets-fread.hex\", packet_memory);\n"
             << "    $readmemh(\"packets.hex\", packet_memory);\n"
             << "    $writememh(\"packets-dump.hex\", packet_memory);\n"
+            << "    $readmemh(\"multidimensional.hex\", multidimensional_memory);\n"
+            << "    $writememh(\"multidimensional-dump.hex\", multidimensional_memory);\n"
+            << "    $readmemh(\"strings.mem\", string_memory);\n"
+            << "    $writememb(\"strings-dump.mem\", string_memory);\n"
+            << "    $readmemh(\"aggregates.hex\", aggregate_memory);\n"
+            << "    $writememh(\"aggregates-dump.hex\", aggregate_memory);\n"
             << "    $fwrite(writer, \"|chars=%0d\", first_character);\n"
             << "    $fwrite(writer, \"/%0d\", pushback_status);\n"
             << "    $fwrite(writer, \"/%0d\", second_character);\n"
@@ -639,6 +687,15 @@ end architecture;
             "\x00\x00\x00\x00\x00\x00\x00\x00",
             24});
     write_text(packet_input, "a1\nb2\n");
+    write_text(
+        directory.path / "multidimensional.hex",
+        "11\n22\n33\n44\n");
+    write_text(
+        directory.path / "strings.mem",
+        "\"alpha beta\"\n\"line\\n//literal\"\n");
+    write_text(
+        directory.path / "aggregates.hex",
+        "a5\n3c\n");
     const auto config =
         make_config(directory.path, stable, source, optimization);
     const auto reference =
@@ -658,6 +715,8 @@ end architecture;
               "binary=4/305419896/4/0/2/22136/0/2/18/52\n"
               "binary_scalar=1.25/23/0/8/8/8\n");
     assert(reference.saved_line == "Zlpha\n");
+    assert(reference.multichannel_first == "shared=9\n");
+    assert(reference.multichannel_second == "shared=9\n");
     assert(reference.binary_word
            == "00010010001101000101011001111000");
     assert(reference.positioned_word == "0101011001111000");
@@ -670,9 +729,22 @@ end architecture;
         == "00010010\n00110100\n");
     assert(reference.packet_fread_dump == "34\n12\n");
     assert(reference.packet_memory_dump == "a1\nb2\n");
+    assert(
+        reference.multidimensional_memory_dump
+        == "11\n22\n33\n44\n");
+    assert(
+        reference.string_memory_dump
+        == "\"alpha beta\"\n\"line\\n//literal\"\n");
+    assert(reference.aggregate_memory_dump == "a5\n3c\n");
+    assert(
+        reference.multidimensional_fread_dump
+        == "xx\n12\n34\nxx\n");
+    assert(reference.aggregate_fread_dump == "12\n34\n");
     assert((reference.packet_memory
             == std::vector<std::string>{"10110010", "10100001"}));
     assert(reference.output_file == cold.output_file);
+    assert(reference.multichannel_first == cold.multichannel_first);
+    assert(reference.multichannel_second == cold.multichannel_second);
     assert(reference.saved_line == cold.saved_line);
     assert(reference.binary_word == cold.binary_word);
     assert(reference.positioned_word == cold.positioned_word);
@@ -681,8 +753,19 @@ end architecture;
     assert(reference.memory_binary_dump == cold.memory_binary_dump);
     assert(reference.packet_fread_dump == cold.packet_fread_dump);
     assert(reference.packet_memory_dump == cold.packet_memory_dump);
+    assert(
+        reference.multidimensional_memory_dump
+        == cold.multidimensional_memory_dump);
+    assert(reference.string_memory_dump == cold.string_memory_dump);
+    assert(reference.aggregate_memory_dump == cold.aggregate_memory_dump);
+    assert(
+        reference.multidimensional_fread_dump
+        == cold.multidimensional_fread_dump);
+    assert(reference.aggregate_fread_dump == cold.aggregate_fread_dump);
     assert(reference.packet_memory == cold.packet_memory);
     assert(cold.output_file == warm.output_file);
+    assert(cold.multichannel_first == warm.multichannel_first);
+    assert(cold.multichannel_second == warm.multichannel_second);
     assert(cold.saved_line == warm.saved_line);
     assert(cold.binary_word == warm.binary_word);
     assert(cold.positioned_word == warm.positioned_word);
@@ -691,6 +774,15 @@ end architecture;
     assert(cold.memory_binary_dump == warm.memory_binary_dump);
     assert(cold.packet_fread_dump == warm.packet_fread_dump);
     assert(cold.packet_memory_dump == warm.packet_memory_dump);
+    assert(
+        cold.multidimensional_memory_dump
+        == warm.multidimensional_memory_dump);
+    assert(cold.string_memory_dump == warm.string_memory_dump);
+    assert(cold.aggregate_memory_dump == warm.aggregate_memory_dump);
+    assert(
+        cold.multidimensional_fread_dump
+        == warm.multidimensional_fread_dump);
+    assert(cold.aggregate_fread_dump == warm.aggregate_fread_dump);
     assert(cold.packet_memory == warm.packet_memory);
     assert(reference.keys == cold.keys && cold.keys == warm.keys);
     assert(

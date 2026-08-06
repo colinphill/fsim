@@ -1336,6 +1336,18 @@ endmodule
       expanded_static_interpreter->run().status
       == fsim::runtime::RunStatus::completed);
 
+  const auto malformed_shuffle = fsim::frontend::parse_text(
+      "container-malformed-shuffle.sv",
+      "module container_malformed_shuffle; byte values[]; "
+      "initial values.shuffle(1); endmodule",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(!malformed_shuffle.ok());
+  assert(std::ranges::any_of(
+      malformed_shuffle.diagnostics,
+      [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-SV-SEM-081";
+      }));
+
   const auto invalid = fsim::frontend::parse_text(
       "container-invalid-lowering.sv",
       R"(
@@ -1349,6 +1361,7 @@ module container_invalid_lowering;
   byte lookup[int];
   byte dynamic[];
   byte fixed[1:0];
+  string strings[1:0];
   byte too_large[0:1000000000];
   int runtime_bound;
   byte nonconstant[runtime_bound:0];
@@ -1421,6 +1434,8 @@ module container_invalid_lowering;
     fixed[0].sort();
     result = fixed.sort();
     fixed.shuffle();
+    lookup.shuffle();
+    strings.shuffle();
     locator_result = lookup.min();
     dynamic = fixed.min();
     locator_indices = fixed.unique();
@@ -1477,8 +1492,6 @@ endmodule
       rejected, "FSIM-ELAB-SVORDER-003"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVORDER-004"));
-  assert(has_diagnostic(
-      rejected, "FSIM-ELAB-SVORDER-005"));
   assert(has_diagnostic(
       rejected, "FSIM-ELAB-SVORDER-006"));
   assert(has_diagnostic(

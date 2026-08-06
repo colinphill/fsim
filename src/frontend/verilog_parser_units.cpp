@@ -1020,7 +1020,7 @@ Type VerilogParser::parse_parameter_type() {
     type.is_signed = false;
     return type;
   }
-  if (keyword("chandle")) {
+  if (keyword("chandle") || keyword("process")) {
     const auto token = advance();
     type.spelling = token.text;
     type.domain = ValueDomain::Unknown;
@@ -1109,7 +1109,7 @@ Type VerilogParser::parse_type_parameter_actual() {
         "parameter actual");
     return {};
   }
-  if (keyword("chandle")) {
+  if (keyword("chandle") || keyword("process")) {
     return parse_parameter_type();
   }
   if (keyword("byte") || keyword("shortint")

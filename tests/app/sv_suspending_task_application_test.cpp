@@ -7,6 +7,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <optional>
 #include <string>
 #include <system_error>
@@ -267,6 +268,330 @@ void verify_suspended_locals(
       == "00101010");
 }
 
+void verify_reference_activation(
+    const std::filesystem::path& directory) {
+  const auto source = directory / "reference_activation.sv";
+  {
+    std::ofstream output(source, std::ios::binary);
+    output << R"(`timescale 1ns/1ns
+module reference_activation;
+  logic [7:0] value;
+  logic [7:0] function_result;
+  logic [7:0] first_result;
+  logic [7:0] second_result;
+  logic [15:0] packed_value;
+  logic [15:0] selected_result;
+  integer selected;
+
+  function automatic logic [7:0] bump(
+      ref logic [7:0] target, input logic [7:0] amount);
+    target = target + amount;
+    return target;
+  endfunction
+
+  task automatic delayed_bump(
+      ref logic [7:0] target, input logic [7:0] amount);
+    target = target + amount;
+    #1;
+    target = target + amount;
+  endtask
+
+  task automatic delayed_part(ref logic [7:0] target);
+    target = target + 1;
+    #1;
+    selected = 1;
+    #1;
+    target = target + 1;
+  endtask
+
+  initial begin
+    value = 8'd1;
+    function_result = bump(value, 8'd2);
+    delayed_bump(value, 8'd3);
+    first_result = value;
+    delayed_bump(value, 8'd1);
+    second_result = value;
+  end
+  initial begin
+    packed_value = 16'h0102;
+    selected = 0;
+    delayed_part(packed_value[selected * 8 +: 8]);
+    selected_result = packed_value;
+  end
+endmodule
+)";
+    assert(output.good());
+  }
+
+  for (const auto optimization :
+       {fsim::project::Optimization::o0,
+        fsim::project::Optimization::o2}) {
+    auto config = make_config(directory, source, optimization);
+    config.project.top = "sv:work.reference_activation";
+    for (const auto engine :
+         {fsim::app::SimulationEngine::interpreter,
+          fsim::app::SimulationEngine::compiled,
+          fsim::app::SimulationEngine::compiled}) {
+      fsim::diagnostic::Engine diagnostics;
+      auto project = fsim::app::build_project(config, diagnostics);
+      if (!project) {
+        for (const auto& diagnostic : diagnostics.diagnostics()) {
+          std::cerr << diagnostic.code << ": "
+                    << diagnostic.message << '\n';
+        }
+      }
+      assert(project);
+      fsim::app::Simulation simulation{
+          std::move(*project), config.run.max_deltas, engine};
+      const auto value = simulation.find_signal(
+          "reference_activation.value");
+      const auto function_result = simulation.find_signal(
+          "reference_activation.function_result");
+      const auto first_result = simulation.find_signal(
+          "reference_activation.first_result");
+      const auto second_result = simulation.find_signal(
+          "reference_activation.second_result");
+      const auto packed_value = simulation.find_signal(
+          "reference_activation.packed_value");
+      const auto selected_result = simulation.find_signal(
+          "reference_activation.selected_result");
+      assert(
+          value && function_result && first_result && second_result
+          && packed_value && selected_result);
+      const auto result = simulation.run();
+      assert(
+          result.status == fsim::runtime::RunStatus::completed
+          && result.time == 2);
+      assert(
+          simulation.read_signal(*value).to_msb_string() == "00001011"
+          && simulation.read_signal(*function_result).to_msb_string()
+              == "00000011"
+          && simulation.read_signal(*first_result).to_msb_string()
+              == "00001001"
+          && simulation.read_signal(*second_result).to_msb_string()
+              == "00001011"
+          && simulation.read_signal(*packed_value).to_msb_string()
+              == "0000000100000100"
+          && simulation.read_signal(*selected_result).to_msb_string()
+              == "0000000100000100");
+    }
+  }
+}
+
+void verify_reference_failure(
+    const std::filesystem::path& directory) {
+  const auto source = directory / "reference_failure.sv";
+  {
+    std::ofstream output(source, std::ios::binary);
+    output << R"(`timescale 1ns/1ns
+module reference_failure;
+  logic [7:0] value;
+  integer invalid_delay;
+  task automatic fail(ref logic [7:0] target);
+    target = 8'hff;
+    #(invalid_delay);
+    target = 8'h00;
+  endtask
+  initial begin
+    value = 8'h07;
+    invalid_delay = -1;
+    fail(value);
+  end
+endmodule
+)";
+    assert(output.good());
+  }
+
+  for (const auto engine :
+       {fsim::app::SimulationEngine::interpreter,
+        fsim::app::SimulationEngine::compiled}) {
+    auto config = make_config(
+        directory, source, fsim::project::Optimization::o2);
+    config.project.top = "sv:work.reference_failure";
+    fsim::diagnostic::Engine diagnostics;
+    auto project = fsim::app::build_project(config, diagnostics);
+    if (!project) {
+      for (const auto& diagnostic : diagnostics.diagnostics()) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(project);
+    fsim::app::Simulation simulation{
+        std::move(*project), config.run.max_deltas, engine};
+    const auto value = simulation.find_signal(
+        "reference_failure.value");
+    assert(value);
+    bool rejected = false;
+    try {
+      (void)simulation.run();
+    } catch (const std::exception& error) {
+      rejected = std::string_view{error.what()}.find("cannot be negative")
+          != std::string_view::npos;
+    }
+    assert(rejected);
+    assert(
+        simulation.read_signal(*value).to_msb_string() == "00000111");
+  }
+}
+
+void verify_static_callable_lifetime(
+    const std::filesystem::path& directory) {
+  const auto source = directory / "static_callable_lifetime.sv";
+  {
+    std::ofstream output(source, std::ios::binary);
+    output << R"(`timescale 1ns/1ns
+module static_callable_lifetime;
+  logic [7:0] function_first;
+  logic [7:0] function_second;
+  logic [7:0] task_first;
+  logic [7:0] task_second;
+
+  function logic [7:0] retained_function;
+    begin : outer
+      string text = "A";
+      logic [7:0] memory[1:0] = '{8'd3, 8'd2};
+      begin : inner
+        logic [7:0] count = 0;
+        count = count + 1;
+        memory[0] = memory[0] + 1;
+        text = {text, "B"};
+        retained_function = count + memory[0] + text.len();
+      end
+    end
+  endfunction
+
+  task retained_task(output logic [7:0] result);
+    begin : scope
+      string text = "T";
+      logic [7:0] memory[1:0] = '{8'd5, 8'd4};
+      logic [7:0] count = 0;
+      count = count + 1;
+      memory[0] = memory[0] + 1;
+      text = {text, "X"};
+      #1;
+      result = count + memory[0] + text.len();
+    end
+  endtask
+
+  initial begin
+    function_first = retained_function();
+    function_second = retained_function();
+    retained_task(task_first);
+    retained_task(task_second);
+  end
+endmodule
+)";
+    assert(output.good());
+  }
+
+  for (const auto optimization :
+       {fsim::project::Optimization::o0,
+        fsim::project::Optimization::o2}) {
+    auto config = make_config(directory, source, optimization);
+    config.project.top = "sv:work.static_callable_lifetime";
+    for (const auto engine :
+         {fsim::app::SimulationEngine::interpreter,
+          fsim::app::SimulationEngine::compiled,
+          fsim::app::SimulationEngine::compiled}) {
+      fsim::diagnostic::Engine diagnostics;
+      auto project = fsim::app::build_project(config, diagnostics);
+      if (!project) {
+        for (const auto& diagnostic : diagnostics.diagnostics()) {
+          std::cerr << diagnostic.code << ": "
+                    << diagnostic.message << '\n';
+        }
+      }
+      assert(project);
+      fsim::app::Simulation simulation{
+          std::move(*project), config.run.max_deltas, engine};
+      std::optional<fsim::runtime::simir::ProcessId> process_id;
+      std::optional<std::size_t> function_text;
+      std::optional<std::size_t> task_text;
+      std::optional<std::size_t> function_memory;
+      std::optional<std::size_t> task_memory;
+      bool function_count = false;
+      bool task_count = false;
+      for (const auto& process : simulation.design().processes()) {
+        for (std::size_t index = 0;
+             index < process.debug_string_locals.size(); ++index) {
+          const auto& name = process.debug_string_locals[index].name;
+          if (name == "retained_function.outer.text") {
+            process_id = process.id;
+            function_text = index;
+          } else if (name == "retained_task.scope.text") {
+            process_id = process.id;
+            task_text = index;
+          }
+        }
+        for (std::size_t index = 0;
+             index < process.debug_container_locals.size(); ++index) {
+          const auto& name = process.debug_container_locals[index].name;
+          if (name == "retained_function.outer.memory") {
+            process_id = process.id;
+            function_memory = index;
+          } else if (name == "retained_task.scope.memory") {
+            process_id = process.id;
+            task_memory = index;
+          }
+        }
+        function_count = function_count
+            || std::ranges::any_of(
+                process.debug_locals,
+                [](const auto& local) {
+                  return local.name
+                      == "retained_function.outer.inner.count";
+                });
+        task_count = task_count
+            || std::ranges::any_of(
+                process.debug_locals,
+                [](const auto& local) {
+                  return local.name
+                      == "retained_task.scope.count";
+                });
+      }
+      assert(
+          process_id && function_text && task_text
+          && function_memory && task_memory
+          && function_count && task_count);
+      const auto function_first = simulation.find_signal(
+          "static_callable_lifetime.function_first");
+      const auto function_second = simulation.find_signal(
+          "static_callable_lifetime.function_second");
+      const auto task_first = simulation.find_signal(
+          "static_callable_lifetime.task_first");
+      const auto task_second = simulation.find_signal(
+          "static_callable_lifetime.task_second");
+      assert(
+          function_first && function_second
+          && task_first && task_second);
+      const auto result = simulation.run();
+      assert(
+          result.status == fsim::runtime::RunStatus::completed
+          && result.time == 2);
+      assert(
+          simulation.read_signal(*function_first).low_word().aval == 6
+          && simulation.read_signal(*function_second).low_word().aval == 9
+          && simulation.read_signal(*task_first).low_word().aval == 8
+          && simulation.read_signal(*task_second).low_word().aval == 11);
+      assert(
+          simulation.read_process_string_local(
+              *process_id, *function_text) == "ABB"
+          && simulation.read_process_string_local(
+              *process_id, *task_text) == "TXX");
+      const auto retained_function_memory =
+          simulation.read_process_container_local(
+              *process_id, *function_memory);
+      const auto retained_task_memory =
+          simulation.read_process_container_local(
+              *process_id, *task_memory);
+      assert(
+          retained_function_memory.elements[1].low_word().aval == 4
+          && retained_task_memory.elements[1].low_word().aval == 6);
+    }
+  }
+}
+
 } // namespace
 
 int main() {
@@ -342,6 +667,9 @@ endmodule
       };
 
   write_source(2);
+  verify_reference_activation(directory.path);
+  verify_reference_failure(directory.path);
+  verify_static_callable_lifetime(directory.path);
   std::vector<std::string> baseline_keys;
   for (const auto optimization :
        {fsim::project::Optimization::o0,

@@ -5,13 +5,14 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
-## Batch 151 start checkpoint - 2026-08-05
+## Batch 152 completed checkpoint - 2026-08-06
 
 1. Start in `/home/colin/projects/fsim`, read this file and the locked Batch
-   151 allocation in `implementation_plan_v2.md`, and verify `codex/v2` remains
-   based on pushed Batch 150 closeout `9612507`. Batch 151 Changes 1-20 are
-   complete in one accumulated closeout commit; verify the current commit with
-   `git log -1 --oneline` before beginning Batch 152.
+   152 allocation in `implementation_plan_v2.md`, and verify `codex/v2` remains
+   based on pushed Batch 151 closeout
+   `91cab87c02f0560401471c7b7495a121d2b29ba3`. Batch 152 Changes 1-20 are
+   complete in the single accumulated closeout commit containing this handoff;
+   verify the branch tip and origin match before continuing Batch 153 Change 1.
 2. Batch 150 is complete. Final implementation repair `0005462` closes the
    Windows class-artifact input stream before renaming its source. Replacement
    hosted run `31054730031` passes all eleven jobs, including the Windows MSVC
@@ -117,6 +118,314 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
 4. Batch 151 is not a sanitizer or hosted-CI boundary. Run the local sanitizer
    again at Batch 160 Change 20 under the ten-batch cadence; do not inspect
    documentation-only hosted runs.
+5. Batch 152 Change 1 is complete in the uncommitted Batch 152 worktree.
+   Leading constant/runtime index prefixes of multidimensional static unpacked
+   arrays now produce isolated remaining-rank snapshots and support exact whole
+   assignment, partial-target replacement, and fixed-array callable arguments
+   for packed/scalar leaves. The exact-LLVM Debug build uses eight workers; core
+   elaboration, container elaboration, and the O0/O2 cold/warm aggregate
+   application differential pass 3/3. The diagnostic catalog and 2,500-line
+   source-policy gates pass 2/2, and `git diff --check` is clean. Preserve this
+   dirty accumulated Batch 152 worktree and begin Change 2's multidimensional
+   range/indexed slices; do not commit, push, inspect hosted CI, or run a
+   sanitizer before Change 20.
+6. Change 2 is complete in the same accumulated worktree. Multidimensional
+   range/indexed slices now retain remaining rank and trailing dimensions,
+   adapt equal per-dimension shapes, snapshot overlapping sources, replace
+   nested targets, and cross fixed-array return/task copy-out plus slice query
+   paths. Interpreter and compiled O0/O2 cold/warm evidence passes with the
+   focused 3/3 application/elaboration matrix; catalog and source-policy gates
+   pass 2/2.
+7. Change 3 is complete in the same accumulated worktree. Named, anonymous,
+   and nested unpacked structs and unions now retain recursive container
+   profiles, defaults, member selection/update, snapshot whole-element copies,
+   scalar union-arm aliasing, debugger visibility, and deterministic compiled
+   cache identity. Missing aggregate braces recover at the declaration boundary
+   after an OOM regression exposed by the monolithic frontend suite. The full
+   exact-LLVM Debug build succeeds with eight workers; the semantic HIR,
+   frontend, elaboration, container elaboration, runtime, LLVM, 40-signal
+   interpreter/O0/O2 cold/warm application differential, diagnostic catalog,
+   and 2,500-line source-policy matrix passes 9/9. `git diff --check` is clean.
+   Continue with Change 4's recursive unpacked patterns, queries, equality, and
+   value-copy closure. Preserve the dirty accumulated Batch 152 worktree; do
+   not commit, push, inspect hosted CI, or run a sanitizer before Change 20.
+8. Change 4 is complete in the same accumulated worktree. Recursive unpacked
+   struct/union assignment patterns now cover fixed, dynamic, queue, and
+   associative containers with positional, keyed, defaulted, and cataloged
+   invalid forms. Recursive type/object queries, corrected aggregate
+   dimensions, four-state equality, snapshot copies, associative mutation and
+   deletion, union aliasing, debugger views, and deterministic native keys run
+   through both execution paths. The explicit aggregate-value profile removes
+   the dynamic-array/value-box ambiguity and is validated and retained by
+   runtime-state schema 11. The full 363-step exact-LLVM Debug build succeeds
+   with eight workers. The 48-signal interpreter/O0/O2 cold/warm application
+   differential, full application, container elaboration, runtime, LLVM,
+   diagnostic catalog, and 2,500-line source-policy matrix passes 7/7;
+   `git diff --check` is clean. Continue with Change 5's string-element
+   static/dynamic/queue/nested container execution. Preserve the dirty
+   accumulated Batch 152 worktree; do not commit, push, inspect hosted CI, or
+   run a sanitizer before Change 20.
+9. Change 5 is complete in the same accumulated worktree. Append-only
+   string-element and typed nested-element SimIR operations execute fixed,
+   dynamic, bounded queue, integral associative, multidimensional static, and
+   fixed-to-dynamic nested string containers with exact empty defaults,
+   prefix-preserving resize, selected reads/writes, whole copy/comparison, and
+   dynamic-array callable copy-in/out. Interpreter and compiled callbacks,
+   validation, native-cache identity, debugger views, and runtime-state schema
+   12 retain the new operations and recursively owned values. The full
+   363-step exact-LLVM Debug build succeeds with eight workers. Full
+   application, the interpreter/O0/O2 cold/warm aggregate differential,
+   container elaboration, runtime, LLVM, diagnostic catalog, and 2,500-line
+   source-policy gates pass 7/7; touched implementation files remain below the
+   2,500-line hard limit and `git diff --check` is clean. Continue with Change
+   6's canonical string associative indices, traversal, ordering, mutation,
+   and resource-governed identity. Preserve the dirty accumulated Batch 152
+   worktree; do not commit, push, inspect hosted CI, or run a sanitizer before
+   Change 20.
+10. Change 6 is complete in the same accumulated worktree. Canonical
+    string-indexed associative arrays own a distinct lexicographically ordered
+    strict-UTF-8 key store through elaboration, SimIR, interpreter and compiled
+    callbacks, portable artifacts, runtime-state schema 13, native-cache
+    identity, and debugger rendering. Packed and string elements support
+    default lookup, insertion, overwrite, existence, first/last/next/previous
+    traversal with string-iterator mutation, deletion, copy, and equality;
+    bounded key length, malformed UTF-8, element count, and recursively owned
+    storage reject before publication. The focused aggregate differential
+    passes through interpreter plus cold/warm LLVM O0/O2, and direct runtime
+    evidence covers ordered traversal, selection, deletion, invalid UTF-8,
+    oversized keys, and distinct packed/string storage. Crossing the 2,500-line
+    hard limit triggered the required refactor: `simir_containers.cpp` is now
+    1,777 lines and `simir_container_algorithms.cpp` is 809. The eight-worker
+    exact-LLVM Debug build succeeds; full application plus seven focused
+    frontend, container-elaboration, runtime, LLVM, application, catalog, and
+    source-policy gates pass 8/8, and `git diff --check` is clean. Continue
+    with Change 7's explicit ownership and shape-checked SystemVerilog/VHDL and
+    standard-descriptor boundaries. Preserve the dirty accumulated Batch 152
+    worktree; do not commit, push, inspect hosted CI, or run a sanitizer before
+    Change 20.
+11. Change 7 is complete in the same accumulated worktree. Fixed recursively
+    packable SystemVerilog container ports now cross VHDL and packed-signal
+    descriptor boundaries through one central runtime alias service used by
+    interpreter and compiled callbacks. Port direction gives each alias
+    explicit readable/writable ownership; registration rejects invalid IDs,
+    duplicates, slice aliases, unsupported recursive profiles, and width
+    mismatches. Elaboration compares fixed dimension counts, aggregate member
+    grouping, leaf widths, and two-/four-state domains, so equal flattened
+    widths with different recursive shapes reject through
+    `FSIM-ELAB-SVPORT-004`. Recursive pack/unpack retains declaration order
+    and exact Logic4/Logic9 states. The positive fixture drives a VHDL array of
+    four byte vectors through an SV static-array input and returns the reversed
+    values through an SV output; its same-width two-word negative rejects.
+    The full eight-worker exact-LLVM Debug build succeeds. Frontend, diagnostic
+    catalog, 2,500-line source policy, full/container elaboration, runtime,
+    LLVM, aggregate application differential, and full application gates pass
+    9/9; `git diff --check` is clean. Touched implementation and test files
+    remain below 2,000 lines. Continue with Change 8's multichannel and
+    recursive memory-file transactional I/O. Preserve the dirty accumulated
+    Batch 152 worktree; do not commit, push, inspect hosted CI, or run a
+    sanitizer before Change 20.
+12. Change 8 is complete in the same accumulated worktree. One-argument
+    `$fopen` returns multichannel descriptor bits disjoint from ordinary tagged
+    descriptors; combined writes, flushes, and closes validate selected
+    channels and retain process ownership. `$readmem*` and `$writemem*` now
+    cover deterministic row-major multidimensional storage, quoted escaped
+    UTF-8 string elements, and recursively packed aggregate elements. Failed
+    text parsing/range validation leaves the complete target unchanged.
+    `$fread` likewise accepts multidimensional and recursively packed aggregate
+    memories through staged publication. The eight-worker exact-LLVM Debug
+    build succeeds. Frontend, diagnostics catalog, 2,500-line source policy,
+    full/container elaboration, LLVM, runtime, and the interpreter plus
+    cold/warm O0/O2 file-application differential pass 8/8; `git diff --check`
+    is clean. Continue with Change 9's runtime real-valued and variable delays.
+    Preserve the dirty accumulated Batch 152 worktree; do not commit, push,
+    inspect hosted CI, or run a sanitizer before Change 20.
+13. Change 9 is complete in the same accumulated worktree. Runtime-valued
+    SystemVerilog delay controls now lower packed integral, `time`, `real`,
+    `shortreal`, and `realtime` expressions into typed `WaitFor` source
+    metadata. Project normalization supplies the timeunit tick scale and
+    timeprecision quantum; the shared kernel boundary performs deterministic
+    real rounding, unknown/negative/nonfinite/type/overflow rejection, and
+    final scheduler admission for interpreter and native frames. Native cache
+    schema v85 and runtime-state schema 14 cover the new fields. The full
+    eight-worker exact-LLVM Debug build succeeds. Design-artifact, diagnostics
+    catalog, 2,500-line source policy, full/container elaboration, LLVM,
+    runtime, and interpreter plus cold/warm O0/O2 time-application gates pass
+    8/8; `git diff --check` is clean. Continue with Change 10's generalized
+    edge expressions and runtime-selected force/release targets. Preserve the
+    dirty accumulated Batch 152 worktree; do not commit, push, inspect hosted
+    CI, or run a sanitizer before Change 20.
+14. Change 10 is complete in the same accumulated worktree. Edge-qualified
+    SystemVerilog expressions now retain deduplicated signal dependencies,
+    exact four-state transition predicates, baseline refresh, spurious-wake
+    re-arming, and mixed direct/expression event-list behavior. Runtime-selected
+    force/release bit targets reuse the signed 32-bit dynamic-index mapping in
+    both engines; masked underlying writes remain live and release reveals the
+    current underlying value. Optional selection metadata advances the native
+    cache to schema v86 and runtime state to schema 15. The full eight-worker
+    exact-LLVM Debug build succeeds. Frontend, design-artifact, diagnostics
+    catalog, 2,500-line source policy, elaboration, LLVM, and the interpreter
+    plus cold/warm O0/O2 procedural-assignment differential pass 7/7;
+    `git diff --check` is clean. Continue with Change 11's nonlocal and
+    suspending references across activation, re-entry, copy-out, and failure
+    unwinding. Preserve the dirty accumulated Batch 152 worktree; do not
+    commit, push, inspect hosted CI, or run a sanitizer before Change 20.
+15. Change 11 is complete in the same accumulated worktree. Automatic function
+    and task reference actuals now accept writable nonlocal, indexed, and
+    sliced targets. Dynamic selectors are captured once into activation-local
+    temporaries before callable execution, so suspension and sequential re-entry
+    cannot redirect copy-out; failed calls unwind before publication and leave
+    the original actual unchanged. The interpreter plus cold/warm LLVM O0/O2
+    application matrix covers module-scope function refs, sequential suspending
+    task refs, a selector changed during packed-part activation, and a runtime
+    delay exception. The full eight-worker exact-LLVM Debug build succeeds.
+    Frontend, diagnostics catalog, 2,500-line source policy, elaboration, LLVM,
+    callable-closure, and suspending-task gates pass 7/7; touched callable and
+    fixture files remain below 2,000 lines and `git diff --check` is clean.
+    Continue with Change 12's nested and nonintegral static locals/tasks,
+    specialization, initialization, debugger identity, and restart-safe
+    lifetime. Preserve the dirty accumulated Batch 152 worktree; do not commit,
+    push, inspect hosted CI, or run a sanitizer before Change 20.
+16. Change 12 is complete in the same accumulated worktree. Static callable
+    allocation now recursively initializes nested packed, string, and container
+    declarations once, records their source identities, and rebinds them at
+    lexical block entry without replaying initialization. Fixed-container
+    initializer patterns use the typed pattern path, and static tasks may
+    suspend sequentially; simultaneous re-entry remains assigned to Change 13.
+    Interpreter plus cold/warm LLVM O0/O2 evidence covers two nested function
+    calls, two suspended task calls, retained packed/string/fixed-array values,
+    exact nested debugger identities and values, and fresh-simulation
+    initialization. The full eight-worker exact-LLVM Debug build succeeds.
+    Frontend, catalog, 2,500-line source policy, full/container elaboration,
+    runtime, LLVM, callable-closure, suspending-task, mutable-string, and
+    container-application gates pass 11/11; `git diff --check` is clean.
+    Continue with Change 13's simultaneous fork-site re-entry and
+    generation-safe process handles. Preserve the dirty accumulated Batch 152
+    worktree; do not commit, push, inspect hosted CI, or run a sanitizer before
+    Change 20.
+17. Change 13 is complete in the same accumulated worktree. Repeated execution
+    of one lexical fork site now retains simultaneous live child generations,
+    and checked 64-bit process handles combine a monotonic nonzero generation
+    with the dense process ID so null, malformed, forged, and stale handles
+    reject. Append-only SimIR operations and the SystemVerilog `process` source
+    type implement `process::self()`, `status()`, `completed()`, `await()`, and
+    `kill()` through interpreter and compiled host boundaries. Completion wakes
+    explicit awaiters; recursive kill records `KILLED`; JIT suspension and halt
+    paths retain `WAITING` and `FINISHED` consistently. Direct runtime evidence
+    covers stale-generation rejection and lifecycle transitions. The fork
+    application re-enters the same site twice and checks waiting, finished,
+    killed, and completed results through interpreter plus cold/warm LLVM O0/O2.
+    The full eight-worker exact-LLVM Debug build succeeds. Frontend, diagnostic
+    catalog, 2,500-line source policy, elaboration, runtime, LLVM, and fork-
+    application gates pass 7/7; `git diff --check` is clean. Continue with
+    Change 14's typed mailboxes and counting semaphores. Preserve the dirty
+    accumulated Batch 152 worktree; do not commit, push, inspect hosted CI, or
+    run a sanitizer before Change 20.
+18. Change 14 is complete in the same accumulated worktree. Contextual typed
+    `mailbox #(T)` and `semaphore` source handles lower to append-only SimIR
+    create, query, blocking, and nonblocking operations. The runtime owns
+    bounded mailbox storage plus FIFO reader/writer queues and FIFO semaphore
+    waiters without bypass; wakeups retain blocked continuations and typed
+    mailbox reads publish through ordinary copy-out. Direct runtime regressions
+    cover capacity, nonblocking results, reader/writer ordering, counted-key
+    ordering, and wakeup. The source application covers `num`, put/get/peek,
+    try variants, and counted semaphore operations through interpreter plus
+    cold/warm LLVM O0/O2. The full eight-worker exact-LLVM Debug build succeeds.
+    Frontend, diagnostic catalog, 2,500-line source policy, elaboration,
+    runtime, LLVM, and synchronization-application gates pass 7/7;
+    `git diff --check` is clean. Continue with Change 15's named-event and
+    container ordering interactions, deterministic shuffle, waiter ordering,
+    and cross-process visibility. Preserve the dirty accumulated Batch 152
+    worktree; do not commit, push, inspect hosted CI, or run a sanitizer before
+    Change 20.
+19. Change 15 is complete in the same accumulated worktree. SystemVerilog
+    `shuffle()` lowers through the shared container-ordering path, and both
+    interpreter and compiled execution consume one deterministic per-process
+    random stream through an unbiased Fisher-Yates implementation. Named-event
+    waiters retain stable process-ID order, while shared queue pushes, shuffle,
+    reverse, and observations remain visible between awakened processes. Direct
+    runtime evidence proves exact draw consumption and permutation. The source
+    application passes interpreter plus cold/warm LLVM O0/O2 with identical
+    results and one-specialization native-cache reuse. The full eight-worker
+    exact-LLVM Debug build succeeds. Frontend, diagnostic catalog, 2,500-line
+    source policy, elaboration, LLVM, named-event, container-application,
+    ordering-application, and runtime gates pass 9/9; `git diff --check` is
+    clean. Continue with Change 16's scheduler ownership, lifetime,
+    cancellation, exception propagation, and failure containment. Preserve the
+    dirty accumulated Batch 152 worktree; do not commit, push, inspect hosted
+    CI, or run a sanitizer before Change 20.
+20. Change 16 is complete in the same accumulated worktree. Cancelable
+    scheduler handles now retain owner identity and are live only while their
+    work remains pending. Cross-owner and moved-from cancellation cannot affect
+    transferred work; execution, explicit cancellation, discard, and owner
+    destruction invalidate handles. A throwing callback invalidates its handle,
+    releases scheduler run state, propagates once, and preserves later stable-
+    order callbacks for a resumed run. The full eight-worker exact-LLVM Debug
+    build succeeds. Direct runtime ownership/lifetime/failure evidence plus
+    LLVM, safe-point, named-event, fork/process, procedural-assignment,
+    suspending-task, mailbox/semaphore, and ordering-application gates pass
+    11/11. Diagnostic catalog and 2,500-line source policy remain green;
+    `git diff --check` is clean. Continue with Change 17's portable artifact,
+    relocation, native-cache, debugger, callback, trace, and snapshot
+    preservation. Preserve the dirty accumulated Batch 152 worktree; do not
+    commit, push, inspect hosted CI, or run a sanitizer before Change 20.
+21. Change 17 is complete in the same accumulated worktree. Runtime-state
+    schema 16 versions the completed procedural operation set, and native
+    object-cache schema v87 separates appended shuffle identity from older
+    objects. Mailbox/semaphore and event/container-ordering designs survive
+    deterministic runtime-state round trips before execution. A moved
+    `.fsimlib` remains mapped and runs the shuffle fixture identically through
+    interpreter and LLVM, including container snapshots, debugger output,
+    signal callbacks, VCD, and native-cache identity. The eight-worker exact-
+    LLVM Debug build and full application gate succeed. Library, object/design
+    artifact, diagnostic catalog, 2,500-line source policy, LLVM,
+    synchronization, ordering, and runtime gates pass 9/9; `git diff --check`
+    is clean. Continue with Change 18's cataloged malformed/type/rank/resource/
+    lifetime negatives and engine/optimization/cache/multiple-root/restart
+    differentials. Preserve the dirty accumulated Batch 152 worktree; do not
+    commit, push, inspect hosted CI, or run a sanitizer before Change 20.
+22. Change 18 is complete in the same accumulated worktree. Shuffle has
+    cataloged malformed-arity, associative/nonintegral receiver, missing-random-
+    source, forbidden-key, and corrupt portable-enum negatives. The ordering
+    fixture now elaborates two roots, deterministically round-trips runtime
+    state, rejects an invalid archive enum before publication, relocates its
+    `.fsimlib`, and agrees across O0/O2 interpreter, cold/warm LLVM cache, and
+    restarted mapped-library execution. The full eight-worker exact-LLVM Debug
+    build succeeds. Diagnostic catalog, 2,500-line source policy, elaboration,
+    ordering, runtime, LLVM, full application, fork, container-application, and
+    synchronization gates pass 10/10; `git diff --check` is clean. Continue
+    with Change 19's public architecture, language support, diagnostics,
+    feature-evidence, inventory, release-contract, and restart-handoff sync.
+    Preserve the dirty accumulated Batch 152 worktree; do not commit, push,
+    inspect hosted CI, or run a sanitizer before Change 20.
+23. Change 19 is complete in the same accumulated worktree. Public README,
+    architecture, language support, diagnostics, feature evidence, inventory,
+    release contracts, and this handoff now describe Batch 152 and retain the
+    later program/clocking/SVA/foreign/UVM boundaries. `SV-733` through
+    `SV-740` advance the reviewed feature matrix to 1,170 executable rows and
+    4,680 evidence cells over 414 exact paths. Matrix digest
+    `4c9bc37c9076a6e331ab09386c6d2a9437bdf001b7f5a6857208386bcc274ba6`
+    and evidence digest
+    `c76f1dbfecd0fc5392f2f7108da2f2d5c06830cd2777952d833821241d8e1fa5`
+    are locked into the release contracts. Inventories contain 1,875
+    production diagnostics, 570 bounded C/C++ sources, 660 SPDX-owned
+    artifacts, and 221 authored test/control files. All 26 documentation,
+    conformance, release, inventory, installation, and Linux/Windows
+    portability contracts pass; `git diff --check` is clean. Continue with
+    Change 20's full non-sanitized exact-LLVM Debug/Release and release gates,
+    then commit and push the accumulated Batch 152 work once. Do not run a
+    sanitizer or inspect hosted CI for this non-monitoring batch.
+24. Change 20 is complete. The final exact LLVM 22.1.8 Debug tree rebuilds with
+    eight workers and passes 114/114 tests in 206.72 seconds. The Release tree
+    completes all 448 eight-worker build steps and passes 114/114 tests in
+    163.74 seconds. Release-only `-O3 -Werror` evidence made the guarded packed/
+    scalar element width explicit, and the transition-delay negative now
+    expects only the still-illegal negative constant while runtime scalar delay
+    remains supported. Both full runs include the 26-contract release prefix,
+    diagnostic catalog, 2,500-line source policy, artifacts, LLVM, runtime, and
+    every application matrix. Batch 152 is not a ten-batch monitoring boundary:
+    no sanitizer ran and hosted CI was not inspected. Closeout is the one
+    accumulated commit and push containing this handoff. Continue with Batch
+    153 Change 1 after verifying the branch and origin tips match.
 
 ## Batch 150 completed checkpoint - 2026-08-05
 

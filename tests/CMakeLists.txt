@@ -478,6 +478,7 @@ add_executable(
   elaboration/elaborator_vhdl_concurrent_test.cpp
   elaboration/elaborator_sv_file_test.cpp
   elaboration/elaborator_sv_container_test.cpp
+  elaboration/elaborator_sv_container_bridge_test.cpp
   elaboration/elaborator_sv_composite_container_test.cpp
   elaboration/elaborator_sv_aggregate_container_test.cpp
   elaboration/elaborator_sv_slice_call_test.cpp
@@ -494,6 +495,7 @@ add_executable(
   fsim_sv_container_elaboration_tests
   elaboration/elaborator_sv_container_main.cpp
   elaboration/elaborator_sv_container_test.cpp
+  elaboration/elaborator_sv_container_bridge_test.cpp
   elaboration/elaborator_sv_composite_container_test.cpp
   elaboration/elaborator_sv_aggregate_container_test.cpp
   elaboration/elaborator_sv_slice_call_test.cpp
@@ -955,6 +957,14 @@ if(TARGET fsim_application)
       1 sv_containers app/sv_container_application_test.cpp
       fsim.application.sv_containers
       fast containers tasks timing systemverilog cache)
+    fsim_add_application_case(
+      1 synchronization app/synchronization_application_test.cpp
+      fsim.application.synchronization
+      fast synchronization mailbox semaphore systemverilog cache)
+    fsim_add_application_case(
+      1 ordering_interactions app/ordering_interaction_application_test.cpp
+      fsim.application.ordering_interactions
+      fast named-events containers ordering shuffle systemverilog cache)
     add_test(
       NAME fsim.application.sv_container_capacity
       COMMAND fsim_application_tests_1 sv_container_capacity)
@@ -1658,6 +1668,44 @@ set_tests_properties(
   set_tests_properties(
     fsim.application.fork
     PROPERTIES LABELS "fast;fork;systemverilog;cache;debugger"
+  )
+
+  add_executable(
+    fsim_synchronization_application_tests
+    app/synchronization_application_test.cpp
+  )
+  fsim_configure_test(fsim_synchronization_application_tests)
+  target_link_libraries(
+    fsim_synchronization_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.synchronization
+    COMMAND fsim_synchronization_application_tests
+  )
+  set_tests_properties(
+    fsim.application.synchronization
+    PROPERTIES
+      LABELS "fast;synchronization;mailbox;semaphore;systemverilog;cache"
+  )
+
+  add_executable(
+    fsim_ordering_interaction_application_tests
+    app/ordering_interaction_application_test.cpp
+  )
+  fsim_configure_test(fsim_ordering_interaction_application_tests)
+  target_link_libraries(
+    fsim_ordering_interaction_application_tests
+    PRIVATE fsim_application
+  )
+  add_test(
+    NAME fsim.application.ordering_interactions
+    COMMAND fsim_ordering_interaction_application_tests
+  )
+  set_tests_properties(
+    fsim.application.ordering_interactions
+    PROPERTIES
+      LABELS "fast;named-events;containers;ordering;shuffle;systemverilog;cache"
   )
 
   add_executable(

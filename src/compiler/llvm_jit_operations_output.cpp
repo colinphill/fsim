@@ -119,7 +119,7 @@ void OutputOperationLowerer::lower(
   return_result(
       FSIM_JIT_RESUME_STATUS_WAIT_FOR,
       instruction,
-      operation.delay,
+      operation.source ? 0 : operation.delay,
       FSIM_JIT_FRAME_STATE_READY,
       instruction + 1U);
 }

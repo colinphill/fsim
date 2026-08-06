@@ -131,6 +131,7 @@ void test_systemverilog_function_lowering();
 void test_systemverilog_task_lowering();
 void test_systemverilog_file_lowering();
 void test_systemverilog_container_lowering();
+void test_systemverilog_cross_language_container_bridge();
 void test_systemverilog_composite_container_types();
 void test_systemverilog_aggregate_containers();
 void test_systemverilog_static_slice_calls();

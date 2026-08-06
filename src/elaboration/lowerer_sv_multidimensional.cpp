@@ -7,29 +7,63 @@
 namespace fsim::elaboration {
 using namespace runtime::simir;
 
+namespace {
+
+struct MultidimensionalSelection {
+  const Expression* base{};
+  std::vector<const Expression*> indices;
+};
+
+[[nodiscard]] MultidimensionalSelection selection_chain(
+    const Expression& expression) {
+  MultidimensionalSelection result;
+  result.base = &expression;
+  while (result.base->kind == ExpressionKind::Index
+         && result.base->operands.size() == 2) {
+    result.indices.push_back(&result.base->operands[1]);
+    result.base = &result.base->operands[0];
+  }
+  std::ranges::reverse(result.indices);
+  return result;
+}
+
+[[nodiscard]] std::uint64_t flattened_element_count(
+    const ContainerType& type) {
+  std::uint64_t result = 1;
+  for (const auto& dimension : type.dimensions) {
+    result *= static_cast<std::uint64_t>(
+        static_cast<std::int64_t>(
+            std::max(dimension.first, dimension.second))
+        - std::min(dimension.first, dimension.second) + 1);
+  }
+  return result;
+}
+
+}  // namespace
+
 std::optional<RegisterId>
 Lowerer::lower_multidimensional_index(
     const Expression& expression,
-    const frontend::Type& type) {
+    const frontend::Type& type,
+    const bool require_complete) {
   if (!type.systemverilog_container) {
     return std::nullopt;
   }
   const auto& ranges = type.systemverilog_container
       ->static_range_expressions;
-  std::vector<const Expression*> indices;
-  const Expression* base = &expression;
-  while (base->kind == ExpressionKind::Index
-         && base->operands.size() == 2) {
-    indices.push_back(&base->operands[1]);
-    base = &base->operands[0];
-  }
-  std::ranges::reverse(indices);
-  if (base->kind != ExpressionKind::Identifier
-      || ranges.size() <= 1 || indices.size() != ranges.size()) {
+  const auto selection = selection_chain(expression);
+  if (selection.base->kind != ExpressionKind::Identifier
+      || ranges.size() <= 1 || selection.indices.empty()
+      || selection.indices.size() > ranges.size()
+      || (require_complete
+          && selection.indices.size() != ranges.size())) {
     report(
         "FSIM-ELAB-SVMDARRAY-001",
-        "a multidimensional static-array access must supply exactly one "
-        "index per declared dimension",
+        require_complete
+            ? "a multidimensional static-array element access must supply "
+              "exactly one index per declared dimension"
+            : "a multidimensional static-array subarray selection must "
+              "supply a nonempty leading index prefix",
         expression.span);
     return std::nullopt;
   }
@@ -40,18 +74,19 @@ Lowerer::lower_multidimensional_index(
   }
   std::optional<RegisterId> linear;
   for (std::size_t dimension = 0;
-       dimension < ranges.size(); ++dimension) {
+       dimension < selection.indices.size(); ++dimension) {
     const auto& bounds = runtime_type->dimensions[dimension];
     const auto low = std::min(bounds.first, bounds.second);
     const auto high = std::max(bounds.first, bounds.second);
     std::optional<RegisterId> ordinal;
-    if (const auto constant = static_integer_value(*indices[dimension])) {
+    if (const auto constant =
+            static_integer_value(*selection.indices[dimension])) {
       if (*constant < low || *constant > high) {
         report(
             "FSIM-ELAB-SVMDARRAY-003",
             "multidimensional static-array index is outside its declared "
             "range",
-            indices[dimension]->span);
+            selection.indices[dimension]->span);
         return std::nullopt;
       }
       const auto value = static_cast<std::uint64_t>(
@@ -62,13 +97,14 @@ Lowerer::lower_multidimensional_index(
       process_.operations.emplace_back(
           LoadConstant{*ordinal, unsigned_value(value, 32)});
     } else {
-      const auto index = lower_expression(*indices[dimension], 32);
+      const auto index =
+          lower_expression(*selection.indices[dimension], 32);
       if (!index || register_width(*index) != 32) {
         report(
             "FSIM-ELAB-SVMDARRAY-002",
             "a runtime multidimensional index must lower to a signed "
             "32-bit integral value",
-            indices[dimension]->span);
+            selection.indices[dimension]->span);
         return std::nullopt;
       }
       process_.operations.emplace_back(IntegerCheck{
@@ -109,6 +145,120 @@ Lowerer::lower_multidimensional_index(
   return linear;
 }
 
+std::optional<ContainerType>
+Lowerer::multidimensional_container_subarray_type(
+    const Expression& expression) {
+  const auto selection = selection_chain(expression);
+  if (selection.base->kind != ExpressionKind::Identifier
+      || selection.indices.empty()) {
+    return std::nullopt;
+  }
+  const auto* type = object_type(selection.base->text);
+  if (type == nullptr || !type->systemverilog_container) {
+    return std::nullopt;
+  }
+  auto runtime_type = container_type(*type, expression.span);
+  if (!runtime_type || !runtime_type->fixed
+      || runtime_type->dimensions.size() <= 1
+      || selection.indices.size()
+          >= runtime_type->dimensions.size()) {
+    return std::nullopt;
+  }
+  runtime_type->dimensions.erase(
+      runtime_type->dimensions.begin(),
+      runtime_type->dimensions.begin()
+          + static_cast<std::ptrdiff_t>(selection.indices.size()));
+  runtime_type->index_left = runtime_type->dimensions.front().first;
+  runtime_type->index_right = runtime_type->dimensions.front().second;
+  return runtime_type;
+}
+
+void Lowerer::copy_multidimensional_container_elements(
+    const ContainerRegisterId destination,
+    const RegisterId destination_base,
+    const ContainerRegisterId source,
+    const RegisterId source_base,
+    const ContainerType& selected_type) {
+  const auto count = flattened_element_count(selected_type);
+  const auto linear_index =
+      [&](const RegisterId base, const std::uint64_t ordinal) {
+        if (ordinal == 0) return base;
+        const auto displacement =
+            allocate_register(32, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(LoadConstant{
+            displacement, integer_value(
+                static_cast<std::int64_t>(ordinal))});
+        const auto result =
+            allocate_register(32, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(IntegerBinary{
+            IntegerBinaryOperator::add,
+            result, base, displacement});
+        return result;
+      };
+  for (std::uint64_t ordinal = 0; ordinal < count; ++ordinal) {
+    const auto source_index = linear_index(source_base, ordinal);
+    const auto value = allocate_register(
+        selected_type.element_width,
+        selected_type.two_state
+            ? frontend::ValueDomain::Bit2
+            : frontend::ValueDomain::Logic4);
+    process_.operations.emplace_back(ContainerRead{
+        value, source, source_index, true, true});
+    const auto destination_index =
+        linear_index(destination_base, ordinal);
+    process_.operations.emplace_back(ContainerWrite{
+        destination, destination_index, value, true, true});
+  }
+}
+
+std::optional<ContainerRegisterId>
+Lowerer::lower_multidimensional_container_subarray(
+    const Expression& expression) {
+  const auto selection = selection_chain(expression);
+  const auto selected_type =
+      multidimensional_container_subarray_type(expression);
+  if (!selected_type || selection.base->kind != ExpressionKind::Identifier) {
+    return std::nullopt;
+  }
+  if (selected_type->element_kind != ContainerElementKind::Packed
+      && selected_type->element_kind != ContainerElementKind::Scalar) {
+    report(
+        "FSIM-ELAB-SVMDARRAY-001",
+        "multidimensional subarray selection currently requires a packed "
+        "or scalar leaf profile",
+        expression.span);
+    return std::nullopt;
+  }
+  const auto* type = object_type(selection.base->text);
+  const auto prefix = type != nullptr
+      ? lower_multidimensional_index(expression, *type, false)
+      : std::nullopt;
+  const auto source = lower_container_expression(*selection.base);
+  if (!prefix || !source) {
+    return std::nullopt;
+  }
+  const auto count = flattened_element_count(*selected_type);
+  const auto count_register =
+      allocate_register(32, frontend::ValueDomain::Integer);
+  process_.operations.emplace_back(LoadConstant{
+      count_register,
+      integer_value(static_cast<std::int64_t>(count))});
+  const auto source_base =
+      allocate_register(32, frontend::ValueDomain::Integer);
+  process_.operations.emplace_back(IntegerBinary{
+      IntegerBinaryOperator::multiply,
+      source_base, *prefix, count_register});
+  const auto destination_base =
+      allocate_register(32, frontend::ValueDomain::Integer);
+  process_.operations.emplace_back(
+      LoadConstant{destination_base, integer_value(0)});
+  const auto destination = allocate_container_register(*selected_type);
+  copy_multidimensional_container_elements(
+      destination, destination_base,
+      *source, source_base, *selected_type);
+  return destination;
+}
+
 Lowerer::ExpressionAttempt
 Lowerer::lower_multidimensional_container_read(
     const Expression& expression) {
@@ -127,7 +277,13 @@ Lowerer::lower_multidimensional_container_read(
   if (type == nullptr || !type->systemverilog_container
       || type->systemverilog_container
              ->static_range_expressions.size()
-          <= 1) {
+      <= 1) {
+    return {};
+  }
+  const auto selection = selection_chain(expression);
+  if (selection.indices.size()
+      < type->systemverilog_container
+            ->static_range_expressions.size()) {
     return {};
   }
   const auto linear = lower_multidimensional_index(expression, *type);
@@ -153,14 +309,164 @@ bool Lowerer::lower_multidimensional_container_assignment(
   if (!type.systemverilog_container
       || type.systemverilog_container
              ->static_range_expressions.size()
-          <= 1
-      || statement.target.kind != ExpressionKind::Index) {
+          <= 1) {
     return false;
+  }
+  const bool nested_slice =
+      statement.target.kind == ExpressionKind::Slice
+      && statement.target.operands.size() == 3
+      && statement.target.operands.front().kind
+          == ExpressionKind::Index;
+  if (nested_slice) {
+    const auto& receiver = statement.target.operands.front();
+    const auto selection = static_container_slice(statement.target);
+    const auto receiver_type =
+        multidimensional_container_subarray_type(receiver);
+    if (!selection || !receiver_type) {
+      return true;
+    }
+    const auto source = lower_static_container_assignment_value(
+        statement.value, selection->selected_type);
+    const auto prefix =
+        lower_multidimensional_index(receiver, type, false);
+    if (!source || !prefix) {
+      return true;
+    }
+    const auto receiver_count =
+        flattened_element_count(*receiver_type);
+    const auto receiver_count_register =
+        allocate_register(32, frontend::ValueDomain::Integer);
+    process_.operations.emplace_back(LoadConstant{
+        receiver_count_register,
+        integer_value(static_cast<std::int64_t>(receiver_count))});
+    const auto prefix_base =
+        allocate_register(32, frontend::ValueDomain::Integer);
+    process_.operations.emplace_back(IntegerBinary{
+        IntegerBinaryOperator::multiply,
+        prefix_base, *prefix, receiver_count_register});
+    const auto trailing_count =
+        receiver_count
+        / static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(
+                std::max(
+                    receiver_type->dimensions.front().first,
+                    receiver_type->dimensions.front().second))
+            - std::min(
+                receiver_type->dimensions.front().first,
+                receiver_type->dimensions.front().second) + 1);
+    const auto selected_outer_ordinal =
+        static_cast<std::uint64_t>(
+            receiver_type->index_left >= receiver_type->index_right
+                ? static_cast<std::int64_t>(receiver_type->index_left)
+                      - selection->selected_type.index_left
+                : static_cast<std::int64_t>(
+                      selection->selected_type.index_left)
+                      - receiver_type->index_left);
+    auto destination_base = prefix_base;
+    if (selected_outer_ordinal != 0) {
+      const auto displacement =
+          allocate_register(32, frontend::ValueDomain::Integer);
+      process_.operations.emplace_back(LoadConstant{
+          displacement,
+          integer_value(static_cast<std::int64_t>(
+              selected_outer_ordinal * trailing_count))});
+      destination_base =
+          allocate_register(32, frontend::ValueDomain::Integer);
+      process_.operations.emplace_back(IntegerBinary{
+          IntegerBinaryOperator::add,
+          destination_base, prefix_base, displacement});
+    }
+    const auto source_base =
+        allocate_register(32, frontend::ValueDomain::Integer);
+    process_.operations.emplace_back(
+        LoadConstant{source_base, integer_value(0)});
+    copy_multidimensional_container_elements(
+        target, destination_base,
+        *source, source_base, selection->selected_type);
+    if (object) {
+      process_.operations.emplace_back(
+          WriteContainerObject{*object, target});
+    }
+    return true;
+  }
+  if (statement.target.kind != ExpressionKind::Index) {
+    return false;
+  }
+  const auto selection = selection_chain(statement.target);
+  const auto rank = type.systemverilog_container
+      ->static_range_expressions.size();
+  if (!selection.indices.empty()
+      && selection.indices.size() < rank) {
+    const auto selected_type =
+        multidimensional_container_subarray_type(statement.target);
+    if (!selected_type
+        || (selected_type->element_kind
+                != ContainerElementKind::Packed
+            && selected_type->element_kind
+                != ContainerElementKind::Scalar)) {
+      return true;
+    }
+    if (container_expression_type(statement.value) == nullptr
+        && statement.value.kind != ExpressionKind::Slice) {
+      report(
+          "FSIM-ELAB-SVMDARRAY-001",
+          "a partial multidimensional target requires a compatible "
+          "remaining-rank subarray value",
+          statement.value.span);
+      return true;
+    }
+    const auto source = lower_static_container_assignment_value(
+        statement.value, *selected_type);
+    const auto prefix =
+        lower_multidimensional_index(statement.target, type, false);
+    if (!source || !prefix) {
+      return true;
+    }
+    const auto count = flattened_element_count(*selected_type);
+    const auto count_register =
+        allocate_register(32, frontend::ValueDomain::Integer);
+    process_.operations.emplace_back(LoadConstant{
+        count_register,
+        integer_value(static_cast<std::int64_t>(count))});
+    const auto destination_base =
+        allocate_register(32, frontend::ValueDomain::Integer);
+    process_.operations.emplace_back(IntegerBinary{
+        IntegerBinaryOperator::multiply,
+        destination_base, *prefix, count_register});
+    const auto source_base =
+        allocate_register(32, frontend::ValueDomain::Integer);
+    process_.operations.emplace_back(
+        LoadConstant{source_base, integer_value(0)});
+    copy_multidimensional_container_elements(
+        target, destination_base,
+        *source, source_base, *selected_type);
+    if (object) {
+      process_.operations.emplace_back(
+          WriteContainerObject{*object, target});
+    }
+    return true;
   }
   const auto linear = lower_multidimensional_index(
       statement.target, type);
   const auto element_width = type.width();
-  if (!linear || !element_width) {
+  const bool string_element =
+      type.systemverilog_container->element_types.size() == 1
+      && type.systemverilog_container->element_types.front().domain
+          == frontend::ValueDomain::String;
+  if (!linear || (!element_width && !string_element)) {
+    return true;
+  }
+  if (string_element) {
+    const auto value = lower_string_expression(statement.value);
+    if (!value) {
+      return true;
+    }
+    process_.operations.emplace_back(ContainerStringWrite{
+        target, *linear, *value, true, true});
+    if (object) {
+      process_.operations.emplace_back(
+          WriteContainerObject{*object, target});
+    }
     return true;
   }
   auto scalar_element_type = type;

@@ -31,6 +31,113 @@ void require(bool condition, const char *message) {
 
 } // namespace
 
+void test_simir_runtime_value_delays() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  const auto real_payload = encode_systemverilog_scalar_payload(
+      SystemVerilogScalarValue::realtime(0.55));
+  require(
+      static_cast<bool>(real_payload),
+      "realtime delay payload encoding");
+
+  Interpreter rounded;
+  Process process;
+  process.name = "runtime-value-delays";
+  process.register_count = 2;
+  WaitFor real_wait;
+  real_wait.delay = 1000;
+  real_wait.source = 0;
+  real_wait.source_width = 64;
+  real_wait.source_kind = SystemVerilogScalarKind::Realtime;
+  real_wait.rounding_quantum = 100;
+  WaitFor integer_wait;
+  integer_wait.delay = 10;
+  integer_wait.source = 1;
+  integer_wait.source_width = 8;
+  process.operations = {
+      LoadConstant{0, real_payload.value},
+      real_wait,
+      LoadConstant{
+          1, PackedLogic4::from_aval_bval(8, 3, 0)},
+      integer_wait,
+      Halt{},
+  };
+  (void)rounded.add_process(std::move(process));
+  const auto rounded_result = rounded.run();
+  require(
+      rounded_result.status == RunStatus::completed
+          && rounded_result.time == 630,
+      "runtime real delays round to timeprecision before integral scaling");
+
+  const auto expect_failure = [](Process rejected,
+                                 const std::string_view expected) {
+    Interpreter interpreter;
+    (void)interpreter.add_process(std::move(rejected));
+    try {
+      (void)interpreter.run();
+    } catch (const InterpreterError& error) {
+      require(
+          std::string_view{error.what()}.find(expected)
+              != std::string_view::npos,
+          "runtime delay failure reports the expected cause");
+      return;
+    }
+    throw std::runtime_error{"runtime delay failure was not rejected"};
+  };
+
+  Process negative;
+  negative.name = "negative-runtime-delay";
+  negative.register_count = 1;
+  WaitFor negative_wait;
+  negative_wait.delay = 1;
+  negative_wait.source = 0;
+  negative_wait.source_width = 8;
+  negative_wait.source_signed = true;
+  negative.operations = {
+      LoadConstant{
+          0, PackedLogic4::from_aval_bval(8, UINT64_C(0xff), 0)},
+      negative_wait,
+      Halt{},
+  };
+  expect_failure(std::move(negative), "cannot be negative");
+
+  Process overflow;
+  overflow.name = "overflow-runtime-delay";
+  overflow.register_count = 1;
+  WaitFor overflow_wait;
+  overflow_wait.delay = 2;
+  overflow_wait.source = 0;
+  overflow_wait.source_width = 64;
+  overflow.operations = {
+      LoadConstant{
+          0,
+          PackedLogic4::from_aval_bval(
+              64, std::numeric_limits<std::uint64_t>::max(), 0)},
+      overflow_wait,
+      Halt{},
+  };
+  expect_failure(std::move(overflow), "overflows simulation ticks");
+
+  Process admission;
+  admission.name = "admission-runtime-delay";
+  admission.register_count = 1;
+  WaitFor admission_wait;
+  admission_wait.delay = 1;
+  admission_wait.source = 0;
+  admission_wait.source_width = 64;
+  admission.operations = {
+      WaitFor{1},
+      LoadConstant{
+          0,
+          PackedLogic4::from_aval_bval(
+              64, std::numeric_limits<std::uint64_t>::max(), 0)},
+      admission_wait,
+      Halt{},
+  };
+  expect_failure(std::move(admission), "simulation time overflow");
+}
+
 void test_simir_inertial_transition_writes() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;

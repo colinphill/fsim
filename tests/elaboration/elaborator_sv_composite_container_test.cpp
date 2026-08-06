@@ -74,10 +74,12 @@ endmodule
   assert((
       records_object.type.element_kind
           == ContainerElementKind::Aggregate
+      && !records_object.type.aggregate_value
       && records_object.type.member_names
           == std::vector<std::string>{
               "weight", "ticks", "label", "cookie"}
       && records_value.nested_elements.size() == 2
+      && records_value.nested_elements.front().type.aggregate_value
       && records_value.nested_elements.front()
              .nested_elements.size() == 4));
 
@@ -107,11 +109,62 @@ endmodule
       unsupported.design,
       "composite_container_operations_invalid");
   assert(!rejected.ok());
-  assert(has_diagnostic(rejected, "FSIM-ELAB-SVCONTAINER-024"));
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVSLICE-006"));
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVREDUCE-006"));
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVORDER-008"));
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVLOCATOR-008"));
+
+  const auto invalid_patterns = fsim::frontend::parse_text(
+      "composite-container-patterns-invalid.sv",
+      R"(
+module composite_container_patterns_invalid;
+  typedef struct {
+    logic [3:0] left;
+    logic [3:0] right;
+  } pair_t;
+  typedef union {
+    logic [7:0] primary;
+    logic [7:0] alias_value;
+  } choice_t;
+  pair_t mixed[1:0];
+  pair_t uncovered[1:0];
+  pair_t dynamic[];
+  pair_t lookup[int];
+  choice_t choices[1:0];
+  initial begin
+    mixed = '{
+      '{left: 4'h1, 4'h2},
+      '{left: 4'h3, right: 4'h4}
+    };
+    uncovered = '{
+      '{left: 4'h1},
+      '{left: 4'h2, right: 4'h3}
+    };
+    dynamic = '{0: '{left: 4'h1, right: 4'h2}};
+    lookup = '{'{left: 4'h1, right: 4'h2}};
+    choices = '{
+      '{primary: 8'h11, alias_value: 8'h22},
+      '{primary: 8'h33}
+    };
+  end
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(invalid_patterns.ok());
+  const auto invalid_pattern_result = fsim::elaboration::elaborate(
+      invalid_patterns.design,
+      "composite_container_patterns_invalid");
+  assert(!invalid_pattern_result.ok());
+  assert(has_diagnostic(
+      invalid_pattern_result, "FSIM-ELAB-SVPATTERN-004"));
+  assert(has_diagnostic(
+      invalid_pattern_result, "FSIM-ELAB-SVPATTERN-002"));
+  assert(has_diagnostic(
+      invalid_pattern_result, "FSIM-ELAB-SVPATTERN-001"));
+  assert(has_diagnostic(
+      invalid_pattern_result, "FSIM-ELAB-SVPATTERN-003"));
+  assert(has_diagnostic(
+      invalid_pattern_result, "FSIM-ELAB-SVPATTERN-005"));
 }
 
 }  // namespace fsim::tests::elaboration

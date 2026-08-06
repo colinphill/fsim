@@ -4,6 +4,7 @@
 #include "fsim/runtime/file_binary.hpp"
 #include "fsim/runtime/file_scanning.hpp"
 #include "fsim/runtime/string_methods.hpp"
+#include "fsim/runtime/systemverilog_string.hpp"
 
 #include <algorithm>
 
@@ -909,6 +910,11 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 process, instruction,
                 "associative-array method used on another container"};
           }
+          if (target.type.string_indices) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                "string-indexed associative array requires a string index"};
+          }
           if (bval != 0) {
             throw runtime::simir::InterpreterError{
                 process, instruction,
@@ -953,6 +959,48 @@ std::uint32_t LlvmProcessExecutor::container_operation(
           return left.low_word().aval
               == right.low_word().aval;
         };
+    const auto string_key =
+        [&](const runtime::simir::ContainerValue& target,
+            const runtime::simir::StringRegisterId index_register)
+            -> const std::string& {
+          if (!target.type.associative
+              || !target.type.string_indices) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                "integral-indexed associative array requires an integral index"};
+          }
+          const auto& value =
+              state.executor->string_registers_.at(index_register);
+          if (value.size() > runtime::simir::maximum_string_bytes
+              || !runtime::systemverilog_string_is_valid(value)) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                "associative-array string index must be bounded strict UTF-8"};
+          }
+          return value;
+        };
+    const auto lower_string_key =
+        [](const runtime::simir::ContainerValue& target,
+           const std::string_view sought) {
+          return static_cast<std::size_t>(
+              std::lower_bound(
+                  target.string_keys.begin(), target.string_keys.end(),
+                  sought)
+              - target.string_keys.begin());
+        };
+    const auto aggregate_element_type =
+        [](const runtime::simir::ContainerType& type) {
+          auto result = type;
+          result.queue = false;
+          result.associative = false;
+          result.fixed = false;
+          result.aggregate_value = true;
+          result.maximum_elements.reset();
+          result.dimensions.clear();
+          result.index_left = 0;
+          result.index_right = 0;
+          return result;
+        };
     if (const auto* scalar =
             fsim::runtime::simir::operation_get_if<
                 runtime::simir::SystemVerilogScalarBinary>(&operation)) {
@@ -981,8 +1029,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             fsim::runtime::simir::operation_get_if<runtime::simir::ResizeContainer>(
                 &operation)) {
       auto& target = registers.at(resize->target);
-      if (target.type.queue || target.type.associative
-          || target.type.fixed) {
+      if ((target.type.queue && !resize->allow_queue)
+          || target.type.associative || target.type.fixed) {
         throw runtime::simir::InterpreterError{
             process, instruction,
             target.type.queue
@@ -1069,7 +1117,17 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                        &operation)) {
       runtime::simir::order_container_value(
           registers.at(ordering->target),
-          ordering->operation, ordering->key);
+          ordering->operation, ordering->key,
+          [&]() {
+            const auto word = state.context->random_value(
+                runtime::simir::RandomKind::urandom,
+                std::nullopt, std::nullopt).low_word();
+            if (word.width != 32U || word.bval != 0) {
+              throw compiler::LlvmJitError{
+                  "generated container shuffle received invalid entropy"};
+            }
+            return static_cast<std::uint32_t>(word.aval);
+          });
     } else if (const auto* locator =
                    fsim::runtime::simir::operation_get_if<runtime::simir::LocateContainer>(
                        &operation)) {
@@ -1084,6 +1142,17 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                        &operation)) {
       const auto& source = registers.at(read->source);
       if (source.type.associative) {
+        if (read->string_index) {
+          const auto& sought = string_key(source, read->index);
+          const auto at = lower_string_key(source, sought);
+          if (at < source.string_keys.size()
+              && source.string_keys[at] == sought) {
+            const auto word = source.elements[at].low_word();
+            *result_aval = word.aval;
+            *result_bval = word.bval;
+          }
+          return 0;
+        }
         const auto sought =
             key(source, input0_aval, input0_bval);
         const auto at = lower_key(source, sought);
@@ -1118,6 +1187,36 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                        &operation)) {
       auto& target = registers.at(write->target);
       if (target.type.associative) {
+        if (write->string_index) {
+          const auto& sought = string_key(target, write->index);
+          const auto source =
+              element(target, input1_aval, input1_bval);
+          const auto at = lower_string_key(target, sought);
+          if (at < target.string_keys.size()
+              && target.string_keys[at] == sought) {
+            target.elements[at] = source;
+          } else {
+            if (target.elements.size()
+                >= runtime::simir::maximum_container_elements(
+                    target.type)) {
+              throw runtime::simir::InterpreterError{
+                  process, instruction,
+                  "associative array exceeds the per-container "
+                  "owning-storage budget"};
+            }
+            target.string_keys.insert(
+                target.string_keys.begin() + at, sought);
+            target.elements.insert(
+                target.elements.begin() + at, source);
+          }
+          if (runtime::simir::container_value_storage_bytes(target)
+              > runtime::simir::maximum_container_storage_bytes) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                "associative array exceeds its recursive owning-storage budget"};
+          }
+          return 0;
+        }
         const auto sought =
             key(target, input0_aval, input0_bval);
         const auto source =
@@ -1157,29 +1256,505 @@ std::uint32_t LlvmProcessExecutor::container_operation(
       }
       target.elements[at] =
           element(target, input1_aval, input1_bval);
+    } else if (const auto* string_read =
+                   fsim::runtime::simir::operation_get_if<
+                       runtime::simir::ContainerStringRead>(&operation)) {
+      const auto& source = registers.at(string_read->source);
+      if (source.type.element_kind
+          != runtime::simir::ContainerElementKind::String) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "string element read requires a string container"};
+      }
+      if (source.type.associative) {
+        if (string_read->string_index) {
+          const auto& sought =
+              string_key(source, string_read->index);
+          const auto at = lower_string_key(source, sought);
+          state.executor->write_string_register(
+              string_read->destination,
+              at < source.string_keys.size()
+                      && source.string_keys[at] == sought
+                  ? source.string_elements[at]
+                  : std::string{});
+          return 0;
+        }
+        const auto sought = key(source, input0_aval, input0_bval);
+        const auto at = lower_key(source, sought);
+        state.executor->write_string_register(
+            string_read->destination,
+            at < source.keys.size()
+                    && key_equal(source.keys[at], sought)
+                ? source.string_elements[at]
+                : std::string{});
+        return 0;
+      }
+      const auto at = source.type.fixed
+          ? string_read->linear_index
+                ? index(
+                      input0_aval, input0_bval, true,
+                      "multidimensional linear index")
+                : fixed_offset(source, input0_aval, input0_bval)
+          : index(
+                input0_aval, input0_bval, string_read->signed_index,
+                "container index");
+      if (at >= source.string_elements.size()) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "string container index is out of range"};
+      }
+      state.executor->write_string_register(
+          string_read->destination, source.string_elements[at]);
+    } else if (const auto* string_write =
+                   fsim::runtime::simir::operation_get_if<
+                       runtime::simir::ContainerStringWrite>(&operation)) {
+      auto& target = registers.at(string_write->target);
+      if (target.type.element_kind
+          != runtime::simir::ContainerElementKind::String) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "string element write requires a string container"};
+      }
+      const auto source =
+          state.executor->string_registers_.at(string_write->source);
+      if (target.type.associative) {
+        if (string_write->string_index) {
+          const auto& sought =
+              string_key(target, string_write->index);
+          const auto at = lower_string_key(target, sought);
+          if (at < target.string_keys.size()
+              && target.string_keys[at] == sought) {
+            target.string_elements[at] = source;
+          } else {
+            if (target.string_keys.size()
+                >= runtime::simir::maximum_container_elements(
+                    target.type)) {
+              throw runtime::simir::InterpreterError{
+                  process, instruction,
+                  "associative string array exceeds its owning-storage budget"};
+            }
+            target.string_keys.insert(
+                target.string_keys.begin() + at, sought);
+            target.string_elements.insert(
+                target.string_elements.begin() + at, source);
+          }
+          if (runtime::simir::container_value_storage_bytes(target)
+              > runtime::simir::maximum_container_storage_bytes) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                "associative string array exceeds its recursive owning-storage budget"};
+          }
+          return 0;
+        }
+        const auto sought = key(target, input0_aval, input0_bval);
+        const auto at = lower_key(target, sought);
+        if (at < target.keys.size()
+            && key_equal(target.keys[at], sought)) {
+          target.string_elements[at] = source;
+        } else {
+          if (target.keys.size()
+              >= runtime::simir::maximum_container_elements(target.type)) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                "associative string array exceeds its owning-storage budget"};
+          }
+          target.keys.insert(target.keys.begin() + at, sought);
+          target.string_elements.insert(
+              target.string_elements.begin() + at, source);
+        }
+        return 0;
+      }
+      const auto at = target.type.fixed
+          ? string_write->linear_index
+                ? index(
+                      input0_aval, input0_bval, true,
+                      "multidimensional linear index")
+                : fixed_offset(target, input0_aval, input0_bval)
+          : index(
+                input0_aval, input0_bval, string_write->signed_index,
+                "container index");
+      if (at >= target.string_elements.size()) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "string container index is out of range"};
+      }
+      target.string_elements[at] = source;
+    } else if (const auto* element_read =
+                   fsim::runtime::simir::operation_get_if<
+                       runtime::simir::ContainerElementRead>(&operation)) {
+      const auto& source = registers.at(element_read->source);
+      if (source.type.element_kind
+              != runtime::simir::ContainerElementKind::Container
+          || source.type.element_types.size() != 1) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "nested element read requires a nested container"};
+      }
+      const runtime::simir::ContainerValue* selected = nullptr;
+      std::optional<runtime::simir::ContainerValue> missing;
+      if (source.type.associative) {
+        const auto sought = key(source, input0_aval, input0_bval);
+        const auto at = lower_key(source, sought);
+        if (at < source.keys.size()
+            && key_equal(source.keys[at], sought)) {
+          selected = &source.nested_elements[at];
+        } else {
+          missing = runtime::simir::default_container_value(
+              source.type.element_types.front());
+          selected = &*missing;
+        }
+      } else {
+        const auto at = source.type.fixed
+            ? fixed_offset(source, input0_aval, input0_bval)
+            : index(
+                  input0_aval, input0_bval,
+                  element_read->signed_index, "container index");
+        if (at >= source.nested_elements.size()) {
+          throw runtime::simir::InterpreterError{
+              process, instruction,
+              "nested container index is out of range"};
+        }
+        selected = &source.nested_elements[at];
+      }
+      auto& destination = registers.at(element_read->destination);
+      if (destination.type != selected->type) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "nested element read profile mismatch"};
+      }
+      destination = *selected;
+    } else if (const auto* element_write =
+                   fsim::runtime::simir::operation_get_if<
+                       runtime::simir::ContainerElementWrite>(&operation)) {
+      auto& target = registers.at(element_write->target);
+      const auto& source = registers.at(element_write->source);
+      if (target.type.element_kind
+              != runtime::simir::ContainerElementKind::Container
+          || target.type.element_types.size() != 1
+          || target.type.element_types.front() != source.type) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "nested element write profile mismatch"};
+      }
+      std::size_t at{};
+      if (target.type.associative) {
+        const auto sought = key(target, input0_aval, input0_bval);
+        at = lower_key(target, sought);
+        if (at >= target.keys.size()
+            || !key_equal(target.keys[at], sought)) {
+          if (target.keys.size()
+              >= runtime::simir::maximum_container_elements(target.type)) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                "associative nested container exceeds its owning-storage "
+                "budget"};
+          }
+          target.keys.insert(target.keys.begin() + at, sought);
+          target.nested_elements.insert(
+              target.nested_elements.begin() + at,
+              runtime::simir::default_container_value(
+                  target.type.element_types.front()));
+        }
+      } else {
+        at = target.type.fixed
+            ? fixed_offset(target, input0_aval, input0_bval)
+            : index(
+                  input0_aval, input0_bval,
+                  element_write->signed_index, "container index");
+        if (at >= target.nested_elements.size()) {
+          throw runtime::simir::InterpreterError{
+              process, instruction,
+              "nested container index is out of range"};
+        }
+      }
+      target.nested_elements[at] = source;
+    } else if (const auto* aggregate_read =
+                   fsim::runtime::simir::operation_get_if<
+                       runtime::simir::ContainerAggregateRead>(&operation)) {
+      const auto& source = registers.at(aggregate_read->source);
+      if (source.type.element_kind
+              != runtime::simir::ContainerElementKind::Aggregate
+          || aggregate_read->members.empty()) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "aggregate member read requires an unpacked aggregate "
+            "container"};
+      }
+      std::optional<runtime::simir::ContainerValue> missing;
+      const runtime::simir::ContainerValue* selected = nullptr;
+      if (source.type.associative) {
+        const auto sought = key(source, input0_aval, input0_bval);
+        const auto at = lower_key(source, sought);
+        if (at < source.keys.size()
+            && key_equal(source.keys[at], sought)) {
+          selected = &source.nested_elements[at];
+        } else {
+          missing = runtime::simir::default_container_value(
+              aggregate_element_type(source.type));
+          selected = &*missing;
+        }
+      } else {
+        const auto at = source.type.fixed
+            ? aggregate_read->linear_index
+                  ? index(
+                        input0_aval, input0_bval, true,
+                        "multidimensional linear index")
+                  : fixed_offset(source, input0_aval, input0_bval)
+            : index(
+                  input0_aval, input0_bval,
+                  aggregate_read->signed_index,
+                  "container index");
+        if (at >= source.nested_elements.size()) {
+          throw runtime::simir::InterpreterError{
+              process, instruction,
+              "aggregate container index is out of range"};
+        }
+        selected = &source.nested_elements[at];
+      }
+      for (const auto member : aggregate_read->members) {
+        if (selected->type.element_kind
+                != runtime::simir::ContainerElementKind::Aggregate
+            || member >= selected->nested_elements.size()) {
+          throw runtime::simir::InterpreterError{
+              process, instruction,
+              "aggregate member read path is invalid"};
+        }
+        selected = &selected->nested_elements[member];
+      }
+      if (!selected->type.fixed
+          || selected->elements.size() != 1U) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "aggregate member read requires a packed or scalar leaf"};
+      }
+      const auto word = selected->elements.front().low_word();
+      *result_aval = word.aval;
+      *result_bval = word.bval;
+    } else if (const auto* aggregate_write =
+                   fsim::runtime::simir::operation_get_if<
+                       runtime::simir::ContainerAggregateWrite>(&operation)) {
+      auto& target = registers.at(aggregate_write->target);
+      if (target.type.element_kind
+              != runtime::simir::ContainerElementKind::Aggregate
+          || aggregate_write->members.empty()) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "aggregate member write requires an unpacked aggregate "
+            "container"};
+      }
+      std::size_t at{};
+      if (target.type.associative) {
+        const auto sought = key(target, input0_aval, input0_bval);
+        at = lower_key(target, sought);
+        if (at >= target.keys.size()
+            || !key_equal(target.keys[at], sought)) {
+          if (target.keys.size()
+              >= runtime::simir::maximum_container_elements(target.type)) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                "associative aggregate exceeds its owning-storage budget"};
+          }
+          target.keys.insert(target.keys.begin() + at, sought);
+          target.nested_elements.insert(
+              target.nested_elements.begin() + at,
+              runtime::simir::default_container_value(
+                  aggregate_element_type(target.type)));
+        }
+      } else {
+        at = target.type.fixed
+            ? aggregate_write->linear_index
+                  ? index(
+                        input0_aval, input0_bval, true,
+                        "multidimensional linear index")
+                  : fixed_offset(target, input0_aval, input0_bval)
+            : index(
+                  input0_aval, input0_bval,
+                  aggregate_write->signed_index,
+                  "container index");
+        if (at >= target.nested_elements.size()) {
+          throw runtime::simir::InterpreterError{
+              process, instruction,
+              "aggregate container index is out of range"};
+        }
+      }
+      auto* selected = &target.nested_elements[at];
+      runtime::simir::ContainerValue* direct_union = nullptr;
+      for (std::size_t path_index = 0;
+           path_index < aggregate_write->members.size(); ++path_index) {
+        const auto member = aggregate_write->members[path_index];
+        if (selected->type.element_kind
+                != runtime::simir::ContainerElementKind::Aggregate
+            || member >= selected->nested_elements.size()) {
+          throw runtime::simir::InterpreterError{
+              process, instruction,
+              "aggregate member write path is invalid"};
+        }
+        if (selected->type.union_aggregate
+            && path_index + 1U
+                == aggregate_write->members.size()) {
+          direct_union = selected;
+        }
+        selected = &selected->nested_elements[member];
+      }
+      const auto value = runtime::PackedLogic4::from_aval_bval(
+          selected->type.element_width, input1_aval, input1_bval);
+      if (!selected->type.fixed
+          || selected->elements.size() != 1U
+          || (selected->type.two_state && input1_bval != 0)) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "aggregate member write leaf type mismatch"};
+      }
+      selected->elements.front() = value;
+      if (direct_union != nullptr) {
+        for (auto& sibling : direct_union->nested_elements) {
+          if (sibling.type == selected->type && sibling.type.fixed
+              && sibling.elements.size() == 1U) {
+            sibling.elements.front() = value;
+          }
+        }
+      }
+    } else if (const auto* aggregate_copy =
+                   fsim::runtime::simir::operation_get_if<
+                       runtime::simir::CopyContainerAggregateElement>(
+                       &operation)) {
+      auto& target = registers.at(aggregate_copy->target);
+      const auto& source = registers.at(aggregate_copy->source);
+      if (target.type != source.type
+          || target.type.element_kind
+              != runtime::simir::ContainerElementKind::Aggregate) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "aggregate element copy requires identical container profiles"};
+      }
+      std::optional<runtime::simir::ContainerValue> missing;
+      const runtime::simir::ContainerValue* source_element = nullptr;
+      if (source.type.associative) {
+        const auto sought = key(source, input1_aval, input1_bval);
+        const auto source_at = lower_key(source, sought);
+        if (source_at < source.keys.size()
+            && key_equal(source.keys[source_at], sought)) {
+          source_element = &source.nested_elements[source_at];
+        } else {
+          missing = runtime::simir::default_container_value(
+              aggregate_element_type(source.type));
+          source_element = &*missing;
+        }
+      } else {
+        const auto source_at = source.type.fixed
+            ? fixed_offset(source, input1_aval, input1_bval)
+            : index(
+                  input1_aval, input1_bval,
+                  aggregate_copy->source_signed_index,
+                  "source container index");
+        if (source_at >= source.nested_elements.size()) {
+          throw runtime::simir::InterpreterError{
+              process, instruction,
+              "aggregate element copy source index is out of range"};
+        }
+        source_element = &source.nested_elements[source_at];
+      }
+      const auto snapshot = *source_element;
+      std::size_t target_at{};
+      if (target.type.associative) {
+        const auto sought = key(target, input0_aval, input0_bval);
+        target_at = lower_key(target, sought);
+        if (target_at >= target.keys.size()
+            || !key_equal(target.keys[target_at], sought)) {
+          if (target.keys.size()
+              >= runtime::simir::maximum_container_elements(target.type)) {
+            throw runtime::simir::InterpreterError{
+                process, instruction,
+                "associative aggregate exceeds its owning-storage budget"};
+          }
+          target.keys.insert(target.keys.begin() + target_at, sought);
+          target.nested_elements.insert(
+              target.nested_elements.begin() + target_at,
+              runtime::simir::default_container_value(
+                  aggregate_element_type(target.type)));
+        }
+      } else {
+        target_at = target.type.fixed
+            ? fixed_offset(target, input0_aval, input0_bval)
+            : index(
+                  input0_aval, input0_bval,
+                  aggregate_copy->target_signed_index,
+                  "target container index");
+        if (target_at >= target.nested_elements.size()) {
+          throw runtime::simir::InterpreterError{
+              process, instruction,
+              "aggregate element copy target index is out of range"};
+        }
+      }
+      if (target.nested_elements[target_at].type != snapshot.type) {
+        throw runtime::simir::InterpreterError{
+            process, instruction,
+            "aggregate element copy profile mismatch"};
+      }
+      target.nested_elements[target_at] = snapshot;
     } else if (const auto* erase =
                    fsim::runtime::simir::operation_get_if<runtime::simir::DeleteContainer>(
                        &operation)) {
       auto& target = registers.at(erase->target);
+      const bool aggregate =
+          target.type.element_kind
+          == runtime::simir::ContainerElementKind::Aggregate;
+      const bool string_element =
+          target.type.element_kind
+          == runtime::simir::ContainerElementKind::String;
       if (erase->index) {
         if (target.type.queue) {
           const auto at = index(
               input0_aval, input0_bval, true,
               "queue delete index");
-          if (at >= target.elements.size()) {
+          const auto element_count =
+              runtime::simir::container_value_size(target);
+          if (at >= element_count) {
             throw runtime::simir::InterpreterError{
                 process, instruction,
                 "queue delete index is out of range"};
           }
-          target.elements.erase(target.elements.begin() + at);
+          if (aggregate) {
+            target.nested_elements.erase(
+                target.nested_elements.begin() + at);
+          } else if (string_element) {
+            target.string_elements.erase(
+                target.string_elements.begin() + at);
+          } else {
+            target.elements.erase(target.elements.begin() + at);
+          }
         } else {
+          if (erase->string_index) {
+            const auto& sought = string_key(target, *erase->index);
+            const auto at = lower_string_key(target, sought);
+            if (at < target.string_keys.size()
+                && target.string_keys[at] == sought) {
+              target.string_keys.erase(
+                  target.string_keys.begin() + at);
+              if (aggregate) {
+                target.nested_elements.erase(
+                    target.nested_elements.begin() + at);
+              } else if (string_element) {
+                target.string_elements.erase(
+                    target.string_elements.begin() + at);
+              } else {
+                target.elements.erase(target.elements.begin() + at);
+              }
+            }
+            return 0;
+          }
           const auto sought =
               key(target, input0_aval, input0_bval);
           const auto at = lower_key(target, sought);
           if (at < target.keys.size()
               && key_equal(target.keys[at], sought)) {
             target.keys.erase(target.keys.begin() + at);
-            target.elements.erase(target.elements.begin() + at);
+            if (aggregate) {
+              target.nested_elements.erase(
+                  target.nested_elements.begin() + at);
+            } else {
+              target.elements.erase(target.elements.begin() + at);
+            }
           }
         }
       } else {
@@ -1188,8 +1763,15 @@ std::uint32_t LlvmProcessExecutor::container_operation(
               process, instruction,
               "delete() cannot clear a static array"};
         }
-        target.elements.clear();
+        if (aggregate) {
+          target.nested_elements.clear();
+        } else if (string_element) {
+          target.string_elements.clear();
+        } else {
+          target.elements.clear();
+        }
         target.keys.clear();
+        target.string_keys.clear();
       }
     } else if (const auto* load =
                    fsim::runtime::simir::operation_get_if<runtime::simir::LoadMemory>(
@@ -1265,6 +1847,15 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                    fsim::runtime::simir::operation_get_if<runtime::simir::ContainerExists>(
                        &operation)) {
       const auto& source = registers.at(exists->source);
+      if (exists->string_index) {
+        const auto& sought = string_key(source, exists->index);
+        const auto at = lower_string_key(source, sought);
+        *result_aval =
+            at < source.string_keys.size()
+                && source.string_keys[at] == sought
+            ? 1U : 0U;
+        return 0;
+      }
       const auto sought =
           key(source, input0_aval, input0_bval);
       const auto at = lower_key(source, sought);
@@ -1281,6 +1872,38 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         throw runtime::simir::InterpreterError{
             process, instruction,
             "first/last/next/prev require an associative array"};
+      }
+      if (traverse->string_index) {
+        std::optional<std::size_t> selected;
+        if (!source.string_keys.empty()) {
+          if (traverse->traversal
+              == runtime::simir::ContainerTraversal::first) {
+            selected = 0;
+          } else if (traverse->traversal
+                     == runtime::simir::ContainerTraversal::last) {
+            selected = source.string_keys.size() - 1U;
+          } else {
+            const auto& sought =
+                string_key(source, traverse->index);
+            const auto at = lower_string_key(source, sought);
+            if (traverse->traversal
+                == runtime::simir::ContainerTraversal::next) {
+              const auto next =
+                  at < source.string_keys.size()
+                          && source.string_keys[at] == sought
+                      ? at + 1U : at;
+              if (next < source.string_keys.size()) selected = next;
+            } else if (at != 0) {
+              selected = at - 1U;
+            }
+          }
+        }
+        if (selected) {
+          state.executor->write_string_register(
+              traverse->index, source.string_keys[*selected]);
+        }
+        *result_aval = selected ? 1U : 0U;
+        return 0;
       }
       std::optional<std::size_t> selected;
       if (!source.keys.empty()) {

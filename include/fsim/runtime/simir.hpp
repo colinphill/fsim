@@ -121,6 +121,7 @@ struct ResizeContainer {
   ContainerRegisterId target{};
   RegisterId size{};
   std::optional<ContainerRegisterId> initializer{};
+  bool allow_queue{};
 };
 
 struct CopyContainerRegister {
@@ -173,6 +174,7 @@ enum class ContainerOrderingOperator : std::uint8_t {
   reverse,
   ascending,
   descending,
+  shuffle,
 };
 
 enum class ContainerLocatorOperator : std::uint8_t {
@@ -236,7 +238,8 @@ struct OrderContainer {
 void order_container_value(
     ContainerValue& value,
     ContainerOrderingOperator operation,
-    std::span<const ContainerPredicateNode> key = {});
+    std::span<const ContainerPredicateNode> key = {},
+    const std::function<std::uint32_t()>& random = {});
 
 struct ContainerReduction {
   ContainerReductionOperator operation{
@@ -281,6 +284,7 @@ struct ContainerRead {
   RegisterId index{};
   bool signed_index{true};
   bool linear_index{};
+  bool string_index{};
 };
 struct ContainerWrite {
   ContainerRegisterId target{};
@@ -288,17 +292,79 @@ struct ContainerWrite {
   RegisterId source{};
   bool signed_index{true};
   bool linear_index{};
+  bool string_index{};
+};
+
+struct ContainerStringRead {
+  StringRegisterId destination{};
+  ContainerRegisterId source{};
+  RegisterId index{};
+  bool signed_index{true};
+  bool linear_index{};
+  bool string_index{};
+};
+
+struct ContainerStringWrite {
+  ContainerRegisterId target{};
+  RegisterId index{};
+  StringRegisterId source{};
+  bool signed_index{true};
+  bool linear_index{};
+  bool string_index{};
+};
+
+struct ContainerElementRead {
+  ContainerRegisterId destination{};
+  ContainerRegisterId source{};
+  RegisterId index{};
+  bool signed_index{true};
+};
+
+struct ContainerElementWrite {
+  ContainerRegisterId target{};
+  RegisterId index{};
+  ContainerRegisterId source{};
+  bool signed_index{true};
+};
+
+struct ContainerAggregateRead {
+  RegisterId destination{};
+  ContainerRegisterId source{};
+  RegisterId index{};
+  std::vector<std::uint32_t> members;
+  bool signed_index{true};
+  bool linear_index{};
+};
+
+struct ContainerAggregateWrite {
+  ContainerRegisterId target{};
+  RegisterId index{};
+  RegisterId source{};
+  std::vector<std::uint32_t> members;
+  bool signed_index{true};
+  bool linear_index{};
+};
+
+struct CopyContainerAggregateElement {
+  ContainerRegisterId target{};
+  RegisterId target_index{};
+  ContainerRegisterId source{};
+  RegisterId source_index{};
+  bool target_signed_index{true};
+  bool source_signed_index{true};
 };
 
 struct DeleteContainer {
   ContainerRegisterId target{};
   std::optional<RegisterId> index{};
+  bool string_index{};
 };
 
 struct ContainerExists {
   RegisterId destination{};
   ContainerRegisterId source{};
   RegisterId index{};
+  bool string_index{};
 };
 
 enum class ContainerTraversal : std::uint8_t {
@@ -313,6 +379,7 @@ struct TraverseContainer {
   ContainerRegisterId source{};
   RegisterId index{};
   ContainerTraversal traversal{ContainerTraversal::first};
+  bool string_index{};
 };
 
 struct LoadMemory {
@@ -323,6 +390,11 @@ struct LoadMemory {
   bool hexadecimal{};
   bool write{};
 };
+
+/// Return the fixed packed width of one memory element when the element is
+/// recursively representable as packed leaves.
+[[nodiscard]] std::optional<std::size_t>
+container_packed_element_width(const ContainerType& type);
 
 /// Parse bounded IEEE-style read-memory text into a fixed unpacked array.
 /// Tokens may contain underscores, X/Z/? digits, comments, and @addresses.
@@ -774,6 +846,7 @@ struct ForceSignalSlice {
   SignalId signal{};
   RegisterId source{};
   std::uint32_t offset{};
+  std::optional<DynamicIndex> selection;
 };
 
 /// Release a static packed force region and reveal current driven bits.
@@ -781,6 +854,7 @@ struct ReleaseSignalSlice {
   SignalId signal{};
   std::uint32_t offset{};
   std::uint32_t width{};
+  std::optional<DynamicIndex> selection;
 };
 struct WriteInertialDynamicSlice {
   SignalId signal{};
@@ -820,7 +894,16 @@ struct ProjectedWaveformValue {
     const TransitionDelays& delays);
 
 struct WaitFor {
+  WaitFor() = default;
+  explicit WaitFor(const SimulationTick static_delay) : delay(static_delay) {}
+  // A static delay when source is empty; otherwise the normalized tick scale
+  // applied to the runtime value held in source.
   SimulationTick delay{};
+  std::optional<RegisterId> source;
+  std::uint32_t source_width{};
+  SystemVerilogScalarKind source_kind{SystemVerilogScalarKind::None};
+  bool source_signed{};
+  SimulationTick rounding_quantum{1};
 };
 
 enum class EdgeKind : std::uint8_t {
@@ -873,6 +956,85 @@ struct Fork {
 struct ForkEnd {};
 struct WaitFork {};
 struct DisableFork {};
+/// Values returned by the SystemVerilog process status query.
+enum class ProcessStatus : std::uint8_t {
+  finished = 0,
+  running = 1,
+  waiting = 2,
+  suspended = 3,
+  killed = 4,
+};
+/// Materialize a generation-safe handle for the currently executing process.
+struct ProcessSelf {
+  RegisterId destination{};
+};
+/// Query the SystemVerilog process status ordinal for a handle.
+struct ProcessStatusQuery {
+  RegisterId destination{};
+  RegisterId source{};
+};
+/// Query whether a process has finished normally or was killed.
+struct ProcessCompleted {
+  RegisterId destination{};
+  RegisterId source{};
+};
+/// Suspend the current process until the target reaches a terminal state.
+struct ProcessAwait {
+  RegisterId source{};
+};
+/// Recursively terminate the target process and its dynamic descendants.
+struct ProcessKill {
+  RegisterId source{};
+};
+
+/// Construct a typed mailbox. A zero capacity selects the bounded unbounded
+/// form; nonzero capacities are exact maximum entry counts.
+struct MailboxCreate {
+  RegisterId destination{};
+  RegisterId capacity{};
+  std::uint32_t element_width{};
+};
+
+/// Put one packed value. A result register selects nonblocking `try_put` and
+/// receives one on success; no result register selects blocking `put`.
+struct MailboxPut {
+  RegisterId receiver{};
+  RegisterId source{};
+  std::uint32_t element_width{};
+  std::optional<RegisterId> result;
+};
+
+/// Get or peek one packed value. A result register selects the corresponding
+/// nonblocking `try_*` form and receives one on success.
+struct MailboxGet {
+  RegisterId receiver{};
+  RegisterId destination{};
+  std::uint32_t element_width{};
+  std::optional<RegisterId> result;
+  bool peek{};
+};
+
+struct MailboxNum {
+  RegisterId destination{};
+  RegisterId receiver{};
+};
+
+struct SemaphoreCreate {
+  RegisterId destination{};
+  RegisterId keys{};
+};
+
+/// Acquire keys. A result register selects nonblocking `try_get`.
+struct SemaphoreGet {
+  RegisterId receiver{};
+  RegisterId keys{};
+  std::optional<RegisterId> result;
+};
+
+struct SemaphorePut {
+  RegisterId receiver{};
+  RegisterId keys{};
+};
 struct Jump {
   InstructionIndex target{};
 };
@@ -1148,6 +1310,13 @@ struct ContainerObject {
   std::string name;
   ContainerValue initial_value;
   std::optional<ContainerSliceAlias> slice_alias;
+};
+
+struct ContainerSignalAlias {
+  ContainerObjectId object{};
+  SignalId signal{};
+  bool readable{};
+  bool writable{};
 };
 
 struct Sensitivity {
@@ -1869,6 +2038,7 @@ public:
   [[nodiscard]] StringObjectId add_string_object(StringObject object);
   [[nodiscard]] ContainerObjectId add_container_object(
       ContainerObject object);
+  void add_container_signal_alias(ContainerSignalAlias alias);
   [[nodiscard]] ProcessId add_process(Process process);
   [[nodiscard]] std::uint32_t add_module_path(ModulePath path);
   [[nodiscard]] std::uint32_t add_module_timing_check(

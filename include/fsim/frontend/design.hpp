@@ -148,6 +148,10 @@ struct Delay {
   // physical-time expression that is not the legacy integer/unit literal.
   // Language-specific semantic analysis resolves it into project ticks.
   std::optional<Expression> expression;
+  // Runtime expression delays are rounded to this many project ticks after
+  // applying `magnitude` as their normalized tick scale. Literal delays keep
+  // the default because their rounding is completed during normalization.
+  std::uint64_t rounding_quantum{1};
   // Present together only for a parenthesized min:typ:max delay triple.
   std::optional<DelayAlternative> minimum;
   std::optional<DelayAlternative> typical;
@@ -424,6 +428,7 @@ enum class PackedAggregateKind {
   Union,
   UnpackedStruct,
   TaggedUnion,
+  UnpackedUnion,
 };
 
 struct Type {

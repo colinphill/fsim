@@ -19,6 +19,7 @@ void VerilogParser::parse_parameter_overrides(
         || keyword("longint") || keyword("time")
         || keyword("shortreal") || keyword("real")
         || keyword("realtime") || keyword("chandle")
+        || keyword("process")
         || keyword("integer") || keyword("int")
         || keyword("logic") || keyword("reg") || keyword("bit")
         || keyword("signed") || keyword("unsigned")
@@ -149,8 +150,10 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
         const bool explicit_type =
             explicit_variable || is_net_type_keyword()
             || keyword("string") || keyword("chandle")
+            || keyword("process")
             || is_named_type_reference_start();
-        if (keyword("string") || keyword("chandle")) {
+        if (keyword("string") || keyword("chandle")
+            || keyword("process")) {
           spec.type = parse_parameter_type();
         } else if (is_named_type_reference_start()) {
           spec.type = parse_named_type();
@@ -488,6 +491,10 @@ Type VerilogParser::parse_named_type() {
       false};
   type.named_type = name;
   type.named_type_span = span;
+  if (name == "mailbox" || name == "semaphore") {
+    type.domain = ValueDomain::Bit2;
+    type.systemverilog_scalar = SystemVerilogScalarKind::Chandle;
+  }
   if (match(TokenKind::Hash)) {
     const auto hash = previous();
     Instance actual_owner;
@@ -522,35 +529,29 @@ Type VerilogParser::parse_systemverilog_aggregate_type() {
   Type type;
   type.spelling =
       tagged ? "union tagged packed"
-      : is_union ? "union packed"
+      : is_union ? packed ? "union packed" : "union"
                : packed ? "struct packed" : "struct";
   type.packed_aggregate =
       tagged
           ? PackedAggregateKind::TaggedUnion
       : is_union
-          ? PackedAggregateKind::Union
+          ? packed ? PackedAggregateKind::Union
+                   : PackedAggregateKind::UnpackedUnion
           : packed ? PackedAggregateKind::Struct
                    : PackedAggregateKind::UnpackedStruct;
   type.domain = ValueDomain::Bit2;
-  if (!packed && is_union) {
-    error(
-        previous(),
-        "FSIM-SV-UNSUPPORTED-027",
-        "bounded unpacked union declarations are not implemented");
-  } else if (!packed) {
-    error(
-        previous(),
-        "FSIM-SV-UNSUPPORTED-028",
-        "anonymous or nested unpacked struct declarations are not "
-        "implemented");
-  }
   if (packed) {
     parse_optional_signedness(type);
   }
-  expect(
-      TokenKind::LeftBrace,
-      "'{' before aggregate members",
-      "FSIM-SV-PARSE-086");
+  if (!at(TokenKind::LeftBrace)) {
+    (void)expect(
+        TokenKind::LeftBrace,
+        "'{' before aggregate members",
+        "FSIM-SV-PARSE-086");
+    skip_to_semicolon();
+    return type;
+  }
+  (void)advance();
   if (at(TokenKind::RightBrace)) {
     error(
         current(),
@@ -583,9 +584,11 @@ Type VerilogParser::parse_systemverilog_aggregate_type() {
       }
       break;
     }
-    if ((packed || is_union)
-        && member_type.packed_aggregate
-            == PackedAggregateKind::UnpackedStruct) {
+    if (packed
+        && (member_type.packed_aggregate
+                == PackedAggregateKind::UnpackedStruct
+            || member_type.packed_aggregate
+                == PackedAggregateKind::UnpackedUnion)) {
       error(
           member_start,
           "FSIM-SV-UNSUPPORTED-028",
@@ -596,7 +599,7 @@ Type VerilogParser::parse_systemverilog_aggregate_type() {
           expect_identifier("aggregate member name");
       auto declarator_type = member_type;
       if (at(TokenKind::LeftBracket)) {
-        if (packed || is_union) {
+        if (packed) {
           error(
               current(),
               "FSIM-SV-UNSUPPORTED-029",
@@ -722,6 +725,7 @@ Type VerilogParser::parse_systemverilog_enum_type(
   } else if (is_named_type_reference_start()) {
     type = parse_named_type();
   } else if (keyword("string") || keyword("chandle")
+             || keyword("process")
              || keyword("shortreal") || keyword("real")
              || keyword("realtime")) {
     const auto unsupported = advance();
@@ -812,33 +816,31 @@ void VerilogParser::parse_typedef(
     if (is_union && !tagged && match_keyword("tagged")) {
       tagged = true;
     }
-    if (!packed && is_union) {
-      error(
-          current(),
-          "FSIM-SV-UNSUPPORTED-027",
-          "bounded unpacked union typedefs are not implemented");
-      skip_to_semicolon();
-      return;
-    }
     type.spelling =
         tagged ? "union tagged packed"
-        : is_union ? "union packed"
+        : is_union ? packed ? "union packed" : "union"
                  : packed ? "struct packed" : "struct";
     type.packed_aggregate =
         tagged
             ? PackedAggregateKind::TaggedUnion
         : is_union
-            ? PackedAggregateKind::Union
+            ? packed ? PackedAggregateKind::Union
+                     : PackedAggregateKind::UnpackedUnion
             : packed ? PackedAggregateKind::Struct
                      : PackedAggregateKind::UnpackedStruct;
     type.domain = ValueDomain::Bit2;
     if (packed) {
       parse_optional_signedness(type);
     }
-    expect(
-        TokenKind::LeftBrace,
-        "'{' before packed aggregate members",
-        "FSIM-SV-PARSE-086");
+    if (!at(TokenKind::LeftBrace)) {
+      (void)expect(
+          TokenKind::LeftBrace,
+          "'{' before aggregate members",
+          "FSIM-SV-PARSE-086");
+      skip_to_semicolon();
+      return;
+    }
+    (void)advance();
     if (at(TokenKind::RightBrace)) {
       error(
           current(),
@@ -851,7 +853,7 @@ void VerilogParser::parse_typedef(
       Type member_type;
       if (keyword("struct") || keyword("union")) {
         member_type = parse_systemverilog_aggregate_type();
-      } else if (!packed && !is_union) {
+      } else if (!packed) {
         member_type = parse_parameter_type();
       } else if (keyword("logic") || keyword("reg")
           || keyword("bit") || keyword("byte")
@@ -870,9 +872,11 @@ void VerilogParser::parse_typedef(
         skip_to_semicolon();
         continue;
       }
-      if ((packed || is_union)
-          && member_type.packed_aggregate
-              == PackedAggregateKind::UnpackedStruct) {
+      if (packed
+          && (member_type.packed_aggregate
+                  == PackedAggregateKind::UnpackedStruct
+              || member_type.packed_aggregate
+                  == PackedAggregateKind::UnpackedUnion)) {
         error(
             member_start,
             "FSIM-SV-UNSUPPORTED-028",
@@ -884,7 +888,7 @@ void VerilogParser::parse_typedef(
             expect_identifier("packed aggregate member name");
         auto declarator_type = member_type;
         if (at(TokenKind::LeftBracket)) {
-          if (packed || is_union) {
+          if (packed) {
             error(
                 current(),
                 "FSIM-SV-UNSUPPORTED-029",
@@ -1009,7 +1013,7 @@ void VerilogParser::parse_typedef(
     }
   } else if (keyword("shortreal") || keyword("real")
       || keyword("realtime") || keyword("time")
-      || keyword("chandle")) {
+      || keyword("chandle") || keyword("process")) {
     type = parse_parameter_type();
   } else if (keyword("logic") || keyword("reg")
       || keyword("bit") || keyword("integer")
@@ -1208,6 +1212,7 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
         || keyword("longint") || keyword("time")
         || keyword("integer") || keyword("int")
         || keyword("logic") || keyword("reg") || keyword("bit")
+        || keyword("string")
         || keyword("signed") || keyword("unsigned")
         || at(TokenKind::LeftBracket);
     if (built_in) {
@@ -1219,17 +1224,6 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
           TokenKind::RightBracket,
           "']' after associative-array index type",
           "FSIM-SV-PARSE-157");
-    } else if (keyword("string")) {
-      const auto unsupported = advance();
-      error(
-          unsupported,
-          "FSIM-SV-SEM-082",
-          "string associative-array indices are not supported");
-      expect(
-          TokenKind::RightBracket,
-          "']' after associative-array index type",
-          "FSIM-SV-PARSE-157");
-      return true;
     } else if (at(TokenKind::Star)) {
       error(
           current(),
@@ -1362,6 +1356,7 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
 [[nodiscard]] bool VerilogParser::is_declaration_start() const  {
   return is_direction_keyword() || is_net_type_keyword()
       || keyword("string") || keyword("chandle")
+      || keyword("process")
       || keyword("struct") || keyword("union") || keyword("enum")
       || is_named_type_reference_start();
 }
@@ -1424,9 +1419,11 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     const bool explicit_type =
         explicit_variable || is_net_type_keyword()
         || keyword("string") || keyword("chandle")
+        || keyword("process")
         || keyword("struct") || keyword("union") || keyword("enum")
         || is_named_type_reference_start();
     if (keyword("string") || keyword("chandle")
+        || keyword("process")
         || keyword("struct") || keyword("union") || keyword("enum")) {
       spec.type = parse_parameter_type();
     } else if (is_named_type_reference_start()) {
@@ -1436,6 +1433,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     }
     require_default_port_net_type(current(), explicit_type);
   } else if (keyword("string") || keyword("chandle")
+             || keyword("process")
              || keyword("struct") || keyword("union") || keyword("enum")) {
     spec.type = parse_parameter_type();
   } else if (is_named_type_reference_start()) {
@@ -1698,6 +1696,7 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
   const auto start = current();
   Type type = default_verilog_type();
   if (keyword("string") || keyword("chandle")
+      || keyword("process")
       || keyword("struct") || keyword("union") || keyword("enum")) {
     type = parse_parameter_type();
   } else if (is_named_type_reference_start()) {

@@ -1418,6 +1418,7 @@ using namespace elaboration_detail;
                         port,
                         connection,
                         path,
+                        parent_signals,
                         parent_containers,
                         parent_read_only_containers,
                         cross_language);

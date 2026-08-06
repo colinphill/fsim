@@ -481,9 +481,11 @@ constants, and one element-typed conditional selection as transformed
 reductions. Every key is computed once before stable ascending/descending
 sorting, so equal keys retain original order. Ordering supports writable
 module objects, output/inout port aliases, and automatic task values across
-suspension. Arbitrary value arguments, keys on `reverse`, associative arrays,
-indirect or read-only receivers, arithmetic/calls/side effects in keys,
-expression-result use, and nondeterministic `shuffle()` remain unsupported.
+suspension. No-argument `shuffle()` uses a deterministic per-process random
+stream and the same interpreter/compiled Fisher-Yates implementation. Arbitrary
+value arguments, keys on `reverse` or `shuffle`, associative arrays, indirect
+or read-only receivers, arithmetic/calls/side effects in keys, and expression-
+result use remain unsupported.
 Direct nonassociative static arrays, dynamic arrays, queues, and bounded
 queues also support `min()`, `max()`, `unique()`, and `unique_index()` with
 an optional parenthesized `with` transformation when their result is assigned
@@ -1324,9 +1326,10 @@ length, iteration, indexing, slicing, replacement, case, comparison,
 substring, integer-conversion, and real-conversion methods share bounded,
 transactional storage. Scalar text and binary file I/O covers the supported
 real/time/string/null-chandle values with descriptor and partial-conversion
-rollback. Cross-language strings, string associative indices, unrestricted
-host paths, standard/multichannel descriptor aliases, `$fstrobe`, and
-`$fmonitor` remain deferred.
+rollback. Cross-language strings, unrestricted host paths, standard descriptor
+aliases, `$fstrobe`, and `$fmonitor` remain deferred. Batch 152 adds strict-
+UTF-8 string associative indices and process-owned multichannel descriptor bits
+for the supported bounded operations.
 
 Owning-unit schema 8, portable-library schema 5, design-state artifacts,
 relocated mapped libraries, and native-cache identities preserve these types
@@ -1336,6 +1339,42 @@ This scalar closure is prerequisite infrastructure, not UVM completion:
 arbitrary-width packed values and residual aggregate/procedural work are in
 Batches 151-152, SVA/coverage in Batches 154-155, foreign interfaces in
 Batches 156-158, and UVM 1.2/UVM 2020-3.1 in Batches 159-162.
+
+### SystemVerilog unpacked data, file, and procedural closure in v2
+
+Batch 152 makes remaining-rank multidimensional prefix selections, range and
+indexed slices, overlapping snapshot copies, compatible callable returns and
+copy-out, recursive unpacked struct/union values, nested assignment patterns,
+string-element containers, and canonical string-index associative arrays
+executable. Supported recursive fixed profiles cross VHDL/SystemVerilog ports
+with explicit direction and shape checks. Multichannel output and bounded
+multidimensional, string, and recursively packable aggregate memory-file I/O
+stage complete results before publication.
+
+Runtime packed, `time`, `real`, `shortreal`, and `realtime` delay values are
+normalized and rounded at execution. Edge-qualified packed expressions may be
+mixed with direct signals in event lists, and runtime-selected force/release
+bit targets preserve underlying drivers. Nonlocal and selected ref actuals are
+captured once across suspension; nested packed/string/container static locals
+initialize once, and static tasks may suspend sequentially. Re-entered fork
+sites own simultaneous children and generation-safe `process` handles with
+checked self/status/completed/await/kill operations.
+
+Contextual typed mailboxes and counting semaphores provide bounded FIFO
+blocking/nonblocking operations and fair wakeup. Named-event waiters retain
+stable process order, and no-argument container `shuffle()` consumes the
+deterministic process random stream identically in interpreter and compiled
+execution. Cancelable scheduler work is owner-checked, invalidates on every
+terminal path, and remains resumable after a propagating callback failure.
+Runtime-state schema 16, native-object schema 87, portable objects/designs,
+relocated mapped libraries, debugger/callback/VCD surfaces, and cold/warm LLVM
+O0/O2 cache execution preserve this completed substrate.
+
+This is governed procedural infrastructure, not complete SystemVerilog/UVM.
+Programs, clocking blocks and interfaces, SVA/coverage, foreign interfaces,
+and UVM retain their locked later-batch ownership; unrestricted allocation,
+standard descriptor aliases, and ordering `with` clauses on `shuffle()` remain
+outside this slice.
 
 ## v1 target
 

@@ -35,16 +35,20 @@ Lowerer::ExpressionAttempt Lowerer::lower_file_binary_read(
   if (const auto local = container_locals_.find(target.text);
       local != container_locals_.end()) {
     const auto& type = process_.container_register_types.at(local->second);
-    if (!type.fixed || type.dimensions.size() != 1U) {
+    const auto width =
+        runtime::simir::container_packed_element_width(type);
+    if (!type.fixed || !width
+        || *width > std::numeric_limits<std::uint32_t>::max()) {
       report(
           "FSIM-ELAB-SVFILE-014",
-          "$fread memory target must be one-dimensional and fixed",
+          "$fread memory target must be fixed with recursively packed "
+          "elements",
           target.span);
       return std::nullopt;
     }
     operation.target_kind = FileBinaryTargetKind::container_register;
     operation.target = local->second;
-    operation.width = type.element_width;
+    operation.width = static_cast<std::uint32_t>(*width);
     operation.two_state = type.two_state;
     operation.scalar_kind = type.scalar_kind;
   } else if (const auto object = container_objects_.find(target.text);
@@ -53,16 +57,21 @@ Lowerer::ExpressionAttempt Lowerer::lower_file_binary_read(
     const auto* frontend_type = object_type(target.text);
     const auto type = frontend_type != nullptr
         ? container_type(*frontend_type, target.span) : std::nullopt;
-    if (!type || !type->fixed || type->dimensions.size() != 1U) {
+    const auto width = type
+        ? runtime::simir::container_packed_element_width(*type)
+        : std::nullopt;
+    if (!type || !type->fixed || !width
+        || *width > std::numeric_limits<std::uint32_t>::max()) {
       report(
           "FSIM-ELAB-SVFILE-014",
-          "$fread memory target must be one-dimensional and fixed",
+          "$fread memory target must be fixed with recursively packed "
+          "elements",
           target.span);
       return std::nullopt;
     }
     operation.target_kind = FileBinaryTargetKind::container_object;
     operation.target = object->second;
-    operation.width = type->element_width;
+    operation.width = static_cast<std::uint32_t>(*width);
     operation.two_state = type->two_state;
     operation.scalar_kind = type->scalar_kind;
   } else if (const auto packed_local = locals_.find(target.text);

@@ -1523,7 +1523,9 @@ void substitute_parameters(
             type.packed_aggregate
                 == frontend::PackedAggregateKind::Union
             || type.packed_aggregate
-                == frontend::PackedAggregateKind::TaggedUnion;
+                == frontend::PackedAggregateKind::TaggedUnion
+            || type.packed_aggregate
+                == frontend::PackedAggregateKind::UnpackedUnion;
         const bool tagged_union =
             type.packed_aggregate
             == frontend::PackedAggregateKind::TaggedUnion;
@@ -1532,8 +1534,10 @@ void substitute_parameters(
             && type.packed_aggregate
                 == frontend::PackedAggregateKind::Struct;
         const bool heterogeneous_unpacked =
-            type.packed_aggregate
-                == frontend::PackedAggregateKind::UnpackedStruct
+            (type.packed_aggregate
+                 == frontend::PackedAggregateKind::UnpackedStruct
+             || type.packed_aggregate
+                 == frontend::PackedAggregateKind::UnpackedUnion)
             && std::ranges::any_of(
                 type.packed_members,
                 [](const frontend::PackedMember& member) {
@@ -1544,7 +1548,9 @@ void substitute_parameters(
                           != frontend::SystemVerilogScalarKind::None
                       || nested.systemverilog_container.has_value()
                       || nested.packed_aggregate
-                          == frontend::PackedAggregateKind::UnpackedStruct;
+                          == frontend::PackedAggregateKind::UnpackedStruct
+                      || nested.packed_aggregate
+                          == frontend::PackedAggregateKind::UnpackedUnion;
                 });
         if (heterogeneous_unpacked) {
             for (auto& member : type.packed_members) {

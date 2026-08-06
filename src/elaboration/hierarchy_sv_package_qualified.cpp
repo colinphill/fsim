@@ -108,7 +108,10 @@ void HierarchyBuilder::validate_systemverilog_exports(
             function_imports;
         std::vector<frontend::TaskDeclaration> task_imports;
         for (const auto& identifier : ordered) {
-            if (identifier == "std::randomize") continue;
+            if (identifier == "std::randomize"
+                || identifier == "process::self") {
+                continue;
+            }
             const auto& reference_span =
                 identifiers.at(identifier);
             const auto separator = identifier.find("::");

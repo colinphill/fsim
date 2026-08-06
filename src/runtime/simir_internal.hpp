@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+
+#include <deque>
 #include "fsim/runtime/simir.hpp"
 
 #include <algorithm>
@@ -18,6 +20,15 @@
 namespace fsim::runtime::simir {
 
 void validate_container_value(const ContainerValue& value);
+
+[[nodiscard]] std::optional<std::size_t>
+container_signal_bridge_width(const ContainerType& type);
+[[nodiscard]] PackedLogic4 pack_container_signal_value(
+    const ContainerValue& value,
+    bool logic9);
+void unpack_container_signal_value(
+    ContainerValue& value,
+    const PackedLogic4& packed);
 
 
 [[nodiscard]] std::string error_text(ProcessId process,
@@ -256,13 +267,47 @@ struct Interpreter::Impl {
     std::uint64_t random_state{};
     std::map<InstructionIndex, VitalTimingState> vital_timing_states;
     std::map<InstructionIndex, VitalDelayState> vital_delay_states;
+    std::uint32_t generation{};
+    ProcessStatus status{ProcessStatus::running};
     bool halted{};
+    bool killed{};
     std::optional<ProcessId> fork_parent;
     std::optional<std::uint64_t> fork_group;
     std::set<ProcessId> live_children;
     std::map<InstructionIndex, std::set<ProcessId>> active_fork_sites;
     bool waiting_for_children{};
     std::optional<std::uint64_t> waiting_fork_group;
+    std::optional<ProcessId> waiting_process;
+    std::set<ProcessId> process_waiters;
+  };
+
+  struct MailboxReader {
+    ProcessId process{};
+    RegisterId destination{};
+    bool peek{};
+  };
+
+  struct MailboxWriter {
+    ProcessId process{};
+    PackedLogic4 value;
+  };
+
+  struct MailboxState {
+    std::uint32_t element_width{};
+    std::size_t capacity{};
+    std::deque<PackedLogic4> entries;
+    std::deque<MailboxReader> readers;
+    std::deque<MailboxWriter> writers;
+  };
+
+  struct SemaphoreWaiter {
+    ProcessId process{};
+    std::uint32_t keys{};
+  };
+
+  struct SemaphoreState {
+    std::uint32_t keys{};
+    std::deque<SemaphoreWaiter> waiters;
   };
 
   struct ForkGroup {
@@ -384,9 +429,12 @@ struct Interpreter::Impl {
   std::vector<Signal> signals;
   std::vector<StringObject> string_objects;
   std::vector<ContainerObject> container_objects;
+  std::vector<std::optional<ContainerSignalAlias>>
+      container_signal_aliases;
   std::filesystem::path file_root;
   std::map<FileHandle, FileState> files;
   FileHandle next_file_handle{1};
+  std::uint32_t next_multichannel_channel{1};
   std::vector<PackedLogic4> driven_values;
   std::vector<std::map<ProcessId, PackedLogic4>> driver_values;
   std::vector<std::map<ProcessId, DriveStrength>> driver_strengths;
@@ -397,11 +445,14 @@ struct Interpreter::Impl {
   std::vector<std::optional<PackedLogic4>> forced_values;
   std::vector<PackedLogic4> forced_masks;
   std::vector<ProcessState> processes;
+  std::vector<MailboxState> mailboxes;
+  std::vector<SemaphoreState> semaphores;
   std::vector<ModulePath> module_paths;
   std::vector<ModuleTimingCheck> module_timing_checks;
   std::vector<ModuleTimingCheckState> module_timing_check_states;
   std::map<std::uint64_t, ForkGroup> fork_groups;
   std::uint64_t next_fork_group{1};
+  std::uint32_t next_process_generation{1};
   std::vector<std::vector<Fanout>> static_fanout;
   std::vector<std::vector<Fanout>> dynamic_fanout;
   std::vector<EventState> event_states;
@@ -552,6 +603,14 @@ struct Interpreter::Impl {
   void execute_container(ProcessState&, const LocateContainer&);
   void execute_container(ProcessState&, const ContainerRead&);
   void execute_container(ProcessState&, const ContainerWrite&);
+  void execute_container(ProcessState&, const ContainerStringRead&);
+  void execute_container(ProcessState&, const ContainerStringWrite&);
+  void execute_container(ProcessState&, const ContainerElementRead&);
+  void execute_container(ProcessState&, const ContainerElementWrite&);
+  void execute_container(ProcessState&, const ContainerAggregateRead&);
+  void execute_container(ProcessState&, const ContainerAggregateWrite&);
+  void execute_container(
+      ProcessState&, const CopyContainerAggregateElement&);
   void execute_container(ProcessState&, const DeleteContainer&);
   void execute_container(ProcessState&, const ContainerExists&);
   void execute_container(ProcessState&, const TraverseContainer&);
@@ -634,8 +693,26 @@ struct Interpreter::Impl {
       ProcessState& parent,
       InstructionIndex instruction,
       const Fork& operation);
-  void complete_fork_child(ProcessState& child);
+  void complete_fork_child(
+      ProcessState& child,
+      ProcessStatus status = ProcessStatus::finished);
   void cancel_fork_descendants(ProcessState& parent);
+  [[nodiscard]] std::uint64_t process_handle(
+      const ProcessState& process) const;
+  [[nodiscard]] ProcessState& process_from_handle(
+      ProcessState& caller,
+      RegisterId source);
+  [[nodiscard]] bool handle_process_boundary(
+      ProcessState& process,
+      InstructionIndex instruction,
+      const Operation& operation);
+  [[nodiscard]] bool handle_synchronization_boundary(
+      ProcessState& process,
+      InstructionIndex instruction,
+      const Operation& operation);
+  void complete_process(
+      ProcessState& process,
+      ProcessStatus status);
 
   void trigger_event(const SignalId event);
 

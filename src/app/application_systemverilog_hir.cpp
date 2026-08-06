@@ -781,6 +781,8 @@ class SystemVerilogHirBuilder final {
         return sv::TypeForm::tagged_union;
       case frontend::PackedAggregateKind::UnpackedStruct:
         return sv::TypeForm::unpacked_structure;
+      case frontend::PackedAggregateKind::UnpackedUnion:
+        return sv::TypeForm::unpacked_union;
       case frontend::PackedAggregateKind::None:
         break;
     }

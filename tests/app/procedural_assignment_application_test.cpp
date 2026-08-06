@@ -93,7 +93,7 @@ Capture run_once(
   capture.compiled_processes = simulation.compiled_process_count();
   capture.native_cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 36> names{
+  constexpr std::array<std::string_view, 42> names{
       "procedural_assignments.delayed_nba",
       "procedural_assignments.delayed_blocking",
       "procedural_assignments.event_blocking",
@@ -129,13 +129,19 @@ Capture run_once(
       "procedural_assignments.event_compound",
       "procedural_assignments.event_vector",
       "procedural_assignments.cross_slot",
-      "procedural_assignments.inactive_nba"};
+      "procedural_assignments.inactive_nba",
+      "procedural_assignments.dynamic_forced",
+      "procedural_assignments.dynamic_force_masked",
+      "procedural_assignments.dynamic_force_released",
+      "procedural_assignments.edge_positive",
+      "procedural_assignments.edge_negative",
+      "procedural_assignments.edge_mixed_state"};
   constexpr std::array<std::uint32_t, names.size()> widths{
       1, 1, 1, 1, 1, 1, 4, 4, 1, 1, 1,
       16, 16, 16, 16, 16, 32,
       8, 8, 8, 1, 32,
       4, 4, 4, 4, 4, 4, 4, 4, 8, 4, 4, 4,
-      1, 3};
+      1, 3, 4, 4, 4, 1, 1, 2};
   std::array<fsim::runtime::simir::SignalId, names.size()> signals{};
   std::array<fsim::runtime::VcdSignal, names.size()> vcd_signals{};
   std::ostringstream vcd_output;
@@ -301,6 +307,14 @@ void verify_reference(const Capture& capture) {
   assert(final_value("procedural_assignments.delayed_compound") == "0010");
   assert(final_value("procedural_assignments.event_compound") == "0011");
   assert(final_value("procedural_assignments.event_vector") == "0000");
+  assert(final_value("procedural_assignments.dynamic_forced") == "0001");
+  assert(
+      final_value("procedural_assignments.dynamic_force_masked") == "0101");
+  assert(
+      final_value("procedural_assignments.dynamic_force_released") == "0001");
+  assert(final_value("procedural_assignments.edge_positive") == "1");
+  assert(final_value("procedural_assignments.edge_negative") == "1");
+  assert(final_value("procedural_assignments.edge_mixed_state") == "11");
   assert(
       capture.debugger.find(
           "procedural_assignments.dynamic_partial = 1001001000110100")
@@ -341,11 +355,11 @@ void verify_mode(
     assert(reference.debugger == actual->debugger);
   }
 #if defined(FSIM_HAS_LLVM)
-  assert(cold.compiled_processes == 15);
+  assert(cold.compiled_processes == 19);
   assert(cold.native_cache.hits == 0);
   assert(cold.native_cache.misses == 1);
   assert(cold.native_cache.stores == 1);
-  assert(warm.compiled_processes == 15);
+  assert(warm.compiled_processes == 19);
   assert(warm.native_cache.hits == 1);
   assert(warm.native_cache.misses == 0);
 #else
@@ -408,6 +422,15 @@ module procedural_assignments;
   logic [3:0] event_vector;
   logic cross_slot;
   logic [2:0] inactive_nba;
+  logic [3:0] dynamic_forced;
+  logic [3:0] dynamic_force_masked;
+  logic [3:0] dynamic_force_released;
+  logic signed [31:0] force_index;
+  logic edge_left;
+  logic edge_right;
+  logic edge_positive;
+  logic edge_negative;
+  logic [1:0] edge_mixed_state;
   logic [3:0] compound_rhs;
   logic signed [31:0] event_index;
 
@@ -490,9 +513,40 @@ module procedural_assignments;
     whole_masked = forced_whole;
     release forced_whole;
     whole_released = forced_whole;
+    dynamic_forced = 4'b1010;
+    force_index = 2;
+    force dynamic_forced[force_index] = 1'b1;
+    dynamic_forced = 4'b0001;
+    dynamic_force_masked = dynamic_forced;
+    release dynamic_forced[force_index];
+    dynamic_force_released = dynamic_forced;
     chained_target = 8'h00;
     chained_target[7:2][3:1] = 3'b101;
     chained_target[7:2][3:1] += 3'b001;
+  end
+
+  initial begin
+    edge_left = 1'b0;
+    edge_right = 1'b0;
+    #1ps edge_right = 1'b1;
+    #1ps edge_left = 1'b1;
+    #1ps edge_right = 1'b0;
+    #1ps edge_left = 1'b0;
+  end
+  initial begin
+    edge_positive = 1'b0;
+    @(posedge (edge_left | edge_right));
+    edge_positive = 1'b1;
+  end
+  initial begin
+    edge_negative = 1'b0;
+    @(negedge (edge_left | edge_right));
+    edge_negative = 1'b1;
+  end
+  initial begin
+    edge_mixed_state = 2'b00;
+    @(negedge (edge_left | edge_right) or edge_left);
+    edge_mixed_state = {edge_left, edge_right};
   end
 
   initial fork

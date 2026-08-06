@@ -72,6 +72,10 @@ constexpr bool valid_archive_enum(const T value) noexcept {
   } else if constexpr (std::same_as<T, semantic::sv::TypeForm>) {
     return value >= semantic::sv::TypeForm::unresolved
         && value <= semantic::sv::TypeForm::tagged_union;
+  } else if constexpr (
+      std::same_as<T, runtime::simir::ContainerOrderingOperator>) {
+    return value >= runtime::simir::ContainerOrderingOperator::reverse
+        && value <= runtime::simir::ContainerOrderingOperator::shuffle;
   } else {
     return true;
   }
@@ -123,7 +127,8 @@ auto archive_fields(T& value) {
       value.elements,
       value.string_elements,
       value.nested_elements,
-      value.keys);
+      value.keys,
+      value.string_keys);
 }
 
 template <typename T>
@@ -215,6 +220,14 @@ auto archive_fields(T& value) {
       value.destination, value.handle, value.source, value.string_source,
       value.conversions, value.trailing_text, value.require_assignments,
       value.success, value.consume_string_source);
+}
+
+template <typename T>
+  requires std::same_as<std::remove_cv_t<T>, runtime::simir::WaitFor>
+auto archive_fields(T& value) {
+  return std::tie(
+      value.delay, value.source, value.source_width, value.source_kind,
+      value.source_signed, value.rounding_quantum);
 }
 
 template <typename T>

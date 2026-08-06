@@ -1733,7 +1733,7 @@ void test_simir_fork_process_lifecycle() {
     Process process;
     process.id = 0;
     process.name = "fork_lifecycle";
-    process.register_count = 1;
+    process.register_count = 4;
     process.debug_locals = {
         DebugLocal{
             "shared", "logic [1:0]", 0, 2, {}, {}, {},
@@ -1835,6 +1835,93 @@ void test_simir_fork_process_lifecycle() {
       },
       "00", 0, 0);
 
+  run_fork(
+      {
+          LoadConstant{0, PackedLogic4::from_aval_bval(2, 0, 0)},
+          Fork{{9}, ForkJoinKind::none},
+          LoadConstant{1, PackedLogic4::from_aval_bval(2, 1, 0)},
+          Binary{BinaryOperator::add_unsigned, 0, 0, 1},
+          LoadConstant{2, PackedLogic4::from_aval_bval(2, 2, 0)},
+          Binary{BinaryOperator::less_unsigned, 3, 0, 2},
+          Branch{3, 1, 7, UnknownBranchPolicy::when_false},
+          WaitFork{},
+          Halt{},
+          WaitFor{2},
+          ForkEnd{},
+      },
+      "00", 2, 2);
+
+  {
+    Interpreter interpreter;
+    Process process;
+    process.id = 0;
+    process.name = "process_handle_lifecycle";
+    process.register_count = 7;
+    process.debug_locals = {
+        DebugLocal{
+            "handle", "process", 0, 64, {}, {}, {},
+            ValueKind::logic4, {}},
+        DebugLocal{
+            "waiting_status", "process::state", 1, 32, {}, {}, {},
+            ValueKind::logic4, {}},
+        DebugLocal{
+            "waiting_completed", "bit", 2, 1, {}, {}, {},
+            ValueKind::logic4, {}},
+        DebugLocal{
+            "finished_status", "process::state", 3, 32, {}, {}, {},
+            ValueKind::logic4, {}},
+        DebugLocal{
+            "finished_completed", "bit", 4, 1, {}, {}, {},
+            ValueKind::logic4, {}},
+        DebugLocal{
+            "killed_status", "process::state", 5, 32, {}, {}, {},
+            ValueKind::logic4, {}},
+        DebugLocal{
+            "killed_completed", "bit", 6, 1, {}, {}, {},
+            ValueKind::logic4, {}},
+    };
+    process.operations = {
+        Fork{{14}, ForkJoinKind::none},
+        Yield{},
+        ProcessStatusQuery{1, 0},
+        ProcessCompleted{2, 0},
+        ProcessAwait{0},
+        ProcessStatusQuery{3, 0},
+        ProcessCompleted{4, 0},
+        Fork{{17}, ForkJoinKind::none},
+        Yield{},
+        ProcessKill{0},
+        ProcessStatusQuery{5, 0},
+        ProcessCompleted{6, 0},
+        Halt{},
+        Halt{},
+        ProcessSelf{0},
+        WaitFor{2},
+        ForkEnd{},
+        ProcessSelf{0},
+        WaitForever{},
+        ForkEnd{},
+    };
+    (void)interpreter.add_process(std::move(process));
+    const auto result = interpreter.run();
+    const auto value = [&](const RegisterId id) {
+      return interpreter.read_debug_local(0, id).low_word().aval;
+    };
+    require(
+        result.status == RunStatus::completed
+            && result.time == 2
+            && value(1)
+                == static_cast<std::uint32_t>(ProcessStatus::waiting)
+            && value(2) == 0
+            && value(3)
+                == static_cast<std::uint32_t>(ProcessStatus::finished)
+            && value(4) == 1
+            && value(5)
+                == static_cast<std::uint32_t>(ProcessStatus::killed)
+            && value(6) == 1,
+        "generation-safe process handles await, kill, and report lifecycle");
+  }
+
   {
     Interpreter interpreter;
     const auto trigger = interpreter.add_signal(
@@ -1875,6 +1962,7 @@ void test_simir_fork_process_lifecycle() {
     Process process;
     process.id = 0;
     process.name = "malformed_fork";
+    process.register_count = 2;
     process.operations = std::move(operations);
     (void)interpreter.add_process(std::move(process));
     bool rejected = false;
@@ -1904,6 +1992,16 @@ void test_simir_fork_process_lifecycle() {
           Halt{}, ForkEnd{},
       },
       "fork has an invalid join kind");
+  expect_malformed(
+      {
+          LoadConstant{
+              0,
+              PackedLogic4::from_aval_bval(
+                  64, (std::uint64_t{99} << 32U) | 1U, 0)},
+          ProcessStatusQuery{1, 0},
+          Halt{},
+      },
+      "process handle generation is stale");
 }
 
 } // namespace fsim::tests::runtime

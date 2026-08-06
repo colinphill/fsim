@@ -1271,7 +1271,6 @@ endmodule
 module container_invalid;
   int fixed[3];
   int wildcard[*];
-  int string_key[string];
   int queue[$];
   task static bad_lifetime(ref byte values[int]);
   endtask
@@ -1287,7 +1286,6 @@ endmodule
       Language::SystemVerilog2017);
   if (invalid.ok()
       || !has_code(invalid, "FSIM-SV-SEM-078")
-      || !has_code(invalid, "FSIM-SV-SEM-082")
       || !has_code(invalid, "FSIM-SV-SEM-081")
       || !has_code(invalid, "FSIM-SV-SEM-092")
       || !has_code(invalid, "FSIM-SV-SEM-093")
@@ -1300,7 +1298,6 @@ endmodule
   require(
       !invalid.ok()
           && has_code(invalid, "FSIM-SV-SEM-078")
-          && has_code(invalid, "FSIM-SV-SEM-082")
           && has_code(invalid, "FSIM-SV-SEM-081")
           && has_code(invalid, "FSIM-SV-SEM-092")
           && has_code(invalid, "FSIM-SV-SEM-093")

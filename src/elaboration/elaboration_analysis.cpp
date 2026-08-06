@@ -48,6 +48,16 @@ void substitute_delay_parameters(
     const auto negative = value && value->known()
         && value->is_signed && value->width != 0
         && ((value->bits >> (value->width - 1U)) & 1U) != 0;
+    if (language != frontend::Language::Vhdl2008
+        && (!value || !value->known())) {
+      // Runtime SystemVerilog delay expressions retain their specialized AST.
+      // The lowering and scheduler boundary validate their concrete value.
+      for (auto& additional : delay.additional_values) {
+        substitute_delay_parameters(
+            additional, environment, domains, diagnostics, language);
+      }
+      return;
+    }
     if (!value || !value->known() || negative) {
       diagnostics.push_back({
           language == frontend::Language::Vhdl2008

@@ -325,6 +325,13 @@ struct ContainerOperationLowerer {
   void lower(const runtime::simir::LocateContainer&);
   void lower(const runtime::simir::ContainerRead&);
   void lower(const runtime::simir::ContainerWrite&);
+  void lower(const runtime::simir::ContainerStringRead&);
+  void lower(const runtime::simir::ContainerStringWrite&);
+  void lower(const runtime::simir::ContainerElementRead&);
+  void lower(const runtime::simir::ContainerElementWrite&);
+  void lower(const runtime::simir::ContainerAggregateRead&);
+  void lower(const runtime::simir::ContainerAggregateWrite&);
+  void lower(const runtime::simir::CopyContainerAggregateElement&);
   void lower(const runtime::simir::DeleteContainer&);
   void lower(const runtime::simir::ContainerExists&);
   void lower(const runtime::simir::TraverseContainer&);
@@ -459,6 +466,8 @@ struct SignalOperationLowerer {
       llvm::Value*,
       JitGeneratedRuntimeErrorReason,
       std::string_view)> runtime_error_if;
+  std::function<llvm::Value*(const runtime::simir::DynamicIndex&)>
+      dynamic_offset;
 
   void lower(const runtime::simir::LoadConstant& operation);
   void lower(const runtime::simir::WriteBlocking& operation);

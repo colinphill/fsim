@@ -426,6 +426,8 @@ add_library(
     src/runtime/systemverilog_string.cpp
     src/runtime/simir.cpp
     src/runtime/simir_arithmetic.cpp
+    src/runtime/simir_container_algorithms.cpp
+    src/runtime/simir_container_bridge.cpp
     src/runtime/simir_containers.cpp
     src/runtime/simir_container_values.cpp
     src/runtime/simir_execution.cpp
@@ -437,7 +439,8 @@ add_library(
     src/runtime/simir_interpreter.cpp
     src/runtime/simir_logic.cpp
       src/runtime/simir_module_path.cpp
-      src/runtime/simir_scheduling.cpp
+    src/runtime/simir_scheduling.cpp
+    src/runtime/simir_synchronization.cpp
       src/runtime/simir_string_methods.cpp
       src/runtime/simir_vital.cpp
       src/runtime/simir_vital_memory_path.cpp
@@ -490,6 +493,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/hierarchy_resolution.cpp
       src/elaboration/hierarchy_specify.cpp
       src/elaboration/hierarchy_specify_expression.cpp
+      src/elaboration/hierarchy_sv_container_bridge.cpp
       src/elaboration/hierarchy_sv_ports.cpp
       src/elaboration/hierarchy_instantiate.cpp
       src/elaboration/hierarchy_systemc.cpp
@@ -533,6 +537,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_concurrent.cpp
       src/elaboration/lowerer_process.cpp
       src/elaboration/lowerer_fork.cpp
+      src/elaboration/lowerer_sv_synchronization.cpp
       src/elaboration/lowerer_events.cpp
       src/elaboration/lowerer_tasks.cpp
       src/elaboration/lowerer_types.cpp
@@ -544,6 +549,7 @@ fsim_configure_library(fsim_runtime)
       src/elaboration/lowerer_sv_file_binary.cpp
       src/elaboration/lowerer_sv_file_scan.cpp
       src/elaboration/lowerer_sv_multidimensional.cpp
+      src/elaboration/lowerer_sv_unpacked_aggregates.cpp
       src/elaboration/lowerer_vhdl_array_selection.cpp
       src/elaboration/lowerer_vhdl_access.cpp
   )

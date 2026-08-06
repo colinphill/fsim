@@ -43,9 +43,14 @@ materialize_systemverilog_container_type(
     ContainerType result;
     result.element_nominal_type = candidate.nominal_type;
     if (candidate.packed_aggregate
-        == frontend::PackedAggregateKind::UnpackedStruct) {
+            == frontend::PackedAggregateKind::UnpackedStruct
+        || candidate.packed_aggregate
+            == frontend::PackedAggregateKind::UnpackedUnion) {
       result.element_kind = ContainerElementKind::Aggregate;
       result.element_width = 0;
+      result.union_aggregate = candidate.packed_aggregate
+          == frontend::PackedAggregateKind::UnpackedUnion;
+      result.aggregate_value = box_leaf;
       result.element_nominal_type = candidate.nominal_type.empty()
           ? candidate.spelling : candidate.nominal_type;
       for (const auto& member : candidate.packed_members) {
@@ -111,6 +116,8 @@ materialize_systemverilog_container_type(
     result.element_width = element_type->element_width;
     result.two_state = element_type->two_state;
     result.signed_elements = element_type->signed_elements;
+    result.union_aggregate = element_type->union_aggregate;
+    result.aggregate_value = false;
     result.element_nominal_type = element_type->element_nominal_type;
     result.element_types = std::move(element_type->element_types);
     result.member_names = std::move(element_type->member_names);
@@ -124,21 +131,28 @@ materialize_systemverilog_container_type(
 
   if (result.associative) {
     const auto& index_type = source.associative_index_type;
+    if (index_type
+        && index_type->domain == frontend::ValueDomain::String) {
+      result.index_width = 0;
+      result.two_state_indices = true;
+      result.signed_indices = false;
+      result.string_indices = true;
+    } else {
     const auto width = index_type ? index_type->width() : std::nullopt;
     if (!index_type || !width || *width == 0 || *width > 64
-        || index_type->domain == frontend::ValueDomain::String
         || index_type->domain == frontend::ValueDomain::Unknown
         || !index_type->packed_members.empty() || index_type->vhdl_array) {
       report(
           "FSIM-ELAB-SVCONTAINER-013",
-          "associative-array indices require a resolved integral scalar "
-          "type with width in 1..64",
+          "associative-array indices require a resolved string or integral "
+          "scalar type with width in 1..64",
           source.span);
       return std::nullopt;
     }
     result.index_width = static_cast<std::uint32_t>(*width);
     result.two_state_indices = two_state(index_type->domain);
     result.signed_indices = index_type->is_signed;
+    }
   }
 
   if (source.queue_maximum) {

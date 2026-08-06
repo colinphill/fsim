@@ -241,17 +241,36 @@ endmodule
       "procedural anonymous packed aggregates retain nested layout");
   const auto anonymous_unpacked = parse_text(
       "anonymous_unpacked.sv",
-      "module anonymous_unpacked; "
-      "struct { logic value; } deferred; endmodule",
+      R"(
+module anonymous_unpacked;
+  struct {
+    logic value;
+    struct { logic [3:0] code; } nested;
+  } values[1:0];
+  union {
+    logic [7:0] primary;
+    logic [7:0] alias_value;
+  } choices[1:0];
+endmodule
+)",
       Language::SystemVerilog2017);
   require(
-      !anonymous_unpacked.ok()
-          && std::ranges::any_of(
-              anonymous_unpacked.diagnostics,
-              [](const Diagnostic& diagnostic) {
-                return diagnostic.code == "FSIM-SV-UNSUPPORTED-028";
-              }),
-      "anonymous unpacked structs remain deferred to their planned batch");
+      anonymous_unpacked.ok()
+          && anonymous_unpacked.design.units.size() == 1
+          && anonymous_unpacked.design.units[0].variables.size() == 2
+          && anonymous_unpacked.design.units[0].variables[0]
+                 .type.systemverilog_container
+          && anonymous_unpacked.design.units[0].variables[0]
+                 .type.systemverilog_container->element_types.front()
+                 .packed_aggregate
+              == PackedAggregateKind::UnpackedStruct
+          && anonymous_unpacked.design.units[0].variables[1]
+                 .type.systemverilog_container
+          && anonymous_unpacked.design.units[0].variables[1]
+                 .type.systemverilog_container->element_types.front()
+                 .packed_aggregate
+              == PackedAggregateKind::UnpackedUnion,
+      "anonymous unpacked structs and unions retain recursive array elements");
   const auto union_forms = parse_text(
       "union_forms.sv",
       R"(
@@ -264,6 +283,10 @@ package union_shapes;
     logic [15:0] wide;
     logic [7:0] narrow;
   } tagged_t;
+  typedef union {
+    logic [7:0] primary;
+    logic [7:0] alias_value;
+  } unpacked_t;
 endpackage
 import union_shapes::*;
 module union_syntax;
@@ -275,12 +298,14 @@ endmodule
   require(
       union_forms.ok()
           && union_forms.design.units.size() == 2
-          && union_forms.design.units[0].type_aliases.size() == 2,
-      "unequal-width and tagged packed unions parse");
+          && union_forms.design.units[0].type_aliases.size() == 3,
+      "packed, tagged, and unpacked unions parse");
   const auto& unequal_type =
       union_forms.design.units[0].type_aliases[0].type;
   const auto& tagged_type =
       union_forms.design.units[0].type_aliases[1].type;
+  const auto& unpacked_type =
+      union_forms.design.units[0].type_aliases[2].type;
   require(
       unequal_type.packed_aggregate == PackedAggregateKind::Union
           && unequal_type.width() == 16
@@ -290,7 +315,10 @@ endmodule
           && tagged_type.packed_aggregate
               == PackedAggregateKind::TaggedUnion
           && tagged_type.width() == 17
-          && tagged_type.packed_members.size() == 2,
+          && tagged_type.packed_members.size() == 2
+          && unpacked_type.packed_aggregate
+              == PackedAggregateKind::UnpackedUnion
+          && unpacked_type.packed_members.size() == 2,
       "union storage uses the maximum payload plus a tagged discriminator");
   const auto& tagged_constructor =
       union_forms.design.units[1].processes[0].statements[0].value;
@@ -490,7 +518,6 @@ endmodule
           && has_code("FSIM-SV-UNSUPPORTED-024")
           && has_code("FSIM-SV-UNSUPPORTED-025")
           && has_code("FSIM-SV-UNSUPPORTED-026")
-          && has_code("FSIM-SV-UNSUPPORTED-027")
           && has_code("FSIM-SV-UNSUPPORTED-028")
           && has_code("FSIM-SV-UNSUPPORTED-029")
           && has_code("FSIM-SV-PARSE-083")

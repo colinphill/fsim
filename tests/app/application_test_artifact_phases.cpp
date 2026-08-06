@@ -19,7 +19,7 @@
 namespace fsim::test {
 
 void ApplicationTestFixture::test_artifact_phase_semantics() {
-  static_assert(app::kRuntimeStateSchema == 10);
+  static_assert(app::kRuntimeStateSchema == 16);
   static_assert(app::kClassStateSchema == 6);
   static_assert(app::kSystemVerilogConstraintHirStateSchema == 3);
   const auto sv_source = directory / "artifact_phase.sv";

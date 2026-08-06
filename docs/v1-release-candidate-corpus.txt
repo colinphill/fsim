@@ -1,19 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 # Batch 130 Task 9 final release-candidate corpus.
 # Every required row is classified execute and owns nonempty P+/P-/E/R links.
-# matrix-rows: 1162
-# matrix-sha256: 97da9b1e1135bfea5bb7c2879dce2e1196e448d5ffd5bfd05daff25e65aa4021
-# evidence-slots: 4648
-# evidence-paths: 409
-# evidence-sha256: de3a2482ebf7a602074aef21291cb42695e98476c3b2912a8ffa9f62f3a9cb65
-# test-evidence-paths: 185
-# production-evidence-paths: 208
+# matrix-rows: 1170
+# matrix-sha256: 4c9bc37c9076a6e331ab09386c6d2a9437bdf001b7f5a6857208386bcc274ba6
+# evidence-slots: 4680
+# evidence-paths: 414
+# evidence-sha256: c76f1dbfecd0fc5392f2f7108da2f2d5c06830cd2777952d833821241d8e1fa5
+# test-evidence-paths: 187
+# production-evidence-paths: 211
 # release-evidence-paths: 16
-# runtime-evidence-paths: 110
+# runtime-evidence-paths: 112
 # corpus-ctests: 36
 # required-status: execute
 #
-# B130-T9-ROWS: all 1162 required IDs are unique and in one of the eight
+# B130-T9-ROWS: all 1170 required IDs are unique and in one of the eight
 # reviewed SV/VHDL/mixed/SystemC/common release surfaces.
 # B130-T9-CLASSIFICATION: no required row remains parse, v1-target, deferred,
 # or an evidence gap; every row is reclassified only through its exact matrix
@@ -31,6 +31,6 @@
 # locals 0.85 seconds. Task 10 subsequently passed sanitizer 102/102 and exact
 # LLVM Debug/Release 105/105; mandatory hosted CI inspection remains pending.
 #
-# Batch 150 advances the frozen matrix to 1162 rows. LLVM-disabled ASan/UBSan
+# Batch 152 advances the frozen matrix to 1170 rows. LLVM-disabled ASan/UBSan
 # passes 109/109, and exact LLVM 22.1.8 Debug/Release pass 112/112. Hosted-CI
 # inspection remains the final Change 20 monitoring-boundary action.

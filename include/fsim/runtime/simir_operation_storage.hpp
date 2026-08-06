@@ -57,10 +57,14 @@ using ContainerOperationGroup =
                    ConditionalContainerSelect, CompareContainers,
                    ReadContainerObject, WriteContainerObject, ContainerSize,
                    ContainerReduction, OrderContainer, LocateContainer,
-                   ContainerRead, ContainerWrite, DeleteContainer,
+                   ContainerRead, ContainerWrite,
+                   ContainerAggregateRead, ContainerAggregateWrite,
+                   CopyContainerAggregateElement, DeleteContainer,
                    ContainerExists, TraverseContainer, LoadMemory,
                    VitalMemoryDeclare,
-                   PushContainer, PopContainer>;
+                   PushContainer, PopContainer,
+                   ContainerStringRead, ContainerStringWrite,
+                   ContainerElementRead, ContainerElementWrite>;
 
 using FileOperationGroup =
     OperationGroup<FileOpen, FileClose, FileWriteLiteral, FileWriteFormatted,
@@ -70,7 +74,10 @@ using FileOperationGroup =
 
 using SchedulingOperationGroup =
     OperationGroup<WaitFor, WaitOn, WaitSensitivity, WaitForever, Yield, Fork,
-                   ForkEnd, WaitFork, DisableFork>;
+                   ForkEnd, WaitFork, DisableFork, ProcessSelf,
+                   ProcessStatusQuery, ProcessCompleted, ProcessAwait,
+                   ProcessKill, MailboxCreate, MailboxPut, MailboxGet,
+                   MailboxNum, SemaphoreCreate, SemaphoreGet, SemaphorePut>;
 
 using ControlOperationGroup =
     OperationGroup<Jump, Call, Return, Branch, DebugPoint, Assert, Report,
@@ -198,7 +205,7 @@ static_assert(
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
         + std::variant_size_v<ClassOperationGroup::Storage>
-    == 132);
+    == 151);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept {

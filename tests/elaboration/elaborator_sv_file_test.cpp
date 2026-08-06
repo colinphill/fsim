@@ -236,6 +236,7 @@ module file_invalid;
   logic [136:0] unsupported_wide_scan;
   logic [7:0] memory [3:0];
   logic [7:0] matrix [1:0][0:1];
+  logic [7:0] dynamic_memory [];
   initial begin
     handle = $fopen(7, "r");
     result = $fgets(bits, handle);
@@ -251,8 +252,8 @@ module file_invalid;
     result = $fread(bits, handle, 0);
     result = $fread(memory, value, 0, 1);
     result = $fread(matrix, handle);
-    $readmemh("matrix.hex", matrix);
-    $writememh("matrix.hex", matrix);
+    $readmemh("matrix.hex", dynamic_memory);
+    $writememh("matrix.hex", dynamic_memory);
     result = $fseek(handle, value, 0);
     $fflush(value);
     $fclose(value);

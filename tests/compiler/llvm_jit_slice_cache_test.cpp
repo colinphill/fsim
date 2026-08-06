@@ -1265,8 +1265,9 @@ void test_procedural_update_cache_identity(
         process.operations = {
             LoadConstant{
                 0, PackedLogic4::from_msb_string("10xz")},
-            ForceSignalSlice{0, 0, force_offset},
-            ReleaseSignalSlice{0, release_offset, release_width},
+            ForceSignalSlice{0, 0, force_offset, std::nullopt},
+            ReleaseSignalSlice{
+                0, release_offset, release_width, std::nullopt},
             Halt{},
         };
         return process;

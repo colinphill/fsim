@@ -892,8 +892,6 @@ are therefore excluded.
 | `FSIM-SV-SEM-028` | error | A bounded procedural loop iteration updates a name other than its loop variable. |
 | `FSIM-SV-SEM-029` | error | A bounded procedural loop update is not a positive constant step toward its comparison bound. |
 | `FSIM-SV-SEM-103` | error | A procedural loop update is not an assignment or increment of its loop variable. |
-| `FSIM-SV-SEM-104` | error | An edge-qualified event expression is not a direct scalar signal in the bounded expression-control slice. |
-| `FSIM-SV-SEM-105` | error | A general packed event expression is mixed with another event-list item. |
 | `FSIM-SV-SEM-106` | error | A body-timed `always` process has a reachable re-entry path without suspension or termination. |
 | `FSIM-SV-SEM-107` | error | `wait fork` or `disable fork` is used outside SystemVerilog-2017 input. |
 | `FSIM-SV-SEM-108` | error | `join_any` or `join_none` is used outside SystemVerilog-2017 input. |
@@ -1071,7 +1069,6 @@ are therefore excluded.
 | `FSIM-SV-SEM-078` | error | An unpacked declaration has an unsupported dimension or associative index type. |
 | `FSIM-SV-SEM-079` | error | A bounded container has an unsupported nonintegral element type. |
 | `FSIM-SV-SEM-081` | error | A supported container method has the wrong argument count. |
-| `FSIM-SV-SEM-082` | error | An associative array uses a string index type. |
 | `FSIM-SV-SEM-083` | error | A `$readmem*` or `$writemem*` task is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-084` | error | An assignment pattern is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-085` | error | An unpacked-container reduction method is used outside SystemVerilog-2017. |
@@ -1088,7 +1085,6 @@ are therefore excluded.
 | `FSIM-SV-SEM-096` | error | A `ref` function formal is declared in a static or implicit-lifetime function. |
 | `FSIM-SV-SEM-097` | error | A default task actual is attached to a writable or reference formal instead of an input value formal. |
 | `FSIM-SV-SEM-098` | error | A `ref` task formal is declared in a static or implicit-lifetime task. |
-| `FSIM-SV-SEM-099` | error | A static or implicit-lifetime callable declares a nested block local outside its supported persistent body scope. |
 | `FSIM-SV-SEM-100` | error | A streaming concatenation is used outside SystemVerilog-2017. |
 | `FSIM-SV-SEM-101` | error | A bounded `always_ff` process does not have exactly one edge-qualified event. |
 | `FSIM-SV-SEM-102` | error | A bounded `always_ff` body contains a nested timing control. |
@@ -1111,11 +1107,10 @@ are therefore excluded.
 | `FSIM-SV-UNSUPPORTED-024` | error | A bounded typedef target is not an integral built-in or user-defined type. |
 | `FSIM-SV-UNSUPPORTED-025` | error | An unpacked typedef dimension is outside the current packed alias subset. |
 | `FSIM-SV-UNSUPPORTED-026` | error | An enum declaration selects a nonintegral base type. |
-| `FSIM-SV-UNSUPPORTED-027` | error | A bounded aggregate declaration uses an unpacked union, which is outside the supported packed-union or unpacked-struct slice. |
 | `FSIM-SV-UNSUPPORTED-028` | error | A bounded aggregate member uses a data type outside the packed integral, enum, or nested aggregate subset. |
 | `FSIM-SV-UNSUPPORTED-029` | error | A bounded packed aggregate member has an unpacked dimension. |
 | `FSIM-SV-UNSUPPORTED-035` | error | A bounded function output, inout, or ref formal uses a string or unpacked-container type instead of the supported packed integral type. |
-| `FSIM-SV-UNSUPPORTED-041` | error | `reverse` or nondeterministic `shuffle` uses an excluded container-ordering `with` clause. |
+| `FSIM-SV-UNSUPPORTED-041` | error | `reverse` or deterministic `shuffle` uses an excluded container-ordering `with` clause. |
 | `FSIM-SV-UNSUPPORTED-042` | error | A bounded `case matches` item uses a deferred variable-binding, tagged, or structured pattern. |
 | `FSIM-SV-UNSUPPORTED-043` | error | A bounded `case matches` item uses a deferred `&&&` guard. |
 | `FSIM-SV-UNSUPPORTED-044` | error | A modport uses a deferred ref, clocking, or callable import/export member instead of a bounded signal direction. |
@@ -1273,6 +1268,12 @@ are therefore excluded.
 | `FSIM-ELAB-SVTYPE-003` | error | Bounded SystemVerilog typedef aliases contain a cycle. |
 | `FSIM-ELAB-SVTYPE-004` | error | A SystemVerilog packed struct, union, or enum assignment-like context does not use the same nominal type, a matching explicit cast, or a legal contextual pattern. |
 | `FSIM-ELAB-SVTYPE-005` | error | SystemVerilog equality compares packed struct, union, or enum values with different or missing nominal types. |
+| `FSIM-ELAB-SVPROCESS-001` | error | A process-handle expression is not a zero-argument `process::self()`, `status()`, or `completed()` call on a direct process receiver. |
+| `FSIM-ELAB-SVPROCESS-002` | error | A process-handle statement is not a zero-argument `await()` or `kill()` call on a direct process receiver. |
+| `FSIM-ELAB-SVSYNC-001` | error | Mailbox or semaphore construction lacks a compatible 64-bit destination or uses more than one count argument. |
+| `FSIM-ELAB-SVSYNC-002` | error | A typed mailbox has no finite positive packed element width. |
+| `FSIM-ELAB-SVSYNC-003` | error | A mailbox operation has an unsupported method or argument profile. |
+| `FSIM-ELAB-SVSYNC-004` | error | A semaphore operation has an unsupported method or key-count argument profile. |
 | `FSIM-ELAB-SVLOOP-001` | error | A runtime procedural for-loop inline variable shadows an active local. |
 | `FSIM-ELAB-SVLOOP-002` | error | A runtime procedural for-loop condition is not executable as a packed truth value. |
 | `FSIM-ELAB-SVEVENT-001` | error | A packed event expression has no readable signal dependencies. |
@@ -1282,6 +1283,7 @@ are therefore excluded.
 | `FSIM-ELAB-SVDELAY-001` | error | A SystemVerilog delay expression is not a known nonnegative locally constant integral value after specialization. |
 | `FSIM-ELAB-SVDELAY-002` | error | A specialized SystemVerilog delay expression overflows 64-bit simulation time after time-unit normalization. |
 | `FSIM-ELAB-SVDELAY-003` | error | Combined continuous-assignment and net-declaration transition delays overflow 64-bit simulation time. |
+| `FSIM-ELAB-SVDELAY-004` | error | A runtime SystemVerilog delay expression is not an integral, time, real, shortreal, or realtime packed scalar. |
 | `FSIM-ELAB-SVIFACE-001` | error | An interface port actual is not a whole scalar or statically indexed interface instance. |
 | `FSIM-ELAB-SVIFACE-002` | error | An interface port actual does not name an already elaborated interface instance. |
 | `FSIM-ELAB-SVIFACE-003` | error | An interface port actual has the wrong interface type. |
@@ -1298,8 +1300,7 @@ are therefore excluded.
 | `FSIM-ELAB-SVFUNC-009` | error | A bounded SystemVerilog function container argument has an incompatible kind, element profile, queue bound, or associative index profile. |
 | `FSIM-ELAB-SVFUNC-010` | error | Function actual association metadata is inconsistent, positional ordering is illegal, a name is unknown or duplicated, or a required actual/default is missing. |
 | `FSIM-ELAB-SVFUNC-011` | error | Malformed HIR presents a nonintegral writable function formal to the bounded execution path. |
-| `FSIM-ELAB-SVFUNC-012` | error | A bounded `ref` function actual is not a direct caller-local variable or the function is not automatic. |
-| `FSIM-ELAB-SVFUNC-013` | error | A static or implicit-lifetime function local is not a bounded packed/scalar or string value. |
+| `FSIM-ELAB-SVFUNC-012` | error | A bounded `ref` function actual is not a writable variable target or the function is not automatic. |
 | `FSIM-ELAB-VHFUNC-001` | error | An interface-function generic has no retained profile in HIR. |
 | `FSIM-ELAB-VHFUNC-002` | error | An interface-function association or selected actual is not same-language VHDL. |
 | `FSIM-ELAB-VHFUNC-003` | error | An interface-function actual is not a simple visible function name. |
@@ -1448,9 +1449,7 @@ are therefore excluded.
 | `FSIM-ELAB-SVTASK-010` | error | A suspending bounded task is called from `final`, `always_comb`, or `always_latch`. |
 | `FSIM-ELAB-SVTASK-011` | error | A bounded SystemVerilog task container input or inout actual has an incompatible kind, element profile, queue bound, or associative index profile. |
 | `FSIM-ELAB-SVTASK-012` | error | Task actual association metadata is inconsistent, positional ordering is illegal, a name is unknown or duplicated, or a required actual/default is missing. |
-| `FSIM-ELAB-SVTASK-013` | error | A bounded `ref` task call is not automatic and nonsuspending or its actual is not a direct caller-local variable. |
-| `FSIM-ELAB-SVTASK-014` | error | A static or implicit-lifetime task may suspend directly or transitively. |
-| `FSIM-ELAB-SVTASK-015` | error | A static or implicit-lifetime task local is not a bounded packed/scalar or string value. |
+| `FSIM-ELAB-SVTASK-013` | error | A bounded `ref` task actual is not a writable variable target or the task is not automatic. |
 | `FSIM-ELAB-VHTYPE-001` | error | A bounded VHDL named type is not visible in the design unit where it is used. |
 | `FSIM-ELAB-VHTYPE-002` | error | Bounded VHDL named type aliases contain a cycle. |
 | `FSIM-ELAB-VHTYPE-003` | error | The same VHDL type name is directly visible from multiple packages. |
@@ -1709,7 +1708,6 @@ are therefore excluded.
 | `FSIM-ELAB-SVORDER-002` | error | A container ordering method has an invalid retained receiver, optional iterator, or key-expression shape. |
 | `FSIM-ELAB-SVORDER-003` | error | A container ordering method is applied to an associative array. |
 | `FSIM-ELAB-SVORDER-004` | error | A void container ordering method is used as an expression result. |
-| `FSIM-ELAB-SVORDER-005` | error | Nondeterministic `shuffle()` is outside the bounded container-ordering subset. |
 | `FSIM-ELAB-SVORDER-006` | error | A `sort` or `rsort` key uses unsupported arithmetic, calls, side effects, nonconstant operands, more than one conditional, or more than 64 graph nodes. |
 | `FSIM-ELAB-SVORDER-007` | error | A `sort` or `rsort` key contains an invalid iterator/index reference or mixes element and index comparison profiles. |
 | `FSIM-ELAB-SVORDER-008` | error | A `sort` or `rsort` key has a malformed or colliding named iterator, a non-element root, or an otherwise excluded receiver profile. |

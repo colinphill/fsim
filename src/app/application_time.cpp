@@ -737,6 +737,7 @@ bool normalize_delays(
         ticks_per_quantum =
             rounding_femtoseconds / *tick_femtoseconds;
       }
+      delay.rounding_quantum = ticks_per_quantum;
       if (quanta != 0
           && ticks_per_quantum
               > std::numeric_limits<std::uint64_t>::max() / quanta) {

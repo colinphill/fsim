@@ -185,6 +185,12 @@ The current tree contains:
 - Verilog/SystemVerilog named-event declarations, immediate `->` triggers,
   SystemVerilog update-phase or delayed `->>` triggers, and repeated
   static/dynamic event-control wakeups;
+- SystemVerilog multidimensional unpacked selections, recursive unpacked
+  struct/union and string container values, canonical string associative
+  indices, typed mailboxes and semaphores, generation-safe process handles,
+  runtime scalar delays, general edge expressions, runtime-selected
+  force/release, and deterministic `shuffle()` through interpreter and LLVM
+  service paths, portable artifacts, relocation, and native-cache reuse;
 - Verilog-2005/SystemVerilog literal and empty `$display`, `$write`, and
   postponed `$strobe` routed through CLI/Tcl output with newline/no-newline
   semantics, decoded control/quote/backslash/octal escapes, and

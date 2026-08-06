@@ -345,6 +345,17 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         const std::size_t expected_width,
         const frontend::Type* expected_type) {
 
+        auto synchronization = lower_synchronization_expression(
+            expression, expected_width, expected_type);
+        if (synchronization.handled) {
+            return synchronization;
+        }
+
+        auto process = lower_process_expression(expression);
+        if (process.handled) {
+            return process;
+        }
+
         auto vital = lower_vhdl_vital_expression(
             expression, expected_width, expected_type);
         if (vital.handled) {
@@ -361,6 +372,12 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
             expression, expected_width, expected_type);
         if (vhdl_access.handled) {
             return vhdl_access;
+        }
+
+        auto unpacked_aggregate =
+            lower_unpacked_aggregate_member_read(expression);
+        if (unpacked_aggregate.handled) {
+            return unpacked_aggregate;
         }
 
         auto multidimensional =
@@ -478,19 +495,13 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
             expression.kind == ExpressionKind::Call
             && (expression.text == ".reverse"
                 || expression.text == ".sort"
-                || expression.text == ".rsort");
-        if (container_ordering
-            || (expression.kind == ExpressionKind::Call
-                && expression.text == ".shuffle")) {
+                || expression.text == ".rsort"
+                || expression.text == ".shuffle");
+        if (container_ordering) {
             report(
-                expression.text == ".shuffle"
-                    ? "FSIM-ELAB-SVORDER-005"
-                    : "FSIM-ELAB-SVORDER-004",
-                expression.text == ".shuffle"
-                    ? "shuffle() is outside the deterministic "
-                      "container-ordering subset"
-                    : "container ordering methods do not produce an "
-                      "expression result",
+                "FSIM-ELAB-SVORDER-004",
+                "container ordering methods do not produce an "
+                "expression result",
                 expression.span);
             return std::nullopt;
         }
@@ -760,14 +771,19 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 const auto* index_type =
                     type->systemverilog_container
                         ->associative_index_type.get();
-                auto index = lower_expression(
-                    expression.operands[1],
-                    runtime_type->index_width,
-                    index_type);
+                const bool string_index =
+                    runtime_type->string_indices;
+                auto index = string_index
+                    ? lower_string_expression(expression.operands[1])
+                    : lower_expression(
+                          expression.operands[1],
+                          runtime_type->index_width,
+                          index_type);
                 if (!index) {
                     return std::nullopt;
                 }
                 if (expression.text == ".exists"
+                    && !string_index
                     && register_width(*index)
                         != runtime_type->index_width) {
                     *index = resize_register(
@@ -781,7 +797,45 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                 if (expression.text == ".exists") {
                     process_.operations.emplace_back(
                         ContainerExists{
-                            destination, *source, *index});
+                            destination, *source, *index,
+                            string_index});
+                    return destination;
+                }
+                if (string_index) {
+                    if (expression.operands[1].kind
+                            != ExpressionKind::Identifier
+                        || (!string_locals_.contains(
+                                expression.operands[1].text)
+                            && !string_objects_.contains(
+                                expression.operands[1].text))) {
+                        report(
+                            "FSIM-ELAB-SVCONTAINER-016",
+                            expression.text
+                                + " requires a direct mutable string "
+                                  "variable argument",
+                            expression.operands[1].span);
+                        return std::nullopt;
+                    }
+                    auto traversal = ContainerTraversal::first;
+                    if (expression.text == ".last") {
+                        traversal = ContainerTraversal::last;
+                    } else if (expression.text == ".next") {
+                        traversal = ContainerTraversal::next;
+                    } else if (expression.text == ".prev") {
+                        traversal = ContainerTraversal::previous;
+                    }
+                    process_.operations.emplace_back(
+                        TraverseContainer{
+                            destination, *source, *index,
+                            traversal, true});
+                    if (const auto object = string_objects_.find(
+                            expression.operands[1].text);
+                        object != string_objects_.end()
+                        && !string_locals_.contains(
+                            expression.operands[1].text)) {
+                        process_.operations.emplace_back(
+                            WriteStringObject{object->second, *index});
+                    }
                     return destination;
                 }
                 if (expression.operands[1].kind
@@ -855,17 +909,23 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                           ? std::size_t{32}
                           : infer_width(expression.operands[1])
                                 .value_or(std::size_t{32});
-            auto index = lower_expression(
-                expression.operands[1],
-                index_width,
+            const bool string_index =
                 runtime_type->associative
-                    ? type->systemverilog_container
-                          ->associative_index_type.get()
-                    : nullptr);
+                && runtime_type->string_indices;
+            auto index = string_index
+                ? lower_string_expression(expression.operands[1])
+                : lower_expression(
+                      expression.operands[1],
+                      index_width,
+                      runtime_type->associative
+                          ? type->systemverilog_container
+                                ->associative_index_type.get()
+                          : nullptr);
             if (!index) {
                 return std::nullopt;
             }
             if (runtime_type->associative
+                && !string_index
                 && register_width(*index)
                     != runtime_type->index_width) {
                 *index = resize_register(
@@ -882,7 +942,9 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
                         ? runtime_type->signed_indices
                         : runtime_type->fixed
                               || is_signed_expression(
-                                  expression.operands[1])});
+                                  expression.operands[1]),
+                    false,
+                    string_index});
             return destination;
         }
 

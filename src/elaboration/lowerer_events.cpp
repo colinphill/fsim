@@ -176,16 +176,17 @@ bool Lowerer::emit_event_control_wait(const Statement& statement) {
 
 bool Lowerer::emit_single_event_control_wait(
     const Statement& statement) {
-    auto [signals, edges] = resolve_wait_sensitivities(statement);
-    if (signals.empty() && !statement.delay) {
-        return false;
-    }
     const auto general = std::ranges::find_if(
         statement.sensitivities,
         [](const frontend::Sensitivity& sensitivity) {
             return sensitivity.expression.valid();
         });
-    if (language_ == frontend::Language::Vhdl2008) {
+    if (language_ == frontend::Language::Vhdl2008
+        || general == statement.sensitivities.end()) {
+        auto [signals, edges] = resolve_wait_sensitivities(statement);
+        if (signals.empty() && !statement.delay) {
+            return false;
+        }
         WaitOn wait{std::move(signals), std::move(edges)};
         if (statement.delay) {
             wait.timeout = statement.delay->magnitude;
@@ -193,58 +194,214 @@ bool Lowerer::emit_single_event_control_wait(
         process_.operations.emplace_back(std::move(wait));
         return true;
     }
-    if (general == statement.sensitivities.end()) {
-        WaitOn wait{std::move(signals), std::move(edges)};
-        if (statement.delay) {
-            wait.timeout = statement.delay->magnitude;
+
+    struct EventExpressionState {
+        Expression expression;
+        frontend::EdgeKind edge{frontend::EdgeKind::Any};
+        std::size_t width{};
+        RegisterId baseline{};
+    };
+    std::vector<EventExpressionState> expressions;
+    std::vector<SignalId> waited_signals;
+    for (const auto& sensitivity : statement.sensitivities) {
+        EventExpressionState state;
+        state.edge = sensitivity.edge;
+        if (sensitivity.expression.valid()) {
+            state.expression = sensitivity.expression;
+        } else {
+            state.expression.kind = ExpressionKind::Identifier;
+            state.expression.text = sensitivity.signal;
+            state.expression.span = sensitivity.span;
         }
-        process_.operations.emplace_back(std::move(wait));
-        return true;
+        const auto width = infer_width(state.expression);
+        if (!width || *width == 0 || *width > 64
+            || (state.edge != frontend::EdgeKind::Any && *width != 1)) {
+            report(
+                "FSIM-ELAB-SVEVENT-003",
+                state.edge == frontend::EdgeKind::Any
+                    ? "packed event expression must have an executable width "
+                      "from 1 through 64 bits"
+                    : "edge-qualified event expression must be an executable "
+                      "scalar",
+                sensitivity.span);
+            return false;
+        }
+        state.width = *width;
+        const auto dependency_start = waited_signals.size();
+        if (!sensitivity.expression.valid()) {
+            const auto found = signals_.find(sensitivity.signal);
+            if (found != signals_.end()) {
+                waited_signals.push_back(found->second);
+            }
+        } else {
+            std::set<std::string> dependencies;
+            collect_identifiers(state.expression, dependencies);
+            for (const auto& dependency : dependencies) {
+                if (locals_.contains(dependency)) {
+                    continue;
+                }
+                if (const auto found = signals_.find(dependency);
+                    found != signals_.end()) {
+                    waited_signals.push_back(found->second);
+                }
+            }
+        }
+        if (waited_signals.size() == dependency_start) {
+            report(
+                "FSIM-ELAB-SVEVENT-001",
+                "packed event expression has no readable signal dependencies",
+                sensitivity.span);
+            return false;
+        }
+        const auto baseline = lower_expression(
+            state.expression, state.width);
+        if (!baseline) {
+            return false;
+        }
+        state.baseline = *baseline;
+        expressions.push_back(std::move(state));
     }
-    if (statement.sensitivities.size() != 1 || statement.delay) {
-        report(
-            "FSIM-ELAB-SVEVENT-002",
-            "packed event-expression metadata is mixed with another "
-            "event or timeout",
-            general->span);
-        return false;
+    std::ranges::sort(waited_signals);
+    waited_signals.erase(
+        std::unique(waited_signals.begin(), waited_signals.end()),
+        waited_signals.end());
+    const auto waited_signal_count = waited_signals.size();
+
+    std::optional<RegisterId> timed_out;
+    if (statement.delay) {
+        timed_out = allocate_register(
+            1, frontend::ValueDomain::Boolean);
     }
-    const auto width = infer_width(general->expression);
-    if (!width || *width == 0 || *width > 64) {
-        report(
-            "FSIM-ELAB-SVEVENT-003",
-            "packed event expression must have an executable width from "
-            "1 through 64 bits",
-            general->span);
-        return false;
-    }
-    const auto baseline =
-        lower_expression(general->expression, *width);
-    if (!baseline) {
-        return false;
-    }
-    const auto wait_start = static_cast<InstructionIndex>(
+    const auto initial_wait = static_cast<InstructionIndex>(
         process_.operations.size());
-    process_.operations.emplace_back(
-        WaitOn{std::move(signals), std::move(edges)});
-    const auto current =
-        lower_expression(general->expression, *width);
-    if (!current) {
-        return false;
+    WaitOn first_wait{
+        waited_signals,
+        std::vector<runtime::simir::EdgeKind>(
+            waited_signals.size(), runtime::simir::EdgeKind::any)};
+    if (statement.delay) {
+        first_wait.timeout = statement.delay->magnitude;
+        first_wait.timeout_result = timed_out;
     }
-    const auto equal = allocate_register(
-        1, frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(Binary{
-        BinaryOperator::case_equal, equal, *baseline, *current});
-    process_.operations.emplace_back(
-        CopyRegister{*baseline, *current});
-    const auto branch = static_cast<InstructionIndex>(
+    process_.operations.emplace_back(std::move(first_wait));
+
+    const auto evaluation_entry = static_cast<InstructionIndex>(
+        process_.operations.size());
+    std::optional<InstructionIndex> timeout_branch;
+    if (timed_out) {
+        timeout_branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch{
+            *timed_out, 0, 0, UnknownBranchPolicy::error});
+    }
+    const auto expression_start = static_cast<InstructionIndex>(
+        process_.operations.size());
+    std::vector<RegisterId> matches;
+    const auto negate = [&](const RegisterId source) {
+        const auto destination = allocate_register(
+            1, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LogicalNot{destination, source});
+        return destination;
+    };
+    const auto logical = [&](const LogicalBinaryOperator operation,
+                             const RegisterId lhs,
+                             const RegisterId rhs) {
+        const auto destination = allocate_register(
+            1, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            LogicalBinary{operation, destination, lhs, rhs});
+        return destination;
+    };
+    for (auto& state : expressions) {
+        const auto current = lower_expression(
+            state.expression, state.width);
+        if (!current) {
+            return false;
+        }
+        const auto equal = allocate_register(
+            1, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary{
+            BinaryOperator::case_equal,
+            equal,
+            state.baseline,
+            *current});
+        auto matched = negate(equal);
+        if (state.edge != frontend::EdgeKind::Any) {
+            const auto zero = allocate_register(
+                1, frontend::ValueDomain::Bit2);
+            const auto one = allocate_register(
+                1, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                LoadConstant{zero, unsigned_value(0, 1)});
+            process_.operations.emplace_back(
+                LoadConstant{one, unsigned_value(1, 1)});
+            const auto previous_forbidden = allocate_register(
+                1, frontend::ValueDomain::Bit2);
+            const auto current_forbidden = allocate_register(
+                1, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(Binary{
+                BinaryOperator::case_equal,
+                previous_forbidden,
+                state.baseline,
+                state.edge == frontend::EdgeKind::Positive ? one : zero});
+            process_.operations.emplace_back(Binary{
+                BinaryOperator::case_equal,
+                current_forbidden,
+                *current,
+                state.edge == frontend::EdgeKind::Positive ? zero : one});
+            matched = logical(
+                LogicalBinaryOperator::logical_and,
+                matched,
+                negate(previous_forbidden));
+            matched = logical(
+                LogicalBinaryOperator::logical_and,
+                matched,
+                negate(current_forbidden));
+        }
+        matches.push_back(matched);
+        process_.operations.emplace_back(
+            CopyRegister{state.baseline, *current});
+    }
+    auto matched = matches.front();
+    for (std::size_t index = 1; index < matches.size(); ++index) {
+        matched = logical(
+            LogicalBinaryOperator::logical_or,
+            matched,
+            matches[index]);
+    }
+    const auto match_branch = static_cast<InstructionIndex>(
         process_.operations.size());
     process_.operations.emplace_back(Branch{
-        equal,
-        wait_start,
-        static_cast<InstructionIndex>(branch + 1),
-        UnknownBranchPolicy::when_false});
+        matched, 0, 0, UnknownBranchPolicy::error});
+
+    const auto rewait_start = static_cast<InstructionIndex>(
+        process_.operations.size());
+    WaitOn rewait{
+        std::move(waited_signals),
+        std::vector<runtime::simir::EdgeKind>(
+            waited_signal_count,
+            runtime::simir::EdgeKind::any)};
+    if (statement.delay) {
+        rewait.timeout = statement.delay->magnitude;
+        rewait.timeout_result = timed_out;
+        rewait.timeout_origin = initial_wait;
+    }
+    process_.operations.emplace_back(std::move(rewait));
+    process_.operations.emplace_back(Jump{evaluation_entry});
+
+    const auto satisfied = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations[match_branch] = Branch{
+        matched,
+        satisfied,
+        rewait_start,
+        UnknownBranchPolicy::error};
+    if (timeout_branch) {
+        process_.operations[*timeout_branch] = Branch{
+            *timed_out,
+            satisfied,
+            expression_start,
+            UnknownBranchPolicy::error};
+    }
     return true;
 }
 

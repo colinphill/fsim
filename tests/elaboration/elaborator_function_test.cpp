@@ -217,10 +217,10 @@ endmodule
       && has_diagnostic(
           rejected_malformed, "FSIM-ELAB-SVFUNC-010"));
 
-  const auto ref_error = fsim::frontend::parse_text(
-      "function_ref_error.sv",
+  const auto ref_signal = fsim::frontend::parse_text(
+      "function_ref_signal.sv",
       R"(
-module function_ref_error(output logic result);
+module function_ref_signal(output logic result);
   logic value;
   function automatic logic mutate(ref logic target);
     target = 1'b1;
@@ -230,12 +230,45 @@ module function_ref_error(output logic result);
 endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
-  assert(ref_error.ok());
-  const auto rejected_ref = fsim::elaboration::elaborate(
-      ref_error.design, "sv:work.function_ref_error");
+  assert(ref_signal.ok());
+  const auto elaborated_ref_signal = fsim::elaboration::elaborate(
+      ref_signal.design, "sv:work.function_ref_signal");
+  assert(elaborated_ref_signal.ok());
+  auto ref_signal_interpreter =
+      elaborated_ref_signal.design->create_interpreter();
+  const auto ref_signal_value =
+      elaborated_ref_signal.design->find_signal("value");
+  const auto ref_signal_result =
+      elaborated_ref_signal.design->find_signal("result");
+  assert(ref_signal_value && ref_signal_result);
   assert(
-      !rejected_ref.ok()
-      && has_diagnostic(rejected_ref, "FSIM-ELAB-SVFUNC-012"));
+      ref_signal_interpreter->run().status
+      == fsim::runtime::RunStatus::completed);
+  assert(
+      ref_signal_interpreter
+          ->signal_value(*ref_signal_value).to_msb_string() == "1"
+      && ref_signal_interpreter
+             ->signal_value(*ref_signal_result).to_msb_string() == "1");
+
+  const auto ref_literal = fsim::frontend::parse_text(
+      "function_ref_literal.sv",
+      R"(
+module function_ref_literal(output logic result);
+  function automatic logic mutate(ref logic target);
+    target = 1'b1;
+    return target;
+  endfunction
+  initial result = mutate(1'b0);
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(ref_literal.ok());
+  const auto rejected_ref_literal = fsim::elaboration::elaborate(
+      ref_literal.design, "sv:work.function_ref_literal");
+  assert(
+      !rejected_ref_literal.ok()
+      && has_diagnostic(
+          rejected_ref_literal, "FSIM-ELAB-SVFUNC-012"));
 
   const auto static_container = fsim::frontend::parse_text(
       "static_function_container.sv",
@@ -243,6 +276,7 @@ endmodule
 module static_function_container(output logic result);
   function logic retained;
     logic values[1:0];
+    values[0] = 1'b1;
     retained = values[0];
   endfunction
   initial result = retained();
@@ -250,13 +284,22 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(static_container.ok());
-  const auto rejected_static_container = fsim::elaboration::elaborate(
+  const auto elaborated_static_container = fsim::elaboration::elaborate(
       static_container.design,
       "sv:work.static_function_container");
+  assert(elaborated_static_container.ok());
+  auto static_container_interpreter =
+      elaborated_static_container.design->create_interpreter();
   assert(
-      !rejected_static_container.ok()
-      && has_diagnostic(
-          rejected_static_container, "FSIM-ELAB-SVFUNC-013"));
+      static_container_interpreter->run().status
+      == fsim::runtime::RunStatus::completed);
+  const auto static_container_result =
+      elaborated_static_container.design->find_signal("result");
+  assert(
+      static_container_result
+      && static_container_interpreter
+             ->signal_value(*static_container_result)
+             .to_msb_string() == "1");
 
   const auto recursive = fsim::frontend::parse_text(
       "recursive_function.sv",

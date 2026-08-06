@@ -79,6 +79,18 @@ using runtime::simir::WaitSensitivity;
 using runtime::simir::WaitForever;
 using runtime::simir::WaitFork;
 using runtime::simir::DisableFork;
+using runtime::simir::ProcessAwait;
+using runtime::simir::ProcessCompleted;
+using runtime::simir::ProcessKill;
+using runtime::simir::ProcessSelf;
+using runtime::simir::ProcessStatusQuery;
+using runtime::simir::MailboxCreate;
+using runtime::simir::MailboxPut;
+using runtime::simir::MailboxGet;
+using runtime::simir::MailboxNum;
+using runtime::simir::SemaphoreCreate;
+using runtime::simir::SemaphoreGet;
+using runtime::simir::SemaphorePut;
 using runtime::simir::WriteAfter;
 using runtime::simir::WriteAfterDynamicSlice;
 using runtime::simir::WriteAfterDynamicPartSlice;
@@ -1216,7 +1228,8 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         branch_to_next,
         store_logic9_word,
         load_logic9_word,
-        runtime_error_if};
+        runtime_error_if,
+        dynamic_offset};
     OutputOperationLowerer output_lowerer{
         builder,
         context,
@@ -1966,6 +1979,25 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             return_result(
                 FSIM_JIT_RESUME_STATUS_DISABLE_FORK, instruction, 0,
                 FSIM_JIT_FRAME_STATE_READY, next_instruction);
+          } else if constexpr (
+              std::is_same_v<OperationType, ProcessSelf>
+              || std::is_same_v<OperationType, ProcessStatusQuery>
+              || std::is_same_v<OperationType, ProcessCompleted>
+              || std::is_same_v<OperationType, ProcessAwait>
+              || std::is_same_v<OperationType, ProcessKill>
+              || std::is_same_v<OperationType, MailboxCreate>
+              || std::is_same_v<OperationType, MailboxPut>
+              || std::is_same_v<OperationType, MailboxGet>
+              || std::is_same_v<OperationType, MailboxNum>
+              || std::is_same_v<OperationType, SemaphoreCreate>
+              || std::is_same_v<OperationType, SemaphoreGet>
+              || std::is_same_v<OperationType, SemaphorePut>) {
+            return_result(
+                FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY,
+                instruction,
+                0,
+                FSIM_JIT_FRAME_STATE_READY,
+                next_instruction);
           } else if constexpr (std::is_same_v<OperationType, Pause>) {
             return_result(
                 FSIM_JIT_RESUME_STATUS_PAUSED, instruction, 0,

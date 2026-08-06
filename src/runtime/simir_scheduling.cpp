@@ -1644,6 +1644,7 @@ void Interpreter::Impl::handle_external_boundary(
     process.pc = instruction;
     fail(process, "missing dynamic suspension kind");
   case ExternalSuspendKind::wait_for:
+    process.status = ProcessStatus::waiting;
     if (suspension.delay == 0) {
       queue_next_delta(process.program.id);
     } else {
@@ -1656,6 +1657,7 @@ void Interpreter::Impl::handle_external_boundary(
     }
     break;
   case ExternalSuspendKind::wait_on:
+    process.status = ProcessStatus::waiting;
     if (suspension.sensitivity.empty()) {
       process.pc = instruction;
       fail(process, "dynamic wait requires at least one event");
@@ -1692,6 +1694,7 @@ void Interpreter::Impl::handle_external_boundary(
     }
     break;
   case ExternalSuspendKind::wait_sensitivity:
+    process.status = ProcessStatus::waiting;
     if (process.program.static_sensitivity.empty()) {
       process.pc = instruction;
       fail(process, "dynamic static wait has no sensitivity list");
@@ -1699,10 +1702,11 @@ void Interpreter::Impl::handle_external_boundary(
     process.waiting_on_static = true;
     break;
   case ExternalSuspendKind::yield:
+    process.status = ProcessStatus::waiting;
     queue_next_delta(process.program.id);
     break;
   case ExternalSuspendKind::halt:
-    process.halted = true;
+    complete_process(process, ProcessStatus::finished);
     break;
   }
   notify_execution_point(

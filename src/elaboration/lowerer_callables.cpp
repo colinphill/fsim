@@ -96,16 +96,26 @@ bool Lowerer::validate_function_reference_actuals(
             continue;
         }
         const auto& actual = *actuals[index];
-        const bool direct_local =
-            actual.kind == ExpressionKind::Identifier
-            && (locals_.contains(actual.text)
-                || string_locals_.contains(actual.text)
-                || container_locals_.contains(actual.text));
-        if (!function.automatic || !direct_local) {
+        const auto writable = [&](const auto& self,
+                                  const Expression& candidate) -> bool {
+            if (candidate.kind == ExpressionKind::Identifier) {
+                return locals_.contains(candidate.text)
+                    || string_locals_.contains(candidate.text)
+                    || container_locals_.contains(candidate.text)
+                    || signals_.contains(candidate.text)
+                    || packed_member_reference(candidate.text).has_value();
+            }
+            return ((candidate.kind == ExpressionKind::Index
+                     && candidate.operands.size() == 2)
+                    || (candidate.kind == ExpressionKind::Slice
+                        && candidate.operands.size() == 3))
+                && self(self, candidate.operands.front());
+        };
+        if (!function.automatic || !writable(writable, actual)) {
             report(
                 "FSIM-ELAB-SVFUNC-012",
                 "ref function arguments require an automatic function and "
-                "a direct caller-local variable actual",
+                "a writable variable actual",
                 actual.span);
             return false;
         }
@@ -192,6 +202,50 @@ Lowerer::bind_task_actuals(
     return bound;
 }
 
+std::optional<Expression> Lowerer::capture_callable_copy_out_target(
+    const Expression& target,
+    std::string temporary_prefix) {
+    auto captured = target;
+    std::size_t selector_index = 0;
+    const auto capture = [&](const auto& self,
+                             Expression& candidate) -> bool {
+        if ((candidate.kind != ExpressionKind::Index
+             && candidate.kind != ExpressionKind::Slice)
+            || candidate.operands.empty()) {
+            return true;
+        }
+        if (!self(self, candidate.operands.front())) {
+            return false;
+        }
+        for (std::size_t index = 1;
+             index < candidate.operands.size(); ++index) {
+            auto& selector = candidate.operands[index];
+            if (static_integer_value(selector)) {
+                continue;
+            }
+            auto value = lower_expression(selector, 32);
+            if (!value) {
+                return false;
+            }
+            if (register_width(*value) != 32) {
+                *value = resize_register(
+                    *value, 32, is_signed_expression(selector));
+            }
+            const auto name = temporary_prefix + "_selector_"
+                + std::to_string(selector_index++);
+            locals_.insert_or_assign(name, *value);
+            local_signed_.insert_or_assign(name, true);
+            selector = Expression{
+                ExpressionKind::Identifier, name, {}, selector.span};
+        }
+        return true;
+    };
+    if (!capture(capture, captured)) {
+        return std::nullopt;
+    }
+    return captured;
+}
+
 void Lowerer::lower_callable_copy_out(
     const Expression& target,
     const frontend::Type& type,
@@ -227,94 +281,154 @@ void Lowerer::lower_callable_copy_out(
     lower_assignment(copy_out);
 }
 
-std::vector<Lowerer::CallableVariableRegister>
+std::unordered_map<std::string, Lowerer::CallableVariableRegister>
 Lowerer::allocate_static_callable_variables(
     const std::vector<frontend::VariableDeclaration>& variables,
-    const std::string_view diagnostic_code,
-    const std::string_view callable_kind) {
-    std::vector<CallableVariableRegister> registers;
-    registers.reserve(variables.size());
-    for (const auto& variable : variables) {
-        CallableVariableRegister storage;
-        if (variable.type.domain == frontend::ValueDomain::String) {
-            storage.is_string = true;
-            storage.string = allocate_string_register();
-            const auto initial = variable.initializer
-                ? lower_string_expression(*variable.initializer)
-                : std::optional<StringRegisterId>{};
-            if (initial) {
-                process_.operations.emplace_back(
-                    CopyStringRegister{storage.string, *initial});
-            } else {
-                process_.operations.emplace_back(
-                    LoadStringConstant{storage.string, {}});
-            }
-            registers.push_back(storage);
-            continue;
-        }
-        const auto width = variable.type.width();
-        if (variable.type.systemverilog_container
-            || !width || *width == 0) {
-            report(
-                std::string{diagnostic_code},
-                "static or implicit-lifetime "
-                    + std::string{callable_kind}
-                    + " locals require a bounded packed or string type",
-                variable.span);
-            storage.packed = allocate_register(
-                1, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(LoadConstant{
-                storage.packed, unsigned_value(0, 1)});
-            registers.push_back(storage);
-            continue;
-        }
-        storage.packed = allocate_register(
-            static_cast<std::size_t>(*width),
-            variable.type.domain);
-        process_.operations.emplace_back(LoadConstant{
-            storage.packed,
-            default_packed_value(variable.type, *width)});
-        if (variable.initializer) {
-            if (!validate_sv_nominal_assignment(
-                    &variable.type, *variable.initializer)) {
-                registers.push_back(storage);
-                continue;
-            }
-            auto value = lower_expression(
-                *variable.initializer,
-                static_cast<std::size_t>(*width),
-                &variable.type);
-            if (value) {
-                if (register_width(*value) != *width) {
-                    *value = resize_register(
-                        *value,
-                        static_cast<std::size_t>(*width),
-                        is_signed_expression(*variable.initializer));
-                }
-                process_.operations.emplace_back(
-                    CopyRegister{storage.packed, *value});
-            }
-        }
-        registers.push_back(storage);
-    }
+    const std::vector<frontend::Statement>& statements,
+    const std::string_view callable_name) {
+    std::unordered_map<std::string, CallableVariableRegister> registers;
+
+    auto saved_locals = std::move(locals_);
+    auto saved_string_locals = std::move(string_locals_);
+    auto saved_container_locals = std::move(container_locals_);
+    auto saved_signed = std::move(local_signed_);
+    auto saved_ranges = std::move(local_ranges_);
+    auto saved_integer_ranges = std::move(local_integer_ranges_);
+    auto saved_members = std::move(local_members_);
+    auto saved_types = std::move(local_types_);
+    auto saved_scope = std::move(local_scope_);
+    locals_.clear();
+    string_locals_.clear();
+    container_locals_.clear();
+    local_signed_.clear();
+    local_ranges_.clear();
+    local_integer_ranges_.clear();
+    local_members_.clear();
+    local_types_.clear();
+    local_scope_ = {std::string{callable_name}};
+
+    const auto allocate_scope =
+        [&](const std::vector<frontend::VariableDeclaration>& declarations) {
+          initialize_variables(declarations);
+          for (const auto& variable : declarations) {
+              CallableVariableRegister storage;
+              if (variable.type.systemverilog_container) {
+                  const auto found = container_locals_.find(variable.name);
+                  if (found == container_locals_.end()) {
+                      continue;
+                  }
+                  storage.is_container = true;
+                  storage.container = found->second;
+              } else if (
+                  variable.type.domain == frontend::ValueDomain::String) {
+                  const auto found = string_locals_.find(variable.name);
+                  if (found == string_locals_.end()) {
+                      continue;
+                  }
+                  storage.is_string = true;
+                  storage.string = found->second;
+              } else {
+                  const auto found = locals_.find(variable.name);
+                  if (found == locals_.end()) {
+                      continue;
+                  }
+                  storage.packed = found->second;
+              }
+              registers.emplace(declaration_key(variable), storage);
+          }
+        };
+    const auto allocate_statements =
+        [&](const auto& self,
+            const std::vector<frontend::Statement>& nested) -> void {
+          for (const auto& statement : nested) {
+              const bool scoped =
+                  statement.kind == frontend::StatementKind::Block
+                  || statement.kind == frontend::StatementKind::Fork;
+              std::unordered_map<std::string, RegisterId> outer_locals;
+              std::unordered_map<std::string, StringRegisterId>
+                  outer_string_locals;
+              std::unordered_map<std::string, ContainerRegisterId>
+                  outer_container_locals;
+              std::unordered_map<std::string, bool> outer_signed;
+              std::unordered_map<
+                  std::string,
+                  std::optional<frontend::PackedRange>> outer_ranges;
+              std::unordered_map<
+                  std::string,
+                  std::optional<frontend::IntegerRange>>
+                  outer_integer_ranges;
+              std::unordered_map<
+                  std::string,
+                  std::vector<frontend::PackedMember>> outer_members;
+              std::unordered_map<std::string, const frontend::Type*>
+                  outer_types;
+              if (scoped) {
+                  outer_locals = locals_;
+                  outer_string_locals = string_locals_;
+                  outer_container_locals = container_locals_;
+                  outer_signed = local_signed_;
+                  outer_ranges = local_ranges_;
+                  outer_integer_ranges = local_integer_ranges_;
+                  outer_members = local_members_;
+                  outer_types = local_types_;
+                  local_scope_.push_back(block_scope_name(statement));
+              }
+              allocate_scope(statement.declarations);
+              self(self, statement.statements);
+              self(self, statement.else_statements);
+              for (const auto& alternative :
+                   statement.case_alternatives) {
+                  self(self, alternative.statements);
+              }
+              if (scoped) {
+                  local_scope_.pop_back();
+                  locals_ = std::move(outer_locals);
+                  string_locals_ = std::move(outer_string_locals);
+                  container_locals_ =
+                      std::move(outer_container_locals);
+                  local_signed_ = std::move(outer_signed);
+                  local_ranges_ = std::move(outer_ranges);
+                  local_integer_ranges_ =
+                      std::move(outer_integer_ranges);
+                  local_members_ = std::move(outer_members);
+                  local_types_ = std::move(outer_types);
+              }
+          }
+        };
+    allocate_scope(variables);
+    allocate_statements(allocate_statements, statements);
+
+    local_scope_ = std::move(saved_scope);
+    local_types_ = std::move(saved_types);
+    local_members_ = std::move(saved_members);
+    local_integer_ranges_ = std::move(saved_integer_ranges);
+    local_ranges_ = std::move(saved_ranges);
+    local_signed_ = std::move(saved_signed);
+    container_locals_ = std::move(saved_container_locals);
+    string_locals_ = std::move(saved_string_locals);
+    locals_ = std::move(saved_locals);
     return registers;
 }
 
 void Lowerer::bind_static_callable_variables(
     const std::vector<frontend::VariableDeclaration>& variables,
-    const std::vector<CallableVariableRegister>& registers) {
-    for (std::size_t index = 0; index < variables.size(); ++index) {
-        const auto& variable = variables[index];
-        const auto& storage = registers[index];
+    const std::unordered_map<
+        std::string, CallableVariableRegister>& registers) {
+    for (const auto& variable : variables) {
+        const auto found = registers.find(declaration_key(variable));
+        if (found == registers.end()) {
+            continue;
+        }
+        const auto& storage = found->second;
+        if (storage.is_container) {
+            container_locals_.insert_or_assign(
+                variable.name, storage.container);
+            local_types_.insert_or_assign(variable.name, &variable.type);
+            continue;
+        }
         if (storage.is_string) {
             string_locals_.insert_or_assign(variable.name, storage.string);
             local_types_.insert_or_assign(variable.name, &variable.type);
-            process_.debug_string_locals.push_back(DebugStringLocal{
-                scoped_local_name(variable.name), storage.string,
-                SourceLocation{
-                    variable.span.source_name,
-                    static_cast<std::uint32_t>(variable.span.begin.line),
-                    static_cast<std::uint32_t>(variable.span.begin.column)}});
             continue;
         }
         const auto register_id = storage.packed;
@@ -328,32 +442,6 @@ void Lowerer::bind_static_callable_variables(
         local_members_.insert_or_assign(
             variable.name, variable.type.packed_members);
         local_types_.insert_or_assign(variable.name, &variable.type);
-        auto debug_name = scoped_local_name(variable.name);
-        if (!debug_local_names_.emplace(debug_name).second) {
-            debug_name += "@" + std::to_string(variable.span.begin.line)
-                + ":" + std::to_string(variable.span.begin.column);
-            debug_local_names_.emplace(debug_name);
-        }
-        process_.debug_locals.push_back(DebugLocal{
-            std::move(debug_name),
-            variable.type.spelling,
-            register_id,
-            static_cast<std::size_t>(variable.type.width().value_or(1)),
-            SourceLocation{
-                variable.span.source_name,
-                static_cast<std::uint32_t>(variable.span.begin.line),
-                static_cast<std::uint32_t>(variable.span.begin.column)},
-            {},
-            {},
-            value_kind(variable.type.domain),
-            variable.type.enumeration_literals,
-            variable.type.systemverilog_scalar});
-        if (variable.type.integer_range) {
-            const auto [lower, upper] =
-                integer_bounds(variable.type.integer_range);
-            process_.debug_locals.back().integer_lower = lower;
-            process_.debug_locals.back().integer_upper = upper;
-        }
     }
 }
 

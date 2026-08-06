@@ -5,11 +5,16 @@
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
+#include <iostream>
 #include <system_error>
 
 namespace fsim::runtime::simir {
 
 namespace {
+
+constexpr std::string_view multichannel_write_mode =
+    "\x1f" "fsim-multichannel-write";
+constexpr FileHandle file_descriptor_flag = UINT32_C(0x80000000);
 
 [[nodiscard]] bool below_root(
     const std::filesystem::path& root,
@@ -103,7 +108,10 @@ FileHandle Interpreter::Impl::open_file(
     throw std::runtime_error{
         "SystemVerilog file access has no configured project root"};
   }
-  const auto mode = file_mode(mode_text);
+  const bool multichannel =
+      mode_text == multichannel_write_mode;
+  const auto mode =
+      file_mode(multichannel ? std::string_view{"w"} : mode_text);
   if (!mode) {
     throw std::runtime_error{
         "unsupported SystemVerilog text file mode '"
@@ -155,11 +163,21 @@ FileHandle Interpreter::Impl::open_file(
         + std::string{path_text} + "' in mode '"
         + std::string{mode_text} + "'"};
   }
-  if (next_file_handle == 0) {
-    throw std::length_error{
-        "SystemVerilog file handle space is exhausted"};
+  FileHandle handle{};
+  if (multichannel) {
+    if (next_multichannel_channel >= 31U) {
+      throw std::length_error{
+          "SystemVerilog multichannel descriptor space is exhausted"};
+    }
+    handle = FileHandle{1U} << next_multichannel_channel++;
+  } else {
+    if (next_file_handle == 0
+        || next_file_handle >= file_descriptor_flag) {
+      throw std::length_error{
+          "SystemVerilog file descriptor space is exhausted"};
+    }
+    handle = file_descriptor_flag | next_file_handle++;
   }
-  const auto handle = next_file_handle++;
   files.emplace(
       handle,
       FileState{
@@ -202,22 +220,36 @@ Interpreter::Impl::FileState& Interpreter::Impl::checked_file(
 void Interpreter::Impl::close_file(
     const ProcessId process,
     const FileHandle handle) {
-  auto& file = checked_file(process, handle);
-  // A successful read through EOF leaves eofbit/failbit set. Clear those
-  // input-status bits before close so they cannot masquerade as a close
-  // failure.
-  file.stream->clear();
-  if (file.writable) {
-    file.stream->flush();
+  const auto close_one = [](FileState& file) {
+    // A successful read through EOF leaves eofbit/failbit set. Clear those
+    // input-status bits before close so they cannot masquerade as a close
+    // failure.
+    file.stream->clear();
+    if (file.writable) file.stream->flush();
+    file.stream->close();
+    const bool failed = file.stream->fail();
+    file.stream.reset();
+    file.closed = true;
+    if (failed) {
+      file.last_error = "failed to close text file";
+      throw std::runtime_error{file.last_error};
+    }
+  };
+  if ((handle & file_descriptor_flag) != 0) {
+    close_one(checked_file(process, handle));
+    return;
   }
-  file.stream->close();
-  const bool failed = file.stream->fail();
-  file.stream.reset();
-  file.closed = true;
-  if (failed) {
-    file.last_error = "failed to close text file";
-    throw std::runtime_error{file.last_error};
+  if (handle == 0) {
+    static_cast<void>(checked_file(process, handle));
   }
+  std::vector<FileState*> selected;
+  for (std::uint32_t channel = 1; channel < 31U; ++channel) {
+    const auto bit = FileHandle{1U} << channel;
+    if ((handle & bit) != 0) {
+      selected.push_back(&checked_file(process, bit));
+    }
+  }
+  for (auto* file : selected) close_one(*file);
 }
 
 void Interpreter::Impl::write_file(
@@ -225,21 +257,52 @@ void Interpreter::Impl::write_file(
     const FileHandle handle,
     const std::string_view text,
     const bool newline) {
-  auto& file = checked_file(process, handle);
-  if (!file.writable) {
+  const auto validate = [](FileState& file) {
+    if (!file.writable) {
+      throw std::runtime_error{
+          "SystemVerilog file handle is not open for writing"};
+    }
+  };
+  const auto write_one = [&](FileState& file) {
+    file.stream->write(
+        text.data(), static_cast<std::streamsize>(text.size()));
+    if (newline) file.stream->put('\n');
+    file.stream->flush();
+    if (!file.stream->good()) {
+      file.last_error = "failed to write SystemVerilog text file";
+      throw std::runtime_error{file.last_error};
+    }
+  };
+  if ((handle & file_descriptor_flag) != 0) {
+    auto& file = checked_file(process, handle);
+    validate(file);
+    write_one(file);
+    return;
+  }
+  if (handle == 0) {
     throw std::runtime_error{
-        "SystemVerilog file handle is not open for writing"};
+        "invalid zero SystemVerilog multichannel descriptor"};
   }
-  file.stream->write(
-      text.data(), static_cast<std::streamsize>(text.size()));
-  if (newline) {
-    file.stream->put('\n');
+  std::vector<FileState*> selected;
+  for (std::uint32_t channel = 1; channel < 31U; ++channel) {
+    const auto bit = FileHandle{1U} << channel;
+    if ((handle & bit) != 0) {
+      auto& file = checked_file(process, bit);
+      validate(file);
+      selected.push_back(&file);
+    }
   }
-  file.stream->flush();
-  if (!file.stream->good()) {
-    file.last_error = "failed to write SystemVerilog text file";
-    throw std::runtime_error{file.last_error};
+  if ((handle & 1U) != 0) {
+    std::cout.write(
+        text.data(), static_cast<std::streamsize>(text.size()));
+    if (newline) std::cout.put('\n');
+    std::cout.flush();
+    if (!std::cout.good()) {
+      throw std::runtime_error{
+          "failed to write SystemVerilog standard output"};
+    }
   }
+  for (auto* file : selected) write_one(*file);
 }
 
 std::string Interpreter::Impl::read_file_line(
@@ -397,7 +460,23 @@ void Interpreter::Impl::flush_file(
     }
   };
   if (handle) {
-    flush(checked_file(process, *handle));
+    if ((*handle & file_descriptor_flag) != 0) {
+      flush(checked_file(process, *handle));
+      return;
+    }
+    if (*handle == 0) {
+      throw std::runtime_error{
+          "invalid zero SystemVerilog multichannel descriptor"};
+    }
+    std::vector<FileState*> selected;
+    for (std::uint32_t channel = 1; channel < 31U; ++channel) {
+      const auto bit = FileHandle{1U} << channel;
+      if ((*handle & bit) != 0) {
+        selected.push_back(&checked_file(process, bit));
+      }
+    }
+    if ((*handle & 1U) != 0) std::cout.flush();
+    for (auto* file : selected) flush(*file);
     return;
   }
   for (auto& [id, file] : files) {

@@ -175,6 +175,9 @@ ElaboratedDesign::create_interpreter(
   for (const auto& object : container_objects_) {
     (void)interpreter->add_container_object(object);
   }
+  for (const auto& alias : container_signal_aliases_) {
+    interpreter->add_container_signal_alias(alias);
+  }
   for (const auto& process : processes_) {
     (void)interpreter->add_process(process);
   }

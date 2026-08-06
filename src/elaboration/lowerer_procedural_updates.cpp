@@ -373,6 +373,7 @@ void Lowerer::lower_force_release(const Statement& statement) {
 
   auto target_name = base->text;
   std::uint32_t offset = 0;
+  std::optional<DynamicIndex> dynamic_selection;
   std::optional<std::size_t> selected_width;
   std::optional<frontend::ValueDomain> selected_domain;
   if (!signals_.contains(target_name)) {
@@ -413,7 +414,18 @@ void Lowerer::lower_force_release(const Statement& statement) {
     const auto selected = index
         ? select_offset(*base, *index, selection_source_width)
         : std::nullopt;
-    if (!selected
+    if (!index) {
+      dynamic_selection = lower_dynamic_index(
+          *base,
+          statement.target.operands[1],
+          selection_source_width,
+          offset,
+          statement.target.span);
+      if (!dynamic_selection) {
+        return;
+      }
+      selected_width = 1;
+    } else if (!selected
         || static_cast<std::uint64_t>(offset) + *selected
             > std::numeric_limits<std::uint32_t>::max()) {
       report(
@@ -422,9 +434,10 @@ void Lowerer::lower_force_release(const Statement& statement) {
           "index",
           statement.target.span);
       return;
+    } else {
+      offset += static_cast<std::uint32_t>(*selected);
+      selected_width = 1;
     }
-    offset += static_cast<std::uint32_t>(*selected);
-    selected_width = 1;
   } else if (statement.target.kind == ExpressionKind::Slice) {
     const auto selected = constant_slice_selection(
         statement.target, selection_source_width);
@@ -447,8 +460,9 @@ void Lowerer::lower_force_release(const Statement& statement) {
   if (!force) {
     process_.operations.emplace_back(ReleaseSignalSlice{
         signal->second,
-        offset,
-        static_cast<std::uint32_t>(width)});
+        dynamic_selection ? 0U : offset,
+        static_cast<std::uint32_t>(width),
+        dynamic_selection});
     return;
   }
   const auto* target_type =
@@ -474,7 +488,11 @@ void Lowerer::lower_force_release(const Statement& statement) {
     return;
   }
   process_.operations.emplace_back(
-      ForceSignalSlice{signal->second, *value, offset});
+      ForceSignalSlice{
+          signal->second,
+          *value,
+          dynamic_selection ? 0U : offset,
+          dynamic_selection});
 }
 
 }  // namespace fsim::elaboration

@@ -21,10 +21,10 @@ struct Entry {
   StableOrder order{};
   std::uint64_t sequence{};
   Scheduler::Task task;
-  std::shared_ptr<bool> cancelled;
+  std::shared_ptr<bool> active;
 
   [[nodiscard]] bool is_cancelled() const noexcept {
-    return cancelled && *cancelled;
+    return active && !*active;
   }
 };
 
@@ -70,6 +70,12 @@ struct WorkQueue {
     }
   }
 
+  void cancel_pending() noexcept {
+    for (auto index = cursor; index < entries.size(); ++index) {
+      if (entries[index].active) *entries[index].active = false;
+    }
+  }
+
   [[nodiscard]] std::vector<StableOrder> pending_orders() const {
     std::vector<StableOrder> result;
     result.reserve(entries.size() - cursor);
@@ -88,6 +94,10 @@ struct Bucket {
   [[nodiscard]] bool empty() const noexcept {
     return std::all_of(queues.begin(), queues.end(),
                        [](const WorkQueue &queue) { return queue.empty(); });
+  }
+
+  void cancel_pending() noexcept {
+    for (auto& queue : queues) queue.cancel_pending();
   }
 };
 
@@ -148,6 +158,7 @@ struct Scheduler::Impl {
   bool in_run{};
   bool in_callback{};
   std::atomic_bool stop{false};
+  std::shared_ptr<const void> owner = std::make_shared<const bool>(true);
   SafePointHook safe_point_hook;
   std::vector<RuntimeSignalId> recent_signals;
   std::size_t recent_signal_cursor{};
@@ -155,7 +166,7 @@ struct Scheduler::Impl {
   [[nodiscard]] Entry make_entry(
       StableOrder order,
       Task task,
-      std::shared_ptr<bool> cancelled = {}) {
+      std::shared_ptr<bool> active = {}) {
     if (!task) {
       throw std::invalid_argument("cannot schedule an empty task");
     }
@@ -163,7 +174,7 @@ struct Scheduler::Impl {
       throw std::overflow_error("scheduler insertion sequence overflow");
     }
     return Entry{
-        order, next_sequence++, std::move(task), std::move(cancelled)};
+        order, next_sequence++, std::move(task), std::move(active)};
   }
 
   void load_next_slot() {
@@ -236,9 +247,9 @@ ScheduledTaskHandle Scheduler::schedule_after_cancelable(
     throw std::overflow_error("simulation time overflow while scheduling event");
   }
   const auto time = impl_->now + delay;
-  const auto cancelled = std::make_shared<bool>(false);
+  const auto active = std::make_shared<bool>(true);
   auto entry =
-      impl_->make_entry(stable_order, std::move(task), cancelled);
+      impl_->make_entry(stable_order, std::move(task), active);
   const auto index = phase_index(phase);
   if (index >= phase_count) {
     throw std::invalid_argument("invalid scheduler phase");
@@ -252,12 +263,14 @@ ScheduledTaskHandle Scheduler::schedule_after_cancelable(
   } else {
     impl_->future[time].queues[index].push(std::move(entry));
   }
-  return ScheduledTaskHandle{cancelled};
+  return ScheduledTaskHandle{active, impl_->owner};
 }
 
 void Scheduler::cancel(const ScheduledTaskHandle &handle) noexcept {
-  if (handle.cancelled_) {
-    *handle.cancelled_ = true;
+  if (!impl_ || !handle.active_) return;
+  const auto owner = handle.owner_.lock();
+  if (owner && owner.get() == impl_->owner.get()) {
+    *handle.active_ = false;
   }
 }
 
@@ -368,6 +381,7 @@ RunResult Scheduler::run(std::optional<SimulationTick> until) {
         return result(RunStatus::stopped);
       }
       auto entry = queue.pop();
+      if (entry.active) *entry.active = false;
       impl_->in_callback = true;
       try {
         entry.task(*this);
@@ -406,6 +420,14 @@ void Scheduler::discard_pending() {
   if (impl_->in_run || impl_->in_callback) {
     throw std::logic_error(
         "cannot discard scheduler work while it is running");
+  }
+  if (impl_->current) {
+    impl_->current->current.cancel_pending();
+    impl_->current->next_delta.cancel_pending();
+  }
+  for (auto& [time, bucket] : impl_->future) {
+    (void)time;
+    bucket.cancel_pending();
   }
   impl_->current.reset();
   impl_->future.clear();

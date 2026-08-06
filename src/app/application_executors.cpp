@@ -273,7 +273,8 @@ namespace fsim::app::application_detail {
           throw compiler::LlvmJitError(
               "compiled process reported WaitFor at a non-wait instruction");
         }
-        if (result.delay != wait->delay) {
+        const auto expected_delay = wait->source ? 0 : wait->delay;
+        if (result.delay != expected_delay) {
           throw compiler::LlvmJitError(
               "compiled process returned a WaitFor delay that disagrees "
               "with SimIR");
@@ -337,7 +338,7 @@ namespace fsim::app::application_detail {
         break;
       case compiler::JitResumeStatus::simir_boundary: {
         const auto& operation = process_.operations[result.instruction];
-        const auto class_boundary =
+        const auto host_boundary =
             fsim::runtime::simir::operation_holds<
                 runtime::simir::ClassAllocate>(operation)
             || fsim::runtime::simir::operation_holds<
@@ -351,8 +352,32 @@ namespace fsim::app::application_detail {
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::ClassStaticPropertyWrite>(operation)
             || fsim::runtime::simir::operation_holds<
-                runtime::simir::ClassStaticMethodCall>(operation);
-        if (!class_boundary) {
+                runtime::simir::ClassStaticMethodCall>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ProcessSelf>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ProcessStatusQuery>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ProcessCompleted>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ProcessAwait>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ProcessKill>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::MailboxCreate>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::MailboxPut>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::MailboxGet>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::MailboxNum>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::SemaphoreCreate>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::SemaphoreGet>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::SemaphorePut>(operation);
+        if (!host_boundary) {
           throw compiler::LlvmJitError(
               "compiled process reported an unsupported SimIR boundary");
         }

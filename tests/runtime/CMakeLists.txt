@@ -11,6 +11,7 @@ add_executable(
   runtime_chandle_tests.cpp
   runtime_unicode_string_tests.cpp
   runtime_execution_tests.cpp
+  runtime_synchronization_tests.cpp
   runtime_file_tests.cpp
   runtime_container_tests.cpp
   runtime_class_heap_tests.cpp

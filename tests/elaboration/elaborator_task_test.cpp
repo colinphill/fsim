@@ -107,10 +107,10 @@ endmodule
       && has_diagnostic(
           rejected_association, "FSIM-ELAB-SVTASK-012"));
 
-  const auto ref_error = fsim::frontend::parse_text(
-      "task_ref_error.sv",
+  const auto ref_signal = fsim::frontend::parse_text(
+      "task_ref_signal.sv",
       R"(
-module task_ref_error(output logic result);
+module task_ref_signal(output logic result);
   logic value;
   task automatic mutate(ref logic target);
     target = 1'b1;
@@ -122,12 +122,44 @@ module task_ref_error(output logic result);
 endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
-  assert(ref_error.ok());
-  const auto rejected_ref = fsim::elaboration::elaborate(
-      ref_error.design, "sv:work.task_ref_error");
+  assert(ref_signal.ok());
+  const auto elaborated_ref_signal = fsim::elaboration::elaborate(
+      ref_signal.design, "sv:work.task_ref_signal");
+  assert(elaborated_ref_signal.ok());
+  auto ref_signal_interpreter =
+      elaborated_ref_signal.design->create_interpreter();
+  const auto ref_signal_value =
+      elaborated_ref_signal.design->find_signal("value");
+  const auto ref_signal_result =
+      elaborated_ref_signal.design->find_signal("result");
+  assert(ref_signal_value && ref_signal_result);
   assert(
-      !rejected_ref.ok()
-      && has_diagnostic(rejected_ref, "FSIM-ELAB-SVTASK-013"));
+      ref_signal_interpreter->run().status
+      == fsim::runtime::RunStatus::completed);
+  assert(
+      ref_signal_interpreter
+          ->signal_value(*ref_signal_value).to_msb_string() == "1"
+      && ref_signal_interpreter
+             ->signal_value(*ref_signal_result).to_msb_string() == "1");
+
+  const auto ref_literal = fsim::frontend::parse_text(
+      "task_ref_literal.sv",
+      R"(
+module task_ref_literal;
+  task automatic mutate(ref logic target);
+    target = 1'b1;
+  endtask
+  initial mutate(1'b0);
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(ref_literal.ok());
+  const auto rejected_ref_literal = fsim::elaboration::elaborate(
+      ref_literal.design, "sv:work.task_ref_literal");
+  assert(
+      !rejected_ref_literal.ok()
+      && has_diagnostic(
+          rejected_ref_literal, "FSIM-ELAB-SVTASK-013"));
 
   const auto static_suspension = fsim::frontend::parse_text(
       "static_task_suspension.sv",
@@ -141,14 +173,19 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(static_suspension.ok());
-  const auto rejected_static_suspension =
+  const auto elaborated_static_suspension =
       fsim::elaboration::elaborate(
           static_suspension.design,
           "sv:work.static_task_suspension");
+  assert(elaborated_static_suspension.ok());
+  auto static_suspension_interpreter =
+      elaborated_static_suspension.design->create_interpreter();
+  const auto static_suspension_run =
+      static_suspension_interpreter->run();
   assert(
-      !rejected_static_suspension.ok()
-      && has_diagnostic(
-          rejected_static_suspension, "FSIM-ELAB-SVTASK-014"));
+      static_suspension_run.status
+          == fsim::runtime::RunStatus::completed
+      && static_suspension_run.time == 1);
 
   const auto static_container = fsim::frontend::parse_text(
       "static_task_container.sv",
@@ -163,14 +200,16 @@ endmodule
 )",
       fsim::frontend::Language::SystemVerilog2017);
   assert(static_container.ok());
-  const auto rejected_static_container =
+  const auto elaborated_static_container =
       fsim::elaboration::elaborate(
           static_container.design,
           "sv:work.static_task_container");
+  assert(elaborated_static_container.ok());
+  auto static_container_interpreter =
+      elaborated_static_container.design->create_interpreter();
   assert(
-      !rejected_static_container.ok()
-      && has_diagnostic(
-          rejected_static_container, "FSIM-ELAB-SVTASK-015"));
+      static_container_interpreter->run().status
+      == fsim::runtime::RunStatus::completed);
 
   const auto qualified = fsim::frontend::parse_text(
       "qualified_task.sv",

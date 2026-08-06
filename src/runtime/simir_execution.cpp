@@ -4,6 +4,7 @@
 #include "simir_signal_attributes.hpp"
 #include "fsim/runtime/string_methods.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
+#include <cmath>
 #include "simir_execution_context.hpp"
 
 namespace {
@@ -16,6 +17,87 @@ namespace {
     result.set(bit, value.get(bit));
   }
   return value.is_logic9() ? result.promoted_to_logic9() : result;
+}
+
+[[nodiscard]] SimulationTick normalized_dynamic_wait_delay(
+    const WaitFor& wait,
+    const PackedLogic4& payload) {
+  if (!wait.source || wait.source_width == 0
+      || wait.source_width > 64
+      || payload.width() != wait.source_width
+      || wait.rounding_quantum == 0) {
+    throw std::invalid_argument{
+        "runtime WaitFor has invalid dynamic-delay metadata"};
+  }
+  if (wait.source_kind == SystemVerilogScalarKind::ShortReal
+      || wait.source_kind == SystemVerilogScalarKind::Real
+      || wait.source_kind == SystemVerilogScalarKind::Realtime) {
+    const auto decoded = decode_systemverilog_scalar_payload(
+        payload, wait.source_kind);
+    const auto number = decoded ? decoded.value.as_real() : std::nullopt;
+    if (!number || !std::isfinite(*number)) {
+      throw std::invalid_argument{
+          "runtime WaitFor requires a finite real delay"};
+    }
+    if (*number < 0.0) {
+      throw std::invalid_argument{
+          "runtime WaitFor delay cannot be negative"};
+    }
+    const auto scaled_quanta =
+        static_cast<long double>(*number)
+        * static_cast<long double>(wait.delay)
+        / static_cast<long double>(wait.rounding_quantum);
+    if (!std::isfinite(scaled_quanta)) {
+      throw std::overflow_error{
+          "runtime WaitFor delay overflows simulation ticks"};
+    }
+    const auto rounded_quanta = std::round(scaled_quanta);
+    const auto maximum_quanta =
+        static_cast<long double>(
+            std::numeric_limits<SimulationTick>::max())
+        / static_cast<long double>(wait.rounding_quantum);
+    if (rounded_quanta > maximum_quanta) {
+      throw std::overflow_error{
+          "runtime WaitFor delay overflows simulation ticks"};
+    }
+    return static_cast<SimulationTick>(rounded_quanta)
+        * wait.rounding_quantum;
+  }
+
+  std::uint64_t magnitude = 0;
+  if (wait.source_kind == SystemVerilogScalarKind::Time) {
+    const auto decoded = decode_systemverilog_scalar_payload(
+        payload, wait.source_kind);
+    const auto ticks = decoded ? decoded.value.as_time() : std::nullopt;
+    if (!ticks) {
+      throw std::invalid_argument{
+          "runtime WaitFor requires a known time delay"};
+    }
+    magnitude = *ticks;
+  } else if (wait.source_kind == SystemVerilogScalarKind::None) {
+    const auto word = payload.low_word();
+    if (word.bval != 0) {
+      throw std::invalid_argument{
+          "runtime WaitFor requires a known integral delay"};
+    }
+    if (wait.source_signed
+        && payload.width() != 0
+        && ((word.aval >> (payload.width() - 1U)) & 1U) != 0) {
+      throw std::invalid_argument{
+          "runtime WaitFor delay cannot be negative"};
+    }
+    magnitude = word.aval;
+  } else {
+    throw std::invalid_argument{
+        "runtime WaitFor has an invalid delay value kind"};
+  }
+  if (magnitude != 0
+      && wait.delay
+          > std::numeric_limits<SimulationTick>::max() / magnitude) {
+    throw std::overflow_error{
+        "runtime WaitFor delay overflows simulation ticks"};
+  }
+  return magnitude * wait.delay;
 }
 
 }  // namespace
@@ -102,7 +184,21 @@ void Interpreter::Impl::handle_boundary(
   }
   if (const auto* wait = fsim::runtime::simir::operation_get_if<WaitFor>(&operation)) {
     clear_wait_timeout(process);
-    if (wait->delay == 0) {
+    auto delay = wait->delay;
+    if (wait->source) {
+      try {
+        const auto payload = process.executor
+            ? process.executor->read_register(
+                  *wait->source, wait->source_width)
+            : get_register(process, *wait->source);
+        delay = normalized_dynamic_wait_delay(*wait, payload);
+      } catch (const std::exception& error) {
+        process.pc = instruction;
+        fail(process, error.what());
+      }
+    }
+    if (delay == 0) {
+      process.status = ProcessStatus::waiting;
       process.queued = true;
       scheduler.schedule(
           SchedulerPhase::inactive,
@@ -117,12 +213,13 @@ void Interpreter::Impl::handle_boundary(
           process.current_source);
       return;
     }
-    if (wait->delay
+    if (delay
         > std::numeric_limits<SimulationTick>::max() - scheduler.now()) {
       process.pc = instruction;
       fail(process, "simulation time overflow in WaitFor");
     }
-    queue_at(process.program.id, scheduler.now() + wait->delay);
+    queue_at(process.program.id, scheduler.now() + delay);
+    process.status = ProcessStatus::waiting;
     notify_execution_point(
         process, instruction, ExecutionPointKind::process_suspend,
         process.current_source);
@@ -179,6 +276,7 @@ void Interpreter::Impl::handle_boundary(
       }
     }
     process.waiting_on_signal = true;
+    process.status = ProcessStatus::waiting;
     process.dynamic_sensitivity.clear();
     process.dynamic_sensitivity.reserve(wait->signals.size());
     for (std::size_t index = 0; index < wait->signals.size(); ++index) {
@@ -252,6 +350,7 @@ void Interpreter::Impl::handle_boundary(
       fail(process, "WaitSensitivity requires a static sensitivity list");
     }
     process.waiting_on_static = true;
+    process.status = ProcessStatus::waiting;
     notify_execution_point(
         process, instruction, ExecutionPointKind::process_suspend,
         process.current_source);
@@ -259,6 +358,7 @@ void Interpreter::Impl::handle_boundary(
   }
   if (fsim::runtime::simir::operation_holds<WaitForever>(operation)) {
     clear_wait_timeout(process);
+    process.status = ProcessStatus::waiting;
     notify_execution_point(
         process, instruction, ExecutionPointKind::process_suspend,
         process.current_source);
@@ -266,6 +366,7 @@ void Interpreter::Impl::handle_boundary(
   }
   if (fsim::runtime::simir::operation_holds<Yield>(operation)) {
     clear_wait_timeout(process);
+    process.status = ProcessStatus::waiting;
     queue_next_delta(process.program.id);
     notify_execution_point(
         process, instruction, ExecutionPointKind::process_suspend,
@@ -406,6 +507,12 @@ void Interpreter::Impl::handle_boundary(
     }
     return;
   }
+  if (handle_synchronization_boundary(process, instruction, operation)) {
+    return;
+  }
+  if (handle_process_boundary(process, instruction, operation)) {
+    return;
+  }
   if (handle_fork_boundary(process, instruction, operation)) {
     return;
   }
@@ -436,7 +543,7 @@ void Interpreter::Impl::handle_boundary(
     if (process.fork_parent) {
       complete_fork_child(process);
     } else {
-      process.halted = true;
+      complete_process(process, ProcessStatus::finished);
     }
     return;
   }
@@ -449,6 +556,9 @@ void Interpreter::Impl::handle_boundary(
 
 void Interpreter::Impl::execute(ProcessId id) {
   auto &process = get_process(id);
+  if (!process.halted) {
+    process.status = ProcessStatus::running;
+  }
   if (process.executor) {
     ExecutionContext context{*this, id};
     while (!process.halted) {
@@ -475,6 +585,30 @@ void Interpreter::Impl::execute(ProcessId id) {
                   process.program.operations[boundary.instruction])
               || fsim::runtime::simir::operation_holds<ClassStaticMethodCall>(
                   process.program.operations[boundary.instruction]));
+      const bool immediate_process_boundary =
+          boundary.instruction < process.program.operations.size()
+          && (fsim::runtime::simir::operation_holds<ProcessSelf>(
+                  process.program.operations[boundary.instruction])
+              || fsim::runtime::simir::operation_holds<ProcessStatusQuery>(
+                  process.program.operations[boundary.instruction])
+              || fsim::runtime::simir::operation_holds<ProcessCompleted>(
+                  process.program.operations[boundary.instruction]));
+      const bool synchronization_boundary =
+          boundary.instruction < process.program.operations.size()
+          && (fsim::runtime::simir::operation_holds<MailboxCreate>(
+                  process.program.operations[boundary.instruction])
+              || fsim::runtime::simir::operation_holds<MailboxPut>(
+                  process.program.operations[boundary.instruction])
+              || fsim::runtime::simir::operation_holds<MailboxGet>(
+                  process.program.operations[boundary.instruction])
+              || fsim::runtime::simir::operation_holds<MailboxNum>(
+                  process.program.operations[boundary.instruction])
+              || fsim::runtime::simir::operation_holds<SemaphoreCreate>(
+                  process.program.operations[boundary.instruction])
+              || fsim::runtime::simir::operation_holds<SemaphoreGet>(
+                  process.program.operations[boundary.instruction])
+              || fsim::runtime::simir::operation_holds<SemaphorePut>(
+                  process.program.operations[boundary.instruction]));
       if (boundary.external.kind
           == ExternalSuspendKind::simir_boundary) {
         handle_boundary(
@@ -486,7 +620,11 @@ void Interpreter::Impl::execute(ProcessId id) {
             boundary.next_instruction,
             boundary.external);
       }
-      if (class_boundary && !scheduler.stop_requested()) {
+      if ((class_boundary || immediate_process_boundary
+           || (synchronization_boundary
+               && process.status == ProcessStatus::running
+               && !process.queued))
+          && !scheduler.stop_requested()) {
         continue;
       }
       if (!debug_boundary || scheduler.stop_requested()) {
@@ -1306,18 +1444,24 @@ void Interpreter::Impl::execute(ProcessId id) {
             }
           } else if constexpr (std::is_same_v<OperationType, ForceSignalSlice>) {
             try {
+              const auto offset = op.selection
+                  ? selected_offset(*op.selection)
+                  : op.offset;
               force_slice(
                   op.signal,
                   get_register(process, op.source),
-                  op.offset);
+                  offset);
             } catch (const std::invalid_argument& error) {
               fail(process, error.what());
             }
             ++process.pc;
           } else if constexpr (std::is_same_v<OperationType, ReleaseSignalSlice>) {
             try {
+              const auto offset = op.selection
+                  ? selected_offset(*op.selection)
+                  : op.offset;
               release_slice(
-                  op.signal, op.offset, op.width);
+                  op.signal, offset, op.width);
             } catch (const std::invalid_argument& error) {
               fail(process, error.what());
             }
@@ -1380,6 +1524,29 @@ void Interpreter::Impl::execute(ProcessId id) {
           } else if constexpr (std::is_same_v<OperationType, WaitFork>) {
             boundary = true;
           } else if constexpr (std::is_same_v<OperationType, DisableFork>) {
+            boundary = true;
+          } else if constexpr (std::is_same_v<OperationType, ProcessSelf>) {
+            boundary = true;
+          } else if constexpr (
+              std::is_same_v<OperationType, ProcessStatusQuery>) {
+            boundary = true;
+          } else if constexpr (
+              std::is_same_v<OperationType, ProcessCompleted>) {
+            boundary = true;
+          } else if constexpr (
+              std::is_same_v<OperationType, ProcessAwait>) {
+            boundary = true;
+          } else if constexpr (
+              std::is_same_v<OperationType, ProcessKill>) {
+            boundary = true;
+          } else if constexpr (
+              std::is_same_v<OperationType, MailboxCreate>
+              || std::is_same_v<OperationType, MailboxPut>
+              || std::is_same_v<OperationType, MailboxGet>
+              || std::is_same_v<OperationType, MailboxNum>
+              || std::is_same_v<OperationType, SemaphoreCreate>
+              || std::is_same_v<OperationType, SemaphoreGet>
+              || std::is_same_v<OperationType, SemaphorePut>) {
             boundary = true;
           } else if constexpr (std::is_same_v<OperationType, Jump>) {
             if (op.target >= process.program.operations.size()) {
@@ -1770,7 +1937,28 @@ void Interpreter::Impl::execute(ProcessId id) {
     if (boundary) {
       const bool debug_boundary =
           fsim::runtime::simir::operation_holds<DebugPoint>(operation);
+      const bool immediate_process_boundary =
+          fsim::runtime::simir::operation_holds<ProcessSelf>(operation)
+          || fsim::runtime::simir::operation_holds<ProcessStatusQuery>(
+              operation)
+          || fsim::runtime::simir::operation_holds<ProcessCompleted>(
+              operation);
+      const bool synchronization_boundary =
+          fsim::runtime::simir::operation_holds<MailboxCreate>(operation)
+          || fsim::runtime::simir::operation_holds<MailboxPut>(operation)
+          || fsim::runtime::simir::operation_holds<MailboxGet>(operation)
+          || fsim::runtime::simir::operation_holds<MailboxNum>(operation)
+          || fsim::runtime::simir::operation_holds<SemaphoreCreate>(operation)
+          || fsim::runtime::simir::operation_holds<SemaphoreGet>(operation)
+          || fsim::runtime::simir::operation_holds<SemaphorePut>(operation);
       handle_boundary(process, instruction, instruction + 1);
+      if ((immediate_process_boundary
+           || (synchronization_boundary
+               && process.status == ProcessStatus::running
+               && !process.queued))
+          && !scheduler.stop_requested()) {
+        continue;
+      }
       if (!debug_boundary || scheduler.stop_requested()) {
         return;
       }

@@ -2656,22 +2656,315 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 152 - Unpacked data, file/memory, and procedural closure
 
-- **Changes 1-4:** close multidimensional unpacked arrays, subarray slices,
-  unpacked aggregate members/unions, assignment patterns, queries, and
-  recursive value-copy semantics.
-- **Changes 5-8:** close string-element containers, string associative indices,
-  cross-language aggregate/container values, standard descriptors,
-  multichannel I/O, and multidimensional/string/aggregate memory files.
-- **Changes 9-12:** implement runtime real/variable delays, general edge
-  expressions, runtime-selected force/release, nonlocal/suspending references,
-  and nested/nonintegral static locals/tasks.
-- **Changes 13-16:** close simultaneous fork-site re-entry, process handles,
-  mailboxes, semaphores, event/container ordering, shuffle, and scheduler
-  lifetime/failure containment.
-- **Changes 17-19:** add artifacts/caches/debug/trace coverage, negatives,
-  differential fixtures, docs, inventories, and restart evidence.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+1. **Complete.** Make a leading index prefix of a multidimensional static
+   unpacked array produce a shape-preserving remaining-rank value. Constant and
+   runtime prefix indices now pass the declared bounds checks before mutation,
+   selected values use isolated row-major snapshots, and compatible subarrays
+   cross whole assignment, partial-target assignment, and fixed-array callable
+   arguments for packed/scalar leaf profiles. The exact-LLVM Debug build uses
+   eight workers; core elaboration, container elaboration, and the O0/O2 cold/
+   warm aggregate application differential pass 3/3. Diagnostic-catalog and
+   the 2,500-line source-policy gates pass 2/2, and `git diff --check` is clean.
+2. **Complete.** Close multidimensional unpacked range and indexed slices,
+   shape/direction adaptation, overlapping copy semantics, and subarray return/
+   copy-out paths. Slices over remaining-rank values retain every trailing
+   dimension, adapt equal per-dimension counts across range identities, and use
+   isolated row-major snapshots before nested target replacement. The
+   application differential covers range and indexed selection, overlapping
+   self-copy, runtime prefix selection, fixed-array return, task copy-out, and
+   `$size`/bound/rank queries through interpreter plus O0/O2 cold/warm compiled
+   execution. The eight-worker exact-LLVM Debug build succeeds; focused
+   elaboration/container/application gates pass 3/3, catalog/source-policy
+   gates pass 2/2, and `git diff --check` is clean.
+3. **Complete.** Own named and anonymous unpacked structs and unions as
+   executable recursive container members, including selection, update,
+   defaults, and lifetime. Recursive container profiles now retain ordered
+   aggregate members and unpacked-union identity. Dedicated aggregate read,
+   write, and whole-element copy operations execute through the interpreter and
+   LLVM callback boundary with validated operands and deterministic cache keys;
+   copies snapshot the source before publication, and equal-profile union arms
+   share their scalar storage semantics. Named, anonymous, nested, defaulted,
+   selected, updated, copied, and debugger-visible values run through the
+   40-signal aggregate application differential across interpreter and cold/
+   warm LLVM O0/O2 engines. Missing aggregate opening braces now recover at the
+   declaration semicolon instead of consuming the remaining source. The full
+   eight-worker exact-LLVM Debug build succeeds; semantic HIR, frontend,
+   elaboration, container elaboration, runtime, LLVM, application, diagnostic-
+   catalog, and 2,500-line source-policy gates pass 9/9, and `git diff --check`
+   is clean.
+4. **Complete.** Nested positional, keyed, and default assignment patterns now
+   materialize recursive unpacked struct/union values in static, dynamic,
+   queue, and associative arrays. Recursive type/object `$bits`, corrected
+   aggregate `$dimensions`, four-state whole-container equality, snapshot
+   copies, associative default/write/copy/delete behavior, and equal-profile
+   union aliasing execute identically through the interpreter and compiled
+   callback. An explicit aggregate-value profile separates recursive member
+   boxes from dynamic aggregate containers, participates in validation and
+   native cache identity, and advances the runtime-state artifact schema to 11.
+   The full 363-step exact-LLVM Debug build succeeds with eight workers. The
+   48-signal interpreter plus cold/warm LLVM O0/O2 application differential,
+   full application, container elaboration positive/negative matrix, runtime,
+   LLVM, diagnostic-catalog, and 2,500-line source-policy gates pass 7/7;
+   `git diff --check` is clean.
+5. **Complete.** Execute string-element static/dynamic/queue/nested containers
+   with exact defaults, resize, selection, copy, comparison, and callable
+   behavior. Append-only string read/write and typed nested-element read/write
+   SimIR operations now preserve string registers and recursively owned
+   container values through interpreter and compiled callbacks, validation,
+   native-cache identity, debugger views, and runtime-state artifact schema 12.
+   Positional patterns materialize fixed and bounded queue strings, dynamic
+   resize preserves prefixes and empty defaults, integral associative lookup
+   returns the string default before insertion, and fixed-to-dynamic nested
+   selection performs isolated typed read/modify/write. The application matrix
+   exercises direct and callable mutation plus copy/comparison through the
+   interpreter and cold/warm LLVM O0/O2 engines. The full 363-step exact-LLVM
+   Debug build succeeds with eight workers; full application, the focused
+   aggregate differential, container elaboration, runtime, LLVM, diagnostic
+   catalog, and 2,500-line source-policy gates pass 7/7, and
+   `git diff --check` is clean.
+6. **Complete.** Add canonical string associative indices, traversal, ordering,
+   mutation, and resource-governed identity. String-indexed associative arrays
+   now retain a distinct profile and lexicographically ordered strict-UTF-8
+   key store through elaboration, SimIR, interpreter and compiled callbacks,
+   portable artifacts, runtime-state schema 13, native-cache identity, and
+   debugger rendering. Missing reads return element defaults; insertion,
+   overwrite, existence, first/last/next/previous traversal, iterator
+   mutation, deletion, copy, and equality preserve deterministic key/value
+   alignment for packed and string elements. Key length, UTF-8 validity,
+   element count, and recursively owned storage are checked before
+   publication. The application differential exercises ordered traversal,
+   selection, mutation, deletion, copy/equality, debugger order, and cold/warm
+   LLVM O0/O2 reuse; runtime negatives reject malformed and oversized keys.
+   Crossing the 2,500-line hard limit triggered a coherent container-algorithm
+   split, reducing the offending file to 1,777 lines; the new translation unit
+   is 809 lines. The eight-worker exact-LLVM Debug build succeeds, full
+   application plus seven focused frontend, elaboration, runtime, LLVM,
+   application, diagnostic-catalog, and source-policy gates pass 8/8, and
+   `git diff --check` is clean.
+7. **Complete.** Carry recursive aggregate/container values across
+   SystemVerilog/VHDL and standard descriptor boundaries with explicit
+   ownership and shape checks. Fixed recursively packable container ports now
+   bridge packed signals through one runtime alias service shared by
+   interpreter and compiled callbacks. Readable and writable ownership is
+   direction explicit; registration rejects invalid IDs, duplicates, sliced,
+   width-mismatched, and unsupported-profile aliases before simulation. Boundary
+   admission compares fixed dimension counts, aggregate member grouping, leaf
+   widths, and two-/four-state domains rather than flattened width alone.
+   Recursive packing preserves declaration order and exact Logic4/Logic9
+   states. A live VHDL array/SystemVerilog static-container input/output fixture
+   and an equal-width wrong-shape negative pass in the focused container suite.
+   The full eight-worker exact-LLVM Debug build succeeds; frontend, diagnostic-
+   catalog, 2,500-line source-policy, full and container elaboration, runtime,
+   LLVM, aggregate application differential, and full application gates pass
+   9/9. Touched files remain below 2,000 lines, and `git diff --check` is
+   clean.
+8. **Complete.** Close multichannel I/O plus multidimensional, string, and
+   aggregate memory-file reads/writes with transactional failure behavior.
+   One-argument `$fopen` now returns independently owned multichannel bits,
+   while ordinary two-argument descriptors occupy a disjoint tagged range;
+   combined `$fdisplay`, `$fwrite`, `$fflush`, and `$fclose` validate every
+   selected channel before acting, retain stdout bit zero, and preserve
+   process ownership. Fixed multidimensional memories use deterministic
+   row-major linear file addresses. String memories use bounded quoted UTF-8
+   tokens with deterministic escaping, and recursively packable aggregate
+   elements use the same declaration-order bridge as mixed-language ports.
+   Text loads stage a complete replacement and publish only after every token,
+   address, range, shape, UTF-8, and storage check succeeds. Binary `$fread`
+   now admits multidimensional and recursively packed aggregate elements with
+   the same staged container publication. Interpreter and cold/warm LLVM O0/O2
+   source evidence covers multichannel fanout/close, text round trips, and
+   multidimensional/aggregate binary reads. The full eight-worker exact-LLVM
+   Debug build succeeds; frontend, catalog, 2,500-line source policy, full and
+   container elaboration, LLVM, runtime, and file-application gates pass 8/8,
+   and `git diff --check` is clean.
+9. **Complete.** Implement runtime real-valued and variable delays with checked
+   timescale normalization, rounding, overflow, and scheduler admission.
+   Specialized SystemVerilog delay expressions now remain in the executable
+   process when they depend on runtime packed, `time`, `real`, `shortreal`, or
+   `realtime` values. `WaitFor` carries an optional typed source register,
+   normalized timeunit scale, and project-tick timeprecision quantum; static
+   waits retain their existing boundary shape. The kernel decodes interpreter
+   and native-frame payloads identically, rejects unknown, negative, nonfinite,
+   malformed, and overflowing values, rounds real delays to timeprecision, and
+   checks final `now + delay` admission before queuing. Zero results retain the
+   inactive-region delta rule. Native object cache schema v85 keys every new
+   field, and runtime-state schema 14 archives them explicitly. Focused runtime
+   evidence covers real rounding, integral scaling, negative values, conversion
+   overflow, and scheduler overflow. The time application now uses runtime
+   `realtime` and integer delay variables and passes interpreter plus cold/warm
+   LLVM O0/O2 differentials. The full eight-worker exact-LLVM Debug build
+   succeeds; design-artifact, diagnostics-catalog, 2,500-line source-policy,
+   full/container elaboration, LLVM, time-application, and runtime gates pass
+   8/8. Modified sources remain below 2,500 lines, the primary process lowerer
+   remains below 2,000 lines, and `git diff --check` is clean.
+10. **Complete.** Generalize edge expressions and add runtime-selected
+    force/release targets with deterministic dependency and restoration
+    semantics. SystemVerilog event lists now admit edge-qualified packed
+    expressions mixed with direct signals. Lowering snapshots each expression,
+    waits on its deduplicated readable signal dependencies, re-evaluates after
+    every wake, applies exact four-state positive/negative transition rules,
+    refreshes every baseline, and re-arms when a dependency changed without
+    satisfying the requested event. Runtime-selected force/release bit targets
+    reuse the checked signed 32-bit `DynamicIndex` mapping; interpreter and LLVM
+    calculate the same declared-range offset, retain underlying driver updates
+    while forced, and reveal the current underlying value on release.
+    `ForceSignalSlice` and `ReleaseSignalSlice` carry append-only optional
+    selection metadata, native cache schema v86 keys it, and runtime-state
+    schema 15 retains it. Focused elaboration checks prove both selection
+    mappings, while the procedural-assignment application proves derived
+    positive/negative edges, a mixed direct/expression event, spurious-wake
+    rejection, dynamic masking, and restoration through interpreter plus
+    cold/warm LLVM O0/O2. The full eight-worker exact-LLVM Debug build succeeds;
+    frontend, design-artifact, diagnostics-catalog, 2,500-line source-policy,
+    elaboration, LLVM, and application gates pass 7/7, and
+    `git diff --check` is clean.
+11. **Complete.** Preserve nonlocal and suspending references across callable
+    activation, re-entry, copy-out, and failure unwinding. Automatic functions
+    and tasks now admit writable nonlocal, indexed, and sliced actuals instead
+    of requiring direct caller-local identifiers; suspending tasks retain their
+    existing value-copy activation while copy-out remains conditional on a
+    successful return. Dynamic selectors are evaluated once at activation and
+    captured in distinct signed temporaries, so a selector change during
+    suspension or a later sequential call cannot redirect an earlier copy-out.
+    Interpreter and cold/warm LLVM O0/O2 evidence covers module-scope function
+    refs, sequential suspending task re-entry, selector mutation during a
+    packed-part ref activation, and exception unwinding that leaves the actual
+    unchanged. The full eight-worker exact-LLVM Debug build succeeds; frontend,
+    diagnostics-catalog, 2,500-line source-policy, elaboration, LLVM, callable-
+    closure, and suspending-task gates pass 7/7. Touched callable and fixture
+    files remain below 2,000 lines, and `git diff --check` is clean.
+12. **Complete.** Complete nested and nonintegral static locals/tasks with
+    specialization, initialization, debugger identity, and restart-safe
+    lifetime. Static callable allocation now walks every lexical block,
+    initializes each declaration once through the ordinary typed-local path,
+    records storage by source declaration identity, and rebinds packed, string,
+    and container registers without replaying initializers. Fixed-container
+    assignment-pattern initializers use the typed pattern lowerer instead of
+    the slice-only value path. Static tasks may suspend sequentially; concurrent
+    re-entry remains assigned to Change 13. Interpreter and cold/warm LLVM O0/O2
+    evidence covers nested packed/string/fixed-array function and task locals,
+    two retained calls, two suspended task calls, complete lexical debugger
+    names and values, and fresh-simulation initialization. The full
+    eight-worker exact-LLVM Debug build succeeds; frontend, diagnostic-catalog,
+    2,500-line source-policy, full/container elaboration, runtime, LLVM,
+    callable-closure, suspending-task, mutable-string, and container-application
+    gates pass 11/11. `git diff --check` is clean.
+13. **Complete.** Support simultaneous fork-site re-entry and generation-safe
+    process handles through create, await, kill, status, and completed-state
+    queries. Fork children from repeated execution of one lexical site now
+    coexist in the site's active generation, and each process owns a monotonic
+    nonzero generation encoded with its dense ID in a checked 64-bit handle.
+    Append-only SimIR operations implement `process::self()`, `status()`,
+    `completed()`, `await()`, and `kill()` through interpreter and LLVM host
+    boundaries; stale/forged handles reject, terminal completion wakes explicit
+    awaiters, and recursive kill records `KILLED` without confusing a reused ID.
+    SystemVerilog `process` declarations and direct built-in calls lower through
+    the typed source path. Runtime and source regressions prove waiting,
+    finished, killed, completed, await, generation rejection, and simultaneous
+    same-site re-entry through interpreter plus cold/warm LLVM O0/O2. The full
+    eight-worker exact-LLVM Debug build succeeds; frontend, diagnostic-catalog,
+    2,500-line source-policy, elaboration, runtime, LLVM, and fork-application
+    gates pass 7/7, and `git diff --check` is clean.
+14. **Complete.** Implement typed mailboxes and counting semaphores with
+    blocking/nonblocking operations, fairness, wakeup, and bounded resource
+    behavior. Contextual SystemVerilog `mailbox #(T)` and `semaphore` types now
+    lower to checked 64-bit runtime handles. Append-only SimIR operations cover
+    construction, `num`, `put`/`try_put`, `get`/`try_get`, `peek`/`try_peek`,
+    and counted semaphore `get`/`try_get`/`put`. Bounded mailboxes preserve FIFO
+    readers and writers across suspension and wakeup; semaphores preserve FIFO
+    waiter ordering without bypass. Direct runtime tests prove nonblocking,
+    bounded-capacity, copy-out, wakeup, and fairness behavior. The source
+    application proves typed operations through interpreter plus cold/warm LLVM
+    O0/O2. The full eight-worker exact-LLVM Debug build succeeds; frontend,
+    diagnostic-catalog, 2,500-line source-policy, elaboration, runtime, LLVM,
+    and synchronization-application gates pass 7/7, and `git diff --check` is
+    clean.
+15. **Complete.** Close named-event and container ordering interactions,
+    deterministic shuffle, waiter ordering, and cross-process visibility.
+    SystemVerilog `shuffle()` now lowers as an append-only container-ordering
+    operation instead of an unsupported method. Interpreter and compiled
+    execution share one unbiased Fisher-Yates implementation and consume the
+    same deterministic per-process random stream. Named-event wakeups retain
+    stable process-ID order, and cross-process container aliases publish each
+    mutation before the next waiter executes. Direct runtime evidence proves
+    deterministic draw consumption and an exact preserved permutation. The
+    source application combines two event waiters with push, shuffle, reverse,
+    and shared observations through interpreter plus cold/warm LLVM O0/O2,
+    including one-specialization native-cache reuse. The full eight-worker
+    exact-LLVM Debug build succeeds; frontend, diagnostic-catalog, 2,500-line
+    source-policy, elaboration, LLVM, named-event, container-application,
+    ordering-application, and runtime gates pass 9/9, and `git diff --check` is
+    clean.
+16. **Complete.** Harden scheduler ownership, lifetime, cancellation, exception
+    propagation, and failure containment for the completed procedural surfaces.
+    Cancelable task handles now carry their scheduler ownership and remain live
+    only while their work is pending. Unrelated and moved-from schedulers cannot
+    cancel transferred work; execution, explicit cancellation, pending-work
+    discard, and owner destruction invalidate handles deterministically.
+    Callback exceptions invalidate the executing handle, restore scheduler run
+    state, propagate exactly once, and leave later stable-order callbacks
+    resumable. The full eight-worker exact-LLVM Debug build succeeds. Direct
+    ownership/lifetime/failure runtime evidence plus LLVM, safe-point, named-
+    event, fork/process, procedural-assignment, suspending-task,
+    mailbox/semaphore, and ordering-application gates pass 11/11. Diagnostic-
+    catalog and 2,500-line source-policy gates remain green, and
+    `git diff --check` is clean.
+17. **Complete.** Preserve the Batch 152 data/procedural state through portable
+    artifacts, relocation, native caches, debugger, callbacks, trace, and
+    snapshots. Runtime-state schema 16 now versions the completed procedural
+    operation set, while native object-cache schema v87 deliberately separates
+    the appended shuffle identity from older objects. Typed mailbox/semaphore
+    and named-event/container-ordering designs survive deterministic runtime-
+    state serialize/deserialize/reserialize cycles before execution. A moved
+    `.fsimlib` remains mapped without source paths, and its shuffle fixture
+    produces identical interpreter/LLVM results, container snapshots, debugger
+    output, signal callbacks, and VCD. Explicit cache-key evidence proves
+    shuffle differs from reverse/sort/rsort. The eight-worker exact-LLVM Debug
+    build and full application gate succeed; library, object/design artifact,
+    diagnostic-catalog, 2,500-line source-policy, LLVM, synchronization,
+    ordering, and runtime gates pass 9/9, and `git diff --check` is clean.
+18. **Complete.** Add cataloged malformed/type/rank/resource/lifetime negatives
+    plus engine, optimization, cache, multiple-root, and restart differential
+    fixtures. Shuffle now has direct malformed-arity, associative/nonintegral
+    receiver, missing-random-source, forbidden-key, and corrupt portable-enum
+    evidence. Its application fixture elaborates two roots, round-trips runtime
+    state, rejects an invalid archive enum before publication, relocates its
+    `.fsimlib`, and agrees across O0/O2 interpreter plus cold/warm LLVM cache
+    execution and restarted mapped-library execution. The full eight-worker
+    exact-LLVM Debug build succeeds. Diagnostic-catalog, 2,500-line source-
+    policy, elaboration, ordering, runtime, LLVM, full application, fork,
+    container-application, and synchronization gates pass 10/10; `git diff
+    --check` is clean.
+19. **Complete.** Synchronize public architecture, language support,
+    diagnostics, feature evidence, inventories, release contracts, and the
+    restart handoff. README, architecture, and language support now describe
+    the governed Batch 152 unpacked-data/file/procedural substrate and preserve
+    the later program/clocking/SVA/foreign/UVM boundaries. Executable rows
+    `SV-733` through `SV-740` map positive, negative, lowering/runtime, and
+    interpreter/LLVM/cache/restart evidence. The reviewed matrix digest is
+    `4c9bc37c9076a6e331ab09386c6d2a9437bdf001b7f5a6857208386bcc274ba6`;
+    its 1,170 rows own 4,680 evidence cells across 414 exact paths with
+    evidence digest
+    `c76f1dbfecd0fc5392f2f7108da2f2d5c06830cd2777952d833821241d8e1fa5`.
+    Inventories advance to 1,875 production diagnostics, 570 bounded C/C++
+    sources, 660 SPDX-owned artifacts, and 221 authored test/control files;
+    the new unpacked-aggregate lowerer now carries its required SPDX notice.
+    All 26 documentation, conformance, release, inventory, installation, and
+    Linux/Windows portability contracts pass, and `git diff --check` is clean.
+20. **Complete.** Run full non-sanitized exact-LLVM Debug/Release and release
+    gates with at least eight workers, then commit and push once without hosted
+    CI monitoring. The final exact LLVM 22.1.8 Debug tree rebuilds with eight
+    workers and passes 114/114 tests in 206.72 seconds. The Release tree
+    completes its 448-step eight-worker build and passes 114/114 tests in
+    163.74 seconds. Release optimization exposed one guarded optional-width
+    false positive; using the already validated concrete packed/scalar width
+    keeps semantics unchanged and satisfies `-O3 -Werror`. The transition-delay
+    negative now expects the one still-illegal negative constant while runtime
+    scalar delay remains executable. The complete 26-contract release prefix,
+    diagnostic catalog, 2,500-line source policy, artifacts, LLVM, runtime, and
+    application matrices are included in both full runs. Batch 152 is not a
+    ten-batch monitoring boundary, so no sanitizer ran and hosted CI was not
+    inspected. Changes 1-20 close in one accumulated commit and one push.
 
 ### Batch 153 - Program, clocking, and interface closure
 

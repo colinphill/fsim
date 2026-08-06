@@ -216,7 +216,7 @@ enum class KeywordSet {
            "intersect", "join_any", "join_none", "local", "logic",
            "longint", "matches", "modport", "new", "null", "package",
            "packed", "priority", "program", "property", "protected",
-           "pure", "rand", "randc", "randcase", "randsequence", "ref",
+           "process", "pure", "rand", "randc", "randcase", "randsequence", "ref",
            "return", "sequence", "shortint", "shortreal", "solve",
            "static", "string", "struct", "super", "tagged", "this",
            "throughout", "timeprecision", "timeunit", "type", "typedef",

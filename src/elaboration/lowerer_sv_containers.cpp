@@ -5,6 +5,133 @@ namespace fsim::elaboration {
 using namespace runtime::simir;
 using namespace elaboration_detail;
 
+namespace {
+
+[[nodiscard]] bool aggregate_box(
+    const ContainerType& type) noexcept {
+  return type.element_kind == ContainerElementKind::Aggregate
+      && type.aggregate_value;
+}
+
+[[nodiscard]] std::optional<std::uint64_t> container_value_bits(
+    const ContainerType& type);
+
+[[nodiscard]] std::optional<std::uint64_t> aggregate_type_bits(
+    const frontend::Type& type) {
+  const bool unpacked_union =
+      type.packed_aggregate
+      == frontend::PackedAggregateKind::UnpackedUnion;
+  const bool unpacked_structure =
+      type.packed_aggregate
+      == frontend::PackedAggregateKind::UnpackedStruct;
+  if (!unpacked_union && !unpacked_structure) {
+    return type.width();
+  }
+  if (type.packed_members.empty()) {
+    return std::nullopt;
+  }
+  std::uint64_t result{};
+  for (const auto& member : type.packed_members) {
+    if (member.nested_types.size() != 1U) {
+      return std::nullopt;
+    }
+    const auto bits =
+        aggregate_type_bits(member.nested_types.front());
+    if (!bits) {
+      return std::nullopt;
+    }
+    if (unpacked_union) {
+      result = std::max(result, *bits);
+    } else {
+      if (*bits > std::numeric_limits<std::uint64_t>::max() - result) {
+        return std::nullopt;
+      }
+      result += *bits;
+    }
+  }
+  return result;
+}
+
+[[nodiscard]] std::optional<std::uint64_t> container_element_bits(
+    const ContainerType& type) {
+  switch (type.element_kind) {
+  case ContainerElementKind::Packed:
+  case ContainerElementKind::Scalar:
+    return type.element_width;
+  case ContainerElementKind::String:
+    return std::nullopt;
+  case ContainerElementKind::Container:
+    return type.element_types.size() == 1U
+        ? container_value_bits(type.element_types.front())
+        : std::nullopt;
+  case ContainerElementKind::Aggregate:
+    break;
+  }
+  if (type.element_types.empty()) {
+    return std::nullopt;
+  }
+  std::uint64_t result{};
+  for (const auto& member : type.element_types) {
+    const auto bits = container_value_bits(member);
+    if (!bits) {
+      return std::nullopt;
+    }
+    if (type.union_aggregate) {
+      result = std::max(result, *bits);
+    } else {
+      if (*bits > std::numeric_limits<std::uint64_t>::max() - result) {
+        return std::nullopt;
+      }
+      result += *bits;
+    }
+  }
+  return result;
+}
+
+[[nodiscard]] std::optional<std::uint64_t> container_value_bits(
+    const ContainerType& type) {
+  const auto element = container_element_bits(type);
+  if (!element) {
+    return std::nullopt;
+  }
+  if (aggregate_box(type)) {
+    return element;
+  }
+  if (!type.fixed) {
+    return std::nullopt;
+  }
+  std::uint64_t count{1};
+  if (type.dimensions.empty()) {
+    count = static_cast<std::uint64_t>(
+        std::abs(
+            static_cast<std::int64_t>(type.index_left)
+            - type.index_right)
+        + 1);
+  } else {
+    for (const auto& dimension : type.dimensions) {
+      const auto extent = static_cast<std::uint64_t>(
+          std::abs(
+              static_cast<std::int64_t>(dimension.first)
+              - dimension.second)
+          + 1);
+      if (extent != 0
+          && count
+              > std::numeric_limits<std::uint64_t>::max() / extent) {
+        return std::nullopt;
+      }
+      count *= extent;
+    }
+  }
+  if (*element != 0
+      && count
+          > std::numeric_limits<std::uint64_t>::max() / *element) {
+    return std::nullopt;
+  }
+  return count * *element;
+}
+
+}  // namespace
+
 ContainerRegisterId Lowerer::allocate_container_register(
     const ContainerType& type) {
   const auto id = next_container_register_++;
@@ -15,7 +142,8 @@ ContainerRegisterId Lowerer::allocate_container_register(
 bool Lowerer::is_container_expression(
     const Expression& expression) const {
   if (expression.kind != ExpressionKind::Identifier
-      && expression.kind != ExpressionKind::Call) {
+      && expression.kind != ExpressionKind::Call
+      && expression.kind != ExpressionKind::Index) {
     return false;
   }
   return container_expression_type(expression) != nullptr;
@@ -47,14 +175,40 @@ const frontend::Type* Lowerer::container_expression_type(
         : nullptr;
   }
   if (expression.kind == ExpressionKind::Slice
-      && !expression.operands.empty()
-      && expression.operands.front().kind
-          == ExpressionKind::Identifier) {
-    const auto* type =
-        object_type(expression.operands.front().text);
-    return type != nullptr && type->systemverilog_container
-        ? type
-        : nullptr;
+      && !expression.operands.empty()) {
+    return container_expression_type(expression.operands.front());
+  }
+  if (expression.kind == ExpressionKind::Index) {
+    if (expression.operands.size() == 2) {
+      const auto* base_type =
+          container_expression_type(expression.operands.front());
+      if (base_type != nullptr && base_type->systemverilog_container
+          && base_type->systemverilog_container
+                 ->element_types.size() == 1) {
+        const auto& element =
+            base_type->systemverilog_container->element_types.front();
+        if (element.systemverilog_container) {
+          return &element;
+        }
+      }
+    }
+    const Expression* base = &expression;
+    std::size_t selected_dimensions{};
+    while (base->kind == ExpressionKind::Index
+           && base->operands.size() == 2) {
+      ++selected_dimensions;
+      base = &base->operands.front();
+    }
+    if (base->kind == ExpressionKind::Identifier) {
+      const auto* type = object_type(base->text);
+      if (type != nullptr && type->systemverilog_container
+          && selected_dimensions > 0
+          && selected_dimensions
+              < type->systemverilog_container
+                    ->static_range_expressions.size()) {
+        return type;
+      }
+    }
   }
   return nullptr;
 }
@@ -93,6 +247,18 @@ Lowerer::container_expression_runtime_type(
         ? std::optional<ContainerType>{selection->selected_type}
         : std::nullopt;
   }
+  if (expression.kind == ExpressionKind::Index) {
+    if (expression.operands.size() == 2) {
+      const auto base = container_expression_runtime_type(
+          expression.operands.front());
+      if (base
+          && base->element_kind == ContainerElementKind::Container
+          && base->element_types.size() == 1) {
+        return base->element_types.front();
+      }
+    }
+    return multidimensional_container_subarray_type(expression);
+  }
   const auto* type = container_expression_type(expression);
   return type != nullptr
       ? container_type(*type, expression.span)
@@ -102,6 +268,52 @@ Lowerer::container_expression_runtime_type(
 std::optional<ContainerRegisterId>
 Lowerer::lower_container_expression(
     const Expression& expression) {
+  if (expression.kind == ExpressionKind::Index) {
+    if (expression.operands.size() == 2) {
+      const auto runtime_type = container_expression_runtime_type(
+          expression.operands.front());
+      if (runtime_type
+          && runtime_type->element_kind
+              == ContainerElementKind::Container
+          && runtime_type->element_types.size() == 1) {
+        const auto source = lower_container_expression(
+            expression.operands.front());
+        const auto* source_type =
+            container_expression_type(expression.operands.front());
+        const auto index_width = runtime_type->associative
+            ? static_cast<std::size_t>(runtime_type->index_width)
+            : runtime_type->fixed
+                  ? std::size_t{32}
+                  : infer_width(expression.operands[1]).value_or(32U);
+        auto index = lower_expression(
+            expression.operands[1], index_width,
+            runtime_type->associative && source_type != nullptr
+                    && source_type->systemverilog_container
+                ? source_type->systemverilog_container
+                      ->associative_index_type.get()
+                : nullptr);
+        if (!source || !index) {
+          return std::nullopt;
+        }
+        if (runtime_type->associative
+            && register_width(*index) != runtime_type->index_width) {
+          *index = resize_register(
+              *index, runtime_type->index_width,
+              runtime_type->signed_indices);
+        }
+        const auto destination = allocate_container_register(
+            runtime_type->element_types.front());
+        process_.operations.emplace_back(ContainerElementRead{
+            destination, *source, *index,
+            runtime_type->associative
+                ? runtime_type->signed_indices
+                : runtime_type->fixed
+                      || is_signed_expression(expression.operands[1])});
+        return destination;
+      }
+    }
+    return lower_multidimensional_container_subarray(expression);
+  }
   if (expression.kind == ExpressionKind::Slice) {
     const auto value =
         lower_static_container_value(expression);
@@ -313,6 +525,11 @@ Lowerer::ExpressionAttempt Lowerer::lower_container_query(
         && visible_type_mark(operand.text) != nullptr) {
       const auto* type = visible_type_mark(operand.text);
       if (type != nullptr && !type->packed_members.empty()) {
+        const bool unpacked_aggregate =
+            type->packed_aggregate
+                == frontend::PackedAggregateKind::UnpackedStruct
+            || type->packed_aggregate
+                == frontend::PackedAggregateKind::UnpackedUnion;
         const bool accepts_dimension = bound_query || size_query;
         if (language_ != frontend::Language::SystemVerilog2017
             || expression.operands.size()
@@ -335,9 +552,12 @@ Lowerer::ExpressionAttempt Lowerer::lower_container_query(
             return std::nullopt;
           }
         }
-        const auto width = type->width();
+        const auto width = unpacked_aggregate
+            ? aggregate_type_bits(*type)
+            : type->width();
         const auto range = type->packed_range;
-        if (!width || *width == 0 || !range
+        if (!width || *width == 0
+            || (!unpacked_aggregate && !range)
             || *width
                 > static_cast<std::uint64_t>(
                     std::numeric_limits<std::int32_t>::max())) {
@@ -349,7 +569,20 @@ Lowerer::ExpressionAttempt Lowerer::lower_container_query(
           return std::nullopt;
         }
         std::int64_t value = 0;
-        if (bits_query || size_query) {
+        if (bits_query) {
+          value = static_cast<std::int64_t>(*width);
+        } else if (unpacked_aggregate) {
+          if (dimensions_query || unpacked_dimensions_query) {
+            value = 0;
+          } else {
+            report(
+                "FSIM-ELAB-SVQUERY-004",
+                expression.text
+                    + " is not defined for an unpacked aggregate type",
+                operand.span);
+            return std::nullopt;
+          }
+        } else if (size_query) {
           value = static_cast<std::int64_t>(*width);
         } else if (dimensions_query) {
           value = 1;
@@ -451,8 +684,14 @@ Lowerer::ExpressionAttempt Lowerer::lower_container_query(
         return ExpressionAttempt{destination};
       };
   if (dimensions_query) {
+    const bool packed_element =
+        runtime_type->element_kind
+            == ContainerElementKind::Packed
+        || runtime_type->element_kind
+            == ContainerElementKind::Scalar;
     return constant_result(
-        static_cast<std::int64_t>(unpacked_dimensions + 1U));
+        static_cast<std::int64_t>(
+            unpacked_dimensions + (packed_element ? 1U : 0U)));
   }
   if (unpacked_dimensions_query) {
     return constant_result(
@@ -484,16 +723,51 @@ Lowerer::ExpressionAttempt Lowerer::lower_container_query(
             ? left - right + 1
             : right - left + 1;
     if (bits_query) {
-      std::int64_t total = runtime_type->element_width;
+      const auto element_bits =
+          container_element_bits(*runtime_type);
+      if (!element_bits) {
+        report(
+            "FSIM-ELAB-SVQUERY-004",
+            "$bits requires a recursively fixed-width container element",
+            operand.span);
+        return std::nullopt;
+      }
+      std::uint64_t total = *element_bits;
       for (const auto& dimension : runtime_type->dimensions) {
-        total *= std::abs(
-            static_cast<std::int64_t>(dimension.first)
-            - dimension.second) + 1;
+        const auto extent = static_cast<std::uint64_t>(
+            std::abs(
+                static_cast<std::int64_t>(dimension.first)
+                - dimension.second)
+            + 1);
+        if (extent != 0
+            && total
+                > static_cast<std::uint64_t>(
+                      std::numeric_limits<std::int32_t>::max())
+                    / extent) {
+          report(
+              "FSIM-ELAB-SVQUERY-004",
+              "$bits container result exceeds the 32-bit query range",
+              operand.span);
+          return std::nullopt;
+        }
+        total *= extent;
       }
       if (runtime_type->dimensions.empty()) {
-        total *= count;
+        if (count < 0
+            || (count != 0
+                && total
+                    > static_cast<std::uint64_t>(
+                          std::numeric_limits<std::int32_t>::max())
+                        / static_cast<std::uint64_t>(count))) {
+          report(
+              "FSIM-ELAB-SVQUERY-004",
+              "$bits container result exceeds the 32-bit query range",
+              operand.span);
+          return std::nullopt;
+        }
+        total *= static_cast<std::uint64_t>(count);
       }
-      return constant_result(total);
+      return constant_result(static_cast<std::int64_t>(total));
     }
     if (size_query) {
       return constant_result(count);
@@ -534,10 +808,25 @@ Lowerer::ExpressionAttempt Lowerer::lower_container_query(
   }
   const auto factor =
       allocate_register(32, frontend::ValueDomain::Bit2);
+  const auto element_bits =
+      bits_query
+          ? container_element_bits(*runtime_type)
+          : std::optional<std::uint64_t>{1U};
+  if (!element_bits
+      || *element_bits
+          > static_cast<std::uint64_t>(
+                std::numeric_limits<std::uint32_t>::max())) {
+    report(
+        "FSIM-ELAB-SVQUERY-004",
+        "$bits requires a representable recursively fixed-width "
+        "container element",
+        operand.span);
+    return std::nullopt;
+  }
   process_.operations.emplace_back(LoadConstant{
       factor,
       unsigned_value(
-          bits_query ? runtime_type->element_width : 1,
+          static_cast<std::uint32_t>(*element_bits),
           32)});
   const auto destination =
       allocate_register(32, frontend::ValueDomain::Bit2);
@@ -570,12 +859,19 @@ Lowerer::lower_container_pattern(
         expression.span);
     return std::nullopt;
   }
+  if (runtime_type.element_kind
+      == ContainerElementKind::Aggregate) {
+    return lower_unpacked_aggregate_pattern(
+        expression, source_type, runtime_type);
+  }
   const auto* source_element_type = &source_type;
   if (source_type.systemverilog_container
       && source_type.systemverilog_container->element_types.size() == 1) {
     source_element_type =
         &source_type.systemverilog_container->element_types.front();
   }
+  const bool string_elements =
+      runtime_type.element_kind == ContainerElementKind::String;
   if (runtime_type.fixed && runtime_type.dimensions.size() > 1) {
     return lower_multidimensional_container_pattern(
         expression, source_type, runtime_type);
@@ -699,10 +995,12 @@ Lowerer::lower_container_pattern(
     std::vector<ExplicitMember> explicit_members;
     std::set<std::int32_t> converted_keys;
     for (std::size_t member = 0; member < count; ++member) {
-      const auto value = lower_expression(
-          expression.operands[member],
-          runtime_type.element_width,
-          source_element_type);
+      const auto value = string_elements
+          ? lower_string_expression(expression.operands[member])
+          : lower_expression(
+                expression.operands[member],
+                runtime_type.element_width,
+                source_element_type);
       if (!value) {
         return std::nullopt;
       }
@@ -787,8 +1085,13 @@ Lowerer::lower_container_pattern(
           index,
           unsigned_value(
               static_cast<std::uint32_t>(declared_index), 32)});
-      process_.operations.emplace_back(ContainerWrite{
-          destination, index, *default_value, true});
+      if (string_elements) {
+        process_.operations.emplace_back(ContainerStringWrite{
+            destination, index, *default_value, true});
+      } else {
+        process_.operations.emplace_back(ContainerWrite{
+            destination, index, *default_value, true});
+      }
     }
     for (const auto& member : explicit_members) {
       const auto index =
@@ -797,8 +1100,13 @@ Lowerer::lower_container_pattern(
           index,
           unsigned_value(
               static_cast<std::uint32_t>(member.index), 32)});
-      process_.operations.emplace_back(ContainerWrite{
-          destination, index, member.value, true});
+      if (string_elements) {
+        process_.operations.emplace_back(ContainerStringWrite{
+            destination, index, member.value, true});
+      } else {
+        process_.operations.emplace_back(ContainerWrite{
+            destination, index, member.value, true});
+      }
     }
     return destination;
   }
@@ -811,9 +1119,17 @@ Lowerer::lower_container_pattern(
     process_.operations.emplace_back(
         ResizeContainer{destination, size});
   }
+  if (runtime_type.queue && string_elements) {
+    const auto size =
+        allocate_register(32, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(LoadConstant{
+        size, unsigned_value(count, 32)});
+    process_.operations.emplace_back(
+        ResizeContainer{destination, size, std::nullopt, true});
+  }
   std::set<std::uint64_t> keys;
   for (std::size_t element = 0; element < count; ++element) {
-    if (runtime_type.queue) {
+    if (runtime_type.queue && !string_elements) {
       const auto value = lower_expression(
           expression.operands[element],
           runtime_type.element_width,
@@ -904,15 +1220,22 @@ Lowerer::lower_container_pattern(
           unsigned_value(
               static_cast<std::uint32_t>(declared_index), 32)});
     }
-    const auto value = lower_expression(
-        expression.operands[element],
-        runtime_type.element_width,
-        source_element_type);
+    const auto value = string_elements
+        ? lower_string_expression(expression.operands[element])
+        : lower_expression(
+              expression.operands[element],
+              runtime_type.element_width,
+              source_element_type);
     if (!value) {
       return std::nullopt;
     }
-    process_.operations.emplace_back(ContainerWrite{
-        destination, index, *value, signed_index});
+    if (string_elements) {
+      process_.operations.emplace_back(ContainerStringWrite{
+          destination, index, *value, signed_index});
+    } else {
+      process_.operations.emplace_back(ContainerWrite{
+          destination, index, *value, signed_index});
+    }
   }
   return destination;
 }
@@ -1543,6 +1866,12 @@ bool Lowerer::lower_container_locator(
 
 void Lowerer::lower_container_method(
     const Statement& statement) {
+  if (lower_synchronization_method_statement(statement)) {
+    return;
+  }
+  if (lower_process_method_statement(statement)) {
+    return;
+  }
   if (lower_string_method_statement(statement)) {
     return;
   }
@@ -1583,10 +1912,8 @@ void Lowerer::lower_container_method(
       call.kind == ExpressionKind::Call
       && (call.text == ".reverse"
           || call.text == ".sort"
-          || call.text == ".rsort");
-  const bool unsupported_shuffle =
-      call.kind == ExpressionKind::Call
-      && call.text == ".shuffle";
+          || call.text == ".rsort"
+          || call.text == ".shuffle");
   const bool ordering_slice_receiver =
       ordering_method
       && !call.operands.empty()
@@ -1615,7 +1942,7 @@ void Lowerer::lower_container_method(
         call.span);
     return;
   }
-  if (ordering_method || unsupported_shuffle) {
+  if (ordering_method) {
     if (language_
             != frontend::Language::SystemVerilog2017
         || call.operands.empty()
@@ -1656,14 +1983,6 @@ void Lowerer::lower_container_method(
           "FSIM-ELAB-SVORDER-008",
           "a named container ordering iterator must be one identifier",
           call.operands[1].span);
-      return;
-    }
-    if (unsupported_shuffle) {
-      report(
-          "FSIM-ELAB-SVORDER-005",
-          "shuffle() is outside the deterministic "
-          "container-ordering subset",
-          call.span);
       return;
     }
   }
@@ -1711,8 +2030,7 @@ void Lowerer::lower_container_method(
       || call.text == ".push_back"
       || call.text == ".pop_front"
       || call.text == ".pop_back"
-      || ordering_method
-      || unsupported_shuffle;
+      || ordering_method;
   if (mutates_receiver
       && read_only_container_objects_.contains(
           receiver_base.text)) {
@@ -1755,19 +2073,24 @@ void Lowerer::lower_container_method(
             call.span);
         return;
       }
-      const auto index = lower_expression(
-          call.operands[1],
+      const bool string_index =
           runtime_type->associative
-              ? runtime_type->index_width : 32U,
-          runtime_type->associative
-              ? type->systemverilog_container
-                    ->associative_index_type.get()
-              : nullptr);
+          && runtime_type->string_indices;
+      const auto index = string_index
+          ? lower_string_expression(call.operands[1])
+          : lower_expression(
+                call.operands[1],
+                runtime_type->associative
+                    ? runtime_type->index_width : 32U,
+                runtime_type->associative
+                    ? type->systemverilog_container
+                          ->associative_index_type.get()
+                    : nullptr);
       if (!index) {
         return;
       }
       process_.operations.emplace_back(
-          DeleteContainer{*target, *index});
+          DeleteContainer{*target, *index, string_index});
     } else {
       if (runtime_type->fixed) {
         report(
@@ -1908,6 +2231,9 @@ void Lowerer::lower_container_method(
     } else if (call.text == ".rsort") {
       operation =
           ContainerOrderingOperator::descending;
+    } else if (call.text == ".shuffle") {
+      operation =
+          ContainerOrderingOperator::shuffle;
     }
     process_.operations.emplace_back(
         OrderContainer{
