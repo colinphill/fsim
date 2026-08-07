@@ -88,3 +88,11 @@ application artifact matrix. The linked totals are 485 interpreter rows, 402
 LLVM rows, 265 cache rows, 109 debugger rows, 137 VCD/trace rows, 425
 scheduling rows, and 104 failure rows. The reviewed 36-CTest corpus inventory
 is unchanged.
+
+Batch 156's ten DPI-C rows advance the reviewed differential inventory to
+1,210 required rows and 117 runtime owners. The real C/C++ fixture, scalar
+marshal path, leased call paths, multiple roots/contexts, suspension, callback
+re-entry, unload, quarantine, and ABI rejection advance the linked totals to
+486 interpreter rows, 403 LLVM rows, 265 cache rows, 109 debugger rows, 137
+VCD/trace rows, 434 scheduling rows, and 105 failure rows. The reviewed
+36-CTest corpus inventory is unchanged.

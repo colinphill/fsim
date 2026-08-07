@@ -70,6 +70,10 @@ Batch 155 advances the gate to all 770 SystemVerilog rows and 1,200 total
 matrix rows. `SV-761` through `SV-770` own bounded functional-coverage
 declarations, resolution, bins, crosses, options, sampling, observation,
 artifacts, engine parity, and exact legality/resource rejection boundaries.
+Batch 156 advances the gate to all 780 SystemVerilog rows and 1,210 total
+matrix rows. `SV-771` through `SV-780` own bounded DPI-C declarations,
+marshalling, scopes, callbacks, tasks, plug-in ABI/lifetime/provenance, and
+real-symbol engine/multiple-root evidence.
 
 ## Mixed-language and SystemC queues — Batch 127 Tasks 7 and 8
 

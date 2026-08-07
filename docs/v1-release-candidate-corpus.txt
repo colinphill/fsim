@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Batch 130 Task 9 final release-candidate corpus.
 # Every required row is classified execute and owns nonempty P+/P-/E/R links.
-# matrix-rows: 1200
-# matrix-sha256: 07862d8c6b20770ce61076ab21072a69d87cebb7632af3f57d8a74616005c9ed
-# evidence-slots: 4800
-# evidence-paths: 426
-# evidence-sha256: 42df8d80fbb0fd947299c7641d2c224c0b53cdc1e4ab0e60f6afc4a41f9f5e33
-# test-evidence-paths: 188
-# production-evidence-paths: 222
+# matrix-rows: 1210
+# matrix-sha256: f7503d77d833cac7063a5aba47f92f5a9361d4c70494e44daa7b00146001716b
+# evidence-slots: 4840
+# evidence-paths: 438
+# evidence-sha256: cb4114e9c14282ff4aa6b6e03f208ab4acc4364b3c19bfb53256666a5bd85dcb
+# test-evidence-paths: 191
+# production-evidence-paths: 231
 # release-evidence-paths: 16
-# runtime-evidence-paths: 114
+# runtime-evidence-paths: 117
 # corpus-ctests: 36
 # required-status: execute
 #
@@ -55,3 +55,11 @@
 # governance, and portable artifact/engine evidence. Change 20 passes
 # exact-LLVM 22.1.8 Debug 114/114 in 366.52 seconds and Release 114/114 in
 # 308.38 seconds. Hosted CI is intentionally not monitored at this boundary.
+#
+# Batch 156 advances the reviewed matrix to 1210 rows and 4840 evidence cells
+# across 438 exact paths (191 test, 231 production, 16 release), with 117
+# runtime owners. SV-771 through SV-780 close bounded DPI-C declarations,
+# marshalling, scopes, callbacks, tasks, plug-in ABI/lifetime/provenance, and
+# real-symbol engine/multiple-root evidence. Change 20 passes exact-LLVM 22.1.8
+# Debug 114/114 in 355.83 seconds and Release 114/114 in 322.72 seconds. Hosted
+# CI is intentionally not monitored at this boundary.

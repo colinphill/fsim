@@ -3620,21 +3620,254 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 156 - DPI-C import/export closure
 
-- **Changes 1-4:** parse and validate DPI imports/exports, names, pure/context
-  qualifiers, functions/tasks, scopes, and exact C/SystemVerilog profiles.
-- **Changes 5-8:** implement scalar, real, string, chandle, packed/unpacked,
-  fixed/open-array, struct, enum, and in/out/inout/ref marshalling with checked
-  lifetime and ownership.
-- **Changes 9-12:** implement `svScope`, open-array accessors, disabled-state
-  helpers, exported callbacks, suspending tasks, re-entry, exceptions, and
-  scheduler containment.
-- **Changes 13-16:** add portable plug-in discovery/build/link, symbols,
-  artifacts, ABI/version checks, relocation, cache provenance, and Windows/POSIX
-  calling-convention behavior.
-- **Changes 17-19:** add C/C++ fixtures, malformed ABI/profile negatives,
-  engine/multi-root differentials, docs, matrices, inventories, and handoff.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+- **Change 1: Complete.** Add lossless DPI declaration ownership before profile
+  validation. `ParsedDesign` owns compilation-unit imports/exports while
+  packages, modules, interfaces, and programs own their local declarations;
+  each record retains direction, explicit owner kind and identity, every token
+  through the terminating semicolon, and the combined source span. Recognition
+  requires the DPI string-literal form, so ordinary package import/export
+  clauses remain on their existing parser path. `FSIM-SV-PARSE-324` rejects an
+  unterminated declaration. Focused evidence covers every supported owner,
+  imports and exports, balanced function profiles, exact source identity, and
+  coexistence with package wildcard import/re-export. The affected exact-LLVM
+  Debug frontend dependency graph builds warning-clean with eight workers;
+  frontend, diagnostic-catalog, and source-line-budget gates pass 3/3.
+- **Change 2: Complete.** Structure and validate the DPI link string, optional
+  `pure` or `context` qualifier, callable kind, SystemVerilog identifier, and
+  optional C identifier alias directly from the retained tokens. Every
+  structured component owns its original token, so macro/source provenance and
+  exact spans survive while normalized names remain convenient for later
+  resolution. Alias parsing follows the standard pre-callable
+  `c_identifier = function|task` form for imports and exports.
+  `FSIM-SV-SEM-222` requires `"DPI-C"`; `FSIM-SV-PARSE-325`/`326` reject a
+  missing callable kind or non-keyword SystemVerilog name. The first focused
+  run exposed that semantic code 217 already belonged to coverage options and
+  that a missing function name could be mistaken for the `int` return keyword;
+  assigning the next free catalog code and excluding keyword candidates fixes
+  both precisely. The complete 72-step affected Debug graph is warning-clean
+  with eight workers, and the final frontend/catalog/source gates pass 3/3.
+- **Change 3: Complete.** Parse exact import profiles without re-entering the
+  executable callable parser. Functions retain return-type tokens; functions
+  and tasks retain the complete parenthesized formal token sequence, full
+  profile tokens/span, and ordered formals with explicit/default input,
+  output, inout, ref, or const-ref direction, type tokens, owning name token,
+  unpacked-dimension tokens, default tokens, and full formal span. Export
+  declarations remain name-only profiles for Change 4 resolution.
+  `FSIM-SV-PARSE-327`/`328` reject missing, unbalanced, trailing, or incomplete
+  profiles. `FSIM-SV-SEM-223` through `227` reject export qualifiers, pure
+  tasks, non-input pure-function formals, nonportable C aliases, and formal
+  defaults while retaining exact negative evidence. The complete 72-step
+  affected Debug graph builds warning-clean with eight workers, and
+  frontend/catalog/source gates pass 3/3.
+- **Change 4: Complete.** Resolve imports and exports against exact
+  compilation-unit, package, module, interface, or program ownership. Every
+  successful declaration publishes its effective C linkage name and a
+  structure-plus-resolution `validated` state; exports additionally own a
+  typed native callable profile with return type, ordered formal directions,
+  types/names/reference policy, callable span, and exact function/task kind.
+  Compilation-unit native callable definitions are accepted only when a
+  preceding same-kind DPI export introduces the name, preserving the existing
+  diagnostic contract for otherwise unqualified out-of-block class methods.
+  `FSIM-SV-SEM-228` through `230` reject duplicate owner-local names/linkage,
+  native/import conflicts, and missing or wrong-kind exports. The first
+  focused run exposed the unqualified-class-method compatibility boundary;
+  narrowing compilation-unit parsing to explicit DPI exports restores it. The
+  complete 72-step affected Debug graph and final 19-step correction build are
+  warning-clean with eight workers; frontend/catalog/source gates pass 3/3.
+- **Change 5: Complete.** Add an ABI-neutral owning DPI scalar payload with
+  bounded width and standard 32-bit aval/bval planes. Checked marshalling
+  preserves two-state and four-state values across arbitrary word boundaries,
+  rejects X/Z rather than coercing a two-state input, and validates exact
+  output width, plane counts, unused high bits, empty values, and the default
+  1,048,576-bit resource limit before materialization. Focused evidence covers
+  65-bit four-state X/Z round-trip, exact two-state encoding, malformed planes,
+  dirty unused bits, width mismatch, and resource failure. The first build
+  rejected implicit construction of the explicit empty packed-value result;
+  explicit error-result construction is warning-clean. Runtime and
+  source-line-budget gates pass 2/2 with eight-worker builds.
+- **Change 6: Complete.** Add direction-aware shortreal, real, realtime, UTF-8
+  string, and chandle payloads. Real-family transfers preserve exact binary32/
+  binary64 bits including negative zero and reject kind mismatch, dirty
+  shortreal high bits, input writeback, and nonfinite values. String transfers
+  own exact valid UTF-8 bytes, reject embedded NUL, malformed encoding,
+  direction mismatch, and the default 1,048,576-byte resource excess. Chandle
+  transfers preserve stable registry identities and explicit borrowed input
+  versus writable output/inout/ref state; stale, released, borrowed-writeback,
+  and direction-mismatched handles reject before use. Focused evidence covers
+  each success and negative path. The first test build used an obsolete
+  four-field fixture initializer; matching the public three-field descriptor
+  restores a warning-clean eight-worker build. Runtime/source gates pass 2/2.
+- **Change 7: Complete.** Add recursive scalar, fixed-array, struct, and enum
+  descriptors with canonical flattened leaf order. Layout validation checks
+  nonempty exact descriptors, unique struct members and enum values, enum
+  representability, array multiplication and aggregate addition overflow,
+  nesting depth, 65,536-leaf and 1,048,576-bit limits, and actual 32-bit
+  aval/bval payload bytes. Direction-aware composite marshalling reuses Change
+  5 scalar planes for every leaf, preserves packed and unpacked values without
+  exposing host object layout, and rejects leaf width/count, enum, descriptor,
+  direction, unknown-value, and resource mismatch before writeback. Focused
+  nested array-of-struct-with-enum evidence and negatives pass. The 13-step
+  affected runtime build is warning-clean with eight workers; runtime and
+  source-line-budget gates pass 2/2.
+- **Change 8: Complete.** Add registry-owned open-array handles with explicit
+  transfer mode, contiguity, and generation-qualified lifetime. Every
+  dimension preserves declared left/right order and derives exact low, high,
+  increment, and checked size; multidimensional element access maps declared
+  ascending or descending indices into canonical row-major flattened values.
+  Element descriptors reuse Change 7's checked recursive layout and leaf
+  accounting. Creation rejects empty, overflowing, resource-excessive, or
+  value-count-mismatched shapes; element lookup and writeback reject rank,
+  bounds, direction, leaf-count, noncontiguous, released, and stale-handle
+  misuse. Focused evidence covers mixed-direction two-dimensional ranges,
+  first/last elements, writable inout updates, contiguous copies,
+  noncontiguous input handles, and post-release epoch failure. The 14-step
+  affected runtime build is warning-clean with eight workers; runtime and
+  source-line-budget gates pass 2/2.
+- **Change 9: Complete.** Add simulation-owned `svScope` identities and exact
+  named-scope lookup. Generation-qualified handles include the stable
+  simulation identity, slot, and epoch; registration preserves canonical full
+  names and parent identities while rejecting zero simulation identities,
+  malformed/duplicate names, missing parents, and cross-simulation handles.
+  Current scope belongs to an explicit scheduler execution context rather than
+  process-global or thread-local state. Setting a scope returns the exact prior
+  handle for nested restoration, and invalid changes leave the current scope
+  untouched. Focused evidence covers roots, nested/generated names, parent and
+  name lookup, two independent contexts, nested set/restore, malformed trees,
+  and transactional cross-simulation rejection. The 12-step affected runtime
+  build is warning-clean with eight workers; runtime/source gates pass 2/2.
+- **Change 10: Complete.** Expose checked standard-style open-array dimension,
+  range, whole-storage, and indexed-element accessors over Change 8 handles.
+  Read-only transient pointers support input and writable arguments; mutable
+  pointers require output/inout/ref direction. Whole-storage access requires a
+  contiguous representation while indexed element access remains available
+  for noncontiguous handles. Every pointer reports its exact flattened leaf
+  count, multidimensional lookup retains declared-index semantics, and direct
+  writable views update registry-owned storage without a second alias. Rank,
+  bounds, direction, contiguity, and released/stale handles reject before a
+  pointer is returned. Focused evidence covers dimension/range queries, first
+  and last pointers, mutable element publication, noncontiguous element-only
+  access, input protection, and post-release failure. The six-step affected
+  runtime build is warning-clean with eight workers; runtime/source gates pass
+  2/2.
+- **Change 11: Complete.** Add disabled-state helpers and exported callback
+  dispatch with exact linkage, scope, argument-direction, and exception
+  boundaries. A registry binds each callback to a validated Change 9 scope and
+  ordered transfer-mode profile. Dispatch installs that scope in the explicit
+  execution context, invokes against a transactional owning frame, publishes
+  output/inout/ref values only on success, and restores the prior scope on all
+  paths. Input arguments expose read-only access; mutable input or out-of-range
+  access becomes a typed failure. Pending disabled state must be explicitly
+  observed and acknowledged, otherwise publication rejects and the state
+  remains pending. Standard and nonstandard C++ exceptions are contained with
+  rejected outputs and bounded error state. Focused evidence covers success,
+  scope restoration, input-write rejection, acknowledged and unacknowledged
+  disable, exception rollback, unknown name, arity mismatch, and duplicates.
+  The corrected four-step affected runtime build is warning-clean with eight
+  workers; runtime/source gates pass 2/2.
+- **Change 12: Complete.** Add scheduler-backed suspending imported tasks with
+  generation-qualified simulation ownership, exact scope/profile binding, and
+  address-stable invocation state. Each invocation owns a cancelable scheduler
+  handle and a transactional argument frame retained privately across timed
+  suspensions; output/inout/ref values publish only on final completion.
+  Resume reinstalls the exact task scope. Nested exported callbacks may install
+  their own scope and must restore the task scope before returning, after which
+  the task boundary restores its original caller scope. Cancellation removes
+  pending resumes and clears unpublished values. Direction/arity, disabled
+  state, cross-simulation handles, scheduling failures, standard/nonstandard
+  exceptions, and registry destruction are contained without escaping into or
+  poisoning later scheduler work. Focused evidence covers timed suspension,
+  unpublished intermediate state, resume, nested callback re-entry, scope
+  restoration, cancellation, exception failure, surviving later work, and
+  malformed handles/names/profiles. The corrected five-step affected runtime
+  build is warning-clean with eight workers; runtime/source gates pass 2/2.
+- **Change 13: Complete.** Add a versioned portable DPI plug-in manifest and
+  deterministic discovery/compile/link plan. Manifests own exact source,
+  include, library, import-symbol, and export-symbol order. Validation rejects
+  unsupported versions, invalid names/symbols, absolute or parent-escaping
+  inputs, unsupported source extensions, duplicate paths/libraries, and
+  cross-profile duplicate symbols. Planning uses argv vectors, never shell
+  command text; source ordinals make object names collision-free and stable.
+  POSIX plans use C++20, PIC, hidden visibility, and shared linking; MSVC plans
+  use explicit C++20, EH, compile, object, DLL, and output switches. Discovery
+  candidates preserve caller root order and canonical platform filenames.
+  Focused evidence covers repeatability, two-source POSIX plans, MSVC plans,
+  relocation-safe inputs, duplicate symbols, and version rejection. The
+  12-step affected runtime build is warning-clean with eight workers;
+  runtime/source gates pass 2/2.
+- **Change 14: Complete.** Load planned artifacts through the existing hardened
+  `platform::DynamicLibrary` abstraction, which uses local eager POSIX loading
+  and safe-directory Windows loading. A move-only loaded plug-in owns the
+  library lifetime, normalized artifact path, and separate exact import/export
+  address maps. Loading resolves the complete declared inventory before
+  publication; any open or missing-symbol failure destroys the provisional
+  library and returns no partial plug-in. Lookups do not cross the import/
+  export boundary. A real hidden-visibility shared-library fixture explicitly
+  exports one symbol in each direction. Focused evidence loads that artifact,
+  resolves both exact inventories, rejects cross-map lookup, and proves a
+  missing symbol rejects transactionally. The first compile exposed one
+  missing standard-library include; the corrected 13-step affected build is
+  warning-clean with eight workers. Runtime/source gates pass 2/2.
+- **Change 15: Complete.** Add a C-compatible ABI-v1 descriptor with explicit
+  export/calling-convention macros, version, fixed-prefix struct size, pointer
+  width, reserved flags, and a length-delimited plug-in name. The loader
+  resolves and invokes the descriptor before any declared callable symbol and
+  rejects missing/null/throwing descriptors plus version, size, pointer-width,
+  flags, or exact-name mismatch transactionally. SHA-256 provenance separately
+  covers canonical relative manifest fields and complete artifact bytes. The
+  cache key covers both digests, toolchain identity, platform, ABI version, and
+  pointer width while excluding source/build/discovery roots, so relocation is
+  identity-preserving and content/toolchain changes are not. Focused evidence
+  validates the real fixture, ABI version and pointer-width negatives, stable
+  64-hex digests, repeatability, artifact identity, and deliberate toolchain
+  cache divergence. The six-step affected runtime/fixture build is
+  warning-clean with eight workers; runtime/source gates pass 2/2.
+- **Change 16: Complete.** Close Windows/POSIX export visibility and calling
+  conventions through the shared C ABI header: Windows exports use
+  `__declspec(dllexport)` and explicit `__cdecl`, POSIX exports use default
+  symbol visibility, and generated MSVC compile plans explicitly select `/Gd`.
+  Symbol lookup now returns a moveable lease retaining shared module ownership,
+  so callable addresses remain valid after the loaded plug-in facade is
+  released. Normal destruction unloads after the final facade/symbol lease.
+  An explicit thread-safe quarantine path intentionally gives a module
+  process-lifetime ownership when addresses may have escaped during a failed
+  external registration. Focused real-library evidence invokes a leased C ABI
+  function after facade destruction, observes normal unload after lease
+  release, and observes residency after quarantine. The first compile required
+  the lifetime fixture result to be mutable; the corrected three-step affected
+  build is warning-clean with eight workers. Runtime/source gates pass 2/2.
+- **Change 17: Complete.** Extend the real plug-in fixture with independently
+  compiled C and C++ translation units consuming the same public C ABI header.
+  Both exports resolve from one hidden-visibility module, retain leases after
+  facade destruction, and execute through the explicit calling-convention
+  type with distinct expected results. A second real shared library exposes
+  the expected callable inventory but advertises an incompatible ABI version;
+  the loader rejects it before publishing any symbol. Existing real missing-
+  symbol, callback/task arity, mutable-input, descriptor size/version/pointer/
+  flags/name, and manifest symbol-profile negatives complete malformed boundary
+  coverage. The 21-step affected runtime plus C/C++ fixture build is
+  warning-clean with eight workers; runtime/source gates pass 2/2.
+- **Change 18: Complete.** Invoke the real `dpi_add` symbol through the owning
+  scalar marshal/unmarshal path and the compiled O0/O2 call paths with identical
+  results. Two simulation identities and independent current-scope contexts
+  share the leased symbol without aliasing; a scheduler-backed imported task
+  resumes through that real symbol while nested callback scope restoration
+  remains covered. The ten-step affected runtime build is warning-clean with
+  eight workers; runtime/source gates pass 2/2 and `git diff --check` is clean.
+- **Change 19: Complete.** Publish the bounded DPI support, negative, platform,
+  and engine matrices in `systemverilog-dpi.md`; synchronize README,
+  architecture, language-support, feature rows `SV-771` through `SV-780`,
+  deferred ownership, source inventory, release notes, and this exact handoff.
+  The Change 19 documentation/runtime/frontend policy gate is recorded in the
+  restart handoff.
+- **Change 20: Complete.** Synchronize the ten new feature rows and fourteen
+  diagnostics across every frozen legality, release, differential, inventory,
+  and candidate audit: 1,210 execute rows, 4,840 evidence cells, 438 exact
+  paths, 117 runtime owners, 1,989 diagnostics, 609 bounded sources, and 700
+  SPDX-owned files. The full exact-LLVM 22.1.8 Debug build is warning-clean
+  with eight workers and passes 114/114 in 355.83 seconds; the independent
+  Release tree builds all 414 steps warning-clean with eight workers and passes
+  114/114 in 322.72 seconds. `git diff --check` is clean. Commit and push the
+  Batch 156 checkpoint exactly once without sanitizer or hosted-CI monitoring.
 
 ### Batch 157 - IEEE VPI closure
 

@@ -252,6 +252,10 @@ The current tree contains:
   explicit/event/procedural sampling, callbacks, structured reports,
   debugger/trace projections, governed resource limits, and portable
   object/design/library plus interpreter/LLVM O0/O2 parity;
+- bounded SystemVerilog-2017 DPI-C imports/exports with exact owner/profile
+  retention, scalar/composite/open-array marshalling, simulation-owned scopes,
+  callbacks and suspending tasks, plus versioned portable C/C++ plug-ins with
+  transactional ABI/symbol checks, content provenance, and leased lifetime;
 - ordered VHDL sequential packed `case` statements with `|` choices and
   `others`, lowered through common exact case-equality branches;
 - concurrent and sequential VHDL-2008 conditional assignments with chained

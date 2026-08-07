@@ -54,6 +54,7 @@ void test_systemverilog_programs();
 void test_systemverilog_clocking_blocks();
 void test_systemverilog_assertion_declarations();
 void test_systemverilog_covergroup_declarations();
+void test_systemverilog_dpi_declaration_ownership();
 void test_vhdl_function_declarations();
 void test_vhdl_procedure_declarations();
 void test_vhdl_generic_subprogram_declarations();

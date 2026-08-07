@@ -899,9 +899,9 @@ time and opaque-handle identities use 64-bit vectors.
 `chandle` is a nonnumeric, simulation-owned opaque identity. A generation-safe
 registry publishes no host pointers and detects null, stale, and foreign
 identities. Creation, aliasing, cleanup callbacks, storage accounting, and
-debugger updates are transactional; cleanup runs at most once. Only null,
-equality, inequality, and checked same-kind transport are executable until
-the later DPI/VPI/VHPI batches attach standardized foreign ownership.
+debugger updates are transactional; cleanup runs at most once. Null, equality,
+inequality, checked same-kind transport, and the bounded DPI-C transfer
+contract are executable. VPI/VHPI ownership remains later work.
 
 Mutable SystemVerilog strings use one strict UTF-8 service and index Unicode
 scalar values, not encoded bytes. Length, iteration, slicing, replacement,
@@ -923,9 +923,29 @@ flows therefore share producer-independent canonical identities.
 
 This closes the scalar substrate needed by later language work, but it is not
 UVM closure. Arbitrary-width packed values are closed by Batch 151 and the
-remaining governed unpacked-data/file/procedural substrate by Batch 152. SVA,
-and covergroups are closed by Batches 154-155; DPI/VPI/VHPI and the UVM
-library/runtime retain their locked later-batch ownership.
+remaining governed unpacked-data/file/procedural substrate by Batch 152. SVA
+and covergroups are closed by Batches 154-155; the bounded DPI-C boundary is
+closed by Batch 156. VPI/VHPI and the UVM library/runtime retain their locked
+later-batch ownership.
+
+### SystemVerilog DPI-C boundary
+
+Batch 156 retains DPI imports and exports in their exact compilation-unit,
+package, module, interface, or program scope and resolves exports against an
+owner-local typed callable. The runtime boundary owns scalar, recursive fixed-
+composite, and open-array representations rather than aliasing SystemVerilog
+objects to host layouts. Generation-qualified `chandle`, open-array, and
+`svScope` identities prevent stale or cross-simulation use.
+
+Callbacks and suspending imported tasks execute through explicit scheduler
+contexts. Writable arguments remain private until successful return; scope is
+restored on success, cancellation, disable, or exception. Plug-ins load through
+the platform dynamic-library service only after a versioned C ABI descriptor,
+the complete exact symbol inventory, and SHA-256 manifest/artifact provenance
+validate transactionally. Symbol leases retain normal module lifetime, while
+an explicit quarantine path covers failed external registrations whose
+addresses may have escaped. The complete supported, negative, platform, and
+engine matrices are documented in [SystemVerilog DPI-C support](systemverilog-dpi.md).
 
 ### SystemVerilog unpacked data and procedural closure
 

@@ -82,6 +82,7 @@ int main() {
     test_systemverilog_clocking_blocks();
     test_systemverilog_assertion_declarations();
     test_systemverilog_covergroup_declarations();
+    test_systemverilog_dpi_declaration_ownership();
     test_vhdl_function_declarations();
     test_vhdl_procedure_declarations();
     test_vhdl_generic_subprogram_declarations();

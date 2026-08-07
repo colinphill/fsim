@@ -71,15 +71,70 @@ ParseResult VerilogParser::run() {
     } else if (match_keyword("function")) {
       compilation_unit_has_design_item_ = true;
       const auto declaration = previous();
-      design.systemverilog_class_method_definitions.push_back(
-          parse_class_out_of_block_method(
-              declaration, SystemVerilogClassMethodKind::Function));
+      if (compilation_unit_class_method_definition_start()) {
+        design.systemverilog_class_method_definitions.push_back(
+            parse_class_out_of_block_method(
+                declaration, SystemVerilogClassMethodKind::Function));
+      } else if (compilation_unit_dpi_export_definition_start(
+                     design.systemverilog_dpi_declarations,
+                     SystemVerilogDpiCallableKind::Function)) {
+        auto function = parse_function(declaration);
+        const bool duplicate = std::ranges::any_of(
+            design.functions,
+            [&](const FunctionDeclaration& existing) {
+              return existing.name == function.name;
+            }) || std::ranges::any_of(
+            design.tasks,
+            [&](const TaskDeclaration& existing) {
+              return existing.name == function.name;
+            });
+        if (duplicate) {
+          error(
+              declaration,
+              "FSIM-SV-SEM-228",
+              "duplicate compilation-unit callable '"
+                  + function.name + "'");
+        } else {
+          design.functions.push_back(std::move(function));
+        }
+      } else {
+        design.systemverilog_class_method_definitions.push_back(
+            parse_class_out_of_block_method(
+                declaration, SystemVerilogClassMethodKind::Function));
+      }
     } else if (match_keyword("task")) {
       compilation_unit_has_design_item_ = true;
       const auto declaration = previous();
-      design.systemverilog_class_method_definitions.push_back(
-          parse_class_out_of_block_method(
-              declaration, SystemVerilogClassMethodKind::Task));
+      if (compilation_unit_class_method_definition_start()) {
+        design.systemverilog_class_method_definitions.push_back(
+            parse_class_out_of_block_method(
+                declaration, SystemVerilogClassMethodKind::Task));
+      } else if (compilation_unit_dpi_export_definition_start(
+                     design.systemverilog_dpi_declarations,
+                     SystemVerilogDpiCallableKind::Task)) {
+        auto task = parse_task(declaration);
+        const bool duplicate = std::ranges::any_of(
+            design.tasks,
+            [&](const TaskDeclaration& existing) {
+              return existing.name == task.name;
+            }) || std::ranges::any_of(
+            design.functions,
+            [&](const FunctionDeclaration& existing) {
+              return existing.name == task.name;
+            });
+        if (duplicate) {
+          error(
+              declaration,
+              "FSIM-SV-SEM-228",
+              "duplicate compilation-unit callable '" + task.name + "'");
+        } else {
+          design.tasks.push_back(std::move(task));
+        }
+      } else {
+        design.systemverilog_class_method_definitions.push_back(
+            parse_class_out_of_block_method(
+                declaration, SystemVerilogClassMethodKind::Task));
+      }
     } else if (match_keyword("primitive")) {
       compilation_unit_has_design_item_ = true;
       auto declaration = parse_udp_declaration(previous());
@@ -109,6 +164,24 @@ ParseResult VerilogParser::run() {
         exports.insert(parameter.name);
       }
       design.units.push_back(std::move(package));
+    } else if (dpi_declaration_start("import")) {
+      compilation_unit_has_design_item_ = true;
+      const auto declaration = advance();
+      parse_dpi_declaration(
+          design.systemverilog_dpi_declarations,
+          declaration,
+          SystemVerilogDpiDirection::Import,
+          SystemVerilogDpiOwnerKind::CompilationUnit,
+          "$unit");
+    } else if (dpi_declaration_start("export")) {
+      compilation_unit_has_design_item_ = true;
+      const auto declaration = advance();
+      parse_dpi_declaration(
+          design.systemverilog_dpi_declarations,
+          declaration,
+          SystemVerilogDpiDirection::Export,
+          SystemVerilogDpiOwnerKind::CompilationUnit,
+          "$unit");
     } else if (match_keyword("import")) {
       compilation_unit_has_design_item_ = true;
       parse_import_clause(
@@ -129,6 +202,10 @@ ParseResult VerilogParser::run() {
         "unterminated `begin_keywords region");
     keyword_stack_.clear();
   }
+  resolve_dpi_declarations(
+      design.systemverilog_dpi_declarations,
+      design.functions,
+      design.tasks);
   normalize_udp_instances(design);
   return ParseResult{std::move(design), std::move(diagnostics_)};
 }
@@ -948,6 +1025,24 @@ DesignUnit VerilogParser::parse_module(
     } else if (match_keyword("localparam")) {
       module_has_non_time_item_ = true;
       parse_parameter_group(unit, true, false, previous());
+    } else if (dpi_declaration_start("import")) {
+      module_has_non_time_item_ = true;
+      const auto declaration = advance();
+      parse_dpi_declaration(
+          unit.systemverilog_dpi_declarations,
+          declaration,
+          SystemVerilogDpiDirection::Import,
+          SystemVerilogDpiOwnerKind::DesignUnit,
+          unit.name);
+    } else if (dpi_declaration_start("export")) {
+      module_has_non_time_item_ = true;
+      const auto declaration = advance();
+      parse_dpi_declaration(
+          unit.systemverilog_dpi_declarations,
+          declaration,
+          SystemVerilogDpiDirection::Export,
+          SystemVerilogDpiOwnerKind::DesignUnit,
+          unit.name);
     } else if (match_keyword("import")) {
       module_has_non_time_item_ = true;
       parse_import_clause(
@@ -1271,6 +1366,10 @@ DesignUnit VerilogParser::parse_module(
   }
   resolve_implicit_nets(unit);
   resolve_assertion_references(unit);
+  resolve_dpi_declarations(
+      unit.systemverilog_dpi_declarations,
+      unit.functions,
+      unit.tasks);
   unit.span = span_from(start, previous());
   return unit;
 }

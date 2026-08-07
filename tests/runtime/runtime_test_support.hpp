@@ -6,6 +6,15 @@ namespace fsim::tests::runtime {
 void test_logic();
 void test_packed_values();
 void test_systemverilog_scalar_values();
+void test_systemverilog_dpi_scalar_marshalling();
+void test_systemverilog_dpi_real_string_chandle_marshalling();
+void test_systemverilog_dpi_composite_marshalling();
+void test_systemverilog_dpi_open_arrays();
+void test_systemverilog_dpi_scopes();
+void test_systemverilog_dpi_callbacks();
+void test_systemverilog_dpi_tasks();
+void test_systemverilog_dpi_plugin_planning();
+void test_systemverilog_dpi_engine_differential();
 void test_systemverilog_scalar_text_and_time();
 void test_systemverilog_scalar_execution_surfaces();
 void test_systemverilog_chandle_registry();

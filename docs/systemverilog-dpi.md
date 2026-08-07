@@ -1,0 +1,65 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+# SystemVerilog DPI-C support
+
+Batch 156 provides a bounded, checked DPI-C boundary for SystemVerilog-2017.
+It retains imports and exports in their exact compilation-unit, package,
+module, interface, or program scope; validates callable profiles; marshals
+supported values without host-layout aliases; and loads portable C/C++ shared
+libraries through a versioned C ABI.
+
+## Supported surface
+
+| Area | Supported behavior | Primary evidence |
+|---|---|---|
+| Declarations | `import`/`export "DPI-C"`, `pure`/`context`, functions/tasks, optional C aliases, exact owner/tokens/spans, typed export resolution | `frontend_dpi_tests.cpp` |
+| Scalars | Arbitrary bounded two-/four-state aval/bval planes, shortreal/real/realtime exact bits, strict UTF-8 strings, simulation-owned chandle identities | `runtime_dpi_tests.cpp` |
+| Composites | Recursive fixed arrays, structs, enums, canonical flattened leaves, checked layout and resource budgets | `runtime_dpi_tests.cpp` |
+| Open arrays | Declared range direction, multidimensional indices, contiguous and element pointers, direction-aware mutation, epoch lifetime | `runtime_dpi_tests.cpp` |
+| Scope and callbacks | Exact simulation-owned `svScope`, context-local set/restore, exported callbacks, disabled-state acknowledgement, exception rollback | `runtime_dpi_tests.cpp` |
+| Imported tasks | Deterministic timed suspension/resume, cancellation, nested callback re-entry, transactional publication, scheduler containment | `runtime_dpi_tests.cpp` |
+| Plug-ins | Relative versioned manifests, argv compile/link plans, exact symbols, ABI descriptor, SHA-256 provenance/cache identity, leased lifetime and quarantine | `runtime_dpi_tests.cpp` |
+
+## Negative matrix
+
+| Boundary | Rejected before publication |
+|---|---|
+| Parse/profile | Missing terminator/kind/name/profile, invalid link string, illegal qualifier/direction/default/alias, duplicates, conflicts, missing export target |
+| Values | Width/plane/high-bit mismatch, X/Z into two-state, kind/direction mismatch, nonfinite real, malformed UTF-8, embedded NUL, stale chandle |
+| Composite/open array | Invalid descriptor/enum/layout, overflow/depth/element/bit budget, rank/index/leaf mismatch, noncontiguous whole pointer, input mutation, stale epoch |
+| Scope/callback/task | Malformed or duplicate scope, foreign handle, missing linkage, arity/direction error, unacknowledged disable, cancellation, exception, scheduling failure |
+| Manifest/artifact | Version/name/path/source/symbol errors, duplicates, missing compiler/artifact/symbol/descriptor, ABI size/version/pointer/flags/name mismatch, unreadable artifact |
+
+All mutable callback/task results remain private until success. Exceptions do
+not cross the scheduler boundary. A failed loader publishes neither a partial
+symbol table nor a loaded plug-in facade.
+
+## Platform and engine matrix
+
+| Dimension | Covered behavior |
+|---|---|
+| Linux/POSIX | C++20, PIC, hidden-by-default compilation, explicit default-visible C exports, local eager loading, `.so` artifact |
+| Windows/MSVC | C++20, EH, explicit `/Gd`, `__cdecl`, `__declspec(dllexport)`, safe DLL-directory loading, `.dll` artifact |
+| Interpreter | Scalar values traverse the owning aval/bval marshal/unmarshal path before the real C ABI call |
+| Compiled O0/O2 | The same leased callable and exact values cross both compiled-call paths |
+| Multiple roots | Distinct simulation identities and current-scope contexts invoke the same plug-in without aliasing |
+| Suspension/re-entry | A scheduled imported task resumes through the real symbol; nested callbacks restore task and caller scope |
+
+The local Change 19 checkpoint validates the exact-LLVM Debug runtime and
+source-policy gates. Full non-sanitized Debug and Release regressions belong to
+Change 20. Batch 156 is not a sanitizer or hosted-CI monitoring boundary.
+
+## Source inventory
+
+- Public ABI/runtime: `dpi_plugin_abi.h`, `dpi_marshalling.hpp`,
+  `dpi_scope.hpp`, `dpi_callback.hpp`, `dpi_task.hpp`, `dpi_plugin.hpp`.
+- Runtime implementations: `dpi_marshalling.cpp`, `dpi_composite.cpp`,
+  `dpi_open_array.cpp`, `dpi_scope.cpp`, `dpi_callback.cpp`, `dpi_task.cpp`,
+  `dpi_plugin.cpp`.
+- Frontend: `verilog_parser_dpi.cpp` plus DPI declaration ownership in
+  `design.hpp` and parser integration in the Verilog parser core/units.
+- Evidence: `frontend_dpi_tests.cpp`, `runtime_dpi_tests.cpp`, the independent
+  `dpi_test_plugin.cpp`/`dpi_test_plugin_c.c` fixture, and
+  `dpi_bad_abi_plugin.cpp`.
+
+Unrestricted foreign profiles, varargs, producer-specific extensions, VPI,
+VHPI, and UVM library/runtime behavior remain outside Batch 156.

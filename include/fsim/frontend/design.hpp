@@ -1038,6 +1038,87 @@ struct VerilogSpecifyBlock {
   SourceSpan span;
 };
 
+enum class SystemVerilogDpiDirection {
+  Import,
+  Export,
+};
+
+enum class SystemVerilogDpiOwnerKind {
+  CompilationUnit,
+  DesignUnit,
+};
+
+enum class SystemVerilogDpiQualifier {
+  None,
+  Pure,
+  Context,
+};
+
+enum class SystemVerilogDpiCallableKind {
+  Function,
+  Task,
+};
+
+struct SystemVerilogDpiFormal {
+  PortDirection direction{PortDirection::Input};
+  std::optional<Token> direction_token;
+  bool const_reference{};
+  std::vector<Token> type_tokens;
+  std::string name;
+  std::optional<Token> name_token;
+  std::vector<Token> dimension_tokens;
+  std::vector<Token> default_tokens;
+  std::vector<Token> tokens;
+  SourceSpan span;
+};
+
+struct SystemVerilogDpiResolvedFormal {
+  PortDirection direction{PortDirection::Input};
+  Type type;
+  std::string name;
+  bool reference{};
+  SourceSpan span;
+};
+
+struct SystemVerilogDpiResolvedProfile {
+  std::optional<Type> return_type;
+  std::vector<SystemVerilogDpiResolvedFormal> formals;
+  SourceSpan callable_span;
+};
+
+// Lossless source ownership for a SystemVerilog DPI import or export. Later
+// DPI closure phases validate and lower the retained declaration without
+// depending on the parser token stream remaining alive.
+struct SystemVerilogDpiDeclaration {
+  SystemVerilogDpiDirection direction{
+      SystemVerilogDpiDirection::Import};
+  SystemVerilogDpiOwnerKind owner_kind{
+      SystemVerilogDpiOwnerKind::CompilationUnit};
+  std::string owner_identity;
+  std::string link_name;
+  std::optional<Token> link_name_token;
+  SystemVerilogDpiQualifier qualifier{
+      SystemVerilogDpiQualifier::None};
+  std::optional<Token> qualifier_token;
+  SystemVerilogDpiCallableKind callable_kind{
+      SystemVerilogDpiCallableKind::Function};
+  std::optional<Token> callable_token;
+  std::string systemverilog_name;
+  std::optional<Token> systemverilog_name_token;
+  std::optional<std::string> c_identifier;
+  std::optional<Token> c_identifier_token;
+  std::vector<Token> return_type_tokens;
+  std::vector<Token> formal_tokens;
+  std::vector<SystemVerilogDpiFormal> formals;
+  std::vector<Token> profile_tokens;
+  SourceSpan profile_span;
+  std::string linkage_name;
+  bool validated{};
+  std::optional<SystemVerilogDpiResolvedProfile> resolved_profile;
+  std::vector<Token> tokens;
+  SourceSpan span;
+};
+
 struct DesignUnit {
   UnitKind kind{UnitKind::VerilogModule};
   Language language{Language::SystemVerilog2017};
@@ -1067,6 +1148,8 @@ struct DesignUnit {
   std::vector<SystemVerilogImport> systemverilog_imports;
   // Package export/re-export declarations and interface modport views.
   std::vector<SystemVerilogExport> systemverilog_exports;
+  std::vector<SystemVerilogDpiDeclaration>
+      systemverilog_dpi_declarations;
   std::vector<SystemVerilogModport> systemverilog_modports;
   // Clocking declarations are unit-owned for modules, interfaces, and
   // programs. Later semantic lowering preserves their event and signal view.
@@ -1134,6 +1217,13 @@ struct DesignUnit {
 struct ParsedDesign {
   std::vector<DesignUnit> units;
   std::vector<VerilogUdpDeclaration> udp_declarations;
+  // Ordinary compilation-unit callables are distinct from class-qualified
+  // out-of-block definitions and provide exact scope ownership for DPI export.
+  std::vector<FunctionDeclaration> functions;
+  std::vector<TaskDeclaration> tasks;
+  // Compilation-unit DPI declarations remain outside selectable design units.
+  std::vector<SystemVerilogDpiDeclaration>
+      systemverilog_dpi_declarations;
   // Compilation-unit classes remain non-top-selectable declarations.
   std::vector<SystemVerilogClassDeclaration> systemverilog_classes;
   std::vector<SystemVerilogClassMethod>

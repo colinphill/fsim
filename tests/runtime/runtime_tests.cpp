@@ -15,6 +15,15 @@ int main() {
     test_logic();
     test_packed_values();
     test_systemverilog_scalar_values();
+    test_systemverilog_dpi_scalar_marshalling();
+    test_systemverilog_dpi_real_string_chandle_marshalling();
+    test_systemverilog_dpi_composite_marshalling();
+  test_systemverilog_dpi_open_arrays();
+  test_systemverilog_dpi_scopes();
+  test_systemverilog_dpi_callbacks();
+  test_systemverilog_dpi_tasks();
+  test_systemverilog_dpi_plugin_planning();
+  test_systemverilog_dpi_engine_differential();
     test_systemverilog_scalar_text_and_time();
     test_systemverilog_scalar_execution_surfaces();
     test_systemverilog_chandle_registry();

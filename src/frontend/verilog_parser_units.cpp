@@ -115,6 +115,24 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
       module_has_non_time_item_ = true;
       parse_parameter_group(
           unit, true, false, previous());
+    } else if (dpi_declaration_start("import")) {
+      module_has_non_time_item_ = true;
+      const auto declaration = advance();
+      parse_dpi_declaration(
+          unit.systemverilog_dpi_declarations,
+          declaration,
+          SystemVerilogDpiDirection::Import,
+          SystemVerilogDpiOwnerKind::DesignUnit,
+          unit.name);
+    } else if (dpi_declaration_start("export")) {
+      module_has_non_time_item_ = true;
+      const auto declaration = advance();
+      parse_dpi_declaration(
+          unit.systemverilog_dpi_declarations,
+          declaration,
+          SystemVerilogDpiDirection::Export,
+          SystemVerilogDpiOwnerKind::DesignUnit,
+          unit.name);
     } else if (match_keyword("import")) {
       module_has_non_time_item_ = true;
       parse_import_clause(
@@ -250,6 +268,10 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
               + unit.name + "'");
     }
   }
+  resolve_dpi_declarations(
+      unit.systemverilog_dpi_declarations,
+      unit.functions,
+      unit.tasks);
   unit.span = span_from(start, previous());
   return unit;
 }

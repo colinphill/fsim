@@ -388,6 +388,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_classes.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_assertions.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_coverage.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_dpi.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_declarations.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_switch.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_specify.cpp"
@@ -427,6 +428,13 @@ add_library(
     src/runtime/class_static.cpp
     src/runtime/constraint_expression.cpp
     src/runtime/constraint_solver.cpp
+    src/runtime/dpi_composite.cpp
+    src/runtime/dpi_callback.cpp
+    src/runtime/dpi_marshalling.cpp
+    src/runtime/dpi_open_array.cpp
+    src/runtime/dpi_plugin.cpp
+    src/runtime/dpi_scope.cpp
+    src/runtime/dpi_task.cpp
     src/runtime/packed_value.cpp
     src/runtime/scheduler.cpp
     src/runtime/scope_randomize.cpp
@@ -598,6 +606,7 @@ add_library(fsim_platform STATIC src/platform/dynamic_library.cpp)
 add_library(fsim::platform ALIAS fsim_platform)
 fsim_configure_library(fsim_platform)
 target_link_libraries(fsim_platform PRIVATE ${CMAKE_DL_LIBS})
+target_link_libraries(fsim_runtime PRIVATE fsim_platform fsim_support)
 
 add_library(fsim_systemc_headers INTERFACE)
 add_library(fsim::systemc_headers ALIAS fsim_systemc_headers)

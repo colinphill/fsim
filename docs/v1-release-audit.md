@@ -9,13 +9,13 @@ remains the final Task 10 boundary.
 
 ## Matrix baseline
 
-The current matrix contains exactly 1,200 required rows. Every row is classified
+The current matrix contains exactly 1,210 required rows. Every row is classified
 `execute`, has nonempty positive parse, negative diagnostic, elaboration, and
 runtime evidence, and names evidence paths that exist in the checkout.
 
 | Surface | Prefix | Required rows | Final review owner |
 |---|---|---:|---:|
-| SystemVerilog language | `SV` | 770 | Task 2 plus v2 Batches 144-155 |
+| SystemVerilog language | `SV` | 780 | Task 2 plus v2 Batches 144-156 |
 | SystemVerilog release contract | `V1-SV` | 9 | Task 2 |
 | VHDL language | `VH` | 269 | Task 3 plus v2 Batches 140-143 |
 | VHDL release contract | `V1-VH` | 8 | Task 3 |
@@ -25,7 +25,7 @@ runtime evidence, and names evidence paths that exist in the checkout.
 | Common release contract | `V1-CM` | 10 | Tasks 5 through 9 |
 
 The Task 1 baseline matrix digest is
-`07862d8c6b20770ce61076ab21072a69d87cebb7632af3f57d8a74616005c9ed`.
+`f7503d77d833cac7063a5aba47f92f5a9361d4c70494e44daa7b00146001716b`.
 Changing any row requires an intentional audit update and the owning focused
 gate; the digest is evidence of review, not a substitute for semantic tests.
 Corrective Batch 131 re-reviewed the affected container rows after replacing
@@ -60,15 +60,19 @@ V2 Batch 155 adds `SV-761` through `SV-770` for covergroup ownership and
 resolution, scalar/range/wildcard/array/transition bins, automatic and explicit
 crosses, options and percentages, sampling/callback/report/debugger/trace
 observation, governed resources, and portable artifact/engine closure.
+V2 Batch 156 adds `SV-771` through `SV-780` for DPI-C declaration/profile
+ownership, scalar/composite/open-array marshalling, simulation scopes,
+callbacks, suspending tasks, portable plug-ins, public C ABI/lifetime,
+provenance, multiple roots, and real-symbol engine closure.
 
 ## Existing release evidence
 
 The composed local gates currently establish:
 
-- 1,975 production diagnostics are cataloged;
-- 590 authored C/C++ sources remain within the 2,500-line hard limit; any file
+- 1,989 production diagnostics are cataloged;
+- 609 authored C/C++ sources remain within the 2,500-line hard limit; any file
   that exceeds it must be refactored below the 2,000-line target;
-- all 1,200 required matrix rows are executable with no explicit evidence gap;
+- all 1,210 required matrix rows are executable with no explicit evidence gap;
 - 105 independently authored conformance expectations in 28 fixtures are
   owned by 27 CTests;
 - 20 exact portability rows cover Debug/Release, interpreter/LLVM O0/O2,

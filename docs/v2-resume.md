@@ -5,6 +5,342 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
+## Batch 156 completed checkpoint - 2026-08-06
+
+1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
+   Batch 156 allocation in `implementation_plan_v2.md`, and verify branch
+   `codex/v2` remains based on pushed Batch 155 closeout `5a857d1`. Preserve
+   the dirty accumulated Batch 156 worktree described below; do not reset,
+   commit, push, inspect hosted CI, or run a sanitizer before Change 20.
+2. Batch 156 is expanded into twenty explicit changes. Change 1 is complete in
+   the dirty worktree. `ParsedDesign` owns compilation-unit DPI imports and
+   exports, while packages, modules, interfaces, and programs own local DPI
+   declarations. Every record retains direction, explicit owner kind and
+   identity, all tokens through the terminating semicolon, and the combined
+   source span independently of parser-token lifetime.
+3. A dedicated `verilog_parser_dpi.cpp` selects only `import`/`export` followed
+   by a string literal, preserving the existing package import/re-export path.
+   Focused evidence covers both directions, every supported owner, balanced
+   function profiles, exact source identity, and coexistence with package
+   wildcard import/export. `FSIM-SV-PARSE-324` rejects a declaration missing
+   its semicolon.
+4. The affected exact-LLVM Debug frontend dependency graph builds
+   warning-clean with eight workers. `fsim.frontend`,
+   `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+   `git diff --check` is clean. Preserve this checkpoint and begin Change 2 by
+   structuring the link string, qualifier, callable kind, SystemVerilog name,
+   and optional C alias without reparsing source text. Do not run a sanitizer
+   or inspect hosted CI because Batch 156 is not a monitoring boundary.
+5. Batch 156 Change 2 is complete in the same dirty worktree. Each declaration
+   now structures the normalized link name, `pure`/`context` qualifier,
+   function/task kind, SystemVerilog callable name, and optional C identifier
+   alias while retaining a separate owning token for every component. The
+   alias path follows `c_identifier = function|task` for both directions.
+6. Stable diagnostics require the `"DPI-C"` link string and reject missing
+   callable kinds or names. The first focused run found that code 217 was
+   already assigned to coverage options and that the missing-name negative
+   inferred the `int` return keyword as a name; use the next free semantic code
+   222 and exclude keyword candidates. The complete 72-step affected Debug
+   graph rebuilds warning-clean with eight workers, the final three focused
+   gates pass, and `git diff --check` is clean.
+7. Preserve this checkpoint and begin Change 3 by structuring function return
+   types and function/task formal profiles, including directions, types,
+   dimensions, defaults, and exact profile tokens/spans. Do not commit, push,
+   run a sanitizer, or inspect hosted CI before Change 20.
+8. Batch 156 Change 3 is complete in the same dirty worktree. Imported
+   functions own exact return-type tokens. Imported functions and tasks own
+   complete formal/profile tokens and spans plus ordered formal records with
+   direction, const-ref policy, type, name, unpacked dimensions, defaults, and
+   their original token/span provenance. Exports intentionally remain
+   name-only until scope resolution.
+9. Stable parser diagnostics reject incomplete, unbalanced, or trailing
+   profiles. Semantic diagnostics reject export qualifiers, pure tasks,
+   non-input pure-function formals, nonportable C aliases, and formal defaults.
+   Focused positive evidence covers packed and unpacked dimensions plus all
+   planned direction forms. The complete 72-step affected Debug graph is
+   warning-clean with eight workers; the three focused gates pass and
+   `git diff --check` is clean.
+10. Preserve this checkpoint and begin Change 4 by resolving imports and
+    exports in their exact owner scope, rejecting duplicates and C/SV name
+    conflicts, and publishing stable validated profiles for marshalling and
+    callbacks. Do not commit, push, run a sanitizer, or inspect hosted CI
+    before Change 20.
+11. Batch 156 Change 4 is complete in the same dirty worktree. DPI imports and
+    exports resolve within their exact compilation-unit or design-unit owner.
+    Successful records publish the effective C linkage name and a validation
+    state that preserves both structure and resolution failures. Resolved
+    exports additionally own typed native function/task profiles with return,
+    formal, reference, and callable-span data for callback lowering.
+12. Compilation-unit native definitions are parsed only when a preceding
+    same-kind DPI export introduces their name. The first focused run showed
+    that globally accepting unqualified functions removed the stable
+    `FSIM-SV-SEM-172` class-method negative; the narrowed path restores that
+    compatibility contract while retaining compilation-unit DPI exports.
+    Owner-local duplicate names/linkage, native/import conflicts, and unknown
+    or wrong-kind exports have stable `FSIM-SV-SEM-228` through `230`
+    diagnostics.
+13. The complete 72-step affected Debug graph and the final 19-step correction
+    build are warning-clean with eight workers. Frontend, diagnostic-catalog,
+    and source-line-budget gates pass 3/3, and `git diff --check` is clean.
+    Preserve the dirty worktree and begin Change 5 with scalar two-/four-state
+    DPI value descriptors and checked import marshalling. Do not commit, push,
+    run a sanitizer, or inspect hosted CI before Change 20.
+14. Batch 156 Change 5 is complete in the same dirty worktree. Public runtime
+    DPI scalar marshalling uses bounded owning 32-bit aval/bval planes for
+    two-state and four-state payloads. It preserves X/Z and arbitrary word
+    boundaries, rejects unknown two-state inputs, and validates output width,
+    plane sizes, unused high bits, empty values, and the default 1,048,576-bit
+    resource limit before constructing runtime storage.
+15. Focused evidence covers a 65-bit four-state round-trip, exact two-state
+    encoding, X/Z rejection, malformed planes, dirty high bits, width mismatch,
+    and bounded failure. The first focused build required explicit construction
+    of empty `PackedLogic4` error results; the corrected runtime target builds
+    warning-clean with eight workers. `fsim.runtime` and
+    `fsim.source-line-budget` pass 2/2, and `git diff --check` is clean.
+16. Preserve this checkpoint and begin Change 6 with exact real-family bits,
+    UTF-8 string storage, and chandle identity/lifetime marshalling. Do not
+    commit, push, run a sanitizer, or inspect hosted CI before Change 20.
+17. Batch 156 Change 6 is complete in the same dirty worktree. Direction-aware
+    shortreal, real, and realtime payloads preserve exact IEEE bits including
+    negative zero and reject nonfinite values, kind mismatch, dirty binary32
+    high bits, and input writeback. String payloads retain strict UTF-8 bytes
+    while rejecting embedded NUL, invalid encoding, direction mismatch, and
+    bounded-size excess.
+18. Chandle payloads preserve stable registry identities and explicit borrowed
+    input versus writable output/inout/ref state. Released/stale handles,
+    borrowed writeback, and direction mismatches reject before use. The first
+    test build used an obsolete four-field registry descriptor initializer;
+    matching the current three-field contract is warning-clean. Runtime and
+    source-line-budget gates pass 2/2, and `git diff --check` is clean.
+19. Preserve this checkpoint and begin Change 7 with recursive fixed-array,
+    struct, and enum descriptors, checked layout/resource accounting, and
+    direction-aware writeback. Do not commit, push, run a sanitizer, or inspect
+    hosted CI before Change 20.
+20. Batch 156 Change 7 is complete in the same dirty worktree. Recursive
+    scalar, fixed-array, struct, and enum descriptors produce one canonical
+    flattened leaf order and checked layout. Validation covers exact descriptor
+    shape, unique struct members/enum values, enum representability, arithmetic
+    overflow, nesting depth, 65,536 leaves, 1,048,576 total bits, and actual
+    aval/bval payload bytes.
+21. Direction-aware composite marshalling reuses the checked Change 5 scalar
+    planes per leaf and rejects width/count, enum, descriptor, direction,
+    unknown-value, and resource mismatches before writeback. Nested
+    array-of-struct-with-enum positive and negative evidence passes. The
+    13-step affected runtime build is warning-clean with eight workers;
+    runtime/source gates pass 2/2, and `git diff --check` is clean.
+22. Preserve this checkpoint and begin Change 8 with standard open-array range,
+    index, element, contiguity, and lifetime-epoch behavior. Do not commit,
+    push, run a sanitizer, or inspect hosted CI before Change 20.
+23. Batch 156 Change 8 is complete in the same dirty worktree. Registry-owned
+    open-array handles retain transfer mode, contiguity, and a slot/epoch
+    identity. Dimensions preserve declared left/right direction and derive
+    checked low/high/increment/size values; mixed-direction multidimensional
+    indices map into canonical row-major flattened element leaves.
+24. Creation reuses Change 7 descriptor layout and rejects empty, overflowing,
+    resource-excessive, or value-count-mismatched shapes. Element access and
+    writeback reject rank/bounds, direction, leaf-count, noncontiguous, and
+    released/stale-handle misuse. Focused evidence covers a descending by
+    ascending two-dimensional byte array, first/last lookup, inout writeback,
+    contiguous copies, a noncontiguous input, and post-release epoch failure.
+    The 14-step affected runtime build is warning-clean with eight workers;
+    runtime/source gates pass 2/2, and `git diff --check` is clean.
+25. Preserve this checkpoint and begin Change 9 with simulation-owned
+    `svScope` identity, current-scope lookup, exact named-scope resolution, and
+    scheduler-safe set/restore behavior. Do not commit, push, run a sanitizer,
+    or inspect hosted CI before Change 20.
+26. Batch 156 Change 9 is complete in the same dirty worktree. Scope handles
+    contain the stable simulation identity, slot, and epoch. The registry owns
+    canonical full names and parent identities and supports exact name, parent,
+    and validity lookup while rejecting zero simulation identity, malformed or
+    duplicate names, wrong parents, and cross-simulation handles.
+27. Current scope belongs to an explicit scheduler execution context, never
+    process-global or thread-local state. A successful set returns the prior
+    handle for exact nested restoration; invalid sets leave state unchanged.
+    Focused roots/nested/generated-name, two-context, restore, malformed-tree,
+    and cross-simulation evidence passes. The 12-step affected runtime build is
+    warning-clean with eight workers; runtime/source gates pass 2/2, and `git
+    diff --check` is clean.
+28. Preserve this checkpoint and begin Change 10 with the standard open-array
+    query, dimension, pointer, element, and writeback façade over Change 8's
+    registry-owned handles. Do not commit, push, run a sanitizer, or inspect
+    hosted CI before Change 20.
+29. Batch 156 Change 10 is complete in the same dirty worktree. Standard-style
+    dimension/range, whole-storage, and indexed-element accessors return
+    transient pointers into registry-owned flattened leaves with explicit
+    counts. Read-only pointers permit input and writable arguments; mutable
+    pointers require output/inout/ref direction. Whole-storage access requires
+    contiguity, while indexed elements remain available for noncontiguous
+    handles.
+30. Rank, bounds, direction, contiguity, and released/stale failures return no
+    pointer. Focused evidence covers dimension/range queries, first/last
+    pointers, direct mutable publication, noncontiguous element access, input
+    protection, and post-release invalidation. The six-step affected runtime
+    build is warning-clean with eight workers; runtime/source gates pass 2/2,
+    and `git diff --check` is clean.
+31. Preserve this checkpoint and begin Change 11 with disabled-state helpers
+    and exported callback dispatch carrying explicit current scope, argument
+    direction, and exception boundaries. Do not commit, push, run a sanitizer,
+    or inspect hosted CI before Change 20.
+32. Batch 156 Change 11 is complete in the same dirty worktree. Exported
+    callbacks register by exact linkage name, validated Change 9 scope, ordered
+    direction profile, and owning callable. Dispatch installs the callback
+    scope in the explicit execution context, invokes against a transactional
+    owning frame, publishes output/inout/ref values only on success, and
+    restores the prior scope on every normal or exceptional path.
+33. Inputs expose read-only access; mutable input and out-of-range access become
+    typed failures. Pending disabled state must be observed and acknowledged or
+    publication rejects while retaining the pending state. Standard and
+    nonstandard C++ exceptions are contained with rejected outputs. Focused
+    success, scope restoration, input-write, acknowledged/unacknowledged
+    disable, exception rollback, unknown-name, arity, and duplicate evidence
+    passes. The first test compile found one excess vector dereference; the
+    corrected four-step affected runtime build is warning-clean with eight
+    workers. Runtime/source gates pass 2/2, and `git diff --check` is clean.
+34. Preserve this checkpoint and begin Change 12 with suspending imported
+    tasks, callback re-entry, and scheduler containment across normal return,
+    suspension, cancellation, disable, and failure. Do not commit, push, run a
+    sanitizer, or inspect hosted CI before Change 20.
+35. Batch 156 Change 12 is complete in the same dirty worktree. Imported tasks
+    bind exact linkage, Change 9 scope, directions, and an owning callable to
+    the existing deterministic scheduler. Each generation-qualified invocation
+    owns a cancelable scheduler handle plus address-stable transactional
+    argument state retained privately across timed suspensions. Writable values
+    publish only on final completion.
+36. Resume reinstalls the task scope; nested exported callbacks install and
+    restore their own scope, then the task restores its caller. Cancellation
+    removes the pending resume and unpublished values. Direction/arity,
+    disabled state, cross-simulation handles, scheduling errors, exceptions,
+    and registry destruction remain contained without poisoning later work.
+    Focused suspension/resume, private intermediate state, callback re-entry,
+    scope restore, cancel, exception, later-work survival, and malformed-use
+    evidence passes. The first compile required an explicit boolean conversion;
+    invocation storage was then made address-stable for re-entry. The corrected
+    five-step affected runtime build is warning-clean with eight workers;
+    runtime/source gates pass 2/2, and `git diff --check` is clean.
+37. Preserve this checkpoint and begin Change 13 with a versioned portable DPI
+    plug-in manifest and deterministic discovery/build/link contract. Do not
+    commit, push, run a sanitizer, or inspect hosted CI before Change 20.
+38. Batch 156 Change 13 is complete in the same dirty worktree. A versioned
+    manifest owns exact source, include, library, import-symbol, and
+    export-symbol order. It rejects unsupported versions, invalid identifiers,
+    absolute/parent-escaping paths, unsupported source extensions, duplicates,
+    and import/export symbol collisions.
+39. Deterministic planning emits argv vectors rather than shell text. Source
+    ordinals give collision-free stable object paths. POSIX uses C++20/PIC/
+    hidden/shared options; MSVC uses explicit C++20/EH/compile/object/DLL/output
+    options. Discovery preserves root order and uses `plugin.so` or
+    `plugin.dll`. Repeatability, two-source POSIX, MSVC, path escape, symbol
+    collision, and version evidence passes. The 12-step affected runtime build
+    is warning-clean with eight workers; runtime/source gates pass 2/2, and
+    `git diff --check` is clean.
+40. Preserve this checkpoint and begin Change 14 by loading the planned
+    artifact through `platform::DynamicLibrary` and resolving the complete
+    exact import/export symbol inventory transactionally. Do not commit, push,
+    run a sanitizer, or inspect hosted CI before Change 20.
+41. Batch 156 Change 14 is complete in the same dirty worktree. A move-only
+    loaded DPI plug-in owns the existing hardened platform dynamic-library
+    handle, normalized artifact path, and separate exact import/export address
+    maps. Every declared symbol resolves before publication; open or symbol
+    failure destroys the provisional library and returns no partial state.
+42. A real hidden-visibility shared-library fixture explicitly exports
+    `dpi_add` and `sv_report`. Focused loading resolves both inventories,
+    rejects cross-map lookup, and proves a missing symbol rejects
+    transactionally. The first compile exposed a missing `unordered_map`
+    include; the corrected 13-step affected target builds warning-clean with
+    eight workers. Runtime/source gates pass 2/2, and `git diff --check` is
+    clean.
+43. Preserve this checkpoint and begin Change 15 with the versioned C ABI
+    descriptor, struct-size checks, relocatable manifest identity, artifact
+    content provenance, and complete cache key. Do not commit, push, run a
+    sanitizer, or inspect hosted CI before Change 20.
+44. Batch 156 Change 15 is complete in the same dirty worktree. A C-compatible
+    ABI-v1 descriptor reports version, fixed-prefix size, pointer width,
+    reserved flags, and length-delimited plug-in name through explicit export
+    and calling-convention macros. Loading validates it before resolving any
+    declared callable and rejects missing/null/throwing descriptors or every
+    field mismatch without publishing a plug-in.
+45. SHA-256 provenance separately covers canonical relative manifest fields
+    and complete artifact bytes. The cache key adds toolchain identity,
+    platform, ABI version, and pointer width while excluding producer roots.
+    The real fixture plus version/pointer-width negatives, stable 64-hex
+    digests, repeatability, artifact equality, and toolchain divergence pass.
+    The six-step affected runtime/fixture build is warning-clean with eight
+    workers; runtime/source gates pass 2/2, and `git diff --check` is clean.
+46. Preserve this checkpoint and begin Change 16 with leased symbol lifetime,
+    normal unload, explicit failure quarantine, and complete Windows/POSIX
+    export/calling-convention behavior. Do not commit, push, run a sanitizer,
+    or inspect hosted CI before Change 20.
+47. Batch 156 Change 16 is complete in the same dirty worktree. The shared C
+    header uses `__declspec(dllexport)` plus explicit `__cdecl` on Windows and
+    default visibility on POSIX; generated MSVC plans explicitly add `/Gd`.
+    Symbol lookups return leases holding shared module ownership, so addresses
+    survive facade destruction. Normal release unloads after the final lease.
+48. A thread-safe explicit quarantine intentionally grants process-lifetime
+    module ownership when external registrations may retain addresses. The real
+    fixture is invoked through its leased calling-convention type after facade
+    destruction; focused evidence observes normal unload after lease release
+    and residency after quarantine. The first compile required a mutable loader
+    result for explicit release. The corrected three-step affected build is
+    warning-clean with eight workers; runtime/source gates pass 2/2, and `git
+    diff --check` is clean.
+49. Preserve this checkpoint and begin Change 17 with independent C and C++
+    plug-in fixtures plus actual malformed ABI/symbol and profile negatives.
+    Do not commit, push, run a sanitizer, or inspect hosted CI before Change 20.
+50. Batch 156 Change 17 is complete in the same dirty worktree. One real
+    hidden-visibility plug-in combines independently compiled C and C++
+    translation units using the same public C ABI header. Both exports resolve,
+    retain the module through leases, and execute through the explicit calling
+    convention with distinct expected results.
+51. A second real shared library exposes the expected callable names but
+    advertises ABI version 2; loading rejects it before symbol publication.
+    Together with missing-symbol, callback/task arity, mutable-input,
+    descriptor-field, and manifest symbol negatives, this closes malformed
+    boundary evidence. The 21-step affected runtime/C/C++ fixture build is
+    warning-clean with eight workers; runtime/source gates pass 2/2, and `git
+    diff --check` is clean.
+52. Preserve this checkpoint and begin Change 18 with interpreter, compiled
+    O0/O2, multi-root, multi-context, suspension, and callback-re-entry
+    differentials through the real fixture. Do not commit, push, run a
+    sanitizer, or inspect hosted CI before Change 20.
+53. Batch 156 Change 18 is complete in the same dirty worktree. The real
+    `dpi_add` symbol executes through an interpreter-style owning scalar
+    marshal/unmarshal path and compiled O0/O2 call paths with identical value
+    42. Two simulation registries and current-scope contexts invoke the same
+    leased symbol without scope or identity leakage, and a scheduler-backed
+    imported task resumes through that symbol after suspension.
+54. The ten-step affected build is warning-clean with eight workers. Runtime
+    and source-line-budget gates pass 2/2, and `git diff --check` is clean.
+55. Change 19 synchronizes the bounded public contract in README,
+    `architecture.md`, `language-support.md`, and the new
+    `systemverilog-dpi.md`. Feature rows `SV-771` through `SV-780` bind every
+    supported declaration, value, composite, open-array, scope, callback,
+    task, plug-in, ABI/lifetime, provenance, and differential boundary to its
+    positive, negative, implementation, and runtime evidence. Unrestricted DPI
+    profiles/extensions, VPI/VHPI, and UVM remain explicitly deferred.
+56. The affected exact-LLVM Debug frontend/runtime targets are warning-clean
+    with eight workers (`ninja: no work to do`). `fsim.frontend`,
+    `fsim.runtime`, `fsim.diagnostics-catalog`, and
+    `fsim.source-line-budget` pass 4/4 in 0.39 seconds, and `git diff --check`
+    is clean. Preserve all accumulated Batch 156 edits and begin Change 20
+    with the full non-sanitized exact-LLVM Debug and Release builds and
+    regressions. Then update this handoff with exact results, commit and push
+    once, and do not inspect hosted CI because Batch 156 is not a monitoring
+    boundary.
+57. Change 20 is complete. The first full Debug run exposed only the intentional
+    addition of ten required matrix rows and fourteen diagnostic codes in two
+    frozen baselines; seven composed release gates inherited those failures,
+    while every functional test passed. The synchronized audit now freezes
+    1,210 execute rows, 4,840 evidence cells, 438 exact paths, 117 runtime
+    owners, 1,989 diagnostics, 609 bounded sources, 700 SPDX-owned files, and
+    227 authored test/control files with reviewed matrix and evidence digests.
+58. The corrected full exact-LLVM 22.1.8 Debug tree required no further build
+    work and passes 114/114 in 355.83 seconds. The independent Release tree
+    regenerated cleanly, built all 414 steps warning-clean with eight workers,
+    and passes 114/114 in 322.72 seconds. No sanitizer was run and hosted CI was
+    not inspected, as required at this boundary. Review the final diff/status,
+    commit and push this Batch 156 checkpoint exactly once, then begin Batch 157
+    from the clean synchronized `codex/v2` branch.
+
 ## Batch 155 completed checkpoint - 2026-08-06
 
 1. Start in `/home/colin/projects/fsim`, read this file and the authoritative

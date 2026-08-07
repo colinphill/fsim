@@ -792,6 +792,11 @@ are therefore excluded.
 | `FSIM-SV-PARSE-321` | error | A transition bin has an empty, unbalanced, malformed, or unbounded sequence, repetition, or delay form. |
 | `FSIM-SV-PARSE-322` | error | A coverpoint bin `iff` guard is empty, unbalanced, malformed, or attached to an invalid default-sequence form. |
 | `FSIM-SV-PARSE-323` | error | An explicit cross bin is missing its name, assignment, or nonempty selection expression. |
+| `FSIM-SV-PARSE-324` | error | A SystemVerilog DPI import or export declaration is missing its terminating semicolon. |
+| `FSIM-SV-PARSE-325` | error | A SystemVerilog DPI declaration is missing its `function` or `task` callable kind. |
+| `FSIM-SV-PARSE-326` | error | A SystemVerilog DPI declaration is missing its SystemVerilog callable name. |
+| `FSIM-SV-PARSE-327` | error | A DPI import has a missing or malformed formal list, or a DPI export contains profile tokens after its name. |
+| `FSIM-SV-PARSE-328` | error | A DPI function return type or formal type/name entry is missing or malformed. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -1039,6 +1044,15 @@ are therefore excluded.
 | `FSIM-SV-SEM-214` | error | A transition-bin array expansion exceeds 65,536 sequences or would create an empty expanded bin. |
 | `FSIM-SV-SEM-215` | error | A cross declares the same explicit cross-bin name more than once. |
 | `FSIM-SV-SEM-216` | error | A `binsof` operand or named-bin qualification is empty, unknown, malformed, or ambiguous in its cross. |
+| `FSIM-SV-SEM-222` | error | A DPI declaration uses a link string other than `"DPI-C"`. |
+| `FSIM-SV-SEM-223` | error | A DPI export incorrectly declares a `pure` or `context` import qualifier. |
+| `FSIM-SV-SEM-224` | error | An imported DPI task is incorrectly declared `pure`. |
+| `FSIM-SV-SEM-225` | error | A pure imported DPI function has a non-input formal. |
+| `FSIM-SV-SEM-226` | error | A DPI C linkage alias is not a portable C identifier. |
+| `FSIM-SV-SEM-227` | error | A DPI formal incorrectly declares a default value. |
+| `FSIM-SV-SEM-228` | error | A compilation-unit callable or owner-local DPI SystemVerilog/C export name is duplicated. |
+| `FSIM-SV-SEM-229` | error | A DPI import conflicts with a native callable in the same owner scope. |
+| `FSIM-SV-SEM-230` | error | A DPI export does not resolve to a native callable of the declared kind in the same owner scope. |
 | `FSIM-SV-SEM-217` | error | A coverpoint or cross `weight`, `goal`, or `at_least` option is not a bounded integer in its permitted range. |
 | `FSIM-SV-SEM-218` | error | A covergroup-level weight, goal, `per_instance`, or `merge_instances` literal is outside its permitted bounded range. |
 | `FSIM-SV-SEM-219` | error | A covergroup constructor or sample formal uses a real, string, chandle, event, void, or other type outside the bounded integral coverage model. |

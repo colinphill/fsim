@@ -481,6 +481,36 @@ class VerilogParser final : private detail::ParserBase {
       std::vector<SystemVerilogExport>& exports,
       const Token& start);
 
+  [[nodiscard]] bool dpi_declaration_start(
+      std::string_view direction) const;
+
+  void parse_dpi_declaration(
+      std::vector<SystemVerilogDpiDeclaration>& declarations,
+      const Token& start,
+      SystemVerilogDpiDirection direction,
+      SystemVerilogDpiOwnerKind owner_kind,
+      std::string owner_identity);
+
+  void structure_dpi_declaration(
+      SystemVerilogDpiDeclaration& declaration);
+
+  void structure_dpi_profile(
+      SystemVerilogDpiDeclaration& declaration,
+      std::size_t callable_position,
+      std::size_t name_position);
+
+  [[nodiscard]] bool
+  compilation_unit_class_method_definition_start() const;
+
+  [[nodiscard]] bool compilation_unit_dpi_export_definition_start(
+      const std::vector<SystemVerilogDpiDeclaration>& declarations,
+      SystemVerilogDpiCallableKind kind) const;
+
+  void resolve_dpi_declarations(
+      std::vector<SystemVerilogDpiDeclaration>& declarations,
+      const std::vector<FunctionDeclaration>& functions,
+      const std::vector<TaskDeclaration>& tasks);
+
   DesignUnit parse_package(const Token& start);
 
   SystemVerilogClassDeclaration parse_class(

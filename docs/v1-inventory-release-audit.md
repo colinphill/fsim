@@ -207,3 +207,12 @@ bounded C/C++ sources, 680 authored artifacts, and 222 authored test/control
 files. The coverage parser, transaction engine, fixtures, artifact payloads,
 and documentation are clean-room code; no UVM library, external coverage
 engine, third-party coverage corpus, or provenance entry is imported.
+
+v2 Batch 156 adds DPI declaration parsing plus scalar, composite, open-array,
+scope, callback, task, plug-in, ABI, provenance, and real C/C++ fixture
+ownership as nineteen SPDX-owned bounded C/C++ sources and one public guide.
+Fourteen parser and semantic diagnostics advance the reviewed inventory to
+1,989 diagnostics, 609 bounded C/C++ sources, 700 authored artifacts, and 227
+authored test/control files. The DPI boundary, fixtures, ABI, and documentation
+are clean-room code; no external simulator header, foreign runtime, plug-in
+corpus, third-party artifact, or provenance entry is imported.
