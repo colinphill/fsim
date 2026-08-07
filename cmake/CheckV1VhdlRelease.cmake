@@ -125,11 +125,11 @@ foreach(FSIM_GAP_SET IN ITEMS
   endif()
 endforeach()
 
-if(NOT FSIM_ROW_COUNT EQUAL 277
-    OR NOT FSIM_VH_COUNT EQUAL 269
+if(NOT FSIM_ROW_COUNT EQUAL 287
+    OR NOT FSIM_VH_COUNT EQUAL 279
     OR NOT FSIM_V1_VH_COUNT EQUAL 8)
   message(FATAL_ERROR
-    "expected 277 VHDL rows split 269/8, found "
+    "expected 287 VHDL rows split 279/8, found "
     "${FSIM_ROW_COUNT} split ${FSIM_VH_COUNT}/${FSIM_V1_VH_COUNT}")
 endif()
 

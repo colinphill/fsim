@@ -25,6 +25,12 @@ typed status enums in `include/fsim/runtime/vpi_*.hpp` and the bounded
 `fsim_vpi_error_view_v1` C view. Those runtime statuses are not production
 `FSIM-*` diagnostic codes and therefore do not add catalog rows.
 
+The governed VHPI boundary likewise reports ABI, hierarchy, iterator, type,
+value, driver/write, time/callback, foreign, association, I/O, plug-in, and
+checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
+`fsim_vhpi_error_view_v1` C view. Those runtime statuses are not production
+`FSIM-*` diagnostic codes and add no catalog rows.
+
 ## Command line and C API
 
 | Code | Severity | Meaning |

@@ -105,3 +105,12 @@ relocation, and contained ABI or resource failures advance the linked totals
 to 486 interpreter rows, 403 LLVM rows, 266 cache rows, 109 debugger rows, 137
 VCD/trace rows, 444 scheduling rows, and 109 failure rows. The reviewed
 36-CTest corpus inventory is unchanged.
+
+Batch 158's ten VHPI rows advance the reviewed differential inventory to 1,230
+required rows and 133 runtime owners. Typed hierarchy/type/value/driver
+operations, time and callbacks, foreign bindings, associations and I/O,
+exact/portable restart, invalidation, independent images, engine transcripts,
+negative behavior, and relocation advance the linked totals to 486 interpreter
+rows, 403 LLVM rows, 267 cache rows, 109 debugger rows, 137 VCD/trace rows, 454
+scheduling rows, and 110 failure rows. The reviewed 36-CTest corpus inventory
+is unchanged.

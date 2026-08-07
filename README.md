@@ -260,6 +260,10 @@ The current tree contains:
   handles, callbacks, control, system callables, portable I/O, transactional
   save/restart, and versioned C/C++ plug-ins whose native state is explicitly
   retained or invalidated across restart and artifact flows;
+- governed VHDL-2008 VHPI with selected/indexed hierarchy, scalar/composite/
+  nine-state values, drivers, callbacks, foreign models, associations,
+  root-isolated reporting, transactional restart/remap, and independently
+  compiled versioned C/C++ images;
 - ordered VHDL sequential packed `case` statements with `|` choices and
   `others`, lowered through common exact case-equality branches;
 - concurrent and sequential VHDL-2008 conditional assignments with chained

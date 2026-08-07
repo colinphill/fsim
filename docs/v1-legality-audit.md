@@ -133,3 +133,9 @@ inventory, and checks every path-like evidence link. The same task added the
 semantic model ownership validator and cataloged `FSIM-SEM-0001` rejection
 before application checking or DesignIR projection. Tasks 5 through 8 classify
 each remaining language-specific discard site alongside its owning row.
+
+Batch 158 advances the gate to 1,230 total matrix rows and 279 VHDL rows.
+`VH-270` through `VH-279` own the governed VHPI ABI and loader, typed services,
+transaction safety, exact/portable restart, invalidation, independent C/C++
+images, engine transcripts, negative behavior, and relocation. Every row
+remains `execute` with complete evidence.

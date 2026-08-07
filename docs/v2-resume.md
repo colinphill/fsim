@@ -5,6 +5,542 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
+## Batch 158 active checkpoint - 2026-08-07
+
+1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
+   expanded Batch 158 allocation in `implementation_plan_v2.md`, and verify
+   branch `codex/v2` remains based on pushed documentation checkpoint
+   `dd9d2332411646e12797e4329bef20168bb64504`. Preserve the dirty accumulated
+   Batch 158 worktree described below; do not reset, commit, push, inspect
+   hosted CI, or run a sanitizer before Change 20.
+2. Change 1 is complete in the dirty worktree. The distinct public VHPI C ABI
+   fixes explicit host and plug-in versions and structure sizes, native pointer
+   width, reserved flags, stable nonpointer 64-bit handles, simulation
+   ownership, bounded diagnostic views, Windows/POSIX calling and export
+   conventions, and the exact `fsim_vhpi_plugin_bind_v1` symbol.
+3. The C++ constructor and validators reject incompatible host and plug-in
+   versions, truncated tables, foreign pointer widths, reserved flags, zero
+   simulation ownership, missing report state, malformed bounded plug-in names,
+   and incomplete lifecycle tables. An independent C translation unit freezes
+   the 40-byte host and 48-byte plug-in layouts and exercises the diagnostic
+   callback and bind-symbol spelling through the public C header.
+4. The affected exact-LLVM 22.1.8 Debug runtime target rebuilt warning-clean
+   with eight workers. `fsim.runtime` and `fsim.source-line-budget` pass 2/2
+   in 0.21 seconds, tracked and untracked whitespace checks are clean, and no
+   sanitizer or hosted CI was run.
+5. Preserve this checkpoint and begin Change 2 by loading one VHPI image through
+   `platform::DynamicLibrary`, resolving only the exact bind symbol,
+   validating and copying the descriptor transactionally, containing bind,
+   startup, and shutdown failures, and guaranteeing exactly-once teardown
+   before unload.
+6. Change 2 is complete in the same dirty worktree. Loading validates the host
+   before opening an image, resolves only the exact bind symbol, invokes bind
+   and startup behind exception boundaries, copies the validated descriptor
+   before publication, and keeps the image owned until shutdown completes.
+   Failed startup never invokes shutdown; successful explicit, automatic, and
+   move-owned teardown invoke it exactly once and retain the first result.
+7. A real hidden-visibility image covers successful publication, explicit and
+   automatic shutdown, status failures and exceptions at bind/startup/shutdown,
+   malformed versions/sizes/flags/name/lifecycle, missing bind symbol, invalid
+   host ownership, and missing artifacts. The exact-LLVM Debug target builds
+   warning-clean with eight workers; `fsim.runtime` and
+   `fsim.source-line-budget` pass 2/2 in 0.21 seconds, and whitespace checks
+   are clean.
+8. Preserve this checkpoint and begin Change 3 with simulation-owned error
+   state and separate generation-qualified object and iterator handle
+   registries. Distinguish malformed, stale, released, exhausted, and
+   cross-simulation identities deterministically; never reuse VPI identities or
+   expose host addresses.
+9. Change 3 is complete in the same dirty worktree. Mutex-safe error state owns
+   bounded code/message storage, validates raw severities before narrowing,
+   remains inspectable until the next call boundary, and preserves the last
+   valid record when malformed input is rejected.
+10. VHPI object and iterator handles use a VHPI-only interface tag, independent
+    kind tag, process-unique registry identity, 16-bit generation, and 24-bit
+    slot; they cannot alias VPI identities or host addresses. Object records
+    retain kind, parent, stable creation order, and live-child count. Iterators
+    own immutable handle snapshots and release independently.
+11. Focused evidence covers two simulations, malformed and cross-owner
+    identities, unknown kinds, leaf-first release, object/iterator confusion,
+    ordered scan and exhaustion, independent iterator teardown, released
+    identities before reuse, stale identities after reuse, and owned diagnostic
+    lifetime and limits. The exact-LLVM Debug target builds warning-clean with
+    eight workers; `fsim.runtime` and `fsim.source-line-budget` pass 2/2 in
+    0.20 seconds, and whitespace checks are clean.
+12. Preserve this checkpoint and begin Change 4 with canonical case-insensitive
+    basic identifiers, exact extended identifiers, selected/indexed full-name
+    identity, hierarchy-region classification, source metadata, checked
+    root/relative lookup, and creation-ordered relationship iterators.
+13. Change 4 is complete in the same dirty worktree. Named publication owns
+    canonical case-folded basic identifiers, case-exact extended identifiers,
+    signed multidimensional index identity, selected and full names, and
+    bounded file/line/column source records. Duplicate sibling/full identities,
+    malformed identifiers/indices/sources, anonymous named parents, and
+    malformed or missing lookups reject before publication.
+14. Checked full and relative lookup preserves extended-name dots and case while
+    normalizing basic-name case and indexed-name whitespace. Children, region,
+    and declaration relationships snapshot live handles atomically and scan in
+    stable creation order through independently releasable iterators.
+15. Focused evidence covers named multi-root isolation, basic and extended
+    identifiers, two-dimensional signed generate indices, indexed extended
+    signals, source ownership, duplicate and malformed profiles, exact/missing
+    lookup, relationship filtering/order, unknown relationships, cross-owner
+    rejection, and leaf-first name removal. The first build stopped only on
+    warnings-as-errors for an older anonymous aggregate missing explicit new
+    metadata fields; after that correction the exact-LLVM Debug target builds
+    warning-clean with eight workers, and `fsim.runtime` plus
+    `fsim.source-line-budget` pass 2/2 in 0.21 seconds.
+16. Preserve this checkpoint and begin Change 5 with canonical type/subtype
+    identities; scalar categories, base-type links, recursive range and
+    constraint descriptors, direction and resolution metadata, declaration
+    queries, ownership checks, and strict depth/node/resource limits.
+17. Change 5 is complete in the same dirty worktree. A simulation-owned type
+    system publishes one immutable descriptor per canonical Type/Subtype object,
+    retains exact scalar category, direct subtype link, canonical base identity,
+    recursive constraints, inclusive direction/null-range semantics, and
+    optional checked resolution-subprogram identity without native layout.
+18. Recursive constraint validation bounds depth, total nodes, and children and
+    rejects malformed shapes, unknown categories/directions, inconsistent
+    ranges, invalid base chains, wrong resolution objects, duplicate
+    publication, and cross-simulation identities before copying. Signal,
+    variable, constant, and file declarations bind once to a published type and
+    return owned descriptor snapshots.
+19. Focused evidence covers integer, bit, resolved, two-level subtype, signed
+    ascending/descending and explicit-null ranges, nested array/record
+    constraints, immutable snapshots, canonical base queries, declaration
+    queries, duplicates, unknown scalar kinds, missing bases, bad directions,
+    wrong resolvers, recursive-depth limits, and two-simulation isolation. The
+    exact-LLVM Debug target builds warning-clean with eight workers;
+    `fsim.runtime` and `fsim.source-line-budget` pass 2/2 in 0.20 seconds,
+    and whitespace checks are clean.
+20. Preserve this checkpoint and begin Change 6 with checked scalar, enumeration,
+    physical, access, and null value transfer tied to declaration/type identity,
+    including exact positions, units, designated subtype metadata, caller
+    buffer bounds, owned storage, and lossless read/write validation.
+21. Change 6 is complete in the same dirty worktree. A simulation-owned value
+    system binds one typed value profile to each declaration and stores only
+    semantic payloads: booleans/bits, Unicode characters, signed integers,
+    finite reals, full-width time, enumeration positions, physical magnitude
+    plus unit position, and access object handles where zero is the exact null
+    value. No native object address or layout enters the value model.
+22. Enumeration literal tables, physical unit names/multipliers, and designated
+    access subtype identity are copied and validated before publication.
+    Integer constraints, Unicode scalar legality, finite-real policy, enum/unit
+    positions, and exact access target types are checked transactionally before
+    writes. Bounded literal reads report the required size and leave undersized
+    caller buffers untouched.
+23. Focused evidence covers boolean, Unicode character, constrained signed
+    integer, real, maximum-width time, owned enumeration text, negative physical
+    values and exact unit metadata, access null/non-null transfer, range/type/
+    position/unit/designated-subtype failures, malformed profiles, duplicate
+    binding, and rejected-write rollback. The first full compile required three
+    test-only explicit result conversions; production compiled cleanly. The
+    corrected exact-LLVM Debug target builds warning-clean with eight workers,
+    and `fsim.runtime` plus `fsim.source-line-budget` pass 2/2 in 0.21
+    seconds.
+24. Preserve this checkpoint and begin Change 7 with constrained and
+    unconstrained arrays plus records, declared multidimensional index mapping,
+    recursive element/field values, exact shape/type identity, caller buffer
+    sizing, and transactional composite publication and updates.
+25. Change 7 is complete in the same dirty worktree. A simulation-owned
+    composite system publishes immutable array and record descriptors leaf
+    first, distinguishes constrained, runtime-constrained, and explicit-null
+    shapes, owns ordered record fields, and recursively validates scalar and
+    composite values against exact type identity with bounded depth and nodes.
+26. Multidimensional array values retain signed declared ranges and direction;
+    checked row-major translation supports ascending and descending dimensions
+    without exposing native layout. Exact member reads report required size,
+    leave undersized buffers untouched, and copy only after full validation.
+    Whole-value and element updates validate a private copy before publication.
+27. Focused evidence covers a signed two-dimensional matrix, all four declared
+    index translations, descending runtime-constrained arrays, explicit-null
+    arrays, nested matrix-in-record values, ordered fields, exact and short
+    buffers, element updates, duplicate fields, wrong shapes/types/indices, and
+    rejected-write rollback. The exact-LLVM Debug target builds warning-clean
+    with eight workers; `fsim.runtime` and `fsim.source-line-budget` pass 2/2
+    in 0.21 seconds, and tracked and untracked whitespace checks are clean.
+28. Preserve this checkpoint and begin Change 8 with file, protected, resolved,
+    and nine-state type/value semantics. Keep opaque file/protected identities
+    separate from native resources, define resolution metadata and driver-facing
+    value contracts explicitly, and cover all nine logic states losslessly.
+29. Change 8 is complete in the same dirty worktree. File declarations open as
+    simulation-owned opaque nonpointer identities with copied logical names,
+    immutable type/access metadata, checked read/write/append permission, unique
+    reopen identities, deterministic close state, and cross-simulation rejection.
+    No native stream, descriptor, mutex, or protected-object address is exposed.
+30. Protected variables use independently tagged shared/exclusive lease
+    identities tied to a checked process or subprogram caller. Conflicting
+    access returns busy without publication, wrong-caller and repeated release
+    are deterministic, and foreign systems reject leases before lookup.
+    Resolved types separately retain copied resolver provenance only when the
+    semantic type's canonical resolution-subprogram identity agrees.
+31. Exact nine-state scalar and vector values reuse the runtime's lossless
+    four-plane representation. VHPI byte encoding preserves U, X, 0, 1, Z, W,
+    L, H, and don't-care in declared text order; short buffers report the exact
+    requirement without writes, and wrong-width updates retain prior state.
+32. Focused evidence covers file permission, duplicate/open/close/reopen and
+    foreign identities; shared/exclusive protected leases; copied/mismatched
+    resolver provenance; all nine states, scalar and vector transfer, buffers,
+    duplicate binding, rollback, cross-owner and released handles. The first
+    production compile required two exact result-field/default-construction
+    corrections, and the test compile required its local throwing assertion
+    helper. The corrected exact-LLVM Debug target builds warning-clean with
+    eight workers; fsim.runtime and fsim.source-line-budget pass 2/2 in
+    0.21 seconds, source files remain below 2,000 lines, and tracked/untracked
+    whitespace checks are clean.
+33. Preserve this checkpoint and begin Change 9 with signal drivers, sources,
+    projected transactions, waveform elements, rejection and inertial/transport
+    policy, and deterministic relationship queries over the common scheduler.
+    Keep every driver and transaction identity simulation-owned and do not add
+    deposit/force/release semantics reserved for Change 10.
+34. Change 9 is complete in the same dirty worktree. A VHPI driver facade uses
+    the common scheduler's cancelable update tasks while retaining independently
+    tagged opaque driver, source, and projected-transaction identities. Signal
+    and source handles remain checked VHPI objects, driver/source relationships
+    are creation ordered, and unresolved signals reject a second driver.
+35. Resolved logic vectors apply the existing IEEE nine-state resolution table
+    independently per element. Projected waveforms require nonempty, matching-
+    width, strictly ascending elements without time overflow. Later assignments
+    truncate pending transactions at or after their first time; inertial mode
+    additionally applies the checked rejection window and equal-value bridge
+    rule, while transport mode retains earlier transactions exactly.
+36. Pending transaction snapshots preserve identity, driver/signal ownership,
+    copied value, absolute time, rejection, delay mode, and waveform index in
+    deterministic order. Scheduler callbacks commit only a still-pending
+    identity, update its driver slot, erase that transaction, and recompute the
+    resolved visible signal. Destruction cancels every retained task.
+37. Focused evidence covers ordered drivers/sources, duplicate sources, width
+    mismatch, unresolved-driver limits, cross-simulation identity, transport
+    elements and replacement, commits at times 3 and 4, inertial pulse rejection
+    and commit at time 7, empty/descending/wrong-width/rejection failures, and
+    unchanged pending state after rejection. The first production build exposed
+    the missing packed-value include, explicit packed defaults, and an invalid
+    diagnostic-ID narrowing; the test build required two explicit result
+    conversions. The corrected exact-LLVM Debug target builds warning-clean
+    with eight workers; fsim.runtime and fsim.source-line-budget pass 2/2 in
+    0.21 seconds, all new sources remain below 2,000 lines, and tracked/untracked
+    whitespace checks are clean.
+38. Preserve this checkpoint and begin Change 10 with immediate and delayed
+    deposit, force, release, and transaction cancellation over checked signal
+    types and owners. Define force layering and retained operation identities,
+    guarantee rollback on invalid or partially prepared requests, and keep the
+    scheduler's underlying driver activity visible again after release.
+39. Change 10 is complete in the same dirty worktree. Deposits, forces, and
+    releases retain independently tagged opaque operation identities with exact
+    signal, process/subprogram owner, kind, target-force, copied value, absolute
+    time, pending/active/canceled/completed state, and cancelable scheduler task.
+40. Immediate and delayed deposits update the underlying signal value and are
+    superseded by the next driver commit. Forces form ordered layers: the newest
+    active layer masks visible value while projected driver activity continues
+    updating underneath. Releasing any exact owned layer removes only that
+    layer; releasing the top exposes the next force or latest underlying value.
+41. Delayed writes validate all signal/type/width/owner/time/force state before
+    publishing an operation. Owner-checked cancellation changes only a pending
+    identity and leaves completed operations queryable. Projected transaction
+    cancellation likewise requires the exact driver source and erases only the
+    selected pending transaction. Invalid and foreign requests publish nothing.
+42. Focused evidence covers immediate deposit and driver supersession, force
+    masking through a driver commit, release recovery, two-layer force order,
+    delayed force cancellation, delayed deposit and release, driver progress
+    beneath a pending release, selected transaction cancellation, completed and
+    canceled operation queries, wrong width/owner/force, rollback, and foreign
+    operation identity. The complete exact-LLVM Debug target builds warning-
+    clean with eight workers on its first matrix build; fsim.runtime and
+    fsim.source-line-budget pass 2/2 in 0.21 seconds, all affected sources remain
+    below 2,000 lines, and tracked/untracked whitespace checks are clean.
+43. Preserve this checkpoint and begin Change 11 with exact simulation time,
+    unit, precision, and delta queries plus phase callbacks for update,
+    postponed/read-only, next-time, synchronization, save, restart, reset, and
+    terminal regions. Reuse scheduler phase ordering where it matches, define
+    the VHPI-only regions explicitly, and retain removable callback identities.
+44. Change 11 is complete in the same dirty worktree. A simulation-owned time
+    service reports exact ticks, delta count, unit and precision exponents,
+    current scheduler phase, and next pending time. Profiles are bounded to
+    decimal exponents -18 through 18 and reject precision coarser than the
+    declared unit before installing any scheduler hook.
+45. Update, synchronization, and read-only callbacks map respectively to the
+    scheduler's update, reactive, and postponed safe points. Next-time
+    callbacks announce each distinct future timestamp once. Save, restart,
+    reset, and terminal remain explicit VHPI lifecycle notifications rather
+    than invented scheduler phases. Callback snapshots dispatch in creation
+    order outside the registry lock, one-shot callbacks deactivate before
+    invocation, and retained identities remain queryable after removal.
+46. Focused evidence covers initial and in-phase time queries, two simulation
+    times, repeat and one-shot callback counts, deterministic next-time
+    announcement, removal and repeated removal, all four explicit lifecycle
+    regions, invalid profiles/phases, and cross-simulation callback rejection.
+    The complete exact-LLVM Debug target builds warning-clean with eight
+    workers; fsim.runtime and fsim.source-line-budget pass 2/2 in 0.21 seconds,
+    the three new files contain 136, 251, and 213 lines, and tracked/untracked
+    whitespace checks are clean.
+47. Preserve this checkpoint and begin Change 12 with signal, process, event,
+    transaction, assertion, and lifecycle callbacks. Copy event data before
+    dispatch, permit safe self/peer removal and nested registration/re-entry,
+    contain callback exceptions, and guarantee deterministic teardown.
+48. Change 12 is complete in the same dirty worktree. A simulation-owned VHPI
+    callback service retains independently tagged callback identities, exact
+    category and optional object filters, user data, repeat/one-shot policy,
+    creation ordinal, invocation count, and active/fired/removed/failed/
+    torn-down state without exposing callback closures.
+49. Signal, process, generic event, transaction, assertion, and all eight
+    start/end simulation/save/restart/reset event families validate object kind
+    and ownership before publication. Each event owns its nine-state value,
+    message, source location, severity, correlation identity, scheduler time,
+    delta, simulation identity, and callback user data before dispatch.
+50. Dispatch snapshots active identities in creation order, rechecks each
+    identity before invocation so peer removal is effective immediately,
+    invokes outside the registry lock, defers nested registrations until the
+    next matching publication, permits nested publication, contains every
+    callback exception, and destroys retained closures outside the lock in
+    creation order during idempotent teardown.
+51. Focused evidence covers all five runtime event families, copied payloads,
+    scheduler time, exact object/global filters, self and peer removal, nested
+    registration and re-entry, exception containment with later-callback
+    progress, every lifecycle kind, invalid kind/object/request profiles,
+    cross-simulation identities and objects, and deterministic teardown. After
+    one mechanical include/explicit-aggregate correction, the complete
+    exact-LLVM Debug target builds warning-clean with eight workers;
+    fsim.runtime and fsim.source-line-budget pass 2/2 in 0.21 seconds, the three
+    new files contain 165, 374, and 406 lines, and whitespace checks are clean.
+52. Preserve this checkpoint and begin Change 13 with foreign subprogram and
+    foreign-model registration, copied/validated profiles, call contexts,
+    argument/result handles, lifecycle, re-entry, unregister, retained user
+    data, and deterministic containment without exposing C++ ownership.
+53. Change 13 is complete in the same dirty worktree. A simulation-owned
+    foreign registry copies and validates case-insensitive subprogram/model
+    names, ordered unique parameter profiles, exact type and mode identities,
+    optional result type, registration user data, and model start/invoke/stop
+    callbacks before publishing an independently tagged registration identity.
+54. Each invocation owns a distinct call identity, checked live scope, copied
+    typed nine-state arguments, independently tagged argument/result handles,
+    call user data, completion/failure state, and execution error. Invocation
+    callbacks run outside the registry lock, so same-registration re-entry is
+    isolated; result publication is active-call-only, type exact, single-shot,
+    and required for result-bearing subprograms.
+55. Models require explicit start and stop callbacks and cannot invoke before
+    start, stop with an active call, or unregister while started. Subprograms
+    reject model lifecycle callbacks. Active calls prevent unregister/release;
+    completed-call release invalidates all child handles. Exceptions are
+    contained, and unregister/teardown release retained closures outside the
+    lock in registration order without exposing C++ ownership.
+56. Focused evidence covers copied profiles, ordered argument handles, typed
+    results, registration/call user data, nested same-registration invocation,
+    active-call unregister rejection, model start/invoke/stop, callback
+    exception and missing-result failures, invalid scope/arity, explicit call
+    release, repeated unregister, teardown, and foreign registration/call/
+    argument identities. The complete exact-LLVM Debug target builds warning-
+    clean with eight workers; fsim.runtime and fsim.source-line-budget pass 2/2
+    in 0.21 seconds after teardown hardening, the three new files contain 230,
+    591, and 253 lines, and tracked/untracked whitespace checks are clean.
+57. Preserve this checkpoint and begin Change 14 with generic and port
+    association queries, exact formal/actual/mode/class metadata, open and
+    disconnected associations, object and call user data, stable owner
+    identity, and strict cross-root rejection.
+58. Change 14 is complete in the same dirty worktree. A simulation-owned
+    association facade transactionally publishes immutable generic and port
+    descriptors with independently tagged identities, exact owner and root,
+    formal/actual handles, mode, object class, actual kind, creation ordinal,
+    and independently retained object and call user data.
+59. Object actuals require a live class-matching declaration. Open and
+    disconnected actuals use explicit kinds and a zero object identity;
+    disconnected is port-only. Port profiles require signal class, while
+    generic profiles preserve constant, signal, variable, file, and type-class
+    identity. Duplicate formals and repeat owner publication reject without
+    partial state.
+60. Publication walks the owner, every formal, and every object actual to its
+    canonical live root with a bounded ancestry traversal. A different root is
+    rejected even when both roots belong to the same simulation, and foreign
+    handles are distinguished before root comparison. Owner queries filter by
+    generic/port kind while preserving global creation order.
+61. Focused evidence covers a constant generic, connected inout port, open
+    output, disconnected input, exact formal/actual/mode/class/root metadata,
+    stable ordering, mutable object/call user data, repeat publication,
+    invalid owner, duplicate formal, transactional same-simulation cross-root
+    rejection, and foreign owner/association identity. The complete exact-LLVM
+    Debug target builds warning-clean with eight workers on its first build;
+    fsim.runtime and fsim.source-line-budget pass 2/2 in 0.21 seconds, the three
+    new files contain 142, 295, and 229 lines, and whitespace checks are clean.
+62. Preserve this checkpoint and begin Change 15 with assertion, report, and
+    output services plus multiple-root/context isolation, copied severity and
+    source metadata, bounded formatting, sink exception containment, and
+    deterministic interleaving.
+63. Change 15 is complete in the same dirty worktree. A simulation-owned VHPI
+    I/O service publishes independently tagged named contexts bound to one
+    exact live root. Multiple contexts may share a root, multiple roots remain
+    isolated, and every context retains creation order, active state, event
+    count, and its own copied history alongside one global history.
+64. Assertion, report, and raw output events retain a single global ordinal,
+    exact context/root/subject identity, severity, formatted message, and
+    optional copied source. True assertions publish nothing. A bounded 64 KiB,
+    64-argument formatter supports exact `{}` substitution plus escaped braces
+    and rejects malformed or surplus fields before publication.
+65. Root ancestry is checked before assertion/report publication; output has no
+    fabricated subject or source. A recursive dispatch lock serializes every
+    context while permitting sink-triggered nested output, so nested and
+    multi-context events have deterministic ordinals. Events enter both
+    histories before the sink runs; sink exceptions are contained without
+    erasing evidence, and teardown releases sinks outside the registry lock in
+    context order while retaining inactive descriptors and history.
+66. Focused evidence covers two roots, two contexts on one root, exact report
+    formatting and source metadata, true/false assertions, raw output, nested
+    sink output, deterministic global ordinals, per-context/global histories,
+    same-simulation cross-root and foreign-simulation rejection, invalid
+    severity/format/source/text bounds, throwing-sink retention, and idempotent
+    teardown. The complete exact-LLVM Debug target builds warning-clean with
+    eight workers on its first build; fsim.runtime and
+    fsim.source-line-budget pass 2/2 in 0.22 seconds, the three new files
+    contain 163, 405, and 224 lines, and whitespace checks are clean.
+67. Preserve this checkpoint and begin Change 16 with same-process restart and
+    portable artifacts, exact schema/ABI/content/cache/plug-in provenance,
+    canonical handle remapping, explicit native-state invalidation, relocation,
+    and mapped-library identity.
+68. Change 16 is complete in the same dirty worktree. A fixed-width VHPI
+    checkpoint artifact owns its schema, host and plug-in ABI versions and
+    structure sizes, pointer width, source simulation identity, design-content
+    and native-cache fingerprints, mapped-library identities, plug-in
+    provenance, canonical exported-object identities, and a native-state
+    summary without retaining host addresses.
+69. Capture resolves each caller-selected live object to its canonical full
+    name and exact VHPI kind, rejects anonymous, duplicate, malformed, and
+    cross-simulation identities before publication, and retains the source
+    handle only as a logical remap key. Same-process restart requires the exact
+    simulation, object handles, and native-owner summary. Portable restore
+    resolves every object by canonical name and kind in the already-elaborated
+    target registry, returns old-to-new handle mappings, and leaves the target
+    untouched on any mismatch.
+70. Compatibility checks distinguish schema, host ABI, plug-in ABI, pointer
+    width, design content, cache, mapped-library content, and plug-in/host
+    provenance mismatches. Relocated library and plug-in paths are accepted
+    only when their stable identities, mapping, and content fingerprints still
+    match; each changed path is reported explicitly.
+71. Portable restore rejects pre-existing native owners and reports explicit
+    invalidations for callback closures/user data, foreign subprograms/models/
+    user data, active foreign calls, open files, protected leases, scheduled
+    transactions, I/O sink contexts, and dynamic-library plug-in contexts.
+    Focused evidence covers exact restart handles, cross-simulation and changed
+    native state, every compatibility mismatch family, transactional missing
+    and wrong-kind objects, canonical cross-registry remapping, all eleven
+    invalidation classes, two relocation records, duplicate exports, and
+    cross-simulation capture.
+72. The complete exact-LLVM Debug target builds warning-clean with eight
+    workers after one test-only standard-header correction;
+    `fsim.runtime` and `fsim.source-line-budget` pass 2/2 in 0.21 seconds.
+    The three new files contain 180, 385, and 259 lines, duplicate source
+    registration was removed during the final audit, and tracked/untracked
+    whitespace checks are clean. Preserve this checkpoint and begin Change 17
+    with independently built C and C++ VHPI images that exercise the public ABI
+    through host-like loading rather than direct C++ runtime calls.
+73. Change 17 is complete in the same dirty worktree. The append-only public C
+    ABI retains the exact 40-byte v1 reporting host and adds a 56-byte v2 host
+    whose v1 prefix is followed only by a service context and callback. Fixed
+    48-byte request and 40-byte result records carry operation, flags, bounded
+    text, VHPI handle, value, and user-data fields across thirteen explicit
+    hierarchy, type, value, driver, control, time, callback, foreign,
+    association, I/O, user-data, checkpoint, and lifecycle service families.
+74. Independently compiled C and C++ shared images include only the public
+    `vhpi_abi.h` plus language-standard headers. Each requires a checked v2
+    host, publishes the same v1 plug-in descriptor contract, reports startup,
+    invokes every service family in deterministic order, and invokes shutdown
+    through the lifecycle service. The hardened loader still accepts existing
+    v1 lifecycle images; a service image deterministically rejects a v1-only
+    host during bind.
+75. The platform fixture validates C/C++ layout prefixes and sizes, service
+    fields and returned handles, distinct image names/diagnostics/user data,
+    exactly-once shutdown, no calls after unload, two complete loads of each
+    original image, and byte-copied relocated loads with identical transcripts.
+    Dynamic-symbol inspection shows each hidden-visibility image exports only
+    `fsim_vhpi_plugin_bind_v1`.
+76. The first focused test run exposed only the expected legacy negative-probe
+    adjustment: host version 2 is now valid and requires the v2 size, so the
+    unknown-version test now probes version 3. After that correction, the
+    complete exact-LLVM Debug target builds warning-clean with eight workers;
+    `fsim.runtime` and `fsim.source-line-budget` pass 2/2 in 0.21 seconds.
+    The C image, C++ image, host fixture, and public ABI header contain 106,
+    116, 272, and 146 lines, and whitespace checks are clean.
+77. Preserve this checkpoint and begin Change 18 with consolidated negative
+    matrices for malformed ABI/profile inputs, invalid/stale/released/
+    cross-owner handles and iterators, short buffers, callback removal,
+    recursive/reentrant and exception paths, resource bounds, transactional
+    rollback, and post-unload behavior across the completed VHPI surface.
+78. Change 18 is complete in the same dirty worktree. One consolidated
+    cross-surface matrix complements the per-feature rejection tests with
+    thirteen ordered cases spanning malformed and cross-owner handles,
+    released and generation-stale object/iterator snapshots, enum buffer
+    sizing, invalid-write rollback, malformed-profile nonpublication,
+    recursive constraint limits, immediate callback peer removal, nested
+    callback re-entry and exception containment, and callback object/owner
+    validation.
+79. The independent-image host fixture now also drives the raw v2 service
+    boundary with null ownership/request, truncated request/result tables,
+    unknown service families, missing bounded text, and a request after image
+    unload. Every case returns its exact invalid-argument or stale-handle status
+    without publishing a result or additional host transcript.
+80. Together with the retained Changes 1-17 matrices, the focused runtime gate
+    covers malformed host/plug-in ABI and descriptors, invalid/stale/released/
+    cross-simulation object and iterator identities, short buffers, callback
+    removal, recursive and reentrant callbacks, bind/startup/shutdown and
+    callback exceptions, depth/node/text/count resource bounds, transactional
+    publication/write/restore rollback, and post-unload rejection.
+81. The complete exact-LLVM Debug target builds warning-clean with eight
+    workers on its first Change 18 build; `fsim.runtime` and
+    `fsim.source-line-budget` pass 2/2 in 0.22 seconds. The consolidated
+    matrix has 260 lines, the expanded platform fixture has 316 lines, and
+    tracked/untracked whitespace checks are clean. Preserve this checkpoint
+    and begin Change 19 with real interpreter/LLVM O0/O2, mixed-language,
+    multi-root, cold/warm cache, standalone object/design, mapped-library,
+    relocation, and save/restart integration differentials, then synchronize
+    the public VHPI documentation, examples, diagnostics, matrices,
+    inventories, audits, and restart handoff.
+82. Change 19 is complete in the same dirty worktree. The independent C and
+    C++ reference images produce matching deterministic service transcripts
+    under interpreter, compiled O0, and compiled O2 labels while retaining
+    distinct simulation ownership. Repeated loads cover the warm path, and
+    copied images retain exact startup/service/shutdown behavior after
+    relocation. The owning application, API, mapped-library, object/design
+    artifact, cache, and runtime integration gates pass 7/7 in 25.79 seconds.
+83. Public README, architecture, language support, diagnostics, the new
+    `vhdl-vhpi.md` guide with a buildable public-C example, test inventory, and
+    executable feature rows `VH-270` through `VH-279` now describe and own the
+    completed ABI, hierarchy/type/value/driver/callback/foreign/association/I/O,
+    checkpoint, invalidation, integration, and negative surfaces.
+84. The frozen candidate advances to 1,230 executable rows, 4,920 linked
+    evidence cells, and 493 exact paths split 218 test, 259 production, and 16
+    release paths. It owns 133 runtime files and 36 corpus CTests. The matrix
+    SHA-256 is
+    `0878effd1889b17cf7517a952c054a8fe470b0699fca760089b8520f7b4ae4c9`;
+    the evidence-path SHA-256 is
+    `b153df1b3eec1c2b6cd606db60f60554d668c2b02f111bb4725daf25b64daabb`.
+85. Inventories freeze 1,989 diagnostics, 703 bounded C/C++ sources, 796
+    SPDX-owned artifacts, and 265 authored test/control files. Differential
+    evidence covers 486 interpreter, 403 LLVM, 267 cache, 109 debugger, 137
+    VCD/trace, 454 scheduling, and 110 failure rows. The strict VHDL audit owns
+    all 287 VHDL/release rows through 53 distinct runtime files.
+86. The nine diagnostic-catalog, source-policy, legality, VHDL, differential,
+    public, inventory, release-candidate, and installed-public-contract gates
+    pass 9/9 in 14.27 seconds; `git diff --check` is clean. Preserve the
+    accumulated dirty worktree and begin Change 20 with full non-sanitized
+    exact-LLVM Debug and Release builds, full regressions, and release gates.
+    Then commit and push exactly once. Do not run a sanitizer or inspect hosted
+    CI because Batch 158 is not a monitoring boundary.
+87. Change 20 is complete. The exact-LLVM 22.1.8 Debug tree relinks all 17
+    affected executables warning-clean with eight workers and passes the full
+    suite 114/114 in 368.78 seconds. Its longest container application passes
+    in 145.48 seconds, the SystemC matrix passes in 61.13 seconds, and the main
+    application passes in 24.27 seconds.
+88. The independent exact-LLVM Release tree reconfigures and completes all 91
+    affected build steps warning-clean with eight workers. Its full suite
+    passes 114/114 in 312.67 seconds; the container application passes in
+    105.82 seconds, the SystemC matrix in 57.23 seconds, and the main
+    application in 22.47 seconds. Both full suites include all source, catalog,
+    inventory, installed-public-contract, artifact, API/ABI, portability,
+    release-candidate, application, and VHPI runtime gates.
+89. `git diff --check` is clean and no merge-conflict paths exist. Close all
+    twenty Batch 158 changes in exactly one accumulated commit and push. Do not
+    run a sanitizer or inspect hosted CI because this is not a monitoring
+    boundary. After that synchronized closeout, save and push the Batch 159
+    restart plan before making any Batch 159 implementation change, then clear
+    context and resume only from that plan.
+
 ## Batch 158 pre-implementation restart plan - 2026-08-07
 
 1. Start in `/home/colin/projects/fsim`, read this file and the authoritative

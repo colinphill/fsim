@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Batch 130 Task 9 final release-candidate corpus.
 # Every required row is classified execute and owns nonempty P+/P-/E/R links.
-# matrix-rows: 1220
-# matrix-sha256: f60cf9a97f96315f5068a3047e113f70405b9cead25f9e379e5d556b22f76c51
-# evidence-slots: 4880
-# evidence-paths: 461
-# evidence-sha256: d3e9c14916fe0ec37156679632dd3b5488936f94f81d63a02ea5f164b81c51bd
-# test-evidence-paths: 201
-# production-evidence-paths: 244
+# matrix-rows: 1230
+# matrix-sha256: 0878effd1889b17cf7517a952c054a8fe470b0699fca760089b8520f7b4ae4c9
+# evidence-slots: 4920
+# evidence-paths: 493
+# evidence-sha256: b153df1b3eec1c2b6cd606db60f60554d668c2b02f111bb4725daf25b64daabb
+# test-evidence-paths: 218
+# production-evidence-paths: 259
 # release-evidence-paths: 16
-# runtime-evidence-paths: 125
+# runtime-evidence-paths: 133
 # corpus-ctests: 36
 # required-status: execute
 #
@@ -73,3 +73,13 @@
 # delayed-value warning, then passes exact-LLVM 22.1.8 Debug 114/114 in 373.55
 # seconds and Release 114/114 in 300.77 seconds. Sanitizer and hosted CI
 # monitoring are intentionally excluded at this boundary.
+#
+# Batch 158 advances the reviewed matrix to 1230 rows and 4920 evidence cells
+# across 493 exact paths (218 test, 259 production, 16 release), with 133
+# runtime owners. VH-270 through VH-279 close the governed VHPI ABI, hierarchy,
+# types, values, drivers, callbacks, foreign associations, I/O, exact and
+# portable restart, invalidation, independent C/C++ images, engine transcripts,
+# negative behavior, and relocation evidence. Change 20 passes exact-LLVM
+# 22.1.8 Debug 114/114 in 368.78 seconds and Release 114/114 in 312.67 seconds.
+# Sanitizer and hosted CI monitoring are intentionally excluded at this
+# non-monitoring boundary.

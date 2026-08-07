@@ -964,6 +964,23 @@ closures, pointer user data, active calls, streams, and image contexts. The
 complete contract is documented in
 [SystemVerilog VPI support](systemverilog-vpi.md).
 
+### VHDL VHPI boundary
+
+Batch 158 adds a distinct simulation-owned VHPI object graph with canonical
+selected/indexed VHDL names, hierarchy regions, source metadata, type/subtype
+constraints, scalar/composite/file/protected/resolved/nine-state values,
+drivers and projected transactions, checked writes, exact time, callbacks,
+foreign subprograms/models, associations, and root-isolated reporting.
+VHPI-only generation-qualified handles never alias VPI or native addresses.
+
+The frozen v1 reporting host remains a prefix of the append-only v2 service
+host used identically by independent C and C++ images. Same-process restart
+requires exact owners and handles. Portable restore validates schema/ABI,
+content/cache, mapped-library and plug-in provenance before canonical handle
+remapping; relocated paths require stable identity and content, and every
+native closure/resource is returned as an explicit counted invalidation. The
+complete contract is documented in [VHDL VHPI support](vhdl-vhpi.md).
+
 ### SystemVerilog unpacked data and procedural closure
 
 Batch 152 extends the owning runtime value graph instead of flattening

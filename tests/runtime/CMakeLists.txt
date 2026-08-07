@@ -8,6 +8,24 @@ add_executable(
   runtime_tests.cpp
   runtime_value_tests.cpp
   runtime_dpi_tests.cpp
+  runtime_vhpi_tests.cpp
+  runtime_vhpi_abi_c_test.c
+  runtime_vhpi_object_tests.cpp
+  runtime_vhpi_hierarchy_tests.cpp
+  runtime_vhpi_type_tests.cpp
+  runtime_vhpi_value_tests.cpp
+  runtime_vhpi_composite_tests.cpp
+  runtime_vhpi_special_tests.cpp
+  runtime_vhpi_driver_tests.cpp
+  runtime_vhpi_write_tests.cpp
+  runtime_vhpi_time_tests.cpp
+  runtime_vhpi_callback_tests.cpp
+  runtime_vhpi_foreign_tests.cpp
+  runtime_vhpi_association_tests.cpp
+  runtime_vhpi_io_tests.cpp
+  runtime_vhpi_checkpoint_tests.cpp
+  runtime_vhpi_reference_plugin_tests.cpp
+  runtime_vhpi_negative_tests.cpp
   runtime_vpi_tests.cpp
   runtime_vpi_abi_c_test.c
   runtime_vpi_object_tests.cpp
@@ -46,6 +64,20 @@ add_library(fsim_vpi_test_plugin SHARED vpi_test_plugin.cpp)
 fsim_configure_library(fsim_vpi_test_plugin)
 target_include_directories(
   fsim_vpi_test_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+add_library(fsim_vhpi_test_plugin SHARED vhpi_test_plugin.cpp)
+fsim_configure_library(fsim_vhpi_test_plugin)
+target_include_directories(
+  fsim_vhpi_test_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+add_library(
+  fsim_vhpi_reference_c_plugin SHARED vhpi_reference_plugin_c.c)
+fsim_configure_library(fsim_vhpi_reference_c_plugin)
+target_include_directories(
+  fsim_vhpi_reference_c_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+add_library(
+  fsim_vhpi_reference_cpp_plugin SHARED vhpi_reference_plugin_cpp.cpp)
+fsim_configure_library(fsim_vhpi_reference_cpp_plugin)
+target_include_directories(
+  fsim_vhpi_reference_cpp_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
 add_library(fsim_vpi_reference_c_plugin SHARED vpi_reference_plugin_c.c)
 fsim_configure_library(fsim_vpi_reference_c_plugin)
 target_include_directories(
@@ -63,13 +95,19 @@ target_compile_definitions(
   fsim_runtime_tests
   PRIVATE FSIM_DPI_TEST_PLUGIN_PATH="$<TARGET_FILE:fsim_dpi_test_plugin>"
           FSIM_DPI_BAD_ABI_PLUGIN_PATH="$<TARGET_FILE:fsim_dpi_bad_abi_plugin>"
+          FSIM_VHPI_TEST_PLUGIN_PATH="$<TARGET_FILE:fsim_vhpi_test_plugin>"
+          FSIM_VHPI_REFERENCE_C_PLUGIN_PATH="$<TARGET_FILE:fsim_vhpi_reference_c_plugin>"
+          FSIM_VHPI_REFERENCE_CPP_PLUGIN_PATH="$<TARGET_FILE:fsim_vhpi_reference_cpp_plugin>"
           FSIM_VPI_TEST_PLUGIN_PATH="$<TARGET_FILE:fsim_vpi_test_plugin>"
           FSIM_VPI_REFERENCE_C_PLUGIN_PATH="$<TARGET_FILE:fsim_vpi_reference_c_plugin>"
           FSIM_VPI_REFERENCE_CPP_PLUGIN_PATH="$<TARGET_FILE:fsim_vpi_reference_cpp_plugin>"
 )
 add_dependencies(
   fsim_runtime_tests fsim_dpi_test_plugin fsim_dpi_bad_abi_plugin
-  fsim_vpi_test_plugin)
+  fsim_vhpi_test_plugin fsim_vpi_test_plugin)
+add_dependencies(
+  fsim_runtime_tests fsim_vhpi_reference_c_plugin
+  fsim_vhpi_reference_cpp_plugin)
 add_dependencies(
   fsim_runtime_tests fsim_vpi_reference_c_plugin
   fsim_vpi_reference_cpp_plugin)

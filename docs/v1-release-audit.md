@@ -9,7 +9,7 @@ remains the final Task 10 boundary.
 
 ## Matrix baseline
 
-The current matrix contains exactly 1,210 required rows. Every row is classified
+The current matrix contains exactly 1,230 required rows. Every row is classified
 `execute`, has nonempty positive parse, negative diagnostic, elaboration, and
 runtime evidence, and names evidence paths that exist in the checkout.
 
@@ -17,7 +17,7 @@ runtime evidence, and names evidence paths that exist in the checkout.
 |---|---|---:|---:|
 | SystemVerilog language | `SV` | 790 | Task 2 plus v2 Batches 144-157 |
 | SystemVerilog release contract | `V1-SV` | 9 | Task 2 |
-| VHDL language | `VH` | 269 | Task 3 plus v2 Batches 140-143 |
+| VHDL language | `VH` | 279 | Task 3 plus v2 Batches 140-143 and 158 |
 | VHDL release contract | `V1-VH` | 8 | Task 3 |
 | Mixed-language behavior | `ML` | 17 | Task 4 plus v2 Batch 134 |
 | SystemC behavior | `SC` | 28 | Task 4 |
@@ -25,7 +25,7 @@ runtime evidence, and names evidence paths that exist in the checkout.
 | Common release contract | `V1-CM` | 10 | Tasks 5 through 9 |
 
 The Task 1 baseline matrix digest is
-`f60cf9a97f96315f5068a3047e113f70405b9cead25f9e379e5d556b22f76c51`.
+`0878effd1889b17cf7517a952c054a8fe470b0699fca760089b8520f7b4ae4c9`.
 Changing any row requires an intentional audit update and the owning focused
 gate; the digest is evidence of review, not a substitute for semantic tests.
 Corrective Batch 131 re-reviewed the affected container rows after replacing
@@ -68,15 +68,20 @@ V2 Batch 157 adds `SV-781` through `SV-790` for the versioned VPI host and
 plug-in boundary, typed hierarchy/value/time/callback/control/system/I/O
 services, transactional restart and portable remapping, explicit native-state
 invalidations, independent C/C++ images, repeated loading, and relocation.
+V2 Batch 158 adds `VH-270` through `VH-279` for the governed VHPI host and
+plug-in boundary, typed hierarchy/type/value/driver/time/callback/foreign/
+association/I/O services, exact and portable checkpoint restart, explicit
+native-state invalidation, independent C/C++ images, engine transcripts, and
+relocation.
 
 ## Existing release evidence
 
 The composed local gates currently establish:
 
 - 1,989 production diagnostics are cataloged;
-- 652 authored C/C++ sources remain within the 2,500-line hard limit; any file
+- 703 authored C/C++ sources remain within the 2,500-line hard limit; any file
   that exceeds it must be refactored below the 2,000-line target;
-- all 1,220 required matrix rows are executable with no explicit evidence gap;
+- all 1,230 required matrix rows are executable with no explicit evidence gap;
 - 105 independently authored conformance expectations in 28 fixtures are
   owned by 27 CTests;
 - 20 exact portability rows cover Debug/Release, interpreter/LLVM O0/O2,

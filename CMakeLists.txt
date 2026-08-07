@@ -428,6 +428,16 @@ add_library(
     src/runtime/class_static.cpp
     src/runtime/constraint_expression.cpp
     src/runtime/constraint_solver.cpp
+  src/runtime/vhpi_composite.cpp
+  src/runtime/vhpi_special.cpp
+  src/runtime/vhpi_driver.cpp
+  src/runtime/vhpi_write.cpp
+  src/runtime/vhpi_time.cpp
+  src/runtime/vhpi_callback.cpp
+  src/runtime/vhpi_foreign.cpp
+  src/runtime/vhpi_association.cpp
+  src/runtime/vhpi_io.cpp
+  src/runtime/vhpi_checkpoint.cpp
     src/runtime/dpi_composite.cpp
     src/runtime/dpi_callback.cpp
     src/runtime/dpi_marshalling.cpp
@@ -435,6 +445,11 @@ add_library(
     src/runtime/dpi_plugin.cpp
     src/runtime/dpi_scope.cpp
     src/runtime/dpi_task.cpp
+    src/runtime/vhpi_error.cpp
+    src/runtime/vhpi_object.cpp
+    src/runtime/vhpi_plugin.cpp
+    src/runtime/vhpi_type.cpp
+    src/runtime/vhpi_value.cpp
     src/runtime/vpi_plugin.cpp
     src/runtime/vpi_error.cpp
     src/runtime/vpi_object.cpp

@@ -225,3 +225,12 @@ sources, 744 authored artifacts, and 244 authored test/control files. The VPI
 boundary, examples, and tests are clean-room code; no external simulator
 header, foreign runtime, plug-in corpus, third-party artifact, or provenance
 entry is imported.
+
+v2 Batch 158 adds the VHPI ABI, owning runtime services, type/value/driver and
+callback services, checkpoint codec, independent C/C++ images, focused
+matrices, and public guide as 51 SPDX-owned bounded C/C++ files plus one
+document. No production diagnostic code is added; the reviewed inventory
+advances to 1,989 diagnostics, 703 bounded C/C++ sources, 796 authored
+artifacts, and 265 authored test/control files. The VHPI boundary, examples,
+and tests are clean-room code; no external simulator header, foreign runtime,
+plug-in corpus, third-party artifact, or provenance entry is imported.

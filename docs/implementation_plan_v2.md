@@ -4212,71 +4212,77 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 158 - IEEE VHPI closure
 
-- **Change 1:** Define the append-only VHPI host and plug-in C ABI foundation:
+- **Change 1: Complete.** Define the append-only VHPI host and plug-in C ABI foundation:
   explicit versions and structure sizes, pointer width, reserved flags,
   simulation ownership, stable nonpointer handles, bounded diagnostics,
   calling/export conventions, and one exact bind symbol.
-- **Change 2:** Load and own one VHPI image through the hardened platform
+- **Change 2: Complete.** Load and own one VHPI image through the hardened platform
   dynamic-library boundary with transactional bind/startup publication,
   checked descriptors, exception containment, and exactly-once shutdown before
   unload.
-- **Change 3:** Add simulation-owned error state plus generation-qualified
+- **Change 3: Complete.** Add simulation-owned error state plus generation-qualified
   object and iterator handle registries with deterministic invalid, stale,
   released, exhausted, and cross-simulation rejection.
-- **Change 4:** Implement selected/indexed-name identity, parent/child and
+- **Change 4: Complete.** Implement selected/indexed-name identity, parent/child and
   relationship iteration, hierarchy regions, escaped/full names, source
   metadata, stable ordering, and checked name lookup.
-- **Change 5:** Implement scalar type, subtype, base-type, constraint, range,
+- **Change 5: Complete.** Implement scalar type, subtype, base-type, constraint, range,
   direction, resolution, and object-declaration queries with recursive resource
   limits and canonical descriptor identity.
-- **Change 6:** Add checked scalar, enumeration, physical, access, and null
+- **Change 6: Complete.** Add checked scalar, enumeration, physical, access, and null
   value transfer with exact position/unit/designated-subtype metadata and no
   host-layout aliases.
-- **Change 7:** Add constrained/unconstrained array and record type/value
+- **Change 7: Complete.** Add constrained/unconstrained array and record type/value
   transfer, multidimensional declared-index mapping, recursive fields/elements,
   partial-buffer contracts, and transactional publication.
-- **Change 8:** Add file, protected, resolved, and exact nine-state logic values
+- **Change 8: Complete.** Add file, protected, resolved, and exact nine-state logic values
   with simulation-owned identities, access control, resolver provenance, and
   lossless scalar/vector encodings.
-- **Change 9:** Implement signal drivers, sources, projected transactions,
+- **Change 9: Complete.** Implement signal drivers, sources, projected transactions,
   waveform elements, rejection/inertial/transport policy, and deterministic
   relationship queries over the common scheduler.
-- **Change 10:** Implement immediate and delayed deposit, force, release, and
+- **Change 10: Complete.** Implement immediate and delayed deposit, force, release, and
   transaction cancellation with checked type/ownership, force layering,
   retained operation handles, and no partial writes.
-- **Change 11:** Add exact time/unit/precision/delta queries and phase callbacks
+- **Change 11: Complete.** Add exact time/unit/precision/delta queries and phase callbacks
   spanning update, postponed/read-only, next-time, synchronization, save,
   restart, reset, and terminal scheduling regions.
-- **Change 12:** Add signal, process, event, transaction, assertion, and
+- **Change 12: Complete.** Add signal, process, event, transaction, assertion, and
   lifecycle callbacks with copied event data, safe self/peer removal, nested
   registration/re-entry, exception containment, and deterministic teardown.
-- **Change 13:** Implement foreign subprogram and foreign-model registration,
+- **Change 13: Complete.** Implement foreign subprogram and foreign-model registration,
   profile validation, call contexts, argument/result handles, lifecycle,
   re-entry, unregister, and retained user data without exposing C++ ownership.
-- **Change 14:** Implement generic and port association queries, actual/formal/
+- **Change 14: Complete.** Implement generic and port association queries, actual/formal/
   mode/class metadata, disconnected/open associations, object and call user
   data, stable owner identity, and cross-root rejection.
-- **Change 15:** Add assertion/report/output services plus multiple-root and
+- **Change 15: Complete.** Add assertion/report/output services plus multiple-root and
   multiple-context isolation, severity/source metadata, bounded formatting,
   sink containment, and deterministic interleaving.
-- **Change 16:** Integrate same-process restart and portable artifacts with
+- **Change 16: Complete.** Integrate same-process restart and portable artifacts with
   schema/ABI/content/cache/plug-in provenance, canonical handle remapping,
   explicit native-state invalidations, relocation, and mapped-library identity.
-- **Change 17:** Add independently compiled C and C++ VHPI reference images and
+- **Change 17: Complete.** Add independently compiled C and C++ VHPI reference images and
   platform fixtures that exercise the complete public ABI, service families,
   startup/shutdown, repeated load, and relocated load paths.
-- **Change 18:** Add malformed ABI/profile, invalid/stale/released/cross-owner
+- **Change 18: Complete.** Add malformed ABI/profile, invalid/stale/released/cross-owner
   handle, iterator, buffer, callback-removal, recursive/reentrant, exception,
   resource, rollback, and post-unload negative matrices.
-- **Change 19:** Add interpreter/LLVM O0/O2, mixed-language, multi-root,
+- **Change 19: Complete.** Add interpreter/LLVM O0/O2, mixed-language, multi-root,
   cold/warm cache, standalone object/design, mapped-library, relocation, and
   save/restart differentials; update public VHPI documentation, examples,
   diagnostics, matrices, inventories, audits, and restart handoff.
-- **Change 20:** Run full non-sanitized exact-LLVM Debug and Release builds,
-  regressions, source, catalog, inventory, installed-public-contract, and
-  release gates; then commit and push the accumulated implementation once
+- **Change 20: Complete.** Run full non-sanitized exact-LLVM Debug and Release
+  builds, regressions, source, catalog, inventory, installed-public-contract,
+  and release gates; then commit and push the accumulated implementation once
   without sanitizer or hosted CI monitoring because Batch 158 is not a
-  monitoring boundary.
+  monitoring boundary. The complete exact-LLVM 22.1.8 Debug tree rebuilds
+  warning-clean with eight workers and passes 114/114 tests in 368.78 seconds.
+  The independent Release tree reconfigures and builds all 91 affected steps
+  warning-clean with eight workers, then passes 114/114 tests in 312.67
+  seconds. Both runs include every VHPI runtime/integration owner and the full
+  release, evidence, inventory, installation, API/ABI, artifact, portability,
+  and application surfaces.
 
 ### Batch 159 - UVM object, factory, configuration, and reporting foundation
 

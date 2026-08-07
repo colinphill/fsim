@@ -1354,8 +1354,9 @@ user-defined solver functions, and coverage-driven solving are rejected or
 remain outside this slice. Scope randomization currently executes through the
 common validated interpreter service while its full operation participates in
 native-cache identity. This is executable class randomization, not full UVM
-closure; UVM library/runtime behavior, DPI, and VPI remain for subsequent v2
-batches. Batch 155 closes the bounded covergroup surface described above.
+closure; UVM library/runtime behavior remains for subsequent v2 batches.
+Batches 156-158 close the governed DPI-C, VPI, and VHPI boundaries. Batch 155
+closes the bounded covergroup surface described above.
 
 ### SystemVerilog scalar, Unicode string, and foreign-handle closure in v2
 
@@ -1381,7 +1382,7 @@ inequality, exact same-kind transport, debugger inspection/mutation, callbacks,
 and tracing. Generation checks reject stale or foreign handles, cleanup is
 one-shot, and registry state never serializes a host pointer. Non-null text or
 binary input and numeric/arithmetic uses remain checked errors. DPI-C, VPI,
-and VHPI will connect standardized external ownership in Batches 156-158.
+and VHPI connect standardized external ownership in Batches 156-158.
 
 Mutable strings index Unicode scalar values through strict UTF-8. The standard
 length, iteration, indexing, slicing, replacement, case, comparison,
@@ -1490,8 +1491,9 @@ Required for v1:
 - inertial, transport, and reject delays; and
 - reviewed Apache-2.0 IEEE logic, numeric, fixed, and floating-point packages.
 
-Deferred beyond v1: PSL, VHPI, VHDL-AMS, SDF, and proprietary package or pragma
-semantics beyond the reviewed compatibility surface.
+Deferred beyond v1: PSL, VHDL-AMS, SDF, proprietary package or pragma
+semantics, and VHPI extensions outside the governed
+[Batch 158 contract](vhdl-vhpi.md).
 
 ### Verilog-2005 and SystemVerilog-2017
 
