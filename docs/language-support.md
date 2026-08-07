@@ -1238,8 +1238,9 @@ transactional.
 
 This is prerequisite value/type infrastructure for UVM, not UVM completion.
 Concurrent assertions and functional coverage are closed by Batches 154-155;
-The bounded DPI-C boundary is closed by Batch 156. VPI and UVM
-library/runtime work retain their locked later-batch ownership.
+the bounded DPI-C boundary is closed by Batch 156 and the governed
+[VPI boundary](systemverilog-vpi.md) by Batch 157. UVM library/runtime work
+retains its locked later-batch ownership.
 Program, clocking, and interface closure is complete in Batch 153.
 
 ### SystemVerilog concurrent assertions in v2
@@ -1512,8 +1513,9 @@ Required for v1:
 
 Deferred beyond v1: classes, constraints and UVM; concurrent SVA; covergroups;
 DPI profiles outside the bounded [Batch 156 contract](systemverilog-dpi.md),
-VPI, program and clocking blocks, and SDF annotation. Program and clocking
-blocks are implemented by the v2 Batch 153 profile described above.
+VPI extensions outside the governed [Batch 157 contract](systemverilog-vpi.md),
+and SDF annotation. Program and clocking blocks are implemented by the v2
+Batch 153 profile described above.
 
 ### SystemC
 

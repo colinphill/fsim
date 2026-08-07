@@ -96,3 +96,12 @@ re-entry, unload, quarantine, and ABI rejection advance the linked totals to
 486 interpreter rows, 403 LLVM rows, 265 cache rows, 109 debugger rows, 137
 VCD/trace rows, 434 scheduling rows, and 105 failure rows. The reviewed
 36-CTest corpus inventory is unchanged.
+
+Batch 157's ten VPI rows advance the reviewed differential inventory to 1,220
+required rows and 125 runtime owners. Typed hierarchy/value operations,
+scheduler-region callbacks, control and system callables, portable I/O,
+restart/remap/invalidation, exact C/C++ service transcripts, repeated loading,
+relocation, and contained ABI or resource failures advance the linked totals
+to 486 interpreter rows, 403 LLVM rows, 266 cache rows, 109 debugger rows, 137
+VCD/trace rows, 444 scheduling rows, and 109 failure rows. The reviewed
+36-CTest corpus inventory is unchanged.

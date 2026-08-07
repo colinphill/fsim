@@ -435,6 +435,18 @@ add_library(
     src/runtime/dpi_plugin.cpp
     src/runtime/dpi_scope.cpp
     src/runtime/dpi_task.cpp
+    src/runtime/vpi_plugin.cpp
+    src/runtime/vpi_error.cpp
+    src/runtime/vpi_object.cpp
+    src/runtime/vpi_callback.cpp
+    src/runtime/vpi_checkpoint.cpp
+    src/runtime/vpi_type_descriptor.cpp
+    src/runtime/vpi_control.cpp
+    src/runtime/vpi_io.cpp
+    src/runtime/vpi_system.cpp
+    src/runtime/vpi_value.cpp
+    src/runtime/vpi_value_control.cpp
+    src/runtime/vpi_time.cpp
     src/runtime/packed_value.cpp
     src/runtime/scheduler.cpp
     src/runtime/scope_randomize.cpp

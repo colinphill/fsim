@@ -925,8 +925,8 @@ This closes the scalar substrate needed by later language work, but it is not
 UVM closure. Arbitrary-width packed values are closed by Batch 151 and the
 remaining governed unpacked-data/file/procedural substrate by Batch 152. SVA
 and covergroups are closed by Batches 154-155; the bounded DPI-C boundary is
-closed by Batch 156. VPI/VHPI and the UVM library/runtime retain their locked
-later-batch ownership.
+closed by Batch 156 and the VPI boundary by Batch 157. VHPI and the UVM
+library/runtime retain their locked later-batch ownership.
 
 ### SystemVerilog DPI-C boundary
 
@@ -946,6 +946,23 @@ validate transactionally. Symbol leases retain normal module lifetime, while
 an explicit quarantine path covers failed external registrations whose
 addresses may have escaped. The complete supported, negative, platform, and
 engine matrices are documented in [SystemVerilog DPI-C support](systemverilog-dpi.md).
+
+### SystemVerilog VPI boundary
+
+Batch 157 adds simulation-owned hierarchy, type/value, time, callback, control,
+system-call, I/O, checkpoint, and plug-in services. Generation-qualified
+integer handles prevent native address leakage and distinguish invalid, stale,
+released, and cross-simulation use. The frozen v1 C host remains a reporting
+prefix; a versioned v2 wrapper appends one bounded service invocation boundary
+used identically by independent C and C++ images.
+
+Same-process restart retains live external owners and exact handles. Portable
+artifact restore validates ABI, content/cache identity, ordered image
+provenance, complete object inventory, types, and values before mutation,
+remaps object handles by canonical path, and explicitly invalidates native
+closures, pointer user data, active calls, streams, and image contexts. The
+complete contract is documented in
+[SystemVerilog VPI support](systemverilog-vpi.md).
 
 ### SystemVerilog unpacked data and procedural closure
 

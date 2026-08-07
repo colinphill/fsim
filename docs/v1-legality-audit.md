@@ -74,6 +74,11 @@ Batch 156 advances the gate to all 780 SystemVerilog rows and 1,210 total
 matrix rows. `SV-771` through `SV-780` own bounded DPI-C declarations,
 marshalling, scopes, callbacks, tasks, plug-in ABI/lifetime/provenance, and
 real-symbol engine/multiple-root evidence.
+Batch 157 advances the gate to all 790 SystemVerilog rows and 1,220 total
+matrix rows. `SV-781` through `SV-790` own the governed VPI ABI and loader,
+hierarchy, values, time/callback/control/system/I/O services, restart/remap/
+invalidation, independent C/C++ images, engine transcript, warm-load, and
+relocation evidence.
 
 ## Mixed-language and SystemC queues — Batch 127 Tasks 7 and 8
 

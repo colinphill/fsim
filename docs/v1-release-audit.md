@@ -15,7 +15,7 @@ runtime evidence, and names evidence paths that exist in the checkout.
 
 | Surface | Prefix | Required rows | Final review owner |
 |---|---|---:|---:|
-| SystemVerilog language | `SV` | 780 | Task 2 plus v2 Batches 144-156 |
+| SystemVerilog language | `SV` | 790 | Task 2 plus v2 Batches 144-157 |
 | SystemVerilog release contract | `V1-SV` | 9 | Task 2 |
 | VHDL language | `VH` | 269 | Task 3 plus v2 Batches 140-143 |
 | VHDL release contract | `V1-VH` | 8 | Task 3 |
@@ -25,7 +25,7 @@ runtime evidence, and names evidence paths that exist in the checkout.
 | Common release contract | `V1-CM` | 10 | Tasks 5 through 9 |
 
 The Task 1 baseline matrix digest is
-`f7503d77d833cac7063a5aba47f92f5a9361d4c70494e44daa7b00146001716b`.
+`f60cf9a97f96315f5068a3047e113f70405b9cead25f9e379e5d556b22f76c51`.
 Changing any row requires an intentional audit update and the owning focused
 gate; the digest is evidence of review, not a substitute for semantic tests.
 Corrective Batch 131 re-reviewed the affected container rows after replacing
@@ -64,15 +64,19 @@ V2 Batch 156 adds `SV-771` through `SV-780` for DPI-C declaration/profile
 ownership, scalar/composite/open-array marshalling, simulation scopes,
 callbacks, suspending tasks, portable plug-ins, public C ABI/lifetime,
 provenance, multiple roots, and real-symbol engine closure.
+V2 Batch 157 adds `SV-781` through `SV-790` for the versioned VPI host and
+plug-in boundary, typed hierarchy/value/time/callback/control/system/I/O
+services, transactional restart and portable remapping, explicit native-state
+invalidations, independent C/C++ images, repeated loading, and relocation.
 
 ## Existing release evidence
 
 The composed local gates currently establish:
 
 - 1,989 production diagnostics are cataloged;
-- 609 authored C/C++ sources remain within the 2,500-line hard limit; any file
+- 652 authored C/C++ sources remain within the 2,500-line hard limit; any file
   that exceeds it must be refactored below the 2,000-line target;
-- all 1,210 required matrix rows are executable with no explicit evidence gap;
+- all 1,220 required matrix rows are executable with no explicit evidence gap;
 - 105 independently authored conformance expectations in 28 fixtures are
   owned by 27 CTests;
 - 20 exact portability rows cover Debug/Release, interpreter/LLVM O0/O2,

@@ -133,8 +133,13 @@ public:
   /// This is used after a terminal design stop before scheduling final-only
   /// lifecycle work.
   void discard_pending();
+  /// Discard queued work, rewind time/delta identity, and clear a stop request.
+  /// Reset is valid only while the scheduler is not running.
+  void reset();
 
   [[nodiscard]] bool has_pending() const noexcept;
+  [[nodiscard]] std::optional<SimulationTick>
+  next_pending_time() const noexcept;
   [[nodiscard]] bool running() const noexcept;
   [[nodiscard]] SimulationTick now() const noexcept;
   [[nodiscard]] std::uint64_t delta() const noexcept;

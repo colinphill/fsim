@@ -256,6 +256,10 @@ The current tree contains:
   retention, scalar/composite/open-array marshalling, simulation-owned scopes,
   callbacks and suspending tasks, plus versioned portable C/C++ plug-ins with
   transactional ABI/symbol checks, content provenance, and leased lifetime;
+- governed SystemVerilog VPI with generation-qualified hierarchy/value
+  handles, callbacks, control, system callables, portable I/O, transactional
+  save/restart, and versioned C/C++ plug-ins whose native state is explicitly
+  retained or invalidated across restart and artifact flows;
 - ordered VHDL sequential packed `case` statements with `|` choices and
   `others`, lowered through common exact case-equality branches;
 - concurrent and sequential VHDL-2008 conditional assignments with chained

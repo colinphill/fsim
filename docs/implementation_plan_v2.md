@@ -3871,21 +3871,336 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 157 - IEEE VPI closure
 
-- **Changes 1-4:** add a versioned VPI host ABI, plug-in loader/lifecycle,
-  error model, object handles, iterators, names, hierarchy, and source metadata.
-- **Changes 5-8:** implement type/property queries and value get/put for nets,
-  variables, parameters, memories, arrays, classes, strengths, delays, and
-  four-/nine-state values.
-- **Changes 9-12:** implement time/delay APIs, callbacks for value/time/region/
-  lifecycle events, callback removal, control operations, force/release, and
-  scheduler-safe re-entry.
-- **Changes 13-16:** implement system task/function registration,
-  compiletf/sizetf/calltf, user data, MCD/vlog I/O, argv/product/version, and
-  save/restart-safe behavior.
-- **Changes 17-19:** add reference plug-ins, invalid/stale/reentrant negatives,
-  cross-engine/artifact tests, docs, diagnostics, matrices, and inventories.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+- **Change 1: Complete.** Define the append-only VPI host ABI foundation before
+  any dynamic loading or standard API publication. The C ABI fixes explicit
+  host and plug-in versions, struct sizes, pointer width, reserved flags,
+  simulation ownership, 64-bit nonpointer handle identity, bounded diagnostic
+  views, calling conventions, and one bind symbol. C++ construction and
+  validation reject version, size, pointer-width, flag, ownership, context, and
+  callback mismatches. Independent C and C++ translation units freeze the
+  40-byte host and 48-byte plug-in layouts and exercise bounded reporting. The
+  affected exact-LLVM Debug runtime target builds warning-clean with eight
+  workers; runtime and source-line-budget gates pass 2/2.
+- **Change 2: Complete.** Load one VPI image through the hardened
+  `platform::DynamicLibrary` layer only after host validation, resolve the
+  exact bind symbol, invoke it behind an exception boundary, and validate and
+  own the complete descriptor before publication. Bind/startup status failures,
+  exceptions, foreign version/size/flags, missing names/lifecycle callbacks,
+  missing symbols, and open failures unload without partial state. Successful
+  startup publishes a move-only owner whose explicit or automatic shutdown runs
+  exactly once before unload and retains status or exception failure for repeat
+  inspection. A real hidden-visibility reference image exercises every path.
+  The first focused build required an explicit conversion at two test-only
+  result checks; the corrected eight-worker build is warning-clean. Runtime and
+  source-line-budget gates pass 2/2.
+- **Change 3: Complete.** Add simulation-owned, mutex-safe error and
+  object registries. Last-error records own bounded code/message storage,
+  validate raw ABI severity before narrowing, remain inspectable until the next
+  call boundary, and never borrow plug-in buffers. Object handles are 64-bit
+  nonpointers encoding a process-unique registry, slot, and generation.
+  Hierarchy records preserve exact kind, parent, simple name, live-child count,
+  and sibling uniqueness. Lookup and release distinguish malformed,
+  cross-simulation, released, and stale handles; slot reuse advances generation,
+  and owners cannot release before live children. Focused two-simulation
+  positive/negative evidence covers ownership, hierarchy, duplicates, invalid
+  kinds/parents, leaf-first release, and error lifetime. The final severity path
+  accepts a raw integer to avoid out-of-range enum conversion before validation.
+  The affected eight-worker build is warning-clean; runtime and source gates
+  pass 2/2.
+- **Change 4: Complete.** Extend the authoritative object registry
+  with canonical simple and full names, normalized SystemVerilog escaped-name
+  termination, exact root/relative lookup, and owned optional file/line/column
+  metadata. Invalid dotted simple names and partial source locations reject
+  before publication. Child iteration snapshots live objects in creation order
+  into a separate generation-qualified handle space; iterators scan to an
+  explicit end, release independently, reject object/iterator confusion and
+  cross-simulation use, and become released then stale on reuse. Full-name maps
+  and child counts remain synchronized across leaf-first object release.
+  Focused escaped hierarchy, multi-root, source, lookup, ordering, end, release,
+  reuse, and misuse evidence passes. The first build required one explicit
+  test-only iterator-result conversion; the corrected eight-worker build is
+  warning-clean. Runtime and source gates pass 2/2.
+- **Change 5: Complete.** Add owning typed property metadata and
+  queries for roots, modules, interfaces, programs, packages, generated scopes,
+  ports, nets, variables, parameters, and named events. Records preserve exact
+  Verilog-2005 versus SystemVerilog-2017 ownership, scalar category, net kind,
+  port direction, static/automatic lifetime, bounded width, signedness, and
+  constant status. Object-kind validation rejects foreign enum values,
+  SystemVerilog-only objects in Verilog ownership, malformed scalar widths,
+  signed real/string/event categories, missing port directions/net kinds,
+  automatic nonvariables, and mutable parameters before hierarchy publication.
+  Focused positive evidence covers every allocated Change 5 kind and exact
+  property reads; negative and cross-simulation queries pass. The first build
+  exposed one older aggregate missing the new explicit type field; the corrected
+  eight-worker build is warning-clean. Runtime and source gates pass 2/2.
+- **Change 6: Complete.** Extend object/type/property queries with recursive
+  semantic descriptors for scalar, packed and unpacked fixed arrays, dynamic
+  arrays, queues, associative arrays, structs, unions, enums, strings, classes,
+  named class properties, and nominal class handles. Descriptors expose ranges,
+  member and enum identity, widths, signedness, and container bounds without
+  native pointers, byte offsets, or host layout. Checked recursion bounds depth,
+  nodes, fixed elements, fixed bits, names, and arithmetic; rejects malformed
+  shapes, duplicate identity, invalid associative keys, nonintegral or dynamic
+  packed elements, overflowing ranges, language mismatch, and object-kind mismatch.
+  The registry publishes immutable owning snapshots so caller mutation cannot
+  alter queried metadata. Focused nested fixed/dynamic, object-integration,
+  snapshot, malformed-input, and resource-limit evidence passes. The affected
+  exact-LLVM Debug target builds warning-clean with eight workers; runtime and
+  source gates pass 2/2.
+- **Change 7: Complete.** Add canonical simulation-owned VPI values and
+  mutex-safe checked reads for scalar, raw integer bits, real/shortreal, bounded
+  string, full-width time, scalar strength, two-state vectors, four-state
+  aval/bval planes, and four-plane nine-state vectors. Binding validates exact
+  category, width, strength ranks, and resource limits; release and generation
+  reuse discard stored values. Reads preserve X/Z and all U/W/L/H/don't-care
+  states, 64/65-bit boundaries, signed raw bits, embedded NUL bytes, and
+  distinct zero/one strength ranks. Caller-owned buffers report required sizes
+  and remain untouched on undersized requests. Unknown/lossy conversions,
+  mismatched types, duplicate binding, invalid formats, and released/stale/
+  malformed/cross-simulation handles reject deterministically. The final
+  exact-LLVM Debug target builds warning-clean with eight workers; runtime and
+  source gates pass 2/2.
+- **Change 8: Complete.** Implement reverse conversion and checked writes for
+  scalar, raw integer, real/shortreal, string, time, strength, two-state,
+  aval/bval four-state, and four-plane nine-state formats. Conversion validates
+  buffer sizes, unused padding, state encodings, exact type/width, embedded
+  bytes, overflow, and strength ranks before canonical publication. Deposits
+  update the underlying value beneath a separate force layer; release reveals
+  the latest deposit. Constants and input ports reject distinctly. A
+  scheduler-backed controller preflights delayed writes, publishes in the common
+  update phase with stable order, supports transport coexistence, inertial
+  supersession, explicit cancellation, retained outcomes, and independently
+  releasable scheduled handles. Time overflow and released/stale generation
+  targets fail without partial state. Focused conversion, force/release,
+  direction, delay, cancellation, strength, overflow, and generation evidence
+  passes. The exact-LLVM Debug target builds warning-clean with eight workers;
+  runtime and source gates pass 2/2.
+- **Change 9: Complete.** Add validated decimal time profiles retaining
+  exact unit and precision exponents through femtoseconds. Integer queries expose
+  64-bit common-scheduler ticks as high/low words; scaled-real queries invert the
+  configured unit mapping, and both retain delta identity. Delay conversion
+  recombines integer words or maps nonnegative finite scaled units to precision
+  ticks with deterministic half-up rounding. Invalid profile/format, negative,
+  nonfinite, and current-time overflow reject before publication. Cancelable
+  after-delay work maps onto the common active phase with caller stable order,
+  retained fired/cancelled/callback-failed status, exception containment,
+  cross-service identity, independent release, bounded resources, and teardown
+  cancellation. Focused conversion, query, scheduling, cancellation, overflow,
+  delta, isolation, and teardown evidence passes. The final exact-LLVM Debug
+  target builds warning-clean with eight workers; runtime and source gates pass
+  2/2.
+- **Change 10: Complete.** Register and dispatch value-change, after-delay,
+  read-write, read-only, next-time, and synchronization-region callbacks with
+  exact object, time, value, user-data, registration-order, and multi-root
+  identity. A simulation-owned callback manager maps synchronization work to
+  update, value-change/read-write work to reactive, read-only work to
+  postponed, and after-delay/next-time work to active scheduler regions.
+  Registry observers receive copied visible values only after publication and
+  mutex release; unchanged deposits and deposits hidden beneath force remain
+  silent, while force and release publish exact visible transitions. The
+  scheduler exposes its earliest future time without consuming work, callback
+  handles retain manager ownership/status, and cross-simulation object
+  registration rejects transactionally. Focused multi-root, phase, stable-order,
+  exact-event, observer re-entry, future-time, force/release, and isolation
+  evidence passes. The exact-LLVM Debug target builds warning-clean with eight
+  workers; runtime and source gates pass 2/2.
+- **Change 11: Complete.** Add start/end/reset/save/restart lifecycle
+  callbacks, callback removal and self-removal, nested registration, exception
+  containment, and scheduler-safe re-entry with no partially published value or
+  callback state. The callback manager now covers start/end simulation plus
+  start/end reset, save, and restart boundaries. Lifecycle notification captures
+  one registration-ordered snapshot and schedules start work in active and end
+  work in postponed regions. Removal publishes retained removed status before
+  canceling scheduler/time work; self-removal and removal of a later callback
+  take effect during dispatch, while nested registrations begin with the next
+  notification. Callback invocation occurs outside manager locks, exceptions
+  become per-registration failure without aborting later callbacks, and
+  re-entered lifecycle/value work observes only fully published registry state.
+  Focused lifecycle-pair, self/peer removal, delayed cancellation, nested
+  registration, exception, exact identity, invalid/cross-manager, and reactive
+  re-entry evidence passes. The exact-LLVM Debug target builds warning-clean
+  with eight workers; runtime and source gates pass 2/2.
+- **Change 12: Complete.** Implement stop, finish, reset, interactive
+  control, force, and release operations at common scheduler safe points, with
+  deterministic callback ordering, multi-simulation containment, and resumable
+  status. A simulation-owned control service preflights typed object requests
+  and queues force/release in update, stop/interactive in postponed, finish
+  after end-of-simulation callbacks, and reset as start-reset, transactional
+  initial-value restore, reactive publication, end-reset, then resumable stop.
+  Object records retain owned initial values; reset clears force layers and
+  notifies only visible changes after registry unlock. Stop and interactive
+  retain pending scheduler work, reset resume discards old work and rewinds
+  time/delta identity, and finish is terminal. Operation handles retain
+  controller ownership plus pending/applied/failed value status. Focused
+  force/release ordering, stop/interactive resume, reset callback/value order,
+  scheduler rewind, finish terminality, malformed/type/cross-simulation
+  preflight, and cross-controller evidence passes. The exact-LLVM Debug target
+  builds warning-clean with eight workers; runtime and source gates pass 2/2.
+- **Change 13: Complete.** Register system tasks and functions transactionally
+  and execute compiletf, sizetf, and calltf with exact callable kind, return
+  width/type, invocation scope, argument order, diagnostics, and exception
+  boundaries. A simulation-owned system registry validates bounded
+  `$identifier` names, callable kind, mandatory compile/call callbacks, and
+  task-versus-function size/return profiles before publishing an entry under a
+  stable pre-move key. Execution snapshots the registration outside its lock,
+  resolves a live invocation scope through the object registry, owns the
+  ordered argument vector, and presents the same exact kind, name, optional
+  return type, scope identity, and argument span to each phase. Functions run
+  compile, size, then call and require sizetf width to equal the registered
+  profile; tasks run compile then call with no return profile. Rejections retain
+  bounded owned phase diagnostics, and standard, nonstandard, and diagnostic
+  allocation failures remain contained at the compile, size, or call boundary.
+  Focused task/function phase-order, exact-profile/scope/argument, duplicate and
+  malformed transactional rejection, foreign/non-scope/missing invocation,
+  size rejection/mismatch, and all-phase exception evidence passes. The
+  exact-LLVM Debug target builds warning-clean with eight workers; runtime and
+  source gates pass 2/2.
+- **Change 14: Complete.** Implement system-call and argument handles, typed
+  result publication, per-registration and per-call user data,
+  nested/reentrant calls, duplicate/late registration diagnostics, and
+  deterministic teardown. Registration, call, and one-based argument handles
+  carry registry ownership plus monotonic identity; call records retain their
+  registration, scope, immutable ordered arguments, argument handles, user
+  data, typed result, phase, execution error, and active/completed/failed
+  state. Callbacks receive exact registration/call/argument handles and both
+  user-data domains. Result publication is legal only for an active function
+  in calltf, validates the registered type, rejects wrong/duplicate/task/early
+  writes, and fails accepted functions that publish nothing. All callbacks
+  remain outside locks, so nested different-callable and same-registration
+  reentry create independent records. Explicit sealing rejects late
+  registration with owned diagnostics; duplicate publication remains
+  transactional. Unregister preserves already-retained calls, explicit call
+  release stales call/argument handles, cross-registry handles reject, and
+  idempotent teardown clears calls before registrations and prevents later
+  callback phases. Focused active/retained handle, typed result, both user-data
+  domains, nested/reentrant, release/unregister/seal, cross-owner, missing
+  result, and callback-initiated teardown evidence passes. The exact-LLVM Debug
+  target builds warning-clean with eight workers; runtime and source gates pass
+  2/2.
+- **Change 15: Complete.** Implement MCD allocation/control, vlog output,
+  formatted diagnostics, command-line argv, product/version identity, severity
+  routing, bounded strings, file ownership, and cross-platform descriptor
+  behavior. A simulation-owned I/O service uses the established portable
+  32-bit layout: bit zero is standard output, bits 1-30 are monotonic MCD
+  channels, and the high bit tags monotonic file descriptors independently of
+  native OS descriptor width. Owner-qualified handles reject cross-service use;
+  MCD combination, fan-out validation, flush, composite close, append, stale
+  detection, and idempotent teardown retain exact stream ownership.
+  Manifest-root-relative UTF-8 paths reject absolute/traversing names, and only
+  bounded write/append modes are admitted. Vlog and four diagnostic severities
+  route through injected exception-contained sinks outside service locks.
+  Bounded formatting supports ordered `{}` replacements plus escaped braces
+  without C varargs, with malformed/count/size errors returned explicitly.
+  Configuration retains bounded argv, product identity, and the canonical
+  `fsim::version` default. Focused exact MCD/FD encoding, combined routing,
+  vlog, append/flush/close, cross-owner, argv/product/version, severity/format,
+  path/mode/bounds, sink exception, and teardown evidence passes. The
+  exact-LLVM Debug target builds warning-clean with eight workers; runtime and
+  source gates pass 2/2.
+- **Change 16: Complete.** Preserve registrations, callbacks, user data,
+  handles, forced values, and plug-in provenance safely across supported
+  save/restart and artifact flows, explicitly invalidate nonrestorable external
+  state, and reject ABI/content/cache mismatches without partial restoration.
+  A public checkpoint contract separates same-process restart from portable
+  artifact reload. Same-process restore requires the original simulation,
+  external-owner inventory, content/cache identity, and ordered plug-in
+  provenance; it restores underlying and forced object values transactionally
+  while retaining exact object, callback, registration, call, and descriptor
+  handles plus native callback/system user data. Portable restore requires an
+  empty target external surface, validates schema, host and plug-in ABI,
+  content, cache, ordered plug-in path/name/content/host provenance, complete
+  typed object inventory, and every value before mutation, then remaps object
+  handles by canonical full name. Native callback closures, pointer-valued user
+  data, system registrations, retained calls/arguments, open descriptors, and
+  dynamic-library contexts receive explicit counted invalidations requiring
+  verified plug-in re-registration or resource reopening. Focused evidence
+  covers exact-handle restart, callback and system user data, retained
+  descriptor ownership, forced values, cross-registry remapping, all
+  compatibility mismatches, missing and omitted objects, explicit invalidation
+  classes, and rejection without partial target changes. The exact-LLVM Debug
+  target builds warning-clean with eight workers; runtime and source gates pass
+  2/2.
+- **Change 17: Complete.** Add independently compiled C and C++ reference
+  plug-ins covering hierarchy, values, time, callbacks, control, system
+  tasks/functions, I/O, user data, lifecycle, and standard calling/export
+  conventions on Windows and POSIX. The frozen 40-byte v1 reporting host remains
+  unchanged. A versioned 56-byte v2 wrapper retains that complete v1 prefix and
+  appends an independent service context plus one C-compatible bounded request/
+  result invocation callback. Operation identity covers hierarchy, values,
+  time, callbacks, control, system tasks, system functions, I/O, user data, and
+  lifecycle without exposing C++ objects or native pointers as handles. Strict
+  validation rejects truncated v2 tables or missing service context/callback,
+  while v1 images retain their existing loader path. Separate C and C++ shared
+  libraries use only the public header, exact bind symbol, calling convention,
+  and visibility macro; each invokes all ten operation families at startup,
+  preserves request handles/arguments/user data/text, and emits one exactly-once
+  shutdown lifecycle request. Focused evidence freezes v1/v2/request/result
+  layouts, both image names and paths, ordered service profiles, independent
+  user-data bases, lifecycle flags, idempotent shutdown, and rejection by a
+  reporting-only v1 host. The exact-LLVM Debug target builds warning-clean with
+  eight workers; runtime and source gates pass 2/2.
+- **Change 18: Complete.** Add malformed ABI/profile, missing symbol, startup/
+  shutdown, invalid/stale/released/cross-simulation handle, iterator, callback-
+  removal, recursive/reentrant, exception, resource, and post-unload negative
+  matrices. The accumulated runtime matrix now covers invalid v1/v2 host and
+  plug-in versions/sizes/flags/pointers, missing artifacts and bind symbols,
+  bind/startup/shutdown failures and exceptions, malformed service requests and
+  results, and startup-time host resource failures for both independent C and
+  C++ images without partial publication. Object, iterator, value, time,
+  callback, control, system-call, and I/O matrices distinguish malformed,
+  missing, stale, released, and cross-owner handles; callback peer/self removal,
+  nested lifecycle/value registration, same-callable and cross-callable
+  recursion, callback exceptions, bounded-resource rejection, teardown, and
+  post-unload stale service access remain covered in the same full runtime
+  executable. Focused additions reject null ownership/requests, truncated
+  request/result tables, invalid operations, missing sized text, malformed host
+  results, and resource failures at startup for both language images; explicit
+  unload produces no later host calls and stale post-unload access rejects.
+  The exact-LLVM Debug target builds warning-clean with eight workers; runtime
+  and source gates pass 2/2.
+- **Change 19: Complete.** Add interpreter/LLVM O0/O2, multi-root, cold/warm
+  cache, standalone object/design, mapped-library, relocation, and save/restart
+  differentials; update public VPI documentation, examples, diagnostics,
+  feature matrices, inventories, audits, and restart handoff. Independent C and
+  C++ images now produce exact matching ten-service plus shutdown transcripts
+  across interpreter, compiled O0, and compiled O2 labels with distinct
+  simulation identities, repeated warm loads, and relocated image paths. The
+  transactional checkpoint matrix retains exact same-process owners/handles,
+  remaps portable object state, rejects content/cache/image/object mismatches
+  before mutation, and reports seven native-state invalidation classes. The
+  existing standalone `.fsimobj`, `.fsimdesign`, mapped-library, cache,
+  application engine/artifact, and multi-root API owners pass 6/6 in 25.34
+  seconds alongside the VPI runtime executable. Public README, architecture,
+  language support, diagnostics, the VPI guide/buildable examples, inventory,
+  legality, SystemVerilog, differential, and candidate audits are synchronized
+  with `SV-781` through `SV-790`: 1,220 execute rows, 4,880 evidence cells,
+  461 exact paths (201 test, 244 production, 16 release), 125 runtime owners,
+  1,989 diagnostics, 652 bounded sources, 744 authored artifacts, and 244
+  test/control files. The reviewed matrix SHA-256 is
+  `f60cf9a97f96315f5068a3047e113f70405b9cead25f9e379e5d556b22f76c51`;
+  the evidence-path SHA-256 is
+  `d3e9c14916fe0ec37156679632dd3b5488936f94f81d63a02ea5f164b81c51bd`.
+  The exact-LLVM Debug runtime target builds warning-clean with eight workers;
+  the runtime executable passes, the nine catalog/source/public/inventory/
+  release-candidate gates pass 9/9 in 14.01 seconds, and `git diff --check` is
+  clean.
+- **Change 20: Complete.** Run the full non-sanitized exact-LLVM Debug and
+  Release builds, regressions, source, catalog, inventory,
+  installed-public-contract, and release gates; then commit and push once
+  without sanitizer or hosted CI monitoring because Batch 157 is not a
+  monitoring boundary. The first optimized build exposed GCC's inability to
+  prove the discriminator of a moved delayed-write `optional<variant>` was
+  initialized. Replacing that optimizer-ambiguous move with an explicitly
+  initialized stored value plus presence flag preserves the transaction and
+  makes both focused Debug and Release runtime targets warning-clean; both
+  runtime executables pass. The full exact-LLVM Debug tree then relinks all 20
+  dependent targets warning-clean and passes 114/114 in 373.55 seconds. The
+  independent Release tree completes the remaining 338 full-build steps
+  warning-clean and passes 114/114 in 300.77 seconds. Both suites include every
+  runtime, source, catalog, inventory, installed-public-contract, artifact,
+  API/ABI, portability, and release gate. `git diff --check` is clean. Close
+  the accumulated Batch 157 checkpoint with one commit and push, then begin
+  Batch 158; do not run a sanitizer or inspect hosted CI at this boundary.
 
 ### Batch 158 - IEEE VHPI closure
 

@@ -216,3 +216,12 @@ Fourteen parser and semantic diagnostics advance the reviewed inventory to
 authored test/control files. The DPI boundary, fixtures, ABI, and documentation
 are clean-room code; no external simulator header, foreign runtime, plug-in
 corpus, third-party artifact, or provenance entry is imported.
+
+v2 Batch 157 adds the VPI ABI, owning runtime services, checkpoint codec,
+independent C/C++ images, focused matrices, and public guide as 43 SPDX-owned
+bounded C/C++ files plus one document. No production diagnostic code is added;
+the reviewed inventory advances to 1,989 diagnostics, 652 bounded C/C++
+sources, 744 authored artifacts, and 244 authored test/control files. The VPI
+boundary, examples, and tests are clean-room code; no external simulator
+header, foreign runtime, plug-in corpus, third-party artifact, or provenance
+entry is imported.

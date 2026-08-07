@@ -435,6 +435,16 @@ void Scheduler::discard_pending() {
   impl_->future.clear();
 }
 
+void Scheduler::reset() {
+  discard_pending();
+  impl_->now = 0;
+  impl_->callbacks = 0;
+  impl_->next_sequence = 0;
+  impl_->recent_signals.clear();
+  impl_->recent_signal_cursor = 0;
+  impl_->stop.store(false, std::memory_order_relaxed);
+}
+
 bool Scheduler::has_pending() const noexcept {
   if (impl_->current) {
     return true;
@@ -443,6 +453,16 @@ bool Scheduler::has_pending() const noexcept {
       impl_->future.begin(),
       impl_->future.end(),
       [](const auto &entry) { return !entry.second.empty(); });
+}
+
+std::optional<SimulationTick>
+Scheduler::next_pending_time() const noexcept {
+  for (const auto& [time, bucket] : impl_->future) {
+    if (!bucket.empty()) {
+      return time;
+    }
+  }
+  return std::nullopt;
 }
 
 bool Scheduler::running() const noexcept { return impl_->in_run; }

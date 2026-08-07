@@ -19,6 +19,12 @@ entries are errors unless explicitly marked as warnings. The four strings
 `FSIM-DESIGN-CACHE-V2` are persistent-format markers, not diagnostics, and
 are therefore excluded.
 
+The governed VPI boundary reports ABI, object, iterator, value, callback,
+control, system-callable, I/O, plug-in, and checkpoint failures through the
+typed status enums in `include/fsim/runtime/vpi_*.hpp` and the bounded
+`fsim_vpi_error_view_v1` C view. Those runtime statuses are not production
+`FSIM-*` diagnostic codes and therefore do not add catalog rows.
+
 ## Command line and C API
 
 | Code | Severity | Meaning |

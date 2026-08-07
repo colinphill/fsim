@@ -5,6 +5,529 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
+## Batch 157 in-progress checkpoint - 2026-08-07
+
+1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
+   Batch 157 allocation in `implementation_plan_v2.md`, and verify branch
+   `codex/v2` remains based on pushed Batch 156 closeout `98407f3`. Preserve
+   the dirty accumulated Batch 157 worktree described below; do not reset,
+   commit, push, inspect hosted CI, or run a sanitizer before Change 20.
+2. Batch 157 is expanded into twenty explicit changes. Change 1 is complete in
+   the dirty worktree. The new public C ABI fixes explicit host and plug-in
+   version/size fields, native pointer width, reserved flags, stable nonpointer
+   64-bit handles, simulation identity, bounded diagnostic views, Windows/POSIX
+   calling/export conventions, and the exact `fsim_vpi_plugin_bind_v1` symbol.
+3. The C++ host constructor and validator reject incompatible versions,
+   truncated tables, foreign pointer widths, reserved flags, zero simulation
+   ownership, missing host context, and missing report callbacks. An independent
+   C translation unit freezes the 40-byte host and 48-byte plug-in layouts and
+   invokes the bounded diagnostic callback through the C table.
+4. The affected exact-LLVM 22.1.8 Debug runtime target rebuilt warning-clean
+   with eight workers. `fsim.runtime` and `fsim.source-line-budget` pass 2/2
+   in 0.23 seconds, and `git diff --check` is clean.
+5. Preserve this checkpoint and begin Change 2 by loading one VPI image through
+   `platform::DynamicLibrary`, resolving and invoking the bind symbol
+   transactionally, validating and owning the returned descriptor, containing
+   bind/startup/shutdown failures, and guaranteeing exactly-once teardown. Do
+   not commit, push, run a sanitizer, or inspect hosted CI before Change 20.
+6. Change 2 is complete in the same dirty worktree. Loading validates the host
+   before opening an image, resolves only the exact bind symbol, invokes bind
+   and startup behind exception boundaries, and validates and copies the
+   complete plug-in descriptor before publication. Open, missing-symbol, bind,
+   descriptor, and startup failures release the provisional image without
+   publishing plug-in or lifecycle state.
+7. A successful load returns one move-only owner. Explicit shutdown and
+   destructor teardown invoke the callback exactly once before image unload;
+   the first status or exception result is retained for deterministic repeated
+   inspection. A real hidden-visibility image covers successful startup,
+   explicit and automatic shutdown, status failures, exceptions, malformed
+   versions/sizes/flags/name/lifecycle, missing bind symbol, invalid host, and
+   missing artifact.
+8. The first focused build failed only because two test-only explicit result
+   conversions were omitted. After that correction, the affected exact-LLVM
+   Debug target rebuilt warning-clean with eight workers. `fsim.runtime` and
+   `fsim.source-line-budget` pass 2/2 in 0.21 seconds, and `git diff --check`
+   is clean.
+9. Preserve this checkpoint and begin Change 3 with the simulation-owned error
+   state and generation-qualified object-handle registry, including stable
+   kind/parent identity and deterministic invalid, stale, released, and
+   cross-simulation rejection. Do not commit, push, run a sanitizer, or inspect
+   hosted CI before Change 20.
+10. Change 3 is complete in the same dirty worktree. Mutex-safe last-error state
+    owns bounded code/message storage, validates raw ABI severity before
+    narrowing, remains inspectable until the next call boundary, and never
+    borrows plug-in buffers. Invalid severity/code/message inputs reject without
+    replacing valid owned state.
+11. Object handles are 64-bit nonpointers encoding a process-unique registry,
+    slot, and generation. Records preserve kind, parent, simple name,
+    live-child count, and sibling uniqueness. Lookup and release distinguish
+    malformed, cross-simulation, released, and stale handles; reuse advances the
+    generation and parent release rejects while any child remains live.
+12. Focused evidence covers two isolated simulations, root/module/net hierarchy,
+    stable metadata, duplicate names, invalid kinds and parents, leaf-first
+    release, released-before-reuse identity, stale-after-reuse identity, and
+    owning error lifetime. The first final build correctly rejected a test-only
+    out-of-range enum conversion under warnings-as-errors; accepting and
+    validating the raw ABI integer before narrowing fixes the real boundary.
+13. The corrected exact-LLVM Debug target builds warning-clean with eight
+    workers. `fsim.runtime` and `fsim.source-line-budget` pass 2/2 in 0.21
+    seconds, and `git diff --check` is clean. Preserve the accumulated
+    worktree and begin Change 4 with deterministic name/hierarchy lookup,
+    independently releasable relationship iterators, escaped/full/simple names,
+    and source metadata. Do not commit, push, run a sanitizer, or inspect hosted
+    CI before Change 20.
+14. Change 4 is complete in the same dirty worktree. The object registry owns
+    canonical simple and full names, normalizes escaped-name termination,
+    supports exact full and parent-relative lookup, and retains optional
+    file/line/column provenance. Invalid dotted simple names and incomplete
+    source records reject before publication.
+15. Child iteration captures live objects in creation order in a separate
+    generation-qualified handle space. Iterators scan to explicit end, release
+    independently, reject object/iterator confusion and cross-simulation use,
+    and report released before reuse and stale after reuse. Object name maps,
+    source records, and parent child counts remain synchronized across release.
+16. Focused evidence covers an escaped module with a dotted identifier, its
+    nested full name, exact relative lookup, source ownership, malformed names/
+    sources, deterministic sibling order, iterator end/release/reuse, multi-root
+    isolation, and final leaf-first hierarchy teardown. The first build required
+    one test-only explicit iterator-result conversion.
+17. The corrected exact-LLVM Debug target builds warning-clean with eight
+    workers. `fsim.runtime` and `fsim.source-line-budget` pass 2/2 in 0.20
+    seconds, and `git diff --check` is clean. Preserve the accumulated
+    worktree and begin Change 5 with exact scalar object type/property metadata
+    for modules, interfaces, programs, packages, ports, nets, variables,
+    parameters, named events, and generated scopes. Do not commit, push, run a
+    sanitizer, or inspect hosted CI before Change 20.
+18. Change 5 is complete in the same dirty worktree. Typed records and queries
+    preserve exact Verilog-2005/SystemVerilog-2017 ownership, scalar category,
+    net kind, port direction, static/automatic lifetime, bounded width,
+    signedness, and constant status for roots, modules, interfaces, programs,
+    packages, generated scopes, ports, nets, variables, parameters, and events.
+19. Validation rejects unknown enum values, Verilog ownership of
+    SystemVerilog-only kinds, malformed scalar widths, signed real/string/event
+    types, missing directions or net kinds, automatic nonvariables, and mutable
+    parameters before hierarchy publication. Focused positives cover every
+    allocated Change 5 kind and exact property reads; malformed profiles and
+    two-simulation isolation are covered negatively.
+20. The first build exposed one older aggregate fixture missing the newly
+    explicit type field. After adding it, the affected exact-LLVM Debug target
+    builds warning-clean with eight workers. `fsim.runtime` and
+    `fsim.source-line-budget` pass 2/2 in 0.20 seconds, and `git diff --check`
+    is clean. Preserve the accumulated worktree and begin Change 6 with recursive
+    memory, array, queue, associative-array, struct, union, enum, string, class,
+    class-property, and dynamic-object descriptors. Do not commit, push, run a
+    sanitizer, or inspect hosted CI before Change 20.
+
+21. Change 6 is complete in the same dirty worktree. Recursive semantic type
+    descriptors now represent scalar, packed and unpacked fixed arrays, dynamic
+    arrays, queues, associative arrays, structs, unions, enums, strings,
+    classes, named class properties, and nominal class handles without byte
+    offsets, native pointers, or other host-layout fields.
+22. Checked recursive validation bounds depth, node count, fixed element count,
+    fixed bits, names, queue/container maxima, and arithmetic. It rejects
+    malformed shapes, duplicate member and enum identity, invalid associative
+    keys, nonintegral or dynamic packed elements, overflowing ranges, language
+    mismatches, and descriptor/object-kind mismatches before publication. The
+    registry copies accepted descriptor trees into immutable owning snapshots.
+23. Focused evidence covers ascending and descending packed ranges, fixed
+    memories, nested dynamic records, queues, associative arrays, unions,
+    enums, strings, classes/properties/handles, immutable snapshots, recursive
+    limits, and malformed inputs. The affected exact-LLVM Debug target builds
+    warning-clean with eight workers. `fsim.runtime` and
+    `fsim.source-line-budget` pass 2/2 in 0.20 seconds, and
+    `git diff --check` is clean. Preserve the accumulated worktree and begin
+    Change 7 with checked scalar, integer, real, string, time, strength, vector,
+    four-state, and nine-state value reads. Do not commit, push, run a sanitizer,
+    or inspect hosted CI before Change 20.
+
+24. Change 7 is complete in the same dirty worktree. The registry can bind
+    one canonical runtime value to each readable object and perform checked,
+    mutex-safe reads as scalar, raw integer bits, real/shortreal, bounded string,
+    full-width time, scalar strength, two-state words, four-state aval/bval
+    planes, or four-plane nine-state words. Value records remain owned by the
+    simulation and are discarded on object release or generation reuse.
+25. Conversion validates object identity, exact category and width, strength
+    encodings, known-state requirements, and format compatibility. Caller-owned
+    vector and string buffers receive required sizes first; undersized requests,
+    mismatched types, unknown/lossy conversions, duplicate binding, invalid
+    formats, and resource violations fail without partial writes. Released,
+    stale, malformed, and cross-simulation handles retain distinct errors.
+26. Focused evidence covers the 64/65-bit word boundary, exact X/Z aval/bval
+    planes, U/W/L/H/don't-care nine-state planes, signed raw integer identity,
+    unknown-state rejection, real and widened shortreal, embedded-NUL strings,
+    full-width time, distinct zero/one strength ranks, immutable undersized
+    buffers, ownership, and handle isolation. The first compile check corrected
+    warning-only shadowed test names; the first focused gates corrected two
+    test-only nine-state plane expectations. The final exact-LLVM Debug target
+    builds warning-clean with eight workers. `fsim.runtime` and
+    `fsim.source-line-budget` pass 2/2 in 0.20 seconds, and
+    `git diff --check` is clean. Preserve the accumulated worktree and begin
+    Change 8 with checked deposits, delayed writes, and force/release semantics.
+    Do not commit, push, run a sanitizer, or inspect hosted CI before Change 20.
+
+27. Change 8 is complete in the same dirty worktree. Reverse conversion
+    transactionally accepts scalar, raw integer, real/shortreal, string, time,
+    strength, two-state, aval/bval four-state, and four-plane nine-state input
+    formats. It validates caller sizes, unused word padding, state encodings,
+    exact type/width, embedded bytes, shortreal overflow, and strength ranks
+    before constructing a canonical owned value.
+28. Immediate deposits update the underlying value, force adds a separate
+    visible layer, deposits continue beneath an active force, and release reveals
+    the latest underlying value. Constants and input ports reject distinctly;
+    output/inout ports and writable nets/variables accept exact values. A
+    scheduler-backed controller preflights delayed requests, executes them in the
+    common update phase with stable order, supports independent transport writes,
+    inertial supersession, explicit cancellation, retained outcomes, and
+    independent scheduled-handle release.
+29. Focused evidence covers 65-bit input boundaries, invalid padding and
+    nine-state encodings, embedded-NUL strings, shortreal overflow, strength
+    deposits, deposit-under-force/release reveal, constant/input/width negatives,
+    exact delayed deposit/force/release ticks, transport coexistence, inertial
+    cancellation, explicit cancellation, time overflow, and stale-generation
+    failure after object reuse. The affected exact-LLVM Debug target builds
+    warning-clean with eight workers. `fsim.runtime` and
+    `fsim.source-line-budget` pass 2/2 in 0.20 seconds, and
+    tracked plus untracked whitespace checks are clean. Preserve the accumulated
+    worktree and begin Change 9 with exact simulation-time queries and delay
+    scheduling. Do not commit, push, run a sanitizer, or inspect hosted CI before
+    Change 20.
+
+30. Change 9 is complete in the same dirty worktree. A validated time
+    profile retains exact decimal unit and precision exponents from seconds
+    through femtoseconds. Integer queries expose full 64-bit scheduler ticks as
+    high/low words; scaled-real queries convert ticks into the configured unit;
+    every query also preserves the common scheduler's current delta identity.
+31. Delay conversion combines integer high/low words exactly or maps nonnegative
+    finite scaled-real units onto precision ticks with deterministic half-up
+    rounding. Negative, nonfinite, foreign-format, profile, conversion, and
+    current-time overflow reject before scheduling. Cancelable after-delay work
+    maps to the common active phase with caller stable order, retained fired/
+    cancelled/callback-failed status, exception containment, cross-service
+    identity, independent handle release, bounded resources, and teardown
+    cancellation.
+32. Focused evidence covers nanosecond/picosecond scaling, 64-bit integer
+    recombination, half-tick rounding, invalid profiles/formats, negative and
+    infinite delays, identical-time stable order, exact query inversion, callback
+    exception containment, explicit cancellation, service isolation, time
+    overflow, active-to-next-delta identity, and destruction with pending work.
+    The first build removed one stray test-only import; the first focused gate
+    corrected an idle-scheduler delta setup. The final exact-LLVM Debug target
+    builds warning-clean with eight workers. `fsim.runtime` and
+    `fsim.source-line-budget` pass 2/2 in 0.19 seconds, and tracked plus
+    untracked whitespace checks are clean. Preserve the accumulated worktree and
+    begin Change 10 with value-change, after-delay, read-write, read-only,
+    next-time, and synchronization-region callback registration and dispatch.
+    Do not commit, push, run a sanitizer, or inspect hosted CI before Change 20.
+
+33. Change 10 is complete in the same dirty worktree. A simulation-owned
+    callback manager registers value-change, after-delay, read-write, read-only,
+    next-time, and synchronization callbacks with generation-independent
+    manager handles, exact registration order, optional object identity, copied
+    user data, retained status, and the registry's multi-root simulation
+    identity. Cross-simulation objects, invalid requests, absent future times,
+    time-conversion failures, stable-order overflow, and bounded-resource
+    failures reject before publication.
+34. Synchronization callbacks map to update, value-change and read-write to
+    reactive, read-only to postponed, and after-delay/next-time to active
+    scheduler regions. The scheduler now exposes its earliest queued future
+    time without consuming it. Registry value observers run only after a
+    visible value is published and its mutex is unlocked; same-value deposits
+    and deposits hidden beneath force are silent, while force and release queue
+    copied visible values. One scheduled dispatch preserves change sequence and
+    registration order and permits observer-side registry re-entry.
+35. Focused evidence covers all six callback kinds, exact scheduler phase/time/
+    delta, copied object/value/user-data/registration identity, two independent
+    roots, cross-simulation rejection, missing next time, observer re-entry,
+    duplicate-value suppression, force-hidden deposits, release visibility,
+    persistent value-change status, one-shot status, and cross-manager handle
+    isolation. The final exact-LLVM Debug target builds warning-clean with eight
+    workers. `fsim.runtime` and `fsim.source-line-budget` pass 2/2 in 0.20
+    seconds, and tracked plus new callback-file whitespace checks are clean.
+    Preserve the accumulated worktree and begin Change 11 with lifecycle
+    callbacks, callback removal/self-removal, nested registration, exception
+    containment, and scheduler-safe re-entry. Do not commit, push, run a
+    sanitizer, or inspect hosted CI before Change 20.
+36. Change 11 is complete in the same dirty worktree. Callback kinds now cover
+    start/end simulation and start/end reset, save, and restart boundaries.
+    Lifecycle notification captures one active registration snapshot in exact
+    registration order and queues start boundaries in the common active region
+    and end boundaries in postponed. Every event retains exact kind, integer
+    time/delta, user data, registration order, and simulation identity.
+37. Removal first publishes retained removed state, then cancels any pending
+    scheduler-backed or timed work outside the manager mutex. Self-removal and
+    removal of a later callback take effect within the current snapshot; nested
+    registrations wait for the next matching notification. Invocation occurs
+    outside manager and registry locks, so nested registration, removal,
+    lifecycle dispatch, and visible value publication re-enter safely.
+    Exceptions become per-registration callback-failed status without aborting
+    later callbacks, and reactive value observers see only fully published
+    state.
+38. Focused evidence covers all eight lifecycle boundaries, active/postponed
+    mapping, exact time/user/simulation identity, self and peer removal, inactive
+    removal, delayed-work cancellation, nested-registration deferral, contained
+    exceptions, later-callback continuation, cross-manager removal, invalid
+    lifecycle requests, lifecycle-to-lifecycle re-entry, and lifecycle-to-value
+    reactive re-entry. The final exact-LLVM Debug target builds warning-clean
+    with eight workers. `fsim.runtime` and `fsim.source-line-budget` pass 2/2
+    in 0.20 seconds, and tracked plus new callback-file whitespace checks are
+    clean. Preserve the accumulated worktree and begin Change 12 with stop,
+    finish, reset, interactive control, force, and release operations at common
+    scheduler safe points. Do not commit, push, run a sanitizer, or inspect
+    hosted CI before Change 20.
+39. Change 12 is complete in the same dirty worktree. A simulation-owned
+    control service owns generation-independent operation handles, exact
+    simulation identity, pending/applied/failed status, value errors, and
+    Running, Stopped, Interactive, Reset, or Finished state. Invalid operation
+    shapes, mistyped force values, foreign objects, inactive submission,
+    controller-handle mismatch, stable-order overflow, and bounded-resource
+    failures reject before scheduler publication.
+40. Force and release execute in update and publish visible transitions through
+    reactive callbacks. Stop and interactive execute at postponed safe points,
+    preserve later work, and resume distinctly. Finish dispatches end-of-
+    simulation callbacks before a nonresumable terminal stop. Reset dispatches
+    start-reset, restores every live bound object from an owned initial snapshot
+    while clearing force layers transactionally, publishes exact visible changes,
+    dispatches end-reset, and enters resumable reset state. Reset resume cancels
+    old scheduler work, rewinds time/delta/sequence identity, and clears stop.
+41. Focused evidence covers ordered force/release values, cross-simulation and
+    malformed/type preflight, retained stop work and resume, interactive resume,
+    operation status/ownership, start-reset/value/end-reset ordering, force
+    clearing, initial-value restoration, future-work discard, scheduler rewind,
+    end-of-simulation ordering, and terminal finish rejection. The final exact-
+    LLVM Debug target builds warning-clean with eight workers. `fsim.runtime`
+    and `fsim.source-line-budget` pass 2/2 in 0.20 seconds, and tracked plus
+    new control-file whitespace checks are clean. Preserve the accumulated
+    worktree and begin Change 13 with transactional system task/function
+    registration and compiletf/sizetf/calltf execution. Do not commit, push, run
+    a sanitizer, or inspect hosted CI before Change 20.
+42. Change 13 is complete in the same dirty worktree. A simulation-owned system
+    callable registry accepts only bounded `$identifier` names, supported task
+    or function kinds, mandatory compiletf/calltf callbacks, and internally
+    consistent sizetf plus exact return profiles. Task registrations reject
+    return metadata or sizetf, function registrations require both, and all
+    validation plus stable pre-move key construction completes before the map
+    publishes an entry. Duplicate, malformed, invalid-kind, invalid-callback,
+    and allocation failures leave registration count and prior entries intact.
+43. Invocation snapshots the registration and releases the registry lock before
+    user code. It resolves the supplied handle through the same simulation's
+    VPI object registry, accepts only real scope kinds, owns arguments in their
+    original order, and presents exact callable kind, name, optional return
+    type, full scope identity, and an immutable argument span to every phase.
+    Functions run compiletf, sizetf, then calltf and require the reported width
+    to equal the registered return width; tasks run compiletf then calltf with
+    no return profile. Rejections stop later phases and retain bounded owned
+    diagnostics. Standard and nonstandard exceptions in compiletf, sizetf, or
+    calltf become phase-specific callback-exception results; best-effort
+    diagnostic ownership itself cannot reopen the callback boundary.
+44. Focused evidence covers exact function and task phase order, exact return
+    type/width, hierarchical scope identity, mixed argument order, transactional
+    duplicate and malformed profile rejection, missing/foreign/non-scope
+    invocation rejection, sizetf rejection and width mismatch without calltf,
+    owned diagnostics, and exception containment at all three callback phases.
+    The final exact-LLVM Debug target builds warning-clean with eight workers.
+    `fsim.runtime` and `fsim.source-line-budget` pass 2/2 in 0.22 seconds;
+    tracked and all three new system-call files pass whitespace checks.
+    `clang-format` is not installed in this environment, so its non-mutating
+    dry-run was unavailable. Preserve the accumulated worktree and begin Change
+    14 with system-call/argument handles, typed results, registration/call user
+    data, nested/reentrant calls, late-registration diagnostics, and
+    deterministic teardown. Do not commit, push, run a sanitizer, or inspect
+    hosted CI before Change 20.
+45. Change 14 is complete in the same dirty worktree. Registration and call
+    handles carry one registry owner plus monotonic identity; argument handles
+    additionally carry their call and one-based ordinal. Each retained call
+    owns its registration snapshot, full invocation scope, immutable ordered
+    values and argument handles, per-call user data, optional typed result,
+    current/final phase, execution error, and active/completed/failed state.
+    Invocation contexts expose registration, call, and argument handles plus
+    independent per-registration and per-call user data to every callback.
+46. Result publication is admitted only during calltf for an active function
+    and validates the exact registered return type. Early, task, wrong-type,
+    duplicate, and missing publications reject distinctly. Callbacks still run
+    outside locks, so a calltf can synchronously execute a different callable
+    or the same registration without aliasing call records. Explicit sealing
+    gives owned late-registration diagnostics; unregister removes future name
+    lookup while retained calls remain queryable. Completed/failed calls release
+    explicitly and stale their argument handles; active release and
+    cross-registry registration/call/argument handles reject.
+47. Teardown is idempotent, closes and seals the registry, clears calls before
+    registrations, invalidates all retained surfaces, and when invoked from
+    compiletf prevents sizetf and calltf from running. Focused evidence covers
+    active/post-call metadata, ordered argument lookup, exact user data, typed
+    publication and wrong/duplicate/missing results, nested and same-
+    registration reentry, active-release refusal, explicit release/unregister,
+    duplicate/late diagnostics, cross-owner handles, closed surfaces, and
+    callback-initiated teardown. The final exact-LLVM Debug target builds
+    warning-clean with eight workers. `fsim.runtime` and
+    `fsim.source-line-budget` pass 2/2 in 0.21 seconds, and tracked plus all
+    three system-call files pass whitespace checks. Preserve the accumulated
+    worktree and begin Change 15 with MCD allocation/control, vlog and formatted
+    output, argv/product/version identity, severity routing, bounded strings,
+    file ownership, and cross-platform descriptors. Do not commit, push, run a
+    sanitizer, or inspect hosted CI before Change 20.
+48. Change 15 is complete in the same dirty worktree. A simulation-owned VPI
+    I/O service fixes the portable 32-bit descriptor layout independently of
+    native Windows/POSIX widths: bit zero selects standard output, bits 1-30
+    identify monotonic MCD channels, and the high bit tags monotonic file
+    descriptors. Every public handle also carries service ownership.
+    Combination validates all selected channels before fan-out; file
+    descriptors cannot enter MCDs; flush, composite close, stale detection,
+    append, cross-service rejection, and open-file counts preserve exact file
+    ownership.
+49. File opens accept only bounded write/append modes and root-relative UTF-8
+    paths that cannot escape the canonical configured root. Vlog routes through
+    an injected output sink; note, warning, error, and fatal diagnostics route
+    through an independent sink. Both contain exceptions outside the service
+    lock. Formatting owns one bounded message, consumes ordered `{}`
+    placeholders, supports escaped braces, and rejects malformed, missing,
+    excess, or oversized arguments. Configuration owns bounded command-line
+    argv, product identity, and the canonical `fsim::version` default.
+50. Focused evidence covers exact standard-output/MCD/file-descriptor values,
+    MCD combination and fan-out, vlog, flush, composite close, append, monotonic
+    identity, stale/cross-owner handles, all severity routes, escaped formatting,
+    malformed counts/severity/path/mode/bounds, sink exceptions, zero simulation
+    rejection, and idempotent teardown with retained file content. The final
+    exact-LLVM Debug target builds warning-clean with eight workers.
+    `fsim.runtime` and `fsim.source-line-budget` pass 2/2 in 0.20 seconds,
+    and tracked plus all three new I/O files pass whitespace checks. Preserve
+    the accumulated worktree and begin Change 16 with save/restart and artifact
+    preservation or explicit invalidation of registrations, callbacks, user
+    data, handles, forced values, and plug-in provenance. Do not commit, push,
+    run a sanitizer, or inspect hosted CI before Change 20.
+51. Change 16 is complete in the same dirty worktree. The object registry now
+    exports a complete typed snapshot of every live value-bearing object,
+    including its source handle, canonical full name, underlying value, and
+    force layer. Restore first validates complete one-to-one object inventory,
+    unique source handles and names, deep type identity, and both stored values,
+    then applies all records in one mutex-held transaction and returns an exact
+    source-to-target handle map. Missing, omitted, duplicate, or mistyped
+    records reject before any target mutation.
+52. A public checkpoint contract distinguishes same-process restart from
+    portable artifact reload. Restart requires the original simulation and
+    unchanged callback, system-registration/call, and descriptor inventory; it
+    preserves exact object and external handles, callback closures, callback
+    and system user data, registrations, retained calls, descriptors, and
+    forced values. Portable reload requires an empty external target, validates
+    schema, both VPI ABI versions, design content, native cache, and ordered
+    plug-in path/name/content/host provenance before object restoration, remaps
+    object handles by full name, and returns counted reasons invalidating native
+    closures, pointer user data, system registrations/calls/arguments, open
+    streams, and dynamic-library contexts for verified re-registration.
+53. Focused evidence covers exact-handle restart, callback and system user-data
+    execution after restart, retained descriptor writes, underlying and forced
+    values, cross-registry handle remapping, schema/host-ABI/plug-in-ABI/content/
+    cache/plug-in mismatch rejection, missing and omitted records, seven
+    explicit portable invalidation classes, and unchanged target state after
+    every rejected artifact. The final exact-LLVM Debug target builds warning-
+    clean with eight workers. The full runtime executable passes;
+    `fsim.runtime` and `fsim.source-line-budget` pass 2/2 in 0.22 seconds.
+    Tracked and all three new checkpoint files pass whitespace checks. Preserve
+    the accumulated worktree and begin Change 17 with independently compiled C
+    and C++ reference plug-ins. Do not commit, push, run a sanitizer, or inspect
+    hosted CI before Change 20.
+54. Change 17 is complete in the same dirty worktree. The public 40-byte v1 host
+    layout and existing bind entry point remain unchanged. A separate 56-byte
+    v2 wrapper begins with the complete v1 table and appends one service context
+    plus one C-compatible invocation callback. Its bounded request/result
+    records carry explicit sizes, operation/flags, stable integer handle,
+    argument, user data, and sized text; operations allocate hierarchy, value,
+    time, callback, control, system-task, system-function, I/O, user-data, and
+    lifecycle identities without exposing C++ owners across the image boundary.
+55. Independently compiled C and C++ shared libraries include only the public
+    ABI header and export the exact bind symbol through the common Windows/POSIX
+    calling and visibility macros. Each requires a validated v2 service host,
+    invokes all ten service families in order during startup with its own exact
+    user-data base, and emits one flagged lifecycle request during exactly-once
+    shutdown. A reporting-only v1 host is rejected without startup.
+56. Focused evidence freezes the 40-byte v1 prefix, 56-byte v2 wrapper, and
+    portable request/result layouts; validates missing v2 context/callback
+    rejection; and checks both plug-in names, normalized paths, operation order,
+    arguments, user data, sized text, lifecycle flags, and idempotent shutdown.
+    The final exact-LLVM Debug target builds warning-clean with eight workers.
+    The full runtime executable passes; `fsim.runtime` and
+    `fsim.source-line-budget` pass 2/2 in 0.22 seconds. Tracked and all three
+    new reference-plug-in files pass whitespace checks. Preserve the accumulated
+    worktree and begin Change 18 with malformed ABI/profile, lifecycle,
+    handle/iterator/callback/reentrant/exception/resource/post-unload negative
+    matrices. Do not commit, push, run a sanitizer, or inspect hosted CI before
+    Change 20.
+57. Change 18 is complete in the same dirty worktree. The accumulated runtime
+    negative matrix covers malformed v1/v2 host and plug-in ABI versions, sizes,
+    flags, pointer widths, contexts and callbacks; missing artifacts/bind
+    symbols; bind/startup/shutdown status and exception paths; and failure
+    containment without publishing provisional images.
+58. Object, iterator, value, time, callback, control, system-call, and I/O
+    evidence distinguishes invalid, stale, released, and cross-simulation/
+    cross-owner handles. It also covers callback self/peer removal, nested
+    registration and lifecycle/value reentry, same/cross-callable recursive
+    system calls, user exceptions, bounded resources, callback-initiated
+    teardown, and every closed surface. New reference-boundary cases reject
+    null ownership/requests, truncated request/result sizes, invalid operation,
+    missing sized text, host resource failure, malformed successful result, and
+    stale post-unload access. Both independent C and C++ images fail startup
+    without partial publication; explicit unload produces no later host call.
+59. The final exact-LLVM Debug target builds warning-clean with eight workers.
+    The full runtime executable passes; `fsim.runtime` and
+    `fsim.source-line-budget` pass 2/2 in 0.22 seconds. Preserve the dirty
+    accumulated worktree and begin Change 19 with interpreter/LLVM O0/O2,
+    multi-root, cold/warm cache, standalone object/design, mapped-library,
+    relocation, save/restart differentials, and public VPI documentation/
+    inventories. Do not commit, push, run a sanitizer, or inspect hosted CI
+    before Change 20.
+60. Change 19 is complete in the same dirty worktree. The independent C and
+    C++ images now produce exact matching hierarchy/value/time/callback/
+    control/system-task/system-function/I/O/user-data/lifecycle transcripts
+    across interpreter, compiled O0, and compiled O2 labels. Distinct
+    simulation identities remain isolated; repeated loads exercise the warm
+    path; copied images load and shut down exactly once from relocated paths.
+61. The checkpoint matrix retains callback/system user data, exact handles,
+    calls, descriptors, and forced values for same-process restart. Portable
+    restore validates schema, both ABI versions, content/cache identity,
+    ordered image provenance, complete object inventory, deep types, and every
+    value before mutation; it remaps canonical object paths and returns seven
+    counted native-state invalidations. The existing `.fsimobj`, `.fsimdesign`,
+    mapped-library, cache, application engine/artifact, and multi-root API
+    owners pass 6/6 in 25.34 seconds.
+62. Public README, architecture, language support, diagnostics, the new
+    `systemverilog-vpi.md` guide/buildable C/C++ examples, feature rows
+    `SV-781` through `SV-790`, test inventory, and every frozen release audit
+    are synchronized. The candidate now freezes 1,220 execute rows, 4,880
+    evidence cells, 461 exact paths (201 test, 244 production, 16 release), 125
+    runtime owners, 1,989 diagnostics, 652 bounded sources, 744 authored
+    artifacts, and 244 test/control files. The reviewed matrix SHA-256 is
+    `f60cf9a97f96315f5068a3047e113f70405b9cead25f9e379e5d556b22f76c51`;
+    the evidence-path SHA-256 is
+    `d3e9c14916fe0ec37156679632dd3b5488936f94f81d63a02ea5f164b81c51bd`.
+63. The final exact-LLVM Debug runtime target builds warning-clean with eight
+    workers and the full runtime executable passes. The nine catalog, source,
+    legality, SystemVerilog, differential, public, inventory, candidate, and
+    installed-public-contract gates pass 9/9 in 14.01 seconds;
+    `git diff --check` is clean. Preserve the accumulated dirty worktree and
+    begin Change 20 with full non-sanitized exact-LLVM Debug and Release builds,
+    regressions, and release gates. Then commit and push exactly once. Do not
+    run a sanitizer or inspect hosted CI because Batch 157 is not a monitoring
+    boundary.
+64. Change 20 is complete. The first exact-LLVM Release build exposed an
+    optimizer-only GCC `maybe-uninitialized` error while moving a delayed VPI
+    write's `optional<variant>` into the scheduled apply helper. The delayed
+    path now copies into an explicitly initialized stored value and carries a
+    separate presence flag before passing a pointer to the transactional apply
+    helper. This preserves deposit/force/release semantics and removes the
+    optimizer ambiguity. Focused Debug and Release runtime targets rebuild
+    warning-clean and both runtime executables pass.
+65. The final exact-LLVM Debug tree relinks all 20 affected executables against
+    the repaired runtime warning-clean with eight workers and passes the full
+    suite 114/114 in 373.55 seconds. The independent Release tree completes the
+    remaining 338 full-build steps warning-clean with eight workers and passes
+    114/114 in 300.77 seconds. Both suites include the source, catalog,
+    inventory, installed-public-contract, artifact, API/ABI, portability,
+    release-candidate, and VPI runtime gates. `git diff --check` is clean.
+66. Close Batch 157 with exactly one commit and push. Do not run a sanitizer or
+    inspect hosted CI because this is not a monitoring boundary. After the
+    synchronized push, begin Batch 158 by expanding its locked VHPI allocation
+    into twenty exact changes and record the new clean base before making the
+    next accumulated worktree dirty.
+
 ## Batch 156 completed checkpoint - 2026-08-06
 
 1. Start in `/home/colin/projects/fsim`, read this file and the authoritative

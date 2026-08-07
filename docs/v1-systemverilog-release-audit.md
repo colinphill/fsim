@@ -16,7 +16,7 @@ broaden the v1 subset.
 | `B130-T2-SV-NATIVE` | Interpreter, LLVM O0/O2, cache, debugger, VCD, runtime ABI, and source edits | Differential claims remain owned by their exact application/compiler/runtime tests and do not rely on parser acceptance |
 | `B130-T2-SV-RELEASE` | Nine `V1-SV` rows | The complete language promise remains executable with positive, negative, elaboration, and runtime ownership |
 
-The machine gate composes the final release audit, then parses all 789 rows
+The machine gate composes the final release audit, then parses all 799 rows
 independently. It requires `execute`, rejects empty or em-dash evidence cells,
 requires checked test-or-implementation ownership for P+, test/catalog/checked
 rejection ownership for P-, implementation-or-test ownership for E, and
@@ -39,7 +39,7 @@ diagnostics. V2 Batch 147 adds the ten class-foundation rows with focused
 frontend, runtime, application, debugger, engine, and portable-artifact
 owners. The strict audit covers all 716 rows; the runtime evidence-file count
 is frozen by the release-candidate gate.
-Subsequent closure through Batch 156 advances the strict audit to all 789 rows.
+Subsequent closure through Batch 157 advances the strict audit to all 799 rows.
 The ten Batch 155 coverage rows name exact parser/resolution, bin/cross,
 percentage/report, scheduler/callback, debugger/trace, persistence, resource,
 artifact, and interpreter/LLVM evidence; their runtime-owner count remains
@@ -47,3 +47,7 @@ frozen by the synchronized release-candidate gate.
 The ten Batch 156 DPI-C rows name exact declaration/profile, scalar/composite/
 open-array marshalling, scope/callback/task, manifest/loader, public C ABI,
 lifetime, provenance, and real-symbol engine evidence.
+The ten Batch 157 VPI rows advance the strict audit to all 799 rows and name
+the versioned public ABI/loader, hierarchy, recursive types, values, time,
+callbacks, control, system callables, I/O, checkpoint/remap/invalidation, and
+independent repeated/relocated C/C++ image evidence.
