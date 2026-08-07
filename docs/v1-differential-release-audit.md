@@ -79,3 +79,12 @@ VCD, scheduling, and cold/warm/edited-cache evidence. The linked totals are
 472 interpreter rows, 389 LLVM rows, 258 cache rows, 108 debugger rows, 134
 VCD/trace rows, 418 scheduling rows, and 102 failure rows. The reviewed
 36-CTest corpus inventory is unchanged.
+
+Batch 155's ten functional-coverage rows advance the reviewed differential
+inventory to 1,200 required rows and 114 runtime owners. Covergroup sampling,
+callbacks, reports, debugger aliases, traces, persistence, relocation, and
+resource rejection are linked through the frontend coverage owner and
+application artifact matrix. The linked totals are 485 interpreter rows, 402
+LLVM rows, 265 cache rows, 109 debugger rows, 137 VCD/trace rows, 425
+scheduling rows, and 104 failure rows. The reviewed 36-CTest corpus inventory
+is unchanged.

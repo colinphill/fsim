@@ -24,6 +24,7 @@ void ApplicationTestFixture::test_artifact_phase_semantics() {
   static_assert(app::kDesignIrStateSchema == 2);
   static_assert(app::kClassStateSchema == 7);
   static_assert(app::kSystemVerilogConstraintHirStateSchema == 3);
+  static_assert(app::kSystemVerilogCoverageStateSchema == 1);
   const auto sv_source = directory / "artifact_phase.sv";
   const auto vhdl_source = directory / "artifact_phase.vhd";
   const auto sv_object = directory / "artifact-sv.fsimobj";
@@ -102,6 +103,19 @@ module scalar_artifact;
   initialized_wide_t initialized_wide;
   tagged_wide_t tagged_wide;
   logic [4:0] checks;
+  class ArtifactCoverageOwner;
+    covergroup artifact_coverage with function sample(
+      input logic [7:0] sample_value
+    );
+      option.goal = 75;
+      type_option.merge_instances = 1;
+      value_point: coverpoint sample_value {
+        bins low[] = {[0:3]};
+        bins path = (1 => 2);
+        illegal_bins rejected = {8};
+      }
+    endgroup : artifact_coverage
+  endclass : ArtifactCoverageOwner
   assign wide_value = WIDE_SEED;
   initial begin
     r = 1.25;
@@ -292,6 +306,78 @@ end architecture;
   assert(design_inspection->process_count != 0);
   auto active_design = design;
 
+  diagnostic::Engine coverage_load_diagnostics;
+  auto coverage_checkpoint = app::load_design_artifact(
+      active_design, coverage_load_diagnostics);
+  assert(coverage_checkpoint && !coverage_load_diagnostics.has_error());
+  auto coverage_state = coverage_checkpoint->systemverilog_coverage;
+  assert(coverage_state.declarations.size() == 1);
+  assert(coverage_state.instances.size() == 1);
+  assert(coverage_state.reports.size() == 1);
+  const auto& coverage_declaration = coverage_state.declarations.front();
+  assert(coverage_declaration.name == "artifact_coverage");
+  assert(coverage_declaration.effective_instance_goal == 75);
+  assert(coverage_declaration.effective_merge_instances);
+  assert(coverage_declaration.coverage_declarations.size() == 1);
+  assert(coverage_declaration.coverage_declarations.front().bins.size() == 6);
+  auto& coverage_instance = coverage_state.instances.front();
+  assert(coverage_instance.runtime_identity.find("0x") == std::string::npos);
+  const auto& first_bin =
+      coverage_declaration.coverage_declarations.front().bins.front();
+  frontend::SystemVerilogCoverageBinHit hit;
+  hit.coverage_declaration_index = 0;
+  hit.bin_declaration_index = first_bin.declaration_index;
+  hit.identity = first_bin.name;
+  hit.hit_count = 3;
+  hit.at_least = first_bin.at_least;
+  hit.covered = true;
+  coverage_instance.bin_hits.push_back(hit);
+  coverage_instance.transition_progress.push_back({0, 4, 0, 1, 2, 3});
+  coverage_instance.previous_samples.push_back({0, 2, 0, 64});
+  coverage_instance.cross_bin_state.push_back(
+      {0, std::nullopt, "tuple", {first_bin.name}, 4, 1, 1, 100, 1,
+       true, false});
+  coverage_instance.illegal_bin_reports.push_back(
+      {"rejected", 8, first_bin.span});
+  frontend::SystemVerilogCoverageCallbackEvent callback;
+  callback.sequence = 9;
+  callback.kind = frontend::SystemVerilogCoverageCallbackKind::Hit;
+  callback.trigger =
+      frontend::SystemVerilogCoverageSampleTrigger::Procedural;
+  callback.mode = frontend::SystemVerilogCoverageExecutionMode::LlvmO2;
+  callback.runtime_identity = coverage_instance.runtime_identity;
+  callback.bin_identity = first_bin.name;
+  callback.value = 2;
+  coverage_state.callback_events.push_back(callback);
+  coverage_state.trace_events.push_back(
+      {9, 42, 7, "alias.coverage.hit", "coverage.hit",
+       frontend::SystemVerilogCoverageCallbackKind::Hit, 2, true});
+  coverage_state.aliases.push_back({"alias.coverage", "coverage"});
+  frontend::refresh_systemverilog_coverage_reports(coverage_state);
+  diagnostic::Engine coverage_codec_diagnostics;
+  const auto coverage_bytes = app::serialize_systemverilog_coverage_state(
+      coverage_state, coverage_codec_diagnostics);
+  assert(coverage_bytes && !coverage_codec_diagnostics.has_error());
+  auto restored_coverage = app::deserialize_systemverilog_coverage_state(
+      *coverage_bytes, "coverage-state.bin", coverage_codec_diagnostics);
+  assert(restored_coverage && !coverage_codec_diagnostics.has_error());
+  const auto restored_bytes = app::serialize_systemverilog_coverage_state(
+      *restored_coverage, coverage_codec_diagnostics);
+  assert(restored_bytes == coverage_bytes);
+  assert(restored_coverage->instances.front().bin_hits.front().hit_count == 3);
+  assert(restored_coverage->instances.front().transition_progress.size() == 1);
+  assert(restored_coverage->instances.front().previous_samples.size() == 1);
+  assert(restored_coverage->instances.front().cross_bin_state.size() == 1);
+  assert(restored_coverage->instances.front().illegal_bin_reports.size() == 1);
+  assert(restored_coverage->callback_events.front().runtime_identity
+      == coverage_instance.runtime_identity);
+  assert(restored_coverage->trace_events.front().time == 42);
+  assert(restored_coverage->aliases.front().canonical_root == "coverage");
+  assert(frontend::render_systemverilog_coverage_report(
+             restored_coverage->reports.front())
+      == frontend::render_systemverilog_coverage_report(
+             coverage_state.reports.front()));
+
   const auto missing_design = directory / "artifact-missing.fsimdesign";
   const auto missing_design_text = support::path_to_utf8(missing_design);
   const std::vector<const char*> missing_elaborate{
@@ -329,6 +415,9 @@ end architecture;
     assert(built->semantics.source_files().size() >= 2);
     assert(built->design.verilog_specify_paths().size() == 1);
     assert(built->design.verilog_timing_checks().size() == 1);
+    assert(built->systemverilog_coverage.declarations.size() == 1);
+    assert(built->systemverilog_coverage.instances.size() == 1);
+    assert(built->systemverilog_coverage.reports.size() == 1);
     for (const auto& file : built->semantics.source_files()) {
       assert(!std::filesystem::path(file.physical_name).is_absolute());
     }
@@ -538,6 +627,8 @@ end architecture;
     std::vector<std::string> keys;
     app::NativeCacheStatistics cache;
     std::size_t compiled_processes{};
+    std::string coverage_identity;
+    std::string coverage_report;
   };
   ScalarLibraryCapture scalar_o2_reference;
   const auto run_scalar_library = [&](
@@ -559,6 +650,13 @@ end architecture;
     assert(built && built->mapped_libraries.size() == 1);
     ScalarLibraryCapture capture;
     capture.keys = built->specialization_cache_keys;
+    assert(built->systemverilog_coverage.declarations.size() == 1);
+    assert(built->systemverilog_coverage.instances.size() == 1);
+    capture.coverage_identity =
+        built->systemverilog_coverage.instances.front().runtime_identity;
+    capture.coverage_report =
+        frontend::render_systemverilog_coverage_report(
+            built->systemverilog_coverage.reports.front());
     app::Simulation simulation{std::move(*built), 1000, engine};
     capture.cache = simulation.native_cache_statistics();
     capture.compiled_processes = simulation.compiled_process_count();
@@ -597,6 +695,13 @@ end architecture;
         && scalar_cold.payloads == scalar_warm.payloads);
     assert(scalar_interpreted.keys == scalar_cold.keys
         && scalar_cold.keys == scalar_warm.keys);
+    assert(scalar_interpreted.coverage_identity
+        == scalar_cold.coverage_identity);
+    assert(scalar_cold.coverage_identity
+        == scalar_warm.coverage_identity);
+    assert(scalar_interpreted.coverage_report
+        == scalar_cold.coverage_report);
+    assert(scalar_cold.coverage_report == scalar_warm.coverage_report);
 #if defined(FSIM_HAS_LLVM)
     assert(scalar_cold.compiled_processes == 1);
     assert(scalar_warm.cache.hits == 1);
@@ -615,7 +720,11 @@ end architecture;
       relocated_scalar.checks == "11111"
       && relocated_scalar.wide == scalar_o2_reference.wide
       && relocated_scalar.payloads == scalar_o2_reference.payloads
-      && relocated_scalar.keys == scalar_o2_reference.keys);
+      && relocated_scalar.keys == scalar_o2_reference.keys
+      && relocated_scalar.coverage_identity
+          == scalar_o2_reference.coverage_identity
+      && relocated_scalar.coverage_report
+          == scalar_o2_reference.coverage_report);
 #if defined(FSIM_HAS_LLVM)
   assert(relocated_scalar.cache.hits == 1);
 #endif

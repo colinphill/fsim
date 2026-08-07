@@ -1237,9 +1237,9 @@ stale schema, corrupt artifact, and oversized input failures are cataloged and
 transactional.
 
 This is prerequisite value/type infrastructure for UVM, not UVM completion.
-SVA/coverage, DPI/VPI, and UVM library/runtime work retain their locked
-Batch 154-162 ownership. Program, clocking, and interface closure is complete
-in Batch 153.
+Concurrent assertions and functional coverage are closed by Batches 154-155;
+DPI/VPI and UVM library/runtime work retain their locked later-batch ownership.
+Program, clocking, and interface closure is complete in Batch 153.
 
 ### SystemVerilog concurrent assertions in v2
 
@@ -1268,7 +1268,36 @@ Property actuals/formals/locals, non-scalar predicates, compound clock events,
 and more than 256 executable directives in one design unit reject with stable
 diagnostics. The richer temporal forms above are source-owned semantic HIR for
 later executable expansion; they are not silently claimed by the bounded
-runtime slice. Functional coverage remains assigned to Batch 155.
+runtime slice.
+
+### SystemVerilog functional coverage in v2
+
+Design units and classes own SystemVerilog-2017 covergroups with constructor
+formals, event or `with function sample` profiles, instance/type options,
+coverpoints, crosses, exact source provenance, and stable specialization and
+runtime identities. The bounded executable slice supports scalar, inclusive
+range, wildcard, sized/unsized array, automatic, default, ignored, illegal, and
+transition bins; deterministic guards and overlap handling; automatic cross
+products; and explicit cross bins using `binsof`, complement, Boolean
+composition, and scalar/ranged `intersect` selections.
+
+Weights, goals, `at_least`, `per_instance`, and `merge_instances` use exact
+basis-point percentages with instance-over-type precedence. Explicit,
+event-driven, and procedural sampling share one transactional scheduler and
+ordered pre-sample, hit/illegal/cross, and post-sample callbacks. Structured
+and deterministic text reports expose type, instance, coverpoint, cross, bin,
+hit, exclusion, illegal, threshold, goal, percentage, and source state.
+Debugger snapshots and traces add multiple roots, canonical aliases,
+VCD-compatible values, and exact time/delta coordinates.
+
+Coverage declarations and live hit/progress/report/observation state survive
+`.fsimobj`, standalone `.fsimdesign`, mapped-library relocation, multiple
+roots, and cold/warm LLVM O0/O2 reuse. Static declaration, aggregate-bin,
+cross-product, and transition-work limits plus transactional input and
+persistent-state limits reject before partial mutation. The supported formal
+and sampled value model is bounded integral data; real/string/chandle/event/
+void formals, `with`/`matches` bin selection, and unrestricted coverage-driven
+randomization remain outside this slice.
 
 ### SystemVerilog class foundation in v2
 
@@ -1323,8 +1352,8 @@ user-defined solver functions, and coverage-driven solving are rejected or
 remain outside this slice. Scope randomization currently executes through the
 common validated interpreter service while its full operation participates in
 native-cache identity. This is executable class randomization, not full UVM
-closure; covergroups, UVM library/runtime behavior, DPI, and VPI remain for
-subsequent v2 batches.
+closure; UVM library/runtime behavior, DPI, and VPI remain for subsequent v2
+batches. Batch 155 closes the bounded covergroup surface described above.
 
 ### SystemVerilog scalar, Unicode string, and foreign-handle closure in v2
 
@@ -1367,9 +1396,9 @@ relocated mapped libraries, and native-cache identities preserve these types
 and values. Malformed scalar enumerations, schema/checksum damage, producer-
 absolute provenance, and partial payloads are rejected before publication.
 This scalar closure is prerequisite infrastructure, not UVM completion:
-arbitrary-width packed values and residual aggregate/procedural work are in
-Batches 151-152, SVA/coverage in Batches 154-155, foreign interfaces in
-Batches 156-158, and UVM 1.2/UVM 2020-3.1 in Batches 159-162.
+arbitrary-width packed values and residual aggregate/procedural work close in
+Batches 151-152, SVA/coverage close in Batches 154-155, foreign interfaces are
+owned by Batches 156-158, and UVM 1.2/UVM 2020-3.1 by Batches 159-162.
 
 ### SystemVerilog unpacked data, file, and procedural closure in v2
 
@@ -1403,9 +1432,10 @@ O0/O2 cache execution preserve this completed substrate.
 
 This is governed procedural infrastructure, not complete SystemVerilog/UVM.
 Batch 153 supersedes this slice's program, clocking-block, and interface
-exclusions. SVA/coverage, foreign interfaces, and UVM retain their locked
-later-batch ownership; unrestricted allocation, standard descriptor aliases,
-and ordering `with` clauses on `shuffle()` remain outside this slice.
+exclusions, and Batches 154-155 close their bounded SVA/coverage surfaces.
+Foreign interfaces and UVM retain their locked later-batch ownership;
+unrestricted allocation, standard descriptor aliases, and ordering `with`
+clauses on `shuffle()` remain outside this slice.
 
 ### SystemVerilog program, clocking, and interface closure in v2
 

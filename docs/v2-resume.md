@@ -5,6 +5,382 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
+## Batch 155 completed checkpoint - 2026-08-06
+
+1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
+   Batch 155 allocation in `implementation_plan_v2.md`, and verify branch
+   `codex/v2` remains based on pushed Batch 154 closeout
+   `a6704de`. Preserve the dirty accumulated Batch 155 worktree described
+   below; do not reset, commit, push, inspect hosted CI, or run a sanitizer
+   before Change 20.
+2. Batch 155 is expanded into twenty explicit changes. Change 1 is complete in
+   the dirty worktree: `DesignUnit` and every SystemVerilog class own
+   append-only raw `covergroup` declarations with explicit owner kind, stable
+   name and matching end name, exact name/header/body/full spans, and owning
+   header/body token copies. Macro-expanded names and closing labels retain
+   their expansion stacks and physical/logical source identity independently
+   of parser storage.
+3. A dedicated `verilog_parser_coverage.cpp` parses declarations in modules,
+   interfaces, programs, packages, and classes. Stable cataloged diagnostics
+   reject Verilog-2005 use, missing names, missing header semicolons, missing
+   `endgroup`, missing or mismatched closing-label names, and duplicates within
+   one owner. Balanced header parsing and outer-unit/class terminator recovery
+   preserve deterministic declaration boundaries.
+4. Validation completed before this handoff: the complete 307-step exact-LLVM
+   Debug dependency graph rebuilt warning-clean with eight workers.
+   `fsim.frontend`, `fsim.diagnostics-catalog`, and
+   `fsim.source-line-budget` pass 3/3, and `git diff --check` is clean.
+5. Batch 155 Change 2 is complete in the same dirty worktree. Constructor and
+   `with function sample` formals retain direction, `const ref` policy,
+   type/name/default tokens, optional owning name tokens, and exact spans.
+   Sampling records distinguish event-driven and procedural-profile forms while
+   preserving the complete source-owned token stream.
+6. Declaration-scope `option` and `type_option` assignments retain explicit
+   instance/type scope, owning option-name tokens, value tokens, exact spans,
+   and source order. Assignments nested inside future coverpoint/cross bodies
+   remain excluded from the covergroup-scope inventory. Stable cataloged
+   diagnostics reject unbalanced/empty/duplicate formals, malformed sampling
+   events or profiles, and malformed option assignments.
+7. Validation after Change 2 rebuilt the complete 307-step exact-LLVM Debug
+   dependency graph warning-clean with eight workers. `fsim.frontend`,
+   `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+   `git diff --check` is clean.
+8. Batch 155 Change 3 is complete in the same dirty worktree. One unified
+   source-ordered inventory retains coverpoint and cross kinds, stable explicit
+   or deterministic `$coverpoint$N`/`$cross$N` names, owning label tokens,
+   exact declaration indices, and complete spans.
+9. Coverpoints own expression, `iff` condition, and optional body tokens.
+   Crosses own ordered operand spellings/tokens/spans, `iff` conditions, and
+   optional bodies. Coverage-body recognition preserves concatenation braces
+   in expressions and skips nested bin/option content while scanning later
+   declarations. Stable cataloged diagnostics reject missing boundaries,
+   expressions, short/empty cross operand lists, malformed guards, and
+   duplicate names across the coverpoint/cross namespace.
+10. Validation after Change 3 rebuilt the complete 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+    `git diff --check` is clean.
+11. Batch 155 Change 4 is complete in the same dirty worktree. A public
+    coverage-resolution pass assigns canonical owner/declaration/profile
+    identities, resolves coverpoint references and explicit/implicit cross
+    operands, binds local or package-qualified covergroup instance types, and
+    validates constructor and procedural-sample actuals. Stable
+    `FSIM-SV-SEM-208` through `FSIM-SV-SEM-211` cover unknown references,
+    invalid cross operands, profile mismatches, and ambiguous types.
+12. Each design-unit or class-owned instance retains deterministic
+    specialization/runtime identity, constructor actuals, source-ordered
+    initial option state, and recursively collected design-unit or class-method
+    sample calls. Class-owned declarations also retain deterministic `<object>`
+    instance templates. The ordinary source and `.fsimobj` load pipelines both
+    run coverage resolution after class resolution.
+13. The public owning HIR was split into 1,005-line `design.hpp` and 1,521-line
+    `design_core.hpp` after the source gate exposed the former 2,512-line hard
+    limit. The complete 370-step exact-LLVM Debug dependency graph then rebuilt
+    warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+    `git diff --check` is clean.
+14. Batch 155 Change 5 is complete in the same dirty worktree. Coverpoints own
+    source-ordered scalar explicit, automatic, default, ignored, and illegal
+    bins with stable names/indices, exact signed-decimal values, tokens, and
+    spans. Valid array/range syntax remains raw and accepted for Change 6.
+15. The public scalar sampler maintains deterministic per-instance bin-hit
+    state, creates stable `$auto[value]` identities lazily, excludes ignored
+    samples, selects default bins after exact misses, and records both hit state
+    and stable `FSIM-SV-COV-001` diagnostics/reports for illegal matches.
+    `FSIM-SV-PARSE-319` and `FSIM-SV-SEM-212` reject malformed scalar bins and
+    duplicate names.
+16. Validation after Change 5 rebuilt the complete 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+    `git diff --check` is clean.
+17. Batch 155 Change 6 is complete in the same dirty worktree. Explicit bins
+    retain scalar and inclusive-range values, typed/unsized conversion,
+    wildcard value/mask/width state, source names, optional declared array
+    extents and indices, and deterministic expanded identities. Unsized arrays
+    expand one bin per scalar/range value; sized arrays distribute values in
+    source order without empty bins. Both paths reject more than 65,536
+    bins/values.
+18. The public sampler matches exact, inclusive-range, and four-state wildcard
+    values through the same stable hit path. `FSIM-SV-PARSE-320` rejects
+    malformed or unrepresentable selection/declarator forms and
+    `FSIM-SV-SEM-213` rejects invalid or excessive array expansions. Focused
+    evidence covers signed typed conversion, range/wildcard matching, sized and
+    unsized array identities, grouping, and bounded negative diagnostics.
+19. Validation after Change 6 rebuilt the complete 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3,
+    `git diff --check` is clean, and the largest changed coverage parser source
+    remains 1,167 lines.
+20. Batch 155 Change 7 is complete in the same dirty worktree. Transition bins
+    own source-ordered scalar/ranged sequences, consecutive, goto, and
+    nonconsecutive repetition with fixed/ranged bounds, scalar or ranged
+    concatenation delays, sized/unsized array expansion, exact spans, and
+    stable expanded identities.
+21. The public sampler retains per-instance overlapping prefix state, advances
+    repetitions and gaps deterministically, selects the first completed bin in
+    source order, and resets selected-bin progress after a hit. Focused evidence
+    covers simple sequences, every repetition kind, ranged delay, two arrayed
+    sequences, simultaneous overlap, and `FSIM-SV-PARSE-321`/
+    `FSIM-SV-SEM-214` rejection.
+22. Validation after Change 7 rebuilt the complete 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3,
+    `git diff --check` is clean, and changed sources remain below the 2,500-line
+    hard limit (`verilog_parser_coverage.cpp` is 1,455 lines).
+23. Batch 155 Change 8 is complete in the same dirty worktree. Coverpoint and
+    bin `iff` guards execute through deterministic true/false/unknown logic;
+    only true admits a sample. The public sampling value carries an exact value,
+    unknown mask, and width. Exact/range bins require known values, while
+    wildcard bins ignore unknowns only at don't-care positions.
+24. The unified selection path gives ignore bins precedence over illegal bins,
+    illegal bins precedence over regular bins, and preserves source order
+    within each class. Scalar defaults do not steal transition samples;
+    default-sequence bins require prior state and no active/matched transition,
+    and automatic bins exclude unknown samples. `FSIM-SV-PARSE-322` rejects
+    malformed bin guards/default-sequence forms.
+25. Validation after Change 8 rebuilt the complete 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3,
+    `git diff --check` is clean, and changed sources remain below the 2,500-line
+    hard limit.
+26. Batch 155 Change 9 is complete in the same dirty worktree. The public
+    covergroup transaction validates all requested coverpoint indices before
+    mutation, samples them in input/source order, and forms an automatic cross
+    tuple only when every resolved operand produced a selected stable bin
+    identity.
+27. Tuple identities preserve resolved operand order. Repeated tuples increment
+    per-instance hit state; ignored or illegal operand bins instead retain a
+    stable excluded tuple and exclusion count. Partial inputs form no tuple,
+    and duplicate/invalid inputs reject without mutating coverpoint or cross
+    state. Focused evidence covers stable repeats, tuple order, exclusion, and
+    prevalidation.
+28. Validation after Change 9 rebuilt the complete 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3,
+    `git diff --check` is clean, and changed sources remain below the 2,500-line
+    hard limit.
+29. Batch 155 Change 10 is complete in the same dirty worktree. Cross bodies
+    own explicit regular/ignored/illegal bins with stable names, declaration
+    indices, spans, and selection tokens. `binsof(cp.bin)` and
+    `binsof(cp).bin` resolve against cross operands and named scalar/array bins;
+    complement, `&&`/`||`, and scalar/ranged `intersect` execute against the
+    transaction's selected identities and sampled values.
+30. Explicit cross-bin ignore/illegal precedence feeds the same stable tuple
+    and exclusion state as automatic products. `FSIM-SV-PARSE-323`,
+    `FSIM-SV-SEM-215`, and `FSIM-SV-SEM-216` reject malformed/duplicate bins
+    and empty, unknown, or ambiguous selections. Focused evidence covers both
+    named qualification spellings, Boolean complement, ranged intersection,
+    selection identity, exclusion, and negatives.
+31. Validation after Change 10 rebuilt the complete 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3,
+    `git diff --check` is clean, and changed sources remain below the 2,500-line
+    hard limit.
+32. Batch 155 Change 11 is complete in the same dirty worktree. Coverpoint and
+    cross `type_option` and instance `option` assignments accept bounded
+    integer `weight`, `goal`, and `at_least` values. Instance assignments
+    override type assignments independent of source order, and resolved values
+    propagate to explicit, expanded, automatic, and lazy cross bins.
+33. Weight-zero bins retain their stable selected identity but create no hit
+    state. Coverpoint and cross state records own weight, goal, threshold, and
+    exact covered status; covered becomes true at the `at_least` hit.
+    Accumulation stops at `uint64_t` maximum and emits stable
+    `FSIM-SV-COV-002`; `FSIM-SV-SEM-217` rejects invalid option bounds.
+    Focused evidence covers precedence, propagation, zero-weight exclusion,
+    threshold transitions, and both coverpoint and cross overflow boundaries.
+34. Validation after Change 11 rebuilt the complete 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3,
+    `git diff --check` is clean, and changed sources remain below the
+    2,500-line hard limit (`verilog_parser_coverage.cpp` is 1,619 lines).
+35. Batch 155 Change 12 is complete in the same dirty worktree. The public
+    `coverage_percentage.hpp` API returns exact raw and goal-normalized
+    basis-point percentages for source-ordered coverpoints/crosses, instances,
+    and types. Logical regular bins use resolved weights and `at_least`
+    covered state; ignored, illegal, and weight-zero bins are excluded.
+36. Instance and type goals normalize with deterministic half-up rounding.
+    Empty coverage is explicit and remains zero. Type calculation sorts
+    instances by runtime identity, retains `per_instance`, and either averages
+    instance percentages or merges stable bin/cross hit state before percentage
+    calculation according to `merge_instances`. `FSIM-SV-SEM-218` rejects
+    out-of-range covergroup goal/weight/Boolean percentage options.
+37. Focused evidence covers one-third rounding, instance/type goal
+    normalization, zero-weight item exclusion, empty types, deterministic
+    instance order, explicit-cross logical-bin percentages, and the difference
+    between averaged and merged instance state.
+38. Validation after Change 12 rebuilt the complete 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3,
+    `git diff --check` is clean, and changed sources remain below the
+    2,500-line hard limit (`verilog_parser_coverage.cpp` is 1,659 lines and
+    `coverage_percentage.cpp` is 262 lines).
+39. Batch 155 Change 13 is complete in the same dirty worktree. The public
+    `coverage_execution.hpp` scheduler accepts explicit, event-driven, and
+    procedural triggers and routes interpreter, LLVM O0, and LLVM O2 modes
+    through one transactional coverage sampler.
+40. Stable callback events retain a monotonic sequence, runtime identity,
+    trigger/mode, optional bin identity, and sampled value. Callback order is
+    pre-sample, coverpoint hits, illegal-bin notification, cross hits, then
+    post-sample. A scoped active-sample guard rejects callback reentrancy before
+    mutation with `FSIM-SV-COV-003`; `FSIM-SV-COV-004` rejects a trigger
+    that does not match the declaration profile.
+41. Focused evidence covers all three sampling profiles, ordered hit/illegal
+    callbacks, outer completion after a rejected nested sample, and identical
+    callback signatures for interpreter and LLVM O0/O2 modes.
+42. Validation after Change 13 completed the 82-step exact-LLVM Debug
+    dependency build warning-clean with eight workers.
+    `fsim.frontend`, `fsim.diagnostics-catalog`, and
+    `fsim.source-line-budget` pass 3/3, `git diff --check` is clean, and
+    changed sources remain below the 2,500-line hard limit
+    (`coverage_execution.cpp` is 142 lines).
+43. Batch 155 Change 14 is complete in the same dirty worktree. The public
+    `coverage_report.hpp` API builds a structured type/instance/item/bin tree
+    with goals, percentages, weights, thresholds, hits, exclusions, illegal
+    reports, and exact source spans. Instance-qualified item/bin paths prevent
+    ambiguous type-wide queries while retaining stable underlying sampling
+    identities.
+44. Reports reuse Change 12 type/instance ordering, retain source order for
+    coverage declarations and explicit bins, and sort automatic identities and
+    realized cross tuples. Public instance/item/bin query helpers return null
+    for misses. The text renderer emits deterministic two-decimal percentages
+    and the same complete state as the structured tree.
+45. Focused evidence proves reversed input instance order renders byte-for-byte
+    identically, instance/item/bin queries select exact paths, missing paths
+    reject cleanly, source identity survives, and explicit-cross reports expose
+    tuple hit/exclusion state, goals, weights, and thresholds.
+46. Validation after Change 14 completed the 82-step exact-LLVM Debug
+    dependency build warning-clean with eight workers.
+    `fsim.frontend`, `fsim.diagnostics-catalog`, and
+    `fsim.source-line-budget` pass 3/3, `git diff --check` is clean, and
+    changed sources remain below the 2,500-line hard limit
+    (`coverage_report.cpp` is 262 lines).
+47. Batch 155 Change 15 is complete in the same dirty worktree. The public
+    `coverage_observation.hpp` API projects structured coverage reports into
+    stable debugger observations for multiple roots. Instance-qualified paths,
+    canonical alias targets, and sorted output retain percentage, goal, hit,
+    exclusion, threshold, covered, and illegal state without host addresses.
+48. Public trace projection adds exact time/delta coordinates and alias paths
+    while retaining the shared execution scheduler's callback sequence,
+    runtime/bin identities, optional sampled values, and
+    pre/hit/illegal/post ordering. Meaningful unsigned and Boolean debugger
+    values plus hit trace events are explicitly VCD-compatible.
+49. Focused evidence proves stable ordering, multiple roots, aliases, canonical
+    paths, no host-address spellings, VCD compatibility, and exact parity with
+    the Change 13 execution callback stream.
+50. Validation after Change 15 completed the full incremental exact-LLVM Debug
+    build warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3,
+    `git diff --check` is clean, and changed sources remain below the
+    2,500-line hard limit (`coverage_observation.cpp` is 147 lines).
+51. Batch 155 Change 16 is complete in the same dirty worktree. The public
+    `coverage_persistence.hpp` API owns declarations/specializations,
+    instances, option and hit/progress state, reports, callback events, traces,
+    aliases, and stable identities at the `BuiltProject` boundary. Derived
+    reports can be refreshed after mutable sampling state changes.
+52. Portable owning-unit schema 11 preserves complete coverage definitions and
+    source identity through `.fsimobj`. Standalone coverage schema 1 is a
+    required checksummed `sv-coverage` `.fsimdesign` payload; load restores it
+    into the same owning project state and remains valid after design-directory
+    relocation.
+53. Exact nonempty codec evidence retains bin hits, transition/previous
+    progress, cross/exclusion/illegal state, rendered reports, callbacks,
+    traces, aliases, and byte-identical deterministic reserialization. Stable
+    identities contain no host addresses.
+54. The application artifact matrix proves class-owned coverage definitions,
+    template instances, reports, and identities survive source compilation,
+    `.fsimobj` reload, standalone `.fsimdesign`, mapped-library relocation,
+    interpreter execution, and cold/warm LLVM O0/O2 builds.
+55. Validation after Change 16 completed the full 135-step exact-LLVM Debug
+    build warning-clean with eight workers. `fsim.frontend`,
+    `fsim.library.artifact`, `fsim.artifact.object`, `fsim.artifact.design`,
+    `fsim.application`, `fsim.diagnostics-catalog`, and
+    `fsim.source-line-budget` pass 7/7; `git diff --check` is clean, and the
+    largest touched production source is 912 lines.
+56. Batch 155 Change 17 is complete in the same dirty worktree. The negative
+    matrix now covers malformed declarations/profiles/items/bins/transitions,
+    exact name resolution and class-qualified ambiguity, type and option
+    bounds, duplicate coverpoint/cross bins, cross selection, trigger mismatch,
+    reentrancy, illegal samples, and hit overflow.
+57. Stable `FSIM-SV-SEM-219` rejects real, shortreal, realtime, string,
+    chandle, event, and void constructor/sample formals outside the bounded
+    integral coverage model. Stable `FSIM-SV-SEM-220` rejects unsupported
+    coverpoint and cross `with`/`matches` bin selections.
+58. Focused assertions require exactly one cataloged diagnostic for the new
+    bounded-type and unsupported-form boundaries plus the previously
+    unasserted ambiguous type, duplicate cross-bin, and unknown-option paths.
+59. Validation after Change 17 completed the full incremental 20-step
+    exact-LLVM Debug build warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3,
+    `git diff --check` is clean, and changed sources remain below the
+    2,500-line hard limit (`verilog_parser_coverage.cpp` is 1,695 lines).
+60. Batch 155 Change 18 is complete in the same dirty worktree. Public
+    `coverage_limits.hpp` defines exact 4,096-declaration, 65,536-bin,
+    1,048,576-product/work, 4,096-input, and 65,536-state-record bounds.
+61. Static validation at resolution rejects declaration, aggregate-bin,
+    transition-work, and cross-product overflow with stable
+    `FSIM-SV-SEM-221`. Sampling/execution preflight worst-case storage growth
+    and rejects excessive transaction inputs or persistent state with stable
+    `FSIM-SV-COV-005` before callbacks or mutation. Existing
+    `FSIM-SV-COV-002` retains exact unsigned hit-count overflow ownership.
+62. Focused resource evidence constructs every boundary independently and
+    requires one stable diagnostic. A normalized interpreter/LLVM O0/O2
+    differential proves identical callback order, structured/text reports,
+    multiple debugger roots, aliases, and trace events. The Change 16
+    application matrix again proves object/design artifacts, relocation,
+    mapped libraries, and cold/warm O0/O2 cache parity.
+63. Validation after Change 18 completed the full 82-step exact-LLVM Debug
+    dependency build warning-clean with eight workers. `fsim.frontend`,
+    `fsim.library.artifact`, `fsim.artifact.object`, `fsim.artifact.design`,
+    `fsim.application`, `fsim.diagnostics-catalog`, and
+    `fsim.source-line-budget` pass 7/7; `git diff --check` is clean, and the
+    largest changed source remains below the 2,500-line hard limit.
+64. Preserve all accumulated Batch 155 edits and begin Change 19 by
+    synchronizing README, architecture, language support, diagnostics, feature
+    rows, legality/release/differential/inventory baselines, release-candidate
+    digests, focused gates, and this resumable handoff. Keep builds at eight or
+    more workers.
+65. Batch 155 Change 19 is complete in the same dirty worktree. Public README,
+    architecture, and language-support documentation now distinguish the
+    bounded executable covergroup surface from unrestricted temporal coverage,
+    coverage-driven randomization, foreign interfaces, and UVM. The feature
+    matrix adds `SV-761` through `SV-770` with exact positive, negative,
+    implementation, and runtime evidence.
+66. The synchronized release inventory freezes 1,200 executable rows, 4,800
+    evidence cells, 426 exact paths (188 test, 222 production, 16 release), 114
+    runtime owners, 1,975 cataloged diagnostics, 590 bounded sources, 680
+    authored artifacts, and 222 authored test/control files. The reviewed
+    matrix digest is
+    `07862d8c6b20770ce61076ab21072a69d87cebb7632af3f57d8a74616005c9ed`;
+    the evidence-path digest is
+    `42df8d80fbb0fd947299c7641d2c224c0b53cdc1e4ab0e60f6afc4a41f9f5e33`.
+67. The final incremental exact-LLVM Debug build completes 21/21
+    warning-clean with eight workers. `fsim.frontend`,
+    `fsim.library.artifact`, `fsim.artifact.object`,
+    `fsim.artifact.design`, `fsim.application`,
+    `fsim.diagnostics-catalog`, `fsim.source-line-budget`, and the legality,
+    release, SystemVerilog, differential, inventory, and final-candidate audits
+    pass 13/13 in 38.26 seconds. `git diff --check` is clean.
+68. Preserve the complete dirty Batch 155 worktree and begin Change 20. Run
+    full non-sanitized exact-LLVM Debug and Release builds with at least eight
+    workers, then run the complete release gates in both configurations.
+    Record the exact results here and in the plan, commit and push the
+    accumulated Batch 155 checkpoint once, and do not run a sanitizer or
+    inspect hosted CI because Batch 155 is not a monitoring boundary.
+69. Batch 155 Change 20 is complete. The first full Debug regression exposed
+    one VITAL relocation fixture that copied every prior standalone-state
+    payload but omitted the newly required `sv-coverage.bin`; adding that
+    payload restores the relocated portable-artifact contract. The first
+    optimized build exposed a GCC maybe-uninitialized warning on a
+    conditionally constructed automatic-bin optional; explicit emplacement
+    retains the same semantics and is warning-clean.
+70. The final exact-LLVM 22.1.8 Debug tree builds warning-clean with eight
+    workers and passes 114/114 in 366.52 seconds. Release regenerates and
+    completes all 377 steps warning-clean with eight workers, then passes
+    114/114 in 308.38 seconds. No sanitizer or hosted CI was run or inspected
+    because Batch 155 is not a monitoring boundary. Run the final candidate
+    and diff checks, commit and push this accumulated Batch 155 checkpoint
+    exactly once, then begin Batch 156 from the clean synchronized branch.
+
 ## Batch 154 completed checkpoint - 2026-08-06
 
 1. Start in `/home/colin/projects/fsim`, read this file and the authoritative

@@ -660,6 +660,17 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
           nested_start);
       continue;
     }
+    if (at(TokenKind::Identifier)
+        && current().text == "covergroup") {
+      const auto covergroup_start = advance();
+      add_covergroup_declaration(
+          declaration.covergroups,
+          parse_covergroup_declaration(
+              covergroup_start,
+              SystemVerilogCovergroupOwnerKind::Class),
+          covergroup_start);
+      continue;
+    }
 
     const auto method_prefix = [&]() {
       std::size_t lookahead = 0;

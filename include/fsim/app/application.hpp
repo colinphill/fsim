@@ -5,6 +5,7 @@
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/frontend/design.hpp"
 #include "fsim/frontend/class_specialization.hpp"
+#include "fsim/frontend/coverage_persistence.hpp"
 #include "fsim/project/project.hpp"
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/class_methods.hpp"
@@ -142,6 +143,8 @@ struct BuiltProject {
   /// simulation heap, static state, and method-dispatch services.
   std::vector<frontend::SystemVerilogClassSpecialization>
       systemverilog_class_specializations;
+  /// Owning coverage declarations, mutable state, reports, and observer events.
+  frontend::SystemVerilogCoverageState systemverilog_coverage;
 };
 
 /// Parse all HDL source files in deterministic manifest order. Independent

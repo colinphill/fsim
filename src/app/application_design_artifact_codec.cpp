@@ -818,6 +818,23 @@ deserialize_systemverilog_constraint_hir_state(
   return hir;
 }
 
+std::optional<std::string> serialize_systemverilog_coverage_state(
+    const frontend::SystemVerilogCoverageState& state,
+    diagnostic::Engine& diagnostics) {
+  return serialize(
+      "FSIMSVCV", kSystemVerilogCoverageStateSchema, state, diagnostics);
+}
+
+std::optional<frontend::SystemVerilogCoverageState>
+deserialize_systemverilog_coverage_state(
+    const std::string_view bytes,
+    std::string source_name,
+    diagnostic::Engine& diagnostics) {
+  return deserialize<frontend::SystemVerilogCoverageState>(
+      "FSIMSVCV", kSystemVerilogCoverageStateSchema,
+      bytes, std::move(source_name), diagnostics);
+}
+
 std::optional<std::string> serialize_semantic_state(
     const semantic::Model& model,
     diagnostic::Engine& diagnostics) {

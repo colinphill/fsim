@@ -843,6 +843,39 @@ address and survives object/design serialization, relocation, multiple roots,
 and native-cache reuse. Unsupported executable forms reject before process
 publication instead of disappearing silently.
 
+### SystemVerilog functional coverage ownership and execution
+
+SystemVerilog design units and classes own append-only covergroup declarations
+independently of parser storage. Each declaration retains constructor and
+procedural-sample profiles, an event or procedural trigger, instance and type
+options, source-ordered coverpoints and crosses, exact tokens/spans, and stable
+owner, declaration, specialization, and runtime identities. Resolution binds
+lexical, package-qualified, and class-qualified coverage types, constructor and
+sample actuals, explicit or implicit cross operands, and design-unit or
+class-method sample calls before runtime state can be published.
+
+One engine-neutral sampling transaction implements scalar, ranged, wildcard,
+arrayed, automatic, default, ignored, illegal, and transition bins together
+with coverpoint/bin guards. It applies ignore-before-illegal-before-regular
+precedence, preserves overlapping transition progress, and constructs ordered
+automatic or explicit cross tuples only after every input has been validated.
+Instance-over-type weight, goal, threshold, merge, and per-instance policies
+feed exact basis-point percentages and the same structured report tree used by
+the deterministic text renderer.
+
+Explicit, event-driven, and procedural samples share one scheduler and callback
+sequence. Reentrant, mismatched-trigger, illegal-bin, hit-overflow, and resource
+failures are diagnosed before partial publication. Debugger snapshots and
+trace projections expose stable instance-qualified paths, aliases, meaningful
+VCD-compatible values, source identity, time, and delta without host addresses.
+The built-project coverage state owns declarations, instances, hits, transition
+progress, exclusions, reports, callbacks, traces, and aliases. Owning-unit
+schema 11 and required standalone coverage schema 1 preserve that state through
+`.fsimobj`, `.fsimdesign`, mapped-library relocation, multiple roots, and cold
+or warm LLVM O0/O2 reuse. Published declaration, bin, cross-product,
+transition-work, transaction-input, and persistent-state limits bound all
+static and runtime growth.
+
 ### SystemVerilog scalar and Unicode value model
 
 SystemVerilog `shortreal`, `real`, `realtime`, `time`, and `chandle` are
@@ -891,8 +924,8 @@ flows therefore share producer-independent canonical identities.
 This closes the scalar substrate needed by later language work, but it is not
 UVM closure. Arbitrary-width packed values are closed by Batch 151 and the
 remaining governed unpacked-data/file/procedural substrate by Batch 152. SVA,
-covergroups, DPI/VPI/VHPI, and the UVM library/runtime retain their locked
-later-batch ownership.
+and covergroups are closed by Batches 154-155; DPI/VPI/VHPI and the UVM
+library/runtime retain their locked later-batch ownership.
 
 ### SystemVerilog unpacked data and procedural closure
 

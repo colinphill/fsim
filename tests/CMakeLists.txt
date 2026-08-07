@@ -43,6 +43,7 @@ add_executable(
   frontend/frontend_vhdl_time_file_tests.cpp
   frontend/frontend_declaration_tests.cpp
   frontend/frontend_chandle_tests.cpp
+  frontend/frontend_coverage_tests.cpp
   frontend/frontend_interface_tests.cpp
   frontend/frontend_package_tests.cpp
   frontend/frontend_callable_tests.cpp

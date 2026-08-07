@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/frontend/coverage_resolution.hpp"
 #include "fsim/frontend/class_resolution.hpp"
 #include "fsim/frontend/class_inheritance.hpp"
 #include "fsim/support/path.hpp"
@@ -387,6 +388,12 @@ std::optional<CheckedProject> check_project(
   validate_vhdl_analysis_order(checked.parsed.units, diagnostics);
   std::vector<frontend::Diagnostic> class_diagnostics;
   (void)frontend::resolve_systemverilog_classes(
+      checked.parsed, class_diagnostics);
+  for (const auto& diagnostic : class_diagnostics) {
+    import_diagnostic(diagnostics, diagnostic);
+  }
+  class_diagnostics.clear();
+  (void)frontend::resolve_systemverilog_covergroups(
       checked.parsed, class_diagnostics);
   for (const auto& diagnostic : class_diagnostics) {
     import_diagnostic(diagnostics, diagnostic);

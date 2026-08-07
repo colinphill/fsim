@@ -66,6 +66,10 @@ SystemVerilog rows and 1,190 total matrix rows. Batch 154 contributes
 `SV-751` through `SV-760`: typed concurrent-assertion ownership, semantic HIR,
 the bounded executable scalar slice, controls, coverage/events, rejection
 boundaries, and portable differential evidence.
+Batch 155 advances the gate to all 770 SystemVerilog rows and 1,200 total
+matrix rows. `SV-761` through `SV-770` own bounded functional-coverage
+declarations, resolution, bins, crosses, options, sampling, observation,
+artifacts, engine parity, and exact legality/resource rejection boundaries.
 
 ## Mixed-language and SystemC queues — Batch 127 Tasks 7 and 8
 

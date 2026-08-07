@@ -256,6 +256,8 @@ std::optional<BuiltProject> build_checked_project(
   if (!elaborated.design || diagnostics.has_error()) {
     return std::nullopt;
   }
+  auto systemverilog_coverage =
+      frontend::capture_systemverilog_coverage_state(lowering_adapter);
   lowering_adapter = {};
   if (!systemc_registries.empty()) {
     try {
@@ -410,7 +412,8 @@ std::optional<BuiltProject> build_checked_project(
       std::move(systemc_hierarchies),
       std::move(mapped_libraries),
       std::move(checked->objects), {},
-      std::move(checked->systemverilog_class_specializations)};
+      std::move(checked->systemverilog_class_specializations),
+      std::move(systemverilog_coverage)};
 }
 
 std::optional<BuiltProject> build_project(

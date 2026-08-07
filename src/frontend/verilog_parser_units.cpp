@@ -173,6 +173,17 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
           unit.systemverilog_classes,
           parse_class(declaration, unit.name),
           declaration);
+    } else if (
+        at(TokenKind::Identifier)
+        && current().text == "covergroup") {
+      module_has_non_time_item_ = true;
+      const auto declaration = advance();
+      add_covergroup_declaration(
+          unit.systemverilog_covergroups,
+          parse_covergroup_declaration(
+              declaration,
+              SystemVerilogCovergroupOwnerKind::DesignUnit),
+          declaration);
     } else if (match_keyword("function")) {
       module_has_non_time_item_ = true;
       auto function = parse_function(previous());

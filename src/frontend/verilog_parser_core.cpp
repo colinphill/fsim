@@ -1027,6 +1027,17 @@ DesignUnit VerilogParser::parse_module(
       }
     } else if (
         at(TokenKind::Identifier)
+        && current().text == "covergroup") {
+      module_has_non_time_item_ = true;
+      const auto declaration_start = advance();
+      add_covergroup_declaration(
+          unit.systemverilog_covergroups,
+          parse_covergroup_declaration(
+              declaration_start,
+              SystemVerilogCovergroupOwnerKind::DesignUnit),
+          declaration_start);
+    } else if (
+        at(TokenKind::Identifier)
         && contains_word(
             {"sequence", "property", "checker"},
             current().text)) {

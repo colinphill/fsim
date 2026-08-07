@@ -409,7 +409,10 @@ bool publish_design_artifact(
       project.systemverilog_class_specializations, diagnostics);
   auto constraint_hir = serialize_systemverilog_constraint_hir_state(
       project.systemverilog_hir, diagnostics);
-  if (!runtime || !semantics || !design_ir || !classes || !constraint_hir) {
+  auto coverage = serialize_systemverilog_coverage_state(
+      project.systemverilog_coverage, diagnostics);
+  if (!runtime || !semantics || !design_ir || !classes || !constraint_hir
+      || !coverage) {
     return false;
   }
 
@@ -457,12 +460,14 @@ bool publish_design_artifact(
   add_payload("classes", "state/classes.bin", *classes);
   add_payload(
       "sv-constraint-hir", "state/sv-constraint-hir.bin", *constraint_hir);
+  add_payload("sv-coverage", "state/sv-coverage.bin", *coverage);
   std::vector<library::PortablePayload> payloads{
       {metadata.payloads[0].artifact, std::move(*runtime)},
       {metadata.payloads[1].artifact, std::move(*semantics)},
       {metadata.payloads[2].artifact, std::move(*design_ir)},
       {metadata.payloads[3].artifact, std::move(*classes)},
-      {metadata.payloads[4].artifact, std::move(*constraint_hir)}};
+      {metadata.payloads[4].artifact, std::move(*constraint_hir)},
+      {metadata.payloads[5].artifact, std::move(*coverage)}};
   std::set<std::string> selected_plugin_libraries;
   for (const auto& instance : project.design.systemc_instances()) {
     if (const auto target = systemc_target(instance.target)) {
@@ -565,9 +570,10 @@ std::optional<BuiltProject> load_design_artifact(
   const auto* class_index = payload_by_kind(*metadata, "classes");
   const auto* constraint_hir_index = payload_by_kind(
       *metadata, "sv-constraint-hir");
+  const auto* coverage_index = payload_by_kind(*metadata, "sv-coverage");
   if (runtime_index == nullptr || semantic_index == nullptr
       || design_ir_index == nullptr || class_index == nullptr
-      || constraint_hir_index == nullptr) {
+      || constraint_hir_index == nullptr || coverage_index == nullptr) {
     diagnostics.error(
         "FSIM-ART-0014", ".fsimdesign is missing a required state payload");
     return std::nullopt;
@@ -588,8 +594,11 @@ std::optional<BuiltProject> load_design_artifact(
       directory / constraint_hir_index->artifact,
       constraint_hir_index->checksum,
       diagnostics);
+  auto coverage_bytes = read_design_payload(
+      directory / coverage_index->artifact, coverage_index->checksum,
+      diagnostics);
   if (!runtime_bytes || !semantic_bytes || !design_ir_bytes || !class_bytes
-      || !constraint_hir_bytes) {
+      || !constraint_hir_bytes || !coverage_bytes) {
     return std::nullopt;
   }
   auto runtime = deserialize_runtime_state(
@@ -607,7 +616,11 @@ std::optional<BuiltProject> load_design_artifact(
   auto constraint_hir = deserialize_systemverilog_constraint_hir_state(
       *constraint_hir_bytes,
       support::path_to_utf8(constraint_hir_index->artifact), diagnostics);
+  auto coverage = deserialize_systemverilog_coverage_state(
+      *coverage_bytes, support::path_to_utf8(coverage_index->artifact),
+      diagnostics);
   if (!runtime || !semantics || !design_ir || !classes || !constraint_hir
+      || !coverage
       || !design_ir->valid(*semantics)
       || !application_detail::valid_runtime_projection(*design_ir, *runtime)) {
     if (!diagnostics.has_error()) {
@@ -665,7 +678,8 @@ std::optional<BuiltProject> load_design_artifact(
       std::move(primary_hierarchy), std::move(live_systemc->roots),
       metadata->seed, metadata->entropy_seed, false,
       directory.parent_path(), std::move(live_systemc->registries), {},
-      std::move(objects), metadata->design_digest, std::move(*classes)};
+      std::move(objects), metadata->design_digest, std::move(*classes),
+      std::move(*coverage)};
 }
 
 bool elaborate_artifact(

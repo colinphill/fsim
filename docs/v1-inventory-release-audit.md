@@ -198,3 +198,12 @@ to 1,936 diagnostics, 571 bounded C/C++ sources, 661 authored artifacts, and
 221 authored test/control files. The assertion parser, scalar execution path,
 fixtures, and documentation are clean-room code; no UVM library, external SVA
 engine, third-party assertion corpus, or provenance entry is imported.
+
+v2 Batch 155 adds covergroup parsing/resolution, sampling, limits, percentage,
+report, observation, persistence, and execution ownership as nineteen
+SPDX-owned bounded C++ files. Thirty-nine parser, semantic, and runtime
+coverage diagnostics advance the reviewed inventory to 1,975 diagnostics, 590
+bounded C/C++ sources, 680 authored artifacts, and 222 authored test/control
+files. The coverage parser, transaction engine, fixtures, artifact payloads,
+and documentation are clean-room code; no UVM library, external coverage
+engine, third-party coverage corpus, or provenance entry is imported.

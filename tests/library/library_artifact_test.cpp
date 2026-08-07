@@ -52,7 +52,7 @@ fsim::library::Metadata example_metadata() {
 }  // namespace
 
 int main() {
-  static_assert(fsim::library::kOwningUnitSchemaVersion == 10);
+  static_assert(fsim::library::kOwningUnitSchemaVersion == 11);
   static_assert(fsim::library::kPortableSchemaVersion == 7);
   const auto expected = example_metadata();
   const auto serialized = fsim::library::serialize_metadata(expected);
@@ -177,6 +177,13 @@ module stage #(parameter int WIDTH = 4) (
   time tick_value;
   chandle handle_value;
   virtual unit_if #(.WIDTH(4)).view interface_view;
+  covergroup portable_coverage with function sample(input logic value);
+    option.goal = 80;
+    point: coverpoint value {
+      bins zero = {0};
+      bins one = {1};
+    }
+  endgroup : portable_coverage
   specify
     (value[0] => result[0]) = (1:2:3);
     $setup(posedge value[0], posedge clock, 2, notifier);
@@ -232,6 +239,13 @@ endmodule
   assert(restored_unit->name == "stage");
   assert(restored_unit->parameters.size() == 3);
   assert(restored_unit->functions.size() == 1);
+  assert(restored_unit->systemverilog_covergroups.size() == 1);
+  const auto& restored_coverage =
+      restored_unit->systemverilog_covergroups.front();
+  assert(restored_coverage.name == "portable_coverage");
+  assert(restored_coverage.effective_instance_goal == 80);
+  assert(restored_coverage.coverage_declarations.size() == 1);
+  assert(restored_coverage.coverage_declarations.front().bins.size() == 2);
   auto portable_interface = *interface_unit;
   portable_interface.library = "vendor";
   portable_interface.compilation_unit_identity =

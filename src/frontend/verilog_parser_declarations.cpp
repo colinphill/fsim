@@ -1621,9 +1621,15 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     if (match(TokenKind::Assign)) {
       initializer = parse_expression();
     }
+    const bool named_construction =
+        !declaration_type.named_type.empty()
+        && initializer
+        && initializer->kind == ExpressionKind::Call
+        && initializer->text == "@sv-new";
     if (initializer
         && declaration_type.domain != ValueDomain::String
         && !declaration_type.systemverilog_container
+        && !named_construction
         && spec.type.spelling != "wire"
         && spec.type.systemverilog_net_type != "wire") {
       error(
@@ -1635,7 +1641,8 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     }
 
     if (declaration_type.domain == ValueDomain::String
-        || declaration_type.systemverilog_container) {
+        || declaration_type.systemverilog_container
+        || named_construction) {
       if (spec.direction != PortDirection::Unknown) {
         SignalDeclaration declaration{
             name.text,

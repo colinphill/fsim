@@ -4,6 +4,7 @@
 #include "fsim/artifact/object.hpp"
 #include "fsim/frontend/class_inheritance.hpp"
 #include "fsim/frontend/class_resolution.hpp"
+#include "fsim/frontend/coverage_resolution.hpp"
 #include "fsim/library/portable_unit.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
@@ -316,6 +317,12 @@ std::optional<CheckedProject> load_objects(
       checked.parsed.units, diagnostics);
   std::vector<frontend::Diagnostic> class_diagnostics;
   (void)frontend::resolve_systemverilog_classes(
+      checked.parsed, class_diagnostics);
+  for (const auto& diagnostic : class_diagnostics) {
+    application_detail::import_diagnostic(diagnostics, diagnostic);
+  }
+  class_diagnostics.clear();
+  (void)frontend::resolve_systemverilog_covergroups(
       checked.parsed, class_diagnostics);
   for (const auto& diagnostic : class_diagnostics) {
     application_detail::import_diagnostic(diagnostics, diagnostic);

@@ -3361,20 +3361,262 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 155 - SystemVerilog functional coverage closure
 
-- **Changes 1-4:** parse, own, specialize, and resolve covergroups, coverpoints,
-  crosses, sampling events/methods, arguments, options, and per-instance state.
-- **Changes 5-8:** implement automatic/default/explicit/illegal/ignore bins,
-  ranges, wildcards, transitions, arrays, iff guards, and deterministic overlap
-  rules.
-- **Changes 9-12:** implement cross bins, binsof/intersect, weights, goals,
-  at-least thresholds, merge/per-instance/type coverage, and standardized
-  percentage calculation.
-- **Changes 13-16:** expose callbacks, reports, debugger/trace inspection,
-  save/restore, multiple roots, artifacts, relocation, caches, and API access.
-- **Changes 17-19:** add malformed/resource/overflow negatives, deterministic
-  differentials, docs, diagnostics, feature/inventory evidence, and handoff.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+- **Change 1: Complete.** Add append-only, design-unit- and class-owned raw
+  `covergroup` declaration records with stable owner kind, name,
+  header/body/full spans, owning token copies, macro/source provenance,
+  matching end names, duplicate checks, and SystemVerilog-2017-only
+  diagnostics. A dedicated parser translation unit handles modules,
+  interfaces, programs, packages, and classes while retaining balanced headers
+  and recovering before outer terminators. Stable cataloged diagnostics reject
+  missing names, header semicolons, declaration terminators, or closing-label
+  names as well as mismatched labels, duplicates within one owner, and
+  Verilog-2005 use. The complete 307-step exact-LLVM Debug dependency rebuild
+  succeeds warning-clean with eight workers; frontend, catalog, and
+  source-policy gates pass 3/3, and `git diff --check` is clean.
+- **Change 2: Complete.** Structure covergroup constructor formals, optional
+  sampling events or `with function sample` profiles, and declaration-scope
+  instance/type option assignments without retaining parser storage. Formals
+  own direction, `const ref` policy, type/name/default tokens, optional owning
+  name tokens, and exact spans; sampling records retain their complete event or
+  procedural-profile source. Top-level `option` and `type_option`
+  assignments own stable scope, name/value tokens, exact spans, and source
+  order while nested coverpoint options remain excluded. Stable cataloged
+  diagnostics reject malformed or duplicate formals, sampling profiles, and
+  option assignments. The complete 307-step exact-LLVM Debug dependency
+  rebuild succeeds warning-clean with eight workers; frontend, catalog, and
+  source-policy gates pass 3/3, and `git diff --check` is clean.
+- **Change 3: Complete.** Own coverpoint and cross declarations in one
+  source-ordered inventory with stable explicit or deterministic synthesized
+  names, owning label tokens, exact declaration indices, and complete spans.
+  Coverpoints retain expression, `iff` condition, and optional body tokens;
+  crosses retain ordered operand spellings/tokens/spans, `iff` conditions,
+  and optional bodies. Coverage-body recognition preserves expression
+  concatenations while excluding nested bin/option content from declaration
+  scanning. Stable cataloged diagnostics reject missing boundaries or
+  expressions, short/empty cross operand lists, malformed guards, and
+  duplicate names across both kinds. The complete 307-step exact-LLVM Debug
+  dependency rebuild succeeds warning-clean with eight workers; frontend,
+  catalog, and source-policy gates pass 3/3, and `git diff --check` is clean.
+- **Change 4: Complete.** Resolve design-unit and class-owned covergroup types,
+  constructor/sample actuals, coverpoint/cross references, and lexical,
+  class, and package-qualified names after complete declaration collection.
+  Canonical declaration and exact-profile specialization identities feed
+  deterministic per-instance runtime identities; instances retain constructor
+  actuals, source-ordered initial option state, and design-unit or class-method
+  sample calls. Cross operands resolve to explicit declarations or stable
+  implicit coverpoints. Stable cataloged diagnostics reject unknown coverage
+  references, invalid cross operands, constructor/sample profile mismatches,
+  and ambiguous types. Split the public owning HIR into 1,005-line `design.hpp`
+  and 1,521-line `design_core.hpp` headers after the source-policy hard limit
+  exposed the accumulated growth. The complete 370-step exact-LLVM Debug
+  dependency rebuild succeeds warning-clean with eight workers; frontend,
+  catalog, and source-policy gates pass 3/3, and `git diff --check` is clean.
+- **Change 5: Complete.** Own source-ordered scalar explicit, automatic,
+  default, `illegal_bins`, and `ignore_bins` coverpoint bins independently of
+  parser storage. Exact signed-decimal values retain tokens, folded values,
+  spans, stable names, and declaration indices; binless coverpoints receive a
+  deterministic lazy `$auto[value]` identity while Change 6 array/range forms
+  remain raw and accepted. A public sampler updates per-instance hit counts,
+  excludes ignored values, falls through to default bins, and emits/stores
+  stable `FSIM-SV-COV-001` illegal-bin diagnostics and reports. Stable parser
+  and semantic diagnostics reject malformed scalar declarations and duplicate
+  names. The complete 307-step exact-LLVM Debug dependency rebuild succeeds
+  warning-clean with eight workers; frontend, catalog, and source-policy gates
+  pass 3/3, and `git diff --check` is clean.
+- **Change 6: Complete.** Implement scalar/ranged bin sets, wildcard matching,
+  unsized/typed conversion, arrayed bins including unsized arrays, and checked
+  expansion into stable bin identities. Source-order records retain exact or
+  inclusive-range values, four-state wildcard masks, declared widths, source
+  names, optional array extents/indices, and deterministic expanded names.
+  Sized arrays distribute values without empty bins; unsized arrays expand one
+  bin per scalar/range value; both are capped at 65,536 bins/values. The public
+  sampler matches ranges and wildcard masks through the same stable hit path.
+  `FSIM-SV-PARSE-320` and `FSIM-SV-SEM-213` reject malformed/unrepresentable
+  values and invalid/resource-excessive expansions. The complete 307-step
+  exact-LLVM Debug dependency rebuild succeeds warning-clean with eight
+  workers; frontend, catalog, and source-policy gates pass 3/3, and
+  `git diff --check` is clean.
+- **Change 7: Complete.** Implement transition bins with source-ordered
+  sequences, consecutive/goto/nonconsecutive repetition and bounded ranges,
+  scalar/ranged concatenation delays, and sized/unsized transition arrays.
+  The public HIR owns exact step values, repetition/delay kinds and bounds,
+  sequence spans, stable expanded identities, and per-instance progress without
+  parser storage or host addresses. Sampling keeps overlapping prefixes,
+  advances gaps/repetitions deterministically, records only the first completed
+  bin in source order, and resets the selected bin's progress after a hit.
+  `FSIM-SV-PARSE-321` and `FSIM-SV-SEM-214` reject malformed sequences and
+  empty/resource-excessive transition-array expansion. The complete 307-step
+  exact-LLVM Debug dependency rebuild succeeds warning-clean with eight
+  workers; frontend, catalog, and source-policy gates pass 3/3, and
+  `git diff --check` is clean.
+- **Change 8: Complete.** Execute coverpoint and bin `iff` guards,
+  default/default-sequence exclusions, ignore/illegal precedence, and
+  source-ordered overlap policies through one four-state-aware sampling path.
+  Public samples retain value, unknown mask, and width; exact/range matches
+  require known values while wildcard masks ignore unknowns only in don't-care
+  positions. Guards use deterministic true/false/unknown logic and only true
+  admits a sample. Ignore bins precede illegal bins, which precede regular bins,
+  with source order within each class. Scalar defaults are excluded from
+  transition coverpoints; default-sequence bins require prior state and no
+  active/matched transition, and automatic bins reject unknown samples.
+  `FSIM-SV-PARSE-322` rejects malformed bin guards/default-sequence forms. The
+  complete 307-step exact-LLVM Debug dependency rebuild succeeds warning-clean
+  with eight workers; frontend, catalog, and source-policy gates pass 3/3, and
+  `git diff --check` is clean.
+- **Change 9: Complete.** Construct automatic cross products lazily from the
+  selected stable bin identities of resolved cross operands. A public
+  covergroup transaction validates all input declaration indices before
+  mutation, samples requested coverpoints in source order, then creates a cross
+  tuple only when every operand produced a selected identity. Tuple identities
+  preserve resolved operand order; repeat transactions increment checked
+  per-instance hit state, while ignored/illegal operands update deterministic
+  exclusion state instead of hits. Partial inputs do not form tuples and
+  duplicate/invalid inputs reject before mutation. The complete 307-step
+  exact-LLVM Debug dependency rebuild succeeds warning-clean with eight
+  workers; frontend, catalog, and source-policy gates pass 3/3, and
+  `git diff --check` is clean.
+- **Change 10: Complete.** Implement explicit regular/ignored/illegal cross
+  bins with owning selection tokens, stable names/indices/spans, and source
+  order. `binsof(cp.bin)` and `binsof(cp).bin` resolve against cross operands
+  and named scalar/array bins; complement, `&&`/`||` composition, and scalar or
+  ranged `intersect` sets execute against the transaction's selected identities
+  and sampled values. Explicit cross-bin ignore/illegal precedence feeds the
+  same stable tuple/exclusion state as automatic products. `FSIM-SV-PARSE-323`
+  and `FSIM-SV-SEM-215`/`216` reject malformed/duplicate bins and empty,
+  unknown, or ambiguous selections. The complete 307-step exact-LLVM Debug
+  dependency rebuild succeeds warning-clean with eight workers; frontend,
+  catalog, and source-policy gates pass 3/3, and `git diff --check` is clean.
+- **Change 11: Complete.** Implement coverpoint and cross `type_option` and
+  instance `option` weights, goals, and `at_least` thresholds with bounded
+  integer validation and instance-over-type precedence independent of source
+  order. Resolved settings propagate to explicit, expanded, and automatic bins
+  and to lazy cross state. Weight-zero selections retain their stable selected
+  identity but are excluded from hit state; per-bin covered state changes at
+  the exact `at_least` hit. Coverpoint and cross accumulation rejects a
+  further increment at `uint64_t` maximum with stable
+  `FSIM-SV-COV-002`, while `FSIM-SV-SEM-217` rejects invalid weight, goal,
+  and threshold bounds. The complete 307-step exact-LLVM Debug dependency
+  rebuild succeeds warning-clean with eight workers; frontend, catalog, and
+  source-policy gates pass 3/3, and `git diff --check` is clean.
+- **Change 12: Complete.** Add a public exact basis-point percentage engine for
+  coverpoints, crosses, instances, and types. Logical regular bins contribute
+  their resolved weights; ignored, illegal, and weight-zero bins are excluded,
+  automatic bins/crosses use realized stable identities, and `at_least`
+  covered state feeds the numerator. Item, instance, and type goals normalize
+  with deterministic half-up rounding; empty coverage remains explicitly empty
+  at zero. Type calculation sorts instances by runtime identity and either
+  averages their instance results or unions/saturating-adds stable hit state
+  first when `merge_instances` is enabled, while retaining `per_instance`
+  policy. `FSIM-SV-SEM-218` bounds covergroup-level percentage options. The
+  complete 307-step exact-LLVM Debug dependency rebuild succeeds warning-clean
+  with eight workers; frontend, catalog, and source-policy gates pass 3/3, and
+  `git diff --check` is clean.
+- **Change 13: Complete.** Add one public sampling scheduler for explicit,
+  event-driven, and procedural `sample()` profiles. It validates the requested
+  trigger before mutation and routes interpreter, LLVM O0, and LLVM O2 modes
+  through the same transaction and source-ordered callback path. Stable events
+  own a monotonic sequence, runtime identity, trigger/mode, optional bin
+  identity, and sampled value; callbacks run in pre-sample, coverpoint hit,
+  illegal-bin, cross hit, and post-sample order. A scoped active-sample guard
+  rejects callback reentrancy before mutation with `FSIM-SV-COV-003`, while
+  `FSIM-SV-COV-004` rejects declaration/trigger mismatches. Focused evidence
+  proves identical interpreter/O0/O2 signatures, all three trigger profiles,
+  illegal callbacks, and outer-transaction completion after a rejected nested
+  call. The complete 82-step exact-LLVM Debug dependency build succeeds
+  warning-clean with eight workers; frontend, catalog, and source-policy gates
+  pass 3/3, and `git diff --check` is clean.
+- **Change 14: Complete.** Expose one public structured report tree and stable
+  queries for covergroup types, instances, source-ordered coverpoints/crosses,
+  logical or realized bins, goals, percentages, hit/exclusion counts, illegal
+  reports, and exact source spans. Type reports reuse Change 12 ordering and
+  percentage policy; item/bin report paths are instance-qualified so queries
+  cannot silently collide across instances. Automatic identities and explicit
+  cross tuples sort deterministically within source-ordered declarations.
+  A deterministic text renderer formats exact two-decimal percentages and all
+  threshold/weight/count/exclusion/source fields from the same structured
+  records. Focused evidence proves reversed input instance order renders
+  identically, missing queries return null, and explicit-cross tuple state is
+  complete. The complete 82-step exact-LLVM Debug dependency build succeeds
+  warning-clean with eight workers; frontend, catalog, and source-policy gates
+  pass 3/3, and `git diff --check` is clean.
+- **Change 15: Complete.** Expose public debugger snapshots and trace-event
+  projections with stable instance-qualified paths, canonical alias targets,
+  multiple coverage roots, and deterministic ordering. Debug observations
+  include percentage, goal, hit, exclusion, threshold, covered, and illegal
+  state; meaningful unsigned/Boolean values are explicitly VCD-compatible.
+  Trace events preserve the shared execution callback sequence and optional
+  sampled/bin identities while adding exact time/delta coordinates and alias
+  projections. Focused evidence proves stable ordering, canonical paths,
+  multiple roots, aliases, no host addresses, VCD compatibility, and exact
+  pre/hit/illegal/post callback parity. The full incremental exact-LLVM Debug
+  build succeeds warning-clean with eight workers; frontend, catalog, and
+  source-policy gates pass 3/3, and `git diff --check` is clean.
+- **Change 16: Complete.** Add one owning `SystemVerilogCoverageState` to the
+  built-project boundary with declarations/specializations, instances, option
+  and hit/progress state, reports, callback events, traces, aliases, and stable
+  public identities. Owning-unit schema 11 preserves complete coverage
+  definitions through `.fsimobj`; standalone coverage schema 1 is a required
+  checksummed `.fsimdesign` payload and survives design-directory relocation.
+  Exact nonempty save/restore evidence retains bin hits, transition/previous
+  progress, cross/exclusion/illegal state, rendered reports, callbacks, traces,
+  aliases, and deterministic bytes. Class-owned template state survives mapped
+  library relocation and remains identical across interpreter plus cold/warm
+  LLVM O0/O2 builds without host addresses. The full 135-step exact-LLVM Debug
+  build succeeds warning-clean with eight workers; frontend, library/object/
+  design artifacts, application, catalog, and source-policy gates pass 7/7,
+  and `git diff --check` is clean.
+- **Change 17: Complete.** Complete the exact malformed, name-resolution,
+  type, option, bin, transition, cross-selection, sampling-profile, and
+  unsupported-form matrix. `FSIM-SV-SEM-219` rejects real/string/chandle/
+  event/void formals outside the bounded integral model, and
+  `FSIM-SV-SEM-220` rejects unsupported coverpoint or cross `with`/`matches`
+  selections. Focused evidence adds exactly-one checks for ambiguous
+  class-qualified covergroup types, duplicate cross bins, unknown options,
+  bounded-scalar type failures, and both unsupported selection boundaries while
+  retaining every prior parser/resolution/runtime diagnostic. The full
+  incremental exact-LLVM Debug build succeeds warning-clean with eight workers;
+  frontend, catalog, and source-policy gates pass 3/3, and `git diff --check`
+  is clean.
+- **Change 18: Complete.** Publish shared declaration, aggregate-bin,
+  cross-product, transition-work, transaction-input, and persistent-state
+  limits. Static resolution rejects exact resource overflow with
+  `FSIM-SV-SEM-221`; execution preflights worst-case state growth and rejects
+  with `FSIM-SV-COV-005` before pre-sample callbacks or mutation. Existing
+  `FSIM-SV-COV-002` remains the exact unsigned hit-count overflow boundary.
+  Focused evidence covers every static budget plus transaction and storage
+  exhaustion, while normalized interpreter/LLVM O0/O2 callback, report,
+  multiple-root/alias debugger, and trace signatures remain byte-identical.
+  Change 16's application matrix re-proves `.fsimobj`, `.fsimdesign`,
+  relocation, mapped-library, and cold/warm O0/O2 parity. The full 82-step
+  exact-LLVM Debug dependency build succeeds warning-clean with eight workers;
+  frontend, library/object/design artifacts, application, catalog, and
+  source-policy gates pass 7/7, and `git diff --check` is clean.
+- **Change 19: Complete.** Synchronize README, architecture, language support,
+  diagnostics, and ten executable rows `SV-761` through `SV-770`. The
+  legality, release, SystemVerilog, differential, inventory, and final
+  candidate gates freeze 1,200 executable rows, 4,800 evidence cells, 426
+  exact paths (188 test, 222 production, 16 release), 114 runtime owners,
+  1,975 diagnostics, 590 bounded sources, 680 authored artifacts, and 222
+  authored test/control files. The reviewed matrix SHA-256 is
+  `07862d8c6b20770ce61076ab21072a69d87cebb7632af3f57d8a74616005c9ed`;
+  the evidence-path SHA-256 is
+  `42df8d80fbb0fd947299c7641d2c224c0b53cdc1e4ab0e60f6afc4a41f9f5e33`.
+  The final incremental exact-LLVM Debug build succeeds warning-clean with
+  eight workers; frontend, library/object/design artifacts, application,
+  catalog, source-policy, legality, release, SystemVerilog, differential,
+  inventory, and candidate gates pass 13/13, and `git diff --check` is clean.
+- **Change 20: Complete.** Run full non-sanitized exact-LLVM Debug/Release
+  builds and release gates. The first Debug regression exposed a VITAL fixture
+  that relocated only the older standalone-state payload set; copying the new
+  required `sv-coverage.bin` payload restores that portable-artifact contract.
+  The first optimized build exposed GCC's inability to prove a conditionally
+  constructed automatic-bin optional was initialized; explicit emplacement
+  preserves the same value flow and is warning-clean. The final exact-LLVM
+  22.1.8 Debug tree builds with eight workers and passes 114/114 in 366.52
+  seconds. Release regenerates and completes all 377 steps warning-clean with
+  eight workers, then passes 114/114 in 308.38 seconds. No sanitizer or hosted
+  CI was run or inspected because Batch 155 is not a monitoring boundary.
+  Commit and push the accumulated Batch 155 checkpoint once.
 
 ### Batch 156 - DPI-C import/export closure
 

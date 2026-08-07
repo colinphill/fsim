@@ -777,6 +777,21 @@ are therefore excluded.
 | `FSIM-SV-PARSE-306` | error | A property accept/reject abort condition or property operand is missing or malformed. |
 | `FSIM-SV-PARSE-307` | error | A concurrent assert/assume/cover/restrict property boundary is missing, empty, or malformed. |
 | `FSIM-SV-PARSE-308` | error | A concurrent assertion pass or failure action is missing or unbalanced. |
+| `FSIM-SV-PARSE-309` | error | A covergroup declaration or closing label has no name. |
+| `FSIM-SV-PARSE-310` | error | A covergroup declaration header has no terminating semicolon. |
+| `FSIM-SV-PARSE-311` | error | A covergroup declaration has no matching `endgroup`. |
+| `FSIM-SV-PARSE-312` | error | An `endgroup :` closing label has no covergroup name. |
+| `FSIM-SV-PARSE-313` | error | A covergroup formal argument list has unbalanced delimiters. |
+| `FSIM-SV-PARSE-314` | error | A covergroup constructor or sample formal argument is empty, unnamed, or has an empty default. |
+| `FSIM-SV-PARSE-315` | error | A covergroup sampling event or `with function sample` profile is malformed. |
+| `FSIM-SV-PARSE-316` | error | A covergroup-scope `option` or `type_option` assignment is malformed. |
+| `FSIM-SV-PARSE-317` | error | A coverpoint/cross boundary, expression, or operand list is missing or malformed. |
+| `FSIM-SV-PARSE-318` | error | A coverpoint or cross `iff` guard is empty, unbalanced, or malformed. |
+| `FSIM-SV-PARSE-319` | error | An explicit coverpoint bin declaration is missing its name, selection, or nonempty value list. |
+| `FSIM-SV-PARSE-320` | error | A coverpoint bin value, range, wildcard literal, selection, or array declarator is malformed or cannot be represented by the bounded scalar coverage model. |
+| `FSIM-SV-PARSE-321` | error | A transition bin has an empty, unbalanced, malformed, or unbounded sequence, repetition, or delay form. |
+| `FSIM-SV-PARSE-322` | error | A coverpoint bin `iff` guard is empty, unbalanced, malformed, or attached to an invalid default-sequence form. |
+| `FSIM-SV-PARSE-323` | error | An explicit cross bin is missing its name, assignment, or nonempty selection expression. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -1010,6 +1025,30 @@ are therefore excluded.
 | `FSIM-SV-SEM-200` | error | An executable concurrent-property predicate is outside the supported packed scalar/vector expression subset. |
 | `FSIM-SV-SEM-201` | error | An executable concurrent-property clock is not one direct design-unit object with an optional edge. |
 | `FSIM-SV-SEM-202` | error | A design unit exceeds the bounded executable concurrent-assertion resource limit. |
+| `FSIM-SV-SEM-203` | error | A covergroup declaration is used outside SystemVerilog-2017. |
+| `FSIM-SV-SEM-204` | error | A covergroup closing name does not match its declaration name. |
+| `FSIM-SV-SEM-205` | error | A covergroup name duplicates an earlier declaration in the same owner. |
+| `FSIM-SV-SEM-206` | error | A covergroup constructor or sample formal name is duplicated in its profile. |
+| `FSIM-SV-SEM-207` | error | A coverpoint or cross name duplicates an earlier declaration in the same covergroup. |
+| `FSIM-SV-SEM-208` | error | An unqualified coverage expression name is not visible from its covergroup scope. |
+| `FSIM-SV-SEM-209` | error | A cross operand does not resolve to an explicit coverpoint or visible implicit-coverpoint expression. |
+| `FSIM-SV-SEM-210` | error | Covergroup constructor or sample actuals do not match the resolved formal profile. |
+| `FSIM-SV-SEM-211` | error | A covergroup type name resolves ambiguously in its lexical/package/class scope. |
+| `FSIM-SV-SEM-212` | error | A coverpoint declares the same explicit bin name more than once. |
+| `FSIM-SV-SEM-213` | error | A coverpoint bin array size or expansion is empty, exceeds the bounded 65,536-bin/value limit, or would create an empty expanded bin. |
+| `FSIM-SV-SEM-214` | error | A transition-bin array expansion exceeds 65,536 sequences or would create an empty expanded bin. |
+| `FSIM-SV-SEM-215` | error | A cross declares the same explicit cross-bin name more than once. |
+| `FSIM-SV-SEM-216` | error | A `binsof` operand or named-bin qualification is empty, unknown, malformed, or ambiguous in its cross. |
+| `FSIM-SV-SEM-217` | error | A coverpoint or cross `weight`, `goal`, or `at_least` option is not a bounded integer in its permitted range. |
+| `FSIM-SV-SEM-218` | error | A covergroup-level weight, goal, `per_instance`, or `merge_instances` literal is outside its permitted bounded range. |
+| `FSIM-SV-SEM-219` | error | A covergroup constructor or sample formal uses a real, string, chandle, event, void, or other type outside the bounded integral coverage model. |
+| `FSIM-SV-SEM-220` | error | A coverpoint or cross bin uses an unsupported `with` or `matches` selection form. |
+| `FSIM-SV-SEM-221` | error | A covergroup exceeds the bounded declaration, bin, transition-work, or cross-product resource budget. |
+| `FSIM-SV-COV-001` | error | A sampled coverpoint value matched an `illegal_bins` declaration; the diagnostic reports the stable bin identity and value. |
+| `FSIM-SV-COV-002` | error | A coverpoint or cross bin hit count reached the exact unsigned 64-bit resource bound and cannot be incremented. |
+| `FSIM-SV-COV-003` | error | A coverage callback attempted to sample the same covergroup while its current sample transaction was active. |
+| `FSIM-SV-COV-004` | error | A requested explicit, event-driven, or procedural sample trigger does not match the covergroup declaration profile. |
+| `FSIM-SV-COV-005` | error | A coverage transaction exceeds its bounded input/work or persistent state-record storage budget before mutation. |
 | `FSIM-SV-CLASS-001` | error | A class forward declaration has no defining declaration. |
 | `FSIM-SV-CLASS-002` | error | A named base class is not visible from the declaring class scope. |
 | `FSIM-SV-CLASS-003` | error | A named base class is ambiguous in lexical or import scope. |

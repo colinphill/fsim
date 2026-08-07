@@ -413,6 +413,36 @@ class VerilogParser final : private detail::ParserBase {
 
   SystemVerilogClockingSkew parse_clocking_skew();
 
+  SystemVerilogCovergroupDeclaration parse_covergroup_declaration(
+      const Token& start,
+      SystemVerilogCovergroupOwnerKind owner_kind);
+
+  void structure_covergroup_header(
+      SystemVerilogCovergroupDeclaration& declaration);
+
+  void structure_covergroup_formals(
+      std::span<const Token> tokens,
+      std::vector<SystemVerilogCovergroupFormal>& formals,
+      std::string_view description);
+
+  void structure_covergroup_options(
+      SystemVerilogCovergroupDeclaration& declaration);
+
+  void structure_covergroup_declarations(
+      SystemVerilogCovergroupDeclaration& declaration);
+
+  void structure_coverpoint_bins(
+      SystemVerilogCoverageDeclaration& declaration);
+  void structure_coverage_options(
+      SystemVerilogCoverageDeclaration& declaration);
+  void structure_cross_bins(
+      SystemVerilogCoverageDeclaration& declaration);
+
+  void add_covergroup_declaration(
+      std::vector<SystemVerilogCovergroupDeclaration>& declarations,
+      SystemVerilogCovergroupDeclaration declaration,
+      const Token& start);
+
   SystemVerilogAssertionDeclaration parse_assertion_declaration(
       const Token& start,
       SystemVerilogAssertionDeclarationKind kind);

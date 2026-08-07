@@ -246,6 +246,12 @@ The current tree contains:
   property slice providing clock-edge scheduling, controls, callbacks,
   debugger/trace events, per-instance coverage, multiple roots, and portable
   artifact parity;
+- SystemVerilog-2017 functional coverage with design-unit- and class-owned
+  covergroups, scalar/ranged/wildcard/array/transition bins, automatic and
+  explicit crosses, guards and exclusions, options/goals/percentages,
+  explicit/event/procedural sampling, callbacks, structured reports,
+  debugger/trace projections, governed resource limits, and portable
+  object/design/library plus interpreter/LLVM O0/O2 parity;
 - ordered VHDL sequential packed `case` statements with `|` choices and
   `others`, lowered through common exact case-equality branches;
 - concurrent and sequential VHDL-2008 conditional assignments with chained
