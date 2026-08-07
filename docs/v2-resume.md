@@ -5,7 +5,40 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
-## Batch 158 active checkpoint - 2026-08-07
+## Batch 159 pre-implementation restart plan - 2026-08-07
+
+1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
+   expanded Batch 159 allocation in `implementation_plan_v2.md`, and verify
+   branch `codex/v2` is clean and synchronized at Batch 158 closeout
+   `5aa0e6e7a205fe91ebe7ce2b34fbe3c890cd10fc` plus this documentation-only
+   Batch 159 planning checkpoint.
+2. This checkpoint implements the required pre-batch flow. Batch 159 has been
+   expanded into twenty exact changes without broadening the locked UVM object,
+   factory, configuration/resource, and reporting foundation. No Batch 159
+   implementation file has been changed; clear context after pushing this plan
+   and resume only from this section and the authoritative allocation.
+3. Preserve the completed VHPI implementation and every frozen Batch 158
+   baseline. Batch 158 passed exact-LLVM 22.1.8 Debug and Release 114/114 in
+   368.78 and 312.67 seconds, respectively, and is pushed as `5aa0e6e`.
+4. Change 1 begins only with a governed external-source harness for unmodified
+   UVM 1.2 and UVM 2020-3.1 package/macro entry points. Record exact upstream
+   identity and checksums, keep all fetched/generated/build state outside the
+   authored source inventory, use isolated work/cache roots, and do not vendor
+   or patch either standard library.
+5. Treat initial UVM analysis failures as evidence to classify, not permission
+   to add compatibility caps or source rewrites. Close only the language and
+   runtime prerequisites assigned to Changes 2-4, with stable cataloged
+   negatives and focused tests before advancing to executable UVM objects.
+6. Accumulate Changes 1-20 in one dirty Batch 159 worktree. Use at least eight
+   workers for local builds, retain exact test output, and update this handoff
+   after every completed change. Do not reset, commit, or push the
+   implementation before Change 20.
+7. Batch 159 is not a sanitizer or hosted-CI monitoring boundary. Do not run a
+   sanitizer or inspect hosted CI. Change 20 owns the full non-sanitized
+   exact-LLVM Debug/Release regressions and the single implementation commit and
+   push.
+
+## Batch 158 completed checkpoint - 2026-08-07
 
 1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
    expanded Batch 158 allocation in `implementation_plan_v2.md`, and verify

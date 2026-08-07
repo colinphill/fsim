@@ -4286,21 +4286,69 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 159 - UVM object, factory, configuration, and reporting foundation
 
-- **Changes 1-4:** compile unmodified UVM 1.2 and UVM 2020-3.1 package/macro
-  foundations and close any required class, macro, package, virtual-interface,
-  process, and DPI compatibility gaps without vendoring the standard library.
-- **Changes 5-8:** execute `uvm_object`/`uvm_component` construction, hierarchy,
-  type/object wrappers, registry macros, factory type/instance overrides, and
-  deterministic factory diagnostics.
-- **Changes 9-12:** implement config/resource pools, precedence, wildcard scope,
-  typed get/set, command-line settings, callbacks, and multi-root isolation or
-  sharing according to UVM rules.
-- **Changes 13-16:** implement report objects/servers/handlers/catchers, actions,
-  verbosity, IDs, files, summaries, quit counts, and deterministic formatting.
-- **Changes 17-19:** add standard examples and negative matrices across all
-  engines/artifacts, UVM-version docs, feature evidence, inventories, and handoff.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+- **Change 1:** Add a governed external UVM-source harness for unmodified UVM
+  1.2 and UVM 2020-3.1 package and macro entry points, with pinned provenance,
+  isolated work/cache roots, explicit version identity, and no vendored copy.
+- **Change 2:** Close the preprocessor and declaration surface required by both
+  UVM macro sets, including include guards, token composition/stringification,
+  variadic forwarding, nested expansion, generated declarations, and exact
+  cataloged malformed-expansion rejection.
+- **Change 3:** Close the package/class/type surface required to analyze both
+  UVM packages: parameterized and forward class identities, extern/virtual/pure
+  methods, scoped typedefs/enums, static members, wrapper specializations, and
+  deterministic overload/visibility diagnostics.
+- **Change 4:** Close the virtual-interface, process, event, semaphore/mailbox,
+  command-line, and DPI prerequisites reached by the unmodified sources, then
+  prove clean analysis/elaboration of both package foundations without a
+  simulator-specific compatibility patch.
+- **Change 5:** Execute `uvm_object` construction, naming, type identity,
+  cloning/copying/comparison, printing/recording hooks, and field automation
+  with deterministic recursive-object handling.
+- **Change 6:** Execute `uvm_component` construction and parent/child hierarchy,
+  full-name lookup, top-level ownership, deterministic traversal, duplicate
+  rejection, and destruction/lifecycle behavior across multiple roots.
+- **Change 7:** Implement type/object wrappers and the object/component registry
+  macro families, including parameterized registrations, stable type names,
+  create-by-type/name, and duplicate or mismatched registration diagnostics.
+- **Change 8:** Implement factory type and instance overrides, wildcard instance
+  paths, precedence and replacement rules, recursive-loop rejection, debug
+  traces, and deterministic override reports.
+- **Change 9:** Implement typed resource-pool insertion, lookup, read/write,
+  priority, auditing, callbacks, spell checking, and safe resource ownership.
+- **Change 10:** Implement `uvm_config_db` typed set/get/exists/wait_modified,
+  hierarchical precedence, wildcard and regular-expression scope matching,
+  build-time versus runtime precedence, and callback wakeup ordering.
+- **Change 11:** Integrate command-line plusargs for factory, configuration,
+  resource, verbosity, and timeout settings with exact parsing, precedence,
+  repeated-option ordering, and cataloged malformed-option diagnostics.
+- **Change 12:** Define and prove multi-root/multiple-context UVM singleton,
+  factory, resource, configuration, callback, and command-line isolation or
+  intentional sharing, including restart and teardown without state leakage.
+- **Change 13:** Execute report-message construction and `uvm_report_object`
+  severity/ID/verbosity routing, context/file/line metadata, element containers,
+  and deterministic message composition.
+- **Change 14:** Implement report-handler severity/ID actions, verbosity, files,
+  hooks, overrides, default-file behavior, and hierarchical component policy.
+- **Change 15:** Implement report-server formatting, severity counts, ID counts,
+  summaries, quit counts, max-quit behavior, file/display/log actions, and
+  deterministic newline and numeric formatting.
+- **Change 16:** Implement report catchers and callback ordering, throw/catch/
+  demote/modify behavior, re-entry and exception containment, recursion/resource
+  bounds, removal during dispatch, and post-catcher accounting.
+- **Change 17:** Run unmodified UVM 1.2 and UVM 2020-3.1 object/factory/config/
+  report examples through interpreter and LLVM O0/O2, multiple roots, debugger,
+  callbacks, VCD/FST, cold/warm caches, and deterministic transcripts.
+- **Change 18:** Add malformed/type/lifetime/override/regex/callback/resource
+  negative matrices plus portable object/design artifacts, mapped-library
+  relocation, same-process restart, and cross-version invalidation evidence.
+- **Change 19:** Synchronize public UVM/version documentation, examples,
+  diagnostics, feature evidence, provenance, inventories, audits, performance/
+  resource baselines, and the restart handoff.
+- **Change 20:** Run full non-sanitized exact-LLVM Debug and Release builds,
+  regressions, source, catalog, inventory, installed-public-contract, and
+  release gates; then commit and push the accumulated implementation once
+  without sanitizer or hosted CI monitoring because Batch 159 is not a
+  monitoring boundary.
 
 ### Batch 160 - UVM phases, objections, and TLM - CI monitoring boundary
 
