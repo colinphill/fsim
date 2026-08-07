@@ -241,6 +241,11 @@ The current tree contains:
   `nand`/`nor`/`xnor` Boolean operations;
 - labeled or unlabeled VHDL concurrent assertions lowered to stable reactive
   processes with inferred condition sensitivity and retained diagnostics;
+- SystemVerilog-2017 sequence/property/checker and concurrent
+  assert/assume/cover/restrict ownership, with a bounded executable scalar
+  property slice providing clock-edge scheduling, controls, callbacks,
+  debugger/trace events, per-instance coverage, multiple roots, and portable
+  artifact parity;
 - ordered VHDL sequential packed `case` statements with `|` choices and
   `others`, lowered through common exact case-equality branches;
 - concurrent and sequential VHDL-2008 conditional assignments with chained

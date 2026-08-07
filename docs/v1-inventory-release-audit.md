@@ -189,3 +189,12 @@ reviewed inventory now contains 1,875 diagnostics, 570 bounded C/C++ sources,
 fixtures, artifact payloads, and documentation are clean-room code; no UVM
 source, external scheduler/container library, third-party procedural corpus,
 or provenance entry is imported.
+
+v2 Batches 153-154 add program, clocking, virtual-interface, sequence,
+property, checker, concurrent-directive, assertion-control, semantic-HIR,
+coverage/event, and portable-artifact ownership. Thirty-one Batch 154 assertion
+diagnostics and the dedicated assertion parser advance the reviewed inventory
+to 1,936 diagnostics, 571 bounded C/C++ sources, 661 authored artifacts, and
+221 authored test/control files. The assertion parser, scalar execution path,
+fixtures, and documentation are clean-room code; no UVM library, external SVA
+engine, third-party assertion corpus, or provenance entry is imported.

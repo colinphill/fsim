@@ -39,6 +39,32 @@ namespace sv = semantic::sv;
   }
 }
 
+[[nodiscard]] sv::ConcurrentAssertionKind concurrent_assertion_kind(
+    const frontend::SystemVerilogConcurrentAssertionKind kind) noexcept {
+  switch (kind) {
+    case frontend::SystemVerilogConcurrentAssertionKind::Assume:
+      return sv::ConcurrentAssertionKind::assumption;
+    case frontend::SystemVerilogConcurrentAssertionKind::Cover:
+      return sv::ConcurrentAssertionKind::cover;
+    case frontend::SystemVerilogConcurrentAssertionKind::Restrict:
+      return sv::ConcurrentAssertionKind::restriction;
+    default:
+      return sv::ConcurrentAssertionKind::assertion;
+  }
+}
+
+[[nodiscard]] sv::AssertionRegion assertion_region(
+    const frontend::SystemVerilogAssertionRegion region) noexcept {
+  switch (region) {
+    case frontend::SystemVerilogAssertionRegion::Observed:
+      return sv::AssertionRegion::observed;
+    case frontend::SystemVerilogAssertionRegion::Reactive:
+      return sv::AssertionRegion::reactive;
+    default:
+      return sv::AssertionRegion::preponed;
+  }
+}
+
 [[nodiscard]] sv::Lifetime lifetime(
     const bool automatic,
     const bool explicit_lifetime) noexcept {
@@ -1525,6 +1551,59 @@ class SystemVerilogHirBuilder final {
     for (const auto& process : input.processes) {
       output.processes.push_back(add_process_skeleton(
           process, output.scope, output.origin));
+    }
+    for (std::size_t index = 0;
+         index < input.systemverilog_concurrent_assertions.size();
+         ++index) {
+      const auto& input_assertion =
+          input.systemverilog_concurrent_assertions[index];
+      sv::ConcurrentAssertion assertion;
+      assertion.kind = concurrent_assertion_kind(input_assertion.kind);
+      assertion.explicit_label = !input_assertion.label.empty();
+      assertion.name = assertion.explicit_label
+          ? input_assertion.label
+          : "$assertion$" + std::to_string(index + 1U);
+      for (const auto& token : input_assertion.property_tokens) {
+        assertion.property_tokens.push_back(token.text);
+      }
+      assertion.has_pass_action = input_assertion.has_pass_action;
+      for (const auto& token : input_assertion.pass_action_tokens) {
+        assertion.pass_action_tokens.push_back(token.text);
+      }
+      assertion.has_failure_action =
+          input_assertion.has_failure_action;
+      for (const auto& token : input_assertion.failure_action_tokens) {
+        assertion.failure_action_tokens.push_back(token.text);
+      }
+      assertion.sampling_region =
+          assertion_region(input_assertion.sampling_region);
+      assertion.evaluation_region =
+          assertion_region(input_assertion.evaluation_region);
+      assertion.action_region =
+          assertion_region(input_assertion.action_region);
+      assertion.observers.callback_on_failure =
+          input_assertion.kind
+              != frontend::SystemVerilogConcurrentAssertionKind::Cover
+          && input_assertion.kind
+              != frontend::SystemVerilogConcurrentAssertionKind::Restrict;
+      assertion.coverage_slot = static_cast<std::uint32_t>(index);
+      assertion.source = source(input_assertion.span);
+      if (!input_assertion.label.empty()) {
+        assertion.label_source = source(input_assertion.label_span);
+      }
+      if (input_assertion.has_pass_action
+          && !input_assertion.pass_action_tokens.empty()) {
+        assertion.pass_action_source =
+            source(input_assertion.pass_action_span);
+      }
+      if (input_assertion.has_failure_action
+          && !input_assertion.failure_action_tokens.empty()) {
+        assertion.failure_action_source =
+            source(input_assertion.failure_action_span);
+      }
+      assertion.origin = origin(
+          assertion.source, output.origin, assertion.name);
+      output.concurrent_assertions.push_back(std::move(assertion));
     }
     for (const auto& generate : input.generate_regions) {
       output.generates.push_back(add_generate(

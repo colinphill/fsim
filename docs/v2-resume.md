@@ -5,6 +5,352 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
+## Batch 154 completed checkpoint - 2026-08-06
+
+1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
+   Batch 154 allocation in `implementation_plan_v2.md`, and verify branch
+   `codex/v2` remains based on pushed Batch 153 closeout
+   `a105a02c706901ccde5bd0ca01ae76f3c5b1ee34`. Preserve the dirty accumulated
+   Batch 154 worktree described below; do not reset, commit, push, inspect
+   hosted CI, or run a sanitizer before Change 20.
+2. Batch 154 Change 1 is complete in the dirty worktree. `DesignUnit` owns
+   append-only sequence, property, and checker declaration records with exact
+   kind, name, name/header/body/full spans, and owning header/body `Token`
+   vectors. The tokens preserve expansion stacks and physical/logical source
+   identity independently of parser storage so Changes 2-4 can structure
+   formals, locals, clocks, disables, and references without reparsing text.
+3. A dedicated `verilog_parser_assertions.cpp` parses declaration boundaries
+   for modules, interfaces, and programs. Stable cataloged negatives reject
+   missing names, header semicolons, or matching terminators; duplicate names,
+   mismatched closing labels, and Verilog-2005 use also reject. Focused evidence
+   retains a sequence delay range, property clock/disable/reference, and
+   checker-owned clocking/assertion tokens with exact source spans.
+4. Validation completed before this handoff: `fsim_frontend_tests` and the
+   complete 307-step exact-LLVM Debug dependency graph rebuilt warning-clean
+   with eight workers. `fsim.frontend`, `fsim.diagnostics-catalog`, and
+   `fsim.source-line-budget` pass 3/3, and `git diff --check` is clean.
+5. Batch 154 Change 2 is complete in the same dirty worktree. Every declaration
+   now owns structured formal arguments and leading local variables without
+   discarding the raw owning tokens from Change 1. Formal records distinguish
+   value, sequence, property, and untyped arguments and retain direction,
+   `local`, type/default tokens, names, and exact spans. Local records retain
+   shared type, declarator, initializer, name, and exact spans; top-level comma
+   splitting remains delimiter-aware.
+6. Stable cataloged negatives reject malformed formal headers, individual
+   formals, and local declarations as well as duplicate formal names and
+   formal/local name collisions. Focused evidence covers defaults, directions,
+   formal kinds, multiple declarators, and local initializers for sequence,
+   property, and checker declarations.
+7. Validation after Change 2 rebuilt the full 307-step exact-LLVM Debug
+   dependency graph warning-clean with eight workers. `fsim.frontend`,
+   `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+   `git diff --check` is clean.
+8. Batch 154 Change 3 is complete in the same dirty worktree. Optional
+   declaration clocks own their event tokens and exact span, optional `disable
+   iff` clauses own their condition tokens and exact span, and the remaining
+   expression token stream starts after leading locals, clock, and disable
+   structure. Original body tokens remain unchanged and source-owned.
+9. Both parenthesized and named clock events are represented. Stable cataloged
+   negatives reject missing, empty, or unbalanced clock events and `disable
+   iff` conditions. Focused evidence covers clocks following local declarations,
+   property clock/disable composition, expression remainder ownership, and exact
+   source identity.
+10. Validation after Change 3 rebuilt the full 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+    `git diff --check` is clean.
+11. Batch 154 Change 4 is complete in the same dirty worktree. Reference
+    collection runs after the complete design-unit declaration region is known
+    and retains canonical path spelling, path components, owning tokens, and an
+    exact span for every occurrence. Kinds distinguish formal, local-variable,
+    design-unit object, assertion-declaration, hierarchical, and package paths.
+12. Forward assertion-declaration references resolve without declaration-order
+    leakage. Stable `FSIM-SV-SEM-196` rejects unknown unqualified names;
+    hierarchical and package-qualified paths stay explicit for later hierarchy
+    and package specialization. Focused evidence covers all six reference kinds
+    and the unresolved-name negative.
+13. Validation after Change 4 rebuilt the full 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+    `git diff --check` is clean.
+14. Batch 154 Change 5 is complete in the same dirty worktree. Sequence
+    declarations now own ordered elements and source-spanned concatenation
+    delays independently of the raw expression tokens. Scalar and ranged `##`
+    forms retain exact minimum/maximum token ownership.
+15. Element abbreviations distinguish consecutive `[*]`, nonconsecutive `[=]`,
+    and goto `[->]` repetition and retain optional repetition ranges. Stable
+    `FSIM-SV-PARSE-298`/`299` negatives reject missing or malformed delays,
+    empty concatenation elements, and repetition without an operand. Focused
+    evidence covers scalar/ranged delays and all three repetition forms.
+16. Validation after Change 5 rebuilt the full 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+    `git diff --check` is clean.
+17. Batch 154 Change 6 is complete in the same dirty worktree. Scalar `##0`
+    delays carry an explicit fusion annotation while retaining the ordinary
+    delay range and source span. Every top-level `intersect` operand owns its
+    exact token range and span independently of the original sequence tokens.
+18. Stable `FSIM-SV-PARSE-300` rejects empty left or right intersection
+    operands. Focused evidence covers fusion/non-fusion classification, chained
+    three-operand intersection, nested-parenthesis exclusion, exact source
+    identity, and both malformed sides.
+19. Validation after Change 6 rebuilt the full 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+    `git diff --check` is clean.
+20. Batch 154 Change 7 is complete in the same dirty worktree. Every top-level
+    `throughout` and `within` occurrence owns typed left/right operand tokens
+    and an exact full span. Each `first_match(...)` occurrence separately owns
+    its sequence argument, optional match-item tokens, and exact call span.
+21. Stable `FSIM-SV-PARSE-301` rejects missing binary operands and missing,
+    empty, or unbalanced `first_match` arguments. Focused evidence covers both
+    binary operators in one expression, a nested delay range, match-item
+    assignment ownership, exact source identity, and four malformed forms.
+22. Validation after Change 7 rebuilt the full 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+    `git diff --check` is clean.
+23. Batch 154 Change 8 is complete in the same dirty worktree. `.matched` and
+    `.triggered` endpoint records live on every assertion declaration and own
+    exact receiver tokens/spelling, invocation actuals, endpoint kind, optional
+    empty method parentheses, and complete source span.
+24. Unqualified receivers must resolve to sequence declarations or sequence
+    formals; hierarchical/package paths remain explicit for later
+    specialization. Stable `FSIM-SV-PARSE-302` rejects missing/malformed
+    receivers and nonempty endpoint arguments, while `FSIM-SV-SEM-197` rejects
+    ordinary-object receivers. Focused evidence covers declarations with
+    actuals, sequence formals, deferred hierarchy, both methods, both spelling
+    forms, exact spans, and parse/semantic negatives.
+25. Validation after Change 8 rebuilt the full 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+    `git diff --check` is clean.
+26. Batch 154 Change 9 is complete in the same dirty worktree. Property
+    expressions retain typed top-level overlapped `|->` and nonoverlapped
+    `|=>` implications with exact source-owned antecedent/consequent tokens and
+    full spans. Scalar and ranged `##` property delays reuse the sequence-range
+    representation and retain exact spans plus explicit scalar-zero fusion.
+27. Recognition accepts the lexer's maximal-munch `|=` plus `>` split for
+    nonoverlapped implication. Stable `FSIM-SV-PARSE-303` rejects empty
+    implication operands and missing, empty, or unbalanced property delay
+    values/ranges. Focused evidence covers both implication kinds, both operand
+    streams, scalar fusion, a ranged delay, exact source identity, and four
+    malformed forms.
+28. Validation after Change 9 rebuilt the full 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+    `git diff --check` is clean.
+29. Preserve all accumulated Batch 154 edits and begin Change 10's
+    `until`/`s_until` and `nexttime` property ownership. Keep builds at eight
+    or more workers.
+30. Batch 154 Change 10 is complete in the same dirty worktree. Property
+    expressions retain typed `until`, `s_until`, `until_with`, and
+    `s_until_with` operations with exact source-owned left/right tokens and full
+    spans. Typed `nexttime` and `s_nexttime` records retain optional bracketed
+    count tokens, exact operands, strengths, and complete source spans.
+31. Stable `FSIM-SV-PARSE-304` rejects empty until operands, missing nexttime
+    operands, and empty or unbalanced counts. Focused evidence covers all four
+    until variants, both nexttime strengths, counted and uncounted forms, exact
+    source identity, and four malformed forms.
+32. Validation after Change 10 rebuilt the full 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+    `git diff --check` is clean.
+33. Preserve all accumulated Batch 154 edits and begin Change 11's
+    `always`/`s_always`, `eventually`/`s_eventually`, and `strong`/`weak`
+    property ownership. Keep builds at eight or more workers.
+34. Batch 154 Change 11 is complete in the same dirty worktree. Property
+    expressions retain typed `always`, `s_always`, `eventually`, and
+    `s_eventually` recurrence records with optional exact bracketed ranges,
+    source-owned operands, and complete spans. Typed `strong(...)` and
+    `weak(...)` wrappers retain exact sequence operands and call spans.
+35. Stable `FSIM-SV-PARSE-305` rejects missing recurrence operands, empty or
+    unbalanced recurrence ranges, and missing, empty, or unbalanced
+    strength-wrapper operands. Focused evidence covers all four recurrence
+    kinds, ranged and unbounded forms, both strength wrappers, nested sequence
+    delays, exact source identity, and four malformed forms.
+36. Validation after Change 11 rebuilt the full 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+    `git diff --check` is clean.
+37. Preserve all accumulated Batch 154 edits and begin Change 12's
+    accept/reject, abort, and vacuity-policy ownership. Keep builds at eight or
+    more workers.
+38. Batch 154 Change 12 is complete in the same dirty worktree. Property
+    expressions retain typed `accept_on`, `reject_on`, `sync_accept_on`, and
+    `sync_reject_on` abort records with independent asynchronous/synchronous
+    policy and vacuous-success/failure outcome. Each record owns exact condition
+    tokens, property-operand tokens, and a complete source span.
+39. Stable `FSIM-SV-PARSE-306` rejects missing, empty, or unbalanced abort
+    conditions and missing property operands. Focused evidence covers all four
+    operators, both synchronization policies, both outcomes, a compound
+    condition, exact source identity, and four malformed forms.
+40. Validation after Change 12 rebuilt the full 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+    `git diff --check` is clean.
+41. Preserve all accumulated Batch 154 edits and begin Change 13's concurrent
+    assert/assume/cover/restrict scheduling ownership. Keep builds at eight or
+    more workers.
+42. Batch 154 Change 13 is complete in the same dirty worktree. Design units
+    retain typed concurrent `assert`, `assume`, `cover`, and `restrict
+    property` records with optional labels, exact property tokens, and complete
+    source spans.
+43. Every directive explicitly owns Preponed sampling, Observed evaluation, and
+    Reactive action-region policy. Stable `FSIM-SV-PARSE-307` rejects missing
+    `property`, missing/unbalanced/empty property parentheses, and missing
+    terminators. Focused evidence covers all four kinds, labeled/unlabeled
+    forms, exact source identity, all three regions, and four malformed forms.
+44. Validation after Change 13 rebuilt the full 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+    `git diff --check` is clean.
+45. Preserve all accumulated Batch 154 edits and begin Change 14's assertion
+    pass/fail action and control ownership. Keep builds at eight or more workers.
+    Do not reset, commit, push, inspect hosted CI, or run a sanitizer before
+    Change 20; Batch 154 is neither monitoring boundary.
+46. Batch 154 Change 14 is complete in the same dirty worktree. Concurrent
+    directives independently retain pass and failure action presence, exact
+    owning token streams, and source spans. Focused evidence covers simple and
+    balanced compound pass actions, ordinary and failure-only action blocks,
+    exact source identity, and the explicit null pass action before `else`.
+47. All ten procedural assertion-control system tasks remain ordinary task-call
+    statements while owning typed control policy and the existing parsed
+    argument vectors. Stable `FSIM-SV-PARSE-308` rejects missing or unbalanced
+    actions, and `FSIM-SV-SEM-198` rejects restrict actions and cover failure
+    actions without reclassifying the existing `FSIM-SV-PARSE-307` malformed
+    directive cases.
+48. Validation after Change 14 rebuilt the full 307-step exact-LLVM Debug
+    dependency graph warning-clean with eight workers. `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 3/3, and
+    `git diff --check` is clean.
+49. Preserve all accumulated Batch 154 edits and begin Change 15's callback,
+    debugger, trace, and coverage-count ownership. Keep builds at eight or more
+    workers. Do not reset, commit, push, inspect hosted CI, or run a sanitizer
+    before Change 20; Batch 154 is neither monitoring boundary.
+50. Batch 154 Change 15 is complete in the same dirty worktree. Public
+    SystemVerilog semantic HIR now owns one concurrent-assertion descriptor per
+    directive with a stable explicit or synthesized name, deterministic
+    coverage slot, exact property/pass/failure spelling, source/origin
+    provenance, and the Preponed/Observed/Reactive region policy.
+51. Observer policy explicitly selects assertion callbacks for assert/assume
+    failures while keeping all four directive kinds visible to the debugger,
+    trace, and coverage surfaces. Cover and restrict do not manufacture a
+    failure callback. Focused HIR evidence covers every kind, both naming forms,
+    action/source ownership, observer policy, and stable slot ordering.
+52. Validation after Change 15 rebuilt the complete 107-step affected
+    exact-LLVM Debug graph warning-clean with eight workers.
+    `fsim.application.systemverilog_hir`, `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 4/4, and
+    `git diff --check` is clean.
+53. Preserve all accumulated Batch 154 edits and begin Change 16's executable
+    scheduling, shared callback/debugger/trace delivery, runtime coverage
+    counters, and deterministic multiple-root ownership. Keep builds at eight
+    or more workers. Do not reset, commit, push, inspect hosted CI, or run a
+    sanitizer before Change 20; Batch 154 is neither monitoring boundary.
+54. Batch 154 Change 16 is complete in the same dirty worktree. Named or inline
+    scalar concurrent properties lower into ordinary source-spanned assertion
+    processes with stable explicit/synthesized names, property clock edge
+    scheduling, shared assertion debug points, and existing pass/failure report
+    delivery. Repeated instances own independent runtime processes.
+55. Engine-neutral hidden outcome markers feed deterministic public
+    `ConcurrentAssertionCoverage` counts and retained
+    `ConcurrentAssertionEvent` trace records. The public assertion callback
+    receives the exact retained event, including stable name/process/kind/slot,
+    pass/failure/disabled outcome, time/delta, and action-suppression state.
+56. Typed `$asserton`, `$assertoff`, `$assertkill`, pass/failure on/off, and
+    nonvacuous/vacuous controls execute without changing their ordinary
+    task-call HIR. Constant `$assertcontrol` policy selectors share the same
+    runtime path. Disabled samples remain trace-visible without incrementing
+    coverage; independently disabled pass/failure actions and reports are
+    suppressed and restore deterministically.
+57. Focused application evidence compares interpreter, LLVM O2, and LLVM
+    debug/O0 output, reports, callbacks, events, coverage, and process identity.
+    It proves 20 deterministic events across two leaf instances and 40 across
+    two aliased roots, including exact control suppression and four independent
+    coverage records per root.
+58. Validation after Change 16 rebuilt the complete exact-LLVM Debug tree
+    warning-clean with eight workers. `fsim.application.assertions`,
+    `fsim.application.systemverilog_hir`, `fsim.frontend`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 5/5, and
+    `git diff --check` is clean. Preserve the accumulated dirty worktree and
+    begin Change 17's formal/type/clock/resource negative matrix. Do not reset,
+    commit, push, inspect hosted CI, or run a sanitizer before Change 20.
+59. Batch 154 Change 17 is complete in the same dirty worktree. The bounded
+    executable slice no longer silently omits unsupported concurrent
+    properties: `FSIM-SV-SEM-199` rejects actual/formal/local-variable use,
+    `FSIM-SV-SEM-200` rejects unsupported predicate expressions and object
+    types, and `FSIM-SV-SEM-201` rejects clocks other than one direct
+    design-unit object with an optional edge.
+60. `FSIM-SV-SEM-202` enforces a deterministic 256-process per-design-unit
+    executable assertion limit and diagnoses the 257th directive exactly once.
+    Focused evidence proves all four codes and also covers the malformed empty
+    property-token guard that prevents secondary diagnostics or crashes.
+61. Validation after Change 17 rebuilt the complete exact-LLVM Debug tree
+    warning-clean with eight workers. `fsim.frontend`,
+    `fsim.application.assertions`, `fsim.diagnostics-catalog`, and
+    `fsim.source-line-budget` pass 4/4, and `git diff --check` is clean.
+    Preserve the accumulated dirty worktree and begin Change 18's
+    interpreter/LLVM and artifact differential matrix. Do not reset, commit,
+    push, inspect hosted CI, or run a sanitizer before Change 20.
+62. Batch 154 Change 18 is complete in the same dirty worktree. One shared
+    assertion capture path now compares direct interpreter, LLVM O2, LLVM
+    debug/O0, and aliased multiple-root execution with compiled-object plus
+    standalone-design artifact reload.
+63. The artifact path proves interpreter, cold and warm compiled execution,
+    native-cache reuse, and relocated `.fsimdesign` execution. Output, stable
+    process identity, callback events, retained trace events, and coverage are
+    exact. Report message/severity/time/delta and source filename/line/column
+    are exact while the portable artifact path remains intentionally normalized.
+64. Validation after Change 18 keeps the complete exact-LLVM Debug tree
+    warning-clean with eight workers. `fsim.application.assertions`,
+    `fsim.library.artifact`, `fsim.artifact.object`, `fsim.artifact.design`,
+    `fsim.diagnostics-catalog`, and `fsim.source-line-budget` pass 6/6, and
+    `git diff --check` is clean. Preserve the accumulated dirty worktree and
+    begin Change 19's documentation, diagnostics, inventories, and resumable
+    handoff. Do not reset, commit, push, inspect hosted CI, or run a sanitizer
+    before Change 20.
+65. Batch 154 Change 19 is complete in the same dirty worktree. Public README,
+    architecture, and language-support documentation distinguish complete
+    typed sequence/property/checker and concurrent-directive ownership from the
+    deliberately bounded executable scalar property slice. The feature matrix
+    adds `SV-751` through `SV-760` with exact positive, negative,
+    implementation, and runtime evidence.
+66. The synchronized release inventory now freezes 1,190 executable rows,
+    4,760 evidence cells, 416 exact paths (187 test, 213 production, 16
+    release), 113 runtime owners, 1,936 cataloged diagnostics, 571 bounded
+    sources, and 661 authored artifacts. The reviewed matrix digest is
+    `f4b0eaf84c9f0a953cf835615abb7a02e41e90fe9ee26a4516412ee141137ae4`;
+    the evidence-path digest is
+    `1510f52287b0e83852c0f0291487f54af96780722ec232790367db41079dbdfd`.
+67. The legality, release, SystemVerilog, differential, inventory, and final
+    release-candidate audits pass with those exact baselines. Preserve the
+    accumulated dirty worktree and begin Change 20's full non-sanitized LLVM
+    Debug/Release build and test gates. After both configurations pass, record
+    the evidence here and in the plan, then commit and push once. Do not run a
+    sanitizer or inspect hosted CI at this batch boundary.
+68. Change 19's complete 11-gate focused run exposed a stale semantic-HIR
+    fixture rather than permitting it to be masked by the release-only gates.
+    Assertion local-type recognition now rejects a would-be qualified type
+    prefix ending in `.` or `::`, so a selected expression such as
+    `link.valid` remains an expression instead of becoming a false local
+    declaration. The checked HIR fixture uses the bounded direct-scalar runtime
+    predicate, prints retained diagnostics on failure, and accounts for one
+    generated process per concurrent directive. The rebuilt assertion, HIR,
+    frontend, catalog, source, legality, release, SystemVerilog, differential,
+    inventory, and release-candidate gates pass 11/11; `git diff --check` is
+    clean.
+69. Batch 154 Change 20 is complete. The complete exact-LLVM 22.1.8 Debug tree
+    is warning-clean and passes 114/114 tests in 362.82 seconds. The Release
+    tree regenerated and rebuilt all 370 steps warning-clean with eight workers
+    and passes 114/114 tests in 304.68 seconds. No sanitizer or hosted CI was
+    run or inspected because Batch 154 is neither boundary.
+70. Commit and push this accumulated Batch 154 checkpoint exactly once, then
+    begin Batch 155 by expanding its locked functional-coverage allocation into
+    twenty numbered changes before implementation. Keep every local build at
+    eight or more workers, retain full simulation logs, and do not inspect
+    hosted CI before Batch 160's monitoring boundary.
+
 ## Batch 153 completed checkpoint - 2026-08-06
 
 1. Start in `/home/colin/projects/fsim`, read this file and the authoritative

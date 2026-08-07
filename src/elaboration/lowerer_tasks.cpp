@@ -176,6 +176,19 @@ void Lowerer::initialize_task_support() {
 }
 
 void Lowerer::lower_task_call(const Statement& statement) {
+    if (statement.assertion_control
+        != frontend::SystemVerilogAssertionControlKind::None) {
+        auto marker = std::string{"\x1f" "fsim.assertion-control|"}
+            + statement.task_name.substr(1U);
+        if (statement.assertion_control
+                == frontend::SystemVerilogAssertionControlKind::Control
+            && !statement.task_arguments.empty()) {
+            marker += "|" + statement.task_arguments.front().text;
+        }
+        process_.operations.emplace_back(
+            Display{std::move(marker), false, false});
+        return;
+    }
     if (lower_string_format_task(statement)) {
         return;
     }

@@ -1595,6 +1595,37 @@ std::optional<Statement> VerilogParser::parse_statement() {
       }
       Statement statement;
       statement.kind = StatementKind::TaskCall;
+      if (name == "$assertcontrol") {
+        statement.assertion_control =
+            SystemVerilogAssertionControlKind::Control;
+      } else if (name == "$asserton") {
+        statement.assertion_control =
+            SystemVerilogAssertionControlKind::On;
+      } else if (name == "$assertoff") {
+        statement.assertion_control =
+            SystemVerilogAssertionControlKind::Off;
+      } else if (name == "$assertkill") {
+        statement.assertion_control =
+            SystemVerilogAssertionControlKind::Kill;
+      } else if (name == "$assertpasson") {
+        statement.assertion_control =
+            SystemVerilogAssertionControlKind::PassOn;
+      } else if (name == "$assertpassoff") {
+        statement.assertion_control =
+            SystemVerilogAssertionControlKind::PassOff;
+      } else if (name == "$assertfailon") {
+        statement.assertion_control =
+            SystemVerilogAssertionControlKind::FailOn;
+      } else if (name == "$assertfailoff") {
+        statement.assertion_control =
+            SystemVerilogAssertionControlKind::FailOff;
+      } else if (name == "$assertnonvacuouson") {
+        statement.assertion_control =
+            SystemVerilogAssertionControlKind::NonvacuousOn;
+      } else if (name == "$assertvacuousoff") {
+        statement.assertion_control =
+            SystemVerilogAssertionControlKind::VacuousOff;
+      }
       statement.task_name = std::move(name);
       if (match(TokenKind::LeftParen)) {
         if (!at(TokenKind::RightParen)) {

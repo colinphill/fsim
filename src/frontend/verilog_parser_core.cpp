@@ -1025,6 +1025,63 @@ DesignUnit VerilogParser::parse_module(
       } else {
         parse_default_clocking(unit, default_start);
       }
+    } else if (
+        at(TokenKind::Identifier)
+        && contains_word(
+            {"sequence", "property", "checker"},
+            current().text)) {
+      module_has_non_time_item_ = true;
+      const auto declaration_start = advance();
+      const auto assertion_kind = declaration_start.text == "sequence"
+          ? SystemVerilogAssertionDeclarationKind::Sequence
+          : declaration_start.text == "property"
+              ? SystemVerilogAssertionDeclarationKind::Property
+              : SystemVerilogAssertionDeclarationKind::Checker;
+      auto declaration =
+          parse_assertion_declaration(declaration_start, assertion_kind);
+      const auto duplicate = std::ranges::any_of(
+          unit.systemverilog_assertion_declarations,
+          [&](const SystemVerilogAssertionDeclaration& existing) {
+            return !declaration.name.empty()
+                && existing.name == declaration.name;
+          });
+      if (duplicate) {
+        error(
+            declaration_start,
+            "FSIM-SV-SEM-192",
+            "duplicate assertion declaration '" + declaration.name + "'");
+      } else {
+        unit.systemverilog_assertion_declarations.push_back(
+            std::move(declaration));
+      }
+    } else if (
+        (at(TokenKind::Identifier)
+         && contains_word(
+             {"assert", "assume", "cover", "restrict"},
+             current().text))
+        || (at(TokenKind::Identifier)
+            && at(TokenKind::Colon, 1)
+            && at(TokenKind::Identifier, 2)
+            && contains_word(
+                {"assert", "assume", "cover", "restrict"},
+                current(2).text))) {
+      module_has_non_time_item_ = true;
+      std::optional<Token> label;
+      if (at(TokenKind::Colon, 1)) {
+        label = advance();
+        advance();
+      }
+      const auto directive = advance();
+      const auto assertion_kind = directive.text == "assert"
+          ? SystemVerilogConcurrentAssertionKind::Assert
+          : directive.text == "assume"
+              ? SystemVerilogConcurrentAssertionKind::Assume
+              : directive.text == "cover"
+                  ? SystemVerilogConcurrentAssertionKind::Cover
+                  : SystemVerilogConcurrentAssertionKind::Restrict;
+      unit.systemverilog_concurrent_assertions.push_back(
+          parse_concurrent_assertion(
+              directive, assertion_kind, std::move(label)));
     } else if (match_keyword("function")) {
       module_has_non_time_item_ = true;
       auto function = parse_function(previous());
@@ -1202,6 +1259,7 @@ DesignUnit VerilogParser::parse_module(
     }
   }
   resolve_implicit_nets(unit);
+  resolve_assertion_references(unit);
   unit.span = span_from(start, previous());
   return unit;
 }

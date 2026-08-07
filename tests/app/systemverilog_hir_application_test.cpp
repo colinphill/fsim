@@ -92,6 +92,15 @@ module semantic_hir_top;
   integer handle;
   int values[];
   logic [7:0] memory[3:0];
+  logic ready_signal;
+  property ready;
+    ready_signal;
+  endproperty
+  ready_check: assert property (ready)
+    $display("ready"); else $error("not ready");
+  assume property (ready) else $warning("assumption");
+  cover property (ready) $display("covered");
+  restrict property (ready);
   generate
     if (1) begin : generated
       logic active;
@@ -136,6 +145,9 @@ endmodule
 
   fsim::diagnostic::Engine diagnostics;
   auto checked = fsim::app::check_project(config, diagnostics);
+  if (!checked) {
+    fsim::diagnostic::print_text(std::cerr, diagnostics);
+  }
   assert(checked);
   const auto semantic_program = std::ranges::find_if(
       checked->semantics.units(), [](const auto& unit) {
@@ -250,8 +262,58 @@ endmodule
   assert(top->imports.size() == 1);
   assert(top->instances.size() == 1);
   assert(top->generates.size() == 1);
-  assert(top->processes.size() == 1);
-  assert(checked->systemverilog_hir.processes().size() == 3);
+  assert(top->concurrent_assertions.size() == 4);
+  assert(top->processes.size()
+         == 1U + top->concurrent_assertions.size());
+  const auto& ready_assertion = top->concurrent_assertions[0];
+  const auto& assumption = top->concurrent_assertions[1];
+  const auto& cover = top->concurrent_assertions[2];
+  const auto& restriction = top->concurrent_assertions[3];
+  assert(ready_assertion.kind
+         == fsim::semantic::sv::ConcurrentAssertionKind::assertion);
+  assert(ready_assertion.name == "ready_check");
+  assert(ready_assertion.explicit_label);
+  assert(ready_assertion.coverage_slot == 0);
+  assert(ready_assertion.has_pass_action);
+  assert(ready_assertion.has_failure_action);
+  assert(std::ranges::find(
+             ready_assertion.pass_action_tokens, "$display")
+         != ready_assertion.pass_action_tokens.end());
+  assert(std::ranges::find(
+             ready_assertion.failure_action_tokens, "$error")
+         != ready_assertion.failure_action_tokens.end());
+  assert(ready_assertion.sampling_region
+         == fsim::semantic::sv::AssertionRegion::preponed);
+  assert(ready_assertion.evaluation_region
+         == fsim::semantic::sv::AssertionRegion::observed);
+  assert(ready_assertion.action_region
+         == fsim::semantic::sv::AssertionRegion::reactive);
+  assert(ready_assertion.observers.callback_on_failure);
+  assert(ready_assertion.observers.debugger_visible);
+  assert(ready_assertion.observers.trace_visible);
+  assert(ready_assertion.observers.coverage_enabled);
+  assert(ready_assertion.label_source);
+  assert(ready_assertion.pass_action_source);
+  assert(ready_assertion.failure_action_source);
+  assert(ready_assertion.source.valid());
+  assert(ready_assertion.origin.valid());
+  assert(assumption.kind
+         == fsim::semantic::sv::ConcurrentAssertionKind::assumption);
+  assert(assumption.name == "$assertion$2");
+  assert(!assumption.explicit_label);
+  assert(!assumption.has_pass_action);
+  assert(assumption.has_failure_action);
+  assert(assumption.coverage_slot == 1);
+  assert(cover.kind
+         == fsim::semantic::sv::ConcurrentAssertionKind::cover);
+  assert(!cover.observers.callback_on_failure);
+  assert(cover.coverage_slot == 2);
+  assert(restriction.kind
+         == fsim::semantic::sv::ConcurrentAssertionKind::restriction);
+  assert(!restriction.observers.callback_on_failure);
+  assert(restriction.coverage_slot == 3);
+  assert(checked->systemverilog_hir.processes().size()
+         == 3U + top->concurrent_assertions.size());
   const auto& process = checked->systemverilog_hir.processes()[
       top->processes.front().value()];
   assert(process.kind == fsim::semantic::sv::ProcessKind::initial);

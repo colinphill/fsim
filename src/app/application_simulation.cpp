@@ -304,6 +304,141 @@ struct Simulation::Impl {
             const bool newline,
             const SimulationTick time,
             const std::uint64_t delta) {
+          constexpr std::string_view assertion_marker{
+              "\x1f" "fsim.concurrent-assertion|"};
+          constexpr std::string_view control_marker{
+              "\x1f" "fsim.assertion-control|"};
+          if (text.starts_with(control_marker)) {
+            auto control = text.substr(control_marker.size());
+            if (control.starts_with("assertcontrol|")) {
+              std::uint32_t control_type{};
+              const auto value = control.substr(
+                  std::string_view{"assertcontrol|"}.size());
+              const auto parsed = std::from_chars(
+                  value.data(), value.data() + value.size(), control_type);
+              if (parsed.ec == std::errc{}) {
+                switch (control_type) {
+                case 3: control = "asserton"; break;
+                case 4: control = "assertoff"; break;
+                case 5: control = "assertkill"; break;
+                case 6: control = "assertpasson"; break;
+                case 7: control = "assertpassoff"; break;
+                case 8: control = "assertfailon"; break;
+                case 9: control = "assertfailoff"; break;
+                case 10: control = "assertnonvacuouson"; break;
+                case 11: control = "assertvacuousoff"; break;
+                default: break;
+                }
+              }
+            }
+            if (control == "asserton") {
+              concurrent_assertions_enabled = true;
+            } else if (control == "assertoff"
+                       || control == "assertkill") {
+              concurrent_assertions_enabled = false;
+            } else if (control == "assertpasson"
+                       || control == "assertnonvacuouson") {
+              concurrent_assertion_pass_actions_enabled = true;
+            } else if (control == "assertpassoff"
+                       || control == "assertvacuousoff") {
+              concurrent_assertion_pass_actions_enabled = false;
+            } else if (control == "assertfailon") {
+              concurrent_assertion_failure_actions_enabled = true;
+            } else if (control == "assertfailoff") {
+              concurrent_assertion_failure_actions_enabled = false;
+            }
+            return;
+          }
+          if (text.starts_with(assertion_marker)) {
+            const auto payload = text.substr(assertion_marker.size());
+            const auto slot_end = payload.find('|');
+            const auto kind_end = slot_end == std::string_view::npos
+                ? std::string_view::npos
+                : payload.find('|', slot_end + 1U);
+            const auto outcome_end = kind_end == std::string_view::npos
+                ? std::string_view::npos
+                : payload.find('|', kind_end + 1U);
+            if (slot_end != std::string_view::npos
+                && kind_end != std::string_view::npos
+                && outcome_end != std::string_view::npos) {
+              const auto key = process;
+              const auto outcome = payload.substr(
+                  kind_end + 1U,
+                  outcome_end - kind_end - 1U);
+              concurrent_assertion_actions_suppressed[key] =
+                  !concurrent_assertions_enabled
+                  || (outcome == "pass"
+                          ? !concurrent_assertion_pass_actions_enabled
+                          : !concurrent_assertion_failure_actions_enabled);
+              auto found = concurrent_assertion_indices.find(key);
+              if (found == concurrent_assertion_indices.end()) {
+                ConcurrentAssertionCoverage coverage;
+                const auto slot_text = payload.substr(0, slot_end);
+                std::from_chars(
+                    slot_text.data(),
+                    slot_text.data() + slot_text.size(),
+                    coverage.slot);
+                const auto kind = payload.substr(
+                    slot_end + 1U, kind_end - slot_end - 1U);
+                coverage.kind = kind == "assumption"
+                    ? ConcurrentAssertionCoverageKind::assumption
+                    : kind == "cover"
+                        ? ConcurrentAssertionCoverageKind::cover
+                    : kind == "restriction"
+                        ? ConcurrentAssertionCoverageKind::restriction
+                        : ConcurrentAssertionCoverageKind::assertion;
+                coverage.name =
+                    payload.substr(outcome_end + 1U);
+                const auto occurrence = std::ranges::find_if(
+                    built.design_ir.processes(),
+                    [&](const auto& item) {
+                      return item.runtime_index == key;
+                    });
+                coverage.process =
+                    occurrence != built.design_ir.processes().end()
+                        ? occurrence->name
+                        : coverage.name;
+                concurrent_assertion_coverage.push_back(
+                    std::move(coverage));
+                const auto inserted =
+                    concurrent_assertion_coverage.size() - 1U;
+                concurrent_assertion_indices.emplace(key, inserted);
+                found = concurrent_assertion_indices.find(key);
+              }
+              auto& coverage =
+                  concurrent_assertion_coverage[found->second];
+              ConcurrentAssertionEvent event;
+              event.name = coverage.name;
+              event.process = coverage.process;
+              event.kind = coverage.kind;
+              event.slot = coverage.slot;
+              event.time = time;
+              event.delta = delta;
+              event.action_suppressed =
+                  concurrent_assertion_actions_suppressed[key];
+              if (!concurrent_assertions_enabled) {
+                event.outcome = ConcurrentAssertionOutcome::disabled;
+              } else {
+                ++coverage.attempts;
+                if (outcome == "pass") {
+                  event.outcome = ConcurrentAssertionOutcome::pass;
+                  ++coverage.passes;
+                } else {
+                  event.outcome = ConcurrentAssertionOutcome::failure;
+                  ++coverage.failures;
+                }
+              }
+              concurrent_assertion_events.push_back(std::move(event));
+              if (concurrent_assertion_hook) {
+                concurrent_assertion_hook(
+                    concurrent_assertion_events.back());
+              }
+            }
+            return;
+          }
+          if (concurrent_assertion_actions_suppressed[process]) {
+            return;
+          }
           if (output_hook) {
             output_hook(process, text, newline, time, delta);
           }
@@ -316,6 +451,9 @@ struct Simulation::Impl {
             const runtime::simir::SourceLocation& source,
             const SimulationTick time,
             const std::uint64_t delta) {
+          if (concurrent_assertion_actions_suppressed[process]) {
+            return;
+          }
           if (report_hook) {
             report_hook(
                 process,
@@ -1591,6 +1729,18 @@ struct Simulation::Impl {
   std::uint64_t next_safe_point_observer{1};
   OutputHook output_hook;
   ReportHook report_hook;
+  std::vector<ConcurrentAssertionCoverage>
+      concurrent_assertion_coverage;
+  std::vector<ConcurrentAssertionEvent>
+      concurrent_assertion_events;
+  ConcurrentAssertionHook concurrent_assertion_hook;
+  std::map<std::uint32_t, std::size_t>
+      concurrent_assertion_indices;
+  std::map<std::uint32_t, bool>
+      concurrent_assertion_actions_suppressed;
+  bool concurrent_assertions_enabled{true};
+  bool concurrent_assertion_pass_actions_enabled{true};
+  bool concurrent_assertion_failure_actions_enabled{true};
   ClassPropertyChangeHook class_property_change_hook;
   ClassStaticPropertyChangeHook class_static_property_change_hook;
   std::map<std::string, ConstructorEnvironment> source_static_locals_;
@@ -1928,6 +2078,19 @@ NativeCacheStatistics Simulation::native_cache_statistics() const noexcept {
   return {};
 }
 
+std::vector<ConcurrentAssertionCoverage>
+Simulation::concurrent_assertion_coverage() const {
+  auto result = impl_->concurrent_assertion_coverage;
+  std::ranges::sort(
+      result, {}, &ConcurrentAssertionCoverage::process);
+  return result;
+}
+
+const std::vector<ConcurrentAssertionEvent>&
+Simulation::concurrent_assertion_events() const noexcept {
+  return impl_->concurrent_assertion_events;
+}
+
 #include "application_simulation_scalar.tpp"
 
 void Simulation::set_safe_point_hook(SafePointHook hook) {
@@ -1960,6 +2123,11 @@ void Simulation::set_output_hook(OutputHook hook) {
 
 void Simulation::set_report_hook(ReportHook hook) {
   impl_->report_hook = std::move(hook);
+}
+
+void Simulation::set_concurrent_assertion_hook(
+    ConcurrentAssertionHook hook) {
+  impl_->concurrent_assertion_hook = std::move(hook);
 }
 
 void Simulation::set_class_property_change_hook(

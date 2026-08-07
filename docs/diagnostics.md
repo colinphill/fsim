@@ -758,6 +758,25 @@ are therefore excluded.
 | `FSIM-SV-PARSE-287` | error | Expected `;` after default clocking skews. |
 | `FSIM-SV-PARSE-288` | error | Expected `;` after a default clocking declaration. |
 | `FSIM-SV-PARSE-289` | error | Expected `;` after a virtual-interface declaration. |
+| `FSIM-SV-PARSE-290` | error | Expected a sequence, property, or checker declaration/end-label name. |
+| `FSIM-SV-PARSE-291` | error | Expected `;` after a sequence, property, or checker declaration header. |
+| `FSIM-SV-PARSE-292` | error | Expected the matching `endsequence`, `endproperty`, or `endchecker` terminator. |
+| `FSIM-SV-PARSE-293` | error | A sequence, property, or checker formal header is not one balanced parenthesized list. |
+| `FSIM-SV-PARSE-294` | error | A sequence, property, or checker formal argument is empty or has no name. |
+| `FSIM-SV-PARSE-295` | error | An assertion local-variable declaration or declarator has no name. |
+| `FSIM-SV-PARSE-296` | error | An assertion declaration clock has no valid balanced event expression. |
+| `FSIM-SV-PARSE-297` | error | An assertion `disable iff` clause has no valid balanced condition. |
+| `FSIM-SV-PARSE-298` | error | A sequence concatenation has no valid delay value or balanced delay range. |
+| `FSIM-SV-PARSE-299` | error | A sequence expression, concatenation element, or repetition operand is empty. |
+| `FSIM-SV-PARSE-300` | error | A sequence `intersect` operator has an empty left or right operand. |
+| `FSIM-SV-PARSE-301` | error | A sequence `throughout`/`within` operand or `first_match` argument is missing or malformed. |
+| `FSIM-SV-PARSE-302` | error | A sequence `.matched` or `.triggered` endpoint receiver or method call is malformed. |
+| `FSIM-SV-PARSE-303` | error | A property implication operand or property delay value/range is missing or malformed. |
+| `FSIM-SV-PARSE-304` | error | A property `until` operand or `nexttime` count/operand is missing or malformed. |
+| `FSIM-SV-PARSE-305` | error | A property recurrence range/operand or `strong`/`weak` sequence wrapper is missing or malformed. |
+| `FSIM-SV-PARSE-306` | error | A property accept/reject abort condition or property operand is missing or malformed. |
+| `FSIM-SV-PARSE-307` | error | A concurrent assert/assume/cover/restrict property boundary is missing, empty, or malformed. |
+| `FSIM-SV-PARSE-308` | error | A concurrent assertion pass or failure action is missing or unbalanced. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -979,6 +998,18 @@ are therefore excluded.
 | `FSIM-SV-SEM-188` | error | A virtual interface has no interface type name. |
 | `FSIM-SV-SEM-189` | error | A virtual-interface variable conflicts with another design-unit object. |
 | `FSIM-SV-SEM-190` | error | A modport clocking member does not name a clocking block declared by its interface. |
+| `FSIM-SV-SEM-191` | error | A sequence, property, or checker declaration appears outside SystemVerilog-2017. |
+| `FSIM-SV-SEM-192` | error | A design unit repeats a sequence, property, or checker declaration name. |
+| `FSIM-SV-SEM-193` | error | A sequence, property, or checker closing name does not match its declaration. |
+| `FSIM-SV-SEM-194` | error | A sequence, property, or checker repeats a formal-argument name. |
+| `FSIM-SV-SEM-195` | error | An assertion local variable conflicts with a formal or earlier local variable. |
+| `FSIM-SV-SEM-196` | error | An unqualified assertion reference is not declared in assertion or design-unit scope. |
+| `FSIM-SV-SEM-197` | error | An unqualified sequence endpoint receiver does not name a sequence declaration or sequence formal. |
+| `FSIM-SV-SEM-198` | error | A restrict property action or cover property failure action is not permitted. |
+| `FSIM-SV-SEM-199` | error | The bounded executable concurrent-property slice does not support property actuals, formals, or local variables. |
+| `FSIM-SV-SEM-200` | error | An executable concurrent-property predicate is outside the supported packed scalar/vector expression subset. |
+| `FSIM-SV-SEM-201` | error | An executable concurrent-property clock is not one direct design-unit object with an optional edge. |
+| `FSIM-SV-SEM-202` | error | A design unit exceeds the bounded executable concurrent-assertion resource limit. |
 | `FSIM-SV-CLASS-001` | error | A class forward declaration has no defining declaration. |
 | `FSIM-SV-CLASS-002` | error | A named base class is not visible from the declaring class scope. |
 | `FSIM-SV-CLASS-003` | error | A named base class is ambiguous in lexical or import scope. |

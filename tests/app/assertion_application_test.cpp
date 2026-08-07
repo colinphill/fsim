@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
+#include "fsim/app/artifact_phase.hpp"
+#include "fsim/app/design_artifact.hpp"
 
 #include <array>
 #include <cassert>
@@ -36,6 +38,23 @@ struct ReportCapture {
       const ReportCapture&,
       const ReportCapture&) = default;
 };
+
+bool equivalent_artifact_reports(
+    const std::vector<ReportCapture>& left,
+    const std::vector<ReportCapture>& right) {
+  return left.size() == right.size()
+      && std::ranges::equal(
+          left, right, [](const auto& lhs, const auto& rhs) {
+            return lhs.message == rhs.message
+                && lhs.severity == rhs.severity
+                && lhs.time == rhs.time
+                && lhs.delta == rhs.delta
+                && lhs.source.line == rhs.source.line
+                && lhs.source.column == rhs.source.column
+                && std::filesystem::path{lhs.source.path}.filename()
+                    == std::filesystem::path{rhs.source.path}.filename();
+          });
+}
 
 struct Capture {
   std::vector<ReportCapture> reports;
@@ -317,6 +336,324 @@ void test_cli_failure_reporting(
       != std::string::npos);
 }
 
+struct ConcurrentCapture {
+  std::vector<std::string> outputs;
+  std::vector<ReportCapture> reports;
+  std::vector<std::string> process_names;
+  std::vector<fsim::app::ConcurrentAssertionCoverage> coverage;
+  std::vector<fsim::app::ConcurrentAssertionEvent> events;
+  std::vector<fsim::app::ConcurrentAssertionEvent> callback_events;
+  fsim::app::NativeCacheStatistics native_cache;
+  std::size_t compiled_processes{};
+};
+
+ConcurrentCapture capture_concurrent_assertions(
+    fsim::app::BuiltProject project,
+    const std::uint64_t max_deltas,
+    const fsim::app::SimulationEngine engine) {
+  fsim::app::Simulation simulation{
+      std::move(project), max_deltas, engine};
+  ConcurrentCapture capture;
+  capture.compiled_processes = simulation.compiled_process_count();
+  capture.native_cache = simulation.native_cache_statistics();
+  for (const auto& process : simulation.design_ir().processes()) {
+    if (process.name.find("request_check") != std::string::npos
+        || process.name.find("$assertion$2") != std::string::npos) {
+      capture.process_names.push_back(process.name);
+    }
+  }
+  simulation.set_output_hook(
+      [&capture](
+          const fsim::runtime::simir::ProcessId,
+          const std::string_view text,
+          const bool,
+          const fsim::runtime::SimulationTick,
+          const std::uint64_t) {
+        capture.outputs.emplace_back(text);
+      });
+  simulation.set_report_hook(
+      [&capture](
+          const fsim::runtime::simir::ProcessId,
+          const std::string_view message,
+          const fsim::runtime::simir::AssertionSeverity severity,
+          const fsim::runtime::simir::SourceLocation& source,
+          const fsim::runtime::SimulationTick time,
+          const std::uint64_t delta) {
+        capture.reports.push_back(
+            {std::string{message}, severity, source, time, delta});
+      });
+  simulation.set_concurrent_assertion_hook(
+      [&capture](const fsim::app::ConcurrentAssertionEvent& event) {
+        capture.callback_events.push_back(event);
+      });
+  const auto result = simulation.run();
+  assert(result.status == fsim::runtime::RunStatus::stopped);
+  capture.coverage = simulation.concurrent_assertion_coverage();
+  capture.events = simulation.concurrent_assertion_events();
+  return capture;
+}
+
+ConcurrentCapture run_concurrent_assertions(
+    const fsim::project::Config& config,
+    const fsim::app::SimulationEngine engine) {
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  if (!project) {
+    fsim::diagnostic::print_text(std::cerr, diagnostics);
+  }
+  assert(project);
+  return capture_concurrent_assertions(
+      std::move(*project), config.run.max_deltas, engine);
+}
+
+void test_concurrent_assertions(
+    const std::filesystem::path& directory) {
+  const auto source = directory / "concurrent_assertions.sv";
+  {
+    std::ofstream output(source);
+    output << R"(
+module concurrent_leaf(
+    input logic clock,
+    input logic request
+);
+  property requested;
+    @(posedge clock) request;
+  endproperty
+  request_check: assert property (requested)
+    $display("assert pass");
+    else $warning("assert failure");
+  cover property (requested) $display("cover hit");
+endmodule
+
+module concurrent_top;
+  logic clock;
+  logic request;
+  concurrent_leaf left(clock, request);
+  concurrent_leaf right(clock, request);
+  initial begin
+    clock = 1'b0;
+    request = 1'b0;
+    #1 request = 1'b1;
+    clock = 1'b1;
+    #1 clock = 1'b0;
+    $assertoff;
+    #1 request = 1'b0;
+    clock = 1'b1;
+    #1 clock = 1'b0;
+    $asserton;
+    $assertcontrol(7);
+    #1 request = 1'b1;
+    clock = 1'b1;
+    #1 clock = 1'b0;
+    $assertpasson;
+    $assertfailoff;
+    #1 request = 1'b0;
+    clock = 1'b1;
+    #1 clock = 1'b0;
+    $assertfailon;
+    #1 clock = 1'b1;
+    #1 $finish;
+  end
+endmodule
+)";
+    assert(output.good());
+  }
+  auto config = config_for(
+      directory, source, fsim::project::Optimization::o2);
+  config.project.name = "concurrent-assertions";
+  config.project.top = "sv:work.concurrent_top";
+  const auto reference = run_concurrent_assertions(
+      config, fsim::app::SimulationEngine::interpreter);
+  const auto compiled = run_concurrent_assertions(
+      config, fsim::app::SimulationEngine::compiled);
+  assert(reference.outputs == compiled.outputs);
+  assert(reference.reports == compiled.reports);
+  assert(reference.process_names == compiled.process_names);
+  assert(reference.coverage == compiled.coverage);
+  assert(reference.events == compiled.events);
+  assert(reference.callback_events == reference.events);
+  assert(compiled.callback_events == compiled.events);
+  const std::vector<std::string> expected_outputs{
+      "assert pass", "cover hit",
+      "assert pass", "cover hit"};
+  assert(reference.outputs == expected_outputs);
+  assert(reference.reports.size() == 2);
+  assert(std::ranges::all_of(
+      reference.reports, [](const auto& report) {
+        return report.message == "assert failure"
+            && report.severity
+                == fsim::runtime::simir::AssertionSeverity::warning
+            && std::filesystem::path{report.source.path}.filename()
+                == "concurrent_assertions.sv"
+            && report.time == 9;
+      }));
+  assert(reference.process_names.size() == 4);
+  assert(reference.coverage.size() == 4);
+  assert(std::ranges::all_of(
+      reference.coverage, [](const auto& coverage) {
+        return coverage.attempts == 4
+            && coverage.passes == 2
+            && coverage.failures == 2
+            && !coverage.process.empty()
+            && (coverage.name == "request_check"
+                || coverage.name == "$assertion$2");
+      }));
+  assert(std::ranges::count_if(
+      reference.coverage, [](const auto& coverage) {
+        return coverage.kind
+            == fsim::app::ConcurrentAssertionCoverageKind::assertion;
+      }) == 2);
+  assert(reference.events.size() == 20);
+  assert(std::ranges::count_if(
+      reference.events, [](const auto& event) {
+        return event.outcome
+            == fsim::app::ConcurrentAssertionOutcome::pass;
+      }) == 8);
+  assert(std::ranges::count_if(
+      reference.events, [](const auto& event) {
+        return event.outcome
+            == fsim::app::ConcurrentAssertionOutcome::failure;
+      }) == 8);
+  assert(std::ranges::count_if(
+      reference.events, [](const auto& event) {
+        return event.outcome
+            == fsim::app::ConcurrentAssertionOutcome::disabled;
+      }) == 4);
+  assert(std::ranges::count_if(
+      reference.events, [](const auto& event) {
+        return event.action_suppressed;
+      }) == 12);
+
+  const auto debug = run_concurrent_assertions(
+      config, fsim::app::SimulationEngine::debug);
+  assert(reference.outputs == debug.outputs);
+  assert(reference.reports == debug.reports);
+  assert(reference.coverage == debug.coverage);
+  assert(reference.events == debug.events);
+
+  auto multiple_roots = config;
+  multiple_roots.project.name = "concurrent-assertions-multiple-roots";
+  multiple_roots.project.top.clear();
+  multiple_roots.project.tops = {
+      {"sv:work.concurrent_top", "alpha"},
+      {"sv:work.concurrent_top", "beta"}};
+  multiple_roots.build.cache_path = directory / "concurrent-multiple-cache";
+  const auto multiple_reference = run_concurrent_assertions(
+      multiple_roots, fsim::app::SimulationEngine::interpreter);
+  const auto multiple_compiled = run_concurrent_assertions(
+      multiple_roots, fsim::app::SimulationEngine::compiled);
+  assert(multiple_reference.outputs == multiple_compiled.outputs);
+  assert(multiple_reference.reports == multiple_compiled.reports);
+  assert(multiple_reference.process_names
+         == multiple_compiled.process_names);
+  assert(multiple_reference.coverage == multiple_compiled.coverage);
+  assert(multiple_reference.events == multiple_compiled.events);
+  assert(multiple_reference.callback_events
+         == multiple_reference.events);
+  assert(multiple_reference.coverage.size() == 8);
+  assert(multiple_reference.events.size() == 40);
+  assert(std::ranges::count_if(
+      multiple_reference.coverage, [](const auto& coverage) {
+        return coverage.process.starts_with("alpha.");
+      }) == 4);
+  assert(std::ranges::count_if(
+      multiple_reference.coverage, [](const auto& coverage) {
+        return coverage.process.starts_with("beta.");
+      }) == 4);
+
+  const auto object = directory / "concurrent-assertions.fsimobj";
+  const auto design = directory / "concurrent-assertions.fsimdesign";
+  fsim::diagnostic::Engine compile_diagnostics;
+  const auto compiled_object = fsim::app::compile_artifact(
+      config, object, compile_diagnostics);
+  if (!compiled_object) {
+    fsim::diagnostic::print_text(std::cerr, compile_diagnostics);
+  }
+  assert(compiled_object && !compile_diagnostics.has_error());
+  const std::array objects{object};
+  fsim::project::Config artifact_elaboration;
+  artifact_elaboration.base_directory = directory;
+  artifact_elaboration.project.name =
+      "concurrent-assertions-artifact";
+  artifact_elaboration.project.top = config.project.top;
+  artifact_elaboration.project.time_resolution =
+      config.project.time_resolution;
+  artifact_elaboration.build.optimization = config.build.optimization;
+  artifact_elaboration.build.cache_path =
+      directory / "concurrent-assertions-elaboration-cache";
+  artifact_elaboration.run.max_deltas = config.run.max_deltas;
+  fsim::diagnostic::Engine elaborate_diagnostics;
+  const auto elaborated_design = fsim::app::elaborate_artifact(
+      artifact_elaboration, objects, design, elaborate_diagnostics);
+  if (!elaborated_design) {
+    fsim::diagnostic::print_text(std::cerr, elaborate_diagnostics);
+  }
+  assert(elaborated_design && !elaborate_diagnostics.has_error());
+  const auto artifact_cache =
+      directory / "concurrent-assertions-artifact-cache";
+  const auto run_artifact = [&](const fsim::app::SimulationEngine engine) {
+    fsim::diagnostic::Engine diagnostics;
+    auto built = fsim::app::load_design_artifact(design, diagnostics);
+    if (!built) {
+      fsim::diagnostic::print_text(std::cerr, diagnostics);
+    }
+    assert(built && !diagnostics.has_error());
+    built->cache_path = artifact_cache;
+    return capture_concurrent_assertions(
+        std::move(*built), config.run.max_deltas, engine);
+  };
+  const auto artifact_interpreted = run_artifact(
+      fsim::app::SimulationEngine::interpreter);
+  const auto artifact_compiled_cold = run_artifact(
+      fsim::app::SimulationEngine::compiled);
+  const auto artifact_compiled_warm = run_artifact(
+      fsim::app::SimulationEngine::compiled);
+  for (const auto* capture :
+       {&artifact_interpreted,
+        &artifact_compiled_cold,
+        &artifact_compiled_warm}) {
+    assert(capture->outputs == reference.outputs);
+    assert(equivalent_artifact_reports(
+        capture->reports, reference.reports));
+    assert(capture->process_names == reference.process_names);
+    assert(capture->coverage == reference.coverage);
+    assert(capture->events == reference.events);
+    assert(capture->callback_events == capture->events);
+  }
+#if defined(FSIM_HAS_LLVM)
+  assert(artifact_compiled_cold.compiled_processes >= 5);
+  assert(artifact_compiled_warm.native_cache.hits != 0);
+#endif
+  const auto relocated_design =
+      directory / "relocated-concurrent-assertions.fsimdesign";
+  std::filesystem::rename(design, relocated_design);
+  fsim::diagnostic::Engine relocated_diagnostics;
+  auto relocated = fsim::app::load_design_artifact(
+      relocated_design, relocated_diagnostics);
+  assert(relocated && !relocated_diagnostics.has_error());
+  relocated->cache_path = artifact_cache;
+  const auto artifact_relocated = capture_concurrent_assertions(
+      std::move(*relocated), config.run.max_deltas,
+      fsim::app::SimulationEngine::compiled);
+  assert(artifact_relocated.outputs == reference.outputs);
+  assert(equivalent_artifact_reports(
+      artifact_relocated.reports, reference.reports));
+  assert(artifact_relocated.process_names == reference.process_names);
+  assert(artifact_relocated.coverage == reference.coverage);
+  assert(artifact_relocated.events == reference.events);
+  assert(std::ranges::count_if(
+      reference.coverage, [](const auto& coverage) {
+        return coverage.kind
+            == fsim::app::ConcurrentAssertionCoverageKind::cover;
+      }) == 2);
+  assert(reference.compiled_processes == 0);
+#if defined(FSIM_HAS_LLVM)
+  assert(compiled.compiled_processes >= 5);
+#else
+  assert(compiled.compiled_processes == 0);
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -446,6 +783,7 @@ endmodule
       source,
       fsim::project::Optimization::o2);
   test_cli_failure_reporting(manifest);
+  test_concurrent_assertions(directory.path);
   std::cout << "assertion application tests passed\n";
   return 0;
 }

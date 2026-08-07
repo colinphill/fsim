@@ -244,6 +244,50 @@ struct ClassRandomizationTraceState {
   std::uint64_t used_values{};
 };
 
+enum class ConcurrentAssertionCoverageKind : std::uint8_t {
+  assertion,
+  assumption,
+  cover,
+  restriction,
+};
+
+struct ConcurrentAssertionCoverage {
+  std::string name;
+  std::string process;
+  ConcurrentAssertionCoverageKind kind{
+      ConcurrentAssertionCoverageKind::assertion};
+  std::uint32_t slot{};
+  std::uint64_t attempts{};
+  std::uint64_t passes{};
+  std::uint64_t failures{};
+
+  friend bool operator==(
+      const ConcurrentAssertionCoverage&,
+      const ConcurrentAssertionCoverage&) = default;
+};
+
+enum class ConcurrentAssertionOutcome : std::uint8_t {
+  pass,
+  failure,
+  disabled
+};
+
+struct ConcurrentAssertionEvent {
+  std::string name;
+  std::string process;
+  ConcurrentAssertionCoverageKind kind{
+      ConcurrentAssertionCoverageKind::assertion};
+  ConcurrentAssertionOutcome outcome{ConcurrentAssertionOutcome::pass};
+  std::uint32_t slot{};
+  runtime::SimulationTick time{};
+  std::uint64_t delta{};
+  bool action_suppressed{};
+
+  friend bool operator==(
+      const ConcurrentAssertionEvent&,
+      const ConcurrentAssertionEvent&) = default;
+};
+
 class Simulation final {
  public:
   using SignalChangeHook = std::function<void(
@@ -260,6 +304,8 @@ class Simulation final {
       runtime::simir::Interpreter::ExecutionPointHook;
   using OutputHook = runtime::simir::Interpreter::OutputHook;
   using ReportHook = runtime::simir::Interpreter::ReportHook;
+  using ConcurrentAssertionHook =
+      std::function<void(const ConcurrentAssertionEvent&)>;
   using SafePointHook = runtime::Scheduler::SafePointHook;
   using ClassPropertyChangeHook = std::function<void(
       runtime::SystemVerilogClassHandle,
@@ -348,6 +394,14 @@ class Simulation final {
   /// trace backends. Paths and state contain no host addresses or RNG objects.
   [[nodiscard]] std::vector<ClassRandomizationTraceState>
   class_randomization_trace_states() const;
+  /// Deterministic per-instance concurrent assertion outcomes suitable for
+  /// callbacks, debugger inspection, trace backends, and coverage reports.
+  [[nodiscard]] std::vector<ConcurrentAssertionCoverage>
+  concurrent_assertion_coverage() const;
+  /// Stable sample events for callbacks, debugger inspection, and trace
+  /// backends. Disabled samples are retained but do not increment coverage.
+  [[nodiscard]] const std::vector<ConcurrentAssertionEvent>&
+  concurrent_assertion_events() const noexcept;
   [[nodiscard]] runtime::SystemVerilogClassHandle allocate_class(
       std::string_view specialization_identity,
       std::string_view declared_type = {});
@@ -433,6 +487,7 @@ class Simulation final {
   void set_execution_point_hook(ExecutionPointHook hook);
   void set_output_hook(OutputHook hook);
   void set_report_hook(ReportHook hook);
+  void set_concurrent_assertion_hook(ConcurrentAssertionHook hook);
   void set_class_property_change_hook(ClassPropertyChangeHook hook);
   void set_class_static_property_change_hook(
       ClassStaticPropertyChangeHook hook);

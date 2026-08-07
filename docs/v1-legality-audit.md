@@ -61,6 +61,11 @@ Batch 147 adds ten executable class-foundation rows, `SV-698` through
 `SV-707`, with complete owning-HIR, negative, runtime, engine, debugger, and
 artifact evidence. The current gate therefore requires all 707 SystemVerilog
 rows and 1,137 total matrix rows to remain executable with no evidence gaps.
+Subsequent v2 closure through Batch 154 advances that exact gate to all 760
+SystemVerilog rows and 1,190 total matrix rows. Batch 154 contributes
+`SV-751` through `SV-760`: typed concurrent-assertion ownership, semantic HIR,
+the bounded executable scalar slice, controls, coverage/events, rejection
+boundaries, and portable differential evidence.
 
 ## Mixed-language and SystemC queues — Batch 127 Tasks 7 and 8
 

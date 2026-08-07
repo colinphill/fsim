@@ -125,11 +125,11 @@ list(JOIN FSIM_EVIDENCE_PATHS "\n" FSIM_EVIDENCE_CANONICAL)
 string(SHA256 FSIM_EVIDENCE_DIGEST "${FSIM_EVIDENCE_CANONICAL}\n")
 
 set(FSIM_EXPECTED_VALUES
-  FSIM_ROW_COUNT 1180
-  FSIM_EVIDENCE_SLOT_COUNT 4720
-  FSIM_EVIDENCE_PATH_COUNT 414
+  FSIM_ROW_COUNT 1190
+  FSIM_EVIDENCE_SLOT_COUNT 4760
+  FSIM_EVIDENCE_PATH_COUNT 416
   FSIM_TEST_EVIDENCE_COUNT 187
-  FSIM_PRODUCTION_EVIDENCE_COUNT 211
+  FSIM_PRODUCTION_EVIDENCE_COUNT 213
   FSIM_RELEASE_EVIDENCE_COUNT 16)
 while(FSIM_EXPECTED_VALUES)
   list(POP_FRONT FSIM_EXPECTED_VALUES FSIM_VALUE_NAME FSIM_VALUE_EXPECTED)
@@ -141,9 +141,9 @@ while(FSIM_EXPECTED_VALUES)
 endwhile()
 
 set(FSIM_EXPECTED_MATRIX_DIGEST
-  "28623705ee34643f345c98f226b513af67d217adf84618b7c5d89a6160c18cb2")
+  "f4b0eaf84c9f0a953cf835615abb7a02e41e90fe9ee26a4516412ee141137ae4")
 set(FSIM_EXPECTED_EVIDENCE_DIGEST
-  "c76f1dbfecd0fc5392f2f7108da2f2d5c06830cd2777952d833821241d8e1fa5")
+  "1510f52287b0e83852c0f0291487f54af96780722ec232790367db41079dbdfd")
 if(NOT FSIM_MATRIX_DIGEST STREQUAL FSIM_EXPECTED_MATRIX_DIGEST
     OR NOT FSIM_EVIDENCE_DIGEST STREQUAL FSIM_EXPECTED_EVIDENCE_DIGEST)
   message(FATAL_ERROR
@@ -152,13 +152,13 @@ if(NOT FSIM_MATRIX_DIGEST STREQUAL FSIM_EXPECTED_MATRIX_DIGEST
 endif()
 
 foreach(FSIM_TOKEN IN ITEMS
-    "matrix-rows: 1180"
+    "matrix-rows: 1190"
     "matrix-sha256: ${FSIM_MATRIX_DIGEST}"
-    "evidence-slots: 4720"
-    "evidence-paths: 414"
+    "evidence-slots: 4760"
+    "evidence-paths: 416"
     "evidence-sha256: ${FSIM_EVIDENCE_DIGEST}"
     "test-evidence-paths: 187"
-    "production-evidence-paths: 211"
+    "production-evidence-paths: 213"
     "release-evidence-paths: 16"
     "runtime-evidence-paths: 113"
     "corpus-ctests: 36"
@@ -182,6 +182,6 @@ if(FSIM_REGISTRATION_INDEX EQUAL -1)
 endif()
 
 message(STATUS
-  "final release candidate: 1180 execute rows, 4720 linked evidence cells, "
-  "414 exact paths (187 test, 211 production, 16 release), 113 runtime files, "
+  "final release candidate: 1190 execute rows, 4760 linked evidence cells, "
+  "416 exact paths (187 test, 213 production, 16 release), 113 runtime files, "
   "and 36 corpus CTests")

@@ -413,4 +413,1147 @@ endmodule
       "invalid clocking ownership, skew, and declarations are diagnosed");
 }
 
+void test_systemverilog_assertion_declarations() {
+  const auto parsed = parse_text(
+      "assertion-declarations.sv",
+      R"(module assertion_owner(
+  input logic clock,
+  input logic reset_n,
+  input logic request,
+  input logic acknowledge
+);
+  sequence request_acknowledge(
+      int bound = 2,
+      sequence tail,
+      untyped gate
+  );
+    int attempt = bound;
+    logic sampled, enabled = gate;
+    @(posedge clock) attempt >= 0 && request
+      ##[1:bound] acknowledge[*2:4];
+  endsequence : request_acknowledge
+
+  property follows_request(
+      logic enable = 1'b1,
+      property override_property
+  );
+    @(posedge clock) disable iff (!reset_n)
+      enable && assertion_pkg::guard && monitor.ready
+        |-> request_acknowledge(3);
+  endproperty : follows_request
+
+  checker bus_checker(
+      input logic checker_clock,
+      output bit failed
+  );
+    default clocking cb @(posedge checker_clock); endclocking
+    assert property (follows_request(1));
+  endchecker : bus_checker
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      parsed.ok() && parsed.design.units.size() == 1,
+      "sequence, property, and checker declarations must parse");
+  const auto& declarations =
+      parsed.design.units[0].systemverilog_assertion_declarations;
+  const auto has_token = [](
+      const std::vector<Token>& tokens,
+      const std::string_view text) {
+    return std::ranges::any_of(
+        tokens,
+        [&](const Token& token) { return token.text == text; });
+  };
+  const auto has_reference = [](
+      const SystemVerilogAssertionDeclaration& declaration,
+      const std::string_view name,
+      const SystemVerilogAssertionReferenceKind kind) {
+    return std::ranges::any_of(
+        declaration.references,
+        [&](const SystemVerilogAssertionReference& reference) {
+          return reference.canonical_name == name
+              && reference.kind == kind
+              && reference.span.source_name
+                  == "assertion-declarations.sv";
+        });
+  };
+  require(
+      declarations.size() == 3
+          && declarations[0].kind
+              == SystemVerilogAssertionDeclarationKind::Sequence
+          && declarations[0].name == "request_acknowledge"
+          && has_token(declarations[0].header_tokens, "bound")
+          && has_token(declarations[0].header_tokens, "2")
+          && declarations[0].formals.size() == 3
+          && declarations[0].formals[0].kind
+              == SystemVerilogAssertionFormalKind::Value
+          && declarations[0].formals[0].name == "bound"
+          && has_token(declarations[0].formals[0].type_tokens, "int")
+          && has_token(declarations[0].formals[0].default_tokens, "2")
+          && declarations[0].formals[1].kind
+              == SystemVerilogAssertionFormalKind::Sequence
+          && declarations[0].formals[1].name == "tail"
+          && declarations[0].formals[2].kind
+              == SystemVerilogAssertionFormalKind::Untyped
+          && declarations[0].formals[2].name == "gate"
+          && declarations[0].local_variables.size() == 3
+          && declarations[0].local_variables[0].name == "attempt"
+          && has_token(
+              declarations[0].local_variables[0].type_tokens,
+              "int")
+          && has_token(
+              declarations[0].local_variables[0].initializer_tokens,
+              "bound")
+          && declarations[0].local_variables[1].name == "sampled"
+          && declarations[0].local_variables[2].name == "enabled"
+          && has_token(
+              declarations[0].local_variables[2].initializer_tokens,
+              "gate")
+          && declarations[0].clock.has_value()
+          && has_token(declarations[0].clock->event_tokens, "posedge")
+          && has_token(declarations[0].clock->event_tokens, "clock")
+          && declarations[0].clock->span.source_name
+              == "assertion-declarations.sv"
+          && !declarations[0].disable.has_value()
+          && has_token(declarations[0].expression_tokens, "request")
+          && has_reference(
+              declarations[0],
+              "bound",
+              SystemVerilogAssertionReferenceKind::Formal)
+          && has_reference(
+              declarations[0],
+              "gate",
+              SystemVerilogAssertionReferenceKind::Formal)
+          && has_reference(
+              declarations[0],
+              "attempt",
+              SystemVerilogAssertionReferenceKind::LocalVariable)
+          && has_reference(
+              declarations[0],
+              "clock",
+              SystemVerilogAssertionReferenceKind::DesignUnitObject)
+          && has_reference(
+              declarations[0],
+              "request",
+              SystemVerilogAssertionReferenceKind::DesignUnitObject)
+          && declarations[0].sequence_expression.has_value()
+          && declarations[0].sequence_expression->elements.size() == 2
+          && declarations[0].sequence_expression->delays.size() == 1
+          && has_token(
+              declarations[0].sequence_expression
+                  ->delays[0].range.minimum_tokens,
+              "1")
+          && has_token(
+              declarations[0].sequence_expression
+                  ->delays[0].range.maximum_tokens,
+              "bound")
+          && declarations[0].sequence_expression
+                 ->elements[1].repetition
+              == SystemVerilogSequenceRepetitionKind::Consecutive
+          && has_token(
+              declarations[0].sequence_expression
+                  ->elements[1].repetition_range->minimum_tokens,
+              "2")
+          && has_token(
+              declarations[0].sequence_expression
+                  ->elements[1].repetition_range->maximum_tokens,
+              "4")
+          && has_token(declarations[0].body_tokens, "request")
+          && has_token(declarations[0].body_tokens, "acknowledge")
+          && declarations[1].kind
+              == SystemVerilogAssertionDeclarationKind::Property
+          && declarations[1].name == "follows_request"
+          && has_token(declarations[1].header_tokens, "enable")
+          && declarations[1].formals.size() == 2
+          && declarations[1].formals[0].kind
+              == SystemVerilogAssertionFormalKind::Value
+          && has_token(
+              declarations[1].formals[0].default_tokens,
+              "1'b1")
+          && declarations[1].formals[1].kind
+              == SystemVerilogAssertionFormalKind::Property
+          && declarations[1].clock.has_value()
+          && has_token(declarations[1].clock->event_tokens, "posedge")
+          && has_token(declarations[1].clock->event_tokens, "clock")
+          && declarations[1].disable.has_value()
+          && has_token(
+              declarations[1].disable->condition_tokens,
+              "reset_n")
+          && declarations[1].disable->span.source_name
+              == "assertion-declarations.sv"
+          && has_token(declarations[1].expression_tokens, "enable")
+          && has_token(
+              declarations[1].expression_tokens,
+              "request_acknowledge")
+          && declarations[1].property_expression.has_value()
+          && declarations[1].property_expression
+                 ->implications.size() == 1
+          && declarations[1].property_expression
+                 ->implications[0].kind
+              == SystemVerilogPropertyImplicationKind::Overlapped
+          && has_token(
+              declarations[1].property_expression
+                  ->implications[0].antecedent_tokens,
+              "enable")
+          && has_token(
+              declarations[1].property_expression
+                  ->implications[0].consequent_tokens,
+              "request_acknowledge")
+          && has_reference(
+              declarations[1],
+              "assertion_pkg::guard",
+              SystemVerilogAssertionReferenceKind::Package)
+          && has_reference(
+              declarations[1],
+              "monitor.ready",
+              SystemVerilogAssertionReferenceKind::Hierarchical)
+          && has_reference(
+              declarations[1],
+              "request_acknowledge",
+              SystemVerilogAssertionReferenceKind::AssertionDeclaration)
+          && has_token(declarations[1].body_tokens, "disable")
+          && has_token(
+              declarations[1].body_tokens,
+              "request_acknowledge")
+          && declarations[2].kind
+              == SystemVerilogAssertionDeclarationKind::Checker
+          && declarations[2].name == "bus_checker"
+          && has_token(declarations[2].header_tokens, "checker_clock")
+          && declarations[2].formals.size() == 2
+          && declarations[2].formals[0].direction
+              == PortDirection::Input
+          && declarations[2].formals[0].name == "checker_clock"
+          && declarations[2].formals[1].direction
+              == PortDirection::Output
+          && declarations[2].formals[1].name == "failed"
+          && has_token(declarations[2].body_tokens, "assert")
+          && has_token(declarations[2].body_tokens, "follows_request")
+          && declarations[0].name_span.source_name
+              == "assertion-declarations.sv"
+          && declarations[0].header_span.source_name
+              == "assertion-declarations.sv"
+          && declarations[0].body_span.source_name
+              == "assertion-declarations.sv"
+          && declarations[0].span.source_name
+              == "assertion-declarations.sv",
+      "assertion declaration HIR retains kinds, names, tokens, and spans");
+
+  const auto invalid = parse_text(
+      "invalid-assertion-declarations.sv",
+      R"(module invalid;
+  sequence repeated(int value, bit value);
+    int value;
+    1;
+  endsequence
+  property repeated; 1; endproperty
+  checker mismatched; endchecker : wrong
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto has_code = [&](const std::string_view code) {
+    return std::ranges::any_of(
+        invalid.diagnostics,
+        [&](const Diagnostic& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      !invalid.ok()
+          && has_code("FSIM-SV-SEM-192")
+          && has_code("FSIM-SV-SEM-193")
+          && has_code("FSIM-SV-SEM-194")
+          && has_code("FSIM-SV-SEM-195"),
+      "duplicate formals/locals/declarations and end names are rejected");
+
+  const auto malformed_structure = parse_text(
+      "malformed-assertion-structure.sv",
+      R"(module malformed_structure;
+  sequence bad_header int value; 1; endsequence
+  property bad_formals(, int value); 1; endproperty
+  checker bad_local; int = 1; endchecker
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::any_of(
+          malformed_structure.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-293";
+          })
+          && std::ranges::any_of(
+              malformed_structure.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-294";
+              })
+          && std::ranges::any_of(
+              malformed_structure.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-295";
+              }),
+      "malformed assertion formal and local structure is diagnosed");
+
+  const auto malformed_clock_disable = parse_text(
+      "malformed-assertion-clock-disable.sv",
+      R"(module malformed_clock_disable;
+  property bad_clock; @(posedge clock 1; endproperty
+  property bad_disable; disable iff (!reset_n; endproperty
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::any_of(
+          malformed_clock_disable.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-296";
+          })
+          && std::ranges::any_of(
+              malformed_clock_disable.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-297";
+              }),
+      "malformed assertion clocks and disable conditions are diagnosed");
+
+  const auto unresolved_reference = parse_text(
+      "unresolved-assertion-reference.sv",
+      R"(module unresolved_reference(input logic request);
+  property unresolved; missing |-> request; endproperty
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::any_of(
+          unresolved_reference.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-196";
+          }),
+      "an unresolved unqualified assertion reference is rejected");
+
+  const auto repetition_forms = parse_text(
+      "sequence-repetition-forms.sv",
+      R"(module sequence_repetition_forms(input logic request);
+  sequence forms;
+    request[*] ##0 request[=1:3] ##[0:4] request[->2];
+  endsequence
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto& forms = repetition_forms.design.units[0]
+      .systemverilog_assertion_declarations[0].sequence_expression;
+  require(
+      repetition_forms.ok()
+          && forms.has_value()
+          && forms->elements.size() == 3
+          && forms->delays.size() == 2
+          && forms->elements[0].repetition
+              == SystemVerilogSequenceRepetitionKind::Consecutive
+          && forms->elements[1].repetition
+              == SystemVerilogSequenceRepetitionKind::Nonconsecutive
+          && forms->elements[2].repetition
+              == SystemVerilogSequenceRepetitionKind::Goto
+          && has_token(forms->delays[0].range.minimum_tokens, "0")
+          && forms->delays[0].fusion
+          && !forms->delays[1].fusion
+          && has_token(forms->delays[1].range.minimum_tokens, "0")
+          && has_token(forms->delays[1].range.maximum_tokens, "4"),
+      "sequence concatenation owns scalar/ranged delays and repetition forms");
+
+  const auto intersection = parse_text(
+      "sequence-intersection.sv",
+      R"(module sequence_intersection(
+  input logic request,
+  input logic acknowledge
+);
+  sequence both;
+    request intersect acknowledge intersect (request && acknowledge);
+  endsequence
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto& intersection_expression = intersection.design.units[0]
+      .systemverilog_assertion_declarations[0].sequence_expression;
+  require(
+      intersection.ok()
+          && intersection_expression.has_value()
+          && intersection_expression->intersection_operands.size() == 3
+          && has_token(
+              intersection_expression->intersection_operands[0].tokens,
+              "request")
+          && has_token(
+              intersection_expression->intersection_operands[1].tokens,
+              "acknowledge")
+          && intersection_expression->intersection_operands[2]
+                 .span.source_name == "sequence-intersection.sv",
+      "sequence intersection owns every top-level operand and exact span");
+
+  const auto qualified_sequence = parse_text(
+      "qualified-sequence.sv",
+      R"(module qualified_sequence(
+  input logic clock,
+  input logic request,
+  input logic acknowledge
+);
+  sequence qualified;
+    int attempt;
+    @(posedge clock)
+      request throughout (request ##1 acknowledge)
+        within first_match(request ##[1:2] acknowledge, attempt = 1);
+  endsequence
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto& qualified = qualified_sequence.design.units[0]
+      .systemverilog_assertion_declarations[0].sequence_expression;
+  require(
+      qualified_sequence.ok()
+          && qualified.has_value()
+          && qualified->binary_operations.size() == 2
+          && qualified->binary_operations[0].kind
+              == SystemVerilogSequenceBinaryKind::Throughout
+          && qualified->binary_operations[1].kind
+              == SystemVerilogSequenceBinaryKind::Within
+          && has_token(
+              qualified->binary_operations[0].left_tokens,
+              "request")
+          && qualified->first_matches.size() == 1
+          && has_token(qualified->first_matches[0].sequence_tokens, "request")
+          && has_token(
+              qualified->first_matches[0].match_item_tokens,
+              "attempt")
+          && qualified->first_matches[0].span.source_name
+              == "qualified-sequence.sv",
+      "throughout/within and first_match own operands, items, and spans");
+
+  const auto endpoints = parse_text(
+      "sequence-endpoints.sv",
+      R"(module sequence_endpoints(
+  input logic clock,
+  input logic request,
+  input logic acknowledge
+);
+  sequence handshake(int delay = 1);
+    @(posedge clock) request ##delay acknowledge;
+  endsequence
+  property endpoint_property(sequence supplied);
+    @(posedge clock)
+      handshake(2).triggered && supplied.matched()
+        && monitor.remote_sequence.triggered;
+  endproperty
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto& endpoint_declaration = endpoints.design.units[0]
+      .systemverilog_assertion_declarations[1];
+  require(
+      endpoints.ok()
+          && endpoint_declaration.sequence_endpoints.size() == 3
+          && endpoint_declaration.sequence_endpoints[0].kind
+              == SystemVerilogSequenceEndpointKind::Triggered
+          && endpoint_declaration.sequence_endpoints[0].receiver_name
+              == "handshake(2)"
+          && !endpoint_declaration.sequence_endpoints[0].method_parentheses
+          && endpoint_declaration.sequence_endpoints[1].kind
+              == SystemVerilogSequenceEndpointKind::Matched
+          && endpoint_declaration.sequence_endpoints[1].method_parentheses
+          && endpoint_declaration.sequence_endpoints[1].receiver_name
+              == "supplied"
+          && endpoint_declaration.sequence_endpoints[2].receiver_name
+              == "monitor.remote_sequence"
+          && endpoint_declaration.sequence_endpoints[2].span.source_name
+              == "sequence-endpoints.sv",
+      "matched/triggered endpoints own receivers, calls, kinds, and spans");
+
+  const auto property_implications = parse_text(
+      "property-implications.sv",
+      R"(module property_implications(
+  input logic clock,
+  input logic request,
+  input logic acknowledge
+);
+  property delayed;
+    @(posedge clock) request |=> ##[1:3] acknowledge;
+  endproperty
+  property fused;
+    @(posedge clock) request |-> ##0 acknowledge;
+  endproperty
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto& delayed_property = property_implications.design.units[0]
+      .systemverilog_assertion_declarations[0].property_expression;
+  const auto& fused_property = property_implications.design.units[0]
+      .systemverilog_assertion_declarations[1].property_expression;
+  require(
+      property_implications.ok()
+          && delayed_property.has_value()
+          && fused_property.has_value(),
+      "property implication fixtures parse and retain expression HIR");
+  require(
+      delayed_property->implications.size() == 1
+          && fused_property->implications.size() == 1
+          && delayed_property->implications[0].kind
+              == SystemVerilogPropertyImplicationKind::Nonoverlapped
+          && fused_property->implications[0].kind
+              == SystemVerilogPropertyImplicationKind::Overlapped,
+      "property implications own overlapped and nonoverlapped operands");
+  require(
+      delayed_property->delays.size() == 1
+          && has_token(
+              delayed_property->delays[0].range.minimum_tokens,
+              "1")
+          && has_token(
+              delayed_property->delays[0].range.maximum_tokens,
+              "3")
+          && !delayed_property->delays[0].fusion,
+      "a ranged property consequent delay owns both bounds");
+  require(
+      fused_property->delays.size() == 1
+          && fused_property->delays[0].fusion
+          && fused_property->span.source_name
+              == "property-implications.sv",
+      "a scalar zero property delay owns explicit fusion and source span");
+
+  const auto property_temporal = parse_text(
+      "property-temporal.sv",
+      R"(module property_temporal(
+  input logic clock,
+  input logic request,
+  input logic acknowledge
+);
+  property plain_until;
+    @(posedge clock) request until acknowledge;
+  endproperty
+  property strong_until;
+    @(posedge clock) request s_until acknowledge;
+  endproperty
+  property inclusive_until;
+    @(posedge clock) request until_with acknowledge;
+  endproperty
+  property strong_inclusive_until;
+    @(posedge clock) request s_until_with acknowledge;
+  endproperty
+  property counted_next;
+    @(posedge clock) nexttime[2] request;
+  endproperty
+  property strong_next;
+    @(posedge clock) s_nexttime acknowledge;
+  endproperty
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto& temporal_declarations = property_temporal.design.units[0]
+      .systemverilog_assertion_declarations;
+  require(
+      property_temporal.ok()
+          && temporal_declarations.size() == 6
+          && temporal_declarations[0].property_expression
+                 ->until_operations[0].kind
+              == SystemVerilogPropertyUntilKind::Until
+          && temporal_declarations[1].property_expression
+                 ->until_operations[0].kind
+              == SystemVerilogPropertyUntilKind::StrongUntil
+          && temporal_declarations[2].property_expression
+                 ->until_operations[0].kind
+              == SystemVerilogPropertyUntilKind::UntilWith
+          && temporal_declarations[3].property_expression
+                 ->until_operations[0].kind
+              == SystemVerilogPropertyUntilKind::StrongUntilWith
+          && has_token(
+              temporal_declarations[0].property_expression
+                  ->until_operations[0].left_tokens,
+              "request")
+          && has_token(
+              temporal_declarations[0].property_expression
+                  ->until_operations[0].right_tokens,
+              "acknowledge"),
+      "all until variants own typed left and right property operands");
+  require(
+      temporal_declarations[4].property_expression
+             ->nexttimes[0].kind
+          == SystemVerilogPropertyNexttimeKind::Nexttime
+          && has_token(
+              temporal_declarations[4].property_expression
+                  ->nexttimes[0].count_tokens,
+              "2")
+          && has_token(
+              temporal_declarations[4].property_expression
+                  ->nexttimes[0].operand_tokens,
+              "request")
+          && temporal_declarations[5].property_expression
+                 ->nexttimes[0].kind
+              == SystemVerilogPropertyNexttimeKind::StrongNexttime
+          && temporal_declarations[5].property_expression
+                 ->nexttimes[0].count_tokens.empty()
+          && temporal_declarations[5].property_expression
+                 ->nexttimes[0].span.source_name
+              == "property-temporal.sv",
+      "nexttime variants own optional counts, operands, kinds, and spans");
+
+  const auto property_recurrence = parse_text(
+      "property-recurrence.sv",
+      R"(module property_recurrence(
+  input logic clock,
+  input logic request,
+  input logic acknowledge
+);
+  property plain_always;
+    @(posedge clock) always request;
+  endproperty
+  property ranged_always;
+    @(posedge clock) s_always[1:3] request;
+  endproperty
+  property ranged_eventually;
+    @(posedge clock) eventually[2:4] acknowledge;
+  endproperty
+  property strong_eventually;
+    @(posedge clock) s_eventually[1:5] acknowledge;
+  endproperty
+  property strong_sequence;
+    @(posedge clock) strong(request ##1 acknowledge);
+  endproperty
+  property weak_sequence;
+    @(posedge clock) weak(request ##[1:2] acknowledge);
+  endproperty
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto& recurrence_declarations = property_recurrence.design.units[0]
+      .systemverilog_assertion_declarations;
+  require(
+      property_recurrence.ok()
+          && recurrence_declarations.size() == 6
+          && recurrence_declarations[0].property_expression
+                 ->recurrences[0].kind
+              == SystemVerilogPropertyRecurrenceKind::Always
+          && !recurrence_declarations[0].property_expression
+                  ->recurrences[0].range.has_value()
+          && recurrence_declarations[1].property_expression
+                 ->recurrences[0].kind
+              == SystemVerilogPropertyRecurrenceKind::StrongAlways
+          && has_token(
+              recurrence_declarations[1].property_expression
+                  ->recurrences[0].range->minimum_tokens,
+              "1")
+          && has_token(
+              recurrence_declarations[1].property_expression
+                  ->recurrences[0].range->maximum_tokens,
+              "3")
+          && recurrence_declarations[2].property_expression
+                 ->recurrences[0].kind
+              == SystemVerilogPropertyRecurrenceKind::Eventually
+          && recurrence_declarations[3].property_expression
+                 ->recurrences[0].kind
+              == SystemVerilogPropertyRecurrenceKind::StrongEventually
+          && recurrence_declarations[3].property_expression
+                 ->recurrences[0].span.source_name
+              == "property-recurrence.sv",
+      "always/eventually variants own typed operands, ranges, and spans");
+  require(
+      recurrence_declarations[4].property_expression
+             ->sequence_strengths[0].kind
+          == SystemVerilogPropertySequenceStrengthKind::Strong
+          && has_token(
+              recurrence_declarations[4].property_expression
+                  ->sequence_strengths[0].sequence_tokens,
+              "request")
+          && recurrence_declarations[5].property_expression
+                 ->sequence_strengths[0].kind
+              == SystemVerilogPropertySequenceStrengthKind::Weak
+          && has_token(
+              recurrence_declarations[5].property_expression
+                  ->sequence_strengths[0].sequence_tokens,
+              "acknowledge")
+          && recurrence_declarations[5].property_expression
+                 ->sequence_strengths[0].span.source_name
+              == "property-recurrence.sv",
+      "strong/weak wrappers own sequence operands, kinds, and spans");
+
+  const auto property_aborts = parse_text(
+      "property-aborts.sv",
+      R"(module property_aborts(
+  input logic clock,
+  input logic reset,
+  input logic enable,
+  input logic request
+);
+  property async_accept;
+    @(posedge clock) accept_on(reset || !enable) request;
+  endproperty
+  property async_reject;
+    @(posedge clock) reject_on(reset) request;
+  endproperty
+  property synchronous_accept;
+    @(posedge clock) sync_accept_on(reset) request;
+  endproperty
+  property synchronous_reject;
+    @(posedge clock) sync_reject_on(reset) request;
+  endproperty
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto& abort_declarations = property_aborts.design.units[0]
+      .systemverilog_assertion_declarations;
+  require(
+      property_aborts.ok()
+          && abort_declarations.size() == 4
+          && abort_declarations[0].property_expression
+                 ->aborts[0].outcome
+              == SystemVerilogPropertyAbortOutcome::VacuousSuccess
+          && !abort_declarations[0].property_expression
+                  ->aborts[0].synchronous
+          && has_token(
+              abort_declarations[0].property_expression
+                  ->aborts[0].condition_tokens,
+              "enable")
+          && has_token(
+              abort_declarations[0].property_expression
+                  ->aborts[0].property_tokens,
+              "request")
+          && abort_declarations[1].property_expression
+                 ->aborts[0].outcome
+              == SystemVerilogPropertyAbortOutcome::Failure
+          && !abort_declarations[1].property_expression
+                  ->aborts[0].synchronous
+          && abort_declarations[2].property_expression
+                 ->aborts[0].outcome
+              == SystemVerilogPropertyAbortOutcome::VacuousSuccess
+          && abort_declarations[2].property_expression
+                 ->aborts[0].synchronous
+          && abort_declarations[3].property_expression
+                 ->aborts[0].outcome
+              == SystemVerilogPropertyAbortOutcome::Failure
+          && abort_declarations[3].property_expression
+                 ->aborts[0].synchronous
+          && abort_declarations[3].property_expression
+                 ->aborts[0].span.source_name
+              == "property-aborts.sv",
+      "accept/reject aborts own synchronization, vacuity, operands, and spans");
+
+  const auto malformed_sequence = parse_text(
+      "malformed-sequence-structure.sv",
+      R"(module malformed_sequence(input logic request);
+  sequence bad_delay; request ## ; endsequence
+  sequence bad_element; ##1 request; endsequence
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::any_of(
+          malformed_sequence.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-298";
+          })
+          && std::ranges::any_of(
+              malformed_sequence.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-299";
+              }),
+      "malformed sequence concatenation structure is diagnosed");
+
+  const auto malformed_intersection = parse_text(
+      "malformed-sequence-intersection.sv",
+      R"(module malformed_intersection(input logic request);
+  sequence missing_left; @(posedge request) intersect request; endsequence
+  sequence missing_right; @(posedge request) request intersect; endsequence
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::count_if(
+          malformed_intersection.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-300";
+          }) == 2,
+      "empty sequence intersection operands are rejected exactly");
+
+  const auto malformed_qualified_sequence = parse_text(
+      "malformed-qualified-sequence.sv",
+      R"(module malformed_qualified_sequence(input logic request);
+  sequence missing_left; @(posedge request) throughout request; endsequence
+  sequence missing_right; @(posedge request) request within; endsequence
+  sequence empty_first; @(posedge request) first_match(); endsequence
+  sequence open_first; @(posedge request) first_match(request; endsequence
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::count_if(
+          malformed_qualified_sequence.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-301";
+          }) == 4,
+      "malformed throughout/within and first_match operands reject exactly");
+
+  const auto malformed_endpoints = parse_text(
+      "malformed-sequence-endpoints.sv",
+      R"(module malformed_endpoints(input logic request);
+  sequence receiver; @(posedge request) request; endsequence
+  property missing_receiver; @(posedge request) matched; endproperty
+  property endpoint_arguments;
+    @(posedge request) receiver.triggered(1);
+  endproperty
+  property wrong_receiver; @(posedge request) request.matched; endproperty
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::count_if(
+          malformed_endpoints.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-302";
+          }) == 2
+          && std::ranges::any_of(
+              malformed_endpoints.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-197";
+              }),
+      "malformed endpoint syntax and non-sequence receivers reject exactly");
+
+  const auto malformed_property = parse_text(
+      "malformed-property-expression.sv",
+      R"(module malformed_property(input logic request);
+  property missing_left; @(posedge request) |-> request; endproperty
+  property missing_right; @(posedge request) request |=>; endproperty
+  property empty_range;
+    @(posedge request) request |-> ##[] request;
+  endproperty
+  property missing_delay;
+    @(posedge request) request |-> ##;
+  endproperty
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::count_if(
+          malformed_property.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-303";
+          }) == 4,
+      "empty implication operands and malformed property delays reject exactly");
+
+  const auto malformed_temporal = parse_text(
+      "malformed-property-temporal.sv",
+      R"(module malformed_temporal(input logic request);
+  property until_left; @(posedge request) until request; endproperty
+  property until_right; @(posedge request) request s_until; endproperty
+  property next_operand; @(posedge request) nexttime; endproperty
+  property next_count; @(posedge request) s_nexttime[] request; endproperty
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::count_if(
+          malformed_temporal.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-304";
+          }) == 4,
+      "malformed until operands and nexttime count/operand reject exactly");
+
+  const auto malformed_recurrence = parse_text(
+      "malformed-property-recurrence.sv",
+      R"(module malformed_recurrence(input logic request);
+  property always_operand; @(posedge request) always; endproperty
+  property eventually_range;
+    @(posedge request) s_eventually[] request;
+  endproperty
+  property strong_operand; @(posedge request) strong(); endproperty
+  property weak_balance; @(posedge request) weak(request; endproperty
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::count_if(
+          malformed_recurrence.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-305";
+          }) == 4,
+      "malformed recurrence ranges/operands and strength wrappers reject");
+
+  const auto malformed_aborts = parse_text(
+      "malformed-property-aborts.sv",
+      R"(module malformed_aborts(input logic reset, request);
+  property missing_parens;
+    @(posedge request) accept_on reset request;
+  endproperty
+  property empty_condition;
+    @(posedge request) reject_on() request;
+  endproperty
+  property unbalanced_condition;
+    @(posedge request) sync_accept_on(reset;
+  endproperty
+  property missing_operand;
+    @(posedge request) sync_reject_on(reset);
+  endproperty
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::count_if(
+          malformed_aborts.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-306";
+          }) == 4,
+      "malformed abort conditions and missing property operands reject");
+
+  const auto concurrent_assertions = parse_text(
+      "concurrent-assertions.sv",
+      R"(module concurrent_assertions(
+  input logic clock,
+  input logic request
+);
+  property requested;
+    @(posedge clock) request;
+  endproperty
+  request_check: assert property (requested)
+    $display("pass"); else $error("fail");
+  assume property (requested) else $warning("assume");
+  cover property (requested) begin
+    $display("covered");
+  end
+  restrict property (requested);
+  initial begin
+    $assertcontrol(1);
+    $asserton(0);
+    $assertoff;
+    $assertkill;
+    $assertpasson;
+    $assertpassoff;
+    $assertfailon;
+    $assertfailoff;
+    $assertnonvacuouson;
+    $assertvacuousoff;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto& directives = concurrent_assertions.design.units[0]
+      .systemverilog_concurrent_assertions;
+  require(
+      concurrent_assertions.ok()
+          && directives.size() == 4
+          && directives[0].kind
+              == SystemVerilogConcurrentAssertionKind::Assert
+          && directives[0].label == "request_check"
+          && directives[0].label_span.source_name
+              == "concurrent-assertions.sv"
+          && directives[0].has_pass_action
+          && has_token(directives[0].pass_action_tokens, "$display")
+          && directives[0].pass_action_span.source_name
+              == "concurrent-assertions.sv"
+          && directives[0].has_failure_action
+          && has_token(directives[0].failure_action_tokens, "$error")
+          && directives[0].failure_action_span.source_name
+              == "concurrent-assertions.sv"
+          && directives[1].kind
+              == SystemVerilogConcurrentAssertionKind::Assume
+          && !directives[1].has_pass_action
+          && directives[1].has_failure_action
+          && has_token(directives[1].failure_action_tokens, "$warning")
+          && directives[2].kind
+              == SystemVerilogConcurrentAssertionKind::Cover
+          && directives[2].has_pass_action
+          && has_token(directives[2].pass_action_tokens, "begin")
+          && has_token(directives[2].pass_action_tokens, "end")
+          && !directives[2].has_failure_action
+          && directives[3].kind
+              == SystemVerilogConcurrentAssertionKind::Restrict
+          && !directives[3].has_pass_action
+          && !directives[3].has_failure_action
+          && has_token(directives[0].property_tokens, "requested")
+          && directives[0].sampling_region
+              == SystemVerilogAssertionRegion::Preponed
+          && directives[0].evaluation_region
+              == SystemVerilogAssertionRegion::Observed
+          && directives[0].action_region
+              == SystemVerilogAssertionRegion::Reactive
+          && directives[3].span.source_name
+              == "concurrent-assertions.sv",
+      "concurrent directives own kinds, labels, properties, and regions");
+  const auto& controls = concurrent_assertions.design.units[0]
+      .processes[0].statements;
+  require(
+      controls.size() == 10
+          && controls[0].assertion_control
+              == SystemVerilogAssertionControlKind::Control
+          && controls[0].task_arguments.size() == 1
+          && controls[1].assertion_control
+              == SystemVerilogAssertionControlKind::On
+          && controls[2].assertion_control
+              == SystemVerilogAssertionControlKind::Off
+          && controls[3].assertion_control
+              == SystemVerilogAssertionControlKind::Kill
+          && controls[4].assertion_control
+              == SystemVerilogAssertionControlKind::PassOn
+          && controls[5].assertion_control
+              == SystemVerilogAssertionControlKind::PassOff
+          && controls[6].assertion_control
+              == SystemVerilogAssertionControlKind::FailOn
+          && controls[7].assertion_control
+              == SystemVerilogAssertionControlKind::FailOff
+          && controls[8].assertion_control
+              == SystemVerilogAssertionControlKind::NonvacuousOn
+          && controls[9].assertion_control
+              == SystemVerilogAssertionControlKind::VacuousOff,
+      "procedural assertion controls retain typed policy and arguments");
+
+  const auto malformed_actions = parse_text(
+      "malformed-concurrent-actions.sv",
+      R"(module malformed_actions(input logic request);
+  assert property (request) else
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::count_if(
+          malformed_actions.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-308";
+          }) == 1,
+      "missing concurrent assertion failure action rejects exactly");
+
+  const auto illegal_restrict_action = parse_text(
+      "illegal-restrict-action.sv",
+      R"(module illegal_restrict_action(input logic request);
+  restrict property (request) $display("illegal");
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::count_if(
+          illegal_restrict_action.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-198";
+          }) == 1,
+      "restrict property actions reject exactly");
+
+  const auto malformed_directives = parse_text(
+      "malformed-concurrent-assertions.sv",
+      R"(module malformed_directives(input logic request);
+  property requested; request; endproperty
+  assert (requested);
+  assume property requested;
+  cover property ();
+  restrict property (requested)
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::count_if(
+          malformed_directives.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-307";
+          }) == 4,
+      "malformed concurrent property syntax rejects exactly");
+
+  const auto unsupported_formals = parse_text(
+      "unsupported-executable-property-formals.sv",
+      R"(module unsupported_formals(input logic request);
+  property requested(logic value); value; endproperty
+  assert property (requested(request));
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::count_if(
+          unsupported_formals.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-199";
+          }) == 1,
+      "unsupported executable property formals reject exactly");
+
+  const auto unsupported_type = parse_text(
+      "unsupported-executable-property-type.sv",
+      R"(module unsupported_type;
+  string message;
+  assert property (message);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::count_if(
+          unsupported_type.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-200";
+          }) == 1,
+      "unsupported executable property type rejects exactly");
+
+  const auto unsupported_clock = parse_text(
+      "unsupported-executable-property-clock.sv",
+      R"(module unsupported_clock(
+    input logic clock, reset, request);
+  property requested;
+    @(posedge clock or negedge reset) request;
+  endproperty
+  assert property (requested);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::count_if(
+          unsupported_clock.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-201";
+          }) == 1,
+      "unsupported executable property clock rejects exactly");
+
+  std::string resource_source{
+      "module assertion_resource(input logic request);\n"};
+  for (std::size_t index = 0; index < 257U; ++index) {
+    resource_source += "assert property (request);\n";
+  }
+  resource_source += "endmodule\n";
+  const auto resource_overflow = parse_text(
+      "concurrent-assertion-resource.sv",
+      resource_source,
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::count_if(
+          resource_overflow.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-202";
+          }) == 1,
+      "executable concurrent assertion resource overflow rejects exactly");
+
+  const auto malformed_name = parse_text(
+      "missing-assertion-name.sv",
+      "module missing_name; sequence ; 1; endsequence endmodule\n",
+      Language::SystemVerilog2017);
+  const auto malformed_header = parse_text(
+      "missing-assertion-header-semicolon.sv",
+      "module missing_header; property p endproperty endmodule\n",
+      Language::SystemVerilog2017);
+  const auto malformed_end = parse_text(
+      "missing-assertion-end.sv",
+      "module missing_end; checker c; assert (1); endmodule\n",
+      Language::SystemVerilog2017);
+  require(
+      std::ranges::any_of(
+          malformed_name.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PARSE-290";
+          })
+          && std::ranges::any_of(
+              malformed_header.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-291";
+              })
+          && std::ranges::any_of(
+              malformed_end.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-PARSE-292";
+              }),
+      "malformed assertion declaration boundaries are diagnosed exactly");
+
+  const auto wrong_language = parse_text(
+      "verilog-sequence.v",
+      "module wrong_language; sequence s; 1; endsequence endmodule\n",
+      Language::Verilog2005);
+  require(
+      std::ranges::any_of(
+          wrong_language.diagnostics,
+          [](const Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-191";
+          }),
+      "assertion declarations require SystemVerilog-2017");
+}
+
 }  // namespace fsim::tests::frontend

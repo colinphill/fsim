@@ -3157,21 +3157,207 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 154 - SystemVerilog concurrent assertion closure
 
-- **Changes 1-4:** own and resolve sequence/property/checker declarations,
-  formal arguments, local variables, clocks, disables, and hierarchical/package
-  references.
-- **Changes 5-8:** implement sequence concatenation/repetition, fusion,
-  intersection, throughout/within, first-match, matched/triggered, and endpoint
-  semantics.
-- **Changes 9-12:** implement property implication, delay ranges, until/nexttime,
-  always/eventually, strong/weak, accept/reject, abort, and vacuity rules.
-- **Changes 13-16:** schedule concurrent assert/assume/cover/restrict, assertion
-  controls, pass/fail actions, callbacks, debugger, trace, coverage counts, and
-  multi-root behavior.
-- **Changes 17-19:** add formal/type/clock/resource negatives, interpreter/LLVM
-  and artifact differentials, documentation, inventories, and handoff.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+- **Change 1: Complete.** Add an append-only, design-unit-owned frontend HIR
+  for `sequence`, `property`, and `checker` declarations. Each declaration
+  retains its exact kind, name, name/header/body/full spans, and owning copies
+  of every header and body token including macro/source provenance. A dedicated
+  parser translation unit preserves balanced language content without retaining
+  parser storage; duplicate names, mismatched closing names, missing names,
+  missing header terminators, missing declaration terminators, and use outside
+  SystemVerilog-2017 reject through stable cataloged diagnostics. The complete
+  307-step exact-LLVM Debug dependency rebuild succeeds warning-clean with eight
+  workers; frontend, catalog, and source-policy gates pass, and `git diff
+  --check` is clean.
+- **Change 2: Complete.** Structure each declaration's retained header and body
+  into append-only formal-argument and local-variable records. Formals retain
+  value, sequence, property, or untyped kind; direction and `local` qualifiers;
+  type/default tokens; names; and exact source spans. Locals retain shared type,
+  declarator, initializer, name, and exact source ownership, with delimiter-aware
+  comma splitting. Stable cataloged diagnostics reject malformed headers,
+  formals, and local declarations plus duplicate formal names and formal/local
+  collisions. The complete 307-step exact-LLVM Debug dependency rebuild succeeds
+  warning-clean with eight workers; frontend, catalog, and source-policy gates
+  pass, and `git diff --check` is clean.
+- **Change 3: Complete.** Own optional declaration clocks and `disable iff`
+  clauses independently of the raw body token stream. Clock records retain the
+  exact event tokens and span; disable records retain the exact condition tokens
+  and span; the remaining expression tokens and span begin after leading locals,
+  clock, and disable structure. Parenthesized and named clock events are
+  supported, while malformed or empty events and disable conditions reject
+  through stable cataloged diagnostics. The complete 307-step exact-LLVM Debug
+  dependency rebuild succeeds warning-clean with eight workers; frontend,
+  catalog, and source-policy gates pass, and `git diff --check` is clean.
+- **Change 4: Complete.** Resolve each retained assertion reference occurrence
+  after the complete design-unit declaration region is known. Source-owned
+  canonical reference records distinguish formal, local-variable, design-unit
+  object, assertion-declaration, hierarchical, and package-qualified paths;
+  forward assertion names therefore resolve without declaration-order leakage.
+  Stable cataloged diagnostics reject unresolved unqualified names while
+  hierarchical and package paths remain explicit for later hierarchy/package
+  specialization. The complete 307-step exact-LLVM Debug dependency rebuild
+  succeeds warning-clean with eight workers; frontend, catalog, and
+  source-policy gates pass, and `git diff --check` is clean.
+- **Change 5: Complete.** Structure sequence declarations into ordered elements
+  and source-owned concatenation delays. Scalar and ranged `##` delays retain
+  their minimum/maximum tokens and exact spans; element abbreviations retain
+  consecutive `[*]`, nonconsecutive `[=]`, and goto `[->]` repetition kinds and
+  optional ranges. Stable cataloged diagnostics reject missing/malformed delays,
+  empty concatenation elements, and repetition without an operand. The complete
+  307-step exact-LLVM Debug dependency rebuild succeeds warning-clean with eight
+  workers; frontend, catalog, and source-policy gates pass, and `git diff
+  --check` is clean.
+- **Change 6: Complete.** Mark scalar `##0` delays explicitly as sequence fusion
+  without losing their ordinary delay tokens/spans, and retain every top-level
+  `intersect` operand as its own source-owned token range and exact span. Stable
+  cataloged diagnostics reject empty left or right intersection operands. The
+  complete 307-step exact-LLVM Debug dependency rebuild succeeds warning-clean
+  with eight workers; frontend, catalog, and source-policy gates pass, and `git
+  diff --check` is clean.
+- **Change 7: Complete.** Retain every top-level `throughout` and `within`
+  occurrence as a typed binary operation with source-owned left/right operands
+  and an exact full span. Structure each `first_match(...)` occurrence into its
+  sequence argument and optional match-item tokens with an exact call span,
+  including nested delay expressions without treating them as top-level
+  operators. Stable cataloged diagnostics reject missing binary operands and
+  missing, empty, or unbalanced `first_match` arguments. The complete 307-step
+  exact-LLVM Debug dependency rebuild succeeds warning-clean with eight workers;
+  frontend, catalog, and source-policy gates pass, and `git diff --check` is
+  clean.
+- **Change 8: Complete.** Retain `.matched` and `.triggered` endpoint
+  observations on sequence declarations, sequence formals, and deferred
+  hierarchical/package receivers. Each endpoint owns its exact receiver token
+  stream and spelling, source span, method kind, invocation actuals, and whether
+  optional empty method parentheses were written. Stable cataloged parse
+  diagnostics reject missing/malformed receivers and nonempty method arguments;
+  semantic diagnostics reject unqualified receivers that are not sequence
+  declarations or sequence formals. The complete 307-step exact-LLVM Debug
+  dependency rebuild succeeds warning-clean with eight workers; frontend,
+  catalog, and source-policy gates pass, and `git diff --check` is clean.
+- **Change 9: Complete.** Retain top-level overlapped `|->` and
+  nonoverlapped `|=>` property implications as typed records with exact
+  source-owned antecedent/consequent tokens and full spans. Property expressions
+  separately own scalar and ranged `##` delays using the common sequence-range
+  representation, including explicit scalar-zero fusion annotation and exact
+  source spans. Recognition covers the lexer's maximal-munch `|=` plus `>`
+  nonoverlapped token split. Stable cataloged diagnostics reject empty
+  implication operands and missing, empty, or unbalanced delay values/ranges.
+  The complete 307-step exact-LLVM Debug dependency rebuild succeeds
+  warning-clean with eight workers; frontend, catalog, and source-policy gates
+  pass, and `git diff --check` is clean.
+- **Change 10: Complete.** Retain top-level `until`, `s_until`,
+  `until_with`, and `s_until_with` as typed operations with exact
+  source-owned left/right tokens and full spans. Retain `nexttime` and
+  `s_nexttime` as typed prefix records with optional bracketed count tokens,
+  exact operand tokens, and complete source spans. Stable cataloged diagnostics
+  reject empty binary operands, missing prefix operands, and empty or
+  unbalanced counts. The complete 307-step exact-LLVM Debug dependency rebuild
+  succeeds warning-clean with eight workers; frontend, catalog, and
+  source-policy gates pass, and `git diff --check` is clean.
+- **Change 11: Complete.** Retain `always`, `s_always`, `eventually`, and
+  `s_eventually` as typed prefix recurrence records with optional exact
+  bracketed ranges, source-owned operands, and complete spans. Retain
+  `strong(...)` and `weak(...)` as typed sequence-strength wrappers with
+  exact sequence tokens and call spans. Stable cataloged diagnostics reject
+  missing recurrence operands, empty or unbalanced ranges, and missing, empty,
+  or unbalanced strength-wrapper operands. The complete 307-step exact-LLVM
+  Debug dependency rebuild succeeds warning-clean with eight workers; frontend,
+  catalog, and source-policy gates pass, and `git diff --check` is clean.
+- **Change 12: Complete.** Retain `accept_on`, `reject_on`,
+  `sync_accept_on`, and `sync_reject_on` as typed abort records with
+  independently explicit asynchronous/synchronous policy and vacuous-success/
+  failure outcome. Each record owns its exact condition tokens, property
+  operand tokens, and complete source span. Stable cataloged diagnostics reject
+  missing, empty, or unbalanced conditions and missing property operands. The
+  complete 307-step exact-LLVM Debug dependency rebuild succeeds warning-clean
+  with eight workers; frontend, catalog, and source-policy gates pass, and
+  `git diff --check` is clean.
+- **Change 13: Complete.** Retain design-unit concurrent `assert`, `assume`,
+  `cover`, and `restrict property` directives as typed source-owned records
+  with optional labels, exact property tokens, and complete spans. Each record
+  explicitly owns the standard Preponed sampling, Observed evaluation, and
+  Reactive action-region policy for later executable lowering. Stable
+  cataloged diagnostics reject missing `property`, missing/unbalanced/empty
+  property parentheses, and missing terminators. The complete 307-step
+  exact-LLVM Debug dependency rebuild succeeds warning-clean with eight workers;
+  frontend, catalog, and source-policy gates pass, and `git diff --check` is
+  clean.
+- **Change 14: Complete.** Retain concurrent pass and failure actions as
+  independently present, source-owned token streams with exact spans, including
+  failure-only directives, balanced compound statements, and an explicit null
+  pass action before `else`. Retain all ten procedural assertion-control
+  system tasks as typed policy on ordinary task-call HIR with their existing
+  argument ownership. Stable cataloged diagnostics reject missing/unbalanced
+  actions, restrict actions, and cover failure actions without changing the
+  existing malformed-directive boundary. The complete 307-step exact-LLVM
+  Debug dependency rebuild succeeds warning-clean with eight workers; frontend,
+  catalog, and source-policy gates pass, and `git diff --check` is clean.
+- **Change 15: Complete.** Promote every concurrent directive into public
+  SystemVerilog semantic HIR with a stable explicit or synthesized name,
+  deterministic coverage slot, exact property/action spelling, source/origin
+  provenance, region policy, and append-only callback/debugger/trace/coverage
+  observer policy. Assert/assume failures select the shared assertion callback;
+  cover/restrict records remain debugger-, trace-, and coverage-visible without
+  manufacturing a failure callback. Focused HIR evidence covers all four kinds,
+  both naming forms, action/source ownership, observer policy, and slot order.
+  The complete 107-step affected exact-LLVM Debug graph rebuilds warning-clean
+  with eight workers; the HIR application, frontend, catalog, and source-policy
+  gates pass 4/4, and `git diff --check` is clean.
+- **Change 16: Complete.** Lower the executable scalar concurrent-property
+  slice into ordinary source-spanned assertion processes, including named
+  property indirection, positive/negative clock edges, stable explicit or
+  synthesized process names, pass/failure actions, and the shared report path.
+  Engine-neutral outcome markers feed deterministic per-instance
+  attempt/pass/failure coverage plus retained pass/failure/disabled trace
+  events and an exact public callback. Typed procedural assertion controls now
+  execute without losing their ordinary task-call HIR: on/off/kill and
+  pass/failure/vacuity policies gate samples and actions, while constant
+  `$assertcontrol` selectors use the same policy path. Focused evidence proves
+  exact interpreter, LLVM O2, LLVM debug/O0, callback/trace, control, source,
+  repeated-instance, and aliased two-root parity. The complete exact-LLVM
+  Debug tree rebuilds warning-clean with eight workers; the assertion, public
+  HIR, frontend, catalog, and source-policy gates pass 5/5, and `git diff
+  --check` is clean.
+- **Change 17: Complete.** Reject every boundary of the bounded executable
+  concurrent-property slice explicitly instead of silently omitting a runtime
+  process. Stable `FSIM-SV-SEM-199` rejects property actual/formal/local use,
+  `FSIM-SV-SEM-200` rejects non-packed or non-scalar predicates,
+  `FSIM-SV-SEM-201` rejects clocks other than one direct design-unit object
+  with an optional edge, and `FSIM-SV-SEM-202` rejects the 257th executable
+  concurrent assertion in one unit. Focused negatives prove one exact cataloged
+  diagnostic for each boundary, and malformed empty property ownership no
+  longer reaches executable diagnostics. The complete exact-LLVM Debug tree
+  rebuilds warning-clean with eight workers; frontend, executable-assertion,
+  catalog, and source-policy gates pass 4/4, and `git diff --check` is clean.
+- **Change 18: Complete.** Run one shared capture contract across direct
+  interpreter, LLVM O2, LLVM debug/O0, aliased multiple roots, compiled
+  `.fsimobj` plus standalone `.fsimdesign`, cold/warm native-cache reuse, and a
+  relocated design artifact. Outputs, stable process identities, normalized
+  report source identity, callback events, trace events, and runtime coverage
+  remain exact; portable artifact source paths intentionally compare by
+  filename/line/column after relocation. The complete exact-LLVM Debug tree is
+  current and warning-clean with eight workers; the assertion differential,
+  library/object/design artifact, catalog, and source-policy gates pass 6/6,
+  and `git diff --check` is clean.
+- **Change 19: Complete.** Synchronize the public README, architecture and
+  language-support contracts with the distinction between full typed
+  sequence/property/checker ownership and the bounded executable scalar slice.
+  Add executable evidence rows `SV-751` through `SV-760` and advance the
+  machine-checked release inventory to 1,190 rows, 4,760 evidence cells, 416
+  exact evidence paths (187 test, 213 production, 16 release), 113 runtime
+  owners, 1,936 cataloged diagnostics, 571 bounded sources, and 661 authored
+  artifacts. The reviewed matrix digest is
+  `f4b0eaf84c9f0a953cf835615abb7a02e41e90fe9ee26a4516412ee141137ae4`
+  and the evidence-path digest is
+  `1510f52287b0e83852c0f0291487f54af96780722ec232790367db41079dbdfd`.
+  The synchronized assertion/HIR/frontend/catalog/source and release-audit
+  slice passes 11/11. That gate exposed and closed a selected-expression/local-
+  declaration ambiguity plus stale generated-process HIR expectations.
+- **Change 20: Complete.** Rebuild the complete exact-LLVM 22.1.8 Debug and
+  Release trees warning-clean with eight workers. The full non-sanitized Debug
+  suite passes 114/114 in 362.82 seconds and Release passes 114/114 in 304.68
+  seconds. Close the accumulated Batch 154 checkpoint with one commit and push;
+  this batch is intentionally neither a sanitizer nor hosted-CI monitoring
+  boundary.
 
 ### Batch 155 - SystemVerilog functional coverage closure
 

@@ -1241,6 +1241,35 @@ SVA/coverage, DPI/VPI, and UVM library/runtime work retain their locked
 Batch 154-162 ownership. Program, clocking, and interface closure is complete
 in Batch 153.
 
+### SystemVerilog concurrent assertions in v2
+
+The v2 frontend owns `sequence`, `property`, and `checker` declarations with
+formal arguments, leading local variables, declaration clocks, `disable iff`,
+resolved source references, and exact token/span provenance. Typed sequence
+ownership includes delays and ranges, fusion, repetition, `intersect`,
+`throughout`, `within`, `first_match`, and `.matched`/`.triggered`; typed
+property ownership includes implication, delays, until/nexttime families,
+recurrence, strength wrappers, and synchronous/asynchronous accept/reject
+aborts. Concurrent assert, assume, cover, and restrict directives retain region
+policy, stable names, action blocks, controls, semantic observer descriptors,
+and deterministic coverage slots.
+
+The executable slice is deliberately bounded to an inline scalar identifier,
+literal, negated identifier, or an argument-free/local-free named property with
+one direct design-unit clock object and an optional edge. It lowers to ordinary
+source-spanned assertion processes and shares the existing debugger and report
+path. Public per-instance coverage and pass/failure/disabled sample events feed
+callbacks and trace backends identically across interpreter, LLVM O0/O2,
+multiple roots, standalone artifacts, relocation, and warm native caches.
+Assertion on/off/kill, pass/failure action, vacuity, and constant
+`$assertcontrol` policies execute through the same engine-neutral path.
+
+Property actuals/formals/locals, non-scalar predicates, compound clock events,
+and more than 256 executable directives in one design unit reject with stable
+diagnostics. The richer temporal forms above are source-owned semantic HIR for
+later executable expansion; they are not silently claimed by the bounded
+runtime slice. Functional coverage remains assigned to Batch 155.
+
 ### SystemVerilog class foundation in v2
 
 The current v2 slice owns and resolves compilation-unit, package, module,

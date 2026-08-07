@@ -820,6 +820,29 @@ designs; `.fsimobj` and mapped-library flows reconstruct the same graph from
 portable owning units. Covergroups and UVM library/runtime behavior remain in
 following closure batches.
 
+### Concurrent assertion ownership and observation
+
+SystemVerilog design units own append-only sequence, property, checker, and
+concurrent-directive records independently of parser storage. Raw tokens retain
+macro/source provenance while parallel typed records own formals, locals,
+clocks, disables, references, temporal operators, endpoint observations,
+actions, and region policy. Public semantic HIR assigns every concurrent
+directive a stable explicit or synthesized name, source/origin identity,
+Preponed/Observed/Reactive policy, observer policy, and deterministic coverage
+slot.
+
+The bounded executable scalar slice materializes an ordinary assertion process
+per directive and instance. Engine-neutral hidden output markers cross the
+interpreter/LLVM boundary without extending the SimIR ABI; the application
+consumes them before user output, applies simulation-wide assertion controls,
+updates per-instance attempt/pass/failure counts, and publishes stable
+pass/failure/disabled events to a retained trace vector and exact callback.
+Disabled samples do not increment coverage, while pass and failure actions can
+be suppressed independently. The marker representation contains no host
+address and survives object/design serialization, relocation, multiple roots,
+and native-cache reuse. Unsupported executable forms reject before process
+publication instead of disappearing silently.
+
 ### SystemVerilog scalar and Unicode value model
 
 SystemVerilog `shortreal`, `real`, `realtime`, `time`, and `chandle` are

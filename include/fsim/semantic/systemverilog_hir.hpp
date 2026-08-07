@@ -629,6 +629,47 @@ struct CompilationContext {
     bool cell{};
 };
 
+enum class ConcurrentAssertionKind : std::uint8_t {
+    assertion,
+    assumption,
+    cover,
+    restriction,
+};
+
+enum class AssertionRegion : std::uint8_t {
+    preponed,
+    observed,
+    reactive,
+};
+
+struct AssertionObserverPolicy {
+    bool callback_on_failure{true};
+    bool debugger_visible{true};
+    bool trace_visible{true};
+    bool coverage_enabled{true};
+};
+
+struct ConcurrentAssertion {
+    ConcurrentAssertionKind kind{ConcurrentAssertionKind::assertion};
+    std::string name;
+    bool explicit_label{};
+    std::vector<std::string> property_tokens;
+    bool has_pass_action{};
+    std::vector<std::string> pass_action_tokens;
+    bool has_failure_action{};
+    std::vector<std::string> failure_action_tokens;
+    AssertionRegion sampling_region{AssertionRegion::preponed};
+    AssertionRegion evaluation_region{AssertionRegion::observed};
+    AssertionRegion action_region{AssertionRegion::reactive};
+    AssertionObserverPolicy observers;
+    std::uint32_t coverage_slot{};
+    SourceSpanId source;
+    std::optional<SourceSpanId> label_source;
+    std::optional<SourceSpanId> pass_action_source;
+    std::optional<SourceSpanId> failure_action_source;
+    OriginId origin;
+};
+
 struct Unit {
     UnitId id;
     ScopeId scope;
@@ -645,6 +686,7 @@ struct Unit {
     std::vector<InstanceId> instances;
     std::vector<ProcessId> processes;
     std::vector<StatementId> concurrent_statements;
+    std::vector<ConcurrentAssertion> concurrent_assertions;
     std::vector<GenerateRegion> generates;
 };
 

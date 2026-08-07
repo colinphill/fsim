@@ -413,6 +413,36 @@ class VerilogParser final : private detail::ParserBase {
 
   SystemVerilogClockingSkew parse_clocking_skew();
 
+  SystemVerilogAssertionDeclaration parse_assertion_declaration(
+      const Token& start,
+      SystemVerilogAssertionDeclarationKind kind);
+
+  SystemVerilogConcurrentAssertion parse_concurrent_assertion(
+      const Token& start,
+      SystemVerilogConcurrentAssertionKind kind,
+      std::optional<Token> label = std::nullopt);
+
+  void structure_assertion_formals(
+      SystemVerilogAssertionDeclaration& declaration);
+
+  std::size_t structure_assertion_locals(
+      SystemVerilogAssertionDeclaration& declaration);
+
+  void structure_assertion_clock_and_disable(
+      SystemVerilogAssertionDeclaration& declaration,
+      std::size_t position);
+
+  void resolve_assertion_references(DesignUnit& unit);
+
+  void structure_sequence_expression(
+      SystemVerilogAssertionDeclaration& declaration);
+
+  void structure_property_expression(
+      SystemVerilogAssertionDeclaration& declaration);
+
+  void structure_assertion_endpoints(
+      SystemVerilogAssertionDeclaration& declaration);
+
   void parse_import_clause(
       std::vector<SystemVerilogImport>& imports,
       const Token& start);

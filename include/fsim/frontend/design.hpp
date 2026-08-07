@@ -1148,6 +1148,20 @@ struct Sensitivity {
 
 struct CaseAlternative;
 
+enum class SystemVerilogAssertionControlKind {
+  None,
+  Control,
+  On,
+  Off,
+  Kill,
+  PassOn,
+  PassOff,
+  FailOn,
+  FailOff,
+  NonvacuousOn,
+  VacuousOff,
+};
+
 struct Statement {
   StatementKind kind{StatementKind::Null};
   SourceSpan span;
@@ -1163,6 +1177,10 @@ struct Statement {
   // because task formals have direction and copy-out semantics.
   std::string task_name;
   std::vector<Expression> task_arguments;
+  // Procedural assertion-control system tasks retain their exact policy while
+  // sharing the ordinary task-call argument representation.
+  SystemVerilogAssertionControlKind assertion_control{
+      SystemVerilogAssertionControlKind::None};
   // Empty entries are positional; nonempty entries retain named task actuals.
   std::vector<std::string> task_argument_names;
   std::vector<FunctionArgument> class_method_arguments;
@@ -1754,6 +1772,296 @@ struct SystemVerilogClockingBlock {
   SourceSpan span;
 };
 
+enum class SystemVerilogAssertionDeclarationKind {
+  Sequence,
+  Property,
+  Checker,
+};
+
+enum class SystemVerilogAssertionFormalKind {
+  Value,
+  Sequence,
+  Property,
+  Untyped,
+};
+
+struct SystemVerilogAssertionFormal {
+  SystemVerilogAssertionFormalKind kind{
+      SystemVerilogAssertionFormalKind::Untyped};
+  PortDirection direction{PortDirection::Unknown};
+  bool local{};
+  std::vector<Token> type_tokens;
+  std::string name;
+  SourceSpan name_span;
+  std::vector<Token> default_tokens;
+  SourceSpan span;
+};
+
+struct SystemVerilogAssertionLocalVariable {
+  std::vector<Token> type_tokens;
+  std::string name;
+  SourceSpan name_span;
+  std::vector<Token> declarator_tokens;
+  std::vector<Token> initializer_tokens;
+  SourceSpan span;
+};
+
+struct SystemVerilogAssertionClock {
+  std::vector<Token> event_tokens;
+  SourceSpan span;
+};
+
+struct SystemVerilogAssertionDisable {
+  std::vector<Token> condition_tokens;
+  SourceSpan span;
+};
+
+enum class SystemVerilogAssertionReferenceKind {
+  Formal,
+  LocalVariable,
+  DesignUnitObject,
+  AssertionDeclaration,
+  Hierarchical,
+  Package,
+};
+
+struct SystemVerilogAssertionReference {
+  SystemVerilogAssertionReferenceKind kind{
+      SystemVerilogAssertionReferenceKind::DesignUnitObject};
+  std::string canonical_name;
+  std::vector<std::string> path;
+  std::vector<Token> tokens;
+  SourceSpan span;
+};
+
+enum class SystemVerilogSequenceRepetitionKind {
+  None,
+  Consecutive,
+  Nonconsecutive,
+  Goto,
+};
+
+struct SystemVerilogSequenceRange {
+  std::vector<Token> minimum_tokens;
+  std::vector<Token> maximum_tokens;
+  SourceSpan span;
+};
+
+struct SystemVerilogSequenceElement {
+  std::vector<Token> expression_tokens;
+  SystemVerilogSequenceRepetitionKind repetition{
+      SystemVerilogSequenceRepetitionKind::None};
+  std::optional<SystemVerilogSequenceRange> repetition_range;
+  SourceSpan span;
+};
+
+struct SystemVerilogSequenceDelay {
+  SystemVerilogSequenceRange range;
+  bool fusion{};
+  SourceSpan span;
+};
+
+struct SystemVerilogSequenceIntersectionOperand {
+  std::vector<Token> tokens;
+  SourceSpan span;
+};
+
+enum class SystemVerilogSequenceBinaryKind {
+  Throughout,
+  Within,
+};
+
+struct SystemVerilogSequenceBinaryOperation {
+  SystemVerilogSequenceBinaryKind kind{
+      SystemVerilogSequenceBinaryKind::Throughout};
+  std::vector<Token> left_tokens;
+  std::vector<Token> right_tokens;
+  SourceSpan span;
+};
+
+struct SystemVerilogSequenceFirstMatch {
+  std::vector<Token> sequence_tokens;
+  std::vector<Token> match_item_tokens;
+  SourceSpan span;
+};
+
+enum class SystemVerilogSequenceEndpointKind {
+  Matched,
+  Triggered,
+};
+
+struct SystemVerilogSequenceEndpoint {
+  SystemVerilogSequenceEndpointKind kind{
+      SystemVerilogSequenceEndpointKind::Matched};
+  std::string receiver_name;
+  std::vector<Token> receiver_tokens;
+  bool method_parentheses{};
+  SourceSpan span;
+};
+
+struct SystemVerilogSequenceExpression {
+  std::vector<SystemVerilogSequenceElement> elements;
+  std::vector<SystemVerilogSequenceDelay> delays;
+  std::vector<SystemVerilogSequenceIntersectionOperand>
+      intersection_operands;
+  std::vector<SystemVerilogSequenceBinaryOperation> binary_operations;
+  std::vector<SystemVerilogSequenceFirstMatch> first_matches;
+  SourceSpan span;
+};
+
+enum class SystemVerilogPropertyImplicationKind {
+  Overlapped,
+  Nonoverlapped,
+};
+
+struct SystemVerilogPropertyImplication {
+  SystemVerilogPropertyImplicationKind kind{
+      SystemVerilogPropertyImplicationKind::Overlapped};
+  std::vector<Token> antecedent_tokens;
+  std::vector<Token> consequent_tokens;
+  SourceSpan span;
+};
+
+enum class SystemVerilogPropertyUntilKind {
+  Until,
+  StrongUntil,
+  UntilWith,
+  StrongUntilWith,
+};
+
+struct SystemVerilogPropertyUntilOperation {
+  SystemVerilogPropertyUntilKind kind{
+      SystemVerilogPropertyUntilKind::Until};
+  std::vector<Token> left_tokens;
+  std::vector<Token> right_tokens;
+  SourceSpan span;
+};
+
+enum class SystemVerilogPropertyNexttimeKind {
+  Nexttime,
+  StrongNexttime,
+};
+
+struct SystemVerilogPropertyNexttime {
+  SystemVerilogPropertyNexttimeKind kind{
+      SystemVerilogPropertyNexttimeKind::Nexttime};
+  std::vector<Token> count_tokens;
+  std::vector<Token> operand_tokens;
+  SourceSpan span;
+};
+
+enum class SystemVerilogPropertyRecurrenceKind {
+  Always,
+  StrongAlways,
+  Eventually,
+  StrongEventually,
+};
+
+struct SystemVerilogPropertyRecurrence {
+  SystemVerilogPropertyRecurrenceKind kind{
+      SystemVerilogPropertyRecurrenceKind::Always};
+  std::optional<SystemVerilogSequenceRange> range;
+  std::vector<Token> operand_tokens;
+  SourceSpan span;
+};
+
+enum class SystemVerilogPropertySequenceStrengthKind {
+  Strong,
+  Weak,
+};
+
+struct SystemVerilogPropertySequenceStrength {
+  SystemVerilogPropertySequenceStrengthKind kind{
+      SystemVerilogPropertySequenceStrengthKind::Strong};
+  std::vector<Token> sequence_tokens;
+  SourceSpan span;
+};
+
+enum class SystemVerilogPropertyAbortOutcome {
+  VacuousSuccess,
+  Failure,
+};
+
+struct SystemVerilogPropertyAbort {
+  SystemVerilogPropertyAbortOutcome outcome{
+      SystemVerilogPropertyAbortOutcome::VacuousSuccess};
+  bool synchronous{};
+  std::vector<Token> condition_tokens;
+  std::vector<Token> property_tokens;
+  SourceSpan span;
+};
+
+struct SystemVerilogPropertyExpression {
+  std::vector<SystemVerilogPropertyImplication> implications;
+  std::vector<SystemVerilogSequenceDelay> delays;
+  std::vector<SystemVerilogPropertyUntilOperation> until_operations;
+  std::vector<SystemVerilogPropertyNexttime> nexttimes;
+  std::vector<SystemVerilogPropertyRecurrence> recurrences;
+  std::vector<SystemVerilogPropertySequenceStrength> sequence_strengths;
+  std::vector<SystemVerilogPropertyAbort> aborts;
+  SourceSpan span;
+};
+
+// Sequence, property, and checker declarations are source-owned independently
+// of parser storage. Change 1 retains the exact header/body token stream so
+// later Batch 154 changes can add formal, clock, disable, and expression HIR
+// without reparsing source text or losing macro/source provenance.
+struct SystemVerilogAssertionDeclaration {
+  SystemVerilogAssertionDeclarationKind kind{
+      SystemVerilogAssertionDeclarationKind::Sequence};
+  std::string name;
+  SourceSpan name_span;
+  std::vector<Token> header_tokens;
+  SourceSpan header_span;
+  std::vector<SystemVerilogAssertionFormal> formals;
+  std::vector<Token> body_tokens;
+  SourceSpan body_span;
+  std::vector<SystemVerilogAssertionLocalVariable> local_variables;
+  std::optional<SystemVerilogAssertionClock> clock;
+  std::optional<SystemVerilogAssertionDisable> disable;
+  std::vector<Token> expression_tokens;
+  SourceSpan expression_span;
+  std::vector<SystemVerilogAssertionReference> references;
+  std::optional<SystemVerilogSequenceExpression> sequence_expression;
+  std::optional<SystemVerilogPropertyExpression> property_expression;
+  std::vector<SystemVerilogSequenceEndpoint> sequence_endpoints;
+  SourceSpan span;
+};
+
+enum class SystemVerilogConcurrentAssertionKind {
+  Assert,
+  Assume,
+  Cover,
+  Restrict,
+};
+
+enum class SystemVerilogAssertionRegion {
+  Preponed,
+  Observed,
+  Reactive,
+};
+
+struct SystemVerilogConcurrentAssertion {
+  SystemVerilogConcurrentAssertionKind kind{
+      SystemVerilogConcurrentAssertionKind::Assert};
+  std::string label;
+  SourceSpan label_span;
+  std::vector<Token> property_tokens;
+  bool has_pass_action{};
+  std::vector<Token> pass_action_tokens;
+  SourceSpan pass_action_span;
+  bool has_failure_action{};
+  std::vector<Token> failure_action_tokens;
+  SourceSpan failure_action_span;
+  SystemVerilogAssertionRegion sampling_region{
+      SystemVerilogAssertionRegion::Preponed};
+  SystemVerilogAssertionRegion evaluation_region{
+      SystemVerilogAssertionRegion::Observed};
+  SystemVerilogAssertionRegion action_region{
+      SystemVerilogAssertionRegion::Reactive};
+  SourceSpan span;
+};
+
 struct SystemVerilogExport {
   std::string package;
   // Empty means every explicitly imported item from this package.
@@ -1991,6 +2299,10 @@ struct DesignUnit {
   std::optional<std::string>
       systemverilog_default_clocking_block;
   SourceSpan systemverilog_default_clocking_span;
+  std::vector<SystemVerilogAssertionDeclaration>
+      systemverilog_assertion_declarations;
+  std::vector<SystemVerilogConcurrentAssertion>
+      systemverilog_concurrent_assertions;
   // Package, module, and interface class declarations in lexical order.
   // Compilation-unit declarations instead live on ParsedDesign.
   std::vector<SystemVerilogClassDeclaration> systemverilog_classes;
