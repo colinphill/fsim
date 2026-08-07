@@ -5,7 +5,39 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
-## Batch 157 in-progress checkpoint - 2026-08-07
+## Batch 158 pre-implementation restart plan - 2026-08-07
+
+1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
+   expanded Batch 158 allocation in `implementation_plan_v2.md`, and verify
+   branch `codex/v2` is clean and synchronized at the documentation-only
+   Batch 158 planning checkpoint. Its underlying pushed Batch 157 closeout is
+   `8c33afe9c39846edf47ab01f12e678893a685c24`.
+2. This checkpoint implements the required pre-batch flow. Batch 158 has been
+   expanded into twenty exact changes without changing the locked VHPI scope or
+   priority. The planning checkpoint is committed and pushed before any
+   numbered implementation change, and the context that created it ends here.
+   It is outside Changes 1-20 and does not consume the batch's single
+   implementation commit.
+3. No Batch 158 implementation file has been changed and Change 1 remains
+   pending. Do not reuse conversational implementation detail from Batch 157.
+   In the fresh context, verify the live Git state and reread the complete
+   Change 1 contract before code discovery or editing.
+4. Change 1 begins with the public VHPI C ABI foundation only: explicit host
+   and plug-in version/size fields, pointer width, reserved flags, simulation
+   identity, stable nonpointer handles, bounded diagnostic views, portable
+   calling/export macros, and one exact bind symbol. Freeze its C layouts and
+   negative validation before Change 2 introduces dynamic loading.
+5. Reuse hardened platform and scheduler infrastructure where semantics agree,
+   but keep VHPI identities, VHDL regions, selected/indexed names, constraints,
+   nine-state values, foreign models, and restart rules distinct from VPI.
+   Prefer the codebase knowledge graph for discovery. Use at least eight
+   workers for builds.
+6. Batch 158 is neither a sanitizer nor hosted-CI monitoring boundary. Keep
+   Changes 1-19 in one recoverable accumulated worktree after the fresh context
+   begins; do not commit or push implementation, run a sanitizer, or inspect
+   hosted CI before Change 20.
+
+## Batch 157 completed checkpoint - 2026-08-07
 
 1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
    Batch 157 allocation in `implementation_plan_v2.md`, and verify branch

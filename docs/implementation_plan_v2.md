@@ -8,6 +8,12 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
 ## Working cadence
 
 - Every v2 implementation batch contains exactly 20 numbered changes.
+- Before any numbered change in a batch begins, expand that batch into twenty
+  exact entries, write a clean-base restart plan in `v2-resume.md`, commit and
+  push that documentation-only checkpoint, and end the current working
+  context. The fresh context must reread both documents and verify the saved
+  branch tip before implementation. This precursor does not consume a numbered
+  change or the batch's single implementation commit.
 - Changes 1 through 19 accumulate in one recoverable worktree with focused
   warnings-as-errors builds and targeted tests.
 - Change 20 owns the full exact-LLVM Debug and Release regressions,
@@ -1891,9 +1897,11 @@ is preserved by annotated tag `v1.0.0` at `6450599`; v2 development starts on
 The remaining v2 release sequence is Batches 150-175. Every batch has exactly
 20 changes. The compact allocations below partition all 20 changes; before a
 batch starts, its ranges are expanded into 20 individually numbered status
-entries without changing scope or priority. For Batches 150-175, Changes 1-19
-remain one recoverable accumulated worktree and Change 20 owns full gates,
-documentation, one commit, and one push. Local builds use at least eight
+entries without changing scope or priority, then the expanded restart plan is
+committed and pushed as a documentation-only precursor and implementation
+starts in a fresh context. For Batches 150-175, Changes 1-19 remain one
+recoverable accumulated worktree and Change 20 owns full gates, documentation,
+one implementation commit, and one push. Local builds use at least eight
 workers. GitHub
 Actions uses four. Only Batches 150, 160, and 170 run the LLVM-disabled
 sanitizer locally immediately before commit and then monitor and repair every
@@ -4204,22 +4212,71 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 158 - IEEE VHPI closure
 
-- **Changes 1-4:** add a versioned VHPI host ABI, library/plug-in lifecycle,
-  error model, handles, iterators, selected/indexed names, hierarchy, regions,
-  and source metadata.
-- **Changes 5-8:** implement type/constraint/subtype/object queries and scalar,
-  enum, physical, access, array, record, file, protected, resolved, and
-  nine-state value transfer.
-- **Changes 9-12:** implement drivers/transactions, force/deposit/release,
-  delays, time/phase callbacks, signal/process/lifecycle callbacks, and safe
-  callback removal/re-entry.
-- **Changes 13-16:** implement foreign subprogram/model registration, generic/
-  port association, user data, assertions/output, multiple roots, artifacts,
-  relocation, and cache/ABI provenance.
-- **Changes 17-19:** add C fixtures, invalid/stale/profile/resource negatives,
-  interpreter/LLVM/mixed differentials, docs, matrices, inventories, and handoff.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+- **Change 1:** Define the append-only VHPI host and plug-in C ABI foundation:
+  explicit versions and structure sizes, pointer width, reserved flags,
+  simulation ownership, stable nonpointer handles, bounded diagnostics,
+  calling/export conventions, and one exact bind symbol.
+- **Change 2:** Load and own one VHPI image through the hardened platform
+  dynamic-library boundary with transactional bind/startup publication,
+  checked descriptors, exception containment, and exactly-once shutdown before
+  unload.
+- **Change 3:** Add simulation-owned error state plus generation-qualified
+  object and iterator handle registries with deterministic invalid, stale,
+  released, exhausted, and cross-simulation rejection.
+- **Change 4:** Implement selected/indexed-name identity, parent/child and
+  relationship iteration, hierarchy regions, escaped/full names, source
+  metadata, stable ordering, and checked name lookup.
+- **Change 5:** Implement scalar type, subtype, base-type, constraint, range,
+  direction, resolution, and object-declaration queries with recursive resource
+  limits and canonical descriptor identity.
+- **Change 6:** Add checked scalar, enumeration, physical, access, and null
+  value transfer with exact position/unit/designated-subtype metadata and no
+  host-layout aliases.
+- **Change 7:** Add constrained/unconstrained array and record type/value
+  transfer, multidimensional declared-index mapping, recursive fields/elements,
+  partial-buffer contracts, and transactional publication.
+- **Change 8:** Add file, protected, resolved, and exact nine-state logic values
+  with simulation-owned identities, access control, resolver provenance, and
+  lossless scalar/vector encodings.
+- **Change 9:** Implement signal drivers, sources, projected transactions,
+  waveform elements, rejection/inertial/transport policy, and deterministic
+  relationship queries over the common scheduler.
+- **Change 10:** Implement immediate and delayed deposit, force, release, and
+  transaction cancellation with checked type/ownership, force layering,
+  retained operation handles, and no partial writes.
+- **Change 11:** Add exact time/unit/precision/delta queries and phase callbacks
+  spanning update, postponed/read-only, next-time, synchronization, save,
+  restart, reset, and terminal scheduling regions.
+- **Change 12:** Add signal, process, event, transaction, assertion, and
+  lifecycle callbacks with copied event data, safe self/peer removal, nested
+  registration/re-entry, exception containment, and deterministic teardown.
+- **Change 13:** Implement foreign subprogram and foreign-model registration,
+  profile validation, call contexts, argument/result handles, lifecycle,
+  re-entry, unregister, and retained user data without exposing C++ ownership.
+- **Change 14:** Implement generic and port association queries, actual/formal/
+  mode/class metadata, disconnected/open associations, object and call user
+  data, stable owner identity, and cross-root rejection.
+- **Change 15:** Add assertion/report/output services plus multiple-root and
+  multiple-context isolation, severity/source metadata, bounded formatting,
+  sink containment, and deterministic interleaving.
+- **Change 16:** Integrate same-process restart and portable artifacts with
+  schema/ABI/content/cache/plug-in provenance, canonical handle remapping,
+  explicit native-state invalidations, relocation, and mapped-library identity.
+- **Change 17:** Add independently compiled C and C++ VHPI reference images and
+  platform fixtures that exercise the complete public ABI, service families,
+  startup/shutdown, repeated load, and relocated load paths.
+- **Change 18:** Add malformed ABI/profile, invalid/stale/released/cross-owner
+  handle, iterator, buffer, callback-removal, recursive/reentrant, exception,
+  resource, rollback, and post-unload negative matrices.
+- **Change 19:** Add interpreter/LLVM O0/O2, mixed-language, multi-root,
+  cold/warm cache, standalone object/design, mapped-library, relocation, and
+  save/restart differentials; update public VHPI documentation, examples,
+  diagnostics, matrices, inventories, audits, and restart handoff.
+- **Change 20:** Run full non-sanitized exact-LLVM Debug and Release builds,
+  regressions, source, catalog, inventory, installed-public-contract, and
+  release gates; then commit and push the accumulated implementation once
+  without sanitizer or hosted CI monitoring because Batch 158 is not a
+  monitoring boundary.
 
 ### Batch 159 - UVM object, factory, configuration, and reporting foundation
 
