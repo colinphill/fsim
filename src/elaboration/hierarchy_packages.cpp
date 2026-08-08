@@ -1902,6 +1902,20 @@ using namespace elaboration_detail;
                   type_imports.push_back(alias);
                 }
             }
+            for (const auto& declaration :
+                 specialized_package->unit.systemverilog_classes) {
+                const bool public_item = directly_declared(
+                    declaration, package->systemverilog_classes)
+                    || explicitly_exported(declaration.name);
+                if (!public_item) {
+                    continue;
+                }
+                if (!wildcard
+                    && declaration.name != import_item.name) {
+                    continue;
+                }
+                found_selected = true;
+            }
             for (const auto& function :
                  specialized_package->unit.functions) {
                 const bool public_item = directly_declared(

@@ -359,10 +359,15 @@ using namespace elaboration_detail;
         Statement update;
         update.kind = StatementKind::Assignment;
         update.assignment_kind = AssignmentKind::Blocking;
-        update.target = statement.target;
+        update.target = statement.loop_update_target.valid()
+            ? statement.loop_update_target
+            : statement.target;
         update.value = statement.value;
         update.span = statement.value.span;
         lower_assignment(update);
+        for (const auto& additional : statement.loop_updates) {
+            lower_assignment(additional);
+        }
         process_.operations.emplace_back(Jump{loop_start});
         const auto end = static_cast<InstructionIndex>(
             process_.operations.size());

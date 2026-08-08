@@ -402,16 +402,9 @@ bool export_library(
     unit.compilation_unit_identity = declaration.compilation_unit_identity;
     unit.declarations.push_back(declaration);
   }
-  for (const auto& method :
-       checked->parsed.systemverilog_class_method_definitions) {
-    const auto library_name = method.library.empty()
-        ? std::string_view{"work"} : std::string_view{method.library};
-    if (library_name != logical_library) continue;
-    auto& unit = class_units[method.compilation_unit_identity];
-    unit.library = std::string{library_name};
-    unit.compilation_unit_identity = method.compilation_unit_identity;
-    unit.method_definitions.push_back(method);
-  }
+  // Class resolution has already transactionally linked every valid
+  // out-of-block definition into its owning declaration.  Persisting the raw
+  // definitions as well would ask library loading to link them a second time.
   const bool has_systemc = std::ranges::any_of(
       config.source_sets,
       [&](const auto& source_set) {
@@ -522,6 +515,10 @@ bool export_library(
 
   for (std::size_t index = 0; index < units.size(); ++index) {
     auto unit = *units[index];
+    // Class resolution has copied every valid out-of-block method body into
+    // its package-owned class declaration.  Do not archive the raw definition
+    // list too, because library loading performs semantic resolution again.
+    unit.systemverilog_class_method_definitions.clear();
     for (auto& dependency : unit.source_dependencies) {
       const auto normalized = std::filesystem::path(dependency).lexically_normal();
       const auto mapping = std::ranges::find_if(

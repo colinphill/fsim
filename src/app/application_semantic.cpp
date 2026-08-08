@@ -4,6 +4,7 @@
 
 #include <limits>
 #include <system_error>
+#include <utility>
 
 namespace fsim::app::application_detail {
 namespace {
@@ -401,13 +402,18 @@ semantic::SourceSpanId intern_semantic_span(
   if (!source_span.expansion_stack.empty()) {
     expansion = model.intern_expansion(source_span.expansion_stack);
   }
+  auto begin = semantic_position(source_span.begin);
+  auto end = semantic_position(source_span.end);
+  if (end.offset < begin.offset) {
+    std::swap(begin, end);
+  }
   return model.intern_source_span(
       *file,
       source_span.source_name.empty()
           ? physical
           : source_span.source_name,
-      semantic_position(source_span.begin),
-      semantic_position(source_span.end),
+      begin,
+      end,
       expansion);
 }
 

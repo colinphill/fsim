@@ -19,10 +19,10 @@
 namespace fsim::test {
 
 void ApplicationTestFixture::test_artifact_phase_semantics() {
-  static_assert(app::kRuntimeStateSchema == 17);
+  static_assert(app::kRuntimeStateSchema == 18);
   static_assert(app::kSemanticStateSchema == 2);
   static_assert(app::kDesignIrStateSchema == 2);
-  static_assert(app::kClassStateSchema == 7);
+  static_assert(app::kClassStateSchema == 9);
   static_assert(app::kSystemVerilogConstraintHirStateSchema == 3);
   static_assert(app::kSystemVerilogCoverageStateSchema == 1);
   const auto sv_source = directory / "artifact_phase.sv";
@@ -34,6 +34,17 @@ void ApplicationTestFixture::test_artifact_phase_semantics() {
   {
     std::ofstream output(sv_source);
     output << R"(
+package artifact_class_pkg;
+  class process_box;
+    process current;
+    extern function bit same_process(process observed);
+  endclass
+
+  function bit process_box::same_process(process observed);
+    return observed == current;
+  endfunction
+endpackage
+
 module phase_child #(
   parameter logic [7:0] MASK = 8'hff
 ) (

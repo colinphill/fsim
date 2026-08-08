@@ -38,6 +38,7 @@ int main() {
     std::ofstream output{source, std::ios::binary};
     output << R"(`timescale 1ns/1ps
 `default_nettype tri0
+`define FSIM_REORDER(A, B) B + A
 package values;
   typedef logic signed [3:0] key_t;
   typedef enum logic [1:0] {idle = 0, busy = 1} state_t;
@@ -108,6 +109,9 @@ module semantic_hir_top;
   endgenerate
   initial begin : executable
     int local_value = 1;
+    local_value = `FSIM_REORDER(
+        local_value,
+        1);
     handle = $fopen("trace.txt", "w");
     values.push_back(local_value);
     memory = '{default: 8'h11, 2: 8'h22};

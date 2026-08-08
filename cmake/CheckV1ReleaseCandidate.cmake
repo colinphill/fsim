@@ -125,12 +125,12 @@ list(JOIN FSIM_EVIDENCE_PATHS "\n" FSIM_EVIDENCE_CANONICAL)
 string(SHA256 FSIM_EVIDENCE_DIGEST "${FSIM_EVIDENCE_CANONICAL}\n")
 
 set(FSIM_EXPECTED_VALUES
-  FSIM_ROW_COUNT 1230
-  FSIM_EVIDENCE_SLOT_COUNT 4920
-  FSIM_EVIDENCE_PATH_COUNT 493
-  FSIM_TEST_EVIDENCE_COUNT 218
-  FSIM_PRODUCTION_EVIDENCE_COUNT 259
-  FSIM_RELEASE_EVIDENCE_COUNT 16)
+  FSIM_ROW_COUNT 1240
+  FSIM_EVIDENCE_SLOT_COUNT 4960
+  FSIM_EVIDENCE_PATH_COUNT 518
+  FSIM_TEST_EVIDENCE_COUNT 226
+  FSIM_PRODUCTION_EVIDENCE_COUNT 272
+  FSIM_RELEASE_EVIDENCE_COUNT 20)
 while(FSIM_EXPECTED_VALUES)
   list(POP_FRONT FSIM_EXPECTED_VALUES FSIM_VALUE_NAME FSIM_VALUE_EXPECTED)
   if(NOT ${FSIM_VALUE_NAME} EQUAL FSIM_VALUE_EXPECTED)
@@ -141,9 +141,9 @@ while(FSIM_EXPECTED_VALUES)
 endwhile()
 
 set(FSIM_EXPECTED_MATRIX_DIGEST
-  "0878effd1889b17cf7517a952c054a8fe470b0699fca760089b8520f7b4ae4c9")
+  "49c0e3c30b0e0a1c1ebbd0c222acbc6551812e6c932512f0691b7ba49c2eda3b")
 set(FSIM_EXPECTED_EVIDENCE_DIGEST
-  "b153df1b3eec1c2b6cd606db60f60554d668c2b02f111bb4725daf25b64daabb")
+  "9151f73bfa2d952155d9fcc6325f865cc2ace16acc94084c58306b8a92d69099")
 if(NOT FSIM_MATRIX_DIGEST STREQUAL FSIM_EXPECTED_MATRIX_DIGEST
     OR NOT FSIM_EVIDENCE_DIGEST STREQUAL FSIM_EXPECTED_EVIDENCE_DIGEST)
   message(FATAL_ERROR
@@ -152,15 +152,15 @@ if(NOT FSIM_MATRIX_DIGEST STREQUAL FSIM_EXPECTED_MATRIX_DIGEST
 endif()
 
 foreach(FSIM_TOKEN IN ITEMS
-    "matrix-rows: 1230"
+    "matrix-rows: 1240"
     "matrix-sha256: ${FSIM_MATRIX_DIGEST}"
-    "evidence-slots: 4920"
-    "evidence-paths: 493"
+    "evidence-slots: 4960"
+    "evidence-paths: 518"
     "evidence-sha256: ${FSIM_EVIDENCE_DIGEST}"
-    "test-evidence-paths: 218"
-    "production-evidence-paths: 259"
-    "release-evidence-paths: 16"
-    "runtime-evidence-paths: 133"
+    "test-evidence-paths: 226"
+    "production-evidence-paths: 272"
+    "release-evidence-paths: 20"
+    "runtime-evidence-paths: 134"
     "corpus-ctests: 36"
     "required-status: execute"
     "B130-T9-ROWS"
@@ -182,6 +182,6 @@ if(FSIM_REGISTRATION_INDEX EQUAL -1)
 endif()
 
 message(STATUS
-  "final release candidate: 1230 execute rows, 4920 linked evidence cells, "
-  "493 exact paths (218 test, 259 production, 16 release), 133 runtime files, "
+  "final release candidate: 1240 execute rows, 4960 linked evidence cells, "
+  "518 exact paths (226 test, 272 production, 20 release), 134 runtime files, "
   "and 36 corpus CTests")

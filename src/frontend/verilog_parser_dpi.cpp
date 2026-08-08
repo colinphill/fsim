@@ -441,8 +441,11 @@ bool VerilogParser::compilation_unit_class_method_definition_start() const {
             || at(TokenKind::Semicolon, lookahead))) {
       break;
     }
-    if (top_level && at(TokenKind::Identifier, lookahead)
-        && !keyword_reserved(keyword_set_, current(lookahead).text)) {
+    if (top_level
+        && ((at(TokenKind::Identifier, lookahead)
+                && !keyword_reserved(
+                    keyword_set_, current(lookahead).text))
+            || current(lookahead).text == "new")) {
       candidate = lookahead;
     }
     if (at(TokenKind::LeftParen, lookahead)) ++parentheses;

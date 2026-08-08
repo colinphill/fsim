@@ -116,6 +116,13 @@ class Lexer {
       }
       if (!is_vhdl() && peek() == '/' && peek(1) == '/') {
         while (!at_end() && peek() != '\n' && peek() != '\r') {
+          // UVM and other established SystemVerilog libraries place a macro
+          // continuation after an end-of-line comment. Preserve that marker
+          // as a token while still ending the comment at the physical line.
+          if (peek() == '\\'
+              && (peek(1) == '\n' || peek(1) == '\r')) {
+            return;
+          }
           advance();
         }
         continue;
@@ -306,6 +313,11 @@ class Lexer {
     }
     if (!is_vhdl() &&
         (std::isdigit(static_cast<unsigned char>(peek(1))) ||
+         peek(1) == 'b' || peek(1) == 'B' ||
+         peek(1) == 'o' || peek(1) == 'O' ||
+         peek(1) == 'd' || peek(1) == 'D' ||
+         peek(1) == 'h' || peek(1) == 'H' ||
+         peek(1) == 's' || peek(1) == 'S' ||
          peek(1) == 'x' || peek(1) == 'X' || peek(1) == 'z' ||
          peek(1) == 'Z')) {
       lex_number();

@@ -43,7 +43,8 @@ void qualify_statements(
     for (auto* expression : {
              &statement.target, &statement.value,
              &statement.condition, &statement.loop_initial,
-             &statement.loop_limit, &statement.file_handle}) {
+             &statement.loop_limit, &statement.loop_update_target,
+             &statement.file_handle}) {
       qualify_expression(*expression, port, signals, callables, locals);
     }
     if (callables.contains(statement.task_name)

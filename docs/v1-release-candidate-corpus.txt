@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Batch 130 Task 9 final release-candidate corpus.
 # Every required row is classified execute and owns nonempty P+/P-/E/R links.
-# matrix-rows: 1230
-# matrix-sha256: 0878effd1889b17cf7517a952c054a8fe470b0699fca760089b8520f7b4ae4c9
-# evidence-slots: 4920
-# evidence-paths: 493
-# evidence-sha256: b153df1b3eec1c2b6cd606db60f60554d668c2b02f111bb4725daf25b64daabb
-# test-evidence-paths: 218
-# production-evidence-paths: 259
-# release-evidence-paths: 16
-# runtime-evidence-paths: 133
+# matrix-rows: 1240
+# matrix-sha256: 49c0e3c30b0e0a1c1ebbd0c222acbc6551812e6c932512f0691b7ba49c2eda3b
+# evidence-slots: 4960
+# evidence-paths: 518
+# evidence-sha256: 9151f73bfa2d952155d9fcc6325f865cc2ace16acc94084c58306b8a92d69099
+# test-evidence-paths: 226
+# production-evidence-paths: 272
+# release-evidence-paths: 20
+# runtime-evidence-paths: 134
 # corpus-ctests: 36
 # required-status: execute
 #
@@ -83,3 +83,12 @@
 # 22.1.8 Debug 114/114 in 368.78 seconds and Release 114/114 in 312.67 seconds.
 # Sanitizer and hosted CI monitoring are intentionally excluded at this
 # non-monitoring boundary.
+#
+# Batch 159 advances the reviewed matrix to 1240 rows and 4960 evidence cells
+# across 518 exact paths (226 test, 272 production, 20 release), with 134
+# runtime owners. SV-791 through SV-800 close the governed unmodified UVM 1.2
+# and UVM 2020-3.1 source identities, bounded object/component/registry/
+# factory/resource/configuration/command-line/reporting foundation, portable
+# artifacts, two-root engine/cache/trace parity, explicit resource ceilings,
+# and exact negative behavior. Sanitizer and hosted CI remain assigned to
+# Batch 160 Change 20 under the ten-batch cadence.

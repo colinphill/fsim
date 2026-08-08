@@ -762,6 +762,12 @@ class SystemVerilogExecutableBuilder final {
         input.loop_initial, child_scope, statement_origin);
     output.loop_limit = expression(
         input.loop_limit, child_scope, statement_origin);
+    output.loop_update_target = expression(
+        input.loop_update_target, child_scope, statement_origin);
+    for (const auto& update : input.loop_updates) {
+      output.loop_updates.push_back(statement(
+          update, child_scope, statement_origin));
+    }
     output.loop_descending = input.loop_descending;
     output.loop_limit_exclusive = input.loop_limit_exclusive;
     output.loop_repeat = input.loop_repeat;

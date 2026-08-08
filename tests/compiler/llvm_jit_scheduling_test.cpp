@@ -1269,7 +1269,8 @@ void test_class_service_boundaries_at_level(
   process.register_count = 5;
   process.operations = {
       LoadConstant{0, PackedLogic4::from_aval_bval(32, 7, 0)},
-      ClassAllocate{1, "work::Item<WIDTH=8>", "work::Item", {0}, {"value"}},
+      ClassAllocate{
+          1, "work::Item<WIDTH=8>", "work::Item", {0}, {0}, {"value"}},
       ClassPropertyRead{2, 1, "work::Item::value", 8},
       ClassStaticPropertyWrite{2, "work::Item::shared"},
       ProcessSelf{1},

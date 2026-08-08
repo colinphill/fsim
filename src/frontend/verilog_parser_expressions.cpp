@@ -173,9 +173,10 @@ Expression VerilogParser::parse_lvalue() {
   Expression expression{ExpressionKind::Identifier, name.text, {},
                         name.span};
   for (;;) {
-    if (match(TokenKind::Dot)) {
+    if (at(TokenKind::Dot) || at(TokenKind::Scope)) {
+      const auto separator = advance();
       const auto selected = expect_identifier("selected name");
-      expression.text += '.';
+      expression.text += separator.kind == TokenKind::Scope ? "::" : ".";
       expression.text += selected.text;
       expression.span = cover(expression.span, selected.span);
     } else if (match(TokenKind::LeftBracket)) {
@@ -509,7 +510,14 @@ Expression VerilogParser::parse_primary() {
     return pattern;
   }
   if (at(TokenKind::Number)) {
-    const auto token = advance();
+    auto token = advance();
+    if (token.text.find('\'') == std::string::npos
+        && at(TokenKind::Number)
+        && current().text.starts_with("'")) {
+      const auto based = advance();
+      token.text += based.text;
+      token.span = cover(token.span, based.span);
+    }
     const bool decimal_form =
         token.text.find('.') != std::string::npos
         || token.text.find_first_of("eE") != std::string::npos;
@@ -554,9 +562,32 @@ Expression VerilogParser::parse_primary() {
         decoded_string_literal_text(token);
     return parse_postfix(std::move(expression));
   }
-  if (at(TokenKind::Identifier)) {
+  if (at(TokenKind::Identifier)
+      || (keyword("void") && at(TokenKind::Apostrophe, 1))) {
     const auto name = advance();
     std::string canonical = name.text;
+    if (match(TokenKind::Hash)) {
+      Instance actual_owner;
+      parse_parameter_overrides(actual_owner, previous());
+      canonical += "#(";
+      for (std::size_t index = 0;
+           index < actual_owner.parameter_overrides.size(); ++index) {
+        if (index != 0) canonical += ",";
+        const auto& actual = actual_owner.parameter_overrides[index];
+        if (actual.name) {
+          canonical += "." + *actual.name + "(";
+        }
+        if (actual.type_value) {
+          canonical += actual.type_value->named_type.empty()
+              ? actual.type_value->spelling
+              : actual.type_value->named_type;
+        } else {
+          canonical += actual.value.text;
+        }
+        if (actual.name) canonical += ")";
+      }
+      canonical += ")";
+    }
     while (match(TokenKind::Scope)) {
       canonical += "::";
       canonical +=
@@ -594,7 +625,11 @@ Expression VerilogParser::parse_primary() {
       std::vector<std::string> argument_names;
       if (!at(TokenKind::RightParen)) {
         do {
-          if (match(TokenKind::Dot)) {
+          if (at(TokenKind::Comma)
+              || at(TokenKind::RightParen)) {
+            argument_names.emplace_back();
+            arguments.emplace_back();
+          } else if (match(TokenKind::Dot)) {
             const auto formal =
                 expect_identifier("named function argument");
             expect(
@@ -754,7 +789,18 @@ Expression VerilogParser::parse_primary() {
           {},
           direction.span};
       if (!at(TokenKind::LeftBrace)) {
-        slice_size = parse_expression();
+        if (keyword("byte") || keyword("shortint")
+            || keyword("int") || keyword("longint")
+            || keyword("integer") || keyword("time")) {
+          const auto type = advance();
+          slice_size = Expression{
+              ExpressionKind::Identifier,
+              type.text,
+              {},
+              type.span};
+        } else {
+          slice_size = parse_expression();
+        }
       }
       expect(
           TokenKind::LeftBrace,
@@ -964,6 +1010,57 @@ VerilogParser::parse_systemverilog_decimal_literal(
 
 Expression VerilogParser::parse_postfix(Expression expression) {
   for (;;) {
+    if (expression.kind == ExpressionKind::Call
+        && (expression.text == "randomize"
+            || expression.text == ".randomize")
+        && current().text == "with") {
+      const auto with = advance();
+      if (!match(TokenKind::LeftBrace)) {
+        error(
+            current(),
+            "FSIM-SV-PARSE-334",
+            "expected '{' after randomize with");
+      } else {
+        const auto constraint_start = previous();
+        std::size_t depth = 1U;
+        std::string raw_constraint;
+        while (!at_end() && depth != 0U) {
+          const auto token = advance();
+          if (token.kind == TokenKind::LeftBrace) {
+            ++depth;
+          } else if (token.kind == TokenKind::RightBrace) {
+            --depth;
+            if (depth == 0U) {
+              expression.aggregate_choices.push_back(
+                  "@sv-inline-constraint");
+              Expression raw{
+                  ExpressionKind::StringLiteral,
+                  raw_constraint,
+                  {},
+                  cover(constraint_start.span, token.span)};
+              raw.decoded_string = raw_constraint;
+              expression.aggregate_choice_expressions.push_back(
+                  {std::move(raw)});
+              expression.span = cover(expression.span, token.span);
+              break;
+            }
+          }
+          if (depth != 0U) {
+            if (!raw_constraint.empty()) {
+              raw_constraint += ' ';
+            }
+            raw_constraint += token.text;
+          }
+        }
+        if (depth != 0U) {
+          error(
+              with,
+              "FSIM-SV-PARSE-335",
+              "unterminated randomize with constraint block");
+        }
+      }
+      continue;
+    }
     if (match(TokenKind::Dot)) {
       auto member = current();
       if (keyword("new")) {
@@ -977,23 +1074,62 @@ Expression VerilogParser::parse_postfix(Expression expression) {
       } else {
         member = expect_identifier("member name");
       }
-      if (match(TokenKind::LeftParen)) {
+      const bool parenthesized_call = match(TokenKind::LeftParen);
+      const bool implicit_container_with =
+          !parenthesized_call && current().text == "with"
+          && (member.text == "sum"
+              || member.text == "product"
+              || member.text == "and"
+              || member.text == "or"
+              || member.text == "xor"
+              || member.text == "sort"
+              || member.text == "rsort"
+              || member.text == "min"
+              || member.text == "max"
+              || member.text == "unique"
+              || member.text == "unique_index"
+              || member.text == "find"
+              || member.text == "find_index"
+              || member.text == "find_first"
+              || member.text == "find_first_index"
+              || member.text == "find_last"
+              || member.text == "find_last_index");
+      if (parenthesized_call || implicit_container_with) {
         const auto receiver_span = expression.span;
-        const bool predicate_locator_method =
+        const auto receiver_type = [&]() -> const Type* {
+          if (expression.kind != ExpressionKind::Identifier) return nullptr;
+          const auto found = current_procedural_types_.find(expression.text);
+          return found == current_procedural_types_.end()
+              ? nullptr : &found->second;
+        }();
+        const bool known_container_receiver =
+            receiver_type != nullptr
+            && receiver_type->systemverilog_container.has_value();
+        const bool known_class_receiver =
+            receiver_type != nullptr
+            && !known_container_receiver
+            && (!receiver_type->named_type.empty()
+                || !receiver_type
+                        ->systemverilog_class_declaration.empty());
+        const bool predicate_locator_candidate =
             member.text == "find"
-            || member.text == "find_index"
-            || member.text == "find_first"
-            || member.text == "find_first_index"
-            || member.text == "find_last"
-            || member.text == "find_last_index";
+                || member.text == "find_index"
+                || member.text == "find_first"
+                || member.text == "find_first_index"
+                || member.text == "find_last"
+                || member.text == "find_last_index";
         const auto implicit_reference_count =
             implicit_net_references_.size();
         std::vector<Expression> operands;
         std::vector<std::string> argument_names(1);
         operands.push_back(std::move(expression));
-        if (!at(TokenKind::RightParen)) {
+        if (parenthesized_call && !at(TokenKind::RightParen)) {
           do {
-            if (match(TokenKind::Dot)) {
+            if (at(TokenKind::Comma)
+                || at(TokenKind::RightParen)) {
+              argument_names.emplace_back();
+              operands.emplace_back();
+            } else if (match(TokenKind::Dot)) {
               const auto formal =
                   expect_identifier("named method argument");
               expect(
@@ -1016,10 +1152,17 @@ Expression VerilogParser::parse_postfix(Expression expression) {
             }
           } while (match(TokenKind::Comma));
         }
-        expect(
-            TokenKind::RightParen,
-            "')' after method arguments",
-            "FSIM-SV-PARSE-028");
+        if (parenthesized_call) {
+          expect(
+              TokenKind::RightParen,
+              "')' after method arguments",
+              "FSIM-SV-PARSE-028");
+        }
+        const bool predicate_locator_method =
+            predicate_locator_candidate
+            && !known_class_receiver
+            && (known_container_receiver
+                || current().text == "with");
         const auto argument_count = operands.size() - 1U;
         const bool reduction_method =
             member.text == "sum"
@@ -1097,7 +1240,8 @@ Expression VerilogParser::parse_postfix(Expression expression) {
                        : std::optional<std::size_t>{1})
                 : std::nullopt;
         if (expected_arguments
-            && argument_count != *expected_arguments) {
+            && argument_count != *expected_arguments
+            && !known_class_receiver) {
           const bool string_method =
               member.text == "getc" || member.text == "compare"
               || member.text == "icompare" || member.text == "len"
@@ -1391,9 +1535,18 @@ Expression VerilogParser::parse_postfix(Expression expression) {
         }
         continue;
       }
-      expression.text += '.';
-      expression.text += member.text;
-      expression.span = cover(expression.span, member.span);
+      const auto selected_span = cover(expression.span, member.span);
+      if (expression.kind == ExpressionKind::Identifier) {
+        expression.text += '.';
+        expression.text += member.text;
+        expression.span = selected_span;
+      } else {
+        expression = Expression{
+            ExpressionKind::Call,
+            "@sv-select:" + member.text,
+            {std::move(expression)},
+            selected_span};
+      }
     } else if (match(TokenKind::LeftBracket)) {
       Expression first = parse_expression();
       if (at(TokenKind::PlusColon)

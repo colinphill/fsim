@@ -64,6 +64,14 @@ add_executable(
 )
 fsim_configure_test(fsim_frontend_tests)
 target_link_libraries(fsim_frontend_tests PRIVATE fsim_frontend)
+if(FSIM_UVM_1_2_SOURCE_DIR AND FSIM_UVM_2020_3_1_SOURCE_DIR)
+  target_compile_definitions(
+    fsim_frontend_tests
+    PRIVATE
+      "FSIM_TEST_UVM_1_2_SOURCE_DIR=\"${FSIM_UVM_1_2_SOURCE_DIR}\""
+      "FSIM_TEST_UVM_2020_3_1_SOURCE_DIR=\"${FSIM_UVM_2020_3_1_SOURCE_DIR}\""
+  )
+endif()
 add_test(NAME fsim.frontend COMMAND fsim_frontend_tests)
 
 add_executable(fsim_project_tests project/project_config_test.cpp)
@@ -153,6 +161,14 @@ add_test(
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1ConformanceAudit.cmake"
+)
+add_test(
+  NAME fsim.uvm-source-harness
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    "-DFSIM_BINARY_DIR=${PROJECT_BINARY_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckUvmSourceHarness.cmake"
 )
 add_test(
   NAME fsim.v1-conformance-corpus
@@ -322,6 +338,10 @@ set_tests_properties(
 set_tests_properties(
   fsim.v1-conformance-audit
   PROPERTIES LABELS "fast;conformance;license;provenance;cmake"
+)
+set_tests_properties(
+  fsim.uvm-source-harness
+  PROPERTIES LABELS "fast;systemverilog;uvm;license;provenance;cmake"
 )
 set_tests_properties(
   fsim.v1-conformance-corpus

@@ -9,6 +9,15 @@
 #include "fsim/project/project.hpp"
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/class_methods.hpp"
+#include "fsim/runtime/uvm_context.hpp"
+#include "fsim/runtime/uvm_component.hpp"
+#include "fsim/runtime/uvm_object.hpp"
+#include "fsim/runtime/uvm_registry.hpp"
+#include "fsim/runtime/uvm_factory.hpp"
+#include "fsim/runtime/uvm_resource.hpp"
+#include "fsim/runtime/uvm_config_db.hpp"
+#include "fsim/runtime/uvm_command_line.hpp"
+#include "fsim/runtime/uvm_report.hpp"
 #include "fsim/runtime/systemverilog_chandle.hpp"
 #include "fsim/semantic/model.hpp"
 #include "fsim/semantic/design_ir.hpp"
@@ -389,6 +398,38 @@ class Simulation final {
   class_methods() noexcept;
   [[nodiscard]] const runtime::SystemVerilogClassMethodRuntime&
   class_methods() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmObjectService&
+  uvm_objects() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmObjectService&
+  uvm_objects() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmComponentService&
+  uvm_components() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmComponentService&
+  uvm_components() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmRegistryService&
+  uvm_registry() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmRegistryService&
+  uvm_registry() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmFactoryService&
+  uvm_factory() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmFactoryService&
+  uvm_factory() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmResourcePoolService&
+  uvm_resources() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmResourcePoolService&
+  uvm_resources() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmConfigDbService&
+  uvm_config_db() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmConfigDbService&
+  uvm_config_db() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmCommandLineService&
+  uvm_command_line() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmCommandLineService&
+  uvm_command_line() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmReportService&
+  uvm_reports() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmReportService&
+  uvm_reports() const noexcept;
   /// Deterministic packed class-property/static values suitable for trace
   /// declaration or snapshots. Paths and handles contain no host addresses.
   [[nodiscard]] std::vector<ClassPackedTraceValue>
@@ -407,6 +448,18 @@ class Simulation final {
   concurrent_assertion_events() const noexcept;
   [[nodiscard]] runtime::SystemVerilogClassHandle allocate_class(
       std::string_view specialization_identity,
+      std::string_view declared_type = {});
+  [[nodiscard]] runtime::SystemVerilogClassHandle allocate_uvm_object(
+      std::string_view specialization_identity,
+      std::string name = {},
+      std::string_view declared_type = {});
+  [[nodiscard]] runtime::SystemVerilogUvmRootHandle create_uvm_root(
+      std::string identity);
+  [[nodiscard]] runtime::SystemVerilogClassHandle allocate_uvm_component(
+      std::string_view specialization_identity,
+      std::string name,
+      runtime::SystemVerilogClassHandle parent = 0,
+      runtime::SystemVerilogUvmRootHandle root = 0,
       std::string_view declared_type = {});
   [[nodiscard]] const runtime::SystemVerilogClassPropertyValue&
   read_class_property(

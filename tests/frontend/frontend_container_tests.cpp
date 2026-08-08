@@ -47,6 +47,7 @@ module containers;
   bit [3:0] ascending[-2:1];
   int located[$];
   int located_indices[$];
+  int sized[5];
 
   task automatic mutate(
       input int source[],
@@ -164,7 +165,7 @@ endmodule
   const auto* unit =
       parsed.design.find(UnitKind::VerilogModule, "containers");
   require(
-      unit != nullptr && unit->variables.size() == 9,
+      unit != nullptr && unit->variables.size() == 10,
       "module containers remain unpacked variable objects");
   require(
       unit->variables[0].type.systemverilog_container
@@ -229,6 +230,15 @@ endmodule
           && ascending.static_range->right == 1
           && !ascending.static_range->descending,
       "ascending signed static-array bounds retain exact direction");
+  const auto& sized =
+      *unit->variables[9].type.systemverilog_container;
+  require(
+      sized.kind == SystemVerilogContainerKind::StaticArray
+          && sized.static_range
+          && sized.static_range->left == 0
+          && sized.static_range->right == 4
+          && !sized.static_range->descending,
+      "a sized unpacked dimension retains its zero-based static range");
   require(
       unit->processes.size() == 1
           && unit->processes[0].statements.size() >= 2
@@ -1270,7 +1280,7 @@ endmodule
       R"(
 module container_invalid;
   int fixed[3];
-  int wildcard[*];
+  int wildcard_values[*];
   int queue[$];
   task static bad_lifetime(ref byte values[int]);
   endtask

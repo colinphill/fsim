@@ -817,8 +817,65 @@ enable state, revision, stream seed, `randc` domain signature, cycle, and used
 count without exposing an RNG object. A checksummed `sv-constraint-hir`
 payload makes the semantic graph independently reloadable in standalone
 designs; `.fsimobj` and mapped-library flows reconstruct the same graph from
-portable owning units. Covergroups and UVM library/runtime behavior remain in
-following closure batches.
+portable owning units. Covergroups use the coverage ownership described below.
+
+### UVM object, factory, configuration, and reporting foundation
+
+UVM sources are external governed inputs, never vendored compatibility source.
+The source harness validates immutable UVM 1.2 and UVM 2020-3.1 archive and
+complete-tree identities before their unmodified `uvm_pkg.sv` and macro entry
+points enter the ordinary SystemVerilog frontend. Class method hydration starts
+from executable design-unit roots and expands each canonical method once per
+root. Class declarations keep profile references rather than recursively
+materializing the reachable UVM call graph, which bounds both source analysis
+and portable reload.
+
+Every simulation owns one UVM context layered on its class heap. The context
+contains object and component services, a wrapper registry, factory, resource
+pool, configuration database, command-line state, and report service. These
+owners are shared by roots inside one simulation and never process-global.
+Handles are opaque, monotonic or generation-qualified as appropriate; stale,
+released, cross-simulation, nominally mismatched, excessive, or malformed work
+rejects before publication. Multiple simulations created sequentially in one
+process begin with independent contexts.
+
+The object service supplies names, type identity, instance IDs, descriptor-
+ordered copy/clone/compare/print/record behavior, cycle and alias preservation,
+field automation flags, hooks, and transactional rollback. The component
+service adds isolated root identities, parent/child hierarchy, full-name lookup,
+duplicate rejection, creation-order traversal, and iterative leaf-first
+teardown. Registry wrappers retain exact class specializations and parameterized
+type names. Factory resolution applies instance overrides before type overrides,
+supports bounded `*`/`?` paths, rejects loops, and emits deterministic traces.
+
+The resource pool stores nominal packed, scalar, string, and object values with
+priority, audit and callback state. `uvm_config_db` composes component-relative
+scope patterns, precedence, wildcard matching, wait-modified observation, and
+typed get/set/exists behavior over that pool. Recognized UVM plusargs initialize
+factory, verbosity, timeout, config, and resource state without changing the
+simulator's own duration policy.
+
+Reports flow through immutable source messages, handler precedence tables,
+bounded ordered catchers, and a server. Catchers may throw, catch, demote, or
+modify a constrained message view; exceptions and invalid mutations roll back
+that callback only. The server accounts severity and ID totals, applies max-
+quit action, routes standard output and MCD/file sinks, formats packed elements,
+and preserves deterministic route order. Re-entrant reports bypass recursive
+catcher dispatch but still receive unique sequence identities.
+
+Class/UVM operations use the same typed service boundary in interpreter, LLVM
+O0/O2, and debug engines. Portable units retain declarations and executable
+profiles; design artifacts retain normalized class/HIR/runtime state but no
+host addresses. Actual UVM 1.2 and UVM 2020-3.1 object/factory/config/report
+examples reload, relocate, and execute through two aliased roots with identical
+callbacks, traces, cache behavior, and transcripts. Future or malformed schema
+state rejects before execution.
+
+This is deliberately the Batch 159 foundation, not a claim of complete UVM.
+Phase scheduling, objections, TLM, sequences, drivers/monitors, the register
+model, remaining policy classes, and complete 1.2/2020 compatibility are owned
+by Batches 160-162. The public usage and evidence boundary is documented in
+[`systemverilog-uvm.md`](systemverilog-uvm.md).
 
 ### Concurrent assertion ownership and observation
 

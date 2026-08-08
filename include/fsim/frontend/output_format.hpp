@@ -102,8 +102,7 @@ parse_output_format(const std::string_view text) {
       return result;
     }
     if ((parsed.suppress_leading_zero || parsed.zero_pad)
-        && (conversion == 'c' || conversion == 's'
-            || conversion == 'm')) {
+        && (conversion == 'c' || conversion == 'm')) {
       result.valid = false;
       return result;
     }

@@ -486,7 +486,29 @@ void VerilogParser::require_default_port_net_type(
     return false;
   }
   if (at(TokenKind::Hash, offset + 1)) {
-    return true;
+    std::size_t cursor = offset + 2U;
+    if (!at(TokenKind::LeftParen, cursor)) {
+      return true;
+    }
+    std::size_t depth{};
+    do {
+      if (at(TokenKind::LeftParen, cursor)) {
+        ++depth;
+      } else if (at(TokenKind::RightParen, cursor)) {
+        if (--depth == 0) {
+          ++cursor;
+          break;
+        }
+      }
+      ++cursor;
+    } while (!at(TokenKind::EndOfFile, cursor));
+    bool selected = false;
+    while (at(TokenKind::Scope, cursor)
+           && at(TokenKind::Identifier, cursor + 1U)) {
+      selected = true;
+      cursor += 2U;
+    }
+    return !selected || at(TokenKind::Identifier, cursor);
   }
   if (at(TokenKind::Scope, offset + 1)) {
     return at(TokenKind::Identifier, offset + 2)
@@ -826,8 +848,6 @@ Type VerilogParser::parse_systemverilog_enum_type(
     type.spelling = "logic";
     parse_optional_signedness(type);
     parse_optional_range(type);
-  } else if (is_named_type_reference_start()) {
-    type = parse_named_type();
   } else if (keyword("string") || keyword("chandle")
              || keyword("process")
              || keyword("shortreal") || keyword("real")
@@ -840,6 +860,8 @@ Type VerilogParser::parse_systemverilog_enum_type(
     type.domain = ValueDomain::Integer;
     type.spelling = "int";
     type.is_signed = true;
+  } else if (at(TokenKind::Identifier)) {
+    type = parse_named_type();
   } else {
     type.domain = ValueDomain::Integer;
     type.spelling = "int";
@@ -1148,14 +1170,7 @@ void VerilogParser::parse_typedef(
     return;
   }
   const auto name = expect_identifier("typedef name");
-  if (at(TokenKind::LeftBracket)) {
-    error(
-        current(),
-        "FSIM-SV-UNSUPPORTED-025",
-        "unpacked typedef dimensions are not implemented");
-    skip_balanced(
-        TokenKind::LeftBracket, TokenKind::RightBracket);
-  }
+  (void)parse_optional_container_dimension(type);
   expect(
       TokenKind::Semicolon,
       "';' after typedef declaration",
@@ -1266,25 +1281,61 @@ void VerilogParser::parse_optional_signedness(Type& type) {
 }
 
 void VerilogParser::parse_optional_range(Type& type) {
-  if (!match(TokenKind::LeftBracket)) {
+  std::vector<PackedRangeExpression> dimensions;
+  std::uint64_t flattened_width = 1U;
+  bool concrete = true;
+  while (match(TokenKind::LeftBracket)) {
+    const auto start = previous();
+    auto left_expression = parse_expression();
+    expect(TokenKind::Colon, "':' in packed range", "FSIM-SV-PARSE-005");
+    auto right_expression = parse_expression();
+    expect(TokenKind::RightBracket, "']' after packed range",
+           "FSIM-SV-PARSE-006");
+    const auto left = simple_integer_constant(left_expression);
+    const auto right = simple_integer_constant(right_expression);
+    if (left && right && concrete) {
+      const auto width =
+          PackedRange{*left, *right, *left >= *right}.width();
+      constexpr auto maximum_width =
+          static_cast<std::uint64_t>(
+              std::numeric_limits<std::int64_t>::max()) + 1U;
+      if (width == 0U || flattened_width > maximum_width / width) {
+        concrete = false;
+      } else {
+        flattened_width *= width;
+      }
+    } else {
+      concrete = false;
+    }
+    dimensions.push_back(PackedRangeExpression{
+        std::move(left_expression),
+        std::move(right_expression),
+        cover(start.span, previous().span),
+        std::nullopt});
+  }
+  if (dimensions.empty()) {
     return;
   }
-  const auto start = previous();
-  auto left_expression = parse_expression();
-  expect(TokenKind::Colon, "':' in packed range", "FSIM-SV-PARSE-005");
-  auto right_expression = parse_expression();
-  expect(TokenKind::RightBracket, "']' after packed range",
-         "FSIM-SV-PARSE-006");
-  const auto left = simple_integer_constant(left_expression);
-  const auto right = simple_integer_constant(right_expression);
-  if (left && right) {
-    type.packed_range = PackedRange{*left, *right, *left >= *right};
+  if (dimensions.size() == 1U) {
+    const auto left =
+        simple_integer_constant(dimensions.front().left);
+    const auto right =
+        simple_integer_constant(dimensions.front().right);
+    if (left && right) {
+      type.packed_range =
+          PackedRange{*left, *right, *left >= *right};
+    }
+    type.packed_range_expression = std::move(dimensions.front());
+    return;
   }
-  type.packed_range_expression = PackedRangeExpression{
-      std::move(left_expression),
-      std::move(right_expression),
-      cover(start.span, previous().span),
-      std::nullopt};
+  type.systemverilog_packed_dimensions = std::move(dimensions);
+  type.packed_range_expression.reset();
+  if (concrete) {
+    type.packed_range = PackedRange{
+        static_cast<std::int64_t>(flattened_width - 1U), 0, true};
+  } else {
+    type.packed_range.reset();
+  }
 }
 
 bool VerilogParser::parse_optional_container_dimension(Type& type) {
@@ -1368,7 +1419,29 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
             TokenKind::RightBracket,
             "']' after associative-array index type",
             "FSIM-SV-PARSE-157");
-        if (left.kind == ExpressionKind::Identifier) {
+        if (const auto size = simple_integer_constant(left);
+            size && *size > 0) {
+          container.kind =
+              SystemVerilogContainerKind::StaticArray;
+          const auto right_value = *size - 1;
+          container.static_range = PackedRange{
+              0, right_value, false};
+          const auto size_span = left.span;
+          container.static_range_expressions.push_back(
+              PackedRangeExpression{
+                  Expression{
+                      ExpressionKind::IntegerLiteral,
+                      "0",
+                      {},
+                      size_span},
+                  Expression{
+                      ExpressionKind::IntegerLiteral,
+                      std::to_string(right_value),
+                      {},
+                      size_span},
+                  cover(start.span, previous().span),
+                  std::nullopt});
+        } else if (left.kind == ExpressionKind::Identifier) {
           container.kind =
               SystemVerilogContainerKind::AssociativeArray;
           Type index_type{
@@ -1459,7 +1532,8 @@ bool VerilogParser::parse_optional_container_dimension(Type& type) {
 
 [[nodiscard]] bool VerilogParser::is_declaration_start() const  {
   return is_direction_keyword() || is_net_type_keyword()
-      || keyword("string") || keyword("chandle")
+      || keyword("static") || keyword("automatic")
+      || keyword("string") || keyword("chandle") || keyword("event")
       || keyword("process")
       || keyword("struct") || keyword("union") || keyword("enum")
       || is_named_type_reference_start();
@@ -1514,6 +1588,10 @@ void VerilogParser::parse_event_declaration(
 
 void VerilogParser::parse_declaration(DesignUnit& unit) {
   const auto start = current();
+  const bool package_variable =
+      unit.kind == UnitKind::SystemVerilogPackage;
+  const bool systemverilog_const =
+      package_variable && match_keyword("const");
   VerilogTypeSpec spec;
   spec.type = default_verilog_type();
   if (is_direction_keyword()) {
@@ -1627,6 +1705,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
         && initializer->kind == ExpressionKind::Call
         && initializer->text == "@sv-new";
     if (initializer
+        && !package_variable
         && declaration_type.domain != ValueDomain::String
         && !declaration_type.systemverilog_container
         && !named_construction
@@ -1640,7 +1719,8 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
       initializer.reset();
     }
 
-    if (declaration_type.domain == ValueDomain::String
+    if (package_variable
+        || declaration_type.domain == ValueDomain::String
         || declaration_type.systemverilog_container
         || named_construction) {
       if (spec.direction != PortDirection::Unknown) {
@@ -1689,13 +1769,15 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
         error(
             name,
             "FSIM-SV-SEM-006",
-            "duplicate string variable declaration '" + name.text + "'");
+            "duplicate variable declaration '" + name.text + "'");
       } else {
-        unit.variables.push_back(VariableDeclaration{
+        VariableDeclaration variable{
             name.text,
             std::move(declaration_type),
             std::move(initializer),
-            span_from(start, previous())});
+            span_from(start, previous())};
+        variable.systemverilog_const = systemverilog_const;
+        unit.variables.push_back(std::move(variable));
       }
       if (!match(TokenKind::Comma)) {
         break;
@@ -1805,8 +1887,10 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
 
 void VerilogParser::parse_procedural_declaration(Statement& block) {
   const auto start = current();
+  (void)match_keyword("static");
+  (void)match_keyword("automatic");
   Type type = default_verilog_type();
-  if (keyword("string") || keyword("chandle")
+  if (keyword("string") || keyword("chandle") || keyword("event")
       || keyword("process")
       || keyword("struct") || keyword("union") || keyword("enum")) {
     type = parse_parameter_type();
@@ -1831,6 +1915,9 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
     const auto name = expect_identifier("local variable name");
     auto declaration_type = type;
     (void)parse_optional_container_dimension(declaration_type);
+    current_procedural_names_.insert(name.text);
+    current_procedural_types_.insert_or_assign(
+        name.text, declaration_type);
     std::optional<Expression> initializer;
     if (match(TokenKind::Assign)) {
       initializer = parse_expression();
@@ -1840,7 +1927,6 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
         std::move(declaration_type),
         std::move(initializer),
         span_from(name, previous())});
-    current_procedural_names_.insert(name.text);
     if (!match(TokenKind::Comma)) {
       break;
     }
@@ -2236,6 +2322,7 @@ void VerilogParser::parse_gate_primitive(
 Process VerilogParser::parse_always() {
   const auto start = advance();
   current_procedural_names_.clear();
+  current_procedural_types_.clear();
   Process process;
   if (start.text == "always_ff") {
     process.kind = ProcessKind::SystemVerilogAlwaysFF;
@@ -2370,6 +2457,7 @@ Process VerilogParser::parse_always() {
   }
   process.span = span_from(start, previous());
   current_procedural_names_.clear();
+  current_procedural_types_.clear();
   return process;
 }
 }  // namespace fsim::frontend

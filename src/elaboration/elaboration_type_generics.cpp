@@ -331,6 +331,8 @@ bool statements_call_function(
                 statement.loop_initial, name)
             || expression_calls_function(
                 statement.loop_limit, name)
+            || expression_calls_function(
+                statement.loop_update_target, name)
             || statements_call_function(
                 statement.statements, name)
             || statements_call_function(

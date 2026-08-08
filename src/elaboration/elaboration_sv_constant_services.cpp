@@ -235,6 +235,8 @@ void substitute_sv_statements(
             statement.loop_initial, environment);
         substitute_systemverilog_parameters(
             statement.loop_limit, environment);
+        substitute_systemverilog_parameters(
+            statement.loop_update_target, environment);
         for (auto& element : statement.vhdl_waveform) {
             substitute_systemverilog_parameters(
                 element.value, environment);

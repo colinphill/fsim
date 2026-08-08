@@ -2006,6 +2006,7 @@ public:
       std::string_view, std::string_view,
       std::string_view,
       std::span<const PackedLogic4>,
+      std::span<const std::string>,
       std::span<const std::string>)>;
   using ClassPropertyReadHook = std::function<PackedLogic4(
       std::uint64_t, std::string_view)>;
@@ -2015,6 +2016,7 @@ public:
       std::uint64_t,
       std::string_view,
       std::vector<PackedLogic4>&,
+      std::vector<std::string>&,
       std::span<const std::string>,
       std::span<const std::uint8_t>,
       bool)>;
@@ -2025,6 +2027,7 @@ public:
   using ClassStaticMethodCallHook = std::function<PackedLogic4(
       std::string_view,
       std::vector<PackedLogic4>&,
+      std::vector<std::string>&,
       std::span<const std::string>,
       std::span<const std::uint8_t>)>;
 

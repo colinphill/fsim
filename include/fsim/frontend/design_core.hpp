@@ -442,6 +442,11 @@ struct Type {
   // Retained until elaboration even when packed_range is already known, so a
   // parameterized unit can be specialized independently at every instance.
   std::optional<PackedRangeExpression> packed_range_expression;
+  // Source-ordered SystemVerilog packed dimensions. A single dimension keeps
+  // using packed_range_expression for compatibility; two or more dimensions
+  // are retained here while packed_range mirrors their flattened width once
+  // every bound is concrete.
+  std::vector<PackedRangeExpression> systemverilog_packed_dimensions;
   // Non-empty for a SystemVerilog user-defined type reference. Package
   // qualification is retained verbatim (for example `values::word_t`) until
   // elaboration resolves the alias in the owning specialization.
@@ -632,6 +637,9 @@ struct VariableDeclaration {
   // `initializer` for the optional external logical-name expression.
   bool vhdl_file{};
   std::optional<Expression> vhdl_file_open_kind;
+  // True only for a SystemVerilog const variable declaration. Class const
+  // properties retain the same qualifier on SystemVerilogClassProperty.
+  bool systemverilog_const{};
 
   VariableDeclaration() = default;
   VariableDeclaration(
@@ -1198,6 +1206,12 @@ struct Statement {
   std::string loop_control_label;
   Expression loop_initial;
   Expression loop_limit;
+  // Runtime SystemVerilog for loops may initialize and update different
+  // objects. Canonical bounded loops retain the same identifier in both.
+  Expression loop_update_target;
+  // Additional comma-separated SystemVerilog for-loop updates execute in
+  // source order after the legacy primary target/value pair.
+  std::vector<Statement> loop_updates;
   bool loop_descending{};
   // SystemVerilog `<`/`>` loop conditions exclude the retained limit;
   // VHDL discrete ranges and SV `<=`/`>=` include it.
@@ -1316,6 +1330,7 @@ struct Statement {
   CaseQualifier case_qualifier{CaseQualifier::None};
   std::vector<CaseAlternative> case_alternatives;
   // Declarations directly owned by a procedural block.
+  std::vector<TypeAliasDeclaration> type_aliases;
   std::vector<VariableDeclaration> declarations;
 };
 
@@ -1418,6 +1433,7 @@ struct TaskArgument {
 struct TaskDeclaration {
   std::string name;
   std::vector<TaskArgument> arguments;
+  std::vector<TypeAliasDeclaration> type_aliases;
   std::vector<VariableDeclaration> variables;
   std::vector<Statement> statements;
   bool automatic{};
@@ -1490,6 +1506,7 @@ struct SystemVerilogClassMethod {
       SystemVerilogClassMethodKind::Function};
   Type return_type;
   std::vector<FunctionArgument> arguments;
+  std::vector<TypeAliasDeclaration> type_aliases;
   std::vector<VariableDeclaration> variables;
   std::vector<Statement> statements;
   SystemVerilogClassVisibility visibility{SystemVerilogClassVisibility::Public};

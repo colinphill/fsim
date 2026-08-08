@@ -32,6 +32,8 @@ module chandle_types #(
     output chandle exported);
   typedef chandle native_handle_t;
   chandle stored;
+  chandle source[$];
+  chandle target[$];
   integer descriptor;
 
   function automatic chandle choose(
@@ -46,6 +48,15 @@ module chandle_types #(
     target = value;
   endtask
 
+  function automatic void copy_queue();
+    process current;
+    target = source;
+    void'(target.pop_front());
+    current = process::self();
+    if (current != process::self())
+      current = null;
+  endfunction
+
   initial begin
     stored = imported;
     $fwrite(descriptor, "%0h", stored);
@@ -56,6 +67,11 @@ endmodule
 
 class chandle_owner;
   chandle foreign = null;
+  process current;
+
+  function bit same_process(process observed);
+    return observed == current;
+  endfunction
 endclass
 )",
       Language::SystemVerilog2017);
@@ -79,11 +95,11 @@ endclass
   require(
       unit.type_aliases.size() == 1
           && unit.type_aliases[0].type.systemverilog_scalar == chandle_kind
-          && unit.signals.size() == 2
+          && unit.signals.size() >= 2
           && unit.signals[0].type.systemverilog_scalar == chandle_kind,
       "typedefs and variables retain exact opaque chandle identity");
   require(
-      unit.functions.size() == 1
+      unit.functions.size() == 2
           && unit.functions[0].return_type.systemverilog_scalar
               == chandle_kind
           && unit.functions[0].arguments.size() == 2
@@ -99,7 +115,7 @@ endclass
       "function and task profiles retain chandle returns, formals, and ref");
   require(
       parsed.design.systemverilog_classes.size() == 1
-          && parsed.design.systemverilog_classes[0].properties.size() == 1
+          && parsed.design.systemverilog_classes[0].properties.size() == 2
           && parsed.design.systemverilog_classes[0].properties[0]
                  .declaration.type.systemverilog_scalar == chandle_kind,
       "class properties retain chandle identity");
@@ -155,6 +171,10 @@ endclass
   require(
       resolve_systemverilog_classes(parsed.design, parsed.diagnostics),
       "valid chandle assignments, casts, comparisons, and returns resolve");
+  std::vector<Diagnostic> repeated_diagnostics;
+  require(
+      resolve_systemverilog_classes(parsed.design, repeated_diagnostics),
+      "cached class-property chandle expressions resolve repeatedly");
 
   auto rejected = parse_text(
       "invalid-chandle-semantics.sv",

@@ -25,6 +25,19 @@ FunctionDeclaration VerilogParser::parse_function(
   // '('. The general declaration lookahead deliberately treats that shape
   // as a possible instance, but inside a function header it is unambiguous.
   const bool constructor = keyword("new");
+  bool qualified_constructor = false;
+  std::size_t qualified_constructor_offset = 0;
+  while (at(TokenKind::Identifier, qualified_constructor_offset)
+         && at(TokenKind::Scope, qualified_constructor_offset + 1U)) {
+    if (keyword("new", qualified_constructor_offset + 2U)) {
+      qualified_constructor = true;
+      break;
+    }
+    if (!at(TokenKind::Identifier, qualified_constructor_offset + 2U)) {
+      break;
+    }
+    qualified_constructor_offset += 2U;
+  }
   const bool void_result = keyword("void");
   const bool builtin_return_type =
       keyword("string") || keyword("byte")
@@ -40,6 +53,18 @@ FunctionDeclaration VerilogParser::parse_function(
     const auto name = advance();
     function.name = name.text;
     function.return_type.spelling = "constructor";
+  } else if (qualified_constructor) {
+    function.return_type.spelling = "constructor";
+    function.name = expect_identifier("constructor owner").text;
+    while (match(TokenKind::Scope)) {
+      function.name += "::";
+      if (keyword("new")) {
+        function.name += advance().text;
+        break;
+      }
+      function.name +=
+          expect_identifier("selected constructor owner").text;
+    }
   } else {
     if (void_result) {
       const auto result = advance();
@@ -63,13 +88,17 @@ FunctionDeclaration VerilogParser::parse_function(
       function.return_type);
 
   auto saved_names = std::move(current_procedural_names_);
+  auto saved_types = std::move(current_procedural_types_);
   auto saved_arguments = std::move(current_function_arguments_);
   auto saved_function_name = std::move(current_function_name_);
   const bool saved_in_function = in_function_;
+  const bool saved_function_returns_void = current_function_returns_void_;
   current_procedural_names_.clear();
+  current_procedural_types_.clear();
   current_function_arguments_.clear();
   current_function_name_ = function.name;
   in_function_ = true;
+  current_function_returns_void_ = void_result;
   current_procedural_names_.insert(function.name);
 
   std::vector<std::string> classic_header_arguments;
@@ -100,6 +129,7 @@ FunctionDeclaration VerilogParser::parse_function(
       PortDirection direction = PortDirection::Input;
       bool explicit_direction = false;
       bool reference = false;
+      (void)match_keyword("const");
       if (is_direction_keyword()) {
         direction = parse_direction();
         explicit_direction = true;
@@ -143,6 +173,7 @@ FunctionDeclaration VerilogParser::parse_function(
       }
       current_procedural_names_.insert(argument_name.text);
       (void)parse_optional_container_dimension(type);
+      current_procedural_types_.insert_or_assign(argument_name.text, type);
       function.arguments.push_back(FunctionArgument{
           argument_name.text,
           std::move(type),
@@ -171,17 +202,27 @@ FunctionDeclaration VerilogParser::parse_function(
     function.defined = false;
     function.span = span_from(start, previous());
     current_procedural_names_ = std::move(saved_names);
+    current_procedural_types_ = std::move(saved_types);
     current_function_arguments_ = std::move(saved_arguments);
     current_function_name_ = std::move(saved_function_name);
     in_function_ = saved_in_function;
+    current_function_returns_void_ = saved_function_returns_void;
     return function;
   }
 
   Statement body;
   body.kind = StatementKind::Block;
+  DesignUnit local_declarations;
   while (!at_end() && !keyword("endfunction")) {
     const auto before = position();
-    if (is_direction_keyword() || keyword("ref")) {
+    if (match_keyword("typedef")) {
+      const auto alias_count = local_declarations.type_aliases.size();
+      parse_typedef(local_declarations, previous());
+      if (local_declarations.type_aliases.size() > alias_count) {
+        const auto& alias = local_declarations.type_aliases.back();
+        current_procedural_types_.insert_or_assign(alias.name, alias.type);
+      }
+    } else if (is_direction_keyword() || keyword("ref")) {
       const auto declaration_start = advance();
       const bool reference = declaration_start.text == "ref";
       const auto direction = reference
@@ -215,6 +256,8 @@ FunctionDeclaration VerilogParser::parse_function(
         current_procedural_names_.insert(argument_name.text);
         auto argument_type = type;
         (void)parse_optional_container_dimension(argument_type);
+        current_procedural_types_.insert_or_assign(
+            argument_name.text, argument_type);
         function.arguments.push_back(FunctionArgument{
             argument_name.text,
             std::move(argument_type),
@@ -241,10 +284,15 @@ FunctionDeclaration VerilogParser::parse_function(
   expect_keyword(
       "endfunction", false, "FSIM-SV-PARSE-142");
   if (match(TokenKind::Colon)) {
-    const auto end_name = constructor && keyword("new")
+    const auto end_name = (constructor || qualified_constructor)
+            && keyword("new")
         ? advance()
         : expect_identifier("function name after endfunction");
-    if (end_name.text != function.name) {
+    const auto separator = function.name.rfind("::");
+    const auto expected_name = separator == std::string::npos
+        ? std::string_view{function.name}
+        : std::string_view{function.name}.substr(separator + 2U);
+    if (end_name.text != expected_name) {
       error(
           end_name,
           "FSIM-SV-SEM-059",
@@ -253,6 +301,7 @@ FunctionDeclaration VerilogParser::parse_function(
     }
   }
 
+  function.type_aliases = std::move(local_declarations.type_aliases);
   function.variables = std::move(body.declarations);
   function.statements = std::move(body.statements);
   if (!classic_header_arguments.empty()) {
@@ -283,22 +332,29 @@ FunctionDeclaration VerilogParser::parse_function(
     function.arguments = std::move(ordered);
   }
   function.span = span_from(start, previous());
-  if (!constructor && function.return_type.spelling != "void") {
+  if (!constructor && !qualified_constructor
+      && function.return_type.spelling != "void") {
     validate_function_body(function, start);
   }
 
   current_procedural_names_ = std::move(saved_names);
+  current_procedural_types_ = std::move(saved_types);
   current_function_arguments_ = std::move(saved_arguments);
   current_function_name_ = std::move(saved_function_name);
   in_function_ = saved_in_function;
+  current_function_returns_void_ = saved_function_returns_void;
   return function;
 }
 
 void VerilogParser::validate_function_body(
     const FunctionDeclaration& function,
     const Token& start) {
+  const auto result_separator = function.name.rfind("::");
+  const auto result_name = result_separator == std::string::npos
+      ? function.name
+      : function.name.substr(result_separator + 2U);
   std::unordered_set<std::string> locals;
-  locals.insert(function.name);
+  locals.insert(result_name);
   for (const auto& argument : function.arguments) {
     locals.insert(argument.name);
     if (argument.default_value
@@ -314,15 +370,6 @@ void VerilogParser::validate_function_body(
           start,
           "FSIM-SV-SEM-096",
           "ref function arguments require automatic lifetime");
-    }
-    if (argument.direction != PortDirection::Input
-        && (argument.type.domain == ValueDomain::String
-            || argument.type.systemverilog_container)) {
-      error(
-          start,
-          "FSIM-SV-UNSUPPORTED-035",
-          "function output, inout, and ref formals currently require a "
-          "packed integral type");
     }
   }
 
@@ -352,15 +399,10 @@ void VerilogParser::validate_function_body(
   }
   collect_declarations(
       collect_declarations, function.statements);
-  bool assigns_result = false;
   const auto inspect =
       [&](const auto& self,
           const std::vector<Statement>& statements) -> void {
         for (const auto& statement : statements) {
-          if (statement.kind == StatementKind::Return) {
-            assigns_result = assigns_result
-                || statement.value.valid();
-          }
           if (statement.kind == StatementKind::Assignment) {
             const Expression* root = &statement.target;
             while ((root->kind == ExpressionKind::Index
@@ -374,22 +416,7 @@ void VerilogParser::validate_function_body(
                   "FSIM-SV-SEM-061",
                   "a function assignment target must have an identifier "
                   "root");
-            } else if (
-                std::ranges::any_of(
-                    function.arguments,
-                    [&](const FunctionArgument& argument) {
-                      return argument.name == root->text
-                          && argument.direction
-                              == PortDirection::Input
-                          && !argument.reference;
-                    })) {
-              error(
-                  start,
-                  "FSIM-SV-SEM-062",
-                  "a function cannot assign an input argument");
             }
-            assigns_result =
-                assigns_result || root->text == function.name;
             if (statement.assignment_kind
                     != AssignmentKind::Blocking
                 || statement.procedural_assignment_control
@@ -404,14 +431,14 @@ void VerilogParser::validate_function_body(
               statement.kind == StatementKind::Delay
               || statement.kind == StatementKind::WaitOn
               || statement.kind == StatementKind::WaitUntil
-              || statement.kind == StatementKind::EventTrigger
-              || statement.kind == StatementKind::Fork
+              || (statement.kind == StatementKind::EventTrigger
+                  && (statement.delay
+                      || statement.assignment_kind
+                          == AssignmentKind::NonBlocking))
+              || (statement.kind == StatementKind::Fork
+                  && statement.fork_join_kind != ForkJoinKind::None)
               || statement.kind == StatementKind::WaitFork
               || statement.kind == StatementKind::DisableFork
-              || statement.kind == StatementKind::TaskCall
-              || statement.kind == StatementKind::Display
-              || statement.kind == StatementKind::MonitorControl
-              || statement.kind == StatementKind::Report
               || statement.kind == StatementKind::Pause
               || statement.kind == StatementKind::Finish;
           if (forbidden) {
@@ -430,13 +457,6 @@ void VerilogParser::validate_function_body(
         }
       };
   inspect(inspect, function.statements);
-  if (!assigns_result) {
-    error(
-        start,
-        "FSIM-SV-SEM-065",
-        "function '" + function.name
-            + "' has no result assignment or return statement");
-  }
 }
 
 TaskDeclaration VerilogParser::parse_task(
@@ -462,8 +482,10 @@ TaskDeclaration VerilogParser::parse_task(
   }
 
   auto saved_names = std::move(current_procedural_names_);
+  auto saved_types = std::move(current_procedural_types_);
   const bool saved_in_task = in_task_;
   current_procedural_names_.clear();
+  current_procedural_types_.clear();
   in_task_ = true;
 
   std::vector<std::string> classic_header_arguments;
@@ -493,6 +515,7 @@ TaskDeclaration VerilogParser::parse_task(
       auto direction = inherited_direction;
       bool explicit_direction = false;
       bool reference = false;
+      (void)match_keyword("const");
       if (is_direction_keyword()) {
         direction = parse_direction();
         inherited_direction = direction;
@@ -528,6 +551,7 @@ TaskDeclaration VerilogParser::parse_task(
               "duplicate task argument '" + argument_name.text + "'");
       }
       (void)parse_optional_container_dimension(type);
+      current_procedural_types_.insert_or_assign(argument_name.text, type);
       task.arguments.push_back(TaskArgument{argument_name.text, std::move(type),
                                             direction, argument_name.span});
       task.arguments.back().reference = reference;
@@ -547,15 +571,24 @@ TaskDeclaration VerilogParser::parse_task(
   if (prototype) {
     task.span = span_from(start, previous());
     current_procedural_names_ = std::move(saved_names);
+    current_procedural_types_ = std::move(saved_types);
     in_task_ = saved_in_task;
     return task;
   }
 
   Statement body;
   body.kind = StatementKind::Block;
+  DesignUnit local_declarations;
   while (!at_end() && !keyword("endtask")) {
     const auto before = position();
-    if (is_direction_keyword() || keyword("ref")) {
+    if (match_keyword("typedef")) {
+      const auto alias_count = local_declarations.type_aliases.size();
+      parse_typedef(local_declarations, previous());
+      if (local_declarations.type_aliases.size() > alias_count) {
+        const auto& alias = local_declarations.type_aliases.back();
+        current_procedural_types_.insert_or_assign(alias.name, alias.type);
+      }
+    } else if (is_direction_keyword() || keyword("ref")) {
       const auto declaration_start = advance();
       const bool reference = declaration_start.text == "ref";
       const auto direction = reference
@@ -586,6 +619,8 @@ TaskDeclaration VerilogParser::parse_task(
         }
         auto argument_type = type;
         (void)parse_optional_container_dimension(argument_type);
+        current_procedural_types_.insert_or_assign(
+            argument_name.text, argument_type);
         task.arguments.push_back(TaskArgument{
             argument_name.text,
             std::move(argument_type),
@@ -612,12 +647,17 @@ TaskDeclaration VerilogParser::parse_task(
   expect_keyword("endtask", false, "FSIM-SV-PARSE-145");
   if (match(TokenKind::Colon)) {
     const auto end_name = expect_identifier("task name after endtask");
-    if (end_name.text != task.name) {
+    const auto separator = task.name.rfind("::");
+    const auto expected_name = separator == std::string::npos
+        ? std::string_view{task.name}
+        : std::string_view{task.name}.substr(separator + 2U);
+    if (end_name.text != expected_name) {
       error(end_name, "FSIM-SV-SEM-068",
             "task end name does not match '" + task.name + "'");
     }
   }
 
+  task.type_aliases = std::move(local_declarations.type_aliases);
   task.variables = std::move(body.declarations);
   task.statements = std::move(body.statements);
   if (!classic_header_arguments.empty()) {
@@ -651,6 +691,7 @@ TaskDeclaration VerilogParser::parse_task(
   validate_task_body(task, start);
 
   current_procedural_names_ = std::move(saved_names);
+  current_procedural_types_ = std::move(saved_types);
   in_task_ = saved_in_task;
   return task;
 }
@@ -682,32 +723,6 @@ void VerilogParser::validate_task_body(
             "duplicate or conflicting task local '" + variable.name + "'");
     }
   }
-
-  const auto inspect =
-      [&](const auto& self,
-          const std::vector<Statement>& statements) -> void {
-    for (const auto& statement : statements) {
-      const bool forbidden =
-          statement.kind == StatementKind::Pause ||
-          statement.kind == StatementKind::Finish ||
-          (statement.kind == StatementKind::Assignment &&
-           (statement.assignment_kind != AssignmentKind::Blocking ||
-            statement.procedural_assignment_control !=
-                ProceduralAssignmentControl::None));
-      if (forbidden) {
-        error(start, "FSIM-SV-SEM-070",
-              "bounded tasks reject nonblocking or intra-assignment "
-              "controls, $stop, and $finish");
-      }
-      self(self, statement.statements);
-      self(self, statement.else_statements);
-      for (const auto& alternative :
-           statement.case_alternatives) {
-        self(self, alternative.statements);
-      }
-    }
-  };
-  inspect(inspect, task.statements);
 }
 
 }  // namespace fsim::frontend

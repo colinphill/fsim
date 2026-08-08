@@ -4286,69 +4286,277 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 159 - UVM object, factory, configuration, and reporting foundation
 
-- **Change 1:** Add a governed external UVM-source harness for unmodified UVM
-  1.2 and UVM 2020-3.1 package and macro entry points, with pinned provenance,
-  isolated work/cache roots, explicit version identity, and no vendored copy.
-- **Change 2:** Close the preprocessor and declaration surface required by both
-  UVM macro sets, including include guards, token composition/stringification,
-  variadic forwarding, nested expansion, generated declarations, and exact
-  cataloged malformed-expansion rejection.
-- **Change 3:** Close the package/class/type surface required to analyze both
-  UVM packages: parameterized and forward class identities, extern/virtual/pure
-  methods, scoped typedefs/enums, static members, wrapper specializations, and
-  deterministic overload/visibility diagnostics.
-- **Change 4:** Close the virtual-interface, process, event, semaphore/mailbox,
-  command-line, and DPI prerequisites reached by the unmodified sources, then
-  prove clean analysis/elaboration of both package foundations without a
-  simulator-specific compatibility patch.
-- **Change 5:** Execute `uvm_object` construction, naming, type identity,
-  cloning/copying/comparison, printing/recording hooks, and field automation
-  with deterministic recursive-object handling.
-- **Change 6:** Execute `uvm_component` construction and parent/child hierarchy,
-  full-name lookup, top-level ownership, deterministic traversal, duplicate
-  rejection, and destruction/lifecycle behavior across multiple roots.
-- **Change 7:** Implement type/object wrappers and the object/component registry
-  macro families, including parameterized registrations, stable type names,
-  create-by-type/name, and duplicate or mismatched registration diagnostics.
-- **Change 8:** Implement factory type and instance overrides, wildcard instance
-  paths, precedence and replacement rules, recursive-loop rejection, debug
-  traces, and deterministic override reports.
-- **Change 9:** Implement typed resource-pool insertion, lookup, read/write,
-  priority, auditing, callbacks, spell checking, and safe resource ownership.
-- **Change 10:** Implement `uvm_config_db` typed set/get/exists/wait_modified,
-  hierarchical precedence, wildcard and regular-expression scope matching,
-  build-time versus runtime precedence, and callback wakeup ordering.
-- **Change 11:** Integrate command-line plusargs for factory, configuration,
-  resource, verbosity, and timeout settings with exact parsing, precedence,
-  repeated-option ordering, and cataloged malformed-option diagnostics.
-- **Change 12:** Define and prove multi-root/multiple-context UVM singleton,
-  factory, resource, configuration, callback, and command-line isolation or
-  intentional sharing, including restart and teardown without state leakage.
-- **Change 13:** Execute report-message construction and `uvm_report_object`
-  severity/ID/verbosity routing, context/file/line metadata, element containers,
-  and deterministic message composition.
-- **Change 14:** Implement report-handler severity/ID actions, verbosity, files,
-  hooks, overrides, default-file behavior, and hierarchical component policy.
-- **Change 15:** Implement report-server formatting, severity counts, ID counts,
-  summaries, quit counts, max-quit behavior, file/display/log actions, and
-  deterministic newline and numeric formatting.
-- **Change 16:** Implement report catchers and callback ordering, throw/catch/
-  demote/modify behavior, re-entry and exception containment, recursion/resource
-  bounds, removal during dispatch, and post-catcher accounting.
-- **Change 17:** Run unmodified UVM 1.2 and UVM 2020-3.1 object/factory/config/
-  report examples through interpreter and LLVM O0/O2, multiple roots, debugger,
-  callbacks, VCD/FST, cold/warm caches, and deterministic transcripts.
-- **Change 18:** Add malformed/type/lifetime/override/regex/callback/resource
-  negative matrices plus portable object/design artifacts, mapped-library
-  relocation, same-process restart, and cross-version invalidation evidence.
-- **Change 19:** Synchronize public UVM/version documentation, examples,
-  diagnostics, feature evidence, provenance, inventories, audits, performance/
-  resource baselines, and the restart handoff.
-- **Change 20:** Run full non-sanitized exact-LLVM Debug and Release builds,
-  regressions, source, catalog, inventory, installed-public-contract, and
-  release gates; then commit and push the accumulated implementation once
-  without sanitizer or hosted CI monitoring because Batch 159 is not a
-  monitoring boundary.
+- **Change 1: Complete.** Add a governed external UVM-source harness for
+  unmodified UVM 1.2 and UVM 2020-3.1 package and macro entry points, with
+  pinned provenance, isolated work/cache roots, explicit version identity, and
+  no vendored copy. Default builds remain offline. Opt-in fresh-download and
+  exact local-archive modes validate official Accellera URLs, byte sizes,
+  archive SHA-256 identities, all 1,286 extracted files through canonical tree
+  digests, twelve exact package/macro/DPI/license/release entry points, and
+  generated manifests. Authored-source work roots reject before download.
+- **Change 2: Complete.** Close the preprocessor and declaration surface
+  required by both UVM macro sets. Physical-line-aware comment continuations,
+  guarded includes, nested argument expansion, delimiter-balanced tuple
+  forwarding, token composition (including punctuation-delimiting paste
+  markers), composed special strings, and multiline or inline conditional
+  replacement bodies now produce parseable generated declarations. Exact
+  opt-in archive evidence preprocesses the complete unmodified UVM 1.2 and UVM
+  2020-3.1 packages plus representative `uvm_macros.svh`,
+  `uvm_object_utils`, and `uvm_analysis_imp_decl` entry points.
+  Malformed/unmatched or unterminated replacement conditionals and malformed
+  special strings reject through `FSIM-SV-PP-049` through `051`. The complete
+  incremental exact-LLVM Debug tree builds warning-clean with eight workers;
+  frontend, diagnostic-catalog, source-policy, and UVM harness gates pass 4/4.
+- **Change 3: Complete.** Close the package/class/type surface required to
+  analyze both UVM packages. Parameterized and forward class identities,
+  string/type/value specialization actuals, qualified constructors and method
+  definitions, extern/virtual/pure methods, `const ref` formals, qualified end
+  labels, scoped typedefs/enums, class localparams, package const data, static
+  members, unpacked typedef dimensions, and exact multidimensional packed type
+  identities now remain typed and archive-stable. Procedural type tracking
+  prevents class methods such as `uvm_object::compare` from being
+  misdiagnosed as built-in string/container overloads. Focused frontend,
+  portable-library, and application artifact gates pass; remaining full-source
+  failures begin in the procedural/event/synchronization surface assigned to
+  Change 4.
+- **Change 4: Complete.** Close the virtual-interface, process, event,
+  semaphore/mailbox, command-line, formatted-output, procedural-loop, class
+  inheritance/call, and DPI prerequisites reached by the unmodified sources.
+  Both package foundations analyze cleanly without a simulator-specific
+  compatibility patch. Canonical class method bodies are hydrated at most once
+  per executable root instead of being copied recursively through declaration
+  call graphs; capped final scans reduce unmodified UVM 1.2 and UVM 2020-3.1
+  from greater than 20 GiB to 1,689,236 KiB and 1,936,024 KiB peak RSS,
+  respectively.
+- **Change 5: Complete.** Execute `uvm_object` construction, monotonic instance
+  identity, names and type names, deep clone/copy/compare, print/record hooks,
+  and descriptor-driven field automation. Generation-qualified heap handles,
+  bidirectional traversal maps, stable declaration-order fields, and explicit
+  reference/cycle markers preserve aliasing and terminate recursive graphs;
+  checked depth/object/field/output budgets and transactional rollback bound
+  malformed or excessive work. Source-level `new`, `clone`, `copy`, `compare`,
+  `print`, and `record` execute through interpreter, compiled, and debug
+  engines while derived overrides remain dispatchable. The complete 77-step
+  exact-LLVM Debug graph builds warning-clean with eight workers; nine focused
+  runtime/frontend/artifact/elaboration/application/policy gates pass. Final
+  unmodified UVM 1.2 and UVM 2020-3.1 scans both exit zero under a 3-GiB
+  address-space ceiling at 1,688,064 KiB and 1,935,212 KiB peak RSS.
+- **Change 6: Complete.** Execute `uvm_component` construction and
+  parent/child hierarchy, full-name lookup, top-level ownership, deterministic
+  traversal, duplicate rejection, and destruction/lifecycle behavior across
+  multiple roots. A bounded simulation-owned component service isolates root
+  contexts, preserves creation order, validates names/depth/children/path
+  budgets transactionally, and performs iterative leaf-first teardown with
+  contained lifecycle-hook failures. Source `new(name, parent)` carries
+  aligned packed/string constructor actuals through interpreter and JIT
+  boundaries; canonical component parent/count calls and clone rejection
+  execute across all three engines. Focused runtime/application/JIT/policy
+  gates pass, and both unmodified UVM standards remain below the 3-GiB cap.
+- **Change 7: Complete.** Implement type/object wrappers and the
+  object/component registry macro families, including parameterized
+  registrations, stable type names, create-by-type/name, and duplicate or
+  mismatched registration diagnostics. A bounded simulation-owned registry
+  assigns opaque monotonic wrapper handles, retains deterministic registration
+  order, resolves exact specialization/declaration/name identities, validates
+  kind and returned specialization on creation, and rolls failed creation back
+  without leaking heap, object, or component state. Macro-generated object,
+  parameterized-object, and component utility methods return the same wrappers
+  through interpreter, compiled, and debug execution. Focused runtime,
+  application, LLVM, catalog, source-policy, and UVM harness gates pass, and
+  both unmodified UVM standards remain below the 3-GiB ceiling.
+- **Change 8: Complete.** Implement factory type and instance overrides,
+  wildcard instance paths, precedence and replacement rules, recursive-loop
+  rejection, debug traces, and deterministic override reports. A bounded
+  simulation-owned factory resolves source-ordered instance overrides before
+  type overrides, recursively chains selected wrappers, supports deferred
+  name-based originals and linear `*`/`?` matching, and validates all targets
+  through the Change 7 registry. Resolution loops, excessive depth, duplicate
+  instances, unknown targets, and override/path/report limits reject without
+  partial use-count publication. Source and application APIs create the
+  resolved object/component types; interpreter, compiled, and debug execution
+  agree on selected wrappers and stable reports. Focused gates and both capped
+  unmodified UVM scans pass.
+- **Change 9: Complete.** Implement typed resource-pool insertion, lookup,
+  read/write, priority, auditing, callbacks, spell checking, and safe resource
+  ownership. A bounded simulation-owned pool retains nominal packed, real,
+  string, and generation-checked object values behind monotonic opaque handles.
+  Linear `*`/`?` scope matching, precedence, mutable high/low queue priority,
+  and creation-order ties produce deterministic name/type lookups without
+  retaining query indexes. Read/write revisions and counts publish only after
+  validation; read-only and nominal mismatches do not mutate values. Snapshot
+  callback dispatch permits removal during invocation and contains callback
+  exceptions in a fixed-size audit ring. Resource/callback/lookup/audit/spelling,
+  width/string/path/accessor/report budgets reject before growth, and erasing an
+  object-valued resource never takes ownership of the caller's heap object.
+  Public application access exercises the same pool through interpreter,
+  compiled, and debug execution. The full build, six focused gates, and both
+  unmodified UVM scans pass below the 3-GiB address-space ceiling.
+- **Change 10: Complete.** Implement `uvm_config_db` typed
+  set/get/exists/wait-modified behavior, hierarchical precedence, wildcard and
+  regular-expression scope matching, build-time versus runtime precedence, and
+  callback wakeup ordering. A bounded simulation-owned config layer reuses
+  Change 9 resources by exact context/pattern/field/type key. Build settings
+  subtract checked context depth from default precedence; runtime settings
+  restore default precedence, and same-precedence updates are last-wins without
+  growing entries. Glob matching remains linear; `/.../` expressions compile
+  to a deliberately restricted recursion-free atom stream and execute through
+  a capped dynamic-programming matrix, rejecting unsupported backtracking
+  constructs and excess work before publication. One-shot waiters prevalidate
+  wake fanout, detach in registration order after value publication, and
+  contain callback exceptions. Application and runtime evidence covers typed
+  lookup/exists, hierarchy, glob/regex fields and instances, resource reuse,
+  build/runtime ordering, spelling, callback ordering/failure/cancellation,
+  nominal mismatch, and entry/waiter/wake ceilings. The full build, six focused
+  gates, and both capped unmodified UVM scans pass.
+- **Change 11: Complete.** Integrate command-line plusargs for factory,
+  configuration, resource, verbosity, and timeout settings with exact parsing,
+  precedence, repeated-option ordering, and cataloged malformed-option
+  diagnostics. A bounded simulation-owned service retains all plusargs and
+  ordered unknown options while parsing the UVM 1.2/2020 factory aliases,
+  integer/bitstream/string config settings, resource/config trace switches,
+  global and component verbosity, and timeout settings. Parsing, total bytes,
+  values, fields, patterns, settings, fixed 4096-bit numeric conversion, and
+  resource/config publication are explicitly capped before mutation. Instance
+  overrides apply before source-ordered type overrides; integer settings apply
+  before bitstreams and strings; repeated config values remain last-wins; and
+  the first global verbosity/timeout wins while all occurrences remain counted.
+  Run, simulate, and debug own isolated state, malformed or inapplicable
+  settings emit `FSIM-UVM-CLI-001`, and `+UVM_TIMEOUT` remains framework state
+  rather than replacing fsim's independent `--duration`. Runtime, application,
+  LLVM, catalog, source-policy, UVM harness, and both capped unmodified-UVM
+  scans pass.
+- **Change 12: Complete.** Define and prove multi-root/multiple-context UVM
+  singleton, factory, resource, configuration, callback, and command-line
+  isolation or intentional sharing, including restart and teardown without
+  state leakage. A public compile-time ownership contract makes every registry,
+  factory, resource, configuration, callback, and plusarg service unique to one
+  independently constructed `Simulation`, while equal component paths remain
+  partitioned by explicit root handles. Application evidence creates equal
+  `api_top` paths in two roots and proves that factory resolutions, resource
+  callbacks/audits, config values/waiters, and command-line settings are
+  deliberately shared within that simulation. A concurrently alive peer
+  simulation reuses the same root identity and registered type names while
+  publishing divergent factory, resource, config, callback, and plusarg state;
+  neither context observes the other's mutations. Destroying that peer and
+  constructing a third simulation restores empty mutable services and root
+  handle 1 without changing the original context. The full warning-clean build,
+  six focused gates, graph ownership review, and both capped unmodified-UVM
+  scans pass.
+- **Change 13: Complete.** Execute report-message construction and
+  `uvm_report_object` severity/ID/verbosity routing, context/file/line metadata,
+  element containers, and deterministic message composition. A bounded,
+  simulation-owned `SystemVerilogUvmReportService` constructs immutable routed
+  snapshots with monotonic sequence identity, generation-safe report-object
+  handles and full names, exact severity/ID/message/verbosity/source/context
+  fields, UVM_MEDIUM/UVM_NONE defaults, INFO threshold filtering, and
+  prechecked-report behavior; warning/error/fatal routes do not repeat the
+  INFO-only gate. Its insertion-ordered element container supports packed
+  integer, escaped string, and object references with per-element log/display/
+  record actions, copy/erase/clear accounting, deterministic canonical payload
+  composition, stale-handle rejection, exception-contained route hooks, and
+  explicit count/name/value/width/storage/field/composed-payload limits.
+  Command-line global verbosity initializes the report service. Multi-root and
+  concurrent/restarted-simulation application evidence proves equal object
+  names retain distinct handles while report thresholds, sequences, counters,
+  and hooks remain simulation-local. The 75-step warning-clean build, six
+  focused gates, fresh graph bounds review, and both 3-GiB-capped unmodified-UVM
+  scans pass.
+- **Change 14: Complete.** Implement report-handler severity/ID actions,
+  verbosity, files, hooks, overrides, default-file behavior, and hierarchical
+  component policy. Each simulation owns bounded per-report-object handler
+  state with the governed `(severity,ID)` then ID then severity/default
+  precedence for actions and files, `(severity,ID)` then ID then maximum
+  precedence for verbosity, standard INFO/WARNING/ERROR/FATAL default actions,
+  nonzero file fallback, and ID-specific severity override precedence before
+  resolved-severity action/file selection. Generic then severity-specific hooks
+  run for `CALL_HOOK`, both execute even after rejection, and exceptions are
+  contained and counted. The complete UVM component `_hier` setter family uses
+  deterministic nonrecursive subtree traversal and atomically restores every
+  descendant if handler or aggregate-setting caps reject the update. Equal-name
+  components in a second root and sibling subtrees remain unchanged. Actual
+  display/log/file execution and server accounting remain Change 15. The
+  76-step warning-clean build, six focused gates, fresh graph/bounds review,
+  and both 3-GiB-capped unmodified-UVM scans pass.
+- **Change 15: Complete.** Implement report-server formatting, severity counts,
+  ID counts, summaries, quit counts, max-quit behavior, file/display/log
+  actions, and deterministic newline and numeric formatting. The bounded,
+  simulation-owned report server composes the governed severity, optional
+  verbosity, source, timestamp, object/context, ID, payload, and optional
+  terminator fields; executes RECORD, DISPLAY, LOG, COUNT, EXIT, and STOP in
+  UVM order; masks the standard-output bit from MCD log files; contains sink
+  failures; and exposes deterministic severity/ID summaries. Severity, ID, and
+  quit accounting reject overflow transactionally. Max-quit overridability,
+  record-all, ID-summary, show-verbosity, and terminator controls are public and
+  simulation-local. Packed element formatting now covers exact binary, octal,
+  signed/unsigned decimal, hexadecimal, and four-state grouped digits under
+  fixed width and output budgets. Runtime and three-engine application evidence
+  proves exact text/newlines, file/display/record sinks, max-quit EXIT and STOP,
+  count reset/restore, stdout de-duplication, bounds, and restarted-context
+  isolation. The warning-clean full build, six focused gates, fresh graph/bounds
+  review, and both 3-GiB-capped unmodified-UVM scans pass.
+- **Change 16: Complete.** Implement report catchers and callback ordering,
+  throw/catch/demote/modify behavior, re-entry and exception containment,
+  recursion/resource bounds, removal during dispatch, and post-catcher
+  accounting. Each simulation owns one bounded ordered catcher registry with
+  global or exact report-object association, append/prepend ordering, stable
+  opaque handles, callback enablement, and deterministic removal. Catchers
+  observe prior retained severity, ID, message, verbosity, context, action, and
+  element mutations through a constrained mutable context. THROW continues,
+  CAUGHT suppresses later callbacks and server execution, and severity changes
+  remap an unchanged default action exactly once unless the current catcher set
+  an explicit action. Callback exceptions or invalid mutations restore that
+  catcher's input message and continue. Dispatch snapshots exclude additions,
+  honor disable/removal before each callback, and skip recursive catcher
+  invocation for reports emitted during a catcher while retaining unique route
+  sequence order. Caught/demoted/failure/re-entry statistics are simulation-
+  local and deterministic; the report server accounts only the final thrown
+  severity and ID. Runtime and three-engine application evidence covers the
+  complete order, mutation, rollback, catch, re-entry, removal, isolation, and
+  resource-bound matrix. The 75-step warning-clean build, six focused gates,
+  fresh graph/bounds review, and both 3-GiB-capped unmodified-UVM scans pass.
+- **Change 17: Complete.** Unmodified UVM 1.2 and UVM 2020-3.1 now run the
+  same object/registry/factory/config/report example through direct source and
+  portable object/design artifacts without source edits. Both libraries pass
+  two aliased roots through interpreter, LLVM O0/O2, debug execution,
+  simulation callbacks, VCD/FST, and isolated cold/warm native caches with one
+  deterministic transcript and exact 7/11/pass signal transitions. Repeated
+  class hydration is bounded per executable root instead of recursively copying
+  the reachable UVM call graph into every call site. Portable reload no longer
+  replays already-attached extern method bodies, repeated class expression
+  resolution preserves process/chandle/null nominal types, ordinary suspending
+  class tasks retain task-frame lowering, and legal self-qualified package
+  types/constants/functions no longer form false visibility cycles. Governed
+  analysis stays below 2 GiB; full executable compiles and two-root O0/O2
+  elaborations stay below the explicit 4-GiB UVM 1.2 and 5-GiB UVM 2020 caps.
+  The warning-clean build and focused frontend/elaboration/LLVM/application/
+  runtime/catalog/source/UVM gates pass.
+- **Change 18: Complete.** The aggregate UVM negative matrix rejects malformed
+  names/profiles/values, nominal type mismatches, stale and cross-owner handles,
+  override loops and limits, invalid wildcard/regex-like patterns, callback
+  mutation/exception/re-entry failures, and every object/component/registry/
+  factory/resource/config/report ceiling without partial state publication.
+  Actual UVM 1.2 and UVM 2020-3.1 portable object/design artifacts reload and
+  execute after independent design relocation with identical two-root output.
+  Application/library artifacts also cover mapped-library relocation,
+  same-process simulation restart and service isolation, while object/design/
+  class/HIR schema tests reject future, truncated, trailing, and incompatible
+  state before execution. The five artifact/application/runtime aggregate gates
+  pass.
+- **Change 19: Complete.** Public UVM/version documentation, the unmodified
+  object/factory/config/report example, diagnostics, feature evidence,
+  governed provenance, inventories, release audits, and measured resource
+  baselines are synchronized. The reviewed release contract contains 1,240
+  executable rows and 4,960 evidence cells across 518 exact paths; all 27
+  documentation, conformance, inventory, installation, and portability gates
+  pass.
+- **Change 20: Complete.** The final exact-LLVM 22.1.8 Debug build is warning-
+  clean and passes 115/115 tests in 414.95 seconds. The fresh 494-step Release
+  build is warning-clean and passes 115/115 in 336.28 seconds. The first Debug
+  run exposed a non-class indexed aggregate selection left in the new neutral
+  `@sv-select` form; class resolution now folds non-class receivers back to
+  their executable aggregate representation while retaining class-valued
+  selection, with focused and full regression evidence. No sanitizer or hosted
+  CI monitoring ran because Batch 159 is not a monitoring boundary.
 
 ### Batch 160 - UVM phases, objections, and TLM - CI monitoring boundary
 

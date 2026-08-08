@@ -125,11 +125,11 @@ foreach(FSIM_GAP_SET IN ITEMS
   endif()
 endforeach()
 
-if(NOT FSIM_ROW_COUNT EQUAL 799
-    OR NOT FSIM_SV_COUNT EQUAL 790
+if(NOT FSIM_ROW_COUNT EQUAL 809
+    OR NOT FSIM_SV_COUNT EQUAL 800
     OR NOT FSIM_V1_SV_COUNT EQUAL 9)
   message(FATAL_ERROR
-    "expected 799 SystemVerilog rows split 790/9, found "
+    "expected 809 SystemVerilog rows split 800/9, found "
     "${FSIM_ROW_COUNT} split ${FSIM_SV_COUNT}/${FSIM_V1_SV_COUNT}")
 endif()
 

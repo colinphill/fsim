@@ -62,8 +62,8 @@ module text_files;
     status = $rewind(handle);
     $fflush(handle);
     $fflush();
-    $fdisplay(handle, "count=%0d", count);
-    $fwrite(handle, "%s", line);
+    $fdisplay(handle, "count=%0d line=%s", count, line);
+    $fwrite(handle, line);
     $fclose(handle);
   end
 endmodule
@@ -112,14 +112,18 @@ endmodule
   require(
       block.statements[16].kind == StatementKind::FileDisplay
           && block.statements[16].output_newline
-          && block.statements[16].output_format
+          && block.statements[16].output_values.size() == 2
+          && block.statements[16].output_values[0].format
               == OutputFormat::Decimal
+          && block.statements[16].output_values[1].format
+              == OutputFormat::String
           && block.statements[17].kind
               == StatementKind::FileDisplay
           && !block.statements[17].output_newline
-          && block.statements[17].output_format
-              == OutputFormat::String,
-      "file output tasks retain bounded formatting");
+          && block.statements[17].output_values.size() == 1
+          && block.statements[17].output_values[0].value.text
+              == "line",
+      "file output tasks retain ordered and unformatted values");
   require(
       block.statements[18].kind == StatementKind::FileClose
           && block.statements[18].file_handle.text == "handle",
@@ -162,8 +166,8 @@ endmodule
 module file_format;
   integer handle;
   initial begin
-    $fdisplay(handle, "%0d %0d", 1, 2);
-    $fwrite(handle, handle);
+    $fdisplay(handle, "%0d %0d", 1);
+    $fwrite(handle, "%q", handle);
   end
 endmodule
 )",
@@ -171,7 +175,7 @@ endmodule
   require(
       !invalid_format.ok()
           && has_code(invalid_format, "FSIM-SV-SEM-076"),
-      "multi-value and nonliteral file output is diagnosed");
+      "malformed file-output formatting is diagnosed");
 
   const auto verilog = parse_text(
       "file-verilog.v",

@@ -301,9 +301,19 @@ Lowerer::ExpressionAttempt Lowerer::lower_class_expression(
     const auto receiver = lower_expression(expression.operands.front(), 64);
     if (!receiver) return std::nullopt;
     std::vector<RegisterId> actuals;
+    std::vector<std::uint8_t> actual_kinds;
     std::vector<std::size_t> actual_widths;
     std::vector<frontend::ValueDomain> actual_domains;
     for (const auto& operand : expression.operands | std::views::drop(1)) {
+      if (is_string_expression(operand)) {
+        const auto actual = lower_string_expression(operand);
+        if (!actual) return std::nullopt;
+        actuals.push_back(*actual);
+        actual_kinds.push_back(1U);
+        actual_widths.push_back(0U);
+        actual_domains.push_back(frontend::ValueDomain::String);
+        continue;
+      }
       const auto width = infer_width(operand);
       if (!width || *width == 0) {
         report(
@@ -315,6 +325,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_class_expression(
       const auto actual = lower_expression(operand, *width);
       if (!actual) return std::nullopt;
       actuals.push_back(*actual);
+      actual_kinds.push_back(0U);
       actual_widths.push_back(*width);
       actual_domains.push_back(register_domain(*actual));
     }
@@ -343,11 +354,20 @@ Lowerer::ExpressionAttempt Lowerer::lower_class_expression(
         std::move(names),
         std::move(directions),
         static_cast<std::uint32_t>(result_width),
-        selected_prefix == method_prefix});
+        selected_prefix == method_prefix,
+        actual_kinds});
     for (std::size_t index = 0; index < actuals.size(); ++index) {
       if (expression.call_argument_directions[index + 1U]
           == frontend::PortDirection::Input) {
         continue;
+      }
+      if (actual_kinds[index] == 1U) {
+        report(
+            "FSIM-ELAB-SVCLASS-018",
+            "string output and inout class method actuals are not yet "
+            "executable",
+            expression.operands[index + 1U].span);
+        return std::nullopt;
       }
       frontend::Type actual_type;
       actual_type.domain = actual_domains[index];
@@ -387,9 +407,19 @@ Lowerer::ExpressionAttempt Lowerer::lower_class_expression(
       return std::nullopt;
     }
     std::vector<RegisterId> actuals;
+    std::vector<std::uint8_t> actual_kinds;
     std::vector<std::size_t> actual_widths;
     std::vector<frontend::ValueDomain> actual_domains;
     for (const auto& operand : expression.operands) {
+      if (is_string_expression(operand)) {
+        const auto actual = lower_string_expression(operand);
+        if (!actual) return std::nullopt;
+        actuals.push_back(*actual);
+        actual_kinds.push_back(1U);
+        actual_widths.push_back(0U);
+        actual_domains.push_back(frontend::ValueDomain::String);
+        continue;
+      }
       const auto width = infer_width(operand);
       if (!width || *width == 0) {
         report(
@@ -401,6 +431,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_class_expression(
       const auto actual = lower_expression(operand, *width);
       if (!actual) return std::nullopt;
       actuals.push_back(*actual);
+      actual_kinds.push_back(0U);
       actual_widths.push_back(*width);
       actual_domains.push_back(register_domain(*actual));
     }
@@ -421,11 +452,20 @@ Lowerer::ExpressionAttempt Lowerer::lower_class_expression(
         actuals,
         std::move(names),
         std::move(directions),
-        static_cast<std::uint32_t>(result_width)});
+        static_cast<std::uint32_t>(result_width),
+        actual_kinds});
     for (std::size_t index = 0; index < actuals.size(); ++index) {
       if (expression.call_argument_directions[index]
           == frontend::PortDirection::Input) {
         continue;
+      }
+      if (actual_kinds[index] == 1U) {
+        report(
+            "FSIM-ELAB-SVCLASS-019",
+            "string output and inout class static method actuals are not yet "
+            "executable",
+            expression.operands[index].span);
+        return std::nullopt;
       }
       frontend::Type actual_type;
       actual_type.domain = actual_domains[index];
@@ -523,8 +563,26 @@ Lowerer::ExpressionAttempt Lowerer::lower_class_expression(
     return std::nullopt;
   }
   std::vector<RegisterId> actuals;
+  std::vector<std::uint8_t> actual_kinds;
   actuals.reserve(expression.operands.size());
+  actual_kinds.reserve(expression.operands.size());
   for (const auto& operand : expression.operands) {
+    if (operand.text == "@sv-null") {
+      const auto actual = allocate_register(
+          64, frontend::ValueDomain::Bit2);
+      process_.operations.emplace_back(LoadConstant{
+          actual, PackedLogic4::from_aval_bval(64, 0, 0)});
+      actuals.push_back(actual);
+      actual_kinds.push_back(0U);
+      continue;
+    }
+    if (is_string_expression(operand)) {
+      const auto actual = lower_string_expression(operand);
+      if (!actual) return std::nullopt;
+      actuals.push_back(*actual);
+      actual_kinds.push_back(1U);
+      continue;
+    }
     const auto width = infer_width(operand);
     if (!width || *width == 0) {
       report(
@@ -536,6 +594,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_class_expression(
     const auto actual = lower_expression(operand, *width);
     if (!actual) return std::nullopt;
     actuals.push_back(*actual);
+    actual_kinds.push_back(0U);
   }
   const auto destination = allocate_register(
       64, frontend::ValueDomain::Bit2);
@@ -544,6 +603,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_class_expression(
       class_identity,
       expected_type->systemverilog_class_declaration,
       std::move(actuals),
+      std::move(actual_kinds),
       expression.call_argument_names});
   return destination;
 }

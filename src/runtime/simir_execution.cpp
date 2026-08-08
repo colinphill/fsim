@@ -386,15 +386,28 @@ void Interpreter::Impl::handle_boundary(
       fail(process, "class allocation service is unavailable");
     }
     std::vector<PackedLogic4> actuals;
+    std::vector<std::string> string_actuals;
     actuals.reserve(class_allocate->constructor_actuals.size());
-    for (const auto actual : class_allocate->constructor_actuals) {
-      actuals.push_back(read_boundary_register(actual));
+    string_actuals.reserve(class_allocate->constructor_actuals.size());
+    for (std::size_t index = 0;
+         index < class_allocate->constructor_actuals.size(); ++index) {
+      const auto actual = class_allocate->constructor_actuals[index];
+      const auto string_actual =
+          !class_allocate->constructor_actual_kinds.empty()
+          && class_allocate->constructor_actual_kinds[index] == 1U;
+      actuals.push_back(
+          string_actual ? PackedLogic4(64) : read_boundary_register(actual));
+      string_actuals.push_back(
+          string_actual
+              ? process.executor->read_string_register(actual)
+              : std::string{});
     }
     const auto handle = class_allocate_hook(
         process.program.name,
         class_allocate->specialization_identity,
         class_allocate->declared_type,
         actuals,
+        string_actuals,
         class_allocate->constructor_actual_names);
     write_process_register(
         process,
@@ -437,9 +450,19 @@ void Interpreter::Impl::handle_boundary(
       fail(process, "class method service is unavailable");
     }
     std::vector<PackedLogic4> actuals;
+    std::vector<std::string> string_actuals;
     actuals.reserve(method->actuals.size());
-    for (const auto actual : method->actuals) {
-      actuals.push_back(read_boundary_register(actual));
+    string_actuals.reserve(method->actuals.size());
+    for (std::size_t index = 0; index < method->actuals.size(); ++index) {
+      const auto actual = method->actuals[index];
+      const auto string_actual = !method->actual_kinds.empty()
+          && method->actual_kinds[index] == 1U;
+      actuals.push_back(
+          string_actual ? PackedLogic4(64) : read_boundary_register(actual));
+      string_actuals.push_back(
+          string_actual
+              ? process.executor->read_string_register(actual)
+              : std::string{});
     }
     const auto handle = read_boundary_register(
         method->receiver).low_word().aval;
@@ -451,12 +474,20 @@ void Interpreter::Impl::handle_boundary(
                 handle,
                 method->method_identity,
                 actuals,
+                string_actuals,
                 method->actual_names,
                 method->actual_directions,
                 method->virtual_dispatch),
             method->result_width));
     for (std::size_t index = 0; index < actuals.size(); ++index) {
-      write_process_register(process, method->actuals[index], actuals[index]);
+      const auto string_actual = !method->actual_kinds.empty()
+          && method->actual_kinds[index] == 1U;
+      if (string_actual) {
+        process.executor->write_string_register(
+            method->actuals[index], string_actuals[index]);
+      } else {
+        write_process_register(process, method->actuals[index], actuals[index]);
+      }
     }
     return;
   }
@@ -492,9 +523,19 @@ void Interpreter::Impl::handle_boundary(
       fail(process, "class static method service is unavailable");
     }
     std::vector<PackedLogic4> actuals;
+    std::vector<std::string> string_actuals;
     actuals.reserve(method->actuals.size());
-    for (const auto actual : method->actuals) {
-      actuals.push_back(read_boundary_register(actual));
+    string_actuals.reserve(method->actuals.size());
+    for (std::size_t index = 0; index < method->actuals.size(); ++index) {
+      const auto actual = method->actuals[index];
+      const auto string_actual = !method->actual_kinds.empty()
+          && method->actual_kinds[index] == 1U;
+      actuals.push_back(
+          string_actual ? PackedLogic4(64) : read_boundary_register(actual));
+      string_actuals.push_back(
+          string_actual
+              ? process.executor->read_string_register(actual)
+              : std::string{});
     }
     write_process_register(
         process,
@@ -503,11 +544,19 @@ void Interpreter::Impl::handle_boundary(
             class_static_method_call_hook(
                 method->method_identity,
                 actuals,
+                string_actuals,
                 method->actual_names,
                 method->actual_directions),
             method->result_width));
     for (std::size_t index = 0; index < actuals.size(); ++index) {
-      write_process_register(process, method->actuals[index], actuals[index]);
+      const auto string_actual = !method->actual_kinds.empty()
+          && method->actual_kinds[index] == 1U;
+      if (string_actual) {
+        process.executor->write_string_register(
+            method->actuals[index], string_actuals[index]);
+      } else {
+        write_process_register(process, method->actuals[index], actuals[index]);
+      }
     }
     return;
   }
@@ -798,15 +847,30 @@ void Interpreter::Impl::execute(ProcessId id) {
               fail(process, "class allocation service is unavailable");
             }
             std::vector<PackedLogic4> actuals;
+            std::vector<std::string> string_actuals;
             actuals.reserve(op.constructor_actuals.size());
-            for (const auto actual : op.constructor_actuals) {
-              actuals.push_back(get_register(process, actual));
+            string_actuals.reserve(op.constructor_actuals.size());
+            for (std::size_t index = 0;
+                 index < op.constructor_actuals.size(); ++index) {
+              const auto actual = op.constructor_actuals[index];
+              const auto string_actual =
+                  !op.constructor_actual_kinds.empty()
+                  && op.constructor_actual_kinds[index] == 1U;
+              actuals.push_back(
+                  string_actual
+                      ? PackedLogic4(64)
+                      : get_register(process, actual));
+              string_actuals.push_back(
+                  string_actual
+                      ? process.frame->string_registers.at(actual)
+                      : std::string{});
             }
             const auto handle = class_allocate_hook(
                 process.program.name,
                 op.specialization_identity,
                 op.declared_type,
                 actuals,
+                string_actuals,
                 op.constructor_actual_names);
             get_register(process, op.destination) =
                 PackedLogic4::from_aval_bval(64, handle, 0);
@@ -839,9 +903,20 @@ void Interpreter::Impl::execute(ProcessId id) {
               fail(process, "class method service is unavailable");
             }
             std::vector<PackedLogic4> actuals;
+            std::vector<std::string> string_actuals;
             actuals.reserve(op.actuals.size());
-            for (const auto actual : op.actuals) {
-              actuals.push_back(get_register(process, actual));
+            string_actuals.reserve(op.actuals.size());
+            for (std::size_t index = 0; index < op.actuals.size(); ++index) {
+              const auto string_actual = !op.actual_kinds.empty()
+                  && op.actual_kinds[index] == 1U;
+              actuals.push_back(
+                  string_actual
+                      ? PackedLogic4(64)
+                      : get_register(process, op.actuals[index]));
+              string_actuals.push_back(
+                  string_actual
+                      ? get_string_register(process, op.actuals[index])
+                      : std::string{});
             }
             const auto handle =
                 get_register(process, op.receiver).low_word().aval;
@@ -849,11 +924,19 @@ void Interpreter::Impl::execute(ProcessId id) {
                 handle,
                 op.method_identity,
                 actuals,
+                string_actuals,
                 op.actual_names,
                 op.actual_directions,
                 op.virtual_dispatch);
             for (std::size_t index = 0; index < actuals.size(); ++index) {
-              get_register(process, op.actuals[index]) = actuals[index];
+              const auto string_actual = !op.actual_kinds.empty()
+                  && op.actual_kinds[index] == 1U;
+              if (string_actual) {
+                get_string_register(process, op.actuals[index]) =
+                    string_actuals[index];
+              } else {
+                get_register(process, op.actuals[index]) = actuals[index];
+              }
             }
             ++process.pc;
           } else if constexpr (
@@ -879,18 +962,37 @@ void Interpreter::Impl::execute(ProcessId id) {
               fail(process, "class static method service is unavailable");
             }
             std::vector<PackedLogic4> actuals;
+            std::vector<std::string> string_actuals;
             actuals.reserve(op.actuals.size());
-            for (const auto actual : op.actuals) {
-              actuals.push_back(get_register(process, actual));
+            string_actuals.reserve(op.actuals.size());
+            for (std::size_t index = 0; index < op.actuals.size(); ++index) {
+              const auto string_actual = !op.actual_kinds.empty()
+                  && op.actual_kinds[index] == 1U;
+              actuals.push_back(
+                  string_actual
+                      ? PackedLogic4(64)
+                      : get_register(process, op.actuals[index]));
+              string_actuals.push_back(
+                  string_actual
+                      ? get_string_register(process, op.actuals[index])
+                      : std::string{});
             }
             get_register(process, op.destination) =
                 class_static_method_call_hook(
                     op.method_identity,
                     actuals,
+                    string_actuals,
                     op.actual_names,
                     op.actual_directions);
             for (std::size_t index = 0; index < actuals.size(); ++index) {
-              get_register(process, op.actuals[index]) = actuals[index];
+              const auto string_actual = !op.actual_kinds.empty()
+                  && op.actual_kinds[index] == 1U;
+              if (string_actual) {
+                get_string_register(process, op.actuals[index]) =
+                    string_actuals[index];
+              } else {
+                get_register(process, op.actuals[index]) = actuals[index];
+              }
             }
             ++process.pc;
           } else if constexpr (std::is_same_v<OperationType, LoadStringConstant>) {

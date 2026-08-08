@@ -1476,6 +1476,51 @@ endmodule
       has_code(invalid_immediate_delay, "FSIM-SV-SEM-036"),
       "delayed immediate event trigger diagnostic");
 
+  const auto class_events = parse_text(
+      "class_events.sv",
+      R"(
+class uvm_waiter;
+  event trigger;
+endclass
+class uvm_event_owner;
+  protected event m_event;
+  uvm_waiter waiters[int];
+  task wake(input int key);
+    void'(notify(key));
+    -> waiters[key].trigger;
+    -> m_event;
+  endtask
+endclass
+)",
+      Language::SystemVerilog2017);
+  require(class_events.ok(), "UVM-shaped class events must parse");
+  require(
+      class_events.design.systemverilog_classes.size() == 2
+          && class_events.design.systemverilog_classes[0]
+                 .properties.front().declaration.type.spelling
+              == "event"
+          && class_events.design.systemverilog_classes[1]
+                 .properties.front().declaration.type.spelling
+              == "event"
+          && class_events.design.systemverilog_classes[1]
+                 .methods.front().statements.size() == 3
+          && class_events.design.systemverilog_classes[1]
+                 .methods.front().statements[0].kind
+              == StatementKind::ContainerMethod
+          && class_events.design.systemverilog_classes[1]
+                 .methods.front().statements[0].value.text
+              == "@sv-cast:void"
+          && class_events.design.systemverilog_classes[1]
+                 .methods.front().statements[1].kind
+              == StatementKind::EventTrigger
+          && class_events.design.systemverilog_classes[1]
+                 .methods.front().statements[1].target.kind
+              == ExpressionKind::Index
+          && class_events.design.systemverilog_classes[1]
+                 .methods.front().statements[2].target.text
+              == "m_event",
+      "class event properties, void casts, and selected/indexed triggers retain HIR");
+
   const auto duplicate = parse_text(
       "duplicate_event.sv",
       R"(
@@ -1496,7 +1541,7 @@ void test_verilog_literal_display() {
       R"(
 module display;
   initial begin
-    $display("hello\nworld\t\"quote\"\\slash\101");
+    $display("hello\nworld\t\"quote\"\\slash\101\.");
     $display();
     $display;
   end
@@ -1516,10 +1561,22 @@ endmodule
                     && statement.output_newline;
               })
           && statements.front().output_text
-              == "hello\nworld\t\"quote\"\\slashA"
+              == "hello\nworld\t\"quote\"\\slashA."
           && statements[1].output_text.empty()
           && statements[2].output_text.empty(),
       "literal and empty $display HIR");
+
+  const auto escaped_punctuation = parse_text(
+      "escaped-punctuation.sv",
+      R"(
+module escaped_punctuation;
+  string text = "\%\.";
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      escaped_punctuation.ok(),
+      "escaped punctuation in ordinary strings must parse");
 
   const auto formatted = parse_text(
       "formatted_display.sv",
@@ -1533,7 +1590,7 @@ module formatted_display;
     $display("%o", q);
     $display("%d", q);
     $display("%c", q);
-    $display("%s", q);
+    $display("%0s", q);
     $display("%0h", q);
     $display("%B", q);
     $display("%X", q);
@@ -1580,6 +1637,8 @@ endmodule
           && formatted.design.units.front().processes.front()
                  .statements[6].output_format
               == OutputFormat::String
+          && formatted.design.units.front().processes.front()
+                 .statements[6].output_suppress_leading_zero
           && formatted.design.units.front().processes.front()
                  .statements[7].output_format
               == OutputFormat::Hexadecimal
@@ -1642,7 +1701,7 @@ module invalid_format_width;
   logic q;
   initial begin
     $display("%-h", q);
-    $display("%0s", q);
+    $display("%-0s", q);
     $display("%999999999999999999999h", q);
   end
 endmodule

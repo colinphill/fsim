@@ -356,9 +356,16 @@ using runtime::Logic9; using namespace runtime::simir;
                 index);
           } else if constexpr (
               operation_group_contains_v<OperationType, ClassOperationGroup>) {
+            if constexpr (
+                std::is_same_v<OperationType, ClassMethodCall>
+                || std::is_same_v<OperationType, ClassStaticMethodCall>) {
+              result.uses_strings = result.uses_strings
+                  || std::ranges::find(operation.actual_kinds, 1U)
+                      != operation.actual_kinds.end();
+            }
             validate_class_operation(
                 process, index, operation, record_use, record_definition,
-                constrain_width);
+                constrain_width, validate_string_register);
           } else if constexpr (std::is_same_v<OperationType, CopyRegister>) {
             record_definition(operation.destination, index);
             record_use(operation.source, index);

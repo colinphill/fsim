@@ -1239,6 +1239,134 @@ bool Lowerer::report_unsupported_cross_root_reference(
                     32,
                     is_signed_expression(statement.file_handle));
             }
+            const auto scalar_kind_of =
+                [&](const Expression& value) {
+                    const auto* output_type =
+                        value.kind
+                                == frontend::ExpressionKind::Identifier
+                            ? object_type(value.text) : nullptr;
+                    return output_type != nullptr
+                        ? output_type->systemverilog_scalar
+                        : value.systemverilog_scalar_kind;
+                };
+            const auto scalar_format_matches =
+                [&](const Expression& value,
+                    const frontend::OutputFormat output_format) {
+                    const auto scalar_kind = scalar_kind_of(value);
+                    const bool real_kind =
+                        scalar_kind
+                            == frontend::SystemVerilogScalarKind::ShortReal
+                        || scalar_kind
+                            == frontend::SystemVerilogScalarKind::Real
+                        || scalar_kind
+                            == frontend::SystemVerilogScalarKind::Realtime;
+                    const bool real_format =
+                        output_format
+                            == frontend::OutputFormat::RealScientific
+                        || output_format
+                            == frontend::OutputFormat::RealFixed
+                        || output_format
+                            == frontend::OutputFormat::RealGeneral;
+                    return real_kind ? real_format
+                        : scalar_kind
+                                == frontend::SystemVerilogScalarKind::Time
+                            ? output_format
+                                    == frontend::OutputFormat::Time
+                                || output_format
+                                    == frontend::OutputFormat::Decimal
+                        : scalar_kind
+                                == frontend::SystemVerilogScalarKind::Chandle
+                            ? output_format
+                                == frontend::OutputFormat::Hexadecimal
+                            : !real_format
+                                && output_format
+                                    != frontend::OutputFormat::Time;
+                };
+            const auto lower_output =
+                [&](const frontend::OutputValue& output,
+                    const std::string& suffix,
+                    const bool newline) {
+                    if (output.format
+                        == frontend::OutputFormat::Hierarchy) {
+                        process_.operations.emplace_back(
+                            FileWriteLiteral{
+                                *handle,
+                                output.prefix + hierarchy_ + suffix,
+                                newline});
+                        return;
+                    }
+                    if ((output.format
+                             == frontend::OutputFormat::String
+                         || output.format
+                             == frontend::OutputFormat::Decimal)
+                        && is_string_expression(output.value)) {
+                        const auto source =
+                            lower_string_expression(output.value);
+                        if (source) {
+                            process_.operations.emplace_back(
+                                FileWriteString{
+                                    *handle,
+                                    *source,
+                                    output.prefix,
+                                    suffix,
+                                    newline});
+                        }
+                        return;
+                    }
+                    if (!scalar_format_matches(
+                            output.value, output.format)) {
+                        report(
+                            "FSIM-ELAB-SVFILE-007",
+                            "formatted file conversion is incompatible with the value type",
+                            output.value.span);
+                        return;
+                    }
+                    const auto width =
+                        infer_width(output.value).value_or(
+                            std::size_t{32});
+                    const auto source =
+                        lower_expression(output.value, width);
+                    if (!source) {
+                        report(
+                            "FSIM-ELAB-SVFILE-007",
+                            "formatted file output value cannot be lowered",
+                            output.value.span);
+                        return;
+                    }
+                    const auto format =
+                        runtime_output_format(output.format);
+                    process_.operations.emplace_back(
+                        FileWriteFormatted{
+                            *handle,
+                            *source,
+                            static_cast<std::uint32_t>(width),
+                            format,
+                            output.prefix,
+                            suffix,
+                            newline,
+                            format
+                                    == runtime::simir::OutputFormat::decimal
+                                && is_signed_expression(output.value),
+                            output.suppress_leading_zero,
+                            output.minimum_width,
+                            output.left_justify,
+                            output.zero_pad,
+                            scalar_kind_of(output.value)});
+                };
+            if (!statement.output_values.empty()) {
+                for (std::size_t index = 0;
+                     index < statement.output_values.size();
+                     ++index) {
+                    const bool last =
+                        index + 1 == statement.output_values.size();
+                    lower_output(
+                        statement.output_values[index],
+                        last ? statement.output_trailing_text
+                             : std::string{},
+                        last && statement.output_newline);
+                }
+                break;
+            }
             if (!statement.output_format) {
                 process_.operations.emplace_back(
                     FileWriteLiteral{
@@ -1247,90 +1375,17 @@ bool Lowerer::report_unsupported_cross_root_reference(
                         statement.output_newline});
                 break;
             }
-            if (*statement.output_format
-                    == frontend::OutputFormat::String
-                && is_string_expression(statement.value)) {
-                const auto source =
-                    lower_string_expression(statement.value);
-                if (source) {
-                    process_.operations.emplace_back(
-                        FileWriteString{
-                            *handle,
-                            *source,
-                            statement.output_prefix,
-                            statement.output_suffix,
-                            statement.output_newline});
-                }
-                break;
-            }
-            const auto* output_type = statement.value.kind
-                    == frontend::ExpressionKind::Identifier
-                ? object_type(statement.value.text) : nullptr;
-            const auto scalar_kind = output_type != nullptr
-                ? output_type->systemverilog_scalar
-                : statement.value.systemverilog_scalar_kind;
-            const bool real_kind =
-                scalar_kind == frontend::SystemVerilogScalarKind::ShortReal
-                || scalar_kind == frontend::SystemVerilogScalarKind::Real
-                || scalar_kind
-                    == frontend::SystemVerilogScalarKind::Realtime;
-            const bool real_format =
-                *statement.output_format
-                    == frontend::OutputFormat::RealScientific
-                || *statement.output_format
-                    == frontend::OutputFormat::RealFixed
-                || *statement.output_format
-                    == frontend::OutputFormat::RealGeneral;
-            const bool scalar_format_matches =
-                real_kind ? real_format
-                : scalar_kind == frontend::SystemVerilogScalarKind::Time
-                    ? *statement.output_format
-                            == frontend::OutputFormat::Time
-                        || *statement.output_format
-                            == frontend::OutputFormat::Decimal
-                : scalar_kind == frontend::SystemVerilogScalarKind::Chandle
-                    ? *statement.output_format
-                        == frontend::OutputFormat::Hexadecimal
-                    : !real_format
-                        && *statement.output_format
-                            != frontend::OutputFormat::Time;
-            if (!scalar_format_matches) {
-                report(
-                    "FSIM-ELAB-SVFILE-007",
-                    "formatted file conversion is incompatible with the value type",
-                    statement.value.span);
-                break;
-            }
-            const auto width =
-                infer_width(statement.value).value_or(
-                    std::size_t{32});
-            const auto source =
-                lower_expression(statement.value, width);
-            if (!source) {
-                report(
-                    "FSIM-ELAB-SVFILE-007",
-                    "formatted file output value cannot be lowered",
-                    statement.value.span);
-                break;
-            }
-            const auto format =
-                runtime_output_format(*statement.output_format);
-            process_.operations.emplace_back(
-                FileWriteFormatted{
-                    *handle,
-                    *source,
-                    static_cast<std::uint32_t>(width),
-                    format,
+            lower_output(
+                frontend::OutputValue{
+                    statement.value,
+                    *statement.output_format,
                     statement.output_prefix,
-                    statement.output_suffix,
-                    statement.output_newline,
-                    format == runtime::simir::OutputFormat::decimal
-                        && is_signed_expression(statement.value),
                     statement.output_suppress_leading_zero,
                     statement.output_minimum_width,
                     statement.output_left_justify,
-                    statement.output_zero_pad,
-                    scalar_kind});
+                    statement.output_zero_pad},
+                statement.output_suffix,
+                statement.output_newline);
             break;
         }
         case StatementKind::MemoryLoad: {

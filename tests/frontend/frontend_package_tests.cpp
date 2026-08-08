@@ -473,11 +473,10 @@ endmodule
       "invalid_packages.sv",
       R"(
 package invalid_values;
-  logic unsupported;
+  initial;
   typedef string unsupported_t;
   typedef logic duplicate_t;
   typedef bit duplicate_t;
-  typedef logic unpacked_t [2];
   typedef enum { DEFAULT_BASE } default_base_t;
   typedef enum real { INVALID_BASE } invalid_base_t;
   typedef enum logic [1:0] {} empty_enum_t;
@@ -516,7 +515,6 @@ endmodule
       !invalid.ok()
           && has_code("FSIM-SV-UNSUPPORTED-023")
           && has_code("FSIM-SV-UNSUPPORTED-024")
-          && has_code("FSIM-SV-UNSUPPORTED-025")
           && has_code("FSIM-SV-UNSUPPORTED-026")
           && has_code("FSIM-SV-UNSUPPORTED-028")
           && has_code("FSIM-SV-UNSUPPORTED-029")

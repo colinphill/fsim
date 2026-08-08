@@ -39,6 +39,7 @@ struct SystemVerilogClassMethodProfile {
   bool is_pure{};
   std::optional<std::uint32_t> virtual_slot;
   std::vector<FunctionArgument> arguments;
+  std::vector<TypeAliasDeclaration> type_aliases;
   std::vector<VariableDeclaration> variables;
   std::vector<Statement> statements;
 };

@@ -283,18 +283,30 @@ void resolve_declaration_types(
         diagnostics);
   }
   for (auto& method : declaration.methods) {
+    auto method_shadowed_types = shadowed_types;
+    for (const auto& alias : method.type_aliases) {
+      method_shadowed_types.insert(alias.name);
+    }
     resolve_type(
         method.return_type,
         owner,
         entries,
-        shadowed_types,
+        method_shadowed_types,
         diagnostics);
+    for (auto& alias : method.type_aliases) {
+      resolve_type(
+          alias.type,
+          owner,
+          entries,
+          method_shadowed_types,
+          diagnostics);
+    }
     for (auto& argument : method.arguments) {
       resolve_type(
           argument.type,
           owner,
           entries,
-          shadowed_types,
+          method_shadowed_types,
           diagnostics);
     }
     for (auto& variable : method.variables) {
@@ -302,30 +314,36 @@ void resolve_declaration_types(
           variable.type,
           owner,
           entries,
-          shadowed_types,
+          method_shadowed_types,
           diagnostics);
     }
   }
   if (declaration.base) {
-    auto candidates = resolve_name(declaration.base->name, owner, entries);
-    if (candidates.empty()) {
-      diagnose(
-          diagnostics,
-          "FSIM-SV-CLASS-002",
-          "base class '" + declaration.base->name
-              + "' is not visible from '"
-              + declaration.canonical_identity + "'",
-          declaration.base->span);
-    } else if (candidates.size() != 1U) {
-      diagnose(
-          diagnostics,
-          "FSIM-SV-CLASS-003",
-          "base class '" + declaration.base->name
-              + "' is ambiguous in lexical/import scope",
-          declaration.base->span);
-    } else {
-      declaration.base->declaration_identity =
-          candidates.front()->declaration->canonical_identity;
+    const bool deferred_type_parameter =
+        declaration.base->name.find("::") == std::string::npos
+        && shadowed_types.contains(declaration.base->name);
+    if (!deferred_type_parameter) {
+      auto candidates =
+          resolve_name(declaration.base->name, owner, entries);
+      if (candidates.empty()) {
+        diagnose(
+            diagnostics,
+            "FSIM-SV-CLASS-002",
+            "base class '" + declaration.base->name
+                + "' is not visible from '"
+                + declaration.canonical_identity + "'",
+            declaration.base->span);
+      } else if (candidates.size() != 1U) {
+        diagnose(
+            diagnostics,
+            "FSIM-SV-CLASS-003",
+            "base class '" + declaration.base->name
+                + "' is ambiguous in lexical/import scope",
+            declaration.base->span);
+      } else {
+        declaration.base->declaration_identity =
+            candidates.front()->declaration->canonical_identity;
+      }
     }
     for (auto& actual : declaration.base->parameter_actuals) {
       if (actual.type_actual) {
@@ -368,26 +386,38 @@ void resolve_statement_types(
     std::vector<ClassEntry>& entries,
     const std::set<std::string>& shadowed_types,
     std::vector<Diagnostic>& diagnostics) {
+  auto local_shadowed_types = shadowed_types;
+  for (const auto& alias : statement.type_aliases) {
+    local_shadowed_types.insert(alias.name);
+  }
+  for (auto& alias : statement.type_aliases) {
+    resolve_type(
+        alias.type,
+        owner,
+        entries,
+        local_shadowed_types,
+        diagnostics);
+  }
   for (auto& declaration : statement.declarations) {
     resolve_type(
         declaration.type,
         owner,
         entries,
-        shadowed_types,
+        local_shadowed_types,
         diagnostics);
   }
   for (auto& child : statement.statements) {
     resolve_statement_types(
-        child, owner, entries, shadowed_types, diagnostics);
+        child, owner, entries, local_shadowed_types, diagnostics);
   }
   for (auto& child : statement.else_statements) {
     resolve_statement_types(
-        child, owner, entries, shadowed_types, diagnostics);
+        child, owner, entries, local_shadowed_types, diagnostics);
   }
   for (auto& alternative : statement.case_alternatives) {
     for (auto& child : alternative.statements) {
       resolve_statement_types(
-          child, owner, entries, shadowed_types, diagnostics);
+          child, owner, entries, local_shadowed_types, diagnostics);
     }
   }
 }
@@ -434,8 +464,16 @@ void resolve_task_types(
     TaskDeclaration& task,
     const ClassEntry& owner,
     std::vector<ClassEntry>& entries,
-    const std::set<std::string>& shadowed_types,
+    const std::set<std::string>& inherited_shadowed_types,
     std::vector<Diagnostic>& diagnostics) {
+  auto shadowed_types = inherited_shadowed_types;
+  for (const auto& alias : task.type_aliases) {
+    shadowed_types.insert(alias.name);
+  }
+  for (auto& alias : task.type_aliases) {
+    resolve_type(
+        alias.type, owner, entries, shadowed_types, diagnostics);
+  }
   for (auto& argument : task.arguments) {
     resolve_type(
         argument.type, owner, entries, shadowed_types, diagnostics);
@@ -748,9 +786,22 @@ bool resolve_systemverilog_classes(
   }
 
   std::map<std::string, std::size_t> identities;
+  std::set<std::string> alias_identities;
+  for (const auto& unit : design.units) {
+    if (unit.language != Language::SystemVerilog2017) {
+      continue;
+    }
+    const auto prefix =
+        effective_library(unit.library) + "::" + unit.name;
+    for (const auto& alias : unit.type_aliases) {
+      alias_identities.insert(prefix + "::" + alias.name);
+    }
+  }
   for (auto& entry : entries) {
     auto& declaration = *entry.declaration;
-    if (declaration.is_forward_declaration) {
+    if (declaration.is_forward_declaration
+        && !alias_identities.contains(
+            declaration.canonical_identity)) {
       diagnose(
           diagnostics,
           "FSIM-SV-CLASS-001",
@@ -778,8 +829,28 @@ bool resolve_systemverilog_classes(
   }
 
   std::set<std::string> linked_definitions;
+  std::vector<SystemVerilogClassMethod*> method_definitions;
+  method_definitions.reserve(
+      design.systemverilog_class_method_definitions.size());
   for (auto& definition :
        design.systemverilog_class_method_definitions) {
+    method_definitions.push_back(&definition);
+  }
+  for (auto& unit : design.units) {
+    for (auto& definition :
+         unit.systemverilog_class_method_definitions) {
+      if (definition.library.empty()) {
+        definition.library = unit.library;
+      }
+      if (definition.compilation_unit_identity.empty()) {
+        definition.compilation_unit_identity =
+            unit.compilation_unit_identity;
+      }
+      method_definitions.push_back(&definition);
+    }
+  }
+  for (auto* definition_pointer : method_definitions) {
+    auto& definition = *definition_pointer;
     const auto separator = definition.name.rfind("::");
     if (separator == std::string::npos) {
       continue;
@@ -832,6 +903,56 @@ bool resolve_systemverilog_classes(
               + "' has more than one out-of-block definition",
           definition.span);
       continue;
+    }
+    std::set<std::string> definition_shadowed_types;
+    for (const auto& parameter : owners.front()->declaration->parameters) {
+      if (parameter.kind == ParameterKind::Type) {
+        definition_shadowed_types.insert(parameter.name);
+      }
+    }
+    for (const auto& alias : owners.front()->declaration->type_aliases) {
+      definition_shadowed_types.insert(alias.name);
+    }
+    for (const auto& alias : definition.type_aliases) {
+      definition_shadowed_types.insert(alias.name);
+    }
+    resolve_type(
+        definition.return_type,
+        *owners.front(),
+        entries,
+        definition_shadowed_types,
+        diagnostics);
+    for (auto& alias : definition.type_aliases) {
+      resolve_type(
+          alias.type,
+          *owners.front(),
+          entries,
+          definition_shadowed_types,
+          diagnostics);
+    }
+    for (auto& argument : definition.arguments) {
+      resolve_type(
+          argument.type,
+          *owners.front(),
+          entries,
+          definition_shadowed_types,
+          diagnostics);
+    }
+    for (auto& variable : definition.variables) {
+      resolve_type(
+          variable.type,
+          *owners.front(),
+          entries,
+          definition_shadowed_types,
+          diagnostics);
+    }
+    for (auto& statement : definition.statements) {
+      resolve_statement_types(
+          statement,
+          *owners.front(),
+          entries,
+          definition_shadowed_types,
+          diagnostics);
     }
     const auto visibility = prototype->visibility;
     const auto is_static = prototype->is_static;

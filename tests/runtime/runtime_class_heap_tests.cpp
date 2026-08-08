@@ -2,7 +2,9 @@
 #include "fsim/runtime/class_heap.hpp"
 #include "fsim/runtime/class_methods.hpp"
 #include "fsim/runtime/class_static.hpp"
+#include "fsim/runtime/uvm_object.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -676,6 +678,210 @@ void test_systemverilog_class_methods() {
   require(
       static_cycle_failed,
       "cyclic static initialization must reject without publishing values");
+}
+
+void test_systemverilog_uvm_object() {
+  using namespace fsim::runtime;
+  const auto make_descriptor = [] {
+    SystemVerilogClassDescriptor result;
+    result.declared_type = "uvm_pkg::uvm_object";
+    result.dynamic_type = "work::uvm_item";
+    result.specialization_identity = "work::uvm_item";
+    result.assignable_declared_types = {
+        "work::uvm_item", "uvm_pkg::uvm_object"};
+    result.properties = {
+        {"value", SystemVerilogClassPropertyKind::Logic4, 16},
+        {"label", SystemVerilogClassPropertyKind::String, 0},
+        {"child", SystemVerilogClassPropertyKind::ClassHandle, 64},
+        {"alias", SystemVerilogClassPropertyKind::ClassHandle, 64},
+        {"ignored", SystemVerilogClassPropertyKind::Logic4, 8}};
+    return result;
+  };
+
+  SystemVerilogClassHeap heap{{64, 4096}};
+  std::size_t copy_hooks{};
+  std::size_t compare_hooks{};
+  std::size_t print_hooks{};
+  std::size_t record_hooks{};
+  std::size_t print_sink_calls{};
+  std::size_t record_sink_calls{};
+  SystemVerilogUvmObjectService objects{
+      heap,
+      [&](const std::string_view specialization,
+          const std::string_view declared,
+          const std::string_view) {
+        require(
+            specialization == "work::uvm_item"
+                && declared == "uvm_pkg::uvm_object",
+            "UVM virtual create must retain specialization and declared view");
+        return heap.allocate(make_descriptor());
+      },
+      {16, 64, 256, 4096}};
+  SystemVerilogUvmObjectDescriptor type;
+  type.specialization_identity = "work::uvm_item";
+  type.type_name = "uvm_item";
+  type.fields = {
+      {"value", SystemVerilogUvmFieldFlag::None},
+      {"label", SystemVerilogUvmFieldFlag::None},
+      {"child", SystemVerilogUvmFieldFlag::None},
+      {"alias", SystemVerilogUvmFieldFlag::Reference},
+      {"ignored", SystemVerilogUvmFieldFlag::NoCopy
+          | SystemVerilogUvmFieldFlag::NoCompare
+          | SystemVerilogUvmFieldFlag::NoPrint
+          | SystemVerilogUvmFieldFlag::NoRecord}};
+  type.do_copy = [&](const auto, const auto) { ++copy_hooks; };
+  type.do_compare = [&](const auto, const auto) {
+    ++compare_hooks;
+    return true;
+  };
+  type.do_print = [&](const auto handle, auto& entries) {
+    ++print_hooks;
+    entries.push_back({
+        std::string{objects.name(handle)} + ".$do_print",
+        "hook", "print", handle,
+        SystemVerilogUvmObjectEntryKind::Custom, 1});
+  };
+  type.do_record = [&](const auto handle, auto& entries) {
+    ++record_hooks;
+    entries.push_back({
+        std::string{objects.name(handle)} + ".$do_record",
+        "hook", "record", handle,
+        SystemVerilogUvmObjectEntryKind::Custom, 1});
+  };
+  objects.register_type(std::move(type));
+  objects.set_print_hook([&](const auto entries) {
+    ++print_sink_calls;
+    require(!entries.empty(), "UVM print sink must receive a stable snapshot");
+  });
+  objects.set_record_hook([&](const auto entries) {
+    ++record_sink_calls;
+    require(!entries.empty(), "UVM record sink must receive a stable snapshot");
+  });
+
+  const auto root = heap.allocate(make_descriptor());
+  const auto child = heap.allocate(make_descriptor());
+  objects.initialize(root, "root");
+  objects.initialize(child, "child");
+  heap.property(root, "value").packed =
+      PackedLogic4::from_aval_bval(16, 0x1234, 0);
+  heap.property(root, "label").string = "root-label";
+  heap.property(root, "child").handle = child;
+  heap.property(root, "alias").handle = child;
+  heap.property(root, "ignored").packed =
+      PackedLogic4::from_aval_bval(8, 0xaa, 0);
+  heap.property(child, "value").packed =
+      PackedLogic4::from_aval_bval(16, 0x5678, 0);
+  heap.property(child, "label").string = "child-label";
+  heap.property(child, "child").handle = root;
+  heap.property(child, "alias").handle = root;
+
+  require(
+      objects.instance_id(root) == 0 && objects.instance_id(child) == 1
+          && objects.instance_count() == 2
+          && objects.name(root) == "root"
+          && objects.full_name(root) == "root"
+          && objects.type_name(root) == "uvm_item",
+      "UVM construction must retain deterministic names and type/instance identity");
+  objects.set_name(root, "renamed");
+  require(
+      objects.name(root) == "renamed" && objects.full_name(root) == "renamed",
+      "UVM set_name must update leaf and default full-name identity");
+
+  const auto cloned = objects.clone(root);
+  const auto cloned_child = heap.property(cloned, "child").handle;
+  require(
+      cloned != root && cloned_child != child && cloned_child != 0
+          && heap.property(cloned_child, "child").handle == cloned
+          && heap.property(cloned, "alias").handle == child
+          && objects.name(cloned) == "renamed"
+          && objects.name(cloned_child) == "child"
+          && objects.instance_id(cloned) == 2
+          && objects.instance_id(cloned_child) == 3
+          && objects.compare(root, cloned),
+      "UVM clone must deep-copy fields while preserving cycles and reference aliases");
+  require(
+      heap.property(cloned, "ignored").packed
+              != heap.property(root, "ignored").packed
+          && copy_hooks == 2 && compare_hooks == 2,
+      "UVM field flags and virtual copy/compare hooks must execute per object");
+
+  heap.property(cloned_child, "value").packed =
+      PackedLogic4::from_aval_bval(16, 7, 0);
+  require(
+      !objects.compare(root, cloned),
+      "UVM deep compare must detect a recursive field mismatch");
+  objects.copy(cloned, root);
+  const auto recopied_child = heap.property(cloned, "child").handle;
+  require(
+      recopied_child != cloned_child && recopied_child != child
+          && heap.property(recopied_child, "child").handle == cloned
+          && objects.compare(root, cloned),
+      "UVM copy must publish a new deterministic recursive graph");
+
+  const auto printed = objects.print(cloned);
+  const auto recorded = objects.record(cloned);
+  require(
+      std::ranges::any_of(printed, [](const auto& entry) {
+        return entry.kind == SystemVerilogUvmObjectEntryKind::Cycle
+            && entry.path == "renamed.child.child"
+            && entry.value == "renamed";
+      })
+          && std::ranges::none_of(printed, [](const auto& entry) {
+               return entry.path.find("ignored") != std::string::npos;
+             })
+          && std::ranges::any_of(recorded, [](const auto& entry) {
+               return entry.kind == SystemVerilogUvmObjectEntryKind::Custom
+                   && entry.value == "record";
+             })
+          && print_hooks == 2 && record_hooks == 2
+          && print_sink_calls == 1 && record_sink_calls == 1,
+      "UVM print/record automation must expose deterministic cycles, flags, hooks, and snapshots");
+
+  const auto live_before_failure = heap.live_objects();
+  SystemVerilogUvmObjectService bounded{
+      heap,
+      [&](const std::string_view, const std::string_view,
+          const std::string_view) {
+        return heap.allocate(make_descriptor());
+      },
+      {16, 1, 256, 4096}};
+  SystemVerilogUvmObjectDescriptor bounded_type;
+  bounded_type.specialization_identity = "work::uvm_item";
+  bounded_type.type_name = "uvm_item";
+  bounded_type.fields = {
+      {"value", SystemVerilogUvmFieldFlag::None},
+      {"child", SystemVerilogUvmFieldFlag::None}};
+  bounded.register_type(std::move(bounded_type));
+  bounded.initialize(root, "bounded-root");
+  bool bounded_failed = false;
+  try {
+    (void)bounded.clone(root);
+  } catch (const std::length_error&) {
+    bounded_failed = true;
+  }
+  require(
+      bounded_failed && heap.live_objects() == live_before_failure
+          && heap.property(root, "child").handle == child,
+      "UVM recursive copy limits must roll back all newly allocated objects");
+
+  bool duplicate_failed = false;
+  try {
+    SystemVerilogUvmObjectDescriptor duplicate;
+    duplicate.specialization_identity = "work::uvm_item";
+    duplicate.type_name = "duplicate";
+    objects.register_type(std::move(duplicate));
+  } catch (const std::invalid_argument&) {
+    duplicate_failed = true;
+  }
+  bool null_copy_failed = false;
+  try {
+    objects.copy(root, 0);
+  } catch (const std::invalid_argument&) {
+    null_copy_failed = true;
+  }
+  require(
+      duplicate_failed && null_copy_failed,
+      "duplicate UVM types and null copy operands must reject explicitly");
 }
 
 }  // namespace fsim::tests::runtime

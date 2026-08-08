@@ -774,6 +774,10 @@ SpecializedUnit specialize_unit(
         systemverilog_scalar_evaluation_context(source);
     SystemVerilogStringEnvironment
         systemverilog_string_environment;
+    const auto self_qualified_name =
+        [&](const std::string_view name) {
+          return source.name + "::" + std::string{name};
+        };
     for (std::size_t parameter_index = 0;
          parameter_index < source.parameters.size();
          ++parameter_index) {
@@ -915,6 +919,11 @@ SpecializedUnit specialize_unit(
             }
             systemverilog_string_environment[parameter.name] =
                 *systemverilog_string_value;
+            if (is_systemverilog_package) {
+                systemverilog_string_environment[
+                    self_qualified_name(parameter.name)] =
+                    *systemverilog_string_value;
+            }
             result.values.emplace_back(
                 parameter.name,
                 systemverilog_string_value->display());
@@ -962,6 +971,11 @@ SpecializedUnit specialize_unit(
         if (is_verilog && systemverilog_scalar_value) {
             systemverilog_scalar_environment[parameter.name] =
                 *systemverilog_scalar_value;
+            if (is_systemverilog_package) {
+                systemverilog_scalar_environment[
+                    self_qualified_name(parameter.name)] =
+                    *systemverilog_scalar_value;
+            }
             specialized_parameter.default_value =
                 systemverilog_scalar_value->expression(parameter.span);
             result.values.emplace_back(
@@ -1195,14 +1209,27 @@ SpecializedUnit specialize_unit(
             }
             systemverilog_environment[parameter.name] =
                 *systemverilog_value;
+            if (is_systemverilog_package) {
+                systemverilog_environment[
+                    self_qualified_name(parameter.name)] =
+                    *systemverilog_value;
+            }
             if (const auto integer =
                     systemverilog_value->integer_value()) {
                 result.environment[parameter.name] = *integer;
+                if (is_systemverilog_package) {
+                    result.environment[
+                        self_qualified_name(parameter.name)] = *integer;
+                }
             }
             domains[parameter.name] = ConstantTypeInfo{
                 parameter_type.domain,
                 false,
                 parameter_type.nominal_type};
+            if (is_systemverilog_package) {
+                domains[self_qualified_name(parameter.name)] =
+                    domains.at(parameter.name);
+            }
             result.values.emplace_back(
                 parameter.name,
                 systemverilog_value->display());

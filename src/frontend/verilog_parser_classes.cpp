@@ -37,7 +37,6 @@ void VerilogParser::add_class_declaration(
   }
   if (existing->is_forward_declaration
       && !declaration.is_forward_declaration) {
-    declaration.span = cover(existing->span, declaration.span);
     *existing = std::move(declaration);
     return;
   }
@@ -124,7 +123,8 @@ bool VerilogParser::parse_class_property(
       keyword("string") || keyword("byte") || keyword("shortint")
       || keyword("shortreal") || keyword("real")
       || keyword("realtime") || keyword("chandle")
-      || keyword("process")
+      || keyword("process") || keyword("event")
+      || keyword("enum")
       || keyword("longint") || keyword("time") || keyword("integer")
       || keyword("int") || keyword("logic") || keyword("reg")
       || keyword("bit") || keyword("signed") || keyword("unsigned")
@@ -212,6 +212,7 @@ SystemVerilogClassMethod VerilogParser::parse_class_method(
   if (kind == SystemVerilogClassMethodKind::Task) {
     auto task = parse_task(start, prototype, true);
     method.name = std::move(task.name);
+    method.type_aliases = std::move(task.type_aliases);
     method.variables = std::move(task.variables);
     method.statements = std::move(task.statements);
     method.lifetime = task.lifetime_explicit
@@ -234,10 +235,12 @@ SystemVerilogClassMethod VerilogParser::parse_class_method(
     auto function = parse_function(start, prototype, true);
     method.name = std::move(function.name);
     method.kind = method.name == "new"
+            || method.name.ends_with("::new")
         ? SystemVerilogClassMethodKind::Constructor
         : SystemVerilogClassMethodKind::Function;
     method.return_type = std::move(function.return_type);
     method.arguments = std::move(function.arguments);
+    method.type_aliases = std::move(function.type_aliases);
     method.variables = std::move(function.variables);
     method.statements = std::move(function.statements);
     method.lifetime = function.lifetime_explicit
@@ -547,7 +550,7 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
 
   if (match(TokenKind::Hash)) {
     DesignUnit parameter_owner;
-    parse_parameter_port_list(parameter_owner, previous());
+    parse_parameter_port_list(parameter_owner, previous(), true);
     declaration.parameters = std::move(parameter_owner.parameters);
   }
 
@@ -599,6 +602,39 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
       "FSIM-SV-PARSE-258");
 
   while (!at_end() && !keyword("endclass")) {
+    if (match_keyword("localparam")) {
+      const auto parameter_start = previous();
+      DesignUnit parameter_owner;
+      parse_parameter_group(
+          parameter_owner, true, false, parameter_start, false);
+      for (auto& parameter : parameter_owner.parameters) {
+        const bool duplicate = std::ranges::any_of(
+            declaration.properties,
+            [&](const SystemVerilogClassProperty& property) {
+              return property.declaration.name == parameter.name;
+            });
+        if (duplicate) {
+          error(
+              parameter_start,
+              "FSIM-SV-SEM-170",
+              "duplicate class property declaration '"
+                  + parameter.name + "'");
+          continue;
+        }
+        SystemVerilogClassProperty property;
+        property.declaration = VariableDeclaration{
+            std::move(parameter.name),
+            std::move(parameter.type),
+            std::optional<Expression>{
+                std::move(parameter.default_value)},
+            parameter.span};
+        property.is_static = true;
+        property.is_const = true;
+        property.span = parameter.span;
+        declaration.properties.push_back(std::move(property));
+      }
+      continue;
+    }
     if (match_keyword("typedef")) {
       const auto nested_start = previous();
       if (keyword("class")) {

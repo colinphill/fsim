@@ -7,6 +7,7 @@ Process VerilogParser::parse_initial() {
   const auto start =
       expect_keyword("initial", false, "FSIM-SV-PARSE-013");
   current_procedural_names_.clear();
+  current_procedural_types_.clear();
   Process process;
   process.kind = ProcessKind::Initial;
   auto body = parse_statement();
@@ -21,6 +22,7 @@ Process VerilogParser::parse_initial() {
   }
   process.span = span_from(start, previous());
   current_procedural_names_.clear();
+  current_procedural_types_.clear();
   return process;
 }
 
@@ -33,6 +35,7 @@ Process VerilogParser::parse_final() {
       ? advance()
       : expect_keyword("final", false, "FSIM-SV-PARSE-111");
   current_procedural_names_.clear();
+  current_procedural_types_.clear();
   Process process;
   process.kind = ProcessKind::Final;
   if (language_ == Language::Verilog2005) {
@@ -107,6 +110,7 @@ Process VerilogParser::parse_final() {
   }
   process.span = span_from(start, previous());
   current_procedural_names_.clear();
+  current_procedural_types_.clear();
   return process;
 }
 
@@ -330,8 +334,21 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start) {
       TokenKind::LeftParen,
       "'(' after procedural for",
       "FSIM-SV-PARSE-095");
+  const bool built_in_loop_type =
+      keyword("byte") || keyword("shortint")
+      || keyword("int") || keyword("longint")
+      || keyword("integer") || keyword("time")
+      || keyword("bit") || keyword("logic")
+      || keyword("reg") || keyword("signed")
+      || keyword("unsigned") || at(TokenKind::LeftBracket);
+  const bool named_loop_type =
+      at(TokenKind::Identifier)
+      && at(TokenKind::Identifier, 1);
   const bool inline_variable =
-      match_keyword("int") || match_keyword("integer");
+      built_in_loop_type || named_loop_type;
+  if (inline_variable) {
+    (void)parse_parameter_type();
+  }
   const auto variable =
       expect_identifier("procedural loop variable");
   statement.loop_variable = variable.text;
@@ -368,11 +385,6 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start) {
       && (condition.text == "<" || condition.text == "<="
           || condition.text == ">" || condition.text == ">=");
   if (!canonical_condition) {
-    error(
-        variable,
-        "FSIM-SV-SEM-027",
-        "bounded procedural for-loop condition must compare its loop "
-        "variable against an integral bound");
     statement.loop_runtime = true;
   } else {
     statement.loop_descending =
@@ -392,13 +404,11 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start) {
   }
   const auto iteration_variable =
       expect_identifier("procedural loop iteration variable");
-  if (iteration_variable.text != statement.loop_variable) {
-    error(
-        iteration_variable,
-        "FSIM-SV-SEM-028",
-        "procedural loop iteration must update loop variable '"
-            + statement.loop_variable + "'");
-  }
+  statement.loop_update_target = Expression{
+      ExpressionKind::Identifier,
+      iteration_variable.text,
+      {},
+      iteration_variable.span};
   std::string update_operation;
   std::optional<Expression> update_operand;
   if (prefix_update) {
@@ -432,7 +442,7 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start) {
     statement.value = Expression{
         ExpressionKind::Binary,
         update_operation,
-        {statement.target, std::move(*update_operand)},
+        {statement.loop_update_target, std::move(*update_operand)},
         cover(iteration_variable.span, previous().span)};
   }
   if (!statement.value.valid()) {
@@ -441,6 +451,61 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start) {
         "FSIM-SV-SEM-103",
         "procedural loop update is not an assignment or increment of '"
             + statement.loop_variable + "'");
+    statement.loop_runtime = true;
+  }
+  while (match(TokenKind::Comma)) {
+    const auto update_start = current();
+    Statement update;
+    update.kind = StatementKind::Assignment;
+    update.assignment_kind = AssignmentKind::Blocking;
+    std::optional<Token> update_prefix;
+    if (match(TokenKind::PlusPlus)
+        || match(TokenKind::MinusMinus)) {
+      update_prefix = previous();
+    }
+    update.target = parse_lvalue();
+    std::optional<std::string> operation;
+    bool unit = update_prefix.has_value();
+    if (update_prefix) {
+      operation =
+          update_prefix->kind == TokenKind::PlusPlus ? "+" : "-";
+      update.procedural_update_kind = ProceduralUpdateKind::Prefix;
+    } else if (match(TokenKind::PlusPlus)
+               || match(TokenKind::MinusMinus)) {
+      operation =
+          previous().kind == TokenKind::PlusPlus ? "+" : "-";
+      unit = true;
+      update.procedural_update_kind = ProceduralUpdateKind::Postfix;
+    } else if (match(TokenKind::PlusAssign)
+               || match(TokenKind::MinusAssign)) {
+      operation =
+          previous().kind == TokenKind::PlusAssign ? "+" : "-";
+      update.procedural_update_kind = ProceduralUpdateKind::Compound;
+    } else if (match(TokenKind::Assign)) {
+      update.value = parse_expression();
+    } else {
+      error(
+          current(),
+          "FSIM-SV-SEM-103",
+          "procedural loop update is not an assignment or increment");
+    }
+    if (operation) {
+      Expression operand = unit
+          ? Expression{
+                ExpressionKind::IntegerLiteral,
+                "1",
+                {},
+                previous().span}
+          : parse_expression();
+      update.value = Expression{
+          ExpressionKind::Binary,
+          *operation,
+          {update.target, std::move(operand)},
+          cover(update.target.span, previous().span)};
+      update.procedural_update_operator = *operation;
+    }
+    update.span = cover(update_start.span, previous().span);
+    statement.loop_updates.push_back(std::move(update));
     statement.loop_runtime = true;
   }
 
@@ -453,16 +518,10 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start) {
       : std::nullopt;
   const bool supported_update =
       update_amount && *update_amount > 0
+      && iteration_variable.text == statement.loop_variable
       && (statement.loop_descending
               ? statement.value.text == "-"
               : statement.value.text == "+");
-  if (!supported_update) {
-    error(
-        iteration_variable,
-        "FSIM-SV-SEM-029",
-        "bounded procedural for-loop iteration must advance by a "
-        "positive constant toward its comparison bound");
-  }
   if (!canonical_condition || !supported_update
       || !inline_variable || *update_amount != 1) {
     statement.loop_runtime = true;
@@ -477,6 +536,121 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start) {
   if (loop_name != current_loop_names_.end()
       && --loop_name->second == 0) {
     current_loop_names_.erase(loop_name);
+  }
+  statement.span = span_from(start, previous());
+  return statement;
+}
+
+Statement VerilogParser::parse_procedural_foreach_statement(
+    const Token& start) {
+  Statement statement;
+  statement.kind = StatementKind::Loop;
+  statement.loop_runtime = true;
+  statement.loop_variable_declared = true;
+  expect(
+      TokenKind::LeftParen,
+      "'(' after procedural foreach",
+      "FSIM-SV-PARSE-330");
+  const auto collection = keyword("this") || keyword("super")
+      ? advance()
+      : expect_identifier("foreach collection");
+  Expression collection_expression{
+      ExpressionKind::Identifier,
+      collection.text,
+      {},
+      collection.span};
+  for (;;) {
+    if (at(TokenKind::Dot) || at(TokenKind::Scope)) {
+      const auto separator = advance();
+      const auto member =
+          expect_identifier("selected foreach collection");
+      collection_expression.text +=
+          separator.kind == TokenKind::Scope ? "::" : ".";
+      collection_expression.text += member.text;
+      collection_expression.span =
+          cover(collection_expression.span, member.span);
+      continue;
+    }
+    if (!at(TokenKind::LeftBracket)) {
+      break;
+    }
+    std::size_t cursor = 1U;
+    std::size_t depth = 1U;
+    while (depth != 0U
+           && !at(TokenKind::EndOfFile, cursor)) {
+      if (at(TokenKind::LeftBracket, cursor)) {
+        ++depth;
+      } else if (at(TokenKind::RightBracket, cursor)) {
+        --depth;
+      }
+      ++cursor;
+    }
+    if (depth != 0U
+        || (!at(TokenKind::Dot, cursor)
+            && !at(TokenKind::Scope, cursor))) {
+      break;
+    }
+    const auto selection_start = advance();
+    auto index = parse_expression();
+    expect(
+        TokenKind::RightBracket,
+        "']' after selected foreach collection index",
+        "FSIM-SV-PARSE-332");
+    collection_expression = Expression{
+        ExpressionKind::Index,
+        "index",
+        {
+            std::move(collection_expression),
+            std::move(index)},
+        cover(selection_start.span, previous().span)};
+  }
+  statement.target = std::move(collection_expression);
+  expect(
+      TokenKind::LeftBracket,
+      "'[' after foreach collection",
+      "FSIM-SV-PARSE-331");
+  std::vector<Expression> indices;
+  std::vector<std::string> index_names;
+  do {
+    if (at(TokenKind::Comma) || at(TokenKind::RightBracket)) {
+      indices.emplace_back();
+      continue;
+    }
+    const auto variable = expect_identifier("foreach index variable");
+    if (statement.loop_variable.empty()) {
+      statement.loop_variable = variable.text;
+    }
+    index_names.push_back(variable.text);
+    indices.push_back(Expression{
+        ExpressionKind::Identifier,
+        variable.text,
+        {},
+        variable.span});
+  } while (match(TokenKind::Comma));
+  expect(
+      TokenKind::RightBracket,
+      "']' after foreach index variable",
+      "FSIM-SV-PARSE-332");
+  expect(
+      TokenKind::RightParen,
+      "')' after procedural foreach header",
+      "FSIM-SV-PARSE-333");
+  indices.insert(indices.begin(), statement.target);
+  statement.condition = Expression{
+      ExpressionKind::Call,
+      "@sv-foreach",
+      std::move(indices),
+      span_from(start, previous())};
+  for (const auto& index_name : index_names) {
+    ++current_loop_names_[index_name];
+  }
+  parse_procedural_loop_body(start, statement);
+  for (const auto& index_name : index_names) {
+    const auto loop_name = current_loop_names_.find(index_name);
+    if (loop_name != current_loop_names_.end()
+        && --loop_name->second == 0) {
+      current_loop_names_.erase(loop_name);
+    }
   }
   statement.span = span_from(start, previous());
   return statement;
@@ -635,12 +809,10 @@ std::optional<Statement> VerilogParser::parse_statement() {
             "'->>' syntax");
       }
     }
-    const auto event = expect_identifier("named event after '->'");
-    statement.target = Expression{
-        ExpressionKind::Identifier,
-        event.text,
-        {},
-        event.span};
+    const auto implicit_reference_count =
+        implicit_net_references_.size();
+    statement.target = parse_lvalue();
+    implicit_net_references_.resize(implicit_reference_count);
     expect(
         TokenKind::Semicolon,
         "';' after named-event trigger",
@@ -700,6 +872,10 @@ std::optional<Statement> VerilogParser::parse_statement() {
       && match_keyword("for")) {
     return parse_procedural_for_statement(previous());
   }
+  if (language_ == Language::SystemVerilog2017
+      && match_keyword("foreach")) {
+    return parse_procedural_foreach_statement(previous());
+  }
   if (match_keyword("repeat")) {
     return parse_repeat_statement(previous());
   }
@@ -751,10 +927,6 @@ std::optional<Statement> VerilogParser::parse_statement() {
       statement.value = parse_expression();
     } else if (!at(TokenKind::Semicolon)) {
       statement.value = parse_expression();
-    } else if (in_function_) {
-      error(start,
-          "FSIM-SV-SEM-057",
-          "a non-void function return requires a value");
     }
     expect(
         TokenKind::Semicolon,
@@ -818,6 +990,18 @@ std::optional<Statement> VerilogParser::parse_statement() {
         TokenKind::Semicolon,
         "';' after disable fork",
         "FSIM-SV-PARSE-209");
+    statement.span = span_from(start, previous());
+    return statement;
+  }
+  if (keyword("void") && at(TokenKind::Apostrophe, 1)) {
+    const auto start = current();
+    Statement statement;
+    statement.kind = StatementKind::ContainerMethod;
+    statement.value = parse_expression();
+    expect(
+        TokenKind::Semicolon,
+        "';' after void cast statement",
+        "FSIM-SV-PARSE-329");
     statement.span = span_from(start, previous());
     return statement;
   }
@@ -912,9 +1096,28 @@ std::optional<Statement> VerilogParser::parse_statement() {
     Statement block;
     block.kind = StatementKind::Block;
     block.label = opening_label;
+    DesignUnit local_declarations;
+    struct PriorBlockType {
+      std::string name;
+      std::optional<Type> type;
+    };
+    std::vector<PriorBlockType> prior_block_types;
     while (!at_end() && !keyword("end")) {
       const auto before = position();
-      if (is_declaration_start()) {
+      if (match_keyword("typedef")) {
+        const auto alias_count = local_declarations.type_aliases.size();
+        parse_typedef(local_declarations, previous());
+        if (local_declarations.type_aliases.size() > alias_count) {
+          const auto& alias = local_declarations.type_aliases.back();
+          const auto prior = current_procedural_types_.find(alias.name);
+          prior_block_types.push_back({
+              alias.name,
+              prior == current_procedural_types_.end()
+                  ? std::optional<Type>{}
+                  : std::optional<Type>{prior->second}});
+          current_procedural_types_.insert_or_assign(alias.name, alias.type);
+        }
+      } else if (is_declaration_start()) {
         parse_procedural_declaration(block);
       } else if (auto child = parse_statement()) {
         block.statements.push_back(std::move(*child));
@@ -923,6 +1126,7 @@ std::optional<Statement> VerilogParser::parse_statement() {
         advance();
       }
     }
+    block.type_aliases = std::move(local_declarations.type_aliases);
     expect_keyword("end", false, "FSIM-SV-PARSE-017");
     if (match(TokenKind::Colon)) {
       const auto closing_label = expect_identifier("block name");
@@ -938,6 +1142,15 @@ std::optional<Statement> VerilogParser::parse_statement() {
             "end block label '" + closing_label.text
                 + "' does not match opening label '"
                 + opening_label + "'");
+      }
+    }
+    for (auto prior = prior_block_types.rbegin();
+         prior != prior_block_types.rend(); ++prior) {
+      if (prior->type) {
+        current_procedural_types_.insert_or_assign(
+            prior->name, std::move(*prior->type));
+      } else {
+        current_procedural_types_.erase(prior->name);
       }
     }
     block.span = span_from(start, previous());
@@ -1159,12 +1372,11 @@ std::optional<Statement> VerilogParser::parse_statement() {
         "',' after " + task_name + " file handle",
         "FSIM-SV-PARSE-152");
     if (!at(TokenKind::StringLiteral)) {
-      error(
-          current(),
-          "FSIM-SV-SEM-076",
-          task_name
-              + " requires a literal format and at most one value");
-      (void)parse_expression();
+      do {
+        statement.output_values.push_back(
+            OutputValue{
+                parse_expression(), OutputFormat::Decimal, {}});
+      } while (match(TokenKind::Comma));
     } else {
       const auto format_token = advance();
       auto parsed_format = parse_output_format(
@@ -1183,26 +1395,26 @@ std::optional<Statement> VerilogParser::parse_statement() {
               [&consumes_value](const auto& conversion) {
                 return consumes_value(conversion.format);
               }));
-      const bool unsupported_conversion =
-          std::ranges::any_of(
-              parsed_format.conversions,
-              [](const auto& conversion) {
-                return conversion.format == OutputFormat::Hierarchy;
-              });
-      if (!parsed_format.valid || unsupported_conversion
-          || parsed_format.conversions.size() > 1
-          || values.size() > 1
-          || values.size() != required_values) {
+      if (!parsed_format.valid) {
         error(
             format_token,
             "FSIM-SV-SEM-076",
             task_name
-                + " supports a literal or one %b/%h/%o/%d/%c/%s/%e/%f/%g/%t "
-                  "conversion with exactly one value");
-      } else if (parsed_format.conversions.empty()) {
+                + " format contains an unsupported conversion");
+      } else if (values.size() < required_values) {
+        error(
+            format_token,
+            "FSIM-SV-SEM-076",
+            task_name
+                + " format conversions require matching value arguments");
+      } else if (values.empty()
+                 && parsed_format.conversions.empty()) {
         statement.output_text =
             std::move(parsed_format.trailing_text);
-      } else {
+      } else if (parsed_format.conversions.size() == 1
+                 && values.size() == 1
+                 && consumes_value(
+                     parsed_format.conversions.front().format)) {
         auto& conversion = parsed_format.conversions.front();
         statement.output_format = conversion.format;
         statement.output_prefix = std::move(conversion.prefix);
@@ -1217,6 +1429,40 @@ std::optional<Statement> VerilogParser::parse_statement() {
         statement.output_zero_pad = conversion.zero_pad;
         if (!values.empty()) {
           statement.value = std::move(values.front());
+        }
+      } else {
+        statement.output_values.reserve(
+            parsed_format.conversions.size()
+            + values.size() - required_values);
+        std::size_t value_index{};
+        for (auto& conversion : parsed_format.conversions) {
+          Expression value;
+          if (consumes_value(conversion.format)) {
+            value = std::move(values[value_index++]);
+          }
+          statement.output_values.push_back(
+              OutputValue{
+                  std::move(value),
+                  conversion.format,
+                  std::move(conversion.prefix),
+                  conversion.suppress_leading_zero,
+                  conversion.minimum_width,
+                  conversion.left_justify,
+                  conversion.zero_pad});
+        }
+        for (std::size_t index = value_index;
+             index < values.size(); ++index) {
+          statement.output_values.push_back(
+              OutputValue{
+                  std::move(values[index]),
+                  OutputFormat::Decimal,
+                  index == value_index
+                      ? std::move(parsed_format.trailing_text)
+                      : std::string{}});
+        }
+        if (value_index == values.size()) {
+          statement.output_trailing_text =
+              std::move(parsed_format.trailing_text);
         }
       }
     }
@@ -1571,27 +1817,55 @@ std::optional<Statement> VerilogParser::parse_statement() {
 
   if (at(TokenKind::Identifier)) {
     std::size_t lookahead = 1;
-    while (at(TokenKind::Scope, lookahead) &&
-           at(TokenKind::Identifier, lookahead + 1)) {
-      lookahead += 2;
+    if (at(TokenKind::Hash, lookahead)
+        && at(TokenKind::LeftParen, lookahead + 1U)) {
+      ++lookahead;
+      std::size_t depth{};
+      do {
+        if (at(TokenKind::LeftParen, lookahead)) {
+          ++depth;
+        } else if (at(TokenKind::RightParen, lookahead)) {
+          --depth;
+        }
+        ++lookahead;
+      } while (depth != 0U
+               && !at(TokenKind::EndOfFile, lookahead));
     }
-    if (at(TokenKind::Dot, lookahead)
-        && at(TokenKind::Identifier, lookahead + 1)) {
+    while ((at(TokenKind::Scope, lookahead)
+            || at(TokenKind::Dot, lookahead))
+           && at(TokenKind::Identifier, lookahead + 1)) {
       lookahead += 2;
     }
     if (at(TokenKind::LeftParen, lookahead) ||
         at(TokenKind::Semicolon, lookahead)) {
       const auto start = advance();
       std::string name = start.text;
-      while (match(TokenKind::Scope)) {
-        name += "::";
-        name += expect_identifier("package-scoped task name").text;
+      if (match(TokenKind::Hash)) {
+        Instance actual_owner;
+        parse_parameter_overrides(actual_owner, previous());
+        name += "#(";
+        for (std::size_t index = 0;
+             index < actual_owner.parameter_overrides.size(); ++index) {
+          if (index != 0U) name += ',';
+          const auto& actual = actual_owner.parameter_overrides[index];
+          if (actual.name) name += "." + *actual.name + "(";
+          if (actual.type_value) {
+            name += actual.type_value->named_type.empty()
+                ? actual.type_value->spelling
+                : actual.type_value->named_type;
+          } else {
+            name += actual.value.text;
+          }
+          if (actual.name) name += ')';
+        }
+        name += ')';
       }
-      if (match(TokenKind::Dot)) {
-        name += ".";
+      while (at(TokenKind::Scope) || at(TokenKind::Dot)) {
+        const auto separator = advance();
+        name += separator.kind == TokenKind::Scope ? "::" : ".";
         name += keyword("new")
             ? advance().text
-            : expect_identifier("interface task name").text;
+            : expect_identifier("selected task name").text;
       }
       Statement statement;
       statement.kind = StatementKind::TaskCall;
@@ -1630,7 +1904,11 @@ std::optional<Statement> VerilogParser::parse_statement() {
       if (match(TokenKind::LeftParen)) {
         if (!at(TokenKind::RightParen)) {
           do {
-            if (match(TokenKind::Dot)) {
+            if (at(TokenKind::Comma)
+                || at(TokenKind::RightParen)) {
+              statement.task_argument_names.emplace_back();
+              statement.task_arguments.emplace_back();
+            } else if (match(TokenKind::Dot)) {
               const auto formal =
                   expect_identifier("named task argument");
               expect(
@@ -1662,9 +1940,54 @@ std::optional<Statement> VerilogParser::parse_statement() {
     }
   }
 
+  const auto potential_complex_call = [&]() {
+    for (std::size_t lookahead = 1U;
+         !at(TokenKind::Semicolon, lookahead)
+         && !at(TokenKind::EndOfFile, lookahead);
+         ++lookahead) {
+      if (at(TokenKind::Assign, lookahead)
+          || at(TokenKind::LessEqual, lookahead)
+          || at(TokenKind::PlusAssign, lookahead)
+          || at(TokenKind::MinusAssign, lookahead)
+          || at(TokenKind::StarAssign, lookahead)
+          || at(TokenKind::SlashAssign, lookahead)
+          || at(TokenKind::PercentAssign, lookahead)
+          || at(TokenKind::AmpersandAssign, lookahead)
+          || at(TokenKind::PipeAssign, lookahead)
+          || at(TokenKind::CaretAssign, lookahead)
+          || at(TokenKind::ShiftLeftAssign, lookahead)
+          || at(TokenKind::ShiftRightAssign, lookahead)
+          || at(TokenKind::ArithmeticShiftLeftAssign, lookahead)
+          || at(TokenKind::ArithmeticShiftRightAssign, lookahead)) {
+        return false;
+      }
+      if (at(TokenKind::LeftParen, lookahead)) {
+        return true;
+      }
+    }
+    return false;
+  }();
+  if ((at(TokenKind::Identifier)
+       || keyword("this") || keyword("super"))
+      && potential_complex_call) {
+    const auto before = position();
+    const auto start = current();
+    auto call = parse_expression();
+    if (call.kind == ExpressionKind::Call
+        && match(TokenKind::Semicolon)) {
+      Statement statement;
+      statement.kind = StatementKind::ContainerMethod;
+      statement.value = std::move(call);
+      statement.span = span_from(start, previous());
+      return statement;
+    }
+    rewind(before);
+  }
+
   if (at(TokenKind::Identifier)
       || at(TokenKind::PlusPlus)
-      || at(TokenKind::MinusMinus)) {
+      || at(TokenKind::MinusMinus)
+      || at(TokenKind::LeftBrace)) {
     const auto before = position();
     const auto start = current();
     std::optional<Token> prefix_update;
@@ -1672,7 +1995,9 @@ std::optional<Statement> VerilogParser::parse_statement() {
         || match(TokenKind::MinusMinus)) {
       prefix_update = previous();
     }
-    Expression target = parse_lvalue();
+    Expression target = at(TokenKind::LeftBrace)
+        ? parse_expression()
+        : parse_lvalue();
     AssignmentKind assignment_kind{AssignmentKind::Blocking};
     std::optional<std::string> update_operation;
     bool unit_update = prefix_update.has_value();

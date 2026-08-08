@@ -35,6 +35,13 @@ class Box #(
   T value;
 endclass : Box
 
+class Chained #(
+    parameter type A = int,
+    parameter type B = A);
+  B value;
+  A values[$];
+endclass : Chained
+
 class DispatchBase;
   virtual function int value(input int argument);
     return argument;
@@ -68,6 +75,7 @@ virtual class automatic Worker #(parameter int WIDTH = 8)
   ForwardNested child;
   Worker #(.WIDTH(4)) narrowed;
   Box #(.T(logic [3:0]), .COUNT(3)) boxes;
+  Box #(.T(DispatchBase)) dispatch_box;
   function new(int seed = 0);
     this.count = seed;
     super.new();
@@ -137,7 +145,7 @@ endmodule : class_owner
           parsed.design, inheritance_diagnostics),
       "the resolved class inheritance graph must be legal");
   require(
-      parsed.design.systemverilog_classes.size() == 4,
+      parsed.design.systemverilog_classes.size() == 5,
       "a forward declaration and definition must merge");
   const auto worker_declaration = std::ranges::find(
       parsed.design.systemverilog_classes,
@@ -168,7 +176,7 @@ endmodule : class_owner
       "nested classes must merge forwards and use lexical identities");
   require(
       worker.type_aliases.size() == 1
-          && worker.properties.size() == 10,
+          && worker.properties.size() == 11,
       "class typedefs and declaration-ordered properties must be owned");
   require(
       worker.properties.front().visibility
@@ -325,6 +333,175 @@ endmodule : class_owner
           && worker.methods.front().statements.back().task_arguments.front()
                  .text == "super",
       "this and super selections must bind to canonical class members");
+
+  auto local_typedefs = parse_text(
+      "class_method_local_typedefs.sv",
+      R"(
+class LocalTypedefs #(type T = int);
+  function void automate();
+    typedef T local_t;
+    local_t value;
+    begin
+      T local_data;
+      typedef T nested_t;
+      nested_t nested_value;
+    end
+  endfunction
+  task service();
+    typedef int item_t;
+    item_t item;
+  endtask
+endclass
+class LocalTypedefUser;
+  LocalTypedefs #(bit [3:0]) explicit_value;
+endclass
+)",
+      Language::SystemVerilog2017);
+  if (!local_typedefs.ok()) {
+    throw std::runtime_error(
+        local_typedefs.diagnostics.front().code + ": "
+        + local_typedefs.diagnostics.front().message);
+  }
+  std::vector<Diagnostic> local_typedef_diagnostics;
+  require(
+      resolve_systemverilog_classes(
+          local_typedefs.design, local_typedef_diagnostics),
+      "class method-local typedefs must shadow class names during type "
+      "resolution");
+  const auto& local_typedef_class =
+      local_typedefs.design.systemverilog_classes.front();
+  const auto& local_function = local_typedef_class.methods.front();
+  const auto& local_task = local_typedef_class.methods.back();
+  require(
+      local_function.type_aliases.size() == 1
+          && local_function.type_aliases.front().name == "local_t"
+          && local_function.type_aliases.front().type.named_type == "T"
+          && local_function.variables.size() == 1
+          && local_function.variables.front().type.named_type == "local_t"
+          && local_function.statements.size() == 1
+          && local_function.statements.front().type_aliases.size() == 1
+          && local_function.statements.front().type_aliases.front().name
+              == "nested_t"
+          && local_function.statements.front().declarations.size() == 2
+          && local_function.statements.front().declarations.back().type
+                 .named_type == "nested_t"
+          && local_task.type_aliases.size() == 1
+          && local_task.type_aliases.front().name == "item_t"
+          && local_task.variables.size() == 1
+          && local_task.variables.front().type.named_type == "item_t",
+      "function and task local aliases must remain source-owned in class "
+      "method HIR");
+  const auto local_specializations =
+      specialize_systemverilog_classes(local_typedefs.design);
+  const auto explicit_local_specialization = std::ranges::find_if(
+      local_specializations.specializations,
+      [](const SystemVerilogClassSpecialization& specialization) {
+        return specialization.declaration_identity
+                   == "work::$unit::LocalTypedefs"
+            && !specialization.methods.empty()
+            && !specialization.methods.front().variables.empty()
+            && specialization.methods.front().variables.front().type.width()
+                == 4;
+      });
+  require(
+      local_specializations.ok()
+          && explicit_local_specialization
+              != local_specializations.specializations.end()
+          && explicit_local_specialization->methods.size() == 2
+          && explicit_local_specialization->methods.front()
+                 .type_aliases.size() == 1
+          && explicit_local_specialization->methods.front()
+                 .type_aliases.front().type.width() == 4
+          && explicit_local_specialization->methods.front()
+                 .statements.size() == 1
+          && explicit_local_specialization->methods.front()
+                 .statements.front().type_aliases.size() == 1
+          && explicit_local_specialization->methods.front()
+                 .statements.front().type_aliases.front().type.width() == 4
+          && explicit_local_specialization->methods.front()
+                 .statements.front().declarations.size() == 2
+          && std::ranges::all_of(
+              explicit_local_specialization->methods.front()
+                  .statements.front().declarations,
+              [](const VariableDeclaration& declaration) {
+                return declaration.type.width() == 4;
+              }),
+      "explicit class type actuals must specialize method-local aliases, "
+      "variables, and nested statement declarations");
+
+  auto deferred_class_types = parse_text(
+      "deferred_class_types.sv",
+      R"(
+package deferred_class_types;
+  class Base;
+    function int get();
+      return 1;
+    endfunction
+  endclass
+  class Wrapper #(type BASE = Base) extends BASE;
+  endclass
+  class InterfaceActual;
+    function void put(input int value);
+    endfunction
+  endclass
+  class GenericPort #(type IF = Base) extends IF;
+    typedef GenericPort #(IF) this_type;
+    this_type implementation;
+  endclass
+  class ConcretePort extends GenericPort #(InterfaceActual);
+    function void send();
+      implementation.put(1);
+    endfunction
+  endclass
+  typedef class AliasForward;
+  typedef Wrapper #(Base) AliasForward;
+  AliasForward alias_value;
+  function int use_alias();
+    return alias_value.get();
+  endfunction
+  typedef class PoolForward;
+  class PoolTarget;
+    function new(string name = "");
+    endfunction
+    function int get();
+      return 1;
+    endfunction
+  endclass
+  typedef PoolTarget PoolForward;
+  typedef PoolTarget PoolList[string];
+  PoolForward pool;
+  PoolList pool_list;
+  function int use_pool();
+    pool = new("pool");
+    pool_list.delete();
+    return pool.get();
+  endfunction
+endpackage
+)",
+      Language::SystemVerilog2017);
+  require(
+      deferred_class_types.ok(),
+      "deferred class-type bases and forward aliases must parse");
+  std::vector<Diagnostic> deferred_class_diagnostics;
+  require(
+      resolve_systemverilog_classes(
+          deferred_class_types.design,
+          deferred_class_diagnostics),
+      "a type-parameter base must defer until specialization and a "
+      "forward class typedef may complete as a class-type alias");
+  const auto& deferred_package =
+      deferred_class_types.design.units.front();
+  const auto deferred_wrapper = std::ranges::find(
+      deferred_package.systemverilog_classes,
+      std::string{"Wrapper"},
+      &SystemVerilogClassDeclaration::name);
+  require(
+      deferred_wrapper
+              != deferred_package.systemverilog_classes.end()
+          && deferred_wrapper->base
+          && deferred_wrapper->base->name == "BASE"
+          && deferred_wrapper->base->declaration_identity.empty(),
+      "a type-parameter base must retain its symbolic selection");
   require(
       parsed.design.units.size() == 3,
       "classes must not become top-selectable design units");
@@ -408,6 +585,7 @@ class ParseObject;
     return count;
   endfunction
   task run(input int cycles = 1);
+    payload = cycles;
   endtask
 endclass
 module executable_class_syntax;
@@ -489,7 +667,8 @@ endmodule
               == "@sv-task:work::$unit::ParseObject::run"
           && executable_body[9].task_argument_names
               == std::vector<std::string>({"", "cycles"})
-          && executable_body[9].task_arguments.front().text == "handle",
+          && executable_body[9].task_arguments.front().text == "handle"
+          && executable_body[9].statements.size() == 1,
       "named class-task actuals must retain the explicit receiver: "
           + executable_body[9].task_name + "/"
           + std::to_string(executable_body[9].task_arguments.size()) + "/"
@@ -600,6 +779,659 @@ endfunction
           && has_member_code("FSIM-SV-SEM-172")
           && has_member_code("FSIM-SV-SEM-173"),
       "class qualifier, member, method, and constraint diagnostics must be stable");
+
+  auto uvm_surface = parse_text(
+      "uvm_type_surface.sv",
+      R"(
+package uvm_type_surface;
+  typedef int uvm_field_flag_t;
+  typedef enum uvm_field_flag_t {
+    UVM_NONE = 'h0000000,
+    UVM_ALL = 'hf000000
+  } uvm_mask_e;
+  parameter UVM_MASK = 'hf000000;
+  const int UVM_UNBOUNDED_CONNECTIONS = -1;
+  const string s_connection_error_id = "Connection Error";
+  bit uvm_enabled = 1;
+  string uvm_version = "2020.3.1";
+  int uvm_count = 0;
+  uvm_mask_e uvm_mask = UVM_ALL;
+
+  typedef class uvm_forward_item;
+  class uvm_forward_item;
+  endclass
+
+  class uvm_resource #(type T = int);
+  endclass
+  class uvm_byte_rsrc #(int unsigned N = 1)
+      extends uvm_resource #(bit [7:0][N-1:0]);
+  endclass
+
+  virtual class uvm_wrapper #(
+      type T = int,
+      type U = T,
+      string FIELD = "config");
+    typedef uvm_wrapper #(T, U) this_type;
+    typedef T types_t[$];
+    typedef enum bit [1:0] {
+      UVM_IDLE = 2'b00,
+      UVM_BUSY = 2'b01
+    } state_e;
+    localparam int unsigned MAX_VALUE = '1;
+    protected static this_type singleton;
+    local static state_e state = UVM_IDLE;
+    extern function new(string name = "");
+    extern static function this_type get();
+    extern virtual function T convert(input U value);
+    extern task run(const ref T values[]);
+    pure virtual function void required(const ref T values[]);
+  endclass
+
+  function uvm_wrapper::new(string name = "");
+  endfunction : new
+  function uvm_wrapper::this_type uvm_wrapper::get();
+    return singleton;
+  endfunction : get
+  function T uvm_wrapper::convert(input U value);
+    return value;
+  endfunction : convert
+  task uvm_wrapper::run(const ref T values[]);
+  endtask : run
+endpackage
+)",
+      Language::SystemVerilog2017);
+  if (!uvm_surface.ok()) {
+    throw std::runtime_error(
+        uvm_surface.diagnostics.front().code + ": "
+        + uvm_surface.diagnostics.front().message);
+  }
+  std::vector<Diagnostic> uvm_surface_resolution;
+  require(
+      resolve_systemverilog_classes(
+          uvm_surface.design, uvm_surface_resolution),
+      "UVM-shaped forward, wrapper, and extern identities must resolve");
+  const auto& uvm_package = uvm_surface.design.units.front();
+  const auto uvm_wrapper = std::ranges::find(
+      uvm_package.systemverilog_classes,
+      std::string{"uvm_wrapper"},
+      &SystemVerilogClassDeclaration::name);
+  const TypeAliasDeclaration* uvm_types = nullptr;
+  if (uvm_wrapper != uvm_package.systemverilog_classes.end()) {
+    const auto found = std::ranges::find(
+        uvm_wrapper->type_aliases,
+        std::string{"types_t"},
+        &TypeAliasDeclaration::name);
+    if (found != uvm_wrapper->type_aliases.end()) {
+      uvm_types = &*found;
+    }
+  }
+  const SystemVerilogClassMethod* uvm_constructor = nullptr;
+  const SystemVerilogClassMethod* uvm_required = nullptr;
+  if (uvm_wrapper != uvm_package.systemverilog_classes.end()) {
+    const auto found = std::ranges::find(
+        uvm_wrapper->methods,
+        std::string{"new"},
+        &SystemVerilogClassMethod::name);
+    if (found != uvm_wrapper->methods.end()) {
+      uvm_constructor = &*found;
+    }
+    const auto required = std::ranges::find(
+        uvm_wrapper->methods,
+        std::string{"required"},
+        &SystemVerilogClassMethod::name);
+    if (required != uvm_wrapper->methods.end()) {
+      uvm_required = &*required;
+    }
+  }
+  require(
+      uvm_package.type_aliases.size() == 2
+          && uvm_package.parameters.size() == 3
+          && uvm_package.variables.size() == 6
+          && uvm_package.variables[0].systemverilog_const
+          && uvm_package.variables[1].systemverilog_const
+          && uvm_package.functions.empty()
+          && uvm_package.systemverilog_class_method_definitions.size()
+              == 4
+          && uvm_package.variables.front().initializer
+          && uvm_package.variables.back().type.named_type
+              == "uvm_mask_e",
+      "UVM package enums, untyped parameters, and initialized variables must survive");
+  const auto uvm_byte_resource = std::ranges::find(
+      uvm_package.systemverilog_classes,
+      std::string{"uvm_byte_rsrc"},
+      &SystemVerilogClassDeclaration::name);
+  require(
+      uvm_wrapper != uvm_package.systemverilog_classes.end()
+          && uvm_wrapper->parameters.size() == 3
+          && uvm_wrapper->parameters[0].kind == ParameterKind::Type
+          && uvm_wrapper->parameters[1].kind == ParameterKind::Type
+          && uvm_wrapper->parameters[2].type.domain
+              == ValueDomain::String
+          && uvm_wrapper->type_aliases.size() == 3
+          && uvm_types != nullptr
+          && uvm_types->type.systemverilog_container
+          && uvm_types->type.systemverilog_container->kind
+              == SystemVerilogContainerKind::Queue
+          && uvm_types->type.systemverilog_container
+                 ->element_types.size() == 1
+          && uvm_types->type.systemverilog_container
+                 ->element_types.front().named_type == "T"
+          && uvm_wrapper->properties.size() == 3
+          && uvm_wrapper->properties[0].is_static
+          && uvm_wrapper->properties[0].is_const
+          && uvm_wrapper->properties[0].declaration.initializer
+          && uvm_wrapper->methods.size() == 5
+          && uvm_required != nullptr
+          && uvm_required->arguments.size() == 1
+          && uvm_required->arguments.front().reference
+          && uvm_required->arguments.front().type.systemverilog_container
+          && uvm_required->arguments.front().type
+                 .systemverilog_container->kind
+              == SystemVerilogContainerKind::DynamicArray
+          && uvm_constructor != nullptr
+          && uvm_constructor->kind
+              == SystemVerilogClassMethodKind::Constructor
+          && uvm_constructor->defined
+          && uvm_constructor->out_of_block_definition
+          && uvm_constructor->canonical_identity
+              == "work::uvm_type_surface::uvm_wrapper::new"
+          && uvm_byte_resource
+              != uvm_package.systemverilog_classes.end()
+          && uvm_byte_resource->base
+          && uvm_byte_resource->base->parameter_actuals.size() == 1
+          && uvm_byte_resource->base->parameter_actuals.front()
+                 .type_actual
+          && uvm_byte_resource->base->parameter_actuals.front()
+                 .type_actual->systemverilog_packed_dimensions.size()
+              == 2,
+      "UVM class shorthand, scoped aliases/enums/queues, static data, and "
+      "method qualifiers must survive (aliases="
+          + std::to_string(
+              uvm_wrapper == uvm_package.systemverilog_classes.end()
+                  ? 0U
+                  : uvm_wrapper->type_aliases.size())
+          + ", methods="
+          + std::to_string(
+              uvm_wrapper == uvm_package.systemverilog_classes.end()
+                  ? 0U
+                  : uvm_wrapper->methods.size())
+          + ", queue_element="
+          + (uvm_types && uvm_types->type.systemverilog_container
+                     && !uvm_types->type.systemverilog_container
+                              ->element_types.empty()
+                 ? uvm_types->type.systemverilog_container
+                       ->element_types.front().named_type
+                 : "<missing>")
+          + ", constructor="
+          + (uvm_constructor ? uvm_constructor->canonical_identity
+                             : "<missing>")
+          + ", constructor_kind="
+          + std::to_string(
+              uvm_constructor
+                  ? static_cast<int>(uvm_constructor->kind)
+                  : -1)
+          + ", constructor_defined="
+          + std::to_string(
+              uvm_constructor && uvm_constructor->defined)
+          + ", constructor_out_of_block="
+          + std::to_string(
+              uvm_constructor
+                  && uvm_constructor->out_of_block_definition)
+          + ", parameters="
+          + std::to_string(
+              uvm_wrapper == uvm_package.systemverilog_classes.end()
+                  ? 0U
+                  : uvm_wrapper->parameters.size())
+          + ", properties="
+          + std::to_string(
+              uvm_wrapper == uvm_package.systemverilog_classes.end()
+                  ? 0U
+                  : uvm_wrapper->properties.size())
+          + ", first_static="
+          + std::to_string(
+              uvm_wrapper != uvm_package.systemverilog_classes.end()
+                  && !uvm_wrapper->properties.empty()
+                  && uvm_wrapper->properties.front().is_static)
+          + ")");
+  const auto uvm_specialized =
+      specialize_systemverilog_classes(uvm_surface.design);
+  require(
+      uvm_specialized.ok()
+          && std::ranges::any_of(
+              uvm_specialized.specializations,
+              [](const SystemVerilogClassSpecialization& specialization) {
+                return specialization.declaration_identity
+                           == "work::uvm_type_surface::uvm_wrapper"
+                    && std::ranges::any_of(
+                        specialization.parameter_identity_values,
+                        [](const auto& parameter) {
+                          return parameter.first == "FIELD"
+                              && parameter.second.ends_with(
+                                  "=s6:config");
+                        });
+              }),
+      "UVM wrapper string defaults must create deterministic specialization identities");
+
+  auto parameterized_static_call = parse_text(
+      "uvm_parameterized_static_call.sv",
+      R"(
+package uvm_parameterized_static_call;
+  class uvm_formatter #(
+      type T = int,
+      int WIDTH = 32,
+      string FIELD = "config");
+    static function string format(input T value);
+      return FIELD;
+    endfunction
+  endclass
+  uvm_formatter #(string, 32, "config") string_formatter;
+  function string stringify(input int value);
+    return uvm_formatter #(int, 32, "config")::format(value);
+  endfunction
+endpackage
+)",
+      Language::SystemVerilog2017);
+  require(
+      parameterized_static_call.ok()
+          && parameterized_static_call.design.units.size() == 1
+          && parameterized_static_call.design.units.front()
+                 .functions.size() == 1
+          && parameterized_static_call.design.units.front()
+                 .variables.size() == 1
+          && parameterized_static_call.design.units.front()
+                 .variables.front().type
+                 .systemverilog_class_parameter_actuals.size() == 3
+          && parameterized_static_call.design.units.front()
+                 .variables.front().type
+                 .systemverilog_class_parameter_actuals.front().type_actual
+          && parameterized_static_call.design.units.front()
+                 .variables.front().type
+                 .systemverilog_class_parameter_actuals.front().type_actual
+                 ->domain == ValueDomain::String
+          && parameterized_static_call.design.units.front()
+                 .functions.front().statements.size() == 1
+          && parameterized_static_call.design.units.front()
+                 .functions.front().statements.front().value.kind
+              == ExpressionKind::Call
+          && parameterized_static_call.design.units.front()
+                 .functions.front().statements.front().value.text
+              == "uvm_formatter#(int,32,\"config\")::format",
+      "parameterized UVM static calls and string-specialized class handles "
+      "must retain deterministic type, value, and string actual identities");
+  std::vector<Diagnostic> parameterized_static_diagnostics;
+  require(
+      resolve_systemverilog_classes(
+          parameterized_static_call.design,
+          parameterized_static_diagnostics)
+          && parameterized_static_call.design.units.front()
+                 .functions.front().statements.front().value.text
+              == "@sv-static-method:work::uvm_parameterized_static_call::"
+                 "uvm_formatter::format",
+      "parameterized static class calls must bind to canonical executable "
+      "methods");
+
+  auto registry_alias_static_call = parse_text(
+      "uvm_registry_alias_static_call.sv",
+      R"(
+typedef class Registry;
+class Product;
+  typedef Registry type_id;
+endclass
+class Registry;
+  static function Product create(input Product parent);
+    Product result;
+    result = new;
+    return result;
+  endfunction
+endclass
+module registry_alias_static_call;
+  Product value;
+  initial value = Product::type_id::create(null);
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      registry_alias_static_call.ok(),
+      "a UVM-shaped class-scoped registry alias must parse");
+  std::vector<Diagnostic> registry_alias_static_diagnostics;
+  require(
+      resolve_systemverilog_classes(
+          registry_alias_static_call.design,
+          registry_alias_static_diagnostics),
+      "a UVM-shaped registry alias static call must resolve");
+  const auto& registry_alias_call =
+      registry_alias_static_call.design.units.front()
+          .processes.front().statements.front().value;
+  require(
+      registry_alias_call.text
+              == "@sv-static-method:work::$unit::Registry::create"
+          && registry_alias_call.call_result_width == 64
+          && registry_alias_call.call_result_domain == ValueDomain::Bit2
+          && registry_alias_call.operands.size() == 1
+          && registry_alias_call.operands.front().call_result_width == 64,
+      "registry alias calls and context-typed null actuals must retain the "
+      "64-bit class-handle execution shape");
+
+  auto uvm_parameterized_calls = parse_text(
+      "uvm_parameterized_calls.sv",
+      R"(
+class uvm_object;
+endclass
+class uvm_component extends uvm_object;
+endclass
+class uvm_object_registry #(
+    type T = uvm_object,
+    string Tname = "<unknown>");
+  static function T create(string name = "");
+    return null;
+  endfunction
+endclass
+class uvm_config_db #(type T = int);
+  static function void set(
+      uvm_component cntxt,
+      string inst_name,
+      string field_name,
+      T value);
+  endfunction
+  static function bit get(
+      uvm_component cntxt,
+      string inst_name,
+      string field_name,
+      inout T value);
+    return 1;
+  endfunction
+endclass
+class UvmProduct extends uvm_object;
+  typedef uvm_object_registry #(UvmProduct, "UvmProduct") type_id;
+endclass
+module uvm_parameterized_calls;
+  UvmProduct product;
+  int configured;
+  initial product = UvmProduct::type_id::create("product");
+  initial uvm_config_db #(int)::set(null, "*", "field", 7);
+  initial if (!uvm_config_db #(int)::get(
+      null, "", "field", configured)) configured = 0;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      uvm_parameterized_calls.ok(),
+      "UVM parameterized registry and config calls must parse");
+  std::vector<Diagnostic> uvm_parameterized_call_diagnostics;
+  require(
+      resolve_systemverilog_classes(
+          uvm_parameterized_calls.design,
+          uvm_parameterized_call_diagnostics),
+      "UVM parameterized registry and config calls must resolve");
+  std::vector<Diagnostic> repeated_uvm_call_diagnostics;
+  require(
+      resolve_systemverilog_classes(
+          uvm_parameterized_calls.design,
+          repeated_uvm_call_diagnostics),
+      "cached UVM registry/config calls must resolve repeatedly");
+  const auto& uvm_call_unit = uvm_parameterized_calls.design.units.front();
+  const auto& uvm_create_call =
+      uvm_call_unit.processes[0].statements.front().value;
+  const auto& uvm_set_call =
+      uvm_call_unit.processes[1].statements.front();
+  const auto& uvm_get_call =
+      uvm_call_unit.processes[2].statements.front().condition.operands.front();
+  require(
+      uvm_create_call.text.starts_with(
+          "@sv-static-method:@uvm-registry-create:")
+          && uvm_create_call.call_result_width == 64
+          && uvm_set_call.task_name
+              == "@sv-static-task:@uvm-config-db-set:packed:int:32"
+          && uvm_set_call.task_arguments.front().call_result_width == 64
+          && uvm_get_call.text
+              == "@sv-static-method:@uvm-config-db-get:packed:int:32"
+          && uvm_get_call.call_result_width == 1
+          && uvm_get_call.operands.front().call_result_width == 64
+          && uvm_get_call.call_argument_directions.back()
+              == PortDirection::Inout,
+      "selected UVM type actuals must specialize registry/config return and "
+      "argument profiles before native lowering (create="
+          + uvm_create_call.text + "/"
+          + std::to_string(uvm_create_call.call_result_width)
+          + ", set=" + uvm_set_call.task_name + "/"
+          + std::to_string(
+              uvm_set_call.task_arguments.front().call_result_width)
+          + ", get=" + uvm_get_call.text + "/"
+          + std::to_string(uvm_get_call.call_result_width) + "/"
+          + std::to_string(
+              uvm_get_call.operands.front().call_result_width) + "/"
+          + std::to_string(
+              uvm_get_call.operands.back().call_result_width)
+          + ")");
+
+  auto uvm_compare_call = parse_text(
+      "uvm_compare_call.sv",
+      R"(
+class uvm_object;
+  virtual function int compare(
+      input uvm_object rhs,
+      input uvm_object comparer);
+    return 1;
+  endfunction
+endclass
+class uvm_comparer;
+  function int compare_object(
+      input uvm_object lhs,
+      input uvm_object rhs,
+      input uvm_object comparer);
+    return lhs.compare(rhs, comparer);
+  endfunction
+endclass
+)",
+      Language::SystemVerilog2017);
+  if (!uvm_compare_call.ok()) {
+    throw std::runtime_error(
+        uvm_compare_call.diagnostics.front().code + ": "
+        + uvm_compare_call.diagnostics.front().message);
+  }
+  std::vector<Diagnostic> uvm_compare_diagnostics;
+  require(
+      resolve_systemverilog_classes(
+          uvm_compare_call.design, uvm_compare_diagnostics),
+      "UVM-shaped object compare calls must use class overload resolution");
+
+  auto indexed_member_calls = parse_text(
+      "indexed_member_calls.sv",
+      R"(
+class IndexedMemberItem;
+  string label;
+  function int zero();
+    return 0;
+  endfunction
+endclass
+class IndexedMemberBucket;
+  IndexedMemberItem queue[$];
+endclass
+class IndexedMemberCalls;
+  IndexedMemberBucket buckets[int];
+  IndexedMemberItem nested[string][string];
+  IndexedMemberItem item;
+  function int exercise(input int index);
+    buckets[index].queue.push_back(item);
+    return item.zero
+        + buckets[index].queue[index].label.len()
+        + buckets[index].queue[index].zero
+        + nested["outer"].exists("inner");
+  endfunction
+endclass
+class IndexedAliasOwner;
+  typedef IndexedAliasOwner this_type;
+  static this_type singleton;
+  IndexedMemberBucket bucket;
+  static function void initialize();
+    singleton.bucket = new;
+  endfunction
+endclass
+)",
+      Language::SystemVerilog2017);
+  require(
+      indexed_member_calls.ok(),
+      "member selections after container indices must parse structurally: "
+          + (indexed_member_calls.diagnostics.empty()
+                 ? std::string{"<missing diagnostic>"}
+                 : indexed_member_calls.diagnostics.front().code + ": "
+                     + indexed_member_calls.diagnostics.front().message));
+  std::vector<Diagnostic> indexed_member_diagnostics;
+  require(
+      resolve_systemverilog_classes(
+          indexed_member_calls.design,
+          indexed_member_diagnostics),
+      "nested container properties and indexed class string properties must "
+      "resolve");
+
+  auto indexed_aggregate_member = parse_text(
+      "indexed_aggregate_member.sv",
+      R"(
+module IndexedAggregateMember;
+  typedef struct packed { int value; } aggregate_item_t;
+  aggregate_item_t items[1:0];
+  int observed;
+  initial observed = items[0].value;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      indexed_aggregate_member.ok(),
+      "non-class member selections after aggregate indices must parse");
+  std::vector<Diagnostic> indexed_aggregate_diagnostics;
+  require(
+      resolve_systemverilog_classes(
+          indexed_aggregate_member.design,
+          indexed_aggregate_diagnostics),
+      "non-class indexed aggregate selections must survive class resolution");
+  const auto& indexed_aggregate_value = indexed_aggregate_member.design
+      .units.front().processes.front().statements.front().value;
+  require(
+      indexed_aggregate_value.kind == ExpressionKind::Index
+          && indexed_aggregate_value.text == "index.value",
+      "non-class @sv-select markers must fold back to indexed aggregate "
+      "member syntax");
+
+  auto out_of_block_argument_types = parse_text(
+      "out_of_block_argument_types.sv",
+      R"(
+class OutOfBlockParent;
+  function new(string name = "");
+  endfunction
+endclass
+class OutOfBlockItem;
+  OutOfBlockParent parent;
+endclass
+class OutOfBlockMap;
+  extern task apply(OutOfBlockItem rw);
+endclass
+task OutOfBlockMap::apply(OutOfBlockItem rw);
+  if (rw.parent == null)
+    rw.parent = new("parent");
+endtask
+)",
+      Language::SystemVerilog2017);
+  require(
+      out_of_block_argument_types.ok(),
+      "out-of-block task argument types must parse");
+  std::vector<Diagnostic> out_of_block_argument_diagnostics;
+  require(
+      resolve_systemverilog_classes(
+          out_of_block_argument_types.design,
+          out_of_block_argument_diagnostics),
+      "out-of-block task arguments and their nested allocation targets must "
+      "retain canonical class types");
+
+  auto function_statements = parse_text(
+      "class_function_statements.sv",
+      R"(
+class FunctionStatementBase;
+  int observed;
+  virtual function void note(input int value = 1);
+    observed = value;
+  endfunction
+  static function void record(input int value = 1);
+  endfunction
+endclass
+class FunctionStatementDerived extends FunctionStatementBase;
+  function void invoke();
+    note();
+    this.note(2);
+    FunctionStatementBase::record();
+    this.srandom(3);
+  endfunction
+endclass
+)",
+      Language::SystemVerilog2017);
+  require(
+      function_statements.ok(),
+      "void class functions used as statements must parse");
+  std::vector<Diagnostic> function_statement_diagnostics;
+  require(
+      resolve_systemverilog_classes(
+          function_statements.design,
+          function_statement_diagnostics),
+      "inherited, selected, and static void-function statements must resolve");
+  const auto function_statement_derived = std::ranges::find(
+      function_statements.design.systemverilog_classes,
+      std::string{"FunctionStatementDerived"},
+      &SystemVerilogClassDeclaration::name);
+  require(
+      function_statement_derived
+              != function_statements.design.systemverilog_classes.end()
+          && function_statement_derived->methods.size() == 1
+          && function_statement_derived->methods.front().statements.size() == 4
+          && function_statement_derived->methods.front()
+                 .statements[0].task_name.starts_with("@sv-task:")
+          && function_statement_derived->methods.front()
+                 .statements[1].task_name.starts_with("@sv-task:")
+          && function_statement_derived->methods.front()
+                 .statements[2].task_name.starts_with("@sv-static-task:")
+          && function_statement_derived->methods.front()
+                 .statements[3].task_name == "@sv-object-srandom",
+      "function statements must retain executable class-call identities");
+
+  auto recursive_class_task = parse_text(
+      "recursive_class_task.sv",
+      R"(
+class RecursiveTask;
+  task visit(input int depth);
+    int pending[$];
+    if (pending.size() != 0)
+      pending.delete();
+    if (depth > 0)
+      visit(depth - 1);
+  endtask
+  task start();
+    visit(1);
+    visit(2);
+  endtask
+endclass
+)",
+      Language::SystemVerilog2017);
+  require(
+      recursive_class_task.ok(),
+      "recursive class tasks and local container calls must parse");
+  std::vector<Diagnostic> recursive_task_diagnostics;
+  require(
+      resolve_systemverilog_classes(
+          recursive_class_task.design,
+          recursive_task_diagnostics),
+      "recursive class-task profiles must resolve without eager body "
+      "expansion");
+  const auto& recursive_methods =
+      recursive_class_task.design.systemverilog_classes.front().methods;
+  require(
+      recursive_methods.size() == 2
+          && recursive_methods.back().statements.size() == 2
+          && !recursive_methods.back().statements.front()
+                  .class_method_arguments.empty()
+          && recursive_methods.back().statements.front()
+                 .statements.empty()
+          && recursive_methods.back().statements.back()
+                 .statements.empty(),
+      "class-task declarations must retain resolved call profiles without "
+      "eager body expansion");
 
   const auto invalid_syntax = parse_text(
       "invalid_class_syntax.sv",
@@ -725,6 +1557,40 @@ endclass
 class InvalidFactory extends FactoryBase;
   function Unrelated make();
     return null;
+  endfunction
+endclass
+class AliasFactoryBase;
+  typedef ResultBase result_type;
+  virtual function result_type make();
+    return null;
+  endfunction
+endclass
+class AliasFactoryDerived extends AliasFactoryBase;
+  typedef ResultDerived result_type;
+  function result_type make();
+    return null;
+  endfunction
+endclass
+class StaticFactoryHiding extends FactoryBase;
+  static function Unrelated make();
+    return null;
+  endfunction
+endclass
+virtual class ScopedAliasInterface;
+  typedef int unsigned size_t;
+  pure virtual function size_t size();
+endclass
+class ScopedAliasImplementation extends ScopedAliasInterface;
+  function ScopedAliasImplementation::size_t size();
+    return 0;
+  endfunction
+endclass
+virtual class GenericPureInterface #(type T = int);
+  pure virtual function void collect(T value, ref T values[$]);
+endclass
+class GenericPureImplementation
+    extends GenericPureInterface #(string);
+  function void collect(string value, ref string values[$]);
   endfunction
 endclass
 )",

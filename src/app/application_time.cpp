@@ -454,6 +454,7 @@ bool normalize_delays(
             normalize_expression(statement.condition);
             normalize_expression(statement.loop_initial);
             normalize_expression(statement.loop_limit);
+            normalize_expression(statement.loop_update_target);
             normalize_expression(statement.vhdl_guard);
             normalize_expression(statement.vhdl_report_expression);
             normalize_expression(statement.vhdl_severity_expression);
@@ -480,6 +481,7 @@ bool normalize_delays(
             }
             normalize_statement_expressions(statement.statements);
             normalize_statement_expressions(statement.else_statements);
+            normalize_statement_expressions(statement.loop_updates);
             for (auto& alternative : statement.case_alternatives) {
               for (auto& choice : alternative.choices) {
                 normalize_expression(choice);

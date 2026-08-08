@@ -35,6 +35,7 @@ include(cmake/FsimDebugFootprint.cmake)
 include(cmake/FsimDependencies.cmake)
 include(cmake/FsimBoostContext.cmake)
 include(cmake/FsimTcl.cmake)
+include(cmake/FsimUvmSources.cmake)
 
 option(FSIM_BUILD_TESTS "Build fsim's unit and integration tests" ${BUILD_TESTING})
 option(FSIM_BUILD_FUZZERS "Build Clang/libFuzzer targets" OFF)
@@ -60,6 +61,32 @@ set(
   "Tcl interface selection: AUTO/ON discovers or downloads Tcl, OFF disables it"
 )
 set_property(CACHE FSIM_TCL_MODE PROPERTY STRINGS AUTO ON OFF)
+set(
+  FSIM_UVM_SOURCE_MODE
+  "OFF"
+  CACHE STRING
+  "External UVM sources: OFF, FETCH pinned Accellera archives, or ARCHIVE exact local archives"
+)
+set_property(CACHE FSIM_UVM_SOURCE_MODE PROPERTY STRINGS OFF FETCH ARCHIVE)
+set(
+  FSIM_UVM_WORK_ROOT
+  "${CMAKE_BINARY_DIR}/_deps/fsim_uvm"
+  CACHE PATH
+  "Isolated download, extraction, and manifest root for governed UVM sources"
+)
+set(
+  FSIM_UVM_1_2_ARCHIVE
+  ""
+  CACHE FILEPATH
+  "Predownloaded exact UVM 1.2 archive for FSIM_UVM_SOURCE_MODE=ARCHIVE"
+)
+set(
+  FSIM_UVM_2020_3_1_ARCHIVE
+  ""
+  CACHE FILEPATH
+  "Predownloaded exact UVM 2020.3.1 archive for FSIM_UVM_SOURCE_MODE=ARCHIVE"
+)
+fsim_uvm_configure_sources()
 
 string(TOUPPER "${FSIM_LLVM_MODE}" FSIM_LLVM_MODE_NORMALIZED)
 if(NOT FSIM_LLVM_MODE_NORMALIZED MATCHES "^(AUTO|ON|OFF)$")
@@ -426,6 +453,17 @@ add_library(
     src/runtime/class_containers.cpp
     src/runtime/class_methods.cpp
     src/runtime/class_static.cpp
+    src/runtime/uvm_object.cpp
+    src/runtime/uvm_component.cpp
+  src/runtime/uvm_registry.cpp
+  src/runtime/uvm_factory.cpp
+  src/runtime/uvm_resource.cpp
+  src/runtime/uvm_config_db.cpp
+  src/runtime/uvm_command_line.cpp
+  src/runtime/uvm_report.cpp
+  src/runtime/uvm_report_catcher.cpp
+  src/runtime/uvm_report_handler.cpp
+  src/runtime/uvm_report_server.cpp
     src/runtime/constraint_expression.cpp
     src/runtime/constraint_solver.cpp
   src/runtime/vhpi_composite.cpp
@@ -849,6 +887,8 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_services.cpp
       src/app/application_class_inspection.cpp
       src/app/application_simulation.cpp
+      src/app/application_uvm_registry.cpp
+      src/app/application_uvm_command_line.cpp
       src/app/application_time.cpp
       src/app/tcl.cpp
   )

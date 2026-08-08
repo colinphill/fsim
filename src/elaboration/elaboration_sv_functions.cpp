@@ -812,6 +812,22 @@ private:
             constexpr std::size_t maximum_iterations = 1'000'000;
             std::size_t iteration = 0;
             if (statement.loop_runtime) {
+                if (statement.target.valid()
+                    && statement.loop_initial.valid()) {
+                    Statement initializer;
+                    initializer.kind = StatementKind::Assignment;
+                    initializer.target = statement.target;
+                    initializer.value = statement.loop_initial;
+                    const auto flow = execute_statement(
+                        initializer,
+                        environment,
+                        types,
+                        result,
+                        error);
+                    if (flow != Flow::normal) {
+                        return flow;
+                    }
+                }
                 for (;;) {
                     if (!statement.loop_post_test) {
                         const auto condition = evaluate_expression(
@@ -850,6 +866,21 @@ private:
                     }
                     if (flow == Flow::broken) {
                         return Flow::normal;
+                    }
+                    if (statement.loop_update_target.valid()) {
+                        Statement update;
+                        update.kind = StatementKind::Assignment;
+                        update.target = statement.loop_update_target;
+                        update.value = statement.value;
+                        const auto update_flow = execute_statement(
+                            update,
+                            environment,
+                            types,
+                            result,
+                            error);
+                        if (update_flow != Flow::normal) {
+                            return update_flow;
+                        }
                     }
                     if (statement.loop_post_test) {
                         const auto condition = evaluate_expression(

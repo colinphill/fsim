@@ -407,6 +407,162 @@ endmodule
   std::filesystem::remove_all(directory, cleanup_error);
 }
 
+void test_systemverilog_uvm_macro_surface() {
+  const auto directory = make_test_directory("uvm-macro-surface");
+  const auto include = directory / "uvm_like_macros.svh";
+  const auto root = directory / "root.sv";
+  write_text(
+      include,
+      R"(`ifndef FSIM_UVM_LIKE_MACROS_SVH
+`define FSIM_UVM_LIKE_MACROS_SVH
+`define UVM_FORWARD(first, second) localparam int first = second;
+`define UVM_DECLARE(SFX, FORWARDED) \
+module uvm_generated``SFX; \
+  // A comment-ending continuation is used by both governed UVM kits. \
+  `UVM_FORWARD FORWARDED \
+`ifdef FSIM_UVM_ALTERNATE localparam int selected = 1; \
+`else localparam int selected = 2; \
+`endif \
+  initial $display(`"uvm_generated``SFX FORWARDED`"); \
+endmodule
+`endif
+)" );
+  write_text(
+      root,
+      R"(`include "uvm_like_macros.svh"
+`include "uvm_like_macros.svh"
+`define FSIM_UVM_SUFFIX _item
+`UVM_DECLARE(`FSIM_UVM_SUFFIX, (forwarded_value, 7))
+)" );
+  PreprocessorOptions options;
+  options.include_directories = {directory};
+  auto preprocessed = preprocess_verilog_file(
+      root, Language::SystemVerilog2017, options);
+  require(
+      preprocessed.ok(),
+      "UVM-style guarded, nested, forwarded, conditional, pasted, and "
+      "stringified macros must preprocess");
+  const auto has_token = [&](const TokenKind kind, const std::string_view text) {
+    return std::ranges::any_of(
+        preprocessed.lexed.tokens,
+        [&](const Token& token) {
+          return token.kind == kind && token.text == text;
+        });
+  };
+  require(
+      has_token(TokenKind::Identifier, "uvm_generated_item")
+          && has_token(TokenKind::Identifier, "forwarded_value")
+          && has_token(TokenKind::Number, "7")
+          && has_token(TokenKind::Number, "2"),
+      "nested suffix expansion, tuple forwarding, and replacement "
+      "conditional selection must reach generated declarations");
+  require(
+      std::ranges::any_of(
+          preprocessed.lexed.tokens,
+          [](const Token& token) {
+            return token.kind == TokenKind::StringLiteral
+                && token.text.find("uvm_generated_item")
+                    != std::string::npos
+                && token.text.find("forwarded_value")
+                    != std::string::npos
+                && token.text.find('`') == std::string::npos;
+          }),
+      "composed special strings must substitute parameters and remove paste "
+      "markers");
+  const auto parsed = parse_verilog(std::move(preprocessed.lexed), true);
+  require(
+      parsed.ok() && parsed.design.units.size() == 1
+          && parsed.design.units.front().name == "uvm_generated_item",
+      "UVM-style macro expansion must generate one parseable declaration");
+
+  const auto punctuation_paste = preprocess_verilog(
+      SourceText{
+          "uvm-punctuation-paste.sv",
+          "`define UVM_MEMBER(BASE) BASE``.value\n"
+          "`UVM_MEMBER(resource_queue)\n"},
+      Language::SystemVerilog2017);
+  require(
+      punctuation_paste.ok()
+          && punctuation_paste.lexed.tokens.size() == 4
+          && punctuation_paste.lexed.tokens[0].text == "resource_queue"
+          && punctuation_paste.lexed.tokens[1].kind == TokenKind::Dot
+          && punctuation_paste.lexed.tokens[2].text == "value",
+      "a paste marker may delimit a macro argument before punctuation without "
+      "forming one lexical token");
+
+  const auto malformed = preprocess_verilog(
+      SourceText{
+          "uvm-macro-errors.sv",
+          R"(`define BAD_CONDITIONAL \
+`ifdef \
+module bad_conditional; endmodule
+`BAD_CONDITIONAL
+`define BAD_OPEN \
+`ifdef NEVER_DEFINED \
+module bad_open; endmodule
+`BAD_OPEN
+`define BAD_STRING(ARG) `"ARG``"
+`BAD_STRING(value)
+)"},
+      Language::SystemVerilog2017);
+  const auto has_code = [&](const std::string_view code) {
+    return std::ranges::any_of(
+        malformed.lexed.diagnostics,
+        [&](const Diagnostic& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      !malformed.ok() && has_code("FSIM-SV-PP-049")
+          && has_code("FSIM-SV-PP-050")
+          && has_code("FSIM-SV-PP-051"),
+      "malformed replacement conditionals and special strings receive exact "
+      "cataloged diagnostics");
+
+#if defined(FSIM_TEST_UVM_1_2_SOURCE_DIR) \
+    && defined(FSIM_TEST_UVM_2020_3_1_SOURCE_DIR)
+  const std::array<std::filesystem::path, 2> upstream_roots{
+      std::filesystem::path{FSIM_TEST_UVM_1_2_SOURCE_DIR} / "src",
+      std::filesystem::path{FSIM_TEST_UVM_2020_3_1_SOURCE_DIR} / "src"};
+  for (std::size_t release = 0; release < upstream_roots.size(); ++release) {
+    const auto upstream_probe = directory
+        / ("upstream-" + std::to_string(release) + ".sv");
+    write_text(
+        upstream_probe,
+        R"(`include "uvm_macros.svh"
+class fsim_uvm_macro_item;
+  `uvm_object_utils(fsim_uvm_macro_item)
+endclass
+`uvm_analysis_imp_decl(_fsim)
+)" );
+    PreprocessorOptions upstream_options;
+    upstream_options.include_directories = {upstream_roots[release]};
+    const auto upstream = preprocess_verilog_file(
+        upstream_probe, Language::SystemVerilog2017, upstream_options);
+    require(
+        upstream.ok()
+            && std::ranges::any_of(
+                upstream.lexed.tokens,
+                [](const Token& token) {
+                  return token.kind == TokenKind::Identifier
+                      && token.text == "uvm_analysis_imp_fsim";
+                }),
+        "the exact governed UVM macro entry point and representative generated "
+        "declarations must preprocess without modification");
+    const auto upstream_package = preprocess_verilog_file(
+        upstream_roots[release] / "uvm_pkg.sv",
+        Language::SystemVerilog2017, upstream_options);
+    require(
+        upstream_package.ok(),
+        "the complete exact governed UVM package must preprocess without "
+        "modification");
+  }
+#endif
+
+  std::error_code cleanup_error;
+  std::filesystem::remove_all(directory, cleanup_error);
+}
+
 void test_systemverilog_line_directive() {
   const auto remapped = preprocess_verilog(
       SourceText{

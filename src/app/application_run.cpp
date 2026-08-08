@@ -865,6 +865,7 @@ int run_built_project(
     BuiltProject built,
     const SimulationEngine engine,
     const project::Config& config,
+    const std::span<const std::string> plusargs,
     diagnostic::Engine& diagnostics,
     std::ostream& output)  {
   const auto duration = configured_duration(
@@ -879,6 +880,9 @@ int run_built_project(
       std::move(built),
       config.run.max_deltas,
       engine);
+  if (!apply_uvm_command_line(simulation, plusargs, diagnostics)) {
+    return 1;
+  }
   simulation.set_output_hook(
       [&output](
           const runtime::simir::ProcessId,
@@ -982,7 +986,7 @@ int run_built_project(
 }
 
 int handle_run(
-    const cli::Invocation&,
+    const cli::Invocation& invocation,
     const project::Config& config,
     diagnostic::Engine& diagnostics,
     std::ostream& output,
@@ -993,7 +997,7 @@ int handle_run(
   }
   return run_built_project(
       std::move(*built), SimulationEngine::compiled,
-      config, diagnostics, output);
+      config, invocation.plusargs, diagnostics, output);
 }
 
 void print_debug_help(std::ostream& output)  {

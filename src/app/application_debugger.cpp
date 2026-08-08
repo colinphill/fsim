@@ -1596,7 +1596,7 @@ int run_debug_repl_impl(
 }
 
 int handle_debug(
-    const cli::Invocation&,
+    const cli::Invocation& invocation,
     const project::Config& config,
     diagnostic::Engine& diagnostics,
     std::istream& input,
@@ -1613,6 +1613,10 @@ int handle_debug(
       std::move(*built),
       config.run.max_deltas,
       SimulationEngine::debug);
+  if (!apply_uvm_command_line(
+          simulation, invocation.plusargs, diagnostics)) {
+    return 1;
+  }
   simulation.set_output_hook(
       [&output](
           const runtime::simir::ProcessId,

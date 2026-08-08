@@ -211,6 +211,8 @@ void substitute_parameters(
             statement.loop_initial, environment, domains, language);
         substitute_parameters(
             statement.loop_limit, environment, domains, language);
+        substitute_parameters(
+            statement.loop_update_target, environment, domains, language);
         for (auto& declaration : statement.declarations) {
             substitute_parameters(
                 declaration,
@@ -410,6 +412,11 @@ void collect_qualified_identifiers(
                      ->associative_index_type,
                 identifiers);
         }
+    }
+    for (const auto& dimension :
+         type.systemverilog_packed_dimensions) {
+        collect_qualified_identifiers(dimension.left, identifiers);
+        collect_qualified_identifiers(dimension.right, identifiers);
     }
     if (!type.packed_range_expression) {
         return;

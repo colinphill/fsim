@@ -575,6 +575,9 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-SV-PP-046` | error | An include attempts to continue or close a conditional block opened by its parent source. |
 | `FSIM-SV-PP-047` | error | `` `celldefine`` is nested or repeated while already active. |
 | `FSIM-SV-PP-048` | error | `` `nounconnected_drive`` appears without active `` `unconnected_drive`` state. |
+| `FSIM-SV-PP-049` | error | A conditional directive embedded in a macro replacement is malformed or unmatched. |
+| `FSIM-SV-PP-050` | error | A macro replacement contains an unterminated conditional directive. |
+| `FSIM-SV-PP-051` | error | A special macro string contains a backtick that does not introduce an identifier. |
 
 ### Verilog/SystemVerilog syntax
 
@@ -809,6 +812,13 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-SV-PARSE-326` | error | A SystemVerilog DPI declaration is missing its SystemVerilog callable name. |
 | `FSIM-SV-PARSE-327` | error | A DPI import has a missing or malformed formal list, or a DPI export contains profile tokens after its name. |
 | `FSIM-SV-PARSE-328` | error | A DPI function return type or formal type/name entry is missing or malformed. |
+| `FSIM-SV-PARSE-329` | error | A SystemVerilog void-cast statement is missing its terminating semicolon. |
+| `FSIM-SV-PARSE-330` | error | A procedural SystemVerilog `foreach` statement is missing its opening parenthesis. |
+| `FSIM-SV-PARSE-331` | error | A procedural SystemVerilog `foreach` collection is missing its opening index bracket. |
+| `FSIM-SV-PARSE-332` | error | A procedural SystemVerilog `foreach` index is missing its closing bracket. |
+| `FSIM-SV-PARSE-333` | error | A procedural SystemVerilog `foreach` header is missing its closing parenthesis. |
+| `FSIM-SV-PARSE-334` | error | A `randomize with` clause is missing its opening constraint brace. |
+| `FSIM-SV-PARSE-335` | error | A `randomize with` constraint block is unterminated. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -946,9 +956,6 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-SV-SEM-024` | error | A bounded scope declares the same typedef name more than once. |
 | `FSIM-SV-SEM-025` | error | A bounded packed aggregate declares the same member name more than once. |
 | `FSIM-SV-SEM-026` | error | A bounded built-in gate primitive has an invalid number of input terminals. |
-| `FSIM-SV-SEM-027` | error | A bounded procedural loop condition does not compare its loop variable against an integral bound. |
-| `FSIM-SV-SEM-028` | error | A bounded procedural loop iteration updates a name other than its loop variable. |
-| `FSIM-SV-SEM-029` | error | A bounded procedural loop update is not a positive constant step toward its comparison bound. |
 | `FSIM-SV-SEM-103` | error | A procedural loop update is not an assignment or increment of its loop variable. |
 | `FSIM-SV-SEM-106` | error | A body-timed `always` process has a reachable re-entry path without suspension or termination. |
 | `FSIM-SV-SEM-107` | error | `wait fork` or `disable fork` is used outside SystemVerilog-2017 input. |
@@ -1099,7 +1106,6 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-SV-CLASS-INHERIT-005` | error | An `implements` selection does not name an interface class. |
 | `FSIM-SV-CLASS-INHERIT-006` | error | An overriding method has an incompatible result type, including a noncovariant class-handle result. |
 | `FSIM-SV-CLASS-INHERIT-007` | error | A class overrides an inherited final method. |
-| `FSIM-SV-CLASS-INHERIT-008` | error | An override changes whether the inherited method is static. |
 | `FSIM-SV-CLASS-INHERIT-009` | error | A concrete class leaves an inherited pure method unimplemented. |
 | `FSIM-SV-CLASS-SPEC-001` | error | A class parameter actual names no formal or exceeds the positional formal count. |
 | `FSIM-SV-CLASS-SPEC-002` | error | A class parameter formal receives more than one actual. |
@@ -1129,6 +1135,8 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-SVCLASS-015` | error | A class-handle queue operation has an invalid argument profile. |
 | `FSIM-ELAB-SVCLASS-016` | error | A class-handle container expression is not a supported `pop_front` or `size` call. |
 | `FSIM-ELAB-SVCLASS-017` | error | `$cast` lacks a resolved destination class handle or source during lowering. |
+| `FSIM-ELAB-SVCLASS-018` | error | A string output or inout actual of a class method is not executable. |
+| `FSIM-ELAB-SVCLASS-019` | error | A string output or inout actual of a static class method is not executable. |
 | `FSIM-ELAB-CLOCK-001` | error | A clocking block does not have exactly one signal event. |
 | `FSIM-ELAB-CLOCK-002` | error | A clocking block event signal cannot be resolved. |
 | `FSIM-ELAB-CLOCK-003` | error | A clocking member alias is not a signal identifier expression. |
@@ -1146,7 +1154,6 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-SVIFACE-009` | error | A modport export has no matching callable implementation in the connected module. |
 | `FSIM-ELAB-SVIFACE-010` | error | A parameterized virtual-interface view does not match the connected interface specialization identity. |
 | `FSIM-ELAB-SVIFACE-011` | error | A restricted modport actual is widened to a generic interface port or rebound to a different modport. |
-| `FSIM-SV-SEM-030` | error | A reachable `forever` path can take its backedge without suspending, exiting, or terminating the simulation. |
 | `FSIM-SV-SEM-031` | error | A SystemVerilog `break` or `continue` statement appears outside a procedural loop. |
 | `FSIM-SV-SEM-032` | error | A SystemVerilog `final` procedure contains a timing control, wait, or `$finish`. |
 | `FSIM-SV-SEM-033` | error | A SystemVerilog `final` procedure contains a nonblocking assignment. |
@@ -1173,20 +1180,16 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-SV-SEM-054` | error | A procedural assignment contains more than one delay or event control. |
 | `FSIM-SV-SEM-055` | error | A SystemVerilog type parameter and typedef declare the same type-namespace name in one bounded scope. |
 | `FSIM-SV-SEM-056` | error | A SystemVerilog return statement appears outside a function. |
-| `FSIM-SV-SEM-057` | error | A non-void SystemVerilog function return statement omits its value. |
 | `FSIM-SV-SEM-058` | error | A bounded function repeats an argument name or conflicts with its result name. |
 | `FSIM-SV-SEM-059` | error | A function closing name does not match its declaration name. |
 | `FSIM-SV-SEM-060` | error | A bounded function repeats or conflicts with a local declaration. |
 | `FSIM-SV-SEM-061` | error | A bounded function assignment target does not have an identifier root. |
-| `FSIM-SV-SEM-062` | error | A bounded function assigns one of its input arguments. |
 | `FSIM-SV-SEM-063` | error | A bounded function assignment is nonblocking or contains a procedural timing/event control. |
 | `FSIM-SV-SEM-064` | error | A bounded function contains a timing control, event statement, or task statement. |
-| `FSIM-SV-SEM-065` | error | A bounded function has no function-name assignment or value-return statement. |
 | `FSIM-SV-SEM-066` | error | A module or package declares the same bounded function name more than once. |
 | `FSIM-SV-SEM-067` | error | A bounded task repeats an argument name. |
 | `FSIM-SV-SEM-068` | error | A bounded task closing name differs from its declaration name. |
 | `FSIM-SV-SEM-069` | error | A bounded task local conflicts with an argument or earlier local. |
-| `FSIM-SV-SEM-070` | error | A bounded task contains a nonblocking/intra-assignment control, `$stop`, or `$finish`. |
 | `FSIM-SV-SEM-071` | error | A bounded task return statement incorrectly supplies a value. |
 | `FSIM-SV-SEM-073` | error | A module or package declares the same bounded task name more than once. |
 | `FSIM-SV-SEM-074` | error | A bounded text-file system function or task appears outside SystemVerilog-2017 input. |
@@ -1227,16 +1230,13 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-SV-UNSUPPORTED-014` | error | A procedural declaration uses the net-only `wire` type. |
 | `FSIM-SV-UNSUPPORTED-017` | error | A `unique`, `unique0`, or `priority` qualifier is not followed by a case statement. |
 | `FSIM-SV-UNSUPPORTED-019` | error | Type parameters are not implemented. |
-| `FSIM-SV-UNSUPPORTED-020` | error | A parameter data type is outside the supported integral subset. |
 | `FSIM-SV-UNSUPPORTED-021` | error | A generate region or branch contains an item outside the bounded integral-parameter, local-signal, continuous assignment, process, instance, and nested-generate subset. |
 | `FSIM-SV-UNSUPPORTED-022` | error | A generated local declaration incorrectly uses a module-port direction. |
 | `FSIM-SV-UNSUPPORTED-023` | error | A package item is outside the bounded integral parameter/localparam and import subset. |
 | `FSIM-SV-UNSUPPORTED-024` | error | A bounded typedef target is not an integral built-in or user-defined type. |
-| `FSIM-SV-UNSUPPORTED-025` | error | An unpacked typedef dimension is outside the current packed alias subset. |
 | `FSIM-SV-UNSUPPORTED-026` | error | An enum declaration selects a nonintegral base type. |
 | `FSIM-SV-UNSUPPORTED-028` | error | A bounded aggregate member uses a data type outside the packed integral, enum, or nested aggregate subset. |
 | `FSIM-SV-UNSUPPORTED-029` | error | A bounded packed aggregate member has an unpacked dimension. |
-| `FSIM-SV-UNSUPPORTED-035` | error | A bounded function output, inout, or ref formal uses a string or unpacked-container type instead of the supported packed integral type. |
 | `FSIM-SV-UNSUPPORTED-041` | error | `reverse` or deterministic `shuffle` uses an excluded container-ordering `with` clause. |
 | `FSIM-SV-UNSUPPORTED-042` | error | A bounded `case matches` item uses a deferred variable-binding, tagged, or structured pattern. |
 | `FSIM-SV-UNSUPPORTED-043` | error | A bounded `case matches` item uses a deferred `&&&` guard. |
@@ -2038,6 +2038,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-TIME-0004` | error | A declared SystemVerilog time precision is not representable at project resolution. |
 | `FSIM-RUN-0001` | error | The SimIR interpreter failed during a CLI run. |
 | `FSIM-RUN-0002` | error | Another exception terminated a CLI run. |
+| `FSIM-UVM-CLI-001` | error | A recognized UVM command-line plusarg is malformed, exceeds a bound, or cannot be applied to the simulation-owned factory/config/resource state. |
 | `FSIM-RUN-ASSERT-0001` | assertion severity | A false HDL assertion stopped a CLI simulation; the diagnostic retains its source location and message. |
 | `FSIM-HDL-REPORT` | report severity | A VHDL report or SystemVerilog severity task was emitted through a command or Tcl output stream. |
 | `FSIM-RUN-DELTA-0001` | error | Simulation exceeded `max_deltas`; the message includes pending processes and recent signals. |

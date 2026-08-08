@@ -293,6 +293,8 @@ struct Statement {
     bool loop_variable_declared{};
     std::optional<ExpressionId> loop_initial;
     std::optional<ExpressionId> loop_limit;
+    std::optional<ExpressionId> loop_update_target;
+    std::vector<StatementId> loop_updates;
     bool loop_descending{};
     bool loop_limit_exclusive{};
     bool loop_repeat{};

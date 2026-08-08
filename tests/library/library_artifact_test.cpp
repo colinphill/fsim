@@ -52,8 +52,8 @@ fsim::library::Metadata example_metadata() {
 }  // namespace
 
 int main() {
-  static_assert(fsim::library::kOwningUnitSchemaVersion == 11);
-  static_assert(fsim::library::kPortableSchemaVersion == 7);
+  static_assert(fsim::library::kOwningUnitSchemaVersion == 13);
+  static_assert(fsim::library::kPortableSchemaVersion == 9);
   const auto expected = example_metadata();
   const auto serialized = fsim::library::serialize_metadata(expected);
   assert(serialized.starts_with(
@@ -223,6 +223,35 @@ endmodule
   auto source_unit = *stage_unit;
   source_unit.library = "vendor";
   source_unit.compilation_unit_identity = "fixture-compilation-unit";
+  fsim::frontend::Type portable_const_type;
+  portable_const_type.domain = fsim::frontend::ValueDomain::Bit2;
+  portable_const_type.spelling = "bit";
+  portable_const_type.packed_range =
+      fsim::frontend::PackedRange{31, 0, true};
+  portable_const_type.systemverilog_packed_dimensions = {
+      {fsim::frontend::Expression{
+           fsim::frontend::ExpressionKind::IntegerLiteral,
+           "7", {}, {}},
+       fsim::frontend::Expression{
+           fsim::frontend::ExpressionKind::IntegerLiteral,
+           "0", {}, {}},
+       {}, std::nullopt},
+      {fsim::frontend::Expression{
+           fsim::frontend::ExpressionKind::IntegerLiteral,
+           "3", {}, {}},
+       fsim::frontend::Expression{
+           fsim::frontend::ExpressionKind::IntegerLiteral,
+           "0", {}, {}},
+       {}, std::nullopt}};
+  fsim::frontend::VariableDeclaration portable_const{
+      "portable_const",
+      std::move(portable_const_type),
+      fsim::frontend::Expression{
+          fsim::frontend::ExpressionKind::IntegerLiteral,
+          "0", {}, {}},
+      {}};
+  portable_const.systemverilog_const = true;
+  source_unit.variables.push_back(std::move(portable_const));
   fsim::diagnostic::Engine unit_write_diagnostics;
   const auto unit_bytes = fsim::library::serialize_portable_unit(
       source_unit, unit_write_diagnostics);
@@ -240,6 +269,16 @@ endmodule
   assert(restored_unit->parameters.size() == 3);
   assert(restored_unit->functions.size() == 1);
   assert(restored_unit->systemverilog_covergroups.size() == 1);
+  const auto restored_const = std::ranges::find(
+      restored_unit->variables,
+      std::string{"portable_const"},
+      &fsim::frontend::VariableDeclaration::name);
+  assert(
+      restored_const != restored_unit->variables.end()
+      && restored_const->systemverilog_const
+      && restored_const->type.systemverilog_packed_dimensions.size()
+          == 2
+      && restored_const->type.width() == 32);
   const auto& restored_coverage =
       restored_unit->systemverilog_covergroups.front();
   assert(restored_coverage.name == "portable_coverage");

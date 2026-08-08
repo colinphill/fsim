@@ -65,6 +65,50 @@ void ApplicationTestFixture::test_class_simulation_integration() {
           return specialization.declaration_identity.ends_with("::AppBase");
         });
     assert(base != built->systemverilog_class_specializations.end());
+    const auto uvm_item = std::ranges::find_if(
+        built->systemverilog_class_specializations,
+        [](const auto& specialization) {
+          return specialization.declaration_identity.ends_with("::UvmItem");
+        });
+    const auto uvm_object = std::ranges::find_if(
+        built->systemverilog_class_specializations,
+        [](const auto& specialization) {
+          return specialization.declaration_identity.ends_with("::uvm_object");
+        });
+    const auto uvm_component = std::ranges::find_if(
+        built->systemverilog_class_specializations,
+        [](const auto& specialization) {
+          return specialization.declaration_identity.ends_with(
+              "::uvm_component");
+        });
+    const auto uvm_param_item = std::ranges::find_if(
+        built->systemverilog_class_specializations,
+        [](const auto& specialization) {
+          return specialization.declaration_identity.ends_with(
+              "::UvmParamItem");
+        });
+    const auto uvm_factory_item = std::ranges::find_if(
+        built->systemverilog_class_specializations,
+        [](const auto& specialization) {
+          return specialization.declaration_identity.ends_with(
+              "::UvmFactoryItem");
+        });
+    const auto test_uvm_component = std::ranges::find_if(
+        built->systemverilog_class_specializations,
+        [](const auto& specialization) {
+          return specialization.declaration_identity.ends_with(
+              "::UvmComponent");
+        });
+    assert(
+        uvm_item != built->systemverilog_class_specializations.end()
+        && uvm_object != built->systemverilog_class_specializations.end()
+        && uvm_component != built->systemverilog_class_specializations.end()
+        && uvm_param_item
+            != built->systemverilog_class_specializations.end()
+        && uvm_factory_item
+            != built->systemverilog_class_specializations.end()
+        && test_uvm_component
+            != built->systemverilog_class_specializations.end());
     const auto derived_method = std::ranges::find(
         derived->methods,
         std::string{"bump"},
@@ -79,6 +123,17 @@ void ApplicationTestFixture::test_class_simulation_integration() {
     const auto derived_specialization = derived->specialization_identity;
     const auto derived_identity = derived->declaration_identity;
     const auto base_identity = base->declaration_identity;
+    const auto uvm_item_specialization = uvm_item->specialization_identity;
+    const auto uvm_item_identity = uvm_item->declaration_identity;
+    const auto uvm_object_identity = uvm_object->declaration_identity;
+    const auto uvm_component_identity =
+        uvm_component->declaration_identity;
+    const auto test_uvm_component_specialization =
+        test_uvm_component->specialization_identity;
+    const auto uvm_param_item_specialization =
+        uvm_param_item->specialization_identity;
+    const auto uvm_factory_item_specialization =
+        uvm_factory_item->specialization_identity;
     const auto derived_method_identity = derived_method->canonical_identity;
     const auto base_method_identity = base_method_profile->canonical_identity;
     if (engine == fsim::app::SimulationEngine::interpreter) {
@@ -235,6 +290,632 @@ void ApplicationTestFixture::test_class_simulation_integration() {
     const auto handle = simulation.allocate_class(
         derived_specialization,
         base_identity);
+    const auto uvm_root = simulation.allocate_uvm_object(
+        uvm_item_specialization, "api_root", uvm_object_identity);
+    const auto uvm_child = simulation.allocate_uvm_object(
+        uvm_item_specialization, "api_child", uvm_object_identity);
+    const auto api_component_root =
+        simulation.create_uvm_root("api-first");
+    const auto api_component_second_root =
+        simulation.create_uvm_root("api-second");
+    const auto api_component_top = simulation.allocate_uvm_component(
+        test_uvm_component_specialization, "api_top", 0,
+        api_component_root, uvm_component_identity);
+    const auto api_component_child = simulation.allocate_uvm_component(
+        test_uvm_component_specialization, "api_child", api_component_top,
+        api_component_root, uvm_component_identity);
+    const auto api_component_isolated = simulation.allocate_uvm_component(
+        test_uvm_component_specialization, "api_top", 0,
+        api_component_second_root, uvm_component_identity);
+    assert(
+        simulation.uvm_components().full_name(api_component_child)
+            == "api_top.api_child"
+        && simulation.uvm_components().parent(api_component_child)
+            == api_component_top
+        && simulation.uvm_components().lookup_root(
+               api_component_root, "api_top.api_child")
+            == api_component_child
+        && simulation.uvm_components().lookup_root(
+               api_component_second_root, "api_top")
+            == api_component_isolated
+        && simulation.uvm_components().children(api_component_top)
+            == std::vector<fsim::runtime::SystemVerilogClassHandle>{
+                   api_component_child});
+    const auto live_before_duplicate =
+        simulation.class_heap().live_objects();
+    bool duplicate_component_rejected{};
+    try {
+      (void)simulation.allocate_uvm_component(
+          test_uvm_component_specialization, "api_child", api_component_top,
+          api_component_root, uvm_component_identity);
+    } catch (const std::invalid_argument&) {
+      duplicate_component_rejected = true;
+    }
+    assert(
+        duplicate_component_rejected
+        && simulation.class_heap().live_objects() == live_before_duplicate);
+    const auto& uvm_registry = simulation.uvm_registry();
+    const auto item_wrapper = uvm_registry.wrapper_by_specialization(
+        uvm_item_specialization);
+    const auto component_wrapper = uvm_registry.wrapper_by_specialization(
+        test_uvm_component_specialization);
+    const auto param_item_wrapper = uvm_registry.wrapper_by_specialization(
+        uvm_param_item_specialization);
+    const auto factory_item_wrapper = uvm_registry.wrapper_by_specialization(
+        uvm_factory_item_specialization);
+    assert(
+        uvm_registry.size() == 4
+        && item_wrapper != 0 && component_wrapper != 0
+        && param_item_wrapper != 0
+        && factory_item_wrapper != 0
+        && item_wrapper != component_wrapper
+        && param_item_wrapper != item_wrapper
+        && param_item_wrapper != component_wrapper
+        && uvm_registry.wrapper_by_name("UvmItem") == item_wrapper
+        && uvm_registry.wrapper_by_name("UvmParamItem#(WIDTH=8)")
+            == param_item_wrapper
+        && uvm_registry.wrapper_by_name("UvmFactoryItem")
+            == factory_item_wrapper
+        && uvm_registry.wrapper_by_name("UvmComponent")
+            == component_wrapper
+        && uvm_registry.snapshot(item_wrapper).kind
+            == fsim::runtime::SystemVerilogUvmRegisteredKind::Object
+        && uvm_registry.snapshot(component_wrapper).kind
+            == fsim::runtime::SystemVerilogUvmRegisteredKind::Component
+        && uvm_registry.snapshot(param_item_wrapper).parameterized);
+    const auto registered_object = simulation.uvm_registry()
+        .create_object_by_type(item_wrapper, "registered_object");
+    const auto registered_component = simulation.uvm_registry()
+        .create_component_by_name(
+            "UvmComponent", "registered_child", api_component_top,
+            api_component_root);
+    const auto registered_param_object = simulation.uvm_registry()
+        .create_object_by_name(
+            "UvmParamItem#(WIDTH=8)", "registered_param");
+    auto& uvm_factory = simulation.uvm_factory();
+    assert(uvm_factory.set_type_override_by_type(
+        item_wrapper, param_item_wrapper));
+    assert(uvm_factory.set_instance_override_by_type(
+        item_wrapper,
+        factory_item_wrapper,
+        "factory_scope.factory_item"));
+    const auto factory_debug = uvm_factory.debug_resolve_by_name(
+        "UvmItem", "factory_scope.factory_item");
+    const auto factory_object = uvm_factory.create_object_by_type(
+        item_wrapper, "factory_scope", "factory_item");
+    const auto factory_report = uvm_factory.report(true);
+    auto& uvm_resources = simulation.uvm_resources();
+    fsim::runtime::SystemVerilogUvmResourceDescriptor resource_descriptor;
+    resource_descriptor.name = "timeout";
+    resource_descriptor.scope_pattern = "api_top.*";
+    resource_descriptor.type = {
+        "uvm_resource#(logic[15:0])",
+        fsim::runtime::SystemVerilogUvmResourceValueKind::Packed,
+        16};
+    resource_descriptor.value = fsim::runtime::PackedLogic4::from_aval_bval(
+        16, 0x1595, 0);
+    const auto timeout_resource =
+        uvm_resources.insert(std::move(resource_descriptor));
+    std::vector<fsim::runtime::SystemVerilogUvmResourceCallbackEvent>
+        shared_resource_callbacks;
+    (void)uvm_resources.add_callback(
+        timeout_resource,
+        [&](const auto event, const auto& resource) {
+          assert(resource.handle == timeout_resource);
+          shared_resource_callbacks.push_back(event);
+        });
+    assert((
+        uvm_resources.get_by_name("api_top.child", "timeout")
+            == timeout_resource
+        && uvm_resources.write(
+            timeout_resource,
+            fsim::runtime::PackedLogic4::from_aval_bval(
+                16, 0x2020, 0),
+            "api-first.api_top.child")
+        && std::get<fsim::runtime::PackedLogic4>(
+               uvm_resources.read(
+                   timeout_resource, "api-second.api_top.child"))
+               .low_word().aval == 0x2020
+        && uvm_resources.snapshot(timeout_resource).revision == 1
+        && uvm_resources.audit_records().size() == 2
+        && uvm_resources.audit_records()[0].accessor
+            == "api-first.api_top.child"
+        && uvm_resources.audit_records()[1].accessor
+            == "api-second.api_top.child"
+        && shared_resource_callbacks
+            == std::vector{
+                fsim::runtime::SystemVerilogUvmResourceCallbackEvent::PreWrite,
+                fsim::runtime::SystemVerilogUvmResourceCallbackEvent::PostWrite,
+                fsim::runtime::SystemVerilogUvmResourceCallbackEvent::PreRead,
+                fsim::runtime::SystemVerilogUvmResourceCallbackEvent::PostRead}));
+    auto& uvm_config_db = simulation.uvm_config_db();
+    const fsim::runtime::SystemVerilogUvmConfigContext config_root{"", 0};
+    const fsim::runtime::SystemVerilogUvmConfigContext config_child{
+        "api_top", 1};
+    const auto config_type = fsim::runtime::SystemVerilogUvmResourceType{
+        "uvm_config_db#(logic[15:0])",
+        fsim::runtime::SystemVerilogUvmResourceValueKind::Packed,
+        16};
+    (void)uvm_config_db.set(
+        config_root, "api_top.*", "limit", config_type,
+        fsim::runtime::PackedLogic4::from_aval_bval(16, 0x1595, 0),
+        fsim::runtime::SystemVerilogUvmConfigPhase::Build);
+    (void)uvm_config_db.set(
+        config_child, "*", "limit", config_type,
+        fsim::runtime::PackedLogic4::from_aval_bval(16, 0x1111, 0),
+        fsim::runtime::SystemVerilogUvmConfigPhase::Build);
+    assert(
+        std::get<fsim::runtime::PackedLogic4>(*uvm_config_db.get(
+            config_child, "child", "limit", config_type.identity))
+            .low_word().aval == 0x1595);
+    std::vector<unsigned> config_wake_order;
+    (void)uvm_config_db.wait_modified(
+        config_child, "child", "limit",
+        [&](const auto, const auto&) { config_wake_order.push_back(1); });
+    (void)uvm_config_db.wait_modified(
+        config_child, "child", "limit",
+        [&](const auto, const auto&) { config_wake_order.push_back(2); });
+    (void)uvm_config_db.set(
+        config_child, "child", "limit", config_type,
+        fsim::runtime::PackedLogic4::from_aval_bval(16, 0x2020, 0),
+        fsim::runtime::SystemVerilogUvmConfigPhase::Runtime);
+    assert(
+        config_wake_order == std::vector<unsigned>({1, 2})
+        && uvm_config_db.exists(
+            config_child, "child", "limit", config_type.identity)
+        && std::get<fsim::runtime::PackedLogic4>(*uvm_config_db.get(
+               config_child, "child", "limit", config_type.identity))
+               .low_word().aval == 0x2020);
+    for (const auto accessor : {"api-first", "api-second"}) {
+      assert(
+          std::get<fsim::runtime::PackedLogic4>(*uvm_config_db.get(
+              config_child, "child", "limit", config_type.identity,
+              accessor))
+              .low_word().aval == 0x2020);
+    }
+    auto& uvm_command_line = simulation.uvm_command_line();
+    const std::vector<std::string> uvm_plusargs{
+        "+uvm_set_type_override=UvmFactoryItem,UvmParamItem#(WIDTH=8),1",
+        "+uvm_set_config_string=api_top.*,command_mode,first",
+        "+uvm_set_config_string=api_top.*,command_mode,second",
+        "+UVM_VERBOSITY=UVM_HIGH",
+        "+UVM_VERBOSITY=UVM_LOW",
+        "+UVM_TIMEOUT=25,NO",
+        "+UVM_RESOURCE_DB_TRACE",
+        "+APP_PRIVATE=retained"};
+    uvm_command_line.apply(uvm_plusargs);
+    const auto& command_settings = uvm_command_line.settings();
+    const auto command_config = uvm_config_db.get(
+        config_root, "api_top.child", "command_mode",
+        fsim::runtime::kSystemVerilogUvmStringConfigType);
+    assert(
+        uvm_factory.debug_resolve_by_name("UvmFactoryItem").resolved
+            == param_item_wrapper
+        && command_config
+        && std::get<std::string>(*command_config) == "second"
+        && command_settings.arguments == uvm_plusargs
+        && command_settings.unknown_arguments
+            == std::vector<std::string>{"+APP_PRIVATE=retained"}
+        && command_settings.initial_verbosity == 300
+        && command_settings.initial_verbosity_argument_count == 2
+        && command_settings.timeout && command_settings.timeout->ticks == 25
+        && !command_settings.timeout->overridable
+        && command_settings.resource_db_trace);
+    assert(
+        uvm_factory.debug_resolve_by_name(
+            "UvmItem", "api-first.api_top").resolved == param_item_wrapper
+        && uvm_factory.debug_resolve_by_name(
+            "UvmItem", "api-second.api_top").resolved == param_item_wrapper);
+
+    auto& uvm_reports = simulation.uvm_reports();
+    uvm_reports.set_default_verbosity(*command_settings.initial_verbosity);
+    std::vector<fsim::runtime::SystemVerilogUvmReportMessage>
+        routed_reports;
+    uvm_reports.set_route_hook(
+        [&](const auto& message) { routed_reports.push_back(message); });
+    fsim::runtime::SystemVerilogUvmReportRequest api_report;
+    api_report.report_object = api_component_child;
+    api_report.severity =
+        fsim::runtime::SystemVerilogUvmReportSeverity::Info;
+    api_report.id = "API_REPORT";
+    api_report.message = "component ready";
+    api_report.verbosity = 300;
+    api_report.filename = "classes.sv";
+    api_report.line = 159;
+    api_report.context = "api-first";
+    api_report.elements.add_string("engine", "classes");
+    api_report.elements.add_object("item", uvm_child);
+    assert(uvm_reports.report(api_report));
+    auto filtered_report = api_report;
+    filtered_report.verbosity = 301;
+    assert(!uvm_reports.report(filtered_report));
+    auto isolated_report = api_report;
+    isolated_report.report_object = api_component_isolated;
+    isolated_report.severity =
+        fsim::runtime::SystemVerilogUvmReportSeverity::Warning;
+    isolated_report.verbosity = 10'000;
+    isolated_report.context = "api-second";
+    assert(uvm_reports.report(isolated_report));
+    auto prechecked_report = api_report;
+    prechecked_report.verbosity = 10'000;
+    prechecked_report.report_enabled_checked = true;
+    prechecked_report.context = "prechecked";
+    assert(uvm_reports.report(prechecked_report));
+    const auto api_report_payload =
+        uvm_reports.compose_payload(routed_reports.front());
+    assert(
+        routed_reports.size() == 3
+        && routed_reports[0].sequence == 1
+        && routed_reports[0].report_object == api_component_child
+        && routed_reports[0].report_object_name == "api_top.api_child"
+        && routed_reports[0].id == "API_REPORT"
+        && routed_reports[0].filename == "classes.sv"
+        && routed_reports[0].line == 159
+        && routed_reports[0].context == "api-first"
+        && routed_reports[1].sequence == 2
+        && routed_reports[1].report_object == api_component_isolated
+        && routed_reports[1].report_object_name == "api_top"
+        && routed_reports[1].context == "api-second"
+        && routed_reports[2].sequence == 3
+        && routed_reports[2].context == "prechecked"
+        && api_report_payload.find("component ready\n +engine = \"classes\"")
+            == 0
+        && api_report_payload.find("\n +item = @") != std::string::npos
+        && api_report_payload.find("{api_child}") != std::string::npos
+        && uvm_reports.default_verbosity() == 300
+        && uvm_reports.routed_count() == 3
+        && uvm_reports.filtered_count() == 1);
+    uvm_reports.set_verbosity_hier(api_component_top, 150);
+    uvm_reports.set_id_verbosity_hier(
+        api_component_top, "APP_HANDLER", 140);
+    uvm_reports.set_severity_id_verbosity_hier(
+        api_component_top,
+        fsim::runtime::SystemVerilogUvmReportSeverity::Warning,
+        "APP_HANDLER", 130);
+    uvm_reports.set_severity_id_action_hier(
+        api_component_top,
+        fsim::runtime::SystemVerilogUvmReportSeverity::Warning,
+        "APP_HANDLER", fsim::runtime::SystemVerilogUvmReportAction::Log);
+    uvm_reports.set_severity_id_file_hier(
+        api_component_top,
+        fsim::runtime::SystemVerilogUvmReportSeverity::Warning,
+        "APP_HANDLER", 99);
+    const auto child_report_policy = uvm_reports.policy(
+        api_component_child,
+        fsim::runtime::SystemVerilogUvmReportSeverity::Warning,
+        "APP_HANDLER");
+    const auto isolated_report_policy = uvm_reports.policy(
+        api_component_isolated,
+        fsim::runtime::SystemVerilogUvmReportSeverity::Warning,
+        "APP_HANDLER");
+    assert(
+        child_report_policy.verbosity == 130
+        && child_report_policy.action
+            == fsim::runtime::SystemVerilogUvmReportAction::Log
+        && child_report_policy.file == 99
+        && isolated_report_policy.verbosity == 300
+        && isolated_report_policy.action
+            == fsim::runtime::SystemVerilogUvmReportAction::Display
+        && isolated_report_policy.file == 0
+        && uvm_reports.handler_count() == 3
+        && uvm_reports.setting_count() == 12);
+    std::vector<std::string> report_display_records;
+    std::vector<std::pair<std::uint64_t, std::string>> report_file_records;
+    std::size_t report_record_count{};
+    std::vector<fsim::runtime::SystemVerilogUvmReportExecution>
+        report_control_events;
+    uvm_reports.server().set_show_verbosity(true);
+    uvm_reports.server().set_show_terminator(true);
+    uvm_reports.server().set_display_sink([&](const auto record) {
+      report_display_records.emplace_back(record);
+    });
+    uvm_reports.server().set_file_sink(
+        [&](const auto file, const auto record) {
+          report_file_records.emplace_back(file, record);
+        });
+    uvm_reports.server().set_record_sink(
+        [&](const auto&) { ++report_record_count; });
+    uvm_reports.server().set_control_sink([&](const auto& execution) {
+      report_control_events.push_back(execution);
+    });
+    assert(uvm_reports.server().set_max_quit_count(1, false));
+    uvm_reports.set_severity_id_action(
+        api_component_child,
+        fsim::runtime::SystemVerilogUvmReportSeverity::Warning,
+        "APP_SERVER",
+        fsim::runtime::SystemVerilogUvmReportAction::Display
+            | fsim::runtime::SystemVerilogUvmReportAction::Log
+            | fsim::runtime::SystemVerilogUvmReportAction::Record
+            | fsim::runtime::SystemVerilogUvmReportAction::Count);
+    uvm_reports.set_severity_id_file(
+        api_component_child,
+        fsim::runtime::SystemVerilogUvmReportSeverity::Warning,
+        "APP_SERVER", 3);
+    fsim::runtime::SystemVerilogUvmReportRequest server_report;
+    server_report.report_object = api_component_child;
+    server_report.severity =
+        fsim::runtime::SystemVerilogUvmReportSeverity::Warning;
+    server_report.id = "APP_SERVER";
+    server_report.message = "server action";
+    server_report.verbosity = 0;
+    server_report.filename = "classes.sv";
+    server_report.line = 615;
+    server_report.timestamp = 17;
+    server_report.context = "api-server";
+    assert(uvm_reports.report(server_report));
+    const auto expected_server_record =
+        std::string{
+            "UVM_WARNING(UVM_NONE) classes.sv(615) @ 17: "
+            "api_top.api_child@@api-server [APP_SERVER] server action "
+            "-UVM_WARNING\n"};
+    assert((
+        routed_reports.size() == 4
+        && routed_reports.back().sequence == 4
+        && fsim::runtime::has_action(
+            routed_reports.back().action,
+            fsim::runtime::SystemVerilogUvmReportAction::Exit)
+        && report_display_records
+            == std::vector<std::string>{expected_server_record}
+        && report_file_records
+            == std::vector<std::pair<std::uint64_t, std::string>>{
+                   {2, expected_server_record}}
+        && report_record_count == 1
+        && report_control_events.size() == 1
+        && report_control_events.front().exit_requested
+        && uvm_reports.server().quit_count() == 1
+        && uvm_reports.server().severity_count(
+               fsim::runtime::SystemVerilogUvmReportSeverity::Info) == 2
+        && uvm_reports.server().severity_count(
+               fsim::runtime::SystemVerilogUvmReportSeverity::Warning) == 2
+        && uvm_reports.server().id_count("APP_SERVER") == 1));
+
+    std::vector<std::string> application_catcher_order;
+    const auto application_global_catcher = uvm_reports.add_catcher(
+        0, "application-global", [&](auto& context) {
+          application_catcher_order.push_back(
+              "global:" + context.message().id);
+          context.set_severity(
+              fsim::runtime::SystemVerilogUvmReportSeverity::Info);
+          context.set_message("modified by application catcher");
+          context.elements().add_string("engine", "catcher");
+          return fsim::runtime::SystemVerilogUvmReportCatcherResult::Throw;
+        },
+        fsim::runtime::SystemVerilogUvmReportCatcherOrdering::Prepend);
+    const auto application_instance_catcher = uvm_reports.add_catcher(
+        api_component_child, "application-instance", [&](auto& context) {
+          application_catcher_order.push_back(
+              "instance:" + context.message().id);
+          assert(
+              context.message().severity
+                  == fsim::runtime::SystemVerilogUvmReportSeverity::Info
+              && context.message().message
+                  == "modified by application catcher"
+              && context.message().elements.size() == 1);
+          return fsim::runtime::SystemVerilogUvmReportCatcherResult::Caught;
+        });
+    const auto application_isolated_catcher = uvm_reports.add_catcher(
+        api_component_isolated, "application-isolated", [&](auto&) {
+          application_catcher_order.push_back("isolated");
+          return fsim::runtime::SystemVerilogUvmReportCatcherResult::Throw;
+        });
+    (void)application_global_catcher;
+    (void)application_instance_catcher;
+    (void)application_isolated_catcher;
+    auto caught_application_report = server_report;
+    caught_application_report.id = "APP_CATCH";
+    caught_application_report.message = "catch me";
+    assert((
+        !uvm_reports.report(caught_application_report)
+        && application_catcher_order
+            == std::vector<std::string>{
+                   "global:APP_CATCH", "instance:APP_CATCH"}
+        && routed_reports.size() == 4
+        && uvm_reports.routed_count() == 4
+        && uvm_reports.catcher_count() == 3
+        && uvm_reports.catcher_invocations() == 2
+        && uvm_reports.caught_count(
+               fsim::runtime::SystemVerilogUvmReportSeverity::Warning) == 1
+        && uvm_reports.demoted_count(
+               fsim::runtime::SystemVerilogUvmReportSeverity::Warning) == 1
+        && uvm_reports.server().id_count("APP_CATCH") == 0));
+
+    if (engine == fsim::app::SimulationEngine::interpreter) {
+      const auto make_fresh_context = [&]() {
+        fsim::diagnostic::Engine peer_diagnostics;
+        auto peer_project = fsim::app::build_project(config, peer_diagnostics);
+        assert(peer_project && !peer_diagnostics.has_error());
+        return fsim::app::Simulation(
+            std::move(*peer_project), config.run.max_deltas,
+            fsim::app::SimulationEngine::interpreter);
+      };
+      const auto assert_fresh_context = [&](const auto& context) {
+        assert(
+            context.uvm_registry().size() == 4
+            && context.uvm_factory().type_overrides().empty()
+            && context.uvm_factory().instance_overrides().empty()
+            && context.uvm_resources().size() == 0
+            && context.uvm_config_db().entries().empty()
+            && context.uvm_config_db().waiter_count() == 0
+            && context.uvm_command_line().settings().arguments.empty()
+            && context.uvm_reports().default_verbosity() == 200
+            && context.uvm_reports().routed_count() == 0
+            && context.uvm_reports().filtered_count() == 0
+            && context.uvm_reports().handler_count() == 0
+            && context.uvm_reports().setting_count() == 0
+            && context.uvm_reports().catcher_count() == 0
+            && context.uvm_reports().catcher_invocations() == 0
+            && context.uvm_reports().caught_count(
+                   fsim::runtime::SystemVerilogUvmReportSeverity::Warning) == 0
+            && context.uvm_reports().server().severity_count(
+                   fsim::runtime::SystemVerilogUvmReportSeverity::Info) == 0
+            && context.uvm_components().roots().empty());
+      };
+      std::size_t peer_callback_count{};
+      {
+        auto peer = make_fresh_context();
+        assert_fresh_context(peer);
+        const auto peer_root = peer.create_uvm_root("api-first");
+        const auto peer_top = peer.allocate_uvm_component(
+            test_uvm_component_specialization, "api_top", 0, peer_root,
+            uvm_component_identity);
+        std::size_t peer_report_count{};
+        peer.uvm_reports().set_default_verbosity(100);
+        peer.uvm_reports().set_route_hook(
+            [&](const auto&) { ++peer_report_count; });
+        fsim::runtime::SystemVerilogUvmReportRequest peer_report;
+        peer_report.report_object = peer_top;
+        peer_report.id = "PEER";
+        peer_report.message = "peer report";
+        peer_report.verbosity = 101;
+        assert(!peer.uvm_reports().report(peer_report));
+        peer_report.severity =
+            fsim::runtime::SystemVerilogUvmReportSeverity::Warning;
+        assert(peer.uvm_reports().report(peer_report));
+        assert(
+            peer.uvm_components().lookup_root(peer_root, "api_top")
+                == peer_top
+            && simulation.uvm_components().lookup_root(
+                   api_component_root, "api_top") == api_component_top
+            && peer_report_count == 1
+            && peer.uvm_reports().default_verbosity() == 100
+            && peer.uvm_reports().routed_count() == 1
+            && peer.uvm_reports().filtered_count() == 1
+            && uvm_reports.default_verbosity() == 300
+            && uvm_reports.routed_count() == 4
+            && uvm_reports.filtered_count() == 1);
+
+        const auto peer_item = peer.uvm_registry().wrapper_by_name("UvmItem");
+        const auto peer_factory_item =
+            peer.uvm_registry().wrapper_by_name("UvmFactoryItem");
+        assert(peer.uvm_factory().set_type_override_by_type(
+            peer_item, peer_factory_item));
+        assert(
+            peer.uvm_factory().debug_resolve_by_name("UvmItem").resolved
+                == peer_factory_item
+            && simulation.uvm_factory()
+                   .debug_resolve_by_name("UvmItem").resolved
+                == param_item_wrapper);
+
+        fsim::runtime::SystemVerilogUvmResourceDescriptor peer_resource;
+        peer_resource.name = "timeout";
+        peer_resource.scope_pattern = "api_top.*";
+        peer_resource.type = config_type;
+        peer_resource.value =
+            fsim::runtime::PackedLogic4::from_aval_bval(16, 0xbeef, 0);
+        const auto peer_timeout =
+            peer.uvm_resources().insert(std::move(peer_resource));
+        (void)peer.uvm_resources().add_callback(
+            peer_timeout,
+            [&](const auto, const auto&) { ++peer_callback_count; });
+        assert(peer.uvm_resources().write(
+            peer_timeout,
+            fsim::runtime::PackedLogic4::from_aval_bval(16, 0xcafe, 0),
+            "peer.api_top.child"));
+        (void)peer.uvm_config_db().set(
+            config_child, "child", "limit", config_type,
+            fsim::runtime::PackedLogic4::from_aval_bval(16, 0xbeef, 0),
+            fsim::runtime::SystemVerilogUvmConfigPhase::Runtime);
+        const std::vector<std::string> peer_plusargs{
+            "+uvm_set_config_string=api_top.*,command_mode,peer",
+            "+UVM_TIMEOUT=7,YES"};
+        peer.uvm_command_line().apply(peer_plusargs);
+        assert(
+            peer_callback_count == 2
+            && shared_resource_callbacks.size() == 4
+            && std::get<fsim::runtime::PackedLogic4>(
+                   peer.uvm_resources().read(
+                       peer_timeout, "peer.api_top.child"))
+                   .low_word().aval == 0xcafe
+            && std::get<fsim::runtime::PackedLogic4>(*peer.uvm_config_db().get(
+                   config_child, "child", "limit", config_type.identity))
+                   .low_word().aval == 0xbeef
+            && std::get<fsim::runtime::PackedLogic4>(*uvm_config_db.get(
+                   config_child, "child", "limit", config_type.identity))
+                   .low_word().aval == 0x2020
+            && peer.uvm_command_line().settings().timeout->ticks == 7
+            && command_settings.timeout->ticks == 25);
+        (void)uvm_resources.read(
+            timeout_resource, "api-first.api_top.restart-check");
+        assert(
+            shared_resource_callbacks.size() == 6
+            && peer_callback_count == 4);
+      }
+      {
+        auto restarted = make_fresh_context();
+        assert_fresh_context(restarted);
+        const auto restarted_root = restarted.create_uvm_root("api-first");
+        assert(
+            restarted_root == 1
+            && restarted.uvm_factory().type_overrides().empty()
+            && restarted.uvm_resources().size() == 0
+            && restarted.uvm_config_db().entries().empty()
+            && restarted.uvm_command_line().settings().arguments.empty()
+            && restarted.uvm_reports().default_verbosity() == 200
+            && restarted.uvm_reports().routed_count() == 0);
+      }
+      assert(
+          uvm_factory.debug_resolve_by_name("UvmItem").resolved
+              == param_item_wrapper
+          && std::get<fsim::runtime::PackedLogic4>(*uvm_config_db.get(
+                 config_child, "child", "limit", config_type.identity))
+                 .low_word().aval == 0x2020
+          && command_settings.arguments == uvm_plusargs
+          && uvm_reports.routed_count() == 4
+          && uvm_reports.filtered_count() == 1);
+    }
+    assert(
+        simulation.uvm_objects().name(registered_object)
+            == "registered_object"
+        && simulation.uvm_objects().type_name(registered_object) == "UvmItem"
+        && simulation.uvm_objects().name(registered_param_object)
+            == "registered_param"
+        && factory_debug.resolved == factory_item_wrapper
+        && factory_debug.steps.size() == 1
+        && factory_debug.steps.front().kind
+            == fsim::runtime::SystemVerilogUvmOverrideKind::Instance
+        && simulation.class_heap().object(factory_object)
+               .specialization_identity == uvm_factory_item_specialization
+        && simulation.uvm_objects().name(factory_object) == "factory_item"
+        && factory_report.find(
+               "UvmItem @ factory_scope.factory_item -> UvmFactoryItem uses=1")
+            != std::string::npos
+        && simulation.uvm_components().full_name(registered_component)
+            == "api_top.registered_child");
+    simulation.deposit_class_property(
+        uvm_root, uvm_item_identity + "::value",
+        fsim::runtime::PackedLogic4::from_aval_bval(16, 0x1595, 0));
+    simulation.deposit_class_property(
+        uvm_child, uvm_item_identity + "::value",
+        fsim::runtime::PackedLogic4::from_aval_bval(16, 0x2020, 0));
+    simulation.class_heap().property(
+        uvm_root, uvm_item_identity + "::child").handle = uvm_child;
+    simulation.class_heap().property(
+        uvm_child, uvm_item_identity + "::child").handle = uvm_root;
+    const auto uvm_clone = simulation.uvm_objects().clone(uvm_root);
+    assert(
+        simulation.uvm_objects().name(uvm_clone) == "api_root"
+        && simulation.uvm_objects().type_name(uvm_clone) == "UvmItem"
+        && simulation.uvm_objects().compare(uvm_root, uvm_clone));
+    const auto uvm_print = simulation.uvm_objects().print(uvm_clone);
+    const auto uvm_record = simulation.uvm_objects().record(uvm_clone);
+    assert(std::ranges::any_of(uvm_print, [](const auto& entry) {
+      return entry.kind
+              == fsim::runtime::SystemVerilogUvmObjectEntryKind::Cycle
+          && entry.value == "api_root";
+    }));
+    assert(!uvm_record.empty());
+    std::size_t source_uvm_prints{};
+    std::size_t source_uvm_records{};
+    simulation.uvm_objects().set_print_hook(
+        [&](const auto entries) {
+          assert(!entries.empty());
+          ++source_uvm_prints;
+        });
+    simulation.uvm_objects().set_record_hook(
+        [&](const auto entries) {
+          assert(!entries.empty());
+          ++source_uvm_records;
+        });
     assert(simulation.class_heap()
                .random_state(handle, derived_identity + "::value").kind
            == fsim::runtime::SystemVerilogClassRandomKind::Rand);
@@ -424,6 +1105,125 @@ void ApplicationTestFixture::test_class_simulation_integration() {
       simulation.clear_stop();
     }
     const auto result = simulation.run();
+    assert(source_uvm_prints == 1 && source_uvm_records == 1);
+    const auto source_uvm_ready = simulation.find_signal(
+        "class_top.source_uvm_constructed");
+    const auto source_uvm_object = simulation.find_signal(
+        "class_top.source_uvm_object");
+    const auto source_uvm_clone = simulation.find_signal(
+        "class_top.source_uvm_clone");
+    const auto source_uvm_compared = simulation.find_signal(
+        "class_top.source_uvm_clone_compared");
+    const auto source_uvm_copy = simulation.find_signal(
+        "class_top.source_uvm_copy");
+    const auto source_uvm_copy_compared = simulation.find_signal(
+        "class_top.source_uvm_copy_compared");
+    const auto source_uvm_top = simulation.find_signal(
+        "class_top.source_uvm_top");
+    const auto source_uvm_child = simulation.find_signal(
+        "class_top.source_uvm_child");
+    const auto source_uvm_parent_ok = simulation.find_signal(
+        "class_top.source_uvm_parent_ok");
+    const auto source_uvm_child_count = simulation.find_signal(
+        "class_top.source_uvm_child_count");
+    const auto source_uvm_component_clone_null = simulation.find_signal(
+        "class_top.source_uvm_component_clone_null");
+    const auto source_uvm_item_type = simulation.find_signal(
+        "class_top.source_uvm_item_type");
+    const auto source_uvm_component_type = simulation.find_signal(
+        "class_top.source_uvm_component_type");
+    const auto source_uvm_item_wrapper_equal = simulation.find_signal(
+        "class_top.source_uvm_item_wrapper_equal");
+    const auto source_uvm_component_wrapper_equal = simulation.find_signal(
+        "class_top.source_uvm_component_wrapper_equal");
+    const auto source_uvm_wrapper_kinds_distinct = simulation.find_signal(
+        "class_top.source_uvm_wrapper_kinds_distinct");
+    const auto source_uvm_param_type = simulation.find_signal(
+        "class_top.source_uvm_param_type");
+    const auto source_uvm_param_wrapper_equal = simulation.find_signal(
+        "class_top.source_uvm_param_wrapper_equal");
+    const auto source_uvm_factory_selected_override = simulation.find_signal(
+        "class_top.source_uvm_factory_selected_override");
+    const auto source_uvm_factory_created_override = simulation.find_signal(
+        "class_top.source_uvm_factory_created_override");
+    assert(
+        source_uvm_ready && source_uvm_object
+        && source_uvm_clone && source_uvm_compared
+        && source_uvm_copy && source_uvm_copy_compared
+        && source_uvm_top && source_uvm_child
+        && source_uvm_parent_ok && source_uvm_child_count
+        && source_uvm_component_clone_null
+        && source_uvm_item_type && source_uvm_component_type
+        && source_uvm_item_wrapper_equal
+        && source_uvm_component_wrapper_equal
+        && source_uvm_wrapper_kinds_distinct
+        && source_uvm_param_type && source_uvm_param_wrapper_equal
+        && source_uvm_factory_selected_override
+        && source_uvm_factory_created_override);
+    const auto source_uvm_handle = simulation.read_signal(
+        *source_uvm_object).low_word().aval;
+    assert(simulation.read_signal(*source_uvm_ready).low_word().aval == 1);
+    assert(simulation.read_signal(*source_uvm_compared).low_word().aval == 1);
+    assert(
+        simulation.read_signal(*source_uvm_copy_compared)
+            .low_word().aval == 1);
+    const auto source_uvm_top_handle = simulation.read_signal(
+        *source_uvm_top).low_word().aval;
+    const auto source_uvm_child_handle = simulation.read_signal(
+        *source_uvm_child).low_word().aval;
+    assert(
+        simulation.read_signal(*source_uvm_parent_ok).low_word().aval == 1
+        && simulation.read_signal(*source_uvm_child_count).low_word().aval == 1
+        && simulation.read_signal(*source_uvm_component_clone_null)
+               .low_word().aval == 1
+        && simulation.read_signal(*source_uvm_item_wrapper_equal)
+               .low_word().aval == 1
+        && simulation.read_signal(*source_uvm_component_wrapper_equal)
+               .low_word().aval == 1
+        && simulation.read_signal(*source_uvm_wrapper_kinds_distinct)
+               .low_word().aval == 1
+        && simulation.read_signal(*source_uvm_param_wrapper_equal)
+               .low_word().aval == 1
+        && simulation.read_signal(*source_uvm_factory_selected_override)
+               .low_word().aval == 1
+        && simulation.read_signal(*source_uvm_factory_created_override)
+               .low_word().aval == 1
+        && simulation.read_signal(*source_uvm_item_type).low_word().aval
+            == item_wrapper
+        && simulation.read_signal(*source_uvm_component_type).low_word().aval
+            == component_wrapper
+        && simulation.read_signal(*source_uvm_param_type).low_word().aval
+            == param_item_wrapper
+        && simulation.uvm_components().full_name(source_uvm_top_handle)
+            == "source_top"
+        && simulation.uvm_components().full_name(source_uvm_child_handle)
+            == "source_top.source_child"
+        && simulation.uvm_components().lookup(
+               source_uvm_top_handle, "source_child")
+            == source_uvm_child_handle);
+    assert(simulation.uvm_objects().type_name(source_uvm_handle) == "UvmItem");
+    assert(simulation.uvm_objects().name(source_uvm_handle).empty());
+    assert(
+        simulation.read_class_property(
+            source_uvm_handle, uvm_item_identity + "::value")
+            .packed.low_word().aval == 0x1595);
+    const auto source_uvm_clone_handle = simulation.read_signal(
+        *source_uvm_clone).low_word().aval;
+    assert(
+        source_uvm_clone_handle != source_uvm_handle
+        && simulation.uvm_objects().type_name(source_uvm_clone_handle)
+            == "UvmItem"
+        && simulation.read_class_property(
+               source_uvm_clone_handle, uvm_item_identity + "::value")
+               .packed.low_word().aval == 0x1595);
+    const auto source_uvm_copy_handle = simulation.read_signal(
+        *source_uvm_copy).low_word().aval;
+    assert(
+        source_uvm_copy_handle != source_uvm_handle
+        && source_uvm_copy_handle != source_uvm_clone_handle
+        && simulation.read_class_property(
+               source_uvm_copy_handle, uvm_item_identity + "::value")
+               .packed.low_word().aval == 0x1595);
     simulation.remove_safe_point_hook(safe_point);
     assert(result.time == 9);
     assert(safe_points != 0 && safe_point_live_objects >= 4);
@@ -882,7 +1682,7 @@ void ApplicationTestFixture::test_class_simulation_integration() {
   auto standalone = fsim::app::load_design_artifact(
       relocated_design, standalone_diagnostics);
   assert(standalone);
-  assert(standalone->systemverilog_class_specializations.size() == 6);
+  assert(standalone->systemverilog_class_specializations.size() == 15);
   assert(std::ranges::any_of(
       standalone->systemverilog_class_specializations,
       [](const auto& specialization) {
@@ -893,7 +1693,7 @@ void ApplicationTestFixture::test_class_simulation_integration() {
                   && property.type.width() == 137;
             });
       }));
-  assert(standalone->systemverilog_hir.classes().size() == 6);
+  assert(standalone->systemverilog_hir.classes().size() == 15);
   assert(std::ranges::any_of(
       standalone->systemverilog_hir.classes(), [](const auto& declaration) {
         return declaration.canonical_identity.ends_with("::AppDerived")
@@ -981,7 +1781,7 @@ void ApplicationTestFixture::test_class_simulation_integration() {
   fsim::diagnostic::Engine mapped_diagnostics;
   auto mapped = fsim::app::build_project(mapped_config, mapped_diagnostics);
   assert(mapped);
-  assert(mapped->systemverilog_class_specializations.size() == 6);
+  assert(mapped->systemverilog_class_specializations.size() == 15);
   assert(std::ranges::any_of(
       mapped->systemverilog_class_specializations,
       [](const auto& specialization) {

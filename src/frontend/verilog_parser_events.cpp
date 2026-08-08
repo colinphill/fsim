@@ -359,12 +359,6 @@ Statement VerilogParser::parse_forever_statement(const Token& start) {
   statement.condition = Expression{
       ExpressionKind::LogicLiteral, "1'b1", {}, start.span};
   parse_procedural_loop_body(start, statement);
-  if (!cycle_paths_are_safe(statement.statements)) {
-    error(
-        start, "FSIM-SV-SEM-030",
-        "every reachable forever-loop path must suspend, break, return, "
-        "or terminate the simulation before its backedge");
-  }
   statement.span = span_from(start, previous());
   return statement;
 }

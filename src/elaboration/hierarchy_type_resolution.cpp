@@ -27,6 +27,129 @@ using namespace elaboration_detail;
             }
             local_types.emplace(
                 alias.name, index);
+            if (!vhdl
+                && unit.kind
+                    == frontend::UnitKind::SystemVerilogPackage) {
+                local_types.emplace(
+                    unit.name + "::" + alias.name, index);
+            }
+        }
+        std::unordered_map<std::string, frontend::Type>
+            visible_class_types;
+        std::unordered_map<std::string, frontend::Type>
+            visible_class_aliases;
+        std::unordered_set<std::string> ambiguous_class_types;
+        std::unordered_set<std::string> ambiguous_class_aliases;
+        const auto retain_visible_type = [](
+            auto& types,
+            auto& ambiguous,
+            const std::string& name,
+            const frontend::Type& type) {
+                if (name.empty() || ambiguous.contains(name)) {
+                    return;
+                }
+                const auto [found, inserted] =
+                    types.emplace(name, type);
+                if (!inserted
+                    && found->second.systemverilog_class_declaration
+                        != type.systemverilog_class_declaration) {
+                    types.erase(found);
+                    ambiguous.insert(name);
+                }
+            };
+        std::function<void(
+            const frontend::SystemVerilogClassDeclaration&,
+            const std::string&,
+            bool)> collect_visible_class;
+        collect_visible_class =
+            [&](const frontend::SystemVerilogClassDeclaration& declaration,
+                const std::string& lexical_name,
+                const bool expose_short_name) {
+                frontend::Type class_type;
+                class_type.spelling = declaration.name;
+                class_type.named_type = declaration.name;
+                class_type.systemverilog_class_name = declaration.name;
+                class_type.systemverilog_class_declaration =
+                    declaration.canonical_identity;
+                retain_visible_type(
+                    visible_class_types,
+                    ambiguous_class_types,
+                    declaration.canonical_identity,
+                    class_type);
+                const auto scoped_name = lexical_name.empty()
+                    ? declaration.name
+                    : lexical_name + "::" + declaration.name;
+                retain_visible_type(
+                    visible_class_types,
+                    ambiguous_class_types,
+                    scoped_name,
+                    class_type);
+                if (expose_short_name) {
+                    retain_visible_type(
+                        visible_class_types,
+                        ambiguous_class_types,
+                        declaration.name,
+                        class_type);
+                }
+                for (const auto& alias : declaration.type_aliases) {
+                    retain_visible_type(
+                        visible_class_aliases,
+                        ambiguous_class_aliases,
+                        declaration.canonical_identity
+                            + "::" + alias.name,
+                        alias.type);
+                    retain_visible_type(
+                        visible_class_aliases,
+                        ambiguous_class_aliases,
+                        scoped_name + "::" + alias.name,
+                        alias.type);
+                }
+                for (const auto& nested : declaration.nested_classes) {
+                    collect_visible_class(
+                        nested, scoped_name, false);
+                }
+            };
+        if (!vhdl) {
+            for (const auto& declaration : unit.systemverilog_classes) {
+                collect_visible_class(declaration, {}, true);
+                if (unit.kind
+                    != frontend::UnitKind::SystemVerilogPackage) {
+                    continue;
+                }
+                collect_visible_class(
+                    declaration,
+                    unit.name, false);
+            }
+            for (const auto& declaration :
+                 parsed_.systemverilog_classes) {
+                const auto unit_library = unit.library.empty()
+                    ? std::string{"work"}
+                    : unit.library;
+                const auto declaration_library =
+                    declaration.library.empty()
+                    ? std::string{"work"}
+                    : declaration.library;
+                if (declaration_library == unit_library
+                    && declaration.compilation_unit_identity
+                        == unit.compilation_unit_identity) {
+                    collect_visible_class(declaration, {}, true);
+                }
+            }
+            for (const auto& import_item : unit.systemverilog_imports) {
+                const auto* package = find_systemverilog_package(
+                    unit, import_item.package);
+                if (package == nullptr) {
+                    continue;
+                }
+                for (const auto& declaration :
+                     package->systemverilog_classes) {
+                    if (!import_item.name.empty()
+                        && import_item.name != declaration.name) {
+                        continue;
+                    }
+                    collect_visible_class(declaration, {}, true);
+                }
+            }
         }
         std::vector<unsigned char> states(
             unit.type_aliases.size(), 0);
@@ -34,6 +157,7 @@ using namespace elaboration_detail;
             generated_types;
         std::unordered_set<std::string> active_interface_type_formals;
         std::unordered_set<std::string> active_interface_package_formals;
+        std::unordered_set<std::string> active_class_aliases;
         std::function<bool(frontend::Type&)> resolve_type;
         std::function<bool(std::size_t)> resolve_alias;
         const auto simple_type_name =
@@ -618,6 +742,38 @@ using namespace elaboration_detail;
                         unit.type_aliases[local->second].type;
                 }
             }
+            if (!base && !vhdl) {
+                if (const auto alias =
+                        visible_class_aliases.find(name);
+                    alias != visible_class_aliases.end()) {
+                    if (!active_class_aliases.insert(name).second) {
+                        report(
+                            "FSIM-ELAB-SVTYPE-003",
+                            "cyclic SystemVerilog class typedef involving '"
+                                + name + "'",
+                            use_span);
+                        return false;
+                    }
+                    auto resolved = alias->second;
+                    const bool ok = resolve_type(resolved);
+                    active_class_aliases.erase(name);
+                    if (!ok) {
+                        return false;
+                    }
+                    base = std::move(resolved);
+                } else if (const auto class_type =
+                               visible_class_types.find(name);
+                           class_type != visible_class_types.end()) {
+                    const auto container =
+                        type.systemverilog_container;
+                    const auto actuals =
+                        type.systemverilog_class_parameter_actuals;
+                    type = class_type->second;
+                    type.systemverilog_container = container;
+                    type.systemverilog_class_parameter_actuals = actuals;
+                    return true;
+                }
+            }
             if (!base) {
                 const auto imported =
                     imported_types.find(name);
@@ -750,6 +906,23 @@ using namespace elaboration_detail;
             resolve_statements =
             [&](std::vector<Statement>& statements) {
                 for (auto& statement : statements) {
+                    struct PriorStatementType {
+                        std::string name;
+                        frontend::Type* type{};
+                    };
+                    std::vector<PriorStatementType>
+                        prior_statement_types;
+                    for (auto& alias : statement.type_aliases) {
+                        (void)resolve_type(alias.type);
+                        const auto prior =
+                            generated_types.find(alias.name);
+                        prior_statement_types.push_back({
+                            alias.name,
+                            prior == generated_types.end()
+                                ? nullptr
+                                : prior->second});
+                        generated_types[alias.name] = &alias.type;
+                    }
                     for (auto& declaration :
                          statement.declarations) {
                         resolve_declaration(declaration);
@@ -761,6 +934,14 @@ using namespace elaboration_detail;
                          statement.case_alternatives) {
                         resolve_statements(
                             alternative.statements);
+                    }
+                    for (auto prior = prior_statement_types.rbegin();
+                         prior != prior_statement_types.rend(); ++prior) {
+                        if (prior->type == nullptr) {
+                            generated_types.erase(prior->name);
+                        } else {
+                            generated_types[prior->name] = prior->type;
+                        }
                     }
                 }
             };
@@ -982,10 +1163,34 @@ using namespace elaboration_detail;
                         for (auto& argument : task.arguments) {
                             (void)resolve_type(argument.type);
                         }
+                        struct PriorTaskType {
+                            std::string name;
+                            frontend::Type* type{};
+                        };
+                        std::vector<PriorTaskType> prior_task_types;
+                        for (auto& alias : task.type_aliases) {
+                            (void)resolve_type(alias.type);
+                            const auto prior =
+                                generated_types.find(alias.name);
+                            prior_task_types.push_back({
+                                alias.name,
+                                prior == generated_types.end()
+                                    ? nullptr
+                                    : prior->second});
+                            generated_types[alias.name] = &alias.type;
+                        }
                         for (auto& variable : task.variables) {
                             resolve_declaration(variable);
                         }
                         resolve_statements(task.statements);
+                        for (auto prior = prior_task_types.rbegin();
+                             prior != prior_task_types.rend(); ++prior) {
+                            if (prior->type == nullptr) {
+                                generated_types.erase(prior->name);
+                            } else {
+                                generated_types[prior->name] = prior->type;
+                            }
+                        }
                         break;
                     }
                     case DeclarationKind::Procedure: {

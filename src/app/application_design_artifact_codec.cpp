@@ -109,7 +109,9 @@ auto archive_fields(T& value) {
   return std::tie(
       value.domain, value.spelling, value.systemverilog_scalar,
       value.systemverilog_net_type, value.packed_range, value.is_signed,
-      value.packed_range_expression, value.named_type, value.named_type_span,
+      value.packed_range_expression,
+      value.systemverilog_packed_dimensions,
+      value.named_type, value.named_type_span,
       value.nominal_type, value.vhdl_type_declaration,
       value.vhdl_resolution_function, value.enumeration_literals,
       value.systemverilog_enumeration_values,
@@ -168,7 +170,8 @@ template <typename T>
 auto archive_fields(T& value) {
   return std::tie(
       value.name, value.type, value.initializer, value.span,
-      value.vhdl_shared, value.vhdl_file, value.vhdl_file_open_kind);
+      value.vhdl_shared, value.vhdl_file, value.vhdl_file_open_kind,
+      value.systemverilog_const);
 }
 
 template <typename T>

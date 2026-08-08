@@ -102,6 +102,14 @@ int main() {
     test_simir_text_files();
     test_simir_containers();
     test_systemverilog_class_heap();
+    test_systemverilog_uvm_object();
+    test_systemverilog_uvm_component();
+    test_systemverilog_uvm_registry();
+    test_systemverilog_uvm_factory();
+    test_systemverilog_uvm_resource_pool();
+    test_systemverilog_uvm_config_db();
+    test_systemverilog_uvm_command_line();
+    test_systemverilog_uvm_report();
     test_systemverilog_class_methods();
     test_systemverilog_constraint_solver();
     test_simir_alternate_executor_scheduled_word_writes();

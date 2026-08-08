@@ -234,3 +234,13 @@ advances to 1,989 diagnostics, 703 bounded C/C++ sources, 796 authored
 artifacts, and 265 authored test/control files. The VHPI boundary, examples,
 and tests are clean-room code; no external simulator header, foreign runtime,
 plug-in corpus, third-party artifact, or provenance entry is imported.
+
+v2 Batch 159 adds governed UVM source metadata, bounded owning runtime
+services, portable class/artifact state, focused matrices, and one public
+guide as 35 SPDX-owned bounded C/C++ and control files plus one document. One
+production diagnostic code is added; the reviewed inventory advances to 1,990
+diagnostics, 734 bounded C/C++ sources, 832 authored artifacts, and 272
+authored test/control files. The two immutable upstream UVM kits remain
+external build products: their exact archive and extracted-tree identities are
+recorded, while no upstream file is vendored, patched, or counted as authored
+source.

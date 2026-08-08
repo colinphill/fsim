@@ -652,11 +652,13 @@ class VerilogParser final : private detail::ParserBase {
       DesignUnit& unit,
       const bool local,
       const bool port_list,
-      const Token& start);
+      const Token& start,
+      bool class_list = false);
 
   void parse_parameter_port_list(
       DesignUnit& unit,
-      const Token& hash);
+      const Token& hash,
+      bool class_list = false);
 
   std::vector<Instance> parse_instances();
 
@@ -774,6 +776,8 @@ class VerilogParser final : private detail::ParserBase {
 
   Statement parse_procedural_for_statement(const Token& start);
 
+  Statement parse_procedural_foreach_statement(const Token& start);
+
   Statement parse_repeat_statement(const Token& start);
 
   Statement parse_while_statement(const Token& start);
@@ -840,9 +844,11 @@ class VerilogParser final : private detail::ParserBase {
   std::unordered_set<std::string> body_port_declarations_;
   std::unordered_set<std::string> port_type_refinements_;
   std::unordered_set<std::string> current_procedural_names_;
+  std::unordered_map<std::string, Type> current_procedural_types_;
   std::unordered_set<std::string> current_function_arguments_;
   std::string current_function_name_;
   bool in_function_{};
+  bool current_function_returns_void_{};
   bool in_task_{};
   std::unordered_map<std::string, std::size_t>
       current_generate_names_;

@@ -48,6 +48,13 @@ add_executable(
   runtime_file_tests.cpp
   runtime_container_tests.cpp
   runtime_class_heap_tests.cpp
+  runtime_uvm_component_tests.cpp
+  runtime_uvm_registry_tests.cpp
+  runtime_uvm_factory_tests.cpp
+  runtime_uvm_resource_tests.cpp
+  runtime_uvm_config_db_tests.cpp
+  runtime_uvm_command_line_tests.cpp
+  runtime_uvm_report_tests.cpp
   runtime_constraint_solver_tests.cpp
   runtime_executor_tests.cpp
   runtime_specify_tests.cpp

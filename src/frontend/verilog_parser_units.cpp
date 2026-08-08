@@ -73,6 +73,7 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
   implicit_net_references_.clear();
   container_iterator_names_.clear();
   current_procedural_names_.clear();
+  current_procedural_types_.clear();
   current_generate_names_.clear();
   declared_genvars_.clear();
   external_genvar_uses_.clear();
@@ -204,46 +205,68 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
           declaration);
     } else if (match_keyword("function")) {
       module_has_non_time_item_ = true;
-      auto function = parse_function(previous());
-      const bool duplicate = std::ranges::any_of(
-          unit.functions,
-          [&](const FunctionDeclaration& existing) {
-            return existing.name == function.name;
-          })
-          || std::ranges::any_of(
-              unit.tasks,
-              [&](const TaskDeclaration& existing) {
-            return existing.name == function.name;
-          });
-      if (duplicate) {
-        error(
-            start,
-            "FSIM-SV-SEM-066",
-            "duplicate package function '" + function.name + "'");
+      const auto declaration = previous();
+      if (compilation_unit_class_method_definition_start()) {
+        unit.systemverilog_class_method_definitions.push_back(
+            parse_class_out_of_block_method(
+                declaration,
+                SystemVerilogClassMethodKind::Function));
       } else {
-        unit.functions.push_back(std::move(function));
+        auto function = parse_function(declaration);
+        const bool duplicate = std::ranges::any_of(
+            unit.functions,
+            [&](const FunctionDeclaration& existing) {
+              return existing.name == function.name;
+            })
+            || std::ranges::any_of(
+                unit.tasks,
+                [&](const TaskDeclaration& existing) {
+              return existing.name == function.name;
+            });
+        if (duplicate) {
+          error(
+              start,
+              "FSIM-SV-SEM-066",
+              "duplicate package function '" + function.name + "'");
+        } else {
+          unit.functions.push_back(std::move(function));
+        }
       }
     } else if (match_keyword("task")) {
       module_has_non_time_item_ = true;
-      auto task = parse_task(previous());
-      const bool duplicate = std::ranges::any_of(
-          unit.tasks,
-          [&](const TaskDeclaration& existing) {
-            return existing.name == task.name;
-          })
-          || std::ranges::any_of(
-              unit.functions,
-              [&](const FunctionDeclaration& existing) {
-            return existing.name == task.name;
-          });
-      if (duplicate) {
-        error(
-            start,
-            "FSIM-SV-SEM-073",
-            "duplicate package task '" + task.name + "'");
+      const auto declaration = previous();
+      if (compilation_unit_class_method_definition_start()) {
+        unit.systemverilog_class_method_definitions.push_back(
+            parse_class_out_of_block_method(
+                declaration,
+                SystemVerilogClassMethodKind::Task));
       } else {
-        unit.tasks.push_back(std::move(task));
+        auto task = parse_task(declaration);
+        const bool duplicate = std::ranges::any_of(
+            unit.tasks,
+            [&](const TaskDeclaration& existing) {
+              return existing.name == task.name;
+            })
+            || std::ranges::any_of(
+                unit.functions,
+                [&](const FunctionDeclaration& existing) {
+              return existing.name == task.name;
+            });
+        if (duplicate) {
+          error(
+              start,
+              "FSIM-SV-SEM-073",
+              "duplicate package task '" + task.name + "'");
+        } else {
+          unit.tasks.push_back(std::move(task));
+        }
       }
+    } else if (keyword("const")) {
+      module_has_non_time_item_ = true;
+      parse_declaration(unit);
+    } else if (is_declaration_start()) {
+      module_has_non_time_item_ = true;
+      parse_declaration(unit);
     } else {
       module_has_non_time_item_ = true;
       const auto unsupported = advance();
@@ -1061,6 +1084,13 @@ Type VerilogParser::parse_parameter_type() {
     type.systemverilog_scalar = SystemVerilogScalarKind::Chandle;
     return type;
   }
+  if (keyword("event")) {
+    (void)advance();
+    type.spelling = "event";
+    type.domain = ValueDomain::Logic4;
+    type.is_signed = false;
+    return type;
+  }
   if (keyword("shortreal") || keyword("real")
       || keyword("realtime")) {
     const auto token = advance();
@@ -1133,16 +1163,8 @@ Type VerilogParser::parse_type_parameter_actual() {
       && !keyword_reserved(keyword_set_, current().text)) {
     return parse_named_type();
   }
-  if (keyword("string")) {
-    const auto unsupported = advance();
-    error(
-        unsupported,
-        "FSIM-SV-UNSUPPORTED-020",
-        "the string data type is not implemented as a bounded type "
-        "parameter actual");
-    return {};
-  }
-  if (keyword("chandle") || keyword("process")) {
+  if (keyword("string") || keyword("chandle")
+      || keyword("process")) {
     return parse_parameter_type();
   }
   if (keyword("byte") || keyword("shortint")
@@ -1230,10 +1252,20 @@ void VerilogParser::parse_parameter_group(
   DesignUnit& unit,
   const bool local,
   const bool port_list,
-  const Token& start) {
+  const Token& start,
+  const bool class_list) {
   const bool type_parameter = match_keyword("type");
-  const auto type =
-      type_parameter ? Type{} : parse_parameter_type();
+  const bool implicit_value_type =
+      !type_parameter && at(TokenKind::Identifier)
+      && current(1).kind == TokenKind::Assign;
+  auto type =
+      type_parameter || implicit_value_type
+          ? Type{} : parse_parameter_type();
+  if (implicit_value_type) {
+    type.spelling = "implicit";
+    type.domain = ValueDomain::Integer;
+    type.is_signed = true;
+  }
   for (;;) {
     const auto name = expect_identifier(
         local ? "localparam name" : "parameter name");
@@ -1251,11 +1283,18 @@ void VerilogParser::parse_parameter_group(
           "FSIM-SV-PARSE-050",
           "value parameters require a default constant expression");
     }
+    auto declared_type = type;
+    if (implicit_value_type
+        && value.kind == ExpressionKind::StringLiteral) {
+      declared_type.spelling = "string";
+      declared_type.domain = ValueDomain::String;
+      declared_type.is_signed = false;
+    }
     add_parameter(
         unit,
         ParameterDeclaration{
             name.text,
-            type,
+            std::move(declared_type),
             std::move(value),
             local,
             cover(start.span, previous().span),
@@ -1267,8 +1306,16 @@ void VerilogParser::parse_parameter_group(
     if (!match(TokenKind::Comma)) {
       break;
     }
+    const bool next_class_parameter =
+        class_list
+        && (keyword("type") || keyword("string")
+            || keyword("chandle") || keyword("process")
+            || keyword("struct") || keyword("union") || keyword("enum")
+            || is_net_type_keyword()
+            || is_named_type_reference_start());
     if (port_list
-        && (keyword("parameter") || keyword("localparam"))) {
+        && (keyword("parameter") || keyword("localparam")
+            || next_class_parameter)) {
       break;
     }
   }
@@ -1282,16 +1329,24 @@ void VerilogParser::parse_parameter_group(
 
 void VerilogParser::parse_parameter_port_list(
   DesignUnit& unit,
-  const Token& hash) {
+  const Token& hash,
+  const bool class_list) {
   expect(
       TokenKind::LeftParen,
-      "'(' after module parameter '#'",
+      class_list
+          ? "'(' after class parameter '#'"
+          : "'(' after module parameter '#'",
       "FSIM-SV-PARSE-052");
   while (!at_end() && !at(TokenKind::RightParen)) {
     if (match_keyword("parameter")) {
-      parse_parameter_group(unit, false, true, previous());
+      parse_parameter_group(
+          unit, false, true, previous(), class_list);
     } else if (match_keyword("localparam")) {
-      parse_parameter_group(unit, true, true, previous());
+      parse_parameter_group(
+          unit, true, true, previous(), class_list);
+    } else if (class_list) {
+      parse_parameter_group(
+          unit, false, true, current(), true);
     } else {
       error(
           current(),
@@ -1307,7 +1362,9 @@ void VerilogParser::parse_parameter_port_list(
   }
   expect(
       TokenKind::RightParen,
-      "')' after module parameter port list",
+      class_list
+          ? "')' after class parameter port list"
+          : "')' after module parameter port list",
       "FSIM-SV-PARSE-054");
   (void)hash;
 }

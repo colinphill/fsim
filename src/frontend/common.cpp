@@ -120,6 +120,9 @@ std::optional<std::uint64_t> Type::width() const noexcept {
   if (packed_range_expression) {
     return std::nullopt;
   }
+  if (!systemverilog_packed_dimensions.empty()) {
+    return std::nullopt;
+  }
   if (vhdl_array) {
     return std::nullopt;
   }

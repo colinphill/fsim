@@ -64,6 +64,7 @@ struct Invocation {
   std::optional<std::filesystem::path> cache_directory;
   std::optional<std::filesystem::path> file_root;
   std::optional<std::string> engine;
+  std::vector<std::string> plusargs;
   std::vector<std::string> trace_filters;
   std::optional<std::string> duration;
   std::optional<std::uint64_t> max_deltas;

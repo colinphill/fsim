@@ -126,6 +126,8 @@ void substitute_statement_parameter_sites(
     substitute_systemverilog_scalars(statement.condition, environment);
     substitute_systemverilog_scalars(statement.loop_initial, environment);
     substitute_systemverilog_scalars(statement.loop_limit, environment);
+    substitute_systemverilog_scalars(
+        statement.loop_update_target, environment);
     for (auto& argument : statement.task_arguments) {
       substitute_systemverilog_scalars(argument, environment);
     }

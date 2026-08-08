@@ -722,6 +722,17 @@ module function_user(input logic select, output logic [7:0] result);
     observe = observed;
   endfunction
 
+  function automatic void record(input logic value);
+    static logic retained;
+    event changed;
+    retained = value;
+    -> changed;
+    fork
+      $display("recorded");
+    join_none
+    return;
+  endfunction
+
   initial result = choose(select, 8'h2a, 8'h11);
 endmodule
 )",
@@ -751,12 +762,19 @@ endmodule
               == StatementKind::Assignment,
       "module function arguments, locals, and body HIR");
   require(
-      parsed.design.units.back().functions.size() == 2
+      parsed.design.units.back().functions.size() == 3
           && parsed.design.units.back().functions[1].name == "observe"
           && parsed.design.units.back().functions[1].statements.size() == 2
           && parsed.design.units.back().functions[1].statements.front()
                  .target.text == "observed",
       "time-free function writes to nonlocal variables remain observable");
+  require(
+      parsed.design.units.back().functions[2].return_type.spelling == "void"
+          && parsed.design.units.back().functions[2].variables.size() == 2
+          && parsed.design.units.back().functions[2].statements.size() == 4
+          && parsed.design.units.back().functions[2].statements.back().kind
+              == StatementKind::Return,
+      "void functions accept static/event locals, immediate triggers, nonblocking forks, and value-free returns");
 
   const auto classic = parse_text(
       "classic_function.v",
@@ -774,6 +792,26 @@ endmodule
           && classic.design.units.front().functions.front()
                  .arguments.empty(),
       "classic no-argument Verilog function");
+
+  const auto qualified_result = parse_text(
+      "qualified_function_result.sv",
+      R"(
+class result_owner;
+  extern function int compute();
+endclass
+function int result_owner::compute();
+  compute = 42;
+endfunction
+)",
+      Language::SystemVerilog2017);
+  require(
+      qualified_result.ok()
+          && qualified_result.design
+                 .systemverilog_class_method_definitions.size() == 1
+          && qualified_result.design
+                 .systemverilog_class_method_definitions.front()
+                 .statements.front().target.text == "compute",
+      "qualified function definitions assign their unqualified result name");
 
   const auto invalid = parse_text(
       "invalid_functions.sv",
@@ -810,11 +848,8 @@ endmodule
   require(
       has_code("FSIM-SV-SEM-095")
           && has_code("FSIM-SV-SEM-096")
-          && has_code("FSIM-SV-UNSUPPORTED-035")
-          && has_code("FSIM-SV-SEM-062")
           && has_code("FSIM-SV-SEM-064"),
-      "function default, ref lifetime, type, input-write, and timing "
-      "diagnostics");
+      "function default, ref lifetime, and timing diagnostics");
 }
 
 void test_systemverilog_real_time_declarations() {
@@ -1226,6 +1261,25 @@ endmodule
           "task HIR admits bounded timing, event waits, condition waits, "
           "and named-event triggers");
 
+  const auto scheduled = parse_text(
+      "scheduled_task_actions.sv",
+      R"(
+module scheduled_task_actions;
+  task run;
+    logic value;
+    value <= #1 1'b1;
+    $stop;
+    $finish;
+  endtask
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      scheduled.ok()
+          && scheduled.design.units.front().tasks.front().statements.size()
+              == 3,
+      "tasks admit nonblocking intra-assignment controls and simulation control tasks");
+
   const auto invalid = parse_text("invalid_tasks.sv",
                                   R"(
 module invalid_tasks;
@@ -1247,8 +1301,8 @@ endmodule
   };
   require(has_code("FSIM-SV-SEM-098") &&
               has_code("FSIM-SV-SEM-067") && has_code("FSIM-SV-SEM-068") &&
-              has_code("FSIM-SV-SEM-070") && has_code("FSIM-SV-SEM-071"),
-          "task lifetime, ref formal, body, return, and closing-name "
+              has_code("FSIM-SV-SEM-071"),
+          "task lifetime, ref formal, return, and closing-name "
           "diagnostics");
 
   const auto duplicate = parse_text("duplicate_tasks.sv",

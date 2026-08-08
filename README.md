@@ -260,6 +260,12 @@ The current tree contains:
   handles, callbacks, control, system callables, portable I/O, transactional
   save/restart, and versioned C/C++ plug-ins whose native state is explicitly
   retained or invalidated across restart and artifact flows;
+- governed unmodified UVM 1.2 and UVM 2020-3.1 source entry points plus a
+  simulation-owned object/component, registry/factory, resource/configuration,
+  command-line, and report foundation. Interpreter, LLVM O0/O2, debug,
+  multiple-root, callback, VCD/FST, cold/warm cache, and portable relocated
+  artifact paths agree under explicit resource bounds; phases, objections,
+  TLM, sequences, and the register model remain later closure boundaries;
 - governed VHDL-2008 VHPI with selected/indexed hierarchy, scalar/composite/
   nine-state values, drivers, callbacks, foreign models, associations,
   root-isolated reporting, transactional restart/remap, and independently
@@ -836,6 +842,8 @@ build, run, VCD, hierarchy-navigation, breakpoint, and trace-selection steps.
 - [Feature matrix and test evidence](docs/feature-matrix.md)
 - [v1 conformance provenance audit](docs/v1-conformance-audit.md)
 - [SystemC subset and plug-in model](docs/systemc-subset.md)
+- [SystemVerilog UVM foundation](docs/systemverilog-uvm.md)
+- [Governed external UVM source provenance](docs/uvm-source-provenance.md)
 
 ## Licensing
 

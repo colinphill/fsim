@@ -4,14 +4,16 @@
 namespace fsim::compiler::llvm_detail {
 
 template <typename OperationType, typename RecordUse,
-          typename RecordDefinition, typename ConstrainWidth>
+          typename RecordDefinition, typename ConstrainWidth,
+          typename ValidateStringRegister>
 void validate_class_operation(
     const runtime::simir::Process& process,
     const std::size_t index,
     const OperationType& operation,
     RecordUse&& record_use,
     RecordDefinition&& record_definition,
-    ConstrainWidth&& constrain_width) {
+    ConstrainWidth&& constrain_width,
+    ValidateStringRegister&& validate_string_register) {
   using namespace runtime::simir;
   if constexpr (std::is_same_v<OperationType, ClassAllocate>) {
     if (operation.specialization_identity.empty()
@@ -27,8 +29,25 @@ void validate_class_operation(
           process, index,
           "ClassAllocate actual names must align with actual registers");
     }
-    for (const auto actual : operation.constructor_actuals) {
-      record_use(actual, index);
+    if (!operation.constructor_actual_kinds.empty()
+        && operation.constructor_actual_kinds.size()
+            != operation.constructor_actuals.size()) {
+      reject(
+          process, index,
+          "ClassAllocate actual kinds must align with actual registers");
+    }
+    for (std::size_t actual_index = 0;
+         actual_index < operation.constructor_actuals.size();
+         ++actual_index) {
+      const auto kind = operation.constructor_actual_kinds.empty()
+          ? 0U
+          : operation.constructor_actual_kinds[actual_index];
+      if (kind > 1U) {
+        reject(process, index, "ClassAllocate actual kind is invalid");
+      }
+      if (kind == 0U) {
+        record_use(operation.constructor_actuals[actual_index], index);
+      }
     }
     record_definition(operation.destination, index);
     constrain_width(operation.destination, 64U, index);
@@ -50,14 +69,29 @@ void validate_class_operation(
   } else if constexpr (std::is_same_v<OperationType, ClassMethodCall>) {
     if (operation.method_identity.empty() || operation.result_width == 0
         || operation.actual_names.size() != operation.actuals.size()
-        || operation.actual_directions.size() != operation.actuals.size()) {
+        || operation.actual_directions.size() != operation.actuals.size()
+        || (!operation.actual_kinds.empty()
+            && operation.actual_kinds.size() != operation.actuals.size())) {
       reject(
           process, index,
           "ClassMethodCall requires aligned method actual metadata");
     }
     record_use(operation.receiver, index);
     constrain_width(operation.receiver, 64U, index);
-    for (const auto actual : operation.actuals) record_use(actual, index);
+    for (std::size_t actual_index = 0;
+         actual_index < operation.actuals.size(); ++actual_index) {
+      const auto kind = operation.actual_kinds.empty()
+          ? 0U : operation.actual_kinds[actual_index];
+      if (kind > 1U) {
+        reject(process, index, "ClassMethodCall actual kind is invalid");
+      }
+      if (kind == 1U) {
+        validate_string_register(
+            operation.actuals[actual_index], index, "class actual");
+      } else {
+        record_use(operation.actuals[actual_index], index);
+      }
+    }
     record_definition(operation.destination, index);
     constrain_width(operation.destination, operation.result_width, index);
   } else if constexpr (
@@ -78,12 +112,29 @@ void validate_class_operation(
   } else if constexpr (std::is_same_v<OperationType, ClassStaticMethodCall>) {
     if (operation.method_identity.empty() || operation.result_width == 0
         || operation.actual_names.size() != operation.actuals.size()
-        || operation.actual_directions.size() != operation.actuals.size()) {
+        || operation.actual_directions.size() != operation.actuals.size()
+        || (!operation.actual_kinds.empty()
+            && operation.actual_kinds.size() != operation.actuals.size())) {
       reject(
           process, index,
           "ClassStaticMethodCall requires aligned method metadata");
     }
-    for (const auto actual : operation.actuals) record_use(actual, index);
+    for (std::size_t actual_index = 0;
+         actual_index < operation.actuals.size(); ++actual_index) {
+      const auto kind = operation.actual_kinds.empty()
+          ? 0U : operation.actual_kinds[actual_index];
+      if (kind > 1U) {
+        reject(
+            process, index,
+            "ClassStaticMethodCall actual kind is invalid");
+      }
+      if (kind == 1U) {
+        validate_string_register(
+            operation.actuals[actual_index], index, "class static actual");
+      } else {
+        record_use(operation.actuals[actual_index], index);
+      }
+    }
     record_definition(operation.destination, index);
     constrain_width(operation.destination, operation.result_width, index);
   }

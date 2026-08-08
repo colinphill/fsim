@@ -1032,6 +1032,11 @@ std::optional<Invocation> parse_arguments(
       continue;
     }
 
+    if (!positional_only && argument.starts_with('+')) {
+      invocation.plusargs.emplace_back(argument);
+      continue;
+    }
+
     if (!command_selected) {
       if (argument == "systemc") {
         if (index + 1 >= argc || argv[index + 1] == nullptr) {
@@ -1143,6 +1148,15 @@ std::optional<Invocation> parse_arguments(
       && !invocation.tcl_commands.empty()) {
     argument_error(
         diagnostics, "--command is available only with the tcl command");
+    return std::nullopt;
+  }
+  if (!invocation.plusargs.empty()
+      && invocation.command != Command::run
+      && invocation.command != Command::debug
+      && invocation.command != Command::simulate) {
+    argument_error(
+        diagnostics,
+        "plusargs are available only with run, debug, or simulate");
     return std::nullopt;
   }
   if (!invocation.library_exports.empty()

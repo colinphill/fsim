@@ -985,6 +985,11 @@ void report_native_cache_failures(
     const Simulation& simulation,
     diagnostic::Engine& diagnostics);
 
+bool apply_uvm_command_line(
+    Simulation& simulation,
+    std::span<const std::string> plusargs,
+    diagnostic::Engine& diagnostics);
+
 int handle_check(
     const cli::Invocation&,
     const project::Config& config,
@@ -1010,6 +1015,7 @@ int run_built_project(
     BuiltProject project,
     SimulationEngine engine,
     const project::Config& config,
+    std::span<const std::string> plusargs,
     diagnostic::Engine& diagnostics,
     std::ostream& output);
 

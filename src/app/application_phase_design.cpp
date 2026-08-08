@@ -895,7 +895,7 @@ int handle_simulate(
                           : SimulationEngine::compiled;
   return run_built_project(
       std::move(*built), simulation_engine,
-      config, diagnostics, output);
+      config, invocation.plusargs, diagnostics, output);
 }
 
 }  // namespace fsim::app::application_detail

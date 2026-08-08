@@ -61,6 +61,7 @@ int main() {
     test_vhdl_sequential_for_loops();
     test_systemverilog_vertical_slice();
     test_systemverilog_preprocessor();
+    test_systemverilog_uvm_macro_surface();
     test_systemverilog_public_conformance_frontend();
     test_msvc_debug_frontend_portability();
     test_systemverilog_line_directive();

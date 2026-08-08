@@ -223,6 +223,116 @@ void Lowerer::lower_task_call(const Statement& statement) {
             false});
         return;
     }
+    const auto native_uvm_task = [](const std::string_view identity) {
+        return identity.starts_with("@uvm-")
+            || identity.find("::uvm_") != std::string_view::npos;
+    };
+    constexpr std::string_view class_static_task_prefix{"@sv-static-task:"};
+    if (statement.task_name.starts_with(class_static_task_prefix)
+        && native_uvm_task(statement.task_name.substr(
+            class_static_task_prefix.size()))) {
+        std::vector<RegisterId> actuals;
+        std::vector<std::uint8_t> actual_kinds;
+        actuals.reserve(statement.task_arguments.size());
+        actual_kinds.reserve(statement.task_arguments.size());
+        for (const auto& operand : statement.task_arguments) {
+            if (is_string_expression(operand)) {
+                const auto actual = lower_string_expression(operand);
+                if (!actual) return;
+                actuals.push_back(*actual);
+                actual_kinds.push_back(1U);
+                continue;
+            }
+            const auto width = infer_width(operand).value_or(64U);
+            const auto actual = lower_expression(operand, width);
+            if (!actual) return;
+            actuals.push_back(*actual);
+            actual_kinds.push_back(0U);
+        }
+        auto names = statement.task_argument_names;
+        if (names.size() != actuals.size()) {
+            names.assign(actuals.size(), std::string{});
+        }
+        std::vector<std::uint8_t> directions;
+        directions.reserve(actuals.size());
+        for (std::size_t index = 0; index < actuals.size(); ++index) {
+            const auto direction = index < statement.class_method_arguments.size()
+                ? statement.class_method_arguments[index].direction
+                : frontend::PortDirection::Input;
+            directions.push_back(static_cast<std::uint8_t>(direction));
+        }
+        const auto destination = allocate_register(
+            1, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ClassStaticMethodCall{
+            destination,
+            statement.task_name.substr(class_static_task_prefix.size()),
+            std::move(actuals),
+            std::move(names),
+            std::move(directions),
+            1,
+            std::move(actual_kinds)});
+        return;
+    }
+    constexpr std::string_view class_task_prefix{"@sv-task:"};
+    if (statement.task_name.starts_with(class_task_prefix)
+        && native_uvm_task(statement.task_name.substr(
+            class_task_prefix.size()))) {
+        const auto identity = std::string_view{statement.task_name}.substr(
+            class_task_prefix.size());
+        if (statement.task_arguments.empty()) {
+            report(
+                "FSIM-ELAB-SVCLASS-006",
+                "class task requires a class receiver",
+                statement.span);
+            return;
+        }
+        const auto receiver = lower_expression(
+            statement.task_arguments.front(), 64);
+        if (!receiver) return;
+        std::vector<RegisterId> actuals;
+        std::vector<std::uint8_t> actual_kinds;
+        actuals.reserve(statement.task_arguments.size() - 1U);
+        actual_kinds.reserve(statement.task_arguments.size() - 1U);
+        for (std::size_t index = 1U;
+             index < statement.task_arguments.size(); ++index) {
+            const auto& operand = statement.task_arguments[index];
+            if (is_string_expression(operand)) {
+                const auto actual = lower_string_expression(operand);
+                if (!actual) return;
+                actuals.push_back(*actual);
+                actual_kinds.push_back(1U);
+                continue;
+            }
+            const auto width = infer_width(operand).value_or(64U);
+            const auto actual = lower_expression(operand, width);
+            if (!actual) return;
+            actuals.push_back(*actual);
+            actual_kinds.push_back(0U);
+        }
+        auto names = statement.task_argument_names;
+        if (names.size() == statement.task_arguments.size()) {
+            names.erase(names.begin());
+        }
+        if (names.size() != actuals.size()) {
+            names.assign(actuals.size(), std::string{});
+        }
+        const auto destination = allocate_register(
+            1, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ClassMethodCall{
+            destination,
+            *receiver,
+            std::string{identity},
+            std::move(actuals),
+            std::move(names),
+            std::vector<std::uint8_t>(
+                statement.task_arguments.size() - 1U,
+                static_cast<std::uint8_t>(
+                    frontend::PortDirection::Input)),
+            1,
+            true,
+            std::move(actual_kinds)});
+        return;
+    }
     if (!task_support_initialized_) {
         report(
             "FSIM-ELAB-SVTASK-001",

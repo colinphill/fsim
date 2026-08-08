@@ -716,6 +716,125 @@ endmodule
             .to_msb_string()
         == "0100");
 
+    const auto imported_class_scope = fsim::frontend::parse_text(
+        "imported_class_scope.sv",
+        R"(
+package imported_class_scope_package;
+  class imported_class #(type T = int);
+    static function int value();
+      return 7;
+    endfunction
+  endclass
+endpackage
+import imported_class_scope_package::*;
+module imported_class_scope_user;
+  int observed;
+  initial observed = imported_class#(int)::value();
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(imported_class_scope.ok());
+    const auto imported_class_scope_result =
+        fsim::elaboration::elaborate(
+            imported_class_scope.design,
+            "sv:work.imported_class_scope_user");
+    assert(std::ranges::none_of(
+        imported_class_scope_result.diagnostics,
+        [](const auto& diagnostic) {
+          return diagnostic.code == "FSIM-ELAB-SVPKG-001"
+              || diagnostic.code == "FSIM-ELAB-SVPKG-005";
+        }));
+
+    const auto self_qualified_package = fsim::frontend::parse_text(
+        "self_qualified_package.sv",
+        R"(
+package self_qualified_package;
+  localparam int VALUE = 6;
+  typedef bit [3:0] nibble_t;
+  class item;
+  endclass
+  function automatic int value();
+    return VALUE;
+  endfunction
+  typedef self_qualified_package::nibble_t qualified_nibble_t;
+  self_qualified_package::item saved;
+  localparam int QUALIFIED_VALUE = self_qualified_package::VALUE;
+  function automatic int qualified_value();
+    return self_qualified_package::value();
+  endfunction
+endpackage
+module self_qualified_package_user;
+  import self_qualified_package::*;
+  qualified_nibble_t observed;
+  initial observed = qualified_value();
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(self_qualified_package.ok());
+    const auto self_qualified_package_result =
+        fsim::elaboration::elaborate(
+            self_qualified_package.design,
+            "sv:work.self_qualified_package_user");
+    if (!self_qualified_package_result.ok()) {
+        for (const auto& diagnostic :
+             self_qualified_package_result.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(self_qualified_package_result.ok());
+
+    auto hydrated_class_type_scope = fsim::frontend::parse_text(
+        "hydrated_class_type_scope.sv",
+        R"(
+package hydrated_class_type_scope_package;
+  class sibling;
+  endclass
+  class callback_iter;
+  endclass
+  class type_owner;
+    typedef bit [5:0] access_t;
+  endclass
+  class owner #(type T = int);
+    typedef sibling local_t;
+    task exercise();
+      local_t from_alias;
+      sibling from_sibling;
+      callback_iter iterator;
+      type_owner::access_t from_scoped_alias;
+      T from_parameter;
+    endtask
+  endclass
+endpackage
+import hydrated_class_type_scope_package::*;
+module hydrated_class_type_scope_user;
+  initial begin
+    owner #(bit [3:0]) value;
+    value = new;
+    value.exercise();
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(hydrated_class_type_scope.ok());
+    std::vector<fsim::frontend::Diagnostic>
+        hydrated_class_type_scope_diagnostics;
+    assert(fsim::frontend::resolve_systemverilog_classes(
+        hydrated_class_type_scope.design,
+        hydrated_class_type_scope_diagnostics));
+    const auto hydrated_class_type_scope_result =
+        fsim::elaboration::elaborate(
+            hydrated_class_type_scope.design,
+            "sv:work.hydrated_class_type_scope_user");
+    if (!hydrated_class_type_scope_result.ok()) {
+      for (const auto& diagnostic :
+           hydrated_class_type_scope_result.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(hydrated_class_type_scope_result.ok());
+
     const auto invalid_systemverilog_packages =
         fsim::frontend::parse_text(
             "invalid_systemverilog_packages.sv",

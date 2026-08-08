@@ -209,6 +209,10 @@ void substitute_statements(
             statement.loop_initial, environment, integer_environment);
         substitute_expression(
             statement.loop_limit, environment, integer_environment);
+        substitute_expression(
+            statement.loop_update_target,
+            environment,
+            integer_environment);
         for (auto& element : statement.vhdl_waveform) {
             substitute_expression(
                 element.value, environment, integer_environment);

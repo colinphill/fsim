@@ -1177,6 +1177,8 @@ using namespace elaboration_detail;
                         statement.loop_initial, output);
                     collect_identifiers(
                         statement.condition, output);
+                    collect_identifiers(
+                        statement.loop_update_target, output);
                 } else {
                     collect_identifiers(
                         statement.loop_initial, output);
@@ -1207,6 +1209,9 @@ using namespace elaboration_detail;
                 if (statement.output_format) {
                     collect_identifiers(statement.value, output);
                 }
+                for (const auto& value : statement.output_values) {
+                    collect_identifiers(value.value, output);
+                }
                 break;
             case StatementKind::MemoryLoad:
                 collect_identifiers(statement.value, output);
@@ -1233,6 +1238,8 @@ using namespace elaboration_detail;
                 statement.statements, output);
             collect_statement_identifiers(
                 statement.else_statements, output);
+            collect_statement_identifiers(
+                statement.loop_updates, output);
             for (const auto& alternative :
                  statement.case_alternatives) {
                 collect_statement_identifiers(
@@ -1278,6 +1285,9 @@ using namespace elaboration_detail;
                 collect_expression_calls(
                     collect_expression_calls, statement.loop_limit);
                 collect_expression_calls(
+                    collect_expression_calls,
+                    statement.loop_update_target);
+                collect_expression_calls(
                     collect_expression_calls, statement.file_handle);
                 for (const auto& argument : statement.task_arguments) {
                     collect_expression_calls(
@@ -1304,6 +1314,7 @@ using namespace elaboration_detail;
                 }
                 self(self, statement.statements);
                 self(self, statement.else_statements);
+                self(self, statement.loop_updates);
             }
         };
 

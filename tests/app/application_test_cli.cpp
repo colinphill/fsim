@@ -1644,7 +1644,8 @@ std::ostringstream direct_output;
 std::ostringstream direct_error;
 const auto direct_text = differently_named.string();
 const std::vector<const char*> direct_arguments{
-    "fsim", "run", direct_text.c_str()};
+    "fsim", "run", "+UVM_VERBOSITY=UVM_HIGH",
+    "+UVM_TIMEOUT=10,NO", direct_text.c_str()};
 assert(
     fsim::cli::run(
         static_cast<int>(direct_arguments.size()),
@@ -1655,6 +1656,20 @@ assert(
     == 0);
 assert(
     direct_output.str().find("simulation completed at tick 0")
+    != std::string::npos);
+assert(direct_error.str().empty());
+const std::vector<const char*> malformed_uvm_arguments{
+    "fsim", "run", direct_text.c_str(), "+UVM_TIMEOUT=invalid"};
+std::ostringstream malformed_uvm_output;
+std::ostringstream malformed_uvm_error;
+assert(
+    fsim::cli::run(
+        static_cast<int>(malformed_uvm_arguments.size()),
+        malformed_uvm_arguments.data(), services,
+        malformed_uvm_output, malformed_uvm_error)
+    == 1);
+assert(
+    malformed_uvm_error.str().find("FSIM-UVM-CLI-001")
     != std::string::npos);
 
 const auto unicode_directory =

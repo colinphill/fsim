@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_uvm_registry.hpp"
 
 #include <ranges>
 
@@ -20,17 +21,76 @@ struct Simulation::Impl {
       : built(std::move(project)),
         class_heap({}, built.seed),
         class_methods(class_heap, {}, &class_static_store),
+        uvm_objects(
+            class_heap,
+            [this](const std::string_view specialization,
+                   const std::string_view declared,
+                   const std::string_view) {
+              return construct_class(
+                  specialization,
+                  declared,
+                  std::span<const runtime::PackedLogic4>{},
+                  std::span<const std::string>{},
+                  std::span<const std::string>{},
+                  "$uvm-clone");
+            }),
+        uvm_components(class_heap, uvm_objects),
+        uvm_registry(
+            class_heap,
+            uvm_objects,
+            uvm_components,
+            [this](const std::string_view specialization,
+                   const std::string_view name) {
+              const auto handle = construct_class(
+                  specialization,
+                  class_specialization(specialization).declaration_identity,
+                  std::span<const runtime::PackedLogic4>{},
+                  std::span<const std::string>{},
+                  std::span<const std::string>{},
+                  "$uvm-registry");
+              uvm_objects.set_name(handle, std::string{name});
+              return handle;
+            },
+            [this](const std::string_view specialization,
+                   const std::string_view name,
+                   const runtime::SystemVerilogClassHandle parent,
+                   const runtime::SystemVerilogUvmRootHandle root) {
+              std::array actuals{
+                  runtime::PackedLogic4(64),
+                  runtime::PackedLogic4::from_aval_bval(64, parent, 0)};
+              std::array string_actuals{
+                  std::string{name}, std::string{}};
+              return construct_class(
+                  specialization,
+                  class_specialization(specialization).declaration_identity,
+                  actuals,
+                  string_actuals,
+                  std::span<const std::string>{},
+                  "$uvm-registry",
+                  root);
+            }),
+        uvm_factory(uvm_registry),
+        uvm_resources(&class_heap),
+        uvm_config_db(uvm_resources),
+        uvm_command_line(uvm_factory, uvm_resources, uvm_config_db),
+        uvm_reports(uvm_objects, uvm_components),
         interpreter(built.design.create_interpreter(
             runtime::SchedulerOptions{max_deltas, 32},
             built.seed)) {
+    register_systemverilog_uvm_object_types(
+        built.systemverilog_class_specializations, uvm_objects);
+    register_systemverilog_uvm_registry_types(
+        built.systemverilog_class_specializations, uvm_registry);
     interpreter->set_class_allocate_hook(
         [this](const std::string_view scope,
                const std::string_view specialization,
                const std::string_view declared_type,
                const std::span<const runtime::PackedLogic4> actuals,
+               const std::span<const std::string> string_actuals,
                const std::span<const std::string> actual_names) {
           return construct_class(
-              specialization, declared_type, actuals, actual_names, scope);
+              specialization, declared_type, actuals, string_actuals,
+              actual_names, scope);
         });
     interpreter->set_class_property_read_hook(
         [this](const std::uint64_t handle, const std::string_view property) {
@@ -49,6 +109,7 @@ struct Simulation::Impl {
         [this](const std::uint64_t handle,
                const std::string_view method,
                std::vector<runtime::PackedLogic4>& actuals,
+               std::vector<std::string>& string_actuals,
                const std::span<const std::string> names,
                const std::span<const std::uint8_t> directions,
                const bool virtual_dispatch) {
@@ -65,7 +126,8 @@ struct Simulation::Impl {
                   ? invoke_source_randomization_mode(
                         handle, method, actuals)
               : invoke_source_function(
-                    handle, method, actuals, names, directions,
+                    handle, method, actuals, string_actuals,
+                    names, directions,
                     virtual_dispatch);
           notify_class_changes(before);
           notify_static_changes(static_before);
@@ -89,12 +151,13 @@ struct Simulation::Impl {
     interpreter->set_class_static_method_call_hook(
         [this](const std::string_view method,
                std::vector<runtime::PackedLogic4>& actuals,
+               std::vector<std::string>& string_actuals,
                const std::span<const std::string> names,
                const std::span<const std::uint8_t> directions) {
           const auto class_before = packed_class_snapshot();
           const auto static_before = packed_static_snapshot();
           auto result = invoke_source_static_function(
-              method, actuals, names, directions);
+              method, actuals, string_actuals, names, directions);
           notify_class_changes(class_before);
           notify_static_changes(static_before);
           return result;
@@ -539,6 +602,17 @@ struct Simulation::Impl {
     return *found;
   }
 
+  [[nodiscard]] runtime::SystemVerilogUvmRootHandle component_root(
+      const std::string_view allocation_scope) {
+    const std::string identity{
+        allocation_scope.empty() ? "$simulation" : allocation_scope};
+    const auto found = uvm_roots_by_scope.find(identity);
+    if (found != uvm_roots_by_scope.end()) return found->second;
+    const auto root = uvm_components.create_root(identity);
+    uvm_roots_by_scope.emplace(identity, root);
+    return root;
+  }
+
   [[nodiscard]] runtime::PackedLogic4 invoke_source_randomize(
       const runtime::SystemVerilogClassHandle handle,
       const std::span<const std::string> selected_names) {
@@ -872,10 +946,12 @@ struct Simulation::Impl {
               return static_cast<std::uint8_t>(direction);
             });
       }
+      std::vector<std::string> string_actuals(actuals.size());
       auto result = invoke_source_function(
           receiver->low_word().aval,
           expression.text.substr(selected_prefix.size()),
           actuals,
+          string_actuals,
           names,
           directions,
           selected_prefix == method_prefix);
@@ -916,9 +992,11 @@ struct Simulation::Impl {
           [](const auto direction) {
             return static_cast<std::uint8_t>(direction);
           });
+      std::vector<std::string> string_actuals(actuals.size());
       return invoke_source_static_function(
           expression.text.substr(static_method_prefix.size()),
           actuals,
+          string_actuals,
           names,
           directions);
     }
@@ -1047,6 +1125,11 @@ struct Simulation::Impl {
         throw std::invalid_argument{
             "constructor formal '" + formal.name + "' has no actual"};
       }
+      if (formal.type.domain == frontend::ValueDomain::String) {
+        environment.emplace(
+            formal.name, runtime::PackedLogic4(64, runtime::Logic4::zero));
+        continue;
+      }
       const auto value = evaluate_constructor_expression(
           *formal.default_value, handle, environment);
       if (!value) {
@@ -1060,6 +1143,11 @@ struct Simulation::Impl {
     }
     for (const auto& variable : constructor.variables) {
       const auto width = variable.type.width().value_or(64);
+      if (variable.type.domain == frontend::ValueDomain::String) {
+        environment[variable.name] =
+            runtime::PackedLogic4(64, runtime::Logic4::zero);
+        continue;
+      }
       auto value = variable.initializer
           ? evaluate_constructor_expression(
                 *variable.initializer, handle, environment)
@@ -1078,7 +1166,8 @@ struct Simulation::Impl {
   void execute_constructor_statements(
       const std::span<const frontend::Statement> statements,
       const runtime::SystemVerilogClassHandle handle,
-      ConstructorEnvironment& environment) {
+      ConstructorEnvironment& environment,
+      const bool native_uvm_library) {
     constexpr std::string_view property_prefix{"@sv-property:"};
     constexpr std::string_view base_prefix{"@sv-base-constructor:"};
     for (const auto& statement : statements) {
@@ -1090,6 +1179,7 @@ struct Simulation::Impl {
         const auto value = evaluate_constructor_expression(
             statement.value, handle, environment);
         if (!value) {
+          if (native_uvm_library) continue;
           throw std::invalid_argument{
               "constructor assignment expression is not executable"};
         }
@@ -1108,17 +1198,20 @@ struct Simulation::Impl {
             continue;
           }
         }
+        if (native_uvm_library) continue;
         throw std::invalid_argument{
             "constructor assignment target is not executable"};
       }
       if (statement.kind == frontend::StatementKind::Block) {
-        execute_constructor_statements(statement.statements, handle, environment);
+        execute_constructor_statements(
+            statement.statements, handle, environment, native_uvm_library);
         continue;
       }
       if (statement.kind == frontend::StatementKind::If) {
         const auto condition = evaluate_constructor_expression(
             statement.condition, handle, environment);
         if (!condition || condition->low_word().bval != 0) {
+          if (native_uvm_library) continue;
           throw std::invalid_argument{
               "constructor condition is not a known packed value"};
         }
@@ -1127,10 +1220,12 @@ struct Simulation::Impl {
                 ? std::span<const frontend::Statement>{statement.statements}
                 : std::span<const frontend::Statement>{statement.else_statements},
             handle,
-            environment);
+            environment,
+            native_uvm_library);
         continue;
       }
       if (statement.kind != frontend::StatementKind::Null) {
+        if (native_uvm_library) continue;
         throw std::invalid_argument{
             "constructor contains an operation that is not executable"};
       }
@@ -1298,7 +1393,8 @@ struct Simulation::Impl {
 
     if (method.kind != frontend::SystemVerilogClassMethodKind::Function) {
       throw std::invalid_argument{
-          "source class function invocation selected a non-function"};
+          "source class function invocation selected non-function '"
+          + method.canonical_identity + "'"};
     }
     if ((!actual_names.empty() && actual_names.size() != actuals.size())
         || (!actual_directions.empty()
@@ -1392,9 +1488,103 @@ struct Simulation::Impl {
       const runtime::SystemVerilogClassHandle handle,
       const std::string_view canonical_identity,
       std::vector<runtime::PackedLogic4>& actuals,
+      std::vector<std::string>& string_actuals,
       const std::span<const std::string> actual_names,
       const std::span<const std::uint8_t> actual_directions,
       const bool virtual_dispatch) {
+    const auto method_separator = canonical_identity.rfind("::");
+    const auto method_name = method_separator == std::string_view::npos
+        ? canonical_identity
+        : canonical_identity.substr(method_separator + 2U);
+    if (method_name == "uvm_report_info"
+        && actuals.size() >= 3U && string_actuals.size() >= 3U) {
+      runtime::SystemVerilogUvmReportRequest request;
+      request.report_object = handle;
+      request.severity = runtime::SystemVerilogUvmReportSeverity::Info;
+      request.id = string_actuals[0];
+      request.message = string_actuals[1];
+      const auto verbosity = actuals[2].low_word();
+      if (verbosity.bval != 0) {
+        throw std::invalid_argument{
+            "UVM report verbosity must be a known packed value"};
+      }
+      request.verbosity = static_cast<std::int32_t>(verbosity.aval);
+      if (actuals.size() >= 4U && string_actuals.size() >= 4U) {
+        request.filename = string_actuals[3];
+      }
+      if (actuals.size() >= 5U) {
+        request.line = static_cast<std::uint32_t>(
+            actuals[4].low_word().aval);
+      }
+      request.timestamp = interpreter->scheduler().now();
+      (void)uvm_reports.report(request);
+      return runtime::PackedLogic4::from_aval_bval(1, 0, 0);
+    }
+    if (auto factory_result = invoke_systemverilog_uvm_factory_method(
+            built.systemverilog_class_specializations,
+            class_heap,
+            uvm_factory,
+            handle,
+            canonical_identity,
+            actuals)) {
+      return std::move(*factory_result);
+    }
+    const auto uvm_base_method =
+        canonical_identity.find("::uvm_object::") != std::string_view::npos;
+    if (uvm_base_method && uvm_objects.contains(handle)) {
+      if (method_name == "get_inst_id" && actuals.empty()) {
+        return runtime::PackedLogic4::from_aval_bval(
+            32, uvm_objects.instance_id(handle), 0);
+      }
+      if (method_name == "clone" && actuals.empty()) {
+        if (uvm_components.contains(handle)) {
+          return runtime::PackedLogic4::from_aval_bval(64, 0, 0);
+        }
+        return runtime::PackedLogic4::from_aval_bval(
+            64, uvm_objects.clone(handle), 0);
+      }
+      if (method_name == "copy" && actuals.size() == 1U) {
+        uvm_objects.copy(handle, actuals.front().low_word().aval);
+        return runtime::PackedLogic4::from_aval_bval(1, 0, 0);
+      }
+      if (method_name == "compare" && !actuals.empty()) {
+        return runtime::PackedLogic4::from_aval_bval(
+            1,
+            uvm_objects.compare(handle, actuals.front().low_word().aval)
+                ? 1U : 0U,
+            0);
+      }
+      if (method_name == "print") {
+        (void)uvm_objects.print(handle);
+        return runtime::PackedLogic4::from_aval_bval(1, 0, 0);
+      }
+      if (method_name == "record") {
+        (void)uvm_objects.record(handle);
+        return runtime::PackedLogic4::from_aval_bval(1, 0, 0);
+      }
+    }
+    const auto uvm_component_base_method =
+        canonical_identity.find("::uvm_component::")
+        != std::string_view::npos;
+    if (uvm_component_base_method && uvm_components.contains(handle)) {
+      if (method_name == "get_parent" && actuals.empty()) {
+        return runtime::PackedLogic4::from_aval_bval(
+            64, uvm_components.parent(handle), 0);
+      }
+      if (method_name == "get_num_children" && actuals.empty()) {
+        return runtime::PackedLogic4::from_aval_bval(
+            32, uvm_components.children(handle).size(), 0);
+      }
+    }
+    if (uvm_objects.contains(handle)) {
+      if (method_name == "get_object_type" && actuals.empty()) {
+        const auto wrapper = uvm_registry.wrapper_by_specialization(
+            class_heap.object(handle).specialization_identity);
+        if (wrapper != 0) {
+          return runtime::PackedLogic4::from_aval_bval(64, wrapper, 0);
+        }
+      }
+    }
     const auto& method = source_method(
         handle, canonical_identity, virtual_dispatch);
     if (method.is_static) {
@@ -1431,8 +1621,114 @@ struct Simulation::Impl {
   [[nodiscard]] runtime::PackedLogic4 invoke_source_static_function(
       const std::string_view canonical_identity,
       std::vector<runtime::PackedLogic4>& actuals,
+      std::vector<std::string>& string_actuals,
       const std::span<const std::string> actual_names,
       const std::span<const std::uint8_t> actual_directions) {
+    constexpr std::string_view registry_create_prefix{
+        "@uvm-registry-create:"};
+    if (canonical_identity.starts_with(registry_create_prefix)) {
+      if (actuals.empty() || string_actuals.empty()) {
+        throw std::invalid_argument{
+            "UVM registry create requires a string name actual"};
+      }
+      const auto wrapper = uvm_registry.unique_wrapper_by_declaration(
+          canonical_identity.substr(registry_create_prefix.size()));
+      if (wrapper == 0) {
+        throw std::invalid_argument{
+            "UVM registry create selected an unknown object type"};
+      }
+      return runtime::PackedLogic4::from_aval_bval(
+          64,
+          uvm_registry.create_object_by_type(
+              wrapper, string_actuals.front()),
+          0);
+    }
+    constexpr std::string_view config_set_prefix{"@uvm-config-db-set:"};
+    constexpr std::string_view config_get_prefix{"@uvm-config-db-get:"};
+    const auto config_set = canonical_identity.starts_with(config_set_prefix);
+    const auto config_get = canonical_identity.starts_with(config_get_prefix);
+    if (config_set || config_get) {
+      if (actuals.size() != 4U || string_actuals.size() != 4U) {
+        throw std::invalid_argument{
+            "UVM config_db call requires context, instance, field, and value"};
+      }
+      const auto prefix = config_set ? config_set_prefix : config_get_prefix;
+      const auto identity = canonical_identity.substr(prefix.size());
+      runtime::SystemVerilogUvmResourceType type;
+      type.identity = identity;
+      if (identity == "string") {
+        type.kind = runtime::SystemVerilogUvmResourceValueKind::String;
+      } else if (identity.starts_with("class:")) {
+        type.kind = runtime::SystemVerilogUvmResourceValueKind::Object;
+        type.packed_width = 64U;
+      } else {
+        type.kind = runtime::SystemVerilogUvmResourceValueKind::Packed;
+        const auto separator = identity.rfind(':');
+        if (separator != std::string_view::npos) {
+          std::from_chars(
+              identity.data() + separator + 1U,
+              identity.data() + identity.size(),
+              type.packed_width);
+        }
+        if (type.packed_width == 0U) {
+          type.packed_width = actuals[3].width();
+        }
+      }
+      runtime::SystemVerilogUvmConfigContext context;
+      const auto context_word = actuals[0].low_word();
+      if (context_word.bval != 0) {
+        throw std::invalid_argument{
+            "UVM config_db context must be a known class handle"};
+      }
+      if (context_word.aval != 0 && uvm_components.contains(context_word.aval)) {
+        const auto component = uvm_components.snapshot(context_word.aval);
+        context.full_name = component.full_name;
+        context.depth = component.depth;
+      }
+      if (config_set) {
+        runtime::SystemVerilogUvmResourceValue value;
+        if (type.kind == runtime::SystemVerilogUvmResourceValueKind::String) {
+          value = string_actuals[3];
+        } else if (
+            type.kind == runtime::SystemVerilogUvmResourceValueKind::Object) {
+          value = static_cast<runtime::SystemVerilogClassHandle>(
+              actuals[3].low_word().aval);
+        } else {
+          value = resize_packed(actuals[3], type.packed_width);
+        }
+        (void)uvm_config_db.set(
+            context, string_actuals[1], string_actuals[2],
+            std::move(type), std::move(value),
+            runtime::SystemVerilogUvmConfigPhase::Runtime);
+        return runtime::PackedLogic4::from_aval_bval(1, 0, 0);
+      }
+      const auto value = uvm_config_db.get(
+          context, string_actuals[1], string_actuals[2], identity);
+      if (!value) {
+        return runtime::PackedLogic4::from_aval_bval(1, 0, 0);
+      }
+      if (const auto packed = std::get_if<runtime::PackedLogic4>(&*value)) {
+        actuals[3] = *packed;
+      } else if (const auto text = std::get_if<std::string>(&*value)) {
+        string_actuals[3] = *text;
+      } else if (const auto object =
+                     std::get_if<runtime::SystemVerilogClassHandle>(&*value)) {
+        actuals[3] = runtime::PackedLogic4::from_aval_bval(64, *object, 0);
+      }
+      return runtime::PackedLogic4::from_aval_bval(1, 1, 0);
+    }
+    const auto method_separator = canonical_identity.rfind("::");
+    const auto method_name = method_separator == std::string_view::npos
+        ? canonical_identity
+        : canonical_identity.substr(method_separator + 2U);
+    if (method_name == "get_type" && actuals.empty()
+        && method_separator != std::string_view::npos) {
+      const auto wrapper = uvm_registry.unique_wrapper_by_declaration(
+          canonical_identity.substr(0, method_separator));
+      if (wrapper != 0) {
+        return runtime::PackedLogic4::from_aval_bval(64, wrapper, 0);
+      }
+    }
     return invoke_source_profile(
         source_static_method(canonical_identity),
         0,
@@ -1501,7 +1797,9 @@ struct Simulation::Impl {
     }
     if (constructor != specialization.methods.end()) {
       execute_constructor_statements(
-          constructor->statements, handle, environment);
+          constructor->statements, handle, environment,
+          specialization.declaration_identity.find("uvm_pkg::")
+              != std::string::npos);
     }
   }
 
@@ -1557,8 +1855,10 @@ struct Simulation::Impl {
       const std::string_view specialization_identity,
       const std::string_view declared_type,
       const std::span<const runtime::PackedLogic4> actuals,
+      const std::span<const std::string> string_actuals,
       const std::span<const std::string> actual_names,
-      const std::string_view allocation_scope) {
+      const std::string_view allocation_scope,
+      const runtime::SystemVerilogUvmRootHandle requested_root = 0) {
     const auto& specialization = class_specialization(
         specialization_identity);
     const auto handle = allocate_class(
@@ -1566,8 +1866,97 @@ struct Simulation::Impl {
         declared_type,
         allocation_scope);
     const auto before = packed_class_snapshot();
-    invoke_source_constructor(
-        specialization, handle, actuals, actual_names);
+    const auto component_specialization = is_systemverilog_uvm_type(
+        built.systemverilog_class_specializations,
+        specialization,
+        "uvm_component");
+    bool object_initialized{};
+    bool automatic_root_created{};
+    runtime::SystemVerilogUvmRootHandle automatic_root{};
+    std::string automatic_root_identity;
+    try {
+      invoke_source_constructor(
+          specialization, handle, actuals, actual_names);
+      if (is_systemverilog_uvm_type(
+              built.systemverilog_class_specializations,
+              specialization,
+              "uvm_object")) {
+        uvm_objects.initialize(handle);
+        object_initialized = true;
+        std::size_t name_index{};
+        if (!actual_names.empty()) {
+          const auto found = std::ranges::find(actual_names, "name");
+          if (found != actual_names.end()) {
+            name_index = static_cast<std::size_t>(
+                std::distance(actual_names.begin(), found));
+          }
+        }
+        if (name_index < string_actuals.size()
+            && !string_actuals[name_index].empty()) {
+          uvm_objects.set_name(handle, string_actuals[name_index]);
+        }
+      }
+      if (component_specialization) {
+        std::size_t name_index{};
+        std::size_t parent_index{1U};
+        if (!actual_names.empty()) {
+          const auto named_index = [&](const std::string_view name,
+                                       const std::size_t fallback) {
+            const auto found = std::ranges::find(actual_names, name);
+            return found == actual_names.end()
+                ? fallback
+                : static_cast<std::size_t>(
+                      std::distance(actual_names.begin(), found));
+          };
+          name_index = named_index("name", 0U);
+          parent_index = named_index("parent", 1U);
+        }
+        std::string name = name_index < string_actuals.size()
+            ? string_actuals[name_index]
+            : std::string{};
+        if (name.empty()) {
+          name = "COMP_" + std::to_string(uvm_objects.instance_id(handle));
+        }
+        const auto parent = parent_index < actuals.size()
+            ? actuals[parent_index].low_word().aval
+            : runtime::SystemVerilogClassHandle{};
+        auto root = requested_root;
+        if (parent == 0 && root == 0) {
+          automatic_root_identity = allocation_scope.empty()
+              ? "$simulation"
+              : std::string{allocation_scope};
+          automatic_root_created =
+              !uvm_roots_by_scope.contains(automatic_root_identity);
+          root = component_root(allocation_scope);
+          automatic_root = root;
+        }
+        uvm_components.initialize(handle, std::move(name), parent, root);
+      }
+    } catch (...) {
+      if (component_specialization) {
+        if (uvm_components.contains(handle)) {
+          try {
+            uvm_components.release(handle);
+          } catch (...) {
+          }
+        } else {
+          if (object_initialized) uvm_objects.erase(handle);
+          (void)class_heap.release(handle);
+        }
+        if (automatic_root_created
+            && uvm_components.contains_root(automatic_root)) {
+          try {
+            uvm_components.destroy_root(automatic_root);
+          } catch (...) {
+          }
+          uvm_roots_by_scope.erase(automatic_root_identity);
+        }
+      }
+      if (component_specialization && class_heap.contains(handle)) {
+        (void)class_heap.release(handle);
+      }
+      throw;
+    }
     notify_class_changes(before);
     return handle;
   }
@@ -1705,6 +2094,16 @@ struct Simulation::Impl {
   runtime::SystemVerilogChandleRegistry chandle_registry;
   runtime::SystemVerilogClassStaticStore class_static_store;
   runtime::SystemVerilogClassMethodRuntime class_methods;
+  runtime::SystemVerilogUvmObjectService uvm_objects;
+  runtime::SystemVerilogUvmComponentService uvm_components;
+  runtime::SystemVerilogUvmRegistryService uvm_registry;
+  runtime::SystemVerilogUvmFactoryService uvm_factory;
+  runtime::SystemVerilogUvmResourcePoolService uvm_resources;
+  runtime::SystemVerilogUvmConfigDbService uvm_config_db;
+  runtime::SystemVerilogUvmCommandLineService uvm_command_line;
+  runtime::SystemVerilogUvmReportService uvm_reports;
+  std::map<std::string, runtime::SystemVerilogUvmRootHandle, std::less<>>
+      uvm_roots_by_scope;
 #if defined(FSIM_HAS_LLVM)
   // Shared by every compiled executor. It is fully populated before executor
   // installation and outlives the interpreter that owns those executors.
@@ -1761,122 +2160,7 @@ Simulation::~Simulation() = default;
 Simulation::Simulation(Simulation&&) noexcept = default;
 Simulation& Simulation::operator=(Simulation&&) noexcept = default;
 
-const elaboration::ElaboratedDesign& Simulation::design() const noexcept {
-  return runtime_adapter();
-}
-
-const elaboration::ElaboratedDesign&
-Simulation::runtime_adapter() const noexcept {
-  return impl_->built.design;
-}
-
-const semantic::design::DesignIr& Simulation::design_ir() const noexcept {
-  return impl_->built.design_ir;
-}
-
-const semantic::Model& Simulation::semantics() const noexcept {
-  return impl_->built.semantics;
-}
-
-const std::vector<MappedLibraryProvenance>&
-Simulation::mapped_libraries() const noexcept {
-  return impl_->built.mapped_libraries;
-}
-
-std::string_view Simulation::time_resolution() const noexcept {
-  return impl_->built.time_resolution;
-}
-
-std::optional<SignalId> Simulation::find_signal(
-    const std::string_view path) const noexcept {
-  const auto found = std::ranges::find_if(
-      impl_->built.design_ir.objects(), [&](const auto& object) {
-        return design_object_is_signal_bearing(object)
-            && object.path == path
-            && object.runtime_index
-                <= std::numeric_limits<SignalId>::max();
-      });
-  return found == impl_->built.design_ir.objects().end()
-      ? std::nullopt
-      : std::optional<SignalId>{
-            static_cast<SignalId>(found->runtime_index)};
-}
-
-const PackedLogic4& Simulation::read_driver(
-    const runtime::simir::ProcessId process,
-    const SignalId signal) const {
-  return impl_->interpreter->driver_value(process, signal);
-}
-
-std::string Simulation::read_process_string_local(
-    const runtime::simir::ProcessId process,
-    const std::size_t local_index) const {
-  return impl_->interpreter->read_debug_string_local(
-      process, local_index);
-}
-
-runtime::simir::ContainerValue
-Simulation::read_process_container_local(
-    const runtime::simir::ProcessId process,
-    const std::size_t local_index) const {
-  return impl_->interpreter->read_debug_container_local(
-      process, local_index);
-}
-
-const std::string& Simulation::read_string_object(
-    const runtime::simir::StringObjectId object) const {
-  return impl_->interpreter->string_object_value(object);
-}
-
-const runtime::simir::ContainerValue&
-Simulation::read_container_object(
-    const runtime::simir::ContainerObjectId object) const {
-  return impl_->interpreter->container_object_value(object);
-}
-
-const std::vector<frontend::SystemVerilogClassSpecialization>&
-Simulation::class_specializations() const noexcept {
-  return impl_->built.systemverilog_class_specializations;
-}
-
-runtime::SystemVerilogClassHeap& Simulation::class_heap() noexcept {
-  return impl_->class_heap;
-}
-
-const runtime::SystemVerilogClassHeap&
-Simulation::class_heap() const noexcept {
-  return impl_->class_heap;
-}
-
-runtime::SystemVerilogClassStaticStore&
-Simulation::class_static_store() noexcept {
-  return impl_->class_static_store;
-}
-
-const runtime::SystemVerilogClassStaticStore&
-Simulation::class_static_store() const noexcept {
-  return impl_->class_static_store;
-}
-
-runtime::SystemVerilogClassMethodRuntime&
-Simulation::class_methods() noexcept {
-  return impl_->class_methods;
-}
-
-const runtime::SystemVerilogClassMethodRuntime&
-Simulation::class_methods() const noexcept {
-  return impl_->class_methods;
-}
-
-runtime::SystemVerilogClassHandle Simulation::allocate_class(
-    const std::string_view specialization_identity,
-    const std::string_view declared_type) {
-  if (impl_->lifecycle == Impl::Lifecycle::finished
-      || impl_->lifecycle == Impl::Lifecycle::poisoned) {
-    throw std::logic_error{"simulation class heap is no longer mutable"};
-  }
-  return impl_->allocate_class(specialization_identity, declared_type);
-}
+#include "application_simulation_accessors.tpp"
 
 const runtime::SystemVerilogClassPropertyValue&
 Simulation::read_class_property(

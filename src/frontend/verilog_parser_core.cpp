@@ -297,6 +297,10 @@ std::string VerilogParser::decoded_string_literal_text(const Token& token) {
     case '"':
       result.push_back('"');
       break;
+    case '%':
+    case '.':
+      result.push_back(escaped);
+      break;
     default:
       if (escaped >= '0' && escaped <= '7') {
         unsigned value = static_cast<unsigned>(escaped - '0');
@@ -956,6 +960,7 @@ DesignUnit VerilogParser::parse_module(
   implicit_net_references_.clear();
   container_iterator_names_.clear();
   current_procedural_names_.clear();
+  current_procedural_types_.clear();
   current_generate_names_.clear();
   current_loop_names_.clear();
   declared_genvars_.clear();

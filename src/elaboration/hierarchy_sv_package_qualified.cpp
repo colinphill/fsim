@@ -107,6 +107,39 @@ void HierarchyBuilder::validate_systemverilog_exports(
         std::vector<frontend::FunctionDeclaration>
             function_imports;
         std::vector<frontend::TaskDeclaration> task_imports;
+        std::set<std::string_view> class_scopes;
+        std::vector<const frontend::SystemVerilogClassDeclaration*> pending;
+        const auto append_class_scopes =
+            [&](const auto& declarations,
+                const std::string_view selected = {}) {
+              for (const auto& declaration : declarations) {
+                if (selected.empty() || declaration.name == selected) {
+                  pending.push_back(&declaration);
+                }
+              }
+            };
+        append_class_scopes(unit.systemverilog_classes);
+        for (const auto& imported : unit.systemverilog_imports) {
+          const auto* package = find_systemverilog_package(
+              unit, imported.package);
+          if (package != nullptr) {
+            append_class_scopes(
+                package->systemverilog_classes, imported.name);
+          }
+        }
+        while (!pending.empty()) {
+            const auto* declaration = pending.back();
+            pending.pop_back();
+            class_scopes.insert(declaration->name);
+            for (const auto& nested : declaration->nested_classes) {
+                pending.push_back(&nested);
+            }
+        }
+        const auto is_class_scope = [&](const std::string_view scope) {
+            const auto parameter = scope.find('#');
+            const auto class_name = scope.substr(0, parameter);
+            return class_scopes.contains(class_name);
+        };
         for (const auto& identifier : ordered) {
             if (identifier == "std::randomize"
                 || identifier == "process::self") {
@@ -117,8 +150,6 @@ void HierarchyBuilder::validate_systemverilog_exports(
             const auto separator = identifier.find("::");
             if (separator == std::string::npos
                 || separator == 0
-                || identifier.find("::", separator + 2)
-                    != std::string::npos
                 || separator + 2 >= identifier.size()) {
                 report(
                     "FSIM-ELAB-SVPKG-005",
@@ -129,17 +160,95 @@ void HierarchyBuilder::validate_systemverilog_exports(
             }
             const auto package_name =
                 identifier.substr(0, separator);
-            const auto constant_name =
-                identifier.substr(separator + 2);
+            if (is_class_scope(package_name)) {
+                continue;
+            }
             const auto* package =
                 find_systemverilog_package(
                     unit, package_name);
+            if (package != nullptr
+                && identifier.find("::", separator + 2)
+                    != std::string::npos) {
+                report(
+                    "FSIM-ELAB-SVPKG-005",
+                    "a package-scoped item must be "
+                    "package::name",
+                    reference_span);
+                continue;
+            }
+            const auto constant_name =
+                identifier.substr(separator + 2);
             if (package == nullptr) {
                 report(
                     "FSIM-ELAB-SVPKG-001",
                     "SystemVerilog package '"
                         + package_name + "' was not found",
                     reference_span);
+                continue;
+            }
+            // A package may explicitly qualify one of its own declarations.
+            // Resolving that spelling by recursively specializing the package
+            // turns a legal self-scope lookup into a false import cycle.  Make
+            // the qualified spelling an alias of the declaration already in
+            // the package; genuine cycles still pass through package
+            // specialization below.
+            if (!import_stack.empty()
+                && import_stack.back() == package) {
+                bool found_local = false;
+                if (const auto declaration = std::ranges::find_if(
+                        package->parameters,
+                        [&](const auto& candidate) {
+                          return candidate.name == constant_name;
+                        });
+                    declaration != package->parameters.end()) {
+                    found_local = true;
+                }
+                if (const auto alias = std::ranges::find_if(
+                        package->type_aliases,
+                        [&](const auto& candidate) {
+                          return candidate.name == constant_name;
+                        });
+                    alias != package->type_aliases.end()) {
+                    type_environment.insert_or_assign(
+                        identifier,
+                        NamedTypeBinding{alias->type, package->name});
+                    found_local = true;
+                }
+                if (const auto function = std::ranges::find_if(
+                        package->functions,
+                        [&](const auto& candidate) {
+                          return candidate.name == constant_name;
+                        });
+                    function != package->functions.end()) {
+                    auto imported = *function;
+                    imported.name = identifier;
+                    function_imports.push_back(std::move(imported));
+                    found_local = true;
+                }
+                if (const auto task = std::ranges::find_if(
+                        package->tasks,
+                        [&](const auto& candidate) {
+                          return candidate.name == constant_name;
+                        });
+                    task != package->tasks.end()) {
+                    auto imported = *task;
+                    imported.name = identifier;
+                    task_imports.push_back(std::move(imported));
+                    found_local = true;
+                }
+                found_local = found_local || std::ranges::any_of(
+                    package->systemverilog_classes,
+                    [&](const auto& candidate) {
+                      return candidate.name == constant_name;
+                    });
+                if (!found_local) {
+                    report(
+                        "FSIM-ELAB-SVPKG-002",
+                        "SystemVerilog package '" + package_name
+                            + "' has no exported item '"
+                            + constant_name + "'",
+                        reference_span);
+                }
                 continue;
             }
             auto specialized_package =

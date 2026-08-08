@@ -34,6 +34,12 @@ struct Macro {
   SourceSpan definition;
 };
 
+[[nodiscard]] bool is_line_continuation(const Token& token) {
+  return !token.text.empty() && token.text.front() == '\\'
+      && (token.text.find('\n') != std::string::npos
+          || token.text.find('\r') != std::string::npos);
+}
+
 [[nodiscard]] bool same_tokens(
     const std::vector<Token>& left,
     const std::vector<Token>& right) {
@@ -560,11 +566,9 @@ class VerilogPreprocessor {
     while (end < tokens.size()
            && tokens[end].kind != TokenKind::EndOfFile) {
       if (tokens[end].span.begin.line != line) {
-        if (end == begin
-            || tokens[end - 1].text.empty()
-            || tokens[end - 1].text.front() != '\\'
-            || tokens[end - 1].text.find('\n')
-                == std::string::npos) {
+        if (tokens[end].span.begin.line != line + 1
+            || end == begin
+            || !is_line_continuation(tokens[end - 1])) {
           break;
         }
         line = tokens[end].span.begin.line;
@@ -635,6 +639,10 @@ class VerilogPreprocessor {
             output_.end(),
             std::make_move_iterator(expanded.begin()),
             std::make_move_iterator(expanded.end()));
+        continue;
+      }
+      if (is_line_continuation(mapped_tokens[index])) {
+        ++index;
         continue;
       }
       if (active()) {
@@ -1026,10 +1034,7 @@ class VerilogPreprocessor {
                 && braces != 0) {
               --braces;
             }
-            if (!tokens[replacement_begin].text.empty()
-                && tokens[replacement_begin].text.front() == '\\'
-                && tokens[replacement_begin].text.find('\n')
-                    != std::string::npos) {
+            if (is_line_continuation(tokens[replacement_begin])) {
               ++replacement_begin;
               continue;
             }
@@ -1078,9 +1083,7 @@ class VerilogPreprocessor {
       // The lexer represents a preprocessor line continuation as an escaped
       // identifier containing the backslash and newline. It joins physical
       // lines but contributes no replacement token.
-      if (!tokens[position].text.empty()
-          && tokens[position].text.front() == '\\'
-          && tokens[position].text.find('\n') != std::string::npos) {
+      if (is_line_continuation(tokens[position])) {
         continue;
       }
       replacement.push_back(tokens[position]);
@@ -1285,6 +1288,15 @@ class VerilogPreprocessor {
             result.back().text + tokens[index + 2].text;
         auto lexed =
             lex(SourceText{invocation.span.source_name, joined}, language_);
+        if (lexed.ok() && lexed.tokens.size() == 3
+            && lexed.tokens[0].kind == result.back().kind
+            && lexed.tokens[0].text == result.back().text
+            && lexed.tokens[1].kind == tokens[index + 2].kind
+            && lexed.tokens[1].text == tokens[index + 2].text) {
+          result.push_back(std::move(tokens[index + 2]));
+          index += 2;
+          continue;
+        }
         if (!lexed.ok() || lexed.tokens.size() != 2
             || lexed.tokens.front().kind == TokenKind::EndOfFile) {
           diagnose(
@@ -1327,6 +1339,225 @@ class VerilogPreprocessor {
         result.push_back(tokens[index++]);
       }
     }
+    return result;
+  }
+
+  [[nodiscard]] std::vector<Token> select_replacement_conditionals(
+      const Macro& macro,
+      const SourceSpan& invocation,
+      const std::vector<std::string>& expansion_stack) {
+    struct ReplacementConditional {
+      bool parent_active{};
+      bool active{};
+      bool branch_taken{};
+      bool saw_else{};
+    };
+    std::vector<ReplacementConditional> conditionals;
+    std::vector<Token> selected;
+    const auto active_replacement = [&]() {
+      return conditionals.empty() || conditionals.back().active;
+    };
+    for (std::size_t index = 0; index < macro.replacement.size();) {
+      const auto directive =
+          macro.replacement[index].kind == TokenKind::Backtick
+              && index + 1 < macro.replacement.size()
+              && macro.replacement[index + 1].kind
+                  == TokenKind::Identifier
+          ? macro.replacement[index + 1].text
+          : std::string{};
+      const bool conditional_directive =
+          directive == "ifdef" || directive == "ifndef"
+          || directive == "elsif" || directive == "else"
+          || directive == "endif";
+      if (!conditional_directive) {
+        if (active_replacement()) {
+          selected.push_back(macro.replacement[index]);
+        }
+        ++index;
+        continue;
+      }
+
+      const auto directive_line =
+          macro.replacement[index + 1].span.begin.line;
+      const auto malformed = [&](const std::string& message) {
+        diagnose(
+            "FSIM-SV-PP-049", message, invocation,
+            expansion_stack);
+      };
+      if (directive == "ifdef" || directive == "ifndef") {
+        if (index + 2 >= macro.replacement.size()
+            || macro.replacement[index + 2].kind
+                != TokenKind::Identifier
+            || macro.replacement[index + 2].span.begin.line
+                != directive_line) {
+          malformed(
+              "conditional directive inside macro `" + macro.name
+              + "' requires exactly one identifier");
+          index += 2;
+          continue;
+        }
+        const bool parent = active_replacement();
+        const bool defined = macros_.contains(
+            macro.replacement[index + 2].text);
+        const bool take = directive == "ifdef" ? defined : !defined;
+        conditionals.push_back(
+            {parent, parent && take, parent && take, false});
+        index += 3;
+        continue;
+      } else if (directive == "elsif") {
+        if (conditionals.empty()) {
+          malformed("`elsif inside a macro has no matching conditional");
+        } else if (
+            index + 2 >= macro.replacement.size()
+            || macro.replacement[index + 2].kind
+                != TokenKind::Identifier
+            || macro.replacement[index + 2].span.begin.line
+                != directive_line) {
+          malformed("`elsif inside a macro requires exactly one identifier");
+        } else {
+          auto& conditional = conditionals.back();
+          if (conditional.saw_else) {
+            malformed("`elsif inside a macro cannot follow `else");
+          }
+          const bool take =
+              conditional.parent_active && !conditional.branch_taken
+              && macros_.contains(macro.replacement[index + 2].text);
+          conditional.active = take;
+          conditional.branch_taken = conditional.branch_taken || take;
+        }
+        index += 3;
+        continue;
+      } else if (directive == "else") {
+        if (conditionals.empty()) {
+          malformed("`else inside a macro has no matching conditional");
+        } else {
+          auto& conditional = conditionals.back();
+          if (conditional.saw_else) {
+            malformed("duplicate `else inside a macro conditional");
+          }
+          conditional.saw_else = true;
+          conditional.active =
+              conditional.parent_active && !conditional.branch_taken;
+          conditional.branch_taken = true;
+        }
+      } else {
+        if (conditionals.empty()) {
+          malformed("`endif inside a macro has no matching conditional");
+        } else {
+          conditionals.pop_back();
+        }
+      }
+      index += 2;
+    }
+    if (!conditionals.empty()) {
+      diagnose(
+          "FSIM-SV-PP-050",
+          "macro `" + macro.name
+              + "' contains an unterminated conditional directive",
+          invocation, expansion_stack);
+    }
+    return selected;
+  }
+
+  [[nodiscard]] std::optional<std::string> stringify_replacement(
+      const std::string_view body,
+      const Macro& macro,
+      const std::vector<std::vector<Token>>& arguments,
+      const SourceSpan& invocation,
+      const std::size_t depth,
+      const std::vector<std::string>& expansion_stack) {
+    std::string result{"\""};
+    const auto append_escaped = [&](const std::string_view spelling) {
+      for (const char character : spelling) {
+        if (character == '\\' || character == '"') {
+          result.push_back('\\');
+        }
+        result.push_back(character);
+      }
+    };
+    const auto parameter_index = [&](const std::string_view name)
+        -> std::optional<std::size_t> {
+      if (!macro.parameters) {
+        return std::nullopt;
+      }
+      const auto found = std::find_if(
+          macro.parameters->begin(), macro.parameters->end(),
+          [&](const MacroParameter& parameter) {
+            return parameter.name == name;
+          });
+      if (found == macro.parameters->end()) {
+        return std::nullopt;
+      }
+      return static_cast<std::size_t>(
+          std::distance(macro.parameters->begin(), found));
+    };
+    const auto append_argument = [&](const std::size_t parameter) {
+      for (std::size_t index = 0;
+           index < arguments[parameter].size(); ++index) {
+        if (index != 0) {
+          result.push_back(' ');
+        }
+        append_escaped(arguments[parameter][index].text);
+      }
+    };
+
+    std::size_t index = 0;
+    while (index < body.size()) {
+      if (body[index] == '`') {
+        if (index + 1 < body.size() && body[index + 1] == '`') {
+          index += 2;
+          continue;
+        }
+        auto name_end = index + 1;
+        while (name_end < body.size()
+               && (std::isalnum(static_cast<unsigned char>(body[name_end]))
+                   != 0
+                   || body[name_end] == '_' || body[name_end] == '$')) {
+          ++name_end;
+        }
+        if (name_end == index + 1) {
+          diagnose(
+              "FSIM-SV-PP-051",
+              "special macro string contains a backtick without an identifier",
+              invocation, expansion_stack);
+          return std::nullopt;
+        }
+        std::vector<Token> nested{
+            {TokenKind::Backtick, "`", invocation, expansion_stack},
+            {TokenKind::Identifier,
+             std::string{body.substr(index + 1, name_end - index - 1)},
+             invocation, expansion_stack}};
+        std::size_t nested_index = 0;
+        auto expanded = expand_invocation(
+            nested, nested_index, depth + 1, expansion_stack);
+        for (const auto& token : expanded) {
+          append_escaped(token.text);
+        }
+        index = name_end;
+        continue;
+      }
+      const auto first = static_cast<unsigned char>(body[index]);
+      if (std::isalpha(first) != 0 || body[index] == '_'
+          || body[index] == '$') {
+        auto name_end = index + 1;
+        while (name_end < body.size()
+               && (std::isalnum(static_cast<unsigned char>(body[name_end]))
+                   != 0
+                   || body[name_end] == '_' || body[name_end] == '$')) {
+          ++name_end;
+        }
+        if (const auto parameter =
+                parameter_index(body.substr(index, name_end - index))) {
+          append_argument(*parameter);
+        } else {
+          result.append(body.substr(index, name_end - index));
+        }
+        index = name_end;
+        continue;
+      }
+      result.push_back(body[index++]);
+    }
+    result.push_back('"');
     return result;
   }
 
@@ -1430,56 +1661,36 @@ class VerilogPreprocessor {
         "macro `" + macro.name + "' defined at "
         + location_text(macro.definition) + ", expanded at "
         + location_text(invocation_span));
+    expanding_.insert(macro.name);
+    auto expanded_arguments = arguments;
+    for (auto& argument : expanded_arguments) {
+      argument = expand_sequence(argument, depth + 1, expansion_stack);
+    }
+    const auto replacement_tokens = select_replacement_conditionals(
+        macro, invocation_span, expansion_stack);
     std::vector<Token> substituted;
     for (std::size_t replacement_index = 0;
-         replacement_index < macro.replacement.size();
+         replacement_index < replacement_tokens.size();
          ++replacement_index) {
       const auto& replacement =
-          macro.replacement[replacement_index];
+          replacement_tokens[replacement_index];
       if (replacement.kind == TokenKind::Backtick
-          && replacement_index + 1 < macro.replacement.size()
-          && macro.replacement[replacement_index + 1].kind
+          && replacement_index + 1 < replacement_tokens.size()
+          && replacement_tokens[replacement_index + 1].kind
               == TokenKind::StringLiteral) {
         const auto& string_token =
-            macro.replacement[replacement_index + 1];
+            replacement_tokens[replacement_index + 1];
         if (string_token.text.size() >= 3
             && string_token.text[string_token.text.size() - 2]
                 == '`') {
-          const auto parameter_name = string_token.text.substr(
-              1, string_token.text.size() - 3);
-          const auto parameter_match =
-              macro.parameters
-                  ? std::find_if(
-                        macro.parameters->begin(),
-                        macro.parameters->end(),
-                        [&](const MacroParameter& parameter) {
-                          return parameter.name == parameter_name;
-                        })
-                  : std::vector<MacroParameter>::const_iterator{};
-          if (macro.parameters
-              && parameter_match != macro.parameters->end()) {
-            const auto parameter = static_cast<std::size_t>(
-                std::distance(
-                    macro.parameters->begin(), parameter_match));
-            std::string stringified{"\""};
-            for (std::size_t argument_index = 0;
-                 argument_index < arguments[parameter].size();
-                 ++argument_index) {
-              if (argument_index != 0) {
-                stringified.push_back(' ');
-              }
-              for (const auto character :
-                   arguments[parameter][argument_index].text) {
-                if (character == '\\' || character == '"') {
-                  stringified.push_back('\\');
-                }
-                stringified.push_back(character);
-              }
-            }
-            stringified.push_back('"');
+          if (auto stringified = stringify_replacement(
+                  std::string_view{string_token.text}.substr(
+                      1, string_token.text.size() - 3),
+                  macro, expanded_arguments, invocation_span, depth,
+                  expansion_stack)) {
             substituted.push_back({
                 TokenKind::StringLiteral,
-                std::move(stringified),
+                std::move(*stringified),
                 invocation_span,
                 expansion_stack});
             ++replacement_index;
@@ -1502,7 +1713,7 @@ class VerilogPreprocessor {
         }
       }
       if (parameter) {
-        for (auto argument : arguments[*parameter]) {
+        for (auto argument : expanded_arguments[*parameter]) {
           argument.expansion_stack = expansion_stack;
           substituted.push_back(std::move(argument));
         }
@@ -1515,7 +1726,6 @@ class VerilogPreprocessor {
     }
     substituted = concatenate_tokens(
         std::move(substituted), name_token, expansion_stack);
-    expanding_.insert(macro.name);
     auto expanded =
         expand_sequence(substituted, depth + 1, expansion_stack);
     expanding_.erase(macro.name);

@@ -1967,6 +1967,9 @@ void add_container_type_key(
             for (const auto actual : value.constructor_actuals) {
               add_key_u64(builder, "class-actual", actual);
             }
+            for (const auto kind : value.constructor_actual_kinds) {
+              add_key_u64(builder, "class-actual-kind", kind);
+            }
             for (const auto& name : value.constructor_actual_names) {
               builder.add("class-actual-name", name);
             }
@@ -2003,6 +2006,10 @@ void add_container_type_key(
             for (std::size_t actual = 0;
                  actual < value.actuals.size(); ++actual) {
               add_key_u64(builder, "class-actual", value.actuals[actual]);
+              add_key_u64(
+                  builder, "class-actual-kind",
+                  value.actual_kinds.empty()
+                      ? 0U : value.actual_kinds[actual]);
               builder.add("class-actual-name", value.actual_names[actual]);
               add_key_u64(
                   builder, "class-actual-direction",

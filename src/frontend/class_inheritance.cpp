@@ -66,17 +66,169 @@ void collect_classes(
   return profile;
 }
 
+[[nodiscard]] const SystemVerilogClassDeclaration* method_owner(
+    const SystemVerilogClassMethod& method,
+    const std::map<
+        std::string, const SystemVerilogClassDeclaration*>& classes) {
+  const SystemVerilogClassDeclaration* owner = nullptr;
+  std::size_t owner_identity_size{};
+  for (const auto& [identity, declaration] : classes) {
+    if (identity.size() <= owner_identity_size
+        || !method.canonical_identity.starts_with(identity + "::")) {
+      continue;
+    }
+    owner = declaration;
+    owner_identity_size = identity.size();
+  }
+  return owner;
+}
+
+[[nodiscard]] Type resolved_method_type(
+    const SystemVerilogClassMethod& method,
+    Type result,
+    const std::map<
+        std::string, const SystemVerilogClassDeclaration*>& classes) {
+  const auto* owner = method_owner(method, classes);
+  std::set<std::string> expanded;
+  while (!result.named_type.empty()
+         && expanded.insert(result.named_type).second) {
+    auto alias_name = result.named_type;
+    const auto separator = alias_name.rfind("::");
+    if (separator != std::string::npos) {
+      const auto qualifier = alias_name.substr(0, separator);
+      for (auto current = owner; current != nullptr;) {
+        if (qualifier == current->name
+            || qualifier == current->canonical_identity
+            || current->canonical_identity.ends_with(
+                "::" + qualifier)) {
+          alias_name = alias_name.substr(separator + 2U);
+          result.named_type = alias_name;
+          break;
+        }
+        if (!current->base
+            || current->base->declaration_identity.empty()) {
+          break;
+        }
+        const auto base = classes.find(
+            current->base->declaration_identity);
+        current = base == classes.end() ? nullptr : base->second;
+      }
+    }
+    const Type* replacement = nullptr;
+    if (const auto method_alias = std::ranges::find(
+            method.type_aliases,
+            alias_name,
+            &TypeAliasDeclaration::name);
+        method_alias != method.type_aliases.end()) {
+      replacement = &method_alias->type;
+    } else {
+      for (auto current = owner; current != nullptr;) {
+        if (const auto class_alias = std::ranges::find(
+                current->type_aliases,
+                alias_name,
+                &TypeAliasDeclaration::name);
+            class_alias != current->type_aliases.end()) {
+          replacement = &class_alias->type;
+          break;
+        }
+        if (!current->base
+            || current->base->declaration_identity.empty()) {
+          break;
+        }
+        const auto base = classes.find(
+            current->base->declaration_identity);
+        current = base == classes.end() ? nullptr : base->second;
+      }
+    }
+    if (replacement == nullptr) break;
+    result = *replacement;
+  }
+  return result;
+}
+
+[[nodiscard]] std::string inheritance_profile(
+    const SystemVerilogClassMethod& method,
+    const std::map<
+        std::string, const SystemVerilogClassDeclaration*>& classes) {
+  std::string profile = method.name + ':'
+      + std::to_string(static_cast<unsigned>(method.kind)) + '(';
+  for (const auto& argument : method.arguments) {
+    profile += std::to_string(static_cast<unsigned>(argument.direction));
+    profile += ':';
+    profile += type_identity(
+        resolved_method_type(method, argument.type, classes));
+    profile += argument.reference ? ":ref;" : ":value;";
+  }
+  profile += ')';
+  return profile;
+}
+
+[[nodiscard]] bool symbolic_type_parameter(
+    const SystemVerilogClassMethod& method,
+    const Type& type,
+    const std::map<
+        std::string, const SystemVerilogClassDeclaration*>& classes) {
+  const auto* owner = method_owner(method, classes);
+  if (owner == nullptr || type.named_type.empty()) return false;
+  auto name = type.named_type;
+  if (const auto separator = name.rfind("::");
+      separator != std::string::npos) {
+    name = name.substr(separator + 2U);
+  }
+  return std::ranges::any_of(
+      owner->parameters,
+      [&](const ParameterDeclaration& parameter) {
+        return parameter.kind == ParameterKind::Type
+            && parameter.name == name;
+      });
+}
+
+[[nodiscard]] bool compatible_argument_profile(
+    const SystemVerilogClassMethod& method,
+    const SystemVerilogClassMethod& base_method,
+    const std::map<
+        std::string, const SystemVerilogClassDeclaration*>& classes) {
+  if (method.name != base_method.name
+      || method.kind != base_method.kind
+      || method.arguments.size() != base_method.arguments.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < method.arguments.size(); ++index) {
+    const auto& argument = method.arguments[index];
+    const auto& base_argument = base_method.arguments[index];
+    if (argument.direction != base_argument.direction
+        || argument.reference != base_argument.reference) {
+      return false;
+    }
+    const auto argument_type = resolved_method_type(
+        method, argument.type, classes);
+    const auto base_argument_type = resolved_method_type(
+        base_method, base_argument.type, classes);
+    if (type_identity(argument_type) != type_identity(base_argument_type)
+        && !symbolic_type_parameter(method, argument_type, classes)
+        && !symbolic_type_parameter(
+            base_method, base_argument_type, classes)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 [[nodiscard]] bool same_result_type(
     const SystemVerilogClassMethod& left,
     const SystemVerilogClassMethod& right,
     const std::map<
         std::string, const SystemVerilogClassDeclaration*>& classes) {
+  const auto left_result = resolved_method_type(
+      left, left.return_type, classes);
+  const auto right_result = resolved_method_type(
+      right, right.return_type, classes);
   if (left.kind == SystemVerilogClassMethodKind::Task
-      || type_identity(left.return_type) == type_identity(right.return_type)) {
+      || type_identity(left_result) == type_identity(right_result)) {
     return true;
   }
-  const auto& derived = left.return_type.systemverilog_class_declaration;
-  const auto& base = right.return_type.systemverilog_class_declaration;
+  const auto& derived = left_result.systemverilog_class_declaration;
+  const auto& base = right_result.systemverilog_class_declaration;
   if (derived.empty() || base.empty()) return false;
   auto current = classes.find(derived);
   std::set<std::string> visited;
@@ -229,15 +381,25 @@ bool validate_systemverilog_class_inheritance(
     std::set<std::string> fulfilled_pure;
     for (const auto& method : declaration->methods) {
       if (method.kind == SystemVerilogClassMethodKind::Constructor) continue;
-      const auto profile = argument_profile(method);
+      const auto profile = inheritance_profile(method, classes);
       for (const auto* base_method : inherited) {
-        if (argument_profile(*base_method) != profile) continue;
+        if (!compatible_argument_profile(
+                method, *base_method, classes)) {
+          continue;
+        }
+        if (!base_method->is_virtual
+            || base_method->is_static != method.is_static) {
+          continue;
+        }
         if (!same_result_type(method, *base_method, classes)) {
           diagnose(
               diagnostics,
               "FSIM-SV-CLASS-INHERIT-006",
               "override '" + method.canonical_identity
-                  + "' has an incompatible result type",
+                  + "' has an incompatible result type '"
+                  + type_identity(method.return_type)
+                  + "' for inherited result type '"
+                  + type_identity(base_method->return_type) + "'",
               method.span);
           continue;
         }
@@ -250,21 +412,16 @@ bool validate_systemverilog_class_inheritance(
                   + base_method->canonical_identity + "'",
               method.span);
         }
-        if (base_method->is_static != method.is_static) {
-          diagnose(
-              diagnostics,
-              "FSIM-SV-CLASS-INHERIT-008",
-              "override '" + method.canonical_identity
-                  + "' changes static membership",
-              method.span);
+        if (!method.is_pure) {
+          fulfilled_pure.insert(
+              inheritance_profile(*base_method, classes));
         }
-        if (!method.is_pure) fulfilled_pure.insert(profile);
       }
     }
     if (!declaration->is_virtual) {
       std::set<std::string> effective_profiles;
       for (const auto* method : inherited) {
-        const auto profile = argument_profile(*method);
+        const auto profile = inheritance_profile(*method, classes);
         if (!effective_profiles.insert(profile).second) continue;
         if (method->is_pure && !fulfilled_pure.contains(profile)) {
           diagnose(

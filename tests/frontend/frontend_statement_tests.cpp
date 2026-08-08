@@ -566,13 +566,161 @@ endmodule
 }
 
 void test_systemverilog_procedural_for_loops() {
+  const auto foreach_result = parse_text(
+      "procedural_foreach.sv",
+      R"(
+module procedural_foreach;
+  string text;
+  int values[$];
+  int matrix[1:0][1:0];
+  initial begin
+    foreach (text[index])
+      if (text[index] == "*")
+        text[index] = "+";
+    foreach (matrix[row, column]) begin
+      matrix[row][column] = row + column;
+      if (row == 1)
+        break;
+    end
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      foreach_result.ok(),
+      "SystemVerilog procedural foreach loops parse with single and block bodies");
+  const auto& foreach_statements =
+      foreach_result.design.units.front().processes.front().statements;
+  require(
+      foreach_statements.size() == 2
+          && foreach_statements.front().kind == StatementKind::Loop
+          && foreach_statements.front().loop_runtime
+          && foreach_statements.front().loop_variable_declared
+          && foreach_statements.front().loop_variable == "index"
+          && foreach_statements.front().condition.kind
+              == ExpressionKind::Call
+          && foreach_statements.front().condition.text == "@sv-foreach"
+          && foreach_statements.front().condition.operands.size() == 2
+          && foreach_statements.back().loop_variable == "row"
+          && foreach_statements.back().condition.operands.size() == 3
+          && foreach_statements.back().condition.operands[1].text == "row"
+          && foreach_statements.back().condition.operands[2].text == "column"
+          && foreach_statements.front().statements.size() == 1
+          && foreach_statements.back().statements.size() == 2,
+      "foreach collection, index, and bodies remain explicit runtime-loop HIR");
+
+  const auto selected_foreach = parse_text(
+      "selected_foreach.sv",
+      R"(
+class selected_foreach;
+  enum {STANDARD, NON_STANDARD, ILLEGAL} source;
+  constraint source_limit {
+    source < (64 'h1 << 2);
+  }
+  int values[$];
+  int matrix[1:0][1:0];
+  function void scrub();
+    foreach (this.values[index])
+      values[index] = index;
+    foreach (this.matrix[row].entries[column])
+      values[column] = column;
+    this.values[index].print();
+    uvm_config_db#(int)::set(this, "scope", "field", index);
+    this.state.scope.configure(index, , "value");
+    this.values.sort with (item);
+    this.state.scope.down("selected");
+    this.state.scope.up();
+    selected_foreach::default_value = index;
+  endfunction
+  function void stream_assign();
+    int unpacked[];
+    bit [31:0] packed_value;
+    { << int { unpacked }} = packed_value;
+  endfunction
+  function selected_foreach cast_create(selected_foreach rhs);
+    selected_foreach found;
+    found = rhs.find(rhs);
+    found = rhs.configure("name", , rhs);
+    if (!randomize(found) with { found != null; })
+      return;
+    if (!rhs.randomize() with {})
+      return;
+    if (!$cast(cast_create, found))
+      return;
+  endfunction
+endclass
+)",
+      Language::SystemVerilog2017);
+  require(
+      selected_foreach.ok()
+          && selected_foreach.design.systemverilog_classes.size() == 1
+          && selected_foreach.design.systemverilog_classes.front()
+                 .methods.front().statements.front().target.text
+              == "this.values"
+          && selected_foreach.design.systemverilog_classes.front()
+                 .methods.front().statements[1].target.kind
+              == ExpressionKind::Index
+          && selected_foreach.design.systemverilog_classes.front()
+                 .methods.front().statements[1].target.text.ends_with(
+                     ".entries")
+          && selected_foreach.design.systemverilog_classes.front()
+                 .methods.front().statements[2].kind
+              == StatementKind::ContainerMethod
+          && selected_foreach.design.systemverilog_classes.front()
+                 .methods.front().statements[3].kind
+              == StatementKind::TaskCall
+          && selected_foreach.design.systemverilog_classes.front()
+                 .methods.front().statements[3].task_name
+              == "uvm_config_db#(int)::set"
+          && selected_foreach.design.systemverilog_classes.front()
+                 .methods.front().statements[4].task_arguments.size()
+              == 3
+          && !selected_foreach.design.systemverilog_classes.front()
+                  .methods.front().statements[4].task_arguments[1].valid()
+          && selected_foreach.design.systemverilog_classes.front()
+                 .methods.front().statements[5].kind
+              == StatementKind::ContainerMethod
+          && selected_foreach.design.systemverilog_classes.front()
+                 .methods.front().statements[5].value.text
+              == ".sort"
+          && selected_foreach.design.systemverilog_classes.front()
+                 .methods.front().statements[6].task_name
+              == "this.state.scope.down"
+          && selected_foreach.design.systemverilog_classes.front()
+                 .methods.front().statements[7].task_name
+              == "this.state.scope.up"
+          && selected_foreach.design.systemverilog_classes.front()
+                 .methods.front().statements[8].target.text
+              == "selected_foreach::default_value"
+          && selected_foreach.design.systemverilog_classes.front()
+                 .methods.size() == 3
+          && selected_foreach.design.systemverilog_classes.front()
+                 .methods[1].statements.front().target.text
+              == "@stream-left"
+          && selected_foreach.design.systemverilog_classes.front()
+                 .methods.back().name == "cast_create"
+          && selected_foreach.design.systemverilog_classes.front()
+                 .methods.back().statements[2].condition.operands.front()
+                 .aggregate_choices
+              == std::vector<std::string>{"@sv-inline-constraint"}
+          && selected_foreach.design.systemverilog_classes.front()
+                 .methods.back().statements[3].condition.operands.front()
+                 .aggregate_choices
+              == std::vector<std::string>{"@sv-inline-constraint"},
+      "foreach, indexed calls, parameterized statics, class find, and "
+      "inline constraints parse without source rewriting");
+
   const auto result = parse_text(
       "procedural_for.sv",
       R"(
 module procedural_for;
   logic [3:0] result;
   initial begin
+    typedef int loop_item;
     integer runtime_lane;
+    integer start_lane;
+    integer active_lane;
+    loop_item first_item;
     result = 4'b0000;
     for (int lane = 0; lane < 4; lane++)
       result[lane] = 1'b1;
@@ -589,6 +737,20 @@ module procedural_for;
       result[runtime_lane] = 1'b1;
     for (int lane = 0; lane < 4; lane = lane + 2)
       result[lane] = result[lane];
+    for (start_lane = active_lane;
+         active_lane < 4;
+         ++active_lane)
+      result[active_lane] = result[active_lane];
+    for (int unsigned lane = 0; lane < 1; lane++)
+      result[lane] = result[lane];
+    for (loop_item item = first_item;
+         item != null;
+         item = first_item)
+      result[0] = result[0];
+    for (int update_lane = 0;
+         update_lane < 1;
+         update_lane++, active_lane--)
+      result[update_lane] = result[update_lane];
   end
 endmodule
 )",
@@ -604,7 +766,7 @@ endmodule
   const auto& statements =
       result.design.units.front().processes.front().statements;
   require(
-      statements.size() == 8
+      statements.size() == 12
           && statements[1].kind == StatementKind::Loop
           && statements[1].loop_variable == "lane"
           && statements[1].loop_initial.text == "0"
@@ -626,7 +788,23 @@ endmodule
           && statements[6].value.text == "+"
           && statements[7].loop_runtime
           && statements[7].loop_variable_declared
-          && statements[7].value.text == "+",
+          && statements[7].value.text == "+"
+          && statements[8].loop_runtime
+          && statements[8].target.text == "start_lane"
+          && statements[8].condition.operands.front().text
+              == "active_lane"
+          && statements[8].loop_update_target.text == "active_lane"
+          && statements[8].value.operands.front().text == "active_lane"
+          && statements[9].loop_variable_declared
+          && statements[9].loop_variable == "lane"
+          && statements[10].loop_variable_declared
+          && statements[10].loop_variable == "item"
+          && statements[10].loop_runtime
+          && statements[10].loop_update_target.text == "item"
+          && statements[11].loop_updates.size() == 1
+          && statements[11].loop_updates.front().target.text
+              == "active_lane"
+          && statements[11].loop_updates.front().value.text == "-",
       "SystemVerilog loop range normalization and bodies");
 
   const auto invalid = parse_text(
@@ -634,28 +812,20 @@ endmodule
       R"(
 module bad_procedural_for;
   initial begin
-    for (int lane = 0; other < 4; lane++);
-    for (int lane = 0; lane < 4; other++);
-    for (int lane = 0; lane < 4; lane--);
     for (int lane = 0; lane < 4; lane);
   end
 endmodule
 )",
       Language::SystemVerilog2017);
-  require(!invalid.ok(), "noncanonical procedural loops must fail");
-  for (const auto code : {
-           std::string_view{"FSIM-SV-SEM-027"},
-           std::string_view{"FSIM-SV-SEM-028"},
-           std::string_view{"FSIM-SV-SEM-029"},
-           std::string_view{"FSIM-SV-SEM-103"}}) {
-    require(
-        std::ranges::any_of(
-            invalid.diagnostics,
-            [&](const Diagnostic& diagnostic) {
-              return diagnostic.code == code;
-            }),
-        "targeted bounded procedural loop diagnostic");
-  }
+  require(
+      !invalid.ok()
+          && std::ranges::any_of(
+              invalid.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-SV-SEM-103";
+              }),
+      "a procedural loop update still requires assignment or increment "
+      "syntax");
 }
 
 void test_verilog_repeat_statements() {
@@ -818,11 +988,10 @@ module bad_runtime_loops;
 endmodule
 )",
       Language::SystemVerilog2017);
-  require(!invalid.ok(), "malformed or nonsuspending loops must fail");
+  require(!invalid.ok(), "malformed runtime loops must fail");
   for (const auto code : {
            std::string_view{"FSIM-SV-PARSE-102"},
-           std::string_view{"FSIM-SV-PARSE-103"},
-           std::string_view{"FSIM-SV-SEM-030"}}) {
+           std::string_view{"FSIM-SV-PARSE-103"}}) {
     require(
         std::ranges::any_of(
             invalid.diagnostics,

@@ -6,6 +6,7 @@ struct ClassAllocate {
   std::string specialization_identity;
   std::string declared_type;
   std::vector<RegisterId> constructor_actuals;
+  std::vector<std::uint8_t> constructor_actual_kinds;
   std::vector<std::string> constructor_actual_names;
 };
 
@@ -31,6 +32,7 @@ struct ClassMethodCall {
   std::vector<std::uint8_t> actual_directions;
   std::uint32_t result_width{};
   bool virtual_dispatch{true};
+  std::vector<std::uint8_t> actual_kinds{};
 };
 
 struct ClassStaticPropertyRead {
@@ -51,4 +53,5 @@ struct ClassStaticMethodCall {
   std::vector<std::string> actual_names;
   std::vector<std::uint8_t> actual_directions;
   std::uint32_t result_width{};
+  std::vector<std::uint8_t> actual_kinds{};
 };

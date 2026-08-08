@@ -229,6 +229,90 @@ class BrokenPostDerived extends AppDerived;
   endfunction
 endclass
 
+class uvm_object_wrapper;
+endclass
+
+`define uvm_object_utils(TYPE) \
+  static function uvm_object_wrapper get_type(); \
+    return null; \
+  endfunction \
+  virtual function uvm_object_wrapper get_object_type(); \
+    return null; \
+  endfunction
+`define uvm_object_param_utils(TYPE) `uvm_object_utils(TYPE)
+`define uvm_component_utils(TYPE) `uvm_object_utils(TYPE)
+
+class uvm_object;
+  virtual function uvm_object_wrapper get_object_type();
+    return null;
+  endfunction
+  virtual function uvm_object clone();
+    return null;
+  endfunction
+  virtual function bit compare(
+      input uvm_object rhs,
+      input uvm_object comparer = null);
+    return 1'b0;
+  endfunction
+  function void copy(input uvm_object rhs);
+  endfunction
+  function void print(input uvm_object printer = null);
+  endfunction
+  function void record(input uvm_object recorder = null);
+  endfunction
+endclass
+
+class UvmItem extends uvm_object;
+  logic [15:0] value;
+  UvmItem child;
+  `uvm_object_utils(UvmItem)
+endclass
+
+class UvmParamItem #(int WIDTH = 8) extends uvm_object;
+  logic [WIDTH-1:0] value;
+  `uvm_object_param_utils(UvmParamItem)
+endclass
+
+class UvmFactoryItem extends uvm_object;
+  `uvm_object_utils(UvmFactoryItem)
+endclass
+
+class uvm_factory extends uvm_object;
+  virtual function void set_type_override_by_type(
+      uvm_object_wrapper original_type,
+      uvm_object_wrapper override_type,
+      bit replace = 1);
+  endfunction
+  virtual function uvm_object_wrapper find_override_by_type(
+      uvm_object_wrapper requested_type);
+    return null;
+  endfunction
+  virtual function uvm_object create_object_by_type(
+      uvm_object_wrapper requested_type);
+    return null;
+  endfunction
+  virtual function void print(int all_types = 1);
+  endfunction
+endclass
+
+class uvm_default_factory extends uvm_factory;
+endclass
+
+class uvm_component extends uvm_object;
+  virtual function uvm_component get_parent();
+    return null;
+  endfunction
+  virtual function int get_num_children();
+    return 0;
+  endfunction
+endclass
+
+class UvmComponent extends uvm_component;
+  function new(string name, uvm_component parent);
+  endfunction
+  `uvm_component_utils(UvmComponent)
+endclass
+
 module class_top;
   localparam logic [136:0] WIDE_SEED =
       {1'b1, 62'b0, 1'b1, 69'b0, 4'b1000};
@@ -252,6 +336,34 @@ module class_top;
   ImpossibleDerived impossible_object;
   BrokenPreDerived broken_pre_object;
   BrokenPostDerived broken_post_object;
+  UvmItem source_uvm_object;
+  uvm_object source_uvm_clone;
+  UvmItem source_uvm_copy;
+  logic source_uvm_constructed;
+  logic source_uvm_clone_compared;
+  logic source_uvm_copy_compared;
+  UvmComponent source_uvm_top;
+  UvmComponent source_uvm_child;
+  UvmParamItem source_uvm_param;
+  uvm_default_factory source_uvm_factory;
+  uvm_object_wrapper source_uvm_factory_selected;
+  uvm_object source_uvm_factory_created;
+  logic source_uvm_factory_selected_override;
+  logic source_uvm_factory_created_override;
+  uvm_object source_uvm_component_clone;
+  logic source_uvm_parent_ok;
+  int source_uvm_child_count;
+  logic source_uvm_component_clone_null;
+  uvm_object_wrapper source_uvm_item_type;
+  uvm_object_wrapper source_uvm_item_object_type;
+  uvm_object_wrapper source_uvm_component_type;
+  uvm_object_wrapper source_uvm_component_object_type;
+  logic source_uvm_item_wrapper_equal;
+  logic source_uvm_component_wrapper_equal;
+  logic source_uvm_wrapper_kinds_distinct;
+  uvm_object_wrapper source_uvm_param_type;
+  uvm_object_wrapper source_uvm_param_object_type;
+  logic source_uvm_param_wrapper_equal;
   AppBase source_function_returned;
   AppBase source_task_returned;
   LocalWaiter source_waiter;
@@ -481,6 +593,52 @@ module class_top;
     source_broken_post_result = broken_post_object.randomize();
     source_broken_post_pre = broken_post_object.hook_pre;
     source_broken_post_count = broken_post_object.hook_post;
+    source_uvm_object = new;
+    source_uvm_object.value = 16'h1595;
+    source_uvm_constructed = source_uvm_object.value == 16'h1595;
+    source_uvm_clone = source_uvm_object.clone();
+    source_uvm_clone_compared =
+        source_uvm_object.compare(source_uvm_clone);
+    source_uvm_copy = new;
+    source_uvm_copy.copy(source_uvm_object);
+    source_uvm_copy_compared =
+        source_uvm_object.compare(source_uvm_copy);
+    source_uvm_object.print();
+    source_uvm_object.record();
+    source_uvm_top = new("source_top", null);
+    source_uvm_child = new("source_child", source_uvm_top);
+    source_uvm_param = new;
+    source_uvm_parent_ok =
+        source_uvm_child.get_parent() == source_uvm_top;
+    source_uvm_child_count = source_uvm_top.get_num_children();
+    source_uvm_component_clone = source_uvm_top.clone();
+    source_uvm_component_clone_null = source_uvm_component_clone == null;
+    source_uvm_item_type = UvmItem::get_type();
+    source_uvm_item_object_type = source_uvm_object.get_object_type();
+    source_uvm_component_type = UvmComponent::get_type();
+    source_uvm_component_object_type = source_uvm_top.get_object_type();
+    source_uvm_item_wrapper_equal =
+        source_uvm_item_type == source_uvm_item_object_type;
+    source_uvm_component_wrapper_equal =
+        source_uvm_component_type == source_uvm_component_object_type;
+    source_uvm_wrapper_kinds_distinct =
+        source_uvm_item_type != source_uvm_component_type;
+    source_uvm_param_type = source_uvm_param.get_object_type();
+    source_uvm_param_object_type = source_uvm_param.get_object_type();
+    source_uvm_param_wrapper_equal =
+        source_uvm_param_type == source_uvm_param_object_type;
+    source_uvm_factory = new;
+    source_uvm_factory.set_type_override_by_type(
+        source_uvm_item_type, source_uvm_param_type);
+    source_uvm_factory_selected =
+        source_uvm_factory.find_override_by_type(source_uvm_item_type);
+    source_uvm_factory_created =
+        source_uvm_factory.create_object_by_type(source_uvm_item_type);
+    source_uvm_factory_selected_override =
+        source_uvm_factory_selected == source_uvm_param_type;
+    source_uvm_factory_created_override =
+        source_uvm_factory_created.get_object_type() == source_uvm_param_type;
+    source_uvm_factory.print();
     #3 $finish;
   end
   initial begin

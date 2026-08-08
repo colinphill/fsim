@@ -204,6 +204,10 @@ bool compile_object(
       continue;
     }
     auto unit = original;
+    // Class resolution has copied every valid out-of-block method body into
+    // its package-owned class declaration.  Do not archive the raw definition
+    // list too, because object loading performs semantic resolution again.
+    unit.systemverilog_class_method_definitions.clear();
     for (auto& dependency : unit.source_dependencies) {
       const auto found = std::ranges::find_if(
           source_mappings, [&](const auto& mapping) {
@@ -268,16 +272,9 @@ bool compile_object(
     unit.compilation_unit_identity = declaration.compilation_unit_identity;
     unit.declarations.push_back(declaration);
   }
-  for (const auto& method :
-       checked->parsed.systemverilog_class_method_definitions) {
-    const auto method_library = method.library.empty()
-        ? std::string_view{"work"} : std::string_view{method.library};
-    if (method_library != source_set.library) continue;
-    auto& unit = class_units[method.compilation_unit_identity];
-    unit.library = std::string{method_library};
-    unit.compilation_unit_identity = method.compilation_unit_identity;
-    unit.method_definitions.push_back(method);
-  }
+  // Class resolution has already transactionally linked every valid
+  // out-of-block definition into its owning declaration.  Persisting the raw
+  // definitions as well would ask object loading to link them a second time.
   for (auto& [identity, class_unit] : class_units) {
     if (identity.empty()
         || !library::relocate_class_unit_sources(
