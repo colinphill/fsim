@@ -356,10 +356,9 @@ void test_systemverilog_uvm_report() {
           && reports.routed_count() == routed_before_hooks,
       "generic and severity hooks must run in order even when one rejects");
   hook_order.clear();
-  reports.set_report_hook(reporter, [&](const auto&) {
+  reports.set_report_hook(reporter, [&](const auto&) -> bool {
     hook_order.push_back("generic-throws");
     throw std::runtime_error{"hook failed"};
-    return true;
   });
   reports.set_severity_hook(
       reporter, SystemVerilogUvmReportSeverity::Info,
@@ -735,11 +734,11 @@ void test_systemverilog_uvm_report() {
         return SystemVerilogUvmReportCatcherResult::Throw;
       });
   const auto failing = catcher_reports.add_catcher(
-      reporter, "failing", [&](auto& context) {
+      reporter, "failing",
+      [&](auto& context) -> SystemVerilogUvmReportCatcherResult {
         catcher_order.push_back("failing");
         context.set_message("must-roll-back");
         throw std::runtime_error{"catcher failed"};
-        return SystemVerilogUvmReportCatcherResult::Throw;
       });
   SystemVerilogUvmReportCatcherHandle removed_during_dispatch{};
   const auto remover = catcher_reports.add_catcher(
