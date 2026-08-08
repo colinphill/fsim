@@ -143,7 +143,7 @@ class VhdlVhpiValueSystem final {
   [[nodiscard]] VhdlVhpiValueError validate_live(
       fsim_vhpi_handle_v1 declaration) const;
 
-  VhdlVhpiObjectRegistry* objects_{};
+  [[maybe_unused]] VhdlVhpiObjectRegistry* objects_{};
   VhdlVhpiTypeSystem* types_{};
   mutable std::mutex mutex_;
   std::unordered_map<fsim_vhpi_handle_v1, Entry> entries_;
