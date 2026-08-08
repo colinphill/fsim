@@ -71,6 +71,7 @@ add_executable(
   runtime_timing_tests.cpp
   runtime_vital_memory_path_tests.cpp
 )
+target_compile_features(fsim_runtime_tests PRIVATE c_std_11)
 target_link_libraries(fsim_runtime_tests PRIVATE fsim_runtime)
 add_library(
   fsim_dpi_test_plugin SHARED dpi_test_plugin.cpp dpi_test_plugin_c.c)
