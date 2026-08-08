@@ -117,7 +117,8 @@ void test_vhdl_vhpi_scalar_values() {
   require_vhpi_value(
       values.bind(boolean_value, {boolean_type, {}, {}, 0}, true)
               == VhdlVhpiValueError::None
-          && values.bind(character_value, {character_type, {}, {}, 0}, U'λ')
+          && values.bind(
+                 character_value, {character_type, {}, {}, 0}, U'\u03bb')
               == VhdlVhpiValueError::None
           && values.bind(integer_value, {integer_type, {}, {}, 0},
                  std::int64_t{-7})
@@ -198,7 +199,8 @@ void test_vhdl_vhpi_scalar_values() {
 
   require_vhpi_value(
       std::get<bool>(values.read(boolean_value).value)
-          && std::get<char32_t>(values.read(character_value).value) == U'λ'
+          && std::get<char32_t>(values.read(character_value).value)
+                 == U'\u03bb'
           && std::get<std::int64_t>(values.read(integer_value).value) == -7
           && std::get<double>(values.read(real_value).value) == 3.25
           && std::get<std::uint64_t>(values.read(time_value).value)
