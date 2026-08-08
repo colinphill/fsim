@@ -8,12 +8,15 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 namespace fsim::runtime {
+
+class SystemVerilogUvmPhaseService;
 
 using SystemVerilogUvmRootHandle = std::uint64_t;
 
@@ -111,6 +114,8 @@ class SystemVerilogUvmComponentService final {
   }
 
  private:
+  friend class SystemVerilogUvmPhaseService;
+
   struct Component {
     SystemVerilogUvmComponentSnapshot value;
     std::vector<SystemVerilogClassHandle> children;
@@ -131,6 +136,10 @@ class SystemVerilogUvmComponentService final {
   [[nodiscard]] const Root& root(SystemVerilogUvmRootHandle handle) const;
   [[nodiscard]] std::vector<SystemVerilogClassHandle> postorder(
       SystemVerilogClassHandle object) const;
+  void begin_phase_callback(
+      std::optional<SystemVerilogClassHandle> allowed_child_parent);
+  void end_phase_callback() noexcept;
+  void require_phase_hierarchy_idle(std::string_view operation) const;
   void validate_name(std::string_view name) const;
 
   SystemVerilogClassHeap* heap_{};
@@ -144,6 +153,8 @@ class SystemVerilogUvmComponentService final {
   std::uint64_t next_creation_order_{};
   LifecycleHook pre_destroy_hook_;
   LifecycleHook post_destroy_hook_;
+  bool phase_callback_active_{};
+  std::optional<SystemVerilogClassHandle> phase_child_parent_;
 };
 
 }  // namespace fsim::runtime

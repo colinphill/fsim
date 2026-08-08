@@ -31,20 +31,26 @@ when that update explicitly retains it for a particular operation.
 | Preprocessing/directives | Quoted and angle includes, manifest/CLI definitions, object/function macros with default arguments, multiline replacement, argument substitution, token concatenation/stringification, `__FILE__`/`__LINE__`, `undef`, nested conditional compilation, logical `` `line`` source remapping, legal `` `timescale``, `` `default_nettype``, reset/cell/keyword-version/unconnected-drive state, and ordered `file`/`source-set`/`combined` policies | Included units and macro-selected executable source enter the normal frontend; active `` `line`` mappings reach parser diagnostics, macro ancestry, DesignIR/SimIR debug points, report callbacks, and LLVM objects while physical ownership remains in analysis/native cache provenance; mappings reset for includes and compilation-unit roots; source-set/combined roots otherwise share macro, conditional, and parser directive state while retaining library ownership; scalar implicit nets and default port net types honor `` `default_nettype``; cell metadata and omitted-input pulls reach DesignIR/runtime; time directives and declarations scale exact delays and contribute to `auto` resolution; ordered snapshots participate in cache identity; `wand`/`triand` and `wor`/`trior` use native per-driver four-state resolution | Standardized pragma payload behavior remains incomplete; unsupported directives receive targeted errors |
 | SystemC | C++ compatibility header, macro-exported typed factories, HDL-backed module proxies, append-only versioned plug-in ABI, and peer mixed-language hierarchy | Common signals/ports/exports/events/channels, native children, same-path HDL proxy modules with ordinary port binding, ordered lifecycle callbacks, statically and dynamically sensitive `SC_METHOD`, and Boost.Context-backed `SC_THREAD`/`SC_CTHREAD` time/event/list/timeout/static waits execute on the deterministic common kernel | Executable behavior or nested objects inside HDL proxies, arbitrary custom-interface values/binding/updates, dynamic processes, thread reset/kill, TLM/AMS/CCI, and Accellera ABI compatibility remain unsupported |
 
-Batch 159 UVM status update: the exact unmodified UVM 1.2 and UVM 2020-3.1
+Batch 160 UVM status update: the exact unmodified UVM 1.2 and UVM 2020-3.1
 package/macro entry points preprocess and analyze through the ordinary
 SystemVerilog-2017 frontend under a governed external-source contract. The
 executable foundation covers `uvm_object` and `uvm_component` construction,
 identity/hierarchy, object utility registries, factory type/instance overrides,
 typed resources and `uvm_config_db`, recognized command-line settings,
 multiple simulation roots/contexts, and report objects, handler/server routing,
-catchers, accounting, MCD/file sinks, and bounded formatting. Object/factory/
-config/report examples execute through interpreter, LLVM O0/O2, and debug
-engines with callbacks, VCD/FST, cold/warm caches, portable object/design
-artifacts, relocation, and deterministic transcripts. All services are
-simulation-owned and resource-bounded. UVM phases, objections, TLM, sequences,
-drivers/monitors, the register model, remaining policy classes, and complete
-UVM 1.2/2020 closure remain explicitly deferred to Batches 160-162. See
+catchers, accounting, MCD/file sinks, and bounded formatting. Exact common,
+runtime, and custom phase/domain graphs now execute function/task callbacks,
+jumps, synchronization, process cancellation, objections, drains, ready-to-end
+quiescence, and deterministic race/deadlock handling. Typed TLM1 ports/exports/
+implementations, FIFOs, transport and analysis plus TLM2 sockets, generic
+payloads, DMI, blocking/debug/nonblocking transport, activity/debug observers,
+DPI/VPI snapshots, and portable UVM checkpoints are executable. The exact
+phase/TLM example agrees through interpreter, LLVM O0/O2, and debug engines
+with callbacks, VCD/FST, cold/warm caches, portable object/design artifacts,
+relocation, and deterministic transcripts. All services are simulation-owned
+and resource-bounded. Sequences, drivers/monitors, the register model,
+remaining policy classes, and complete UVM 1.2/2020 closure remain explicitly
+deferred to Batches 161-162. See
 [`systemverilog-uvm.md`](systemverilog-uvm.md) for exact usage and evidence.
 
 UDP status update: Verilog-2005/SystemVerilog combinational and sequential

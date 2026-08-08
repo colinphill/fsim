@@ -67,6 +67,7 @@ SystemVerilogUvmComponentService::~SystemVerilogUvmComponentService()
 
 SystemVerilogUvmRootHandle
 SystemVerilogUvmComponentService::create_root(std::string identity) {
+  require_phase_hierarchy_idle("create a root");
   if (identity.empty()) {
     throw std::invalid_argument{"UVM root identity must not be empty"};
   }
@@ -132,6 +133,13 @@ void SystemVerilogUvmComponentService::initialize(
     std::string name,
     const SystemVerilogClassHandle parent_handle,
     SystemVerilogUvmRootHandle root_handle) {
+  if (phase_callback_active_
+      && (!phase_child_parent_
+          || parent_handle != *phase_child_parent_)) {
+    throw std::logic_error{
+        "UVM phase callback may only create a child of the active build "
+        "component"};
+  }
   validate_name(name);
   if (object == 0 || !heap_->contains(object)
       || !objects_->contains(object)) {
@@ -337,6 +345,7 @@ SystemVerilogUvmComponentService::postorder(
 
 void SystemVerilogUvmComponentService::release(
     const SystemVerilogClassHandle object) {
+  require_phase_hierarchy_idle("release a component");
   const auto order = postorder(object);
   std::exception_ptr first_error;
   for (const auto current : order) {
@@ -378,6 +387,7 @@ void SystemVerilogUvmComponentService::release(
 
 void SystemVerilogUvmComponentService::destroy_root(
     const SystemVerilogUvmRootHandle handle) {
+  require_phase_hierarchy_idle("destroy a root");
   auto tops = root(handle).tops;
   std::exception_ptr first_error;
   for (const auto top : tops) {
@@ -393,6 +403,29 @@ void SystemVerilogUvmComponentService::destroy_root(
     roots_.erase(found);
   }
   if (first_error) std::rethrow_exception(first_error);
+}
+
+void SystemVerilogUvmComponentService::begin_phase_callback(
+    const std::optional<SystemVerilogClassHandle> allowed_child_parent) {
+  if (phase_callback_active_) {
+    throw std::logic_error{"nested UVM phase hierarchy guard"};
+  }
+  if (allowed_child_parent) (void)component(*allowed_child_parent);
+  phase_callback_active_ = true;
+  phase_child_parent_ = allowed_child_parent;
+}
+
+void SystemVerilogUvmComponentService::end_phase_callback() noexcept {
+  phase_child_parent_.reset();
+  phase_callback_active_ = false;
+}
+
+void SystemVerilogUvmComponentService::require_phase_hierarchy_idle(
+    const std::string_view operation) const {
+  if (phase_callback_active_) {
+    throw std::logic_error{
+        "UVM phase callback may not " + std::string{operation}};
+  }
 }
 
 SystemVerilogUvmComponentService::Component&

@@ -261,7 +261,8 @@ bool validate(
     const DesignMetadata& metadata,
     diagnostic::Engine& diagnostics,
     const std::string& source) {
-  if ((metadata.format != 1 && metadata.format != kDesignFormatVersion)
+  if ((metadata.format != 1 && metadata.format != 2
+       && metadata.format != kDesignFormatVersion)
       || metadata.runtime_abi != runtime_abi_version) {
     report(
         diagnostics, kSchemaCode,
@@ -627,7 +628,8 @@ std::optional<DesignMetadata> deserialize_design_metadata(
   }
   metadata.format = *format;
   metadata.runtime_abi = *runtime_abi;
-  if (metadata.format != 1 && metadata.format != kDesignFormatVersion) {
+  if (metadata.format != 1 && metadata.format != 2
+      && metadata.format != kDesignFormatVersion) {
     report(
         diagnostics, kSchemaCode,
         "unsupported .fsimdesign format or runtime ABI", source_name);

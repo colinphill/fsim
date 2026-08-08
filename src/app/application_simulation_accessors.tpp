@@ -127,6 +127,76 @@ Simulation::uvm_components() const noexcept {
   return impl_->uvm_components;
 }
 
+runtime::SystemVerilogUvmActivityService&
+Simulation::uvm_activity() noexcept {
+  return impl_->uvm_activity;
+}
+
+const runtime::SystemVerilogUvmActivityService&
+Simulation::uvm_activity() const noexcept {
+  return impl_->uvm_activity;
+}
+
+runtime::SystemVerilogUvmForeignService&
+Simulation::uvm_foreign() noexcept {
+  return impl_->uvm_foreign;
+}
+
+const runtime::SystemVerilogUvmForeignService&
+Simulation::uvm_foreign() const noexcept {
+  return impl_->uvm_foreign;
+}
+
+runtime::SystemVerilogUvmCheckpointCaptureResult
+Simulation::capture_uvm_checkpoint(
+    const runtime::SystemVerilogUvmCheckpointLimits limits) {
+  runtime::SystemVerilogUvmCheckpointProvenance provenance;
+  provenance.content_identity = impl_->built.cache_key;
+  provenance.cache_identity = impl_->built.cache_key + ":"
+      + std::string{project::to_string(impl_->built.optimization)};
+  provenance.artifact_identity = impl_->built.artifact_identity;
+  provenance.roots = impl_->built.design_ir.roots();
+  return runtime::capture_systemverilog_uvm_checkpoint(
+      impl_->uvm_foreign, std::move(provenance), limits);
+}
+
+runtime::SystemVerilogUvmPhaseService& Simulation::uvm_phases() noexcept {
+  return impl_->uvm_phases;
+}
+
+const runtime::SystemVerilogUvmPhaseService&
+Simulation::uvm_phases() const noexcept {
+  return impl_->uvm_phases;
+}
+
+runtime::SystemVerilogUvmObjectionService&
+Simulation::uvm_objections() noexcept {
+  return impl_->uvm_objections;
+}
+
+const runtime::SystemVerilogUvmObjectionService&
+Simulation::uvm_objections() const noexcept {
+  return impl_->uvm_objections;
+}
+
+runtime::SystemVerilogUvmTlm1Service& Simulation::uvm_tlm1() noexcept {
+  return impl_->uvm_tlm1;
+}
+
+const runtime::SystemVerilogUvmTlm1Service&
+Simulation::uvm_tlm1() const noexcept {
+  return impl_->uvm_tlm1;
+}
+
+runtime::SystemVerilogUvmTlm2Service& Simulation::uvm_tlm2() noexcept {
+  return impl_->uvm_tlm2;
+}
+
+const runtime::SystemVerilogUvmTlm2Service&
+Simulation::uvm_tlm2() const noexcept {
+  return impl_->uvm_tlm2;
+}
+
 runtime::SystemVerilogUvmRegistryService& Simulation::uvm_registry() noexcept {
   return impl_->uvm_registry;
 }
@@ -218,7 +288,14 @@ runtime::SystemVerilogUvmRootHandle Simulation::create_uvm_root(
       || impl_->lifecycle == Impl::Lifecycle::poisoned) {
     throw std::logic_error{"simulation class heap is no longer mutable"};
   }
-  return impl_->uvm_components.create_root(std::move(identity));
+  const auto root = impl_->uvm_components.create_root(std::move(identity));
+  try {
+    impl_->uvm_phases.participate_standard_root(root);
+  } catch (...) {
+    impl_->uvm_components.destroy_root(root);
+    throw;
+  }
+  return root;
 }
 
 runtime::SystemVerilogClassHandle Simulation::allocate_uvm_component(

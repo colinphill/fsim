@@ -25,6 +25,7 @@ void ApplicationTestFixture::test_artifact_phase_semantics() {
   static_assert(app::kClassStateSchema == 9);
   static_assert(app::kSystemVerilogConstraintHirStateSchema == 3);
   static_assert(app::kSystemVerilogCoverageStateSchema == 1);
+  static_assert(app::kSystemVerilogUvmStateSchema == 1);
   const auto sv_source = directory / "artifact_phase.sv";
   const auto vhdl_source = directory / "artifact_phase.vhd";
   const auto sv_object = directory / "artifact-sv.fsimobj";
@@ -321,6 +322,75 @@ end architecture;
   auto coverage_checkpoint = app::load_design_artifact(
       active_design, coverage_load_diagnostics);
   assert(coverage_checkpoint && !coverage_load_diagnostics.has_error());
+  assert(coverage_checkpoint->systemverilog_uvm_checkpoint);
+  const auto& uvm_checkpoint =
+      *coverage_checkpoint->systemverilog_uvm_checkpoint;
+  assert(
+      uvm_checkpoint.schema
+          == runtime::systemverilog_uvm_checkpoint_schema
+      && uvm_checkpoint.foreign_abi == FSIM_UVM_FOREIGN_ABI_VERSION
+      && uvm_checkpoint.provenance.roots
+          == std::vector<std::string>(
+              {"main", "observer", "scalar", "virtual"})
+      && uvm_checkpoint.records.size()
+          == runtime::kSystemVerilogUvmStandardPhaseCount
+      && uvm_checkpoint.external_state.phase_processes == 0
+      && uvm_checkpoint.external_state.callbacks == 0);
+  diagnostic::Engine uvm_codec_diagnostics;
+  const auto uvm_bytes = app::serialize_systemverilog_uvm_state(
+      uvm_checkpoint, uvm_codec_diagnostics);
+  assert(uvm_bytes && !uvm_codec_diagnostics.has_error());
+  const auto restored_uvm = app::deserialize_systemverilog_uvm_state(
+      *uvm_bytes, "sv-uvm.bin", uvm_codec_diagnostics);
+  assert(restored_uvm == uvm_checkpoint);
+  const auto repeated_uvm_bytes = app::serialize_systemverilog_uvm_state(
+      *restored_uvm, uvm_codec_diagnostics);
+  assert(repeated_uvm_bytes == uvm_bytes);
+  auto future_uvm = *uvm_bytes;
+  future_uvm[8] = static_cast<char>(app::kSystemVerilogUvmStateSchema + 1U);
+  diagnostic::Engine future_uvm_diagnostics;
+  assert(!app::deserialize_systemverilog_uvm_state(
+      future_uvm, "future-sv-uvm.bin", future_uvm_diagnostics));
+  const auto truncated_uvm = uvm_bytes->substr(0, uvm_bytes->size() - 1U);
+  diagnostic::Engine truncated_uvm_diagnostics;
+  assert(!app::deserialize_systemverilog_uvm_state(
+      truncated_uvm, "truncated-sv-uvm.bin", truncated_uvm_diagnostics));
+  auto nonportable_uvm = uvm_checkpoint;
+  nonportable_uvm.records.front().kind = FSIM_UVM_FOREIGN_PHASE_PROCESS;
+  diagnostic::Engine nonportable_uvm_diagnostics;
+  assert(!app::serialize_systemverilog_uvm_state(
+      nonportable_uvm, nonportable_uvm_diagnostics));
+  assert(std::ranges::any_of(
+      nonportable_uvm_diagnostics.diagnostics(), [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-UVM-STATE-001";
+      }));
+  const auto corrupt_uvm_design =
+      directory / "artifact-corrupt-uvm.fsimdesign";
+  std::filesystem::create_directories(corrupt_uvm_design);
+  for (const auto& entry :
+       std::filesystem::recursive_directory_iterator(active_design)) {
+    const auto destination = corrupt_uvm_design
+        / entry.path().lexically_relative(active_design);
+    if (entry.is_directory()) {
+      std::filesystem::create_directories(destination);
+    } else if (entry.is_regular_file()) {
+      std::filesystem::copy_file(entry.path(), destination);
+      std::filesystem::permissions(
+          destination, std::filesystem::perms::owner_write,
+          std::filesystem::perm_options::add);
+    }
+  }
+  {
+    std::ofstream corrupt(
+        corrupt_uvm_design / "state" / "sv-uvm.bin",
+        std::ios::binary | std::ios::app);
+    corrupt.put('\0');
+  }
+  diagnostic::Engine corrupt_uvm_diagnostics;
+  assert(!app::load_design_artifact(
+      corrupt_uvm_design, corrupt_uvm_diagnostics));
+  assert(corrupt_uvm_diagnostics.has_error());
+  std::filesystem::remove_all(corrupt_uvm_design);
   auto coverage_state = coverage_checkpoint->systemverilog_coverage;
   assert(coverage_state.declarations.size() == 1);
   assert(coverage_state.instances.size() == 1);
@@ -416,6 +486,8 @@ end architecture;
   assert(error.str().find("ambiguous") != std::string::npos);
   assert(!std::filesystem::exists(ambiguous_design));
 
+  std::vector<runtime::SystemVerilogUvmCheckpointArtifact>
+      replay_checkpoints;
   const auto run_engine = [&](const app::SimulationEngine engine) {
     diagnostic::Engine diagnostics;
     auto built = app::load_design_artifact(active_design, diagnostics);
@@ -465,6 +537,16 @@ end architecture;
     const auto result = simulation.run();
     assert(result.status == runtime::RunStatus::stopped);
     assert(result.time == 6);
+    const auto replay_checkpoint = simulation.capture_uvm_checkpoint();
+    assert(
+        replay_checkpoint
+        && replay_checkpoint.artifact.time == result.time
+        && replay_checkpoint.artifact.delta == simulation.delta()
+        && !replay_checkpoint.artifact.provenance.content_identity.empty()
+        && !replay_checkpoint.artifact.provenance.cache_identity.empty()
+        && !replay_checkpoint.artifact.provenance.artifact_identity.empty()
+        && replay_checkpoint.artifact.external_state.phase_processes == 0);
+    replay_checkpoints.push_back(replay_checkpoint.artifact);
     assert(callbacks != 0);
     assert(simulation.read_signal(*stable_probe).to_msb_string() == "1");
     assert(simulation.read_signal(*vital_probe).to_msb_string() == "1");
@@ -505,6 +587,10 @@ end architecture;
   const auto compiled_warm = run_engine(app::SimulationEngine::compiled);
   assert(interpreted == compiled);
   assert(compiled == compiled_warm);
+  assert(
+      replay_checkpoints.size() == 3
+      && replay_checkpoints[0] == replay_checkpoints[1]
+      && replay_checkpoints[1] == replay_checkpoints[2]);
   assert(interpreted.first == "00000001");
   assert(interpreted.second == "1");
 
@@ -513,6 +599,7 @@ end architecture;
   active_design = relocated_design;
   const auto relocated = run_engine(app::SimulationEngine::interpreter);
   assert(relocated == interpreted);
+  assert(replay_checkpoints.back() == replay_checkpoints.front());
 
   output.str({});
   error.str({});

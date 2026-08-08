@@ -114,3 +114,18 @@ negative behavior, and relocation advance the linked totals to 486 interpreter
 rows, 403 LLVM rows, 267 cache rows, 109 debugger rows, 137 VCD/trace rows, 454
 scheduling rows, and 110 failure rows. The reviewed 36-CTest corpus inventory
 is unchanged.
+
+Batch 159's ten UVM object/factory/config/report rows advance the reviewed
+differential inventory to 1,240 required rows and 134 runtime owners. Exact
+unmodified UVM source, two roots, portable artifacts, callbacks, cold/warm
+caches, and bounded negative behavior advance scheduling to 455 rows and
+failure evidence to 111 rows; the remaining linked totals are 486 interpreter,
+403 LLVM, 267 cache, 109 debugger, and 137 VCD/trace rows.
+
+Batch 160's ten UVM phase/objection/TLM rows advance the reviewed differential
+inventory to 1,250 required rows and 135 runtime owners. Direct and portable
+phase/TLM execution, O0/O2 compiled cold/warm caches, debug snapshots, activity
+traces, checkpoint restart, a tick-5 objection race, and cataloged deadlock
+advance the linked totals to 487 interpreter, 404 LLVM, 268 cache, 111
+debugger, 138 VCD/trace, 462 scheduling, and 112 failure rows. The reviewed
+36-CTest corpus inventory is unchanged.

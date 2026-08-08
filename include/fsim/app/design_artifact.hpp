@@ -19,6 +19,7 @@ inline constexpr std::uint32_t kDesignIrStateSchema = 2;
 inline constexpr std::uint32_t kClassStateSchema = 9;
 inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 3;
 inline constexpr std::uint32_t kSystemVerilogCoverageStateSchema = 1;
+inline constexpr std::uint32_t kSystemVerilogUvmStateSchema = 1;
 
 [[nodiscard]] std::optional<std::string> serialize_runtime_state(
     const elaboration::ElaboratedDesign& design,
@@ -72,6 +73,16 @@ serialize_systemverilog_coverage_state(
     diagnostic::Engine& diagnostics);
 [[nodiscard]] std::optional<frontend::SystemVerilogCoverageState>
 deserialize_systemverilog_coverage_state(
+    std::string_view bytes,
+    std::string source_name,
+    diagnostic::Engine& diagnostics);
+
+[[nodiscard]] std::optional<std::string>
+serialize_systemverilog_uvm_state(
+    const runtime::SystemVerilogUvmCheckpointArtifact& state,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<runtime::SystemVerilogUvmCheckpointArtifact>
+deserialize_systemverilog_uvm_state(
     std::string_view bytes,
     std::string source_name,
     diagnostic::Engine& diagnostics);

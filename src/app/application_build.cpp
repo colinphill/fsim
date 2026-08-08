@@ -413,7 +413,7 @@ std::optional<BuiltProject> build_checked_project(
       std::move(mapped_libraries),
       std::move(checked->objects), {},
       std::move(checked->systemverilog_class_specializations),
-      std::move(systemverilog_coverage)};
+      std::move(systemverilog_coverage), std::nullopt};
 }
 
 std::optional<BuiltProject> build_project(

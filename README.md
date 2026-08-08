@@ -262,10 +262,12 @@ The current tree contains:
   retained or invalidated across restart and artifact flows;
 - governed unmodified UVM 1.2 and UVM 2020-3.1 source entry points plus a
   simulation-owned object/component, registry/factory, resource/configuration,
-  command-line, and report foundation. Interpreter, LLVM O0/O2, debug,
-  multiple-root, callback, VCD/FST, cold/warm cache, and portable relocated
-  artifact paths agree under explicit resource bounds; phases, objections,
-  TLM, sequences, and the register model remain later closure boundaries;
+  command-line, report, phase/domain, objection/drain, activity/debug, TLM1,
+  TLM2, foreign snapshot, and portable-checkpoint foundation. Interpreter,
+  LLVM O0/O2, debug, multiple-root, callback, VCD/FST, cold/warm cache, and
+  portable relocated artifact paths agree under explicit resource bounds;
+  sequences, drivers/monitors, and the register model remain later closure
+  boundaries;
 - governed VHDL-2008 VHPI with selected/indexed hierarchy, scalar/composite/
   nine-state values, drivers, callbacks, foreign models, associations,
   root-isolated reporting, transactional restart/remap, and independently

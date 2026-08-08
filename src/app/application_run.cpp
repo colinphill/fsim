@@ -4,6 +4,57 @@
 
 namespace fsim::app::application_detail {
 
+TraceState::~TraceState() {
+  if (simulation && uvm_activity_observer != 0) {
+    simulation->remove_uvm_activity_hook(uvm_activity_observer);
+  }
+}
+
+namespace {
+
+[[nodiscard]] std::uint64_t stable_trace_hash(
+    const std::string_view text) noexcept {
+  std::uint64_t result{UINT64_C(14695981039346656037)};
+  for (const auto byte : text) {
+    result ^= static_cast<unsigned char>(byte);
+    result *= UINT64_C(1099511628211);
+  }
+  return result;
+}
+
+[[nodiscard]] runtime::PackedBit2 trace_bits(
+    const std::size_t width,
+    const std::uint64_t value) {
+  runtime::PackedBit2 result(width);
+  result.words().front() = value;
+  return result;
+}
+
+void write_uvm_activity_trace_event(
+    TraceState& state,
+    const runtime::SystemVerilogUvmActivityEvent& event) {
+  if (event.time
+      > std::numeric_limits<SimulationTick>::max()
+            / state.tick_multiplier) {
+    throw std::overflow_error{"VCD timestamp scaling overflow"};
+  }
+  state.writer->set_time(std::max(
+      state.writer->time(), event.time * state.tick_multiplier));
+  const std::array values{
+      trace_bits(64, event.sequence),
+      trace_bits(4, static_cast<std::uint8_t>(event.kind)),
+      trace_bits(4, static_cast<std::uint8_t>(event.action)),
+      trace_bits(64, event.root),
+      trace_bits(64, event.value),
+      trace_bits(64, stable_trace_hash(event.identity)),
+      trace_bits(64, stable_trace_hash(event.detail))};
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    state.writer->change(state.uvm_activity_handles[index], values[index]);
+  }
+}
+
+}  // namespace
+
 std::string make_cache_key(
     const project::Config& config,
     const CheckedProject& checked,
@@ -621,6 +672,16 @@ std::unique_ptr<TraceState> attach_trace(
     trace->writer =
         std::make_unique<runtime::VcdWriter>(
             trace->stream, scale->timescale);
+    constexpr std::array<std::string_view, 7> activity_names{
+        "sequence", "kind", "action", "root", "value",
+        "identity_hash", "detail_hash"};
+    constexpr std::array<std::size_t, 7> activity_widths{
+        64, 4, 4, 64, 64, 64, 64};
+    for (std::size_t index = 0; index < activity_names.size(); ++index) {
+      trace->uvm_activity_handles[index] = trace->writer->declare_signal(
+          "__fsim.uvm.activity." + std::string{activity_names[index]},
+          activity_widths[index]);
+    }
     trace->handles.resize(simulation.runtime_adapter().signals().size());
     trace->enabled.resize(simulation.runtime_adapter().signals().size());
     trace->scalar_kinds.resize(
@@ -665,7 +726,15 @@ std::unique_ptr<TraceState> attach_trace(
         }
       }
     }
+    for (const auto& event : simulation.uvm_activity().events()) {
+      write_uvm_activity_trace_event(*trace, event);
+    }
+    trace->simulation = &simulation;
     auto* state = trace.get();
+    trace->uvm_activity_observer = simulation.add_uvm_activity_hook(
+        [state](const auto& event) {
+          write_uvm_activity_trace_event(*state, event);
+        });
     simulation.set_signal_change_hook(
         [state](
             const SignalId signal,
@@ -1003,15 +1072,16 @@ int handle_run(
 void print_debug_help(std::ostream& output)  {
   output
       << "Commands: continue|run [DURATION], run-until TIME, "
-         "step statement|process|delta|time,\n"
+         "step statement|process|phase|delta|time,\n"
       << "          break source [PATH:]LINE, break time TIME, "
-         "break signal SIGNAL [==|!= VALUE],\n"
+         "break signal SIGNAL [==|!= VALUE], break phase IDENTITY|*,\n"
       << "          breakpoints,\n"
       << "          delete ID, clear, scope [PATH], scopes [PATH], "
          "signals [PATH],\n"
       << "          show SIGNAL,\n"
       << "          classes, class HANDLE [PROPERTY], chandles, "
          "chandle HANDLE,\n"
+      << "          uvm [summary|phases|objections|tlm1|tlm2|all],\n"
       << "          deposit SIGNAL VALUE, force SIGNAL VALUE, release SIGNAL,\n"
       << "          trace add|remove SIGNAL, trace all|clear|list,\n"
       << "          locals, where, help, quit\n";

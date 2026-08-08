@@ -118,6 +118,17 @@ add_test(
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckDiagnosticCatalog.cmake"
 )
+add_test(
+  NAME fsim.uvm-phase-tlm-matrix
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckUvmPhaseTlmMatrix.cmake"
+)
+set_tests_properties(
+  fsim.uvm-phase-tlm-matrix
+  PROPERTIES LABELS "fast;uvm;phase;tlm;matrix;cmake"
+)
 
 add_test(
   NAME fsim.source-line-budget
@@ -807,6 +818,48 @@ if(FSIM_WITH_LLVM)
 endif()
 
 if(TARGET fsim_application)
+  add_executable(
+    fsim_uvm_phase_tlm_application_tests
+    app/uvm_phase_tlm_application_test.cpp
+  )
+  fsim_configure_test(fsim_uvm_phase_tlm_application_tests)
+  target_compile_definitions(
+    fsim_uvm_phase_tlm_application_tests
+    PRIVATE FSIM_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    fsim_uvm_phase_tlm_application_tests PRIVATE fsim_application)
+  if(FSIM_UVM_1_2_SOURCE_DIR AND FSIM_UVM_2020_3_1_SOURCE_DIR)
+    add_test(
+      NAME fsim.application.uvm_phase_tlm.1_2
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim_uvm_phase_tlm_application_tests>"
+        "-DFSIM_UVM_ROOT=${FSIM_UVM_1_2_SOURCE_DIR}"
+        "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/uvm-phase-tlm-example/uvm-1.2"
+        "-DFSIM_RELEASE=uvm-1.2"
+        -P "${PROJECT_SOURCE_DIR}/cmake/RunUvmPhaseTlmExample.cmake"
+    )
+    add_test(
+      NAME fsim.application.uvm_phase_tlm.2020_3_1
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim_uvm_phase_tlm_application_tests>"
+        "-DFSIM_UVM_ROOT=${FSIM_UVM_2020_3_1_SOURCE_DIR}"
+        "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/uvm-phase-tlm-example/uvm-2020.3.1"
+        "-DFSIM_RELEASE=uvm-2020.3.1"
+        -P "${PROJECT_SOURCE_DIR}/cmake/RunUvmPhaseTlmExample.cmake"
+    )
+    set_tests_properties(
+      fsim.application.uvm_phase_tlm.1_2
+      fsim.application.uvm_phase_tlm.2020_3_1
+      PROPERTIES
+        LABELS "slow;application;systemverilog;uvm;artifact;llvm;debug;trace"
+        RUN_SERIAL TRUE
+        TIMEOUT 1800
+    )
+  endif()
+
   option(
     FSIM_MERGE_APPLICATION_TESTS
     "Merge application cases into a small number of selectable test hosts"
@@ -873,6 +926,14 @@ if(TARGET fsim_application)
 
     fsim_add_application_case(
       0 core app/application_test.cpp fsim.application)
+    fsim_add_application_case(
+      0 artifact_phases app/application_artifact_case.cpp
+      fsim.application.artifact_phases
+      fast artifact portability uvm)
+    fsim_add_application_case(
+      0 classes app/application_classes_case.cpp
+      fsim.application.classes
+      class uvm artifact llvm debug cache)
     fsim_add_application_case(
       0 systemc_matrix app/application_systemc_matrix_test.cpp
       fsim.application.systemc_matrix

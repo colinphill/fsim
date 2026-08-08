@@ -49,6 +49,16 @@ add_executable(
   runtime_container_tests.cpp
   runtime_class_heap_tests.cpp
   runtime_uvm_component_tests.cpp
+  runtime_uvm_phase_tests.cpp
+  runtime_uvm_quiescence_tests.cpp
+  runtime_uvm_objection_tests.cpp
+  runtime_uvm_tlm1_tests.cpp
+  runtime_uvm_tlm1_execution_tests.cpp
+  runtime_uvm_analysis_tests.cpp
+  runtime_uvm_tlm2_tests.cpp
+  runtime_uvm_activity_tests.cpp
+  runtime_uvm_checkpoint_tests.cpp
+  runtime_uvm_foreign_abi_c_test.c
   runtime_uvm_registry_tests.cpp
   runtime_uvm_factory_tests.cpp
   runtime_uvm_resource_tests.cpp

@@ -1951,6 +1951,17 @@ const std::string scaled_vcd{
 assert(
     scaled_vcd.find("$timescale 1ps $end") != std::string::npos);
 assert(scaled_vcd.find("#4") != std::string::npos);
+assert(
+    scaled_vcd.find("$scope module __fsim $end") != std::string::npos
+    && scaled_vcd.find("$scope module uvm $end") != std::string::npos
+    && scaled_vcd.find("$scope module activity $end") != std::string::npos
+    && scaled_vcd.find(" sequence $end") != std::string::npos
+    && scaled_vcd.find(" kind $end") != std::string::npos
+    && scaled_vcd.find(" action $end") != std::string::npos
+    && scaled_vcd.find(" root $end") != std::string::npos
+    && scaled_vcd.find(" value $end") != std::string::npos
+    && scaled_vcd.find(" identity_hash $end") != std::string::npos
+    && scaled_vcd.find(" detail_hash $end") != std::string::npos);
 
 const auto timescale_source = directory / "timescale.sv";
 {

@@ -819,7 +819,7 @@ payload makes the semantic graph independently reloadable in standalone
 designs; `.fsimobj` and mapped-library flows reconstruct the same graph from
 portable owning units. Covergroups use the coverage ownership described below.
 
-### UVM object, factory, configuration, and reporting foundation
+### UVM object, phase, objection, and TLM foundation
 
 UVM sources are external governed inputs, never vendored compatibility source.
 The source harness validates immutable UVM 1.2 and UVM 2020-3.1 archive and
@@ -832,8 +832,10 @@ and portable reload.
 
 Every simulation owns one UVM context layered on its class heap. The context
 contains object and component services, a wrapper registry, factory, resource
-pool, configuration database, command-line state, and report service. These
-owners are shared by roots inside one simulation and never process-global.
+pool, configuration database, command-line state, report service, phase and
+objection schedulers, TLM1 and TLM2 graphs, activity/debug state, and a foreign
+snapshot/checkpoint boundary. These owners are shared by roots inside one
+simulation and never process-global.
 Handles are opaque, monotonic or generation-qualified as appropriate; stale,
 released, cross-simulation, nominally mismatched, excessive, or malformed work
 rejects before publication. Multiple simulations created sequentially in one
@@ -863,18 +865,44 @@ quit action, routes standard output and MCD/file sinks, formats packed elements,
 and preserves deterministic route order. Re-entrant reports bypass recursive
 catcher dispatch but still receive unique sequence identities.
 
+The phase service owns the exact common and runtime domains plus source-ordered
+custom domains and phases. It validates acyclic parent/dependency graphs, root
+participation, synchronization, jumps, and bounded mutations before
+publication. Function phases traverse components deterministically. Task
+phases retain generation-checked process trees, waits, cancellation, timeout,
+and restart state; a shared quiescence loop coordinates objections, drain time,
+ready-to-end re-entry, scheduler callbacks, and delta/time ceilings. Deadlock,
+livelock, callback failure, and a ready-to-end objection race have exact
+cataloged outcomes and leave no partial scheduler state.
+
+TLM1 ports, exports, implementations, FIFOs, transport, and analysis endpoints
+form a typed, root-qualified connection graph with cardinality and cycle
+validation. Blocking/nonblocking put/get/peek, request/response transport,
+bounded FIFO payloads, and snapshot-ordered analysis fanout share phase and
+scheduler ownership. TLM2 initiator, target, and passthrough sockets retain
+nominal protocol profiles, generic payloads, extensions, byte enables,
+streaming widths, DMI descriptors, blocking/debug/nonblocking transport, phase
+transitions, timing, and outstanding-transaction cleanup.
+
+Immutable activity events feed debugger, trace, DPI, and VPI observers through
+contained callbacks. The append-only C foreign host exposes caller-owned
+snapshots and copied payloads, never native service addresses. The schema-1 UVM
+checkpoint persists phase topology and state, objections/drains, TLM graphs and
+payloads, scheduler time, and provenance while representing native callbacks
+and live process objects only as bounded external-state counts.
+
 Class/UVM operations use the same typed service boundary in interpreter, LLVM
 O0/O2, and debug engines. Portable units retain declarations and executable
 profiles; design artifacts retain normalized class/HIR/runtime state but no
-host addresses. Actual UVM 1.2 and UVM 2020-3.1 object/factory/config/report
-examples reload, relocate, and execute through two aliased roots with identical
+host addresses. Actual UVM 1.2 and UVM 2020-3.1 object/factory/config/report and
+phase/TLM examples reload, relocate, and execute through two aliased roots with identical
 callbacks, traces, cache behavior, and transcripts. Future or malformed schema
 state rejects before execution.
 
-This is deliberately the Batch 159 foundation, not a claim of complete UVM.
-Phase scheduling, objections, TLM, sequences, drivers/monitors, the register
-model, remaining policy classes, and complete 1.2/2020 compatibility are owned
-by Batches 160-162. The public usage and evidence boundary is documented in
+This is deliberately the Batch 160 foundation, not a claim of complete UVM.
+Sequences, drivers/monitors, the register model, remaining policy classes, and
+complete 1.2/2020 compatibility are owned by Batches 161-162. The public usage
+and evidence boundary is documented in
 [`systemverilog-uvm.md`](systemverilog-uvm.md).
 
 ### Concurrent assertion ownership and observation

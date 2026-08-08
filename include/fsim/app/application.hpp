@@ -10,7 +10,14 @@
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/class_methods.hpp"
 #include "fsim/runtime/uvm_context.hpp"
+#include "fsim/runtime/uvm_activity.hpp"
+#include "fsim/runtime/uvm_checkpoint.hpp"
+#include "fsim/runtime/uvm_foreign.hpp"
 #include "fsim/runtime/uvm_component.hpp"
+#include "fsim/runtime/uvm_phase.hpp"
+#include "fsim/runtime/uvm_objection.hpp"
+#include "fsim/runtime/uvm_tlm1.hpp"
+#include "fsim/runtime/uvm_tlm2.hpp"
 #include "fsim/runtime/uvm_object.hpp"
 #include "fsim/runtime/uvm_registry.hpp"
 #include "fsim/runtime/uvm_factory.hpp"
@@ -32,6 +39,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -154,6 +162,9 @@ struct BuiltProject {
       systemverilog_class_specializations;
   /// Owning coverage declarations, mutable state, reports, and observer events.
   frontend::SystemVerilogCoverageState systemverilog_coverage;
+  /// Versioned, pointer-free UVM bootstrap state loaded from a portable design.
+  std::optional<runtime::SystemVerilogUvmCheckpointArtifact>
+      systemverilog_uvm_checkpoint;
 };
 
 /// Parse all HDL source files in deterministic manifest order. Independent
@@ -300,6 +311,53 @@ struct ConcurrentAssertionEvent {
       const ConcurrentAssertionEvent&) = default;
 };
 
+struct UvmDebugLimits {
+  std::size_t maximum_records{4'096};
+  std::size_t maximum_payload_bytes{1U << 20U};
+  std::size_t maximum_formatted_bytes{1U << 20U};
+};
+
+enum class UvmDebugSection : std::uint8_t {
+  summary,
+  phases,
+  objections,
+  tlm1,
+  tlm2,
+  all,
+};
+
+class UvmDebugError final : public std::runtime_error {
+ public:
+  UvmDebugError(std::string code, std::string message);
+  [[nodiscard]] std::string_view diagnostic_code() const noexcept {
+    return code_;
+  }
+
+ private:
+  std::string code_;
+};
+
+struct UvmDebugSnapshot {
+  runtime::SimulationTick time{};
+  std::uint64_t delta{};
+  std::vector<runtime::SystemVerilogUvmDomainSnapshot> domains;
+  std::vector<runtime::SystemVerilogUvmPhaseSnapshot> phases;
+  std::vector<runtime::SystemVerilogUvmPhaseProcessSnapshot> processes;
+  std::vector<runtime::SystemVerilogUvmObjectionSnapshot> objections;
+  std::vector<runtime::SystemVerilogUvmDrainSnapshot> drains;
+  std::vector<runtime::SystemVerilogUvmTlm1EndpointSnapshot> tlm1_endpoints;
+  std::vector<runtime::SystemVerilogUvmTlm1FifoSnapshot> tlm1_fifos;
+  std::vector<runtime::SystemVerilogUvmTlm1OperationSnapshot> tlm1_operations;
+  std::vector<runtime::SystemVerilogUvmTlm2SocketSnapshot> tlm2_sockets;
+  std::vector<runtime::SystemVerilogUvmTlm2TransactionSnapshot>
+      tlm2_transactions;
+};
+
+[[nodiscard]] std::string format_uvm_debug_snapshot(
+    const UvmDebugSnapshot& snapshot,
+    UvmDebugSection section = UvmDebugSection::all,
+    std::size_t maximum_bytes = 1U << 20U);
+
 class Simulation final {
  public:
   using SignalChangeHook = std::function<void(
@@ -318,6 +376,9 @@ class Simulation final {
   using ReportHook = runtime::simir::Interpreter::ReportHook;
   using ConcurrentAssertionHook =
       std::function<void(const ConcurrentAssertionEvent&)>;
+  using UvmActivityHook = runtime::SystemVerilogUvmActivityService::Observer;
+  using UvmTaskPhaseContinuation =
+      runtime::SystemVerilogUvmPhaseService::TaskPhaseCallback;
   using SafePointHook = runtime::Scheduler::SafePointHook;
   using ClassPropertyChangeHook = std::function<void(
       runtime::SystemVerilogClassHandle,
@@ -406,6 +467,35 @@ class Simulation final {
   uvm_components() noexcept;
   [[nodiscard]] const runtime::SystemVerilogUvmComponentService&
   uvm_components() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmActivityService&
+  uvm_activity() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmActivityService&
+  uvm_activity() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmForeignService&
+  uvm_foreign() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmForeignService&
+  uvm_foreign() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmPhaseService&
+  uvm_phases() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmPhaseService&
+  uvm_phases() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmObjectionService&
+  uvm_objections() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmObjectionService&
+  uvm_objections() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmTlm1Service&
+  uvm_tlm1() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmTlm1Service&
+  uvm_tlm1() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmTlm2Service&
+  uvm_tlm2() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmTlm2Service&
+  uvm_tlm2() const noexcept;
+  [[nodiscard]] UvmDebugSnapshot uvm_debug_snapshot(
+      UvmDebugLimits limits = {}) const;
+  [[nodiscard]] runtime::SystemVerilogUvmCheckpointCaptureResult
+  capture_uvm_checkpoint(
+      runtime::SystemVerilogUvmCheckpointLimits limits = {});
   [[nodiscard]] runtime::SystemVerilogUvmRegistryService&
   uvm_registry() noexcept;
   [[nodiscard]] const runtime::SystemVerilogUvmRegistryService&
@@ -475,6 +565,12 @@ class Simulation final {
       runtime::SystemVerilogClassHandle this_handle,
       std::vector<runtime::SystemVerilogClassMethodValue>& actuals,
       std::optional<std::uint32_t> virtual_slot = std::nullopt);
+  [[nodiscard]] runtime::SystemVerilogUvmPhaseExecutionResult
+  execute_uvm_function_phase(runtime::SystemVerilogUvmPhaseHandle phase);
+  [[nodiscard]] runtime::SystemVerilogUvmPhaseExecutionResult
+  execute_uvm_task_phase(
+      runtime::SystemVerilogUvmPhaseHandle phase,
+      const UvmTaskPhaseContinuation& continuation = {});
   void schedule_class_method(
       runtime::SimulationTick time,
       runtime::StableOrder stable_order,
@@ -544,6 +640,8 @@ class Simulation final {
   void set_output_hook(OutputHook hook);
   void set_report_hook(ReportHook hook);
   void set_concurrent_assertion_hook(ConcurrentAssertionHook hook);
+  [[nodiscard]] std::uint64_t add_uvm_activity_hook(UvmActivityHook hook);
+  void remove_uvm_activity_hook(std::uint64_t token) noexcept;
   void set_class_property_change_hook(ClassPropertyChangeHook hook);
   void set_class_static_property_change_hook(
       ClassStaticPropertyChangeHook hook);

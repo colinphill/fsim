@@ -455,6 +455,16 @@ add_library(
     src/runtime/class_static.cpp
     src/runtime/uvm_object.cpp
     src/runtime/uvm_component.cpp
+    src/runtime/uvm_phase.cpp
+    src/runtime/uvm_activity.cpp
+    src/runtime/uvm_checkpoint.cpp
+    src/runtime/uvm_foreign.cpp
+    src/runtime/uvm_objection.cpp
+    src/runtime/uvm_tlm1.cpp
+    src/runtime/uvm_tlm1_execution.cpp
+    src/runtime/uvm_tlm1_analysis.cpp
+    src/runtime/uvm_tlm2.cpp
+    src/runtime/uvm_tlm2_transport.cpp
   src/runtime/uvm_registry.cpp
   src/runtime/uvm_factory.cpp
   src/runtime/uvm_resource.cpp
@@ -864,6 +874,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_vhdl_analysis.cpp
       src/app/application_debug_control.cpp
       src/app/application_debugger.cpp
+      src/app/application_uvm_inspection.cpp
       src/app/application_design_ir.cpp
       src/app/application_design_artifact_codec.cpp
       src/app/application_executor_frame.cpp

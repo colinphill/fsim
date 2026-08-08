@@ -838,6 +838,43 @@ deserialize_systemverilog_coverage_state(
       bytes, std::move(source_name), diagnostics);
 }
 
+std::optional<std::string> serialize_systemverilog_uvm_state(
+    const runtime::SystemVerilogUvmCheckpointArtifact& state,
+    diagnostic::Engine& diagnostics) {
+  if (runtime::validate_systemverilog_uvm_checkpoint(
+          state, state.provenance)
+      != runtime::SystemVerilogUvmCheckpointError::None) {
+    diagnostics.error(
+        "FSIM-UVM-STATE-001",
+        "SystemVerilog UVM state is structurally invalid or nonportable");
+    return std::nullopt;
+  }
+  return serialize(
+      "FSIMUVM1", kSystemVerilogUvmStateSchema, state, diagnostics);
+}
+
+std::optional<runtime::SystemVerilogUvmCheckpointArtifact>
+deserialize_systemverilog_uvm_state(
+    const std::string_view bytes,
+    std::string source_name,
+    diagnostic::Engine& diagnostics) {
+  auto state = deserialize<runtime::SystemVerilogUvmCheckpointArtifact>(
+      "FSIMUVM1", kSystemVerilogUvmStateSchema, bytes,
+      std::move(source_name), diagnostics);
+  if (!state) {
+    return std::nullopt;
+  }
+  if (runtime::validate_systemverilog_uvm_checkpoint(
+          *state, state->provenance)
+      != runtime::SystemVerilogUvmCheckpointError::None) {
+    diagnostics.error(
+        "FSIM-UVM-STATE-001",
+        "SystemVerilog UVM state is structurally invalid or nonportable");
+    return std::nullopt;
+  }
+  return state;
+}
+
 std::optional<std::string> serialize_semantic_state(
     const semantic::Model& model,
     diagnostic::Engine& diagnostics) {

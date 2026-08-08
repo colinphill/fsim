@@ -55,6 +55,478 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     exact restart plan, commit and push the documentation-only checkpoint, then
     clear context. Do not begin Batch 160 Change 1 until this checkpoint itself
     is committed, pushed, and followed by a context clear.
+11. Change 1 is complete in the intentionally dirty Batch 160 worktree. The
+    simulation-owned phase service now provides opaque generation-checked
+    domain/phase handles, exact standard kinds/states/identities, parent and
+    predecessor/successor relationships, per-root participation, source-order
+    custom registration, bounded topological traversal, transactional DAG
+    mutation, and cataloged `FSIM-UVM-PHASE-001` through `005` failures.
+12. Runtime coverage proves standard/custom graph construction, snapshots,
+    source order, traversal, disconnect/reconnect, stale/cross-owner handles,
+    duplicates, cycles, missing roots, rollback, and every identity, depth,
+    node, edge, root, traversal, and mutation ceiling. Application coverage
+    proves the public service belongs to its `Simulation`, peer simulations
+    reject each other's handles, and a fresh simulation has no phase domains.
+    The eight-worker exact-LLVM Debug full build passed all 147 steps. The
+    focused runtime, application, LLVM, diagnostic-catalog, source-line,
+    and UVM-source-harness gates passed 6/6; the final ownership-specific
+    `fsim.application` rerun passed in 28.43 seconds. The final catalog and
+    source-line gates pass 2/2, and `git diff --check` is clean after this
+    handoff update.
+13. Change 2 is complete in the intentionally dirty Batch 160 worktree. The
+    service constructs the exact nine-node common and twelve-node runtime
+    chains, places runtime with common `run`, and enrolls API-created and
+    automatic component roots in both domains. Source-ordered custom tail,
+    before, after, between, and parallel-with insertion rewires adjacency
+    transactionally. Independent/shared domain placement, matching-identity and
+    explicit phase synchronization, two-way removal, and deterministic
+    topological order are frozen by focused positive evidence.
+14. Invalid mixed/cross-domain/reverse anchors, duplicate standard schedules,
+    self and cyclic domain placement, malformed or duplicate synchronization,
+    and node, edge, root, and mutation exhaustion all reject without partial
+    state. Standard-root participation reserves its complete two-domain cleanup
+    budget, and failed automatic component construction cannot skip component-
+    root destruction if phase cleanup throws. The eight-worker exact-LLVM Debug
+    build completed 75 affected steps warning-clean. `fsim.runtime`,
+    `fsim.application`, `fsim.llvm`, `fsim.diagnostics-catalog`,
+    `fsim.source-line-budget`, and `fsim.uvm-source-harness` passed 6/6 in
+    29.56 seconds; the application gate itself passed in 26.29 seconds.
+15. Change 3 is complete in the intentionally dirty Batch 160 worktree. The
+    function-phase executor owns exact scheduled-through-done transitions,
+    top-down build and bottom-up later traversal, deterministic multiple roots,
+    per-component started/execute/ready-to-end/ended hooks, and contained
+    `FSIM-UVM-PHASE-006` failures. Build callbacks may add only direct children
+    of the active component; other growth, root creation, teardown, task-phase
+    use, and re-execution reject without corrupting hierarchy or phase state.
+16. The application bridge resolves virtual source callbacks by dynamic
+    specialization and proves build, connect, end-of-elaboration,
+    start-of-simulation, extract, check, report, and final callbacks and exact
+    ordering through interpreter, compiled, and debug engines. Runtime evidence
+    additionally proves live build growth, all hooks/states, exception
+    containment, mutation rules, and deterministic two-root traversal. The
+    source-method implementation is split into a 592-line fragment and
+    `application_simulation.cpp` is 1,934 lines. The eight-worker exact-LLVM
+    Debug tree rebuilt 77 affected steps, followed by a warning-clean 15-step
+    extraction rebuild. `fsim.runtime`, `fsim.application`, `fsim.llvm`,
+    `fsim.diagnostics-catalog`, `fsim.source-line-budget`, and
+    `fsim.uvm-source-harness` pass 6/6 in 32.33 seconds; `git diff --check` is
+    clean.
+17. Change 4 is complete in the intentionally dirty Batch 160 worktree. Every
+    standard/custom task phase launches deterministic top-down, generation-
+    checked process ownership by phase, root, and component. Immediate tasks
+    complete synchronously; suspended tasks keep their phase executing until
+    all owned processes complete or cancel, then ready/end hooks advance the
+    phase to done. Callback failures are contained as `FSIM-UVM-PHASE-006`;
+    invalid process, completion, synchronized-group, and jump state rejects as
+    `FSIM-UVM-PHASE-007`, and process exhaustion rejects before publication.
+18. Explicitly synchronized custom phases in sibling domains execute
+    concurrently with independent roots/processes. Forward jumps cancel source
+    work, skip the intervening interval, and leave the target executable;
+    backward jumps cancel active work and reset the exact target-through-source
+    interval. Runtime evidence covers run, all twelve runtime families, custom
+    phases, synchronization, completion, cancellation, ownership, mutation
+    guards, limits, and both jump directions. Source dispatch accepts zero- or
+    one-phase-argument tasks and proves every standard task callback through
+    interpreter, compiled, and debug engines.
+19. The eight-worker exact-LLVM Debug tree rebuilt 75 affected steps warning-
+    clean; `fsim.runtime`, `fsim.application`, `fsim.llvm`,
+    `fsim.diagnostics-catalog`, `fsim.source-line-budget`, and
+    `fsim.uvm-source-harness` pass 6/6 in 33.62 seconds. The main simulation
+    source is 1,900 lines after extracting its 111-line UVM phase fragment.
+    Final unmodified UVM 1.2 and UVM 2020-3.1 analysis under 3 GiB exits zero at
+    1,856,684 KiB and 2,126,780 KiB peak RSS. Retained two-root compiled designs
+    produce identical PASS transcripts under 4/5-GiB caps at 859,788 KiB and
+    956,912 KiB peak RSS. Keep `/tmp/fsim-uvm12-b160-change4-final.log`,
+    `/tmp/fsim-uvm12-b160-change4-final-time.txt`,
+    `/tmp/fsim-uvm2020-b160-change4-final.log`,
+    `/tmp/fsim-uvm2020-b160-change4-final-time.txt`, and the corresponding
+    `*-exec*` logs as exact local evidence. `git diff --check` is clean.
+20. Change 5 is complete in the intentionally dirty Batch 160 worktree. A
+    dedicated simulation-owned objection service binds live UVM objects into
+    owner-qualified source handles and owns exact phase/root/source/description
+    entries plus source-local, propagated component, and root counts. Component
+    raises, drops, and sets propagate in deterministic leaf-to-root order;
+    noncomponent sources contribute directly to their associated root. Set
+    publishes only its signed difference, exact descriptions remain distinct,
+    and count queries expose local, description-specific, component, and root
+    state.
+21. Raised/dropped callbacks and retained trace records are source-to-root and
+    monotonically sequenced. Callback exceptions are contained as
+    `FSIM-UVM-OBJ-004`; a root transition from nonzero to zero records
+    deterministic all-dropped detection after the final dropped event without
+    taking Change 6 drain or all-dropped callback semantics early. Diagnostics
+    `FSIM-UVM-OBJ-001` through `004` distinguish invalid ownership/lifetime,
+    operation/association, bounded-state, and callback failure.
+22. Runtime proof covers component and noncomponent sources, exact description
+    identity, every local/propagated query, raise/drop/set differences, callback
+    order and containment, monotonic traces, all-dropped detection, stale and
+    cross-simulation handles, root/phase mismatch, negative and underflow
+    counts, overflow, depth, source, description, entry, description-byte,
+    callback-fanout, trace, and mutation ceilings with state-preserving
+    rejection. The new header, implementation, and focused test are 236, 443,
+    and 442 lines. The eight-worker exact-LLVM Debug tree rebuilt 140 affected
+    steps warning-clean, then the final test expansion rebuilt two steps;
+    `fsim.runtime`, `fsim.application`, `fsim.llvm`,
+    `fsim.diagnostics-catalog`, `fsim.source-line-budget`, and
+    `fsim.uvm-source-harness` pass 6/6 in 32.14 seconds before the documentation
+    refresh. `git diff --check` is clean.
+23. Change 6 is current. Implement per-object/per-phase drain time,
+    cancellation/restart of pending drains, all-dropped callback sequencing,
+    re-raise behavior during drains and callbacks, ready-to-end re-entry, and
+    stable simulated-time scheduling with explicit pending-drain, callback,
+    re-entry, delay, and teardown bounds.
+24. Change 6 is complete in the same intentionally dirty worktree. The
+    objection service can bind the simulation scheduler and owns exact
+    source/phase drain settings plus cancelable, generation-qualified pending
+    drain tasks. Transactional local/propagated drops remain immediate, while
+    source drains gate all-dropped then ready-to-end notification until every
+    pending source for the phase/root completes. Re-raise cancels pending work,
+    a later final drop restarts the complete interval, zero drains finalize
+    synchronously, and destruction cancels every bounded scheduled task.
+25. All-dropped precedes ready-to-end, and a re-raise from either callback
+    forces a later stable all-dropped/ready cycle. Runtime proof uses only
+    scheduler ticks: two simultaneous drains in one root and an independent
+    drain in a second root finish at exact times 3, 4, and 5; cancellation at
+    tick 7 restarts a five-tick drain to tick 12. Coverage also includes exact
+    source/phase setting identity, callback containment, missing-scheduler
+    rejection, setting, pending, individual/aggregate delay, trace reservation,
+    callback re-entry, and teardown bounds.
+26. The objection header, implementation, and combined focused test are 336,
+    750, and 738 lines. The final eight-worker exact-LLVM Debug build relinked
+    20 affected targets warning-clean after the 29-step runtime rebuild;
+    `fsim.runtime`, `fsim.application`, `fsim.llvm`,
+    `fsim.diagnostics-catalog`, `fsim.source-line-budget`, and
+    `fsim.uvm-source-harness` pass 6/6 in 33.67 seconds before the documentation
+    refresh. `git diff --check` is clean.
+27. Change 7 is complete in the intentionally dirty Batch 160 worktree. Task-
+    phase completion now rejects while a participating root retains objection
+    count or a pending drain. Successful completion records immutable final
+    process snapshots, reclaims every live process record, and makes the former
+    handles stale without breaking application inspection across the thirteen
+    standard task phases and interpreter, compiled, or debug execution.
+28. Scheduler-owned child processes retain exact phase/root/component, parent,
+    depth, registration, and cancelable-task identity. A parent awaits every
+    running descendant; nested children execute at stable simulated times, and
+    scheduled exceptions are contained as `FSIM-UVM-PHASE-006` while their
+    descendant waits are cancelled. Timeout, jump, root teardown, and service
+    destruction cancel owned process trees and objection drains, prevent post-
+    phase callbacks, and reclaim handles without disturbing caller-owned tasks,
+    sibling roots, or an independently executing sibling domain.
+29. Runtime proof covers objections/drains gating phase completion, immutable
+    final snapshots, child/grandchild await, failure containment, timeout,
+    jump, root teardown, destruction, stale handles, missing-scheduler, count,
+    and depth rejection. Phase header, implementation, and test are 563, 1,905,
+    and 1,616 lines. The eight-worker exact-LLVM Debug tree rebuilt 140 affected
+    steps warning-clean, followed by 71 focused application/runtime steps and
+    the remaining 75 full-tree steps after final snapshot integration;
+    `fsim.runtime`, `fsim.application`, `fsim.llvm`,
+    `fsim.diagnostics-catalog`, `fsim.source-line-budget`, and
+    `fsim.uvm-source-harness` pass 6/6 in 32.37 seconds. `git diff --check` is
+    clean.
+30. Change 8 is complete in the intentionally dirty Batch 160 worktree. A
+    bounded coordinator advances executing task phases only through the
+    simulation scheduler, retries ready-to-end after objection/drain races, and
+    returns explicit completed, stopped, or timed-out results with exact tick,
+    callback, iteration, cancellation, and final execution evidence. The
+    application-owned phase service now attaches to its interpreter scheduler
+    after construction.
+31. Missing scheduler work with live phase state diagnoses deadlock;
+    ready-to-end re-entry, callback work, zero-time/delta stabilization, and
+    outer iteration excess diagnose as `FSIM-UVM-PHASE-008` after phase-local
+    cleanup. Timeout and stop cancel only phase-owned work, backward jump makes
+    a stopped/timed-out interval restartable, and independent simulation owner
+    tokens keep all process, objection, drain, and scheduled-event state
+    isolated.
+32. Runtime evidence covers a two-root ready objection race stabilized by a
+    tick-3 drain, exact tick-5 timeout with caller-task survival, stop and clean
+    restart, no-work deadlock, zero-time delta livelock, callback and ready
+    re-entry ceilings, and an independently alive simulation completing at tick
+    2 without retained state. Phase header/main/coordinator/test files are 591,
+    1,929, 110, and 384 lines; application simulation is 1,901 lines. The final
+    eight-worker exact-LLVM Debug continuation rebuilt 108 affected steps
+    warning-clean; `fsim.runtime`, `fsim.application`, `fsim.llvm`,
+    `fsim.diagnostics-catalog`, `fsim.source-line-budget`, and
+    `fsim.uvm-source-harness` pass 6/6 in 32.93 seconds. `git diff --check` is
+    clean.
+33. Change 9 is complete in the intentionally dirty Batch 160 worktree. A
+    simulation-owned TLM1 service provides owner-qualified port, export, and
+    implementation handles; exact interface, nominal request/response profile,
+    direction, component/root hierarchy, source declaration order, cardinality,
+    fanout, chained-export resolution, stable binding revisions, and exact
+    debug naming. Whole-graph resolution is transactional. The focused matrix
+    rejects foreign/stale ownership, kind/interface/profile/direction/root
+    mismatch, duplicates, cycles, missing required connections, and endpoint,
+    fanout, depth, work, profile, and mutation ceilings through
+    `FSIM-UVM-TLM1-001` through `004`. The eight-worker exact-LLVM Debug tree
+    rebuilt 142 steps warning-clean. Runtime, application, LLVM, catalog,
+    source-policy, and UVM harness gates pass 6/6 in 31.70 seconds; `git diff
+    --check` is clean.
+34. Change 10 is complete in the intentionally dirty Batch 160 worktree. The
+    simulation-owned TLM1 service executes blocking and nonblocking put/get/
+    peek/transport over bounded implementation FIFOs and transport handlers.
+    Owner-qualified operation handles preserve request/response nominal types,
+    packed/object payload identity, root/endpoint ownership, source-order
+    reservations, deterministic feasible-waiter wake order, exact simulated
+    completion time, and stable completed/cancelled snapshots. Master, slave,
+    and bidirectional request/response roles, can/try behavior, provider FIFO
+    access, capacity/payload/pending/execution ceilings, phase timeout/jump/
+    completion/root teardown cancellation, and post-phase callback suppression
+    are covered. A 96-bit nominal payload round trip passes in interpreter,
+    LLVM compiled, and debug application contexts. `FSIM-UVM-TLM1-005` and
+    `006` cover invalid execution and bounded-state failures. The eight-worker
+    exact-LLVM Debug tree rebuilt 143 steps warning-clean; the main sources and
+    tests remain below policy. Runtime, application, LLVM, catalog,
+    source-policy, and UVM harness gates pass 6/6 in 31.14 seconds; `git diff
+    --check` is clean.
+35. Change 11 is complete in the intentionally dirty Batch 160 worktree.
+    Analysis ports broadcast over frozen resolved target/callback snapshots in
+    declaration order through chained exports and intentional fanout. Named
+    macro-style implementations, subscribers, and bounded analysis FIFOs retain
+    one publication sequence, independent value copies, shared live object
+    handles, and exact nominal/root/endpoint identity. Subscriber/FIFO failures
+    are contained while later targets continue; graph and callback mutations
+    appear only after rebinding. Cross-root connections still reject. Callback,
+    recursion, publication, failure, delivery, and queue ceilings are bounded
+    through `FSIM-UVM-TLM1-007` and `008`. Runtime proof covers the positive and
+    negative matrix; an exact 73-bit nominal broadcast passes in interpreter,
+    LLVM compiled, and debug application contexts. The eight-worker exact-LLVM
+    Debug tree rebuilt 140 steps warning-clean; sources remain below policy.
+    Runtime, application, LLVM, catalog, source-policy, and UVM harness gates
+    pass 6/6 in 30.41 seconds; `git diff --check` is clean.
+36. Change 12 is complete in the intentionally dirty Batch 160 worktree. The
+    simulation-owned TLM2 service binds generation-checked, root-qualified
+    initiator, target, and both passthrough socket families through exact
+    protocol, nominal payload/phase, bus-width, cardinality, cycle, and hop
+    validation. Blocking transport, nonblocking forward/backward phase state,
+    debug transport, DMI acquisition/invalidation, annotated delays,
+    extensions, response status, cancellation, and immutable final transaction
+    snapshots preserve exact owner identity and deterministic target resolution.
+37. Runtime proof covers a three-hop passthrough chain, cross-root/profile/cycle
+    rejection, payload and phase nominal mismatch, byte enables, streaming
+    width, extensions, response, debug, DMI, forward/backward and custom phases,
+    callback exception containment, cancellation, and payload, callback,
+    outstanding-transaction, and hop ceilings. Application proof executes an
+    exact 37-byte generic payload with extension, response, and tick-7
+    completion in interpreter, LLVM compiled, and debug contexts.
+    `FSIM-UVM-TLM2-001` through `005` distinguish invalid handles, socket
+    graphs, payloads/DMI, callbacks/phases, and bounded resources. The TLM2
+    header, structural source, transport source, focused test, and application
+    simulation are 430, 363, 551, 498, and 1,908 lines. The eight-worker
+    exact-LLVM Debug tree rebuilt 140 affected steps warning-clean; runtime,
+    application, LLVM, catalog, source-policy, and UVM harness gates pass 6/6
+    in 35.45 seconds. `git diff --check` is clean.
+38. Change 13 is complete in the intentionally dirty Batch 160 worktree. Public
+    `UvmDebugSnapshot` queries capture exact scheduler time/delta plus domain,
+    phase, phase-process, objection, drain, TLM1 endpoint/FIFO/operation, and
+    TLM2 socket/transaction state. Connections retain root-qualified debug
+    names and payloads are owning copies. Record, aggregate payload-byte, and
+    formatted-output ceilings reject through `FSIM-UVM-DEBUG-002`; generation,
+    service-revision, and time/delta checks diagnose stale or advancing capture
+    as `FSIM-UVM-DEBUG-001`. The application now owns and exposes its objection
+    service alongside its phase and TLM services.
+39. Debugger `uvm summary|phases|objections|tlm1|tlm2|all` commands use the same
+    bounded snapshot. Domain-qualified phase breakpoints and `step phase` poll
+    scheduler safe points without changing existing debugger behavior. Runtime
+    proof covers exact objection/drain enumeration; all three application
+    engines prove a two-domain, 21-phase, two-root, four-endpoint/one-FIFO, and
+    two-socket snapshot, root-qualified formatting, bound rejection, and phase-
+    breakpoint registration. The public header, debugger, inspection unit,
+    application simulation, phase implementation, and objection implementation
+    are 685, 1,826, 259, 1,912, 1,946, and 876 lines. The eight-worker exact-
+    LLVM Debug tree rebuilt 75 affected steps warning-clean; runtime,
+    application, LLVM, catalog, source-policy, and UVM harness gates pass 6/6
+    in 31.63 seconds. `git diff --check` is clean.
+40. Change 14 is complete in the intentionally dirty Batch 160 worktree. The
+    simulation-owned `SystemVerilogUvmActivityService` publishes immutable,
+    sequence- and scheduler-stamped graph, phase-state, objection, drain,
+    connection, transaction, FIFO, and quiescence events through frozen token-
+    ordered observer snapshots. Observer mutation affects only later events;
+    re-entry and resources are bounded; callback exceptions, including a full
+    retained-failure log, remain contained and do not alter scheduling. Public
+    `Simulation` accessors/hooks expose the same root-qualified stream.
+41. VCD tracing replays pre-attachment activity and then emits live sequence,
+    kind, action, root, value, and stable identity/detail-hash transitions below
+    `__fsim.uvm.activity`; trace teardown removes its observer before releasing
+    storage. The backend-neutral stream is ready for the FST writer assigned to
+    Batch 171 without implementing that encoder early. Runtime proof covers
+    callback mutation/containment/bounds, objection/drain ordering, FIFO
+    occupancy, and quiescence. All three application engines cover graph,
+    phase, connection, transaction, and FIFO activity, while the CLI proves
+    deterministic VCD names and scaling. `FSIM-UVM-ACTIVITY-001` and `002` are
+    cataloged. The touched activity, phase, objection, TLM, application, and
+    focused-test sources remain below policy at 125, 108, 1,990, 908, 532, 961,
+    441, 605, 1,090, 1,928, 95, 788, 393, and 2,164 lines. The eight-worker exact-
+    LLVM Debug tree rebuilt 79 affected steps warning-clean plus four focused
+    test steps; runtime, application, LLVM, catalog, source-policy, and UVM
+    harness gates pass 6/6 in 28.71 seconds. `git diff --check` is clean.
+42. Change 15 is complete in the intentionally dirty Batch 160 worktree. The
+    append-only `fsim_uvm_foreign_host_v1` table gives DPI and VPI integrations
+    one stable C ABI without changing their frozen plug-in descriptors. Fixed-
+    width layouts expose simulation-qualified snapshot generations, records,
+    and activity callbacks. Identity/detail/payload sizes are queried before
+    copying into caller-owned buffers; callback strings are borrowed only for
+    the invocation. The simulation-owned foreign service captures phase/
+    process, objection/drain, TLM1 endpoint/FIFO/operation, and TLM2 socket/
+    transaction state as bounded owning records.
+43. Release makes foreign generations stale, cross-service identities reject,
+    and snapshot/record/text/payload/callback/buffer ceilings preserve prior
+    state. Callback status failures remain contained by the activity service;
+    teardown removes callbacks before foreign storage disappears. A C unit
+    freezes the ABI layouts. All three engines prove two-root isolation, exact
+    37-byte TLM2 payload copies, TLM1 FIFO state, sizing, cross-simulation and
+    stale rejection, snapshot exhaustion, transaction cancellation, callback
+    failure containment, teardown, and fresh simulation identities.
+    `FSIM-UVM-FOREIGN-001` and `002` are cataloged. The ABI/C++ headers,
+    implementation, application header/simulation, C probe, and application
+    matrix are 122, 103, 382, 698, 1,932, 17, and 2,346 lines. The eight-worker
+    exact-LLVM Debug tree rebuilt 77 affected steps warning-clean; all six gates
+    pass in 28.18 seconds, and `git diff --check` is clean.
+44. Change 16 is complete in the intentionally dirty Batch 160 worktree. A
+    bounded schema-1 `SystemVerilogUvmCheckpoint` owns the exact scheduler
+    time/delta, phase graph/state, objections/drains, TLM1 endpoint/operation/
+    FIFO state and payloads, TLM2 socket/transaction state and payloads, and
+    content/cache/design/root provenance. Foreign records now encode the exact
+    portable phase edges and TLM metadata needed by that checkpoint. Host
+    callbacks and live phase processes remain nonportable and are summarized
+    only by fixed-width counts; no pointer or callback enters serialized state.
+45. Design format 3 requires the `sv-uvm` payload at `state/sv-uvm.bin`, framed
+    by `FSIMUVM1`, while `.fsimobj` retains the corresponding portable class and
+    source definitions. Publication creates a deterministic standard 21-phase
+    bootstrap state. Loading validates schema, foreign ABI, provenance,
+    structure, checksum, and the exact clean-restart baseline before simulation.
+    Runtime and application proof cover byte-stable repetition, future schema,
+    ABI/provenance/root/state mismatch, truncation, physical corruption,
+    nonportable records, relocation between aliased roots, isolated cold/warm
+    caches, clean restart, and exact interpreter/LLVM compiled/debug live-state
+    equality. `FSIM-UVM-STATE-001` and `002` are cataloged.
+46. The checkpoint header/source, foreign header/source, TLM1 header/execution,
+    application header/codec/design/simulation, runtime test, artifact test,
+    class matrix, and two focused case wrappers are 121, 245, 106, 548, 534,
+    970, 705, 952, 940, 1,942, 159, 915, 2,396, 11, and 11 lines. The exact-LLVM
+    Debug tree completed a full 685-step warning-clean rebuild; the later design-
+    format bump completed its 22-step incremental rebuild warning-clean. The
+    final no-op eight-worker build is clean, all six runtime/application/LLVM/
+    catalog/source-policy/UVM-harness gates pass in 32.00 seconds, and `git diff
+    --check` is clean.
+47. Change 17 is complete in the intentionally dirty Batch 160 worktree. One
+    source fixture imports exact, unmodified UVM 1.2 and UVM 2020-3.1 object,
+    component, phase, blocking-put-port, and FIFO types. Its derived constructor
+    and real build/connect/end-of-elaboration/start-of-simulation/run/extract/
+    check/report/final callbacks execute for two aliased roots. An explicit
+    intrinsic boundary materializes upstream `uvm_pkg` base constructors through
+    simulation-owned services instead of bootstrapping a competing upstream
+    scheduler/report/resource/component hierarchy; the user constructor still
+    executes and proves marker `10`. A public run-phase continuation preserves
+    suspended host/DPI/SystemC work until objection `1/0` and a three-tick drain
+    settle.
+48. Direct source, one portable object, relocated O0/O2 portable designs,
+    interpreter, compiled, debug, callbacks, isolated cold/warm native caches,
+    and activity traces produce the exact transcript
+    `FSIM-UVM-PHASE-TLM-PASS phases=build/connect/eoe/sos/run/extract/check/report/final roots=left,right objection=1/0 drain=3 payload=37 result=42 source=37/42/1`.
+    Cold compiled runs assert zero hits plus nonzero misses/stores; warm runs
+    assert nonzero hits and zero misses. All fourteen direct/O0/O2 cold/warm/
+    debug traces are 7,062 bytes with SHA-256 `4546c05e2625a4f934cbf1e30e3786e78b2abed76871a32434b0454eaac71853`.
+    The `.fst`-designated outputs use the backend-neutral VCD activity stream;
+    binary FST encoding remains locked to Batch 171. The retained evidence roots
+    are `/tmp/fsim-batch160-change17-real-source-surface-final-uvm12` and
+    `/tmp/fsim-batch160-change17-real-source-surface-uvm2020`.
+49. Stage-isolated capped measurements keep UVM 1.2/2020.3.1 direct analysis at
+    4,242,276/4,735,592 KiB RSS under 6 GiB, compile at
+    3,308,520/3,672,868 KiB under 5/6 GiB, O0/O2 elaboration at
+    3,198,008/3,198,256 and 3,441,912/3,441,688 KiB under 5/5.5 GiB, and all
+    execution below 1,000,000 KiB under 3 GiB. The final 104-step eight-worker
+    exact-LLVM Debug rebuild is warning-clean; all six runtime/application/LLVM/
+    catalog/source-policy/UVM-harness gates pass in 32.27 seconds, and dedicated
+    UVM tests `fsim.application.uvm_phase_tlm.1_2` and `.2020_3_1` are registered.
+    The application header/simulation/source-method/phase bridge, fixture,
+    focused test, and runner are 709, 1,943, 652, 114, 82, 499, and 47 lines.
+50. Change 18 is complete in the same intentionally dirty Batch 160 worktree.
+    `fsim.uvm-phase-tlm-matrix` maps all 33 phase, objection, TLM1, TLM2,
+    debugger, activity, foreign, and checkpoint codes to executable runtime or
+    application evidence. The consolidated positive contract covers graph
+    construction, jumps, synchronization, callbacks, objection/drain bounds,
+    process cancellation, TLM1 FIFO/transport/analysis, TLM2 sockets/payloads/
+    DMI, artifact relocation/restart, observer containment, and every governed
+    resource ceiling. Exact diagnostic assertions now include contained TLM1
+    failures, cross-service/released TLM2 sockets, stale/cross-owner foreign
+    handles, stale debug snapshots, and checkpoint record/text/root/identity/
+    payload/process/callback limits.
+51. The exact two-root fixture adds a ready-to-end objection race that drains
+    deterministically at tick 5 and a suspended-process deadlock that rejects
+    with `FSIM-UVM-PHASE-008` and cleans every process and objection. Unmodified
+    UVM 1.2 and UVM 2020-3.1 pass direct source, portable compile, O0/O2
+    elaboration, compiled cold/warm cache, and debug execution in 367.21 and
+    481.55 seconds. All fourteen final traces are 10,357 bytes with SHA-256
+    `f78d9f125531a9d4764e6c5336e0bfdf8d9893577932f1cbb0d198355fb7c7ac`.
+52. The eight-worker exact-LLVM Debug build completes 77 affected steps
+    warning-clean. Catalog, aggregate-matrix, source-policy, UVM-harness,
+    application-class, and runtime gates pass 6/6 in 7.65 seconds. The
+    checkpoint header/source, foreign source, checkpoint/analysis/TLM2 runtime
+    tests, application class/exact matrices, aggregate contract, and runner are
+    120, 267, 556, 193, 322, 462, 2,302, 565, 130, and 47 lines; `git diff
+    --check` is clean.
+53. Change 19 is current. Synchronize the public UVM guide, exact example,
+    architecture, language support, diagnostics, feature/conformance evidence,
+    source provenance, measured resource baselines, test inventory, release
+    audits, and restart handoff. Pass documentation, catalog, inventory,
+    installation, portability, and release-candidate contracts. Preserve all
+    accumulated Changes 1-18 files; do not reset, commit, push, run the
+    sanitizer, or inspect hosted CI before Change 20.
+54. Change 19 is complete in the same accumulated dirty worktree. README, the
+    public UVM guide and exact transcript, architecture, language support,
+    diagnostics, governed source provenance, measured resource baselines,
+    feature evidence, inventories, release audits, candidate corpus, and this
+    handoff now state the exact bounded Batch 160 phase/objection/TLM contract.
+    `SV-801` through `SV-810` advance the matrix to 1,250 executable rows and
+    5,000 evidence cells across 545 paths: 237 test, 286 production, and 22
+    release paths with 135 runtime owners. Matrix digest
+    `25300a46781d8945f884358d4fabf05489415cbbee97405edffee7e4a0be4943`
+    and evidence digest
+    `49f1bb1b659bf6e63aa95402f9e0e302330647d0efa8d9c08f6d7cb1be2d62ba`
+    are frozen in the release contracts.
+55. The synchronized inventories cover 2,023 production diagnostics, 769
+    bounded C/C++ sources, 870 SPDX-owned authored files, and 285 authored
+    test/control files. The upstream UVM trees remain exact external build
+    products and are excluded from authored inventories. The main Debug tree
+    registers 118 tests; the governed-source configuration adds the two exact
+    unmodified-UVM phase/TLM tests.
+56. The complete documentation, catalog, UVM matrix, conformance, release,
+    inventory, installed-public, and Linux/Windows portability prefix passes
+    28/28 in 17.87 seconds; `git diff --check` is clean. Preserve Changes 1-19
+    and begin Change 20 with the scheduled LLVM-disabled sanitizer, fresh
+    exact-LLVM Debug and Release eight-worker builds, all regressions and final
+    resource audits, then one commit/push and mandatory non-documentation hosted
+    CI inspection/repair. Do not commit or push before those local gates pass.
+57. Change 20 local qualification is complete in the accumulated dirty Batch
+    160 worktree. The fresh LLVM-disabled GCC 13.3 ASan/UBSan build completes
+    warning-clean with eight workers. Its first run passed 116/117 and exposed
+    a stale VITAL relocation fixture: format-3 `.fsimdesign` requires
+    `state/sv-uvm.bin`, but that test copied only the six earlier state
+    payloads. The fixture now copies all seven. Its isolated rerun passes in
+    5.13 seconds and the exact final sanitizer regression passes 117/117 in
+    1,180.07 seconds with leak detection disabled and ASan/UBSan halt-on-error.
+58. Fresh exact-LLVM 22.1.8 Debug and Release trees each complete 679-step
+    warning-clean eight-worker builds. Debug passes 117/117 in 381.93 seconds
+    and Release passes 117/117 in 314.14 seconds. Both complete suites include
+    source, catalog, UVM matrix, inventory, installed-public, resource,
+    portability, differential, and release-candidate gates. The sanitizer,
+    Debug, and Release trees are all no-op under eight workers; their final logs
+    contain no sanitizer, runtime-error, or CTest-failure markers.
+59. The governed-source tree completes a 338-step warning-clean eight-worker
+    rebuild and is also no-op. Its exact final upstream tests pass 2/2 in
+    856.23 seconds: UVM 1.2 in 369.34 seconds and UVM 2020-3.1 in 486.87
+    seconds. The authoritative current traces are retained below
+    `build/llvm22-ninja-debug-uvm/uvm-phase-tlm-example`; all fourteen direct,
+    O0/O2 cold/warm, and debug traces are exactly 10,357 bytes with SHA-256
+    `f78d9f125531a9d4764e6c5336e0bfdf8d9893577932f1cbb0d198355fb7c7ac`.
+    The older `/tmp/fsim-batch160-change17-real-source-surface-*` roots remain
+    historical Change 17 evidence and intentionally retain their earlier
+    7,062-byte direct traces.
+60. Next action: run final diff/status checks, commit and push the single Batch
+    160 implementation, then inspect and repair every non-documentation hosted
+    Linux, Windows, sanitizer, and fuzz job until green. After hosted closeout,
+    save and push the exact Batch 161 restart plan and clear context before any
+    Batch 161 implementation.
 
 ## Batch 159 active checkpoint - 2026-08-07
 

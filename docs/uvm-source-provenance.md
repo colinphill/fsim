@@ -38,17 +38,19 @@ The downloaded archives, extracted sources, and generated manifests are build
 products and remain outside fsim's authored source, license, and release
 inventories.
 
-## Batch 159 execution resource baseline
+## Batch 160 phase/TLM execution resource baseline
 
 The final package-only analysis peaks at approximately 1.69 GiB for UVM 1.2
-and 1.94 GiB for UVM 2020-3.1 under a 3-GiB address-space ceiling. Direct
-executable source runs peak at 3,957,332 KiB for UVM 1.2 under a 4-GiB ceiling
-and 4,439,280 KiB for UVM 2020-3.1 under a 5-GiB ceiling.
+and 1.94 GiB for UVM 2020-3.1 under a 3-GiB address-space ceiling. The final
+exact phase/TLM direct source runs peak at 4,242,276 KiB for UVM 1.2 and
+4,735,592 KiB for UVM 2020-3.1 under 6-GiB ceilings.
 
-Portable compile peaks at 2,989,608 KiB for UVM 1.2 and 3,448,128 KiB for UVM
-2020-3.1. Two-root O0/O2 design publication peaks at 3,214,264/3,214,124 KiB
-for UVM 1.2 and 3,509,684/3,509,656 KiB for UVM 2020-3.1. Interpreter,
-compiled O0/O2, debug, VCD/FST, cold/warm cache, and relocated-artifact runs
-then produce the same bounded two-root result. These measurements are local
-evidence from the exact governed sources and are ceilings/baselines, not a
-general host-memory guarantee.
+Portable compile peaks at 3,308,520 KiB for UVM 1.2 and 3,672,868 KiB for UVM
+2020-3.1 under 5/6-GiB ceilings. Two-root O0/O2 phase/TLM design publication
+peaks at 3,198,008/3,198,256 KiB for UVM 1.2 and 3,441,912/3,441,688 KiB for
+UVM 2020-3.1 under 5/5.5-GiB ceilings. Every interpreter, compiled O0/O2,
+debug, VCD/FST, cold/warm cache, and relocated-artifact execution remains below
+1,000,000 KiB under a 3-GiB ceiling and produces the exact transcript through
+the tick-5 race and cataloged deadlock. These measurements are local evidence
+from the exact governed sources and are ceilings/baselines, not a general host-
+memory guarantee.

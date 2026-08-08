@@ -955,11 +955,16 @@ std::optional<VcdScale> vcd_scale(
     diagnostic::Engine& diagnostics);
 
 struct TraceState {
+  ~TraceState();
+
   std::ofstream stream;
   std::unique_ptr<runtime::VcdWriter> writer;
   std::vector<std::vector<runtime::VcdSignal>> handles;
   std::vector<bool> enabled;
   std::vector<runtime::SystemVerilogScalarKind> scalar_kinds;
+  std::array<runtime::VcdSignal, 7> uvm_activity_handles{};
+  Simulation* simulation{};
+  std::uint64_t uvm_activity_observer{};
   SimulationTick tick_multiplier{1};
 };
 
@@ -1067,6 +1072,7 @@ enum class DebugBreakpointKind {
   time,
   signal,
   source,
+  phase,
 };
 
 struct DebugBreakpoint {
@@ -1141,6 +1147,11 @@ class DebuggerSession final {
 
   void show_locals();
 
+  void uvm_command(const std::vector<std::string>& command);
+
+  [[nodiscard]] std::vector<std::pair<
+      std::string, runtime::SystemVerilogUvmPhaseState>> phase_states() const;
+
   void trace_command(const std::vector<std::string>& command);
 
   void set_trace_enabled(const SignalId signal, const bool enable);
@@ -1179,6 +1190,8 @@ class DebuggerSession final {
 
   void step(const bool delta_step);
 
+  void step_phase();
+
   void step_execution(const bool process_step);
 
   Simulation& simulation_;
@@ -1194,9 +1207,13 @@ class DebuggerSession final {
   std::vector<DebugBreakpoint> breakpoints_;
   std::optional<DebugBreakpointHit> hit_;
   std::optional<runtime::simir::ExecutionPoint> current_execution_point_;
+  std::vector<std::pair<
+      std::string, runtime::SystemVerilogUvmPhaseState>> phase_states_;
+  std::optional<std::string> phase_transition_;
   std::uint64_t next_breakpoint_{1};
   std::uint64_t observer_{};
   bool executing_{};
+  bool stop_on_phase_transition_{};
 };
 
 int run_debug_repl_impl(

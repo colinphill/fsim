@@ -2039,6 +2039,39 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-RUN-0001` | error | The SimIR interpreter failed during a CLI run. |
 | `FSIM-RUN-0002` | error | Another exception terminated a CLI run. |
 | `FSIM-UVM-CLI-001` | error | A recognized UVM command-line plusarg is malformed, exceeds a bound, or cannot be applied to the simulation-owned factory/config/resource state. |
+| `FSIM-UVM-PHASE-001` | error | A UVM phase or domain handle is empty, stale, or owned by another simulation. |
+| `FSIM-UVM-PHASE-002` | error | A UVM phase/domain identity, standard kind, registration, root participation, or graph edge is malformed or duplicated. |
+| `FSIM-UVM-PHASE-003` | error | A UVM phase parent or dependency edge crosses domains, exceeds structural depth, or would make the graph cyclic or inconsistent. |
+| `FSIM-UVM-PHASE-004` | error | A UVM phase graph exceeds its domain, node, edge, root, identity, traversal, or mutation resource ceiling. |
+| `FSIM-UVM-PHASE-005` | error | A UVM phase domain references a root that is not live in the owning simulation. |
+| `FSIM-UVM-PHASE-006` | error | A per-component UVM phase callback threw or otherwise failed; the phase contains the failure and continues deterministic traversal. |
+| `FSIM-UVM-PHASE-007` | error | A UVM task-phase process tree, scheduled wait, synchronized execution group, completion, timeout, or jump request is invalid for its current state or domain. |
+| `FSIM-UVM-PHASE-008` | error | UVM task-phase quiescence deadlocked or exceeded its ready-to-end re-entry, scheduler callback, zero-time stabilization, delta-cycle, or iteration ceiling. |
+| `FSIM-UVM-OBJ-001` | error | A UVM objection source, phase, root, or component handle is empty, stale, or owned by another simulation. |
+| `FSIM-UVM-OBJ-002` | error | A UVM objection operation has an invalid count, phase state, root association, or local drop underflow. |
+| `FSIM-UVM-OBJ-003` | error | UVM objection source, description, entry, count, propagation, callback, trace, mutation, drain, aggregate delay, or re-entry state exceeds its configured ceiling. |
+| `FSIM-UVM-OBJ-004` | error | A UVM raised, dropped, all-dropped, or ready-to-end callback threw; the failure is contained after the transactional count update and remaining work continues in deterministic order. |
+| `FSIM-UVM-TLM1-001` | error | A UVM TLM1 endpoint, owning component, or root is empty, stale, or owned by another simulation. |
+| `FSIM-UVM-TLM1-002` | error | A UVM TLM1 endpoint name, cardinality, duplicate connection, required binding, or terminal resolution is malformed. |
+| `FSIM-UVM-TLM1-003` | error | A UVM TLM1 connection has incompatible endpoint kinds, interface/profile, direction, root identity, or would introduce a cycle. |
+| `FSIM-UVM-TLM1-004` | error | A UVM TLM1 endpoint, connection, component fanout, graph depth, traversal work, profile storage, or mutation resource ceiling was exceeded. |
+| `FSIM-UVM-TLM1-005` | error | A UVM TLM1 operation is unsupported by its interface, uses an invalid binding or phase state, has a mismatched nominal payload type, or addresses an unavailable FIFO or transport implementation. |
+| `FSIM-UVM-TLM1-006` | error | UVM TLM1 FIFO capacity, queued payload, payload storage, pending operation, execution count, or sequence state exceeds its configured ceiling. |
+| `FSIM-UVM-TLM1-007` | error | A UVM TLM1 analysis publication, subscriber, FIFO, implementation, or callback is invalid; subscriber failures are contained and remaining snapshot targets continue in resolution order. |
+| `FSIM-UVM-TLM1-008` | error | UVM TLM1 analysis publication exceeds its callback fanout, recursion depth, retained failure, publication count, or delivery sequence ceiling. |
+| `FSIM-UVM-TLM2-001` | error | A UVM TLM2 socket or transaction handle is empty, stale, or owned by another simulation. |
+| `FSIM-UVM-TLM2-002` | error | A UVM TLM2 socket registration, connection, binding, kind, protocol, nominal profile, root, cardinality, or passthrough topology is invalid. |
+| `FSIM-UVM-TLM2-003` | error | A UVM TLM2 generic payload, byte-enable pattern, streaming width, extension set, response, direct-memory descriptor, or ownership association is malformed. |
+| `FSIM-UVM-TLM2-004` | error | A UVM TLM2 transport callback, protocol phase, debug result, transaction transition, or forward/backward operation is invalid or failed. |
+| `FSIM-UVM-TLM2-005` | error | UVM TLM2 payload, byte-enable, streaming-width, extension, hop, callback, socket, transaction, or outstanding-work state exceeds its configured ceiling. |
+| `FSIM-UVM-DEBUG-001` | error | UVM phase, objection, process, connection, FIFO, socket, payload, drain, or transaction state advanced, became stale, or was torn down while a public debug snapshot was captured. |
+| `FSIM-UVM-DEBUG-002` | error | A UVM debug snapshot or formatted view exceeds its configured record, payload-byte, or output-byte ceiling. |
+| `FSIM-UVM-ACTIVITY-001` | error | A UVM activity observer is invalid or threw while receiving an immutable event snapshot; observer failures are contained and remaining callbacks continue in registration order. |
+| `FSIM-UVM-ACTIVITY-002` | error | UVM activity event retention, observer count, callback fanout, re-entry depth, text storage, sequence state, or configured resource limits were exceeded. |
+| `FSIM-UVM-FOREIGN-001` | error | A DPI/VPI UVM snapshot layout, record index, simulation identity, generation, or foreign callback request is invalid, stale, or belongs to another simulation. |
+| `FSIM-UVM-FOREIGN-002` | error | A DPI/VPI UVM snapshot, record, text, payload, caller buffer, callback, or retained-generation resource ceiling was exceeded. |
+| `FSIM-UVM-STATE-001` | error | A versioned UVM artifact has an invalid schema, ABI, provenance, phase graph, objection/drain, TLM connection/FIFO/transaction record, or contains a nonportable process object. |
+| `FSIM-UVM-STATE-002` | error | Portable UVM checkpoint construction or capture exceeded a configured record, root, identity, text, payload, callback-summary, or scheduler-state resource ceiling. |
 | `FSIM-RUN-ASSERT-0001` | assertion severity | A false HDL assertion stopped a CLI simulation; the diagnostic retains its source location and message. |
 | `FSIM-HDL-REPORT` | report severity | A VHDL report or SystemVerilog severity task was emitted through a command or Tcl output stream. |
 | `FSIM-RUN-DELTA-0001` | error | Simulation exceeded `max_deltas`; the message includes pending processes and recent signals. |

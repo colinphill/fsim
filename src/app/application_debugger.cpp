@@ -357,6 +357,10 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
       }
       return;
     }
+    if (command[0] == "uvm") {
+      uvm_command(command);
+      return;
+    }
     if (command[0] == "chandle" && command.size() == 2) {
       std::uint64_t handle{};
       const auto converted = std::from_chars(
@@ -617,10 +621,12 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
         step_execution(false);
       } else if (command[1] == "process") {
         step_execution(true);
+      } else if (command[1] == "phase") {
+        step_phase();
       } else if (command[1] == "delta" || command[1] == "time") {
         step(command[1] == "delta");
       } else {
-        output_ << "usage: step statement|process|delta|time\n";
+        output_ << "usage: step statement|process|phase|delta|time\n";
         return;
       }
       return;
@@ -1064,6 +1070,55 @@ void DebuggerSession::show_locals()  {
     }
   }
 
+std::vector<std::pair<std::string, runtime::SystemVerilogUvmPhaseState>>
+DebuggerSession::phase_states() const {
+  std::vector<std::pair<
+      std::string, runtime::SystemVerilogUvmPhaseState>> result;
+  for (const auto& domain : simulation_.uvm_phases().domains()) {
+    const auto domain_snapshot = simulation_.uvm_phases().snapshot(domain);
+    for (const auto& phase : simulation_.uvm_phases().phases(domain)) {
+      const auto snapshot = simulation_.uvm_phases().snapshot(phase);
+      result.emplace_back(
+          domain_snapshot.identity + "." + snapshot.identity,
+          snapshot.state);
+    }
+  }
+  return result;
+}
+
+void DebuggerSession::uvm_command(
+    const std::vector<std::string>& command) {
+  if (command.size() > 2) {
+    output_ << "usage: uvm [summary|phases|objections|tlm1|tlm2|all]\n";
+    return;
+  }
+  auto section = UvmDebugSection::summary;
+  if (command.size() == 2) {
+    if (command[1] == "phases") {
+      section = UvmDebugSection::phases;
+    } else if (command[1] == "objections") {
+      section = UvmDebugSection::objections;
+    } else if (command[1] == "tlm1") {
+      section = UvmDebugSection::tlm1;
+    } else if (command[1] == "tlm2") {
+      section = UvmDebugSection::tlm2;
+    } else if (command[1] == "all") {
+      section = UvmDebugSection::all;
+    } else if (command[1] != "summary") {
+      output_ << "usage: uvm [summary|phases|objections|tlm1|tlm2|all]\n";
+      return;
+    }
+  }
+  try {
+    const auto limits = UvmDebugLimits{};
+    output_ << format_uvm_debug_snapshot(
+        simulation_.uvm_debug_snapshot(limits), section,
+        limits.maximum_formatted_bytes);
+  } catch (const UvmDebugError& error) {
+    error_ << error.diagnostic_code() << ": " << error.what() << '\n';
+  }
+}
+
 void DebuggerSession::trace_command(const std::vector<std::string>& command)  {
     if (trace_ == nullptr) {
       output_ << "trace output is not configured\n";
@@ -1210,6 +1265,35 @@ void DebuggerSession::add_breakpoint(const std::vector<std::string>& command)  {
       output_ << '\n';
       return;
     }
+    if (kind == "phase") {
+      const auto states = phase_states();
+      auto matches = std::vector<std::string>{};
+      for (const auto& [identity, state] : states) {
+        (void)state;
+        if (identity == location
+            || (location.find('.') == std::string_view::npos
+                && identity.ends_with("." + std::string{location}))) {
+          matches.push_back(identity);
+        }
+      }
+      if (location != "*" && matches.empty()) {
+        output_ << "unknown UVM phase: " << location << '\n';
+        return;
+      }
+      if (matches.size() > 1) {
+        output_ << "ambiguous UVM phase: " << location << '\n';
+        return;
+      }
+      breakpoint.kind = DebugBreakpointKind::phase;
+      breakpoint.id = next_breakpoint_++;
+      breakpoint.path = location == "*"
+          ? std::string{location} : std::move(matches.front());
+      breakpoints_.push_back(breakpoint);
+      phase_states_ = states;
+      output_ << "breakpoint " << breakpoint.id << " set on UVM phase "
+              << location << '\n';
+      return;
+    }
     if (kind == "source") {
       const auto separator = location.rfind(':');
       const auto line_text =
@@ -1242,7 +1326,7 @@ void DebuggerSession::add_breakpoint(const std::vector<std::string>& command)  {
     }
     output_ << "usage: break time TIME | "
                "break signal SIGNAL [==|!= VALUE] | "
-               "break source [PATH:]LINE\n";
+               "break source [PATH:]LINE | break phase IDENTITY|*\n";
   }
 
 void DebuggerSession::list_breakpoints() const  {
@@ -1264,12 +1348,14 @@ void DebuggerSession::list_breakpoints() const  {
                   << (breakpoint.signal_condition_equal ? "== " : "!= ")
                   << breakpoint.signal_condition->to_msb_string();
         }
-      } else {
+      } else if (breakpoint.kind == DebugBreakpointKind::source) {
         output_ << "source ";
         if (!breakpoint.path.empty()) {
           output_ << breakpoint.path << ':';
         }
         output_ << breakpoint.line;
+      } else {
+        output_ << "phase " << breakpoint.path;
       }
       output_ << '\n';
     }
@@ -1356,6 +1442,36 @@ void DebuggerSession::install_execution_hook(
             scheduler.request_stop();
             return;
           }
+          const auto current_phase_states = phase_states();
+          for (const auto& [identity, state] : current_phase_states) {
+            const auto previous = std::ranges::find(
+                phase_states_, identity,
+                &std::pair<std::string,
+                           runtime::SystemVerilogUvmPhaseState>::first);
+            if (previous != phase_states_.end()
+                && previous->second == state) {
+              continue;
+            }
+            phase_transition_ = identity + " state "
+                + std::to_string(static_cast<unsigned>(state));
+            const auto found = std::find_if(
+                breakpoints_.begin(), breakpoints_.end(),
+                [&](const DebugBreakpoint& breakpoint) {
+                  return breakpoint.kind == DebugBreakpointKind::phase
+                      && (breakpoint.path == "*"
+                          || breakpoint.path == identity);
+                });
+            if (found != breakpoints_.end()) {
+              hit_ = DebugBreakpointHit{found->id, *phase_transition_};
+              scheduler.request_stop();
+              break;
+            }
+          }
+          phase_states_ = current_phase_states;
+          if (!hit_ && stop_on_phase_transition_ && phase_transition_) {
+            scheduler.request_stop();
+            return;
+          }
           if (additional_stop && additional_stop(scheduler, phase)) {
             scheduler.request_stop();
           }
@@ -1417,6 +1533,9 @@ void DebuggerSession::report_result(const runtime::RunResult& result)  {
       output_ << "hit breakpoint " << hit_->id << ": "
               << hit_->description << '\n';
     }
+    if (stop_on_phase_transition_ && phase_transition_) {
+      output_ << "phase transition " << *phase_transition_ << '\n';
+    }
     report_execution_point();
     output_
         << (simulation_.finished() ? "simulation finished" : "stopped")
@@ -1449,6 +1568,8 @@ void DebuggerSession::run(const std::optional<SimulationTick> requested_limit)  
     }
     hit_.reset();
     current_execution_point_.reset();
+    phase_states_ = phase_states();
+    phase_transition_.reset();
     install_execution_hook(time_breakpoint);
     try {
       simulation_.clear_stop();
@@ -1477,6 +1598,8 @@ void DebuggerSession::step(const bool delta_step)  {
         earliest_time_breakpoint(start_time, std::nullopt);
     hit_.reset();
     current_execution_point_.reset();
+    phase_states_ = phase_states();
+    phase_transition_.reset();
     install_execution_hook(
         time_breakpoint,
         [start_time, delta_step](
@@ -1507,6 +1630,28 @@ void DebuggerSession::step(const bool delta_step)  {
     install_interrupt_hook(simulation_);
   }
 
+void DebuggerSession::step_phase() {
+  if (!can_execute()) return;
+  hit_.reset();
+  current_execution_point_.reset();
+  phase_states_ = phase_states();
+  phase_transition_.reset();
+  stop_on_phase_transition_ = true;
+  install_execution_hook(earliest_time_breakpoint(
+      simulation_.now(), std::nullopt));
+  try {
+    simulation_.clear_stop();
+    executing_ = true;
+    ExecutionGuard guard{executing_};
+    const auto result = simulation_.run();
+    report_result(result);
+  } catch (const std::exception& exception) {
+    error_ << exception.what() << '\n';
+  }
+  stop_on_phase_transition_ = false;
+  install_interrupt_hook(simulation_);
+}
+
 void DebuggerSession::step_execution(const bool process_step)  {
     if (!can_execute()) {
       return;
@@ -1518,6 +1663,8 @@ void DebuggerSession::step_execution(const bool process_step)  {
                 : std::nullopt);
     hit_.reset();
     current_execution_point_.reset();
+    phase_states_ = phase_states();
+    phase_transition_.reset();
     install_execution_hook(
         std::nullopt,
         {},

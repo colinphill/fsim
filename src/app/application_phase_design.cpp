@@ -437,6 +437,29 @@ bool publish_design_artifact(
         alias, config.project.top,
         selected_root_identity(project, alias, config.project.top)});
   }
+  fsim::runtime::SystemVerilogUvmCheckpointProvenance uvm_provenance;
+  uvm_provenance.content_identity = project.cache_key;
+  uvm_provenance.cache_identity = project.cache_key + ":"
+      + std::string{project::to_string(project.optimization)};
+  uvm_provenance.artifact_identity = project.artifact_identity;
+  uvm_provenance.roots.reserve(metadata.roots.size());
+  for (const auto& root : metadata.roots) {
+    uvm_provenance.roots.push_back(root.alias);
+  }
+  auto uvm_bootstrap =
+      fsim::runtime::make_systemverilog_uvm_bootstrap_checkpoint(
+      std::move(uvm_provenance));
+  if (!uvm_bootstrap) {
+    diagnostics.error(
+        "FSIM-UVM-STATE-002",
+        "could not construct the bounded portable UVM bootstrap state");
+    return false;
+  }
+  auto uvm_state = serialize_systemverilog_uvm_state(
+      uvm_bootstrap.artifact, diagnostics);
+  if (!uvm_state) {
+    return false;
+  }
   for (const auto& binding : config.bindings) {
     metadata.bindings.push_back(
         {binding.instance, binding.target, binding.resolver});
@@ -461,13 +484,15 @@ bool publish_design_artifact(
   add_payload(
       "sv-constraint-hir", "state/sv-constraint-hir.bin", *constraint_hir);
   add_payload("sv-coverage", "state/sv-coverage.bin", *coverage);
+  add_payload("sv-uvm", "state/sv-uvm.bin", *uvm_state);
   std::vector<library::PortablePayload> payloads{
       {metadata.payloads[0].artifact, std::move(*runtime)},
       {metadata.payloads[1].artifact, std::move(*semantics)},
       {metadata.payloads[2].artifact, std::move(*design_ir)},
       {metadata.payloads[3].artifact, std::move(*classes)},
       {metadata.payloads[4].artifact, std::move(*constraint_hir)},
-      {metadata.payloads[5].artifact, std::move(*coverage)}};
+      {metadata.payloads[5].artifact, std::move(*coverage)},
+      {metadata.payloads[6].artifact, std::move(*uvm_state)}};
   std::set<std::string> selected_plugin_libraries;
   for (const auto& instance : project.design.systemc_instances()) {
     if (const auto target = systemc_target(instance.target)) {
@@ -571,9 +596,11 @@ std::optional<BuiltProject> load_design_artifact(
   const auto* constraint_hir_index = payload_by_kind(
       *metadata, "sv-constraint-hir");
   const auto* coverage_index = payload_by_kind(*metadata, "sv-coverage");
+  const auto* uvm_index = payload_by_kind(*metadata, "sv-uvm");
   if (runtime_index == nullptr || semantic_index == nullptr
       || design_ir_index == nullptr || class_index == nullptr
-      || constraint_hir_index == nullptr || coverage_index == nullptr) {
+      || constraint_hir_index == nullptr || coverage_index == nullptr
+      || uvm_index == nullptr) {
     diagnostics.error(
         "FSIM-ART-0014", ".fsimdesign is missing a required state payload");
     return std::nullopt;
@@ -597,8 +624,10 @@ std::optional<BuiltProject> load_design_artifact(
   auto coverage_bytes = read_design_payload(
       directory / coverage_index->artifact, coverage_index->checksum,
       diagnostics);
+  auto uvm_bytes = read_design_payload(
+      directory / uvm_index->artifact, uvm_index->checksum, diagnostics);
   if (!runtime_bytes || !semantic_bytes || !design_ir_bytes || !class_bytes
-      || !constraint_hir_bytes || !coverage_bytes) {
+      || !constraint_hir_bytes || !coverage_bytes || !uvm_bytes) {
     return std::nullopt;
   }
   auto runtime = deserialize_runtime_state(
@@ -619,8 +648,10 @@ std::optional<BuiltProject> load_design_artifact(
   auto coverage = deserialize_systemverilog_coverage_state(
       *coverage_bytes, support::path_to_utf8(coverage_index->artifact),
       diagnostics);
+  auto uvm_state = deserialize_systemverilog_uvm_state(
+      *uvm_bytes, support::path_to_utf8(uvm_index->artifact), diagnostics);
   if (!runtime || !semantics || !design_ir || !classes || !constraint_hir
-      || !coverage
+      || !coverage || !uvm_state
       || !design_ir->valid(*semantics)
       || !application_detail::valid_runtime_projection(*design_ir, *runtime)) {
     if (!diagnostics.has_error()) {
@@ -640,12 +671,20 @@ std::optional<BuiltProject> load_design_artifact(
   for (const auto& root : metadata->roots) {
     roots.push_back(root.alias);
   }
+  const fsim::runtime::SystemVerilogUvmCheckpointProvenance expected_uvm{
+      metadata->cache_key,
+      metadata->cache_key + ":" + metadata->optimization,
+      uvm_state->provenance.artifact_identity,
+      roots};
   if (runtime->roots() != roots || design_ir->roots() != roots
       || semantics->units().size() != metadata->unit_count
       || semantics->source_files().size() != metadata->semantic_source_count
       || runtime->specializations().size() != metadata->specialization_count
       || runtime->signals().size() != metadata->signal_count
-      || runtime->processes().size() != metadata->process_count) {
+      || runtime->processes().size() != metadata->process_count
+      || fsim::runtime::validate_systemverilog_uvm_checkpoint(
+             *uvm_state, expected_uvm)
+          != fsim::runtime::SystemVerilogUvmCheckpointError::None) {
     diagnostics.error(
         "FSIM-ART-0014",
         ".fsimdesign metadata counts or roots disagree with state payloads");
@@ -679,7 +718,7 @@ std::optional<BuiltProject> load_design_artifact(
       metadata->seed, metadata->entropy_seed, false,
       directory.parent_path(), std::move(live_systemc->registries), {},
       std::move(objects), metadata->design_digest, std::move(*classes),
-      std::move(*coverage)};
+      std::move(*coverage), std::move(*uvm_state)};
 }
 
 bool elaborate_artifact(

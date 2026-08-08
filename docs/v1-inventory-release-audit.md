@@ -244,3 +244,12 @@ authored test/control files. The two immutable upstream UVM kits remain
 external build products: their exact archive and extracted-tree identities are
 recorded, while no upstream file is vendored, patched, or counted as authored
 source.
+
+v2 Batch 160 adds simulation-owned UVM phase/domain, objection/drain, TLM1,
+TLM2, activity, foreign-snapshot, debugger, and checkpoint services plus exact
+runtime/application matrices and one aggregate release contract as 38 SPDX-
+owned authored files. Thirty-three production diagnostic codes advance the
+reviewed inventory to 2,023 diagnostics, 769 bounded C/C++ sources, 870
+authored artifacts, and 285 authored test/control files. The exact upstream
+UVM trees remain governed external build products; the new fixture imports
+their unmodified types and is itself clean-room authored evidence.
