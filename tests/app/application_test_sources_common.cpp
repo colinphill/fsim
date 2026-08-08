@@ -457,7 +457,9 @@ class UvmComponent extends uvm_component;
   endtask
   `uvm_component_utils(UvmComponent)
 endclass
+)";
 
+  output << R"(
 module class_top;
   localparam logic [136:0] WIDE_SEED =
       {1'b1, 62'b0, 1'b1, 69'b0, 4'b1000};
