@@ -5,6 +5,57 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
+## Batch 160 planned restart checkpoint - 2026-08-08
+
+1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
+   expanded Batch 160 allocation in `implementation_plan_v2.md`, and verify
+   branch `codex/v2` is clean and synchronized at pushed Batch 159 closeout
+   `a7b2ab310e1b3e21e31e98f7dd387304f33cf749` plus this documentation-only
+   Batch 160 planning checkpoint.
+2. This checkpoint implements the required pre-batch flow. Batch 160 is
+   expanded into twenty exact changes without broadening the locked UVM phase,
+   objection, and TLM scope. No Batch 160 implementation file has changed;
+   clear context after pushing this plan and resume only from this section and
+   the authoritative allocation.
+3. Preserve the complete Batch 159 UVM object/factory/configuration/reporting
+   implementation and its bounded hydration repair. The final exact LLVM
+   22.1.8 Debug and Release trees passed 115/115 in 414.95 and 336.28 seconds,
+   and the accumulated implementation is pushed as `a7b2ab3`.
+4. Change 1 begins with a simulation-owned phase model, not scheduler shortcuts:
+   generation-checked phase/domain identities, common and runtime kinds/states,
+   explicit graph ownership and relationships, per-root participation, custom
+   registration order, transactional acyclic construction, resource ceilings,
+   focused service evidence, and cataloged invalid-graph diagnostics.
+5. Changes 2-4 construct the standard/custom graphs and then execute function
+   and task phases with exact hierarchy ordering, domains, synchronization,
+   jumps, hooks, process ownership, and bounded unmodified-UVM memory evidence.
+   Do not implement objections or TLM early to disguise incomplete phase
+   scheduling.
+6. Changes 5-8 own objections, propagation, drains, all-dropped and ready/end
+   hooks, phase-created process cancellation, multi-root/domain quiescence,
+   deadlock/livelock bounds, teardown, and restart isolation. Changes 9-12 then
+   own TLM1 ports/exports/imps and transport/FIFOs/analysis plus TLM2 sockets,
+   payloads, phases, extensions, timing, and connection validation.
+7. Changes 13-16 integrate the completed phase/TLM model with debugger,
+   callbacks, VCD/FST, DPI/VPI, portable artifacts, relocation, deterministic
+   replay, multiple simulations, and cache provenance. Changes 17-19 own exact
+   unmodified UVM 1.2/2020 examples, capped resource measurements, aggregate
+   positive/negative/race/deadlock matrices, docs, inventories, audits, and the
+   handoff.
+8. Accumulate Changes 1-20 in one dirty Batch 160 worktree. Use at least eight
+   workers for local builds, retain exact test and memory output, update this
+   handoff after every completed change, and do not reset, commit, or push the
+   implementation before Change 20.
+9. Batch 160 is the scheduled sanitizer and hosted-CI monitoring boundary.
+   Only Change 20 runs the LLVM-disabled ASan/UBSan regression and full fresh
+   exact-LLVM Debug/Release qualification, commits and pushes once, then
+   inspects and repairs every non-documentation Linux, Windows, sanitizer, and
+   fuzz job until green.
+10. Before Batch 161 implementation, repeat this flow: expand and save its
+    exact restart plan, commit and push the documentation-only checkpoint, then
+    clear context. Do not begin Batch 160 Change 1 until this checkpoint itself
+    is committed, pushed, and followed by a context clear.
+
 ## Batch 159 active checkpoint - 2026-08-07
 
 1. Start in `/home/colin/projects/fsim`, read this file and the authoritative

@@ -4560,21 +4560,125 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 160 - UVM phases, objections, and TLM - CI monitoring boundary
 
-- **Changes 1-4:** implement common/domain phase graphs, build/connect/end-of-
-  elaboration/start-of-simulation/run/extract/check/report/final ordering,
-  jumps, synchronization, and custom phases.
-- **Changes 5-8:** implement objections, drain time, all-dropped callbacks,
-  phase-ready/end hooks, task cancellation, process lifetime, and scheduler
-  quiescence across multiple roots.
-- **Changes 9-12:** implement TLM1/TLM2 ports/exports/imps, blocking/nonblocking
-  transport, analysis ports/FIFOs, sockets, payloads, phases, and connection
-  validation.
-- **Changes 13-16:** integrate phase/TLM state with debugger, callbacks, traces,
-  DPI/VPI, artifacts, relocation, deterministic replay, and cache provenance.
-- **Changes 17-19:** add UVM phase/TLM examples, race/deadlock/connection
-  negatives, cross-engine differentials, docs, matrices, inventories, and handoff.
-- **Change 20:** run the monitoring-batch sanitizer, full Debug/Release and
-  release gates, commit/push once, then inspect and repair all non-doc CI jobs.
+- **Change 1:** Define the simulation-owned UVM phase foundation before any
+  scheduler behavior: opaque generation-checked phase/domain handles, exact
+  phase kind and state, parent/predecessor/successor relationships, per-root
+  participation, source-order custom registration, and bounded acyclic graph
+  construction. Freeze standard common/runtime phase identities, ownership,
+  traversal, mutation, duplicate, cycle, depth, node, edge, and root limits;
+  add focused service tests and cataloged invalid-graph diagnostics.
+- **Change 2:** Construct the standard common domain and runtime schedule with
+  build, connect, end-of-elaboration, start-of-simulation, pre-reset through
+  post-shutdown, extract, check, report, and final nodes. Implement insertion,
+  predecessor/successor placement, shared and independent domains,
+  synchronization edges, custom phase registration, deterministic graph
+  linearization, and transactional rejection without exposing partial graphs.
+- **Change 3:** Execute the function-phase subset over the component hierarchy
+  with UVM-correct top-down or bottom-up traversal, per-component callbacks,
+  phase-ready-to-end and phase-ended hooks, state transitions, exception
+  containment, deterministic multiple-root ordering, and hierarchy-mutation
+  rules. Prove build/connect/end-of-elaboration/start-of-simulation/extract/
+  check/report/final ordering through interpreter, compiled, and debug engines.
+- **Change 4:** Execute task phases and domain control, including run and the
+  pre/reset/post/configure/main/shutdown families, concurrent sibling domains,
+  custom task phases, legal jump/forward/backward restart semantics, graph
+  synchronization, phase completion, and phase-local process ownership. Close
+  the source-level UVM method dispatch needed by unmodified phase callbacks and
+  retain capped UVM 1.2/UVM 2020 package and executable memory baselines.
+- **Change 5:** Implement simulation-owned objections with source-object and
+  description identity, local and propagated counts, raise/drop/set behavior,
+  root and phase association, ordered raised/dropped callbacks, trace records,
+  count queries, and deterministic all-dropped detection. Reject stale,
+  cross-simulation, negative, overflowing, over-depth, and excessive source/
+  description/count state before mutating the phase or hierarchy.
+- **Change 6:** Implement per-object/per-phase drain time, cancellation and
+  restart of pending drains, all-dropped callback sequencing, re-raise during
+  drain or callback, phase-ready-to-end re-entry, and stable simulated-time
+  scheduling. Bound pending drains, callback fanout, re-entry, aggregate delay,
+  and teardown; prove zero/nonzero and simultaneous drains across multiple
+  roots without wall-clock dependence.
+- **Change 7:** Tie task-phase completion to objection state and scheduler-
+  owned process lifetime. Track phase-created process trees, kill or await them
+  at legal boundaries, contain exceptions, cancel waits and drains, prevent
+  post-phase callbacks, and reclaim every process on jump, timeout, root
+  teardown, failed construction, or simulation destruction without disturbing
+  caller-owned or another domain's processes.
+- **Change 8:** Close phase scheduler quiescence across multiple roots and
+  domains: ready/end hook stabilization, objection races, zero-time iteration
+  and callback ceilings, timeout/stop interaction, jump cancellation, teardown,
+  restart, and independent concurrently alive simulations. Add deterministic
+  deadlock/livelock diagnostics and prove no phase, objection, drain, process,
+  or scheduled-event state leaks into the next simulation.
+- **Change 9:** Define bounded TLM1 endpoint ownership and connection graphs for
+  ports, exports, and implementation endpoints. Preserve interface/profile,
+  min/max connection cardinality, source declaration order, hierarchy and
+  root identity, fanout, chained exports, resolution, debug naming, and stable
+  binding. Reject kind/profile/root/direction mismatches, cycles, duplicates,
+  unconnected required endpoints, and count/depth/fanout excess atomically.
+- **Change 10:** Execute blocking and nonblocking put/get/peek/transport plus
+  master/slave and bidirectional TLM1 interfaces. Implement bounded FIFOs,
+  reservation and wake ordering, can/try behavior, request/response ownership,
+  simulated-time blocking, cancellation at phase end, and payload nominal-type
+  preservation through interpreter, compiled, and debug execution.
+- **Change 11:** Execute analysis ports, exports, implementation endpoints,
+  subscribers, analysis FIFOs, and macro-generated analysis implementations.
+  Preserve registration-order broadcast, per-subscriber value/object semantics,
+  snapshot mutation rules, exception containment, recursive publication bounds,
+  and cross-root connection validation while allowing intentional fanout and
+  chained exports.
+- **Change 12:** Execute the UVM TLM2 generic-payload and socket families,
+  blocking and nonblocking forward/backward transport, debug transport, direct
+  memory interface, initiator/target and passthrough sockets, phase values,
+  delays, extensions, response status, and connection validation. Bound payload
+  bytes, byte enables, streaming width, extensions, hops, callbacks, and
+  outstanding transactions with deterministic nominal/profile diagnostics.
+- **Change 13:** Expose phase, objection, connection, FIFO, socket, payload,
+  drain, and process state through the debugger and public application queries.
+  Provide stable read-only snapshots, hierarchy/root qualification, bounded
+  enumeration and formatting, breakpoint/step behavior at phase transitions,
+  and generation-safe rejection while simulations advance or tear down.
+- **Change 14:** Integrate phase/TLM activity with simulation callbacks and
+  VCD/FST traces. Define exact callback ordering for graph, phase-state,
+  objection, drain, connection, transaction, FIFO, and quiescence events;
+  contain callback mutation/re-entry/exceptions; publish deterministic trace
+  names and value transitions without making observer presence alter scheduling.
+- **Change 15:** Integrate phase, objection, and TLM state with the public DPI
+  and VPI boundaries. Add bounded generation-safe queries and callbacks,
+  payload copy/borrow ownership rules, stable C layouts and diagnostics, and
+  prove native plug-in unload, cancellation, multiple-root isolation, and
+  restart without extending the frozen ABI incompatibly.
+- **Change 16:** Version and preserve phase graphs, scheduler checkpoints,
+  objections/drains, TLM connections/FIFOs/payloads, and required provenance in
+  portable object/design/runtime artifacts. Prove relocation, corruption and
+  schema negatives, interpreter/LLVM deterministic replay, repeated simulation,
+  isolated cold/warm native-cache identities, and clean restart; do not archive
+  host pointers, live callbacks, or nonportable process objects.
+- **Change 17:** Run one unmodified UVM 1.2 and UVM 2020-3.1 phase/TLM example
+  through direct source, portable object/design artifacts, two aliased roots,
+  interpreter, LLVM O0/O2, debug execution, callbacks, VCD/FST, and cold/warm
+  caches. Require one exact transcript, phase order, objection/drain timing,
+  TLM payload/result, trace transitions, and explicit capped analysis/compile/
+  elaboration/execution memory measurements without patching either library.
+- **Change 18:** Complete aggregate positive and cataloged-negative matrices for
+  phase graphs, jumps, synchronization, callbacks, objections, drains, process
+  cancellation, quiescence, TLM connections, FIFOs, sockets, payloads, artifacts,
+  relocation, observer failures, every resource ceiling, and cross-owner/stale
+  handles. Add race and deadlock fixtures whose outcome is deterministic across
+  interpreter, compiled, debug, cache, restart, and multiple-root configurations.
+- **Change 19:** Synchronize the public UVM guide, examples, architecture,
+  language support, diagnostic catalog, feature/conformance evidence, upstream
+  provenance, resource baselines, test inventory, release audit, and restart
+  handoff. Split any over-budget authored source along existing ownership seams
+  and pass documentation, catalog, inventory, installation, portability, and
+  release-candidate contracts before final qualification.
+- **Change 20:** Run the LLVM-disabled ASan/UBSan regression at this scheduled
+  monitoring boundary, then fresh warning-clean exact-LLVM Debug and Release
+  eight-worker builds, all tests, release gates, and final resource audits.
+  Repair every failure, commit and push the one accumulated Changes 1-20
+  implementation, inspect every non-documentation GitHub Actions job, and keep
+  repairing/re-running until all Linux, Windows, sanitizer, and fuzz jobs are
+  green. Save and push Batch 161's restart plan and clear context before its
+  implementation.
 
 ### Batch 161 - UVM sequences, callbacks, and register model
 
