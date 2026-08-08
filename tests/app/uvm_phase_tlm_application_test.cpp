@@ -5,12 +5,12 @@
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/project/project.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
+#include "fsim/support/environment.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstdint>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -475,7 +475,8 @@ int main(int argc, char **argv) {
   const std::filesystem::path work{argv[3]};
   const std::string release{argv[4]};
   std::error_code cleanup_error;
-  if (mode == "direct" && std::getenv("FSIM_TEST_REUSE_WORK") == nullptr) {
+  if (mode == "direct" &&
+      !fsim::support::environment_variable("FSIM_TEST_REUSE_WORK")) {
     make_tree_writable(work);
     std::filesystem::remove_all(work, cleanup_error);
   }
