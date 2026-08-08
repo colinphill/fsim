@@ -47,7 +47,7 @@ fsim_vpi_test_shutdown_count() {
 extern "C" FSIM_VPI_EXPORT fsim_vpi_status_v1 FSIM_VPI_CALL
 fsim_vpi_plugin_bind_v1(
     const fsim_vpi_host_v1* const host,
-    fsim_vpi_plugin_v1* const plugin) {
+    fsim_vpi_plugin_v1* const plugin) noexcept(false) {
   if (mode == 1) {
     return FSIM_VPI_STATUS_INVALID_ARGUMENT;
   }

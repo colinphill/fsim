@@ -50,7 +50,7 @@ fsim_vhpi_test_shutdown_count() {
 extern "C" FSIM_VHPI_EXPORT fsim_vhpi_status_v1 FSIM_VHPI_CALL
 fsim_vhpi_plugin_bind_v1(
     const fsim_vhpi_host_v1* const host,
-    fsim_vhpi_plugin_v1* const plugin) {
+    fsim_vhpi_plugin_v1* const plugin) noexcept(false) {
   if (mode == 1) {
     return FSIM_VHPI_STATUS_INVALID_ARGUMENT;
   }

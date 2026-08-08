@@ -138,8 +138,14 @@ typedef struct fsim_vhpi_plugin_v1 {
   fsim_vhpi_plugin_lifecycle_v1 shutdown;
 } fsim_vhpi_plugin_v1;
 
+#ifdef __cplusplus
+typedef fsim_vhpi_status_v1(FSIM_VHPI_CALL *fsim_vhpi_plugin_bind_v1_fn)(
+    const fsim_vhpi_host_v1* host,
+    fsim_vhpi_plugin_v1* plugin) noexcept(false);
+#else
 typedef fsim_vhpi_status_v1(FSIM_VHPI_CALL *fsim_vhpi_plugin_bind_v1_fn)(
     const fsim_vhpi_host_v1* host, fsim_vhpi_plugin_v1* plugin);
+#endif
 
 #ifdef __cplusplus
 }
