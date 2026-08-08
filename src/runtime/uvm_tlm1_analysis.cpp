@@ -7,7 +7,6 @@
 namespace fsim::runtime {
 namespace {
 
-constexpr std::string_view kInvalidHandle{"FSIM-UVM-TLM1-001"};
 constexpr std::string_view kInvalidAnalysis{"FSIM-UVM-TLM1-007"};
 constexpr std::string_view kAnalysisLimit{"FSIM-UVM-TLM1-008"};
 

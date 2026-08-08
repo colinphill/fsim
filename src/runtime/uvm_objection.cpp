@@ -87,7 +87,7 @@ SystemVerilogUvmObjectionService::SystemVerilogUvmObjectionService(
       phases_(&phases),
       scheduler_(scheduler),
       limits_(limits),
-      owner_(std::make_shared<unsigned char>(0)) {
+      owner_(std::make_shared<unsigned char>()) {
   if (limits_.maximum_sources == 0
       || limits_.maximum_descriptions == 0
       || limits_.maximum_entries == 0

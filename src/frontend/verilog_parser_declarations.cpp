@@ -808,7 +808,8 @@ Type VerilogParser::parse_systemverilog_aggregate_type() {
   const auto tag_width = tagged && !type.packed_members.empty()
       ? std::max<std::uint64_t>(
             1U,
-            std::bit_width(type.packed_members.size() - 1U))
+            static_cast<std::uint64_t>(
+                std::bit_width(type.packed_members.size() - 1U)))
       : 0U;
   if (concrete && total_width != 0U
       && tag_width
@@ -1099,7 +1100,8 @@ void VerilogParser::parse_typedef(
     const auto tag_width = tagged && !type.packed_members.empty()
         ? std::max<std::uint64_t>(
               1U,
-              std::bit_width(type.packed_members.size() - 1U))
+              static_cast<std::uint64_t>(
+                  std::bit_width(type.packed_members.size() - 1U)))
         : 0U;
     if (concrete
         && tag_width

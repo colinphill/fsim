@@ -206,7 +206,7 @@ SystemVerilogUvmPhaseService::SystemVerilogUvmPhaseService(
     : components_{&components},
       scheduler_{scheduler},
       limits_{limits},
-      owner_{std::make_shared<std::uint8_t>(0)} {}
+      owner_{std::make_shared<std::uint8_t>()} {}
 
 SystemVerilogUvmPhaseService::~SystemVerilogUvmPhaseService() {
   if (!scheduler_) return;

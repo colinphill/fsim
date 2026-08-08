@@ -38,7 +38,7 @@ SystemVerilogUvmTlm1Service::SystemVerilogUvmTlm1Service(
     SystemVerilogUvmTlm1Limits limits)
     : components_(&components),
       limits_(limits),
-      owner_(std::make_shared<unsigned char>(0)) {
+      owner_(std::make_shared<unsigned char>()) {
   if (limits_.maximum_endpoints == 0
       || limits_.maximum_connections == 0
       || limits_.maximum_endpoints_per_component == 0

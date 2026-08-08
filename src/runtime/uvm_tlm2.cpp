@@ -39,7 +39,7 @@ SystemVerilogUvmTlm2Service::SystemVerilogUvmTlm2Service(
     SystemVerilogUvmTlm2Limits limits)
     : components_(&components),
       limits_(limits),
-      owner_(std::make_shared<unsigned char>(0)) {
+      owner_(std::make_shared<unsigned char>()) {
   if (limits_.maximum_sockets == 0
       || limits_.maximum_connections == 0
       || limits_.maximum_sockets_per_component == 0
