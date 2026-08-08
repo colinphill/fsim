@@ -3,6 +3,7 @@
 #include "fsim/frontend/frontend.hpp"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <ranges>
 #include <stdexcept>
