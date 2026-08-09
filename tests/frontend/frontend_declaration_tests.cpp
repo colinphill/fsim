@@ -688,6 +688,17 @@ endmodule
           && has_code("FSIM-SV-SEM-019")
           && has_code("FSIM-SV-SEM-020"),
       "parameter declaration and override diagnostics are targeted");
+
+  const std::string fuzz_oom_source{
+      "module m(inpsedge ic6\0\0\0automatic\0a+ begin\n", 43U};
+  const auto fuzz_oom = parse_text(
+      "fuzz-oom-08279901975c1c5c906abd0a1609b94359e048a9.sv",
+      fuzz_oom_source,
+      Language::SystemVerilog2017);
+  require(
+      !fuzz_oom.ok() && fuzz_oom.design.units.size() == 1
+          && fuzz_oom.diagnostics.size() < 32,
+      "malformed lifetime declaration recovery must make bounded progress");
 }
 
 

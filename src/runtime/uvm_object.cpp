@@ -265,28 +265,31 @@ void SystemVerilogUvmObjectService::copy(
     for (const auto& field : type.fields) {
       account_field();
       if (has_flag(field.flags, SystemVerilogUvmFieldFlag::NoCopy)) continue;
-      const auto& source_value = heap_->property(source_handle, field.property);
-      auto& target_value = heap_->property(target_handle, field.property);
-      if (!same_property_shape(target_value, source_value)) {
+      const auto source_value = heap_->property(source_handle, field.property);
+      if (!same_property_shape(
+              heap_->property(target_handle, field.property), source_value)) {
         throw std::invalid_argument{
             "UVM field copy encountered incompatible property shapes"};
       }
       if (source_value.packed.width() != 0) {
-        target_value.packed = source_value.packed;
+        heap_->property(target_handle, field.property).packed =
+            source_value.packed;
       } else if (source_value.kind == SystemVerilogClassPropertyKind::String) {
-        target_value.string = source_value.string;
+        heap_->property(target_handle, field.property).string =
+            source_value.string;
       } else if (
           source_value.kind == SystemVerilogClassPropertyKind::ClassHandle) {
-        target_value.handle =
+        const auto copied_handle =
             has_flag(field.flags, SystemVerilogUvmFieldFlag::Reference)
             ? source_value.handle
             : copy_handle(source_value.handle, field.property, depth + 1U);
+        heap_->property(target_handle, field.property).handle = copied_handle;
       } else if (!source_value.handles.empty()) {
-        target_value.handles.clear();
-        target_value.handles.reserve(source_value.handles.size());
+        std::vector<SystemVerilogClassHandle> copied_handles;
+        copied_handles.reserve(source_value.handles.size());
         for (std::size_t index = 0;
              index < source_value.handles.size(); ++index) {
-          target_value.handles.push_back(
+          copied_handles.push_back(
               has_flag(field.flags, SystemVerilogUvmFieldFlag::Reference)
               ? source_value.handles[index]
               : copy_handle(
@@ -294,8 +297,11 @@ void SystemVerilogUvmObjectService::copy(
                     field.property + "[" + std::to_string(index) + "]",
                     depth + 1U));
         }
+        heap_->property(target_handle, field.property).handles =
+            std::move(copied_handles);
       } else {
-        target_value.handle_container = source_value.handle_container;
+        heap_->property(target_handle, field.property).handle_container =
+            source_value.handle_container;
       }
     }
     if (type.do_copy) type.do_copy(target_handle, source_handle);

@@ -108,6 +108,7 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
       "';' after package header",
       "FSIM-SV-PARSE-080");
   while (!at_end() && !keyword("endpackage")) {
+    const auto before = position();
     if (time_declaration_start()) {
       const auto declaration = advance();
       parse_time_declaration(&unit, declaration);
@@ -276,6 +277,9 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
           "unsupported package item starting with '"
               + unsupported.text + "'");
       skip_to_semicolon();
+    }
+    if (position() == before) {
+      advance();
     }
   }
   expect_keyword(

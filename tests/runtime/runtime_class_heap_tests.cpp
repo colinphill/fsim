@@ -787,6 +787,11 @@ void test_systemverilog_uvm_object() {
       objects.name(root) == "renamed" && objects.full_name(root) == "renamed",
       "UVM set_name must update leaf and default full-name identity");
 
+  // Fill the current heap-vector capacity so recursive child creation must
+  // reallocate its slots and cannot rely on retained property references.
+  const auto reallocation_guard = heap.allocate(make_descriptor());
+  require(reallocation_guard != 0, "UVM clone reallocation guard allocation");
+
   const auto cloned = objects.clone(root);
   const auto cloned_child = heap.property(cloned, "child").handle;
   require(

@@ -1021,6 +1021,7 @@ DesignUnit VerilogParser::parse_module(
       : program_unit ? std::string_view{"endprogram"}
                      : std::string_view{"endmodule"};
   while (!at_end() && !keyword(terminator)) {
+    const auto before = position();
     if (time_declaration_start()) {
       const auto declaration = advance();
       parse_time_declaration(&unit, declaration);
@@ -1345,6 +1346,9 @@ DesignUnit VerilogParser::parse_module(
           "unsupported " + std::string{unit_kind}
               + " item starting with '" + unexpected.text + "'");
       skip_to_semicolon();
+    }
+    if (position() == before) {
+      advance();
     }
   }
   expect_keyword(terminator, false, "FSIM-SV-PARSE-004");
