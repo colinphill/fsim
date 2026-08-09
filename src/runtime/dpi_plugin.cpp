@@ -124,6 +124,11 @@ SystemVerilogDpiPluginPlanResult plan_systemverilog_dpi_plugin(
 
   SystemVerilogDpiPluginBuildPlan plan;
   const auto filename = library_filename(platform);
+  const auto command_path = [platform](const auto& path) {
+    return platform == SystemVerilogDpiPluginPlatform::Msvc
+        ? path.string()
+        : path.generic_string();
+  };
   plan.artifact = (build_root / manifest.name / filename).lexically_normal();
   for (const auto& root : discovery_roots) {
     plan.discovery_candidates.push_back(
@@ -147,20 +152,20 @@ SystemVerilogDpiPluginPlanResult plan_systemverilog_dpi_plugin(
           {"/nologo", "/std:c++20", "/EHsc", "/Gd", "/c"});
       for (const auto& include : manifest.include_directories) {
         command.arguments.push_back(
-            "/I" + (source_root / include).lexically_normal().string());
+            "/I" + command_path((source_root / include).lexically_normal()));
       }
-      command.arguments.push_back(source.string());
-      command.arguments.push_back("/Fo" + object.string());
+      command.arguments.push_back(command_path(source));
+      command.arguments.push_back("/Fo" + command_path(object));
     } else {
       command.arguments.insert(command.arguments.end(),
           {"-std=c++20", "-fPIC", "-fvisibility=hidden"});
       for (const auto& include : manifest.include_directories) {
         command.arguments.push_back("-I");
         command.arguments.push_back(
-            (source_root / include).lexically_normal().string());
+            command_path((source_root / include).lexically_normal()));
       }
       command.arguments.insert(command.arguments.end(),
-          {"-c", source.string(), "-o", object.string()});
+          {"-c", command_path(source), "-o", command_path(object)});
     }
     plan.compile_commands.push_back(std::move(command));
   }
@@ -168,7 +173,7 @@ SystemVerilogDpiPluginPlanResult plan_systemverilog_dpi_plugin(
   plan.link_command.arguments.push_back(
       platform == SystemVerilogDpiPluginPlatform::Msvc ? "/LD" : "-shared");
   for (const auto& object : objects) {
-    plan.link_command.arguments.push_back(object.string());
+    plan.link_command.arguments.push_back(command_path(object));
   }
   for (const auto& library : manifest.libraries) {
     plan.link_command.arguments.push_back(
@@ -177,7 +182,7 @@ SystemVerilogDpiPluginPlanResult plan_systemverilog_dpi_plugin(
   }
   plan.link_command.arguments.push_back(
       (platform == SystemVerilogDpiPluginPlatform::Msvc ? "/Fe:" : "-o"));
-  plan.link_command.arguments.push_back(plan.artifact.string());
+  plan.link_command.arguments.push_back(command_path(plan.artifact));
   return {std::move(plan), {}};
 }
 

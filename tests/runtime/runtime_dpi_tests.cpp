@@ -581,6 +581,16 @@ void test_systemverilog_dpi_plugin_planning() {
           && posix.value.compile_commands.size() == 2
           && posix.value.compile_commands.front().arguments.front()
               == "clang++"
+          && posix.value.compile_commands.front().arguments[5]
+              == "/project/include"
+          && posix.value.compile_commands.front().arguments[7]
+              == "/project/src/arith.cpp"
+          && posix.value.compile_commands.front().arguments[9]
+              == "/build/arith_dpi/0-arith.cpp.o"
+          && posix.value.link_command.arguments[2]
+              == "/build/arith_dpi/0-arith.cpp.o"
+          && posix.value.link_command.arguments[3]
+              == "/build/arith_dpi/1-helpers.c.o"
           && posix.value.link_command.arguments.back()
               == "/build/arith_dpi/plugin.so",
       "DPI POSIX discovery, compile, and link planning is deterministic");
