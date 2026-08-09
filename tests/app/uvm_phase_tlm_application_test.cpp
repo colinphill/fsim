@@ -6,6 +6,8 @@
 #include "fsim/project/project.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 #include "fsim/support/environment.hpp"
+#include "uvm_phase_tlm_sequence_probe.hpp"
+#include "uvm_phase_tlm_register_probe.hpp"
 
 #include <algorithm>
 #include <array>
@@ -48,7 +50,11 @@ struct ExerciseResult {
 constexpr std::string_view kExpectedTranscript{
     "FSIM-UVM-PHASE-TLM-PASS phases=build/connect/eoe/sos/run/extract/"
     "check/report/final roots=left,right objection=1/0 drain=3 payload=37 "
-    "result=42 source=37/42/1 race=5 deadlock=FSIM-UVM-PHASE-008"};
+    "result=42 source=37/42/1 race=5 deadlock=FSIM-UVM-PHASE-008 "
+    "sequence=arb/lock/response/virtual roles=agent/driver/monitor/scoreboard "
+    "callback=6 transaction=5 cap=records register=frontdoor/backdoor/predictor "
+    "maps=little/big byte_enable=1010 callback_coverage=1 sequence=access "
+    "replay=relocated cap=records"};
 
 fsim_uvm_foreign_status_v1 FSIM_UVM_FOREIGN_CALL
 accept_foreign_activity(void *, const fsim_uvm_foreign_activity_v1 *) {
@@ -230,6 +236,16 @@ ExerciseResult exercise(fsim::app::BuiltProject project,
     assert(result.success());
     record_execution(result);
   }
+  const auto sequence_root = simulation.create_uvm_root("sequence");
+  const auto sequence_environment =
+      fsim::tests::app::exercise_exact_uvm_sequence_environment(
+          simulation, sequence_root);
+  simulation.uvm_phases().unparticipate_standard_root(sequence_root);
+  const auto register_root = simulation.create_uvm_root("register");
+  const auto register_environment =
+      fsim::tests::app::exercise_exact_uvm_register_environment(
+          simulation, register_root);
+  simulation.uvm_phases().unparticipate_standard_root(register_root);
 
   const auto run_phase = schedule.phase(SystemVerilogUvmPhaseKind::Run);
   auto &objections = simulation.uvm_objections();
@@ -437,7 +453,8 @@ ExerciseResult exercise(fsim::app::BuiltProject project,
   transcript << "FSIM-UVM-PHASE-TLM-PASS "
                 "phases=build/connect/eoe/sos/run/extract/check/report/final"
              << " roots=left,right objection=1/0 drain=3 payload=37 result=42"
-             << " source=37/42/1 race=5 deadlock=FSIM-UVM-PHASE-008";
+             << " source=37/42/1 race=5 deadlock=FSIM-UVM-PHASE-008"
+             << sequence_environment << register_environment;
   return {transcript.str(), std::move(callbacks),
           simulation.native_cache_statistics()};
 }

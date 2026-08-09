@@ -1438,6 +1438,55 @@ void SystemVerilogUvmPhaseService::cancel_task_process(
   cancel_process_tree(handle.slot_);
 }
 
+SystemVerilogUvmPhaseProcessHandle
+SystemVerilogUvmPhaseService::begin_child_process(
+    const SystemVerilogUvmPhaseProcessHandle parent_handle) {
+  auto& parent = process(parent_handle);
+  auto& selected_phase = phase(parent.phase);
+  if (parent.state != SystemVerilogUvmPhaseProcessState::Running
+      || selected_phase.state != SystemVerilogUvmPhaseState::Executing) {
+    fail(kInvalidControl, "UVM child process cannot begin here");
+  }
+  if (parent.depth >= limits_.maximum_process_depth) {
+    fail(kResourceLimit, "UVM phase-process tree depth exceeded");
+  }
+  if (processes_.size() >= limits_.maximum_phase_processes
+      || next_process_ == 0
+      || next_process_registration_order_
+          == std::numeric_limits<std::uint64_t>::max()) {
+    fail(kResourceLimit, "UVM phase-process identity ceiling exceeded");
+  }
+
+  const auto slot = next_process_;
+  const auto handle = SystemVerilogUvmPhaseProcessHandle{owner_, slot, 1};
+  auto parent_children = parent.children;
+  auto phase_processes = selected_phase.processes;
+  parent_children.push_back(slot);
+  phase_processes.push_back(slot);
+  const auto [inserted, did_insert] = processes_.emplace(
+      slot,
+      PhaseProcess{
+          handle,
+          parent.phase,
+          parent.root,
+          parent.component,
+          SystemVerilogUvmPhaseProcessState::Running,
+          next_process_registration_order_,
+          parent_handle.slot_,
+          {},
+          parent.depth + 1U,
+          {}});
+  if (!did_insert) {
+    fail(kInvalidControl, "duplicate UVM child-process slot");
+  }
+  (void)inserted;
+  parent.children.swap(parent_children);
+  selected_phase.processes.swap(phase_processes);
+  ++next_process_;
+  ++next_process_registration_order_;
+  return handle;
+}
+
 bool SystemVerilogUvmPhaseService::has_running_child(
     const PhaseProcess& selected) const {
   return std::ranges::any_of(selected.children, [&](const auto slot) {

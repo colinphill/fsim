@@ -821,6 +821,8 @@ if(TARGET fsim_application)
   add_executable(
     fsim_uvm_phase_tlm_application_tests
     app/uvm_phase_tlm_application_test.cpp
+    app/uvm_phase_tlm_register_probe.cpp
+    app/uvm_phase_tlm_sequence_probe.cpp
   )
   fsim_configure_test(fsim_uvm_phase_tlm_application_tests)
   target_compile_definitions(
@@ -949,6 +951,7 @@ if(TARGET fsim_application)
         app/application_test_non_project_cli.cpp
         app/application_test_simulation.cpp
         app/application_test_classes.cpp
+        app/application_test_uvm_virtual.cpp
         app/application_test_source_updates.cpp
         app/application_test_sources_common.cpp
         app/application_test_sources_mixed.cpp
@@ -2304,6 +2307,7 @@ set_tests_properties(
     app/application_test_non_project_cli.cpp
     app/application_test_simulation.cpp
     app/application_test_classes.cpp
+    app/application_test_uvm_virtual.cpp
     app/application_test_source_updates.cpp
     app/application_test_sources_common.cpp
     app/application_test_sources_mixed.cpp

@@ -138,6 +138,17 @@ SystemVerilogUvmForeignService::~SystemVerilogUvmForeignService() {
   }
 }
 
+void SystemVerilogUvmForeignService::set_integrated_services(
+    SystemVerilogUvmSequenceService &sequences,
+    SystemVerilogUvmCallbackService &callbacks,
+    SystemVerilogUvmTransactionRecorderService &transactions,
+    SystemVerilogUvmRegisterModelService &register_model) noexcept {
+  sequences_ = &sequences;
+  uvm_callbacks_ = &callbacks;
+  transactions_ = &transactions;
+  register_model_ = &register_model;
+}
+
 void SystemVerilogUvmForeignService::set_error(std::string code,
                                                std::string message) const {
   diagnostic_code_ = std::move(code);
@@ -413,6 +424,11 @@ fsim_uvm_foreign_status_v1 SystemVerilogUvmForeignService::capture(
         append_field(record.detail, "extension-data", hex_bytes(extension));
       }
       record.payload = value.payload.data;
+      append(std::move(record));
+    }
+    for (auto &record : integrated_records(
+             limits_.maximum_records - captured.records.size(),
+             limits_.maximum_text_bytes - text_bytes)) {
       append(std::move(record));
     }
     captured.value.record_count = captured.records.size();

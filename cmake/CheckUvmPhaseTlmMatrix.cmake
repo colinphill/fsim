@@ -14,9 +14,25 @@ set(FSIM_EVIDENCE_FILES
   tests/runtime/runtime_uvm_tlm2_tests.cpp
   tests/runtime/runtime_uvm_activity_tests.cpp
   tests/runtime/runtime_uvm_checkpoint_tests.cpp
+  tests/runtime/runtime_uvm_sequence_tests.cpp
+  tests/runtime/runtime_uvm_sequence_access_tests.cpp
+  tests/runtime/runtime_uvm_sequence_handshake_tests.cpp
+  tests/runtime/runtime_uvm_sequence_macro_tests.cpp
+  tests/runtime/runtime_uvm_sequence_role_tests.cpp
+  tests/runtime/runtime_uvm_sequence_virtual_tests.cpp
+  tests/runtime/runtime_uvm_callback_tests.cpp
+  tests/runtime/runtime_uvm_register_model_tests.cpp
+  tests/runtime/runtime_uvm_register_value_tests.cpp
+  tests/runtime/runtime_uvm_register_map_tests.cpp
+  tests/runtime/runtime_uvm_register_frontdoor_tests.cpp
+  tests/runtime/runtime_uvm_register_backdoor_tests.cpp
+  tests/runtime/runtime_uvm_register_sequence_tests.cpp
+  tests/runtime/runtime_uvm_register_coverage_tests.cpp
   tests/app/application_test_artifact_phases.cpp
   tests/app/application_test_classes.cpp
   tests/app/uvm_phase_tlm_application_test.cpp
+  tests/app/uvm_phase_tlm_sequence_probe.cpp
+  tests/app/uvm_phase_tlm_register_probe.cpp
 )
 
 set(FSIM_EXECUTABLE_EVIDENCE "")
@@ -39,8 +55,20 @@ set(FSIM_REQUIRED_DIAGNOSTICS
   FSIM-UVM-TLM1-007 FSIM-UVM-TLM1-008
   FSIM-UVM-TLM2-001 FSIM-UVM-TLM2-002 FSIM-UVM-TLM2-003
   FSIM-UVM-TLM2-004 FSIM-UVM-TLM2-005
+  FSIM-UVM-SEQ-001 FSIM-UVM-SEQ-002 FSIM-UVM-SEQ-003
+  FSIM-UVM-SEQ-004 FSIM-UVM-SEQ-005 FSIM-UVM-SEQ-006
+  FSIM-UVM-SEQ-007 FSIM-UVM-SEQ-008 FSIM-UVM-SEQ-009
+  FSIM-UVM-SEQ-010 FSIM-UVM-SEQ-011 FSIM-UVM-SEQ-012
+  FSIM-UVM-SEQ-013
   FSIM-UVM-DEBUG-001 FSIM-UVM-DEBUG-002
   FSIM-UVM-ACTIVITY-001 FSIM-UVM-ACTIVITY-002
+  FSIM-UVM-CALLBACK-001 FSIM-UVM-CALLBACK-002
+  FSIM-UVM-TR-001 FSIM-UVM-TR-002
+  FSIM-UVM-REG-001 FSIM-UVM-REG-002 FSIM-UVM-REG-003
+  FSIM-UVM-REG-004 FSIM-UVM-REG-005 FSIM-UVM-REG-006
+  FSIM-UVM-REG-007 FSIM-UVM-REG-008 FSIM-UVM-REG-009
+  FSIM-UVM-REG-010 FSIM-UVM-REG-011 FSIM-UVM-REG-012
+  FSIM-UVM-REG-013 FSIM-UVM-REG-014
   FSIM-UVM-FOREIGN-001 FSIM-UVM-FOREIGN-002
   FSIM-UVM-STATE-001 FSIM-UVM-STATE-002
 )
@@ -98,6 +126,40 @@ fsim_require_token(
   tests/runtime/runtime_uvm_checkpoint_tests.cpp
   "maximum_external_callbacks" "checkpoint callback-summary ceiling evidence")
 fsim_require_token(
+  tests/runtime/runtime_uvm_sequence_tests.cpp
+  "StrictRandom" "complete sequence arbitration evidence")
+fsim_require_token(
+  tests/runtime/runtime_uvm_sequence_access_tests.cpp
+  "request_grab" "sequence lock/grab evidence")
+fsim_require_token(
+  tests/runtime/runtime_uvm_sequence_handshake_tests.cpp
+  "get_next_item" "driver handshake evidence")
+fsim_require_token(
+  tests/runtime/runtime_uvm_sequence_role_tests.cpp
+  "Scoreboard" "agent/monitor/scoreboard evidence")
+fsim_require_token(
+  tests/runtime/runtime_uvm_sequence_virtual_tests.cpp
+  "coordinate_virtual" "virtual sequence evidence")
+fsim_require_token(
+  tests/runtime/runtime_uvm_callback_tests.cpp
+  "uvm_transaction_callback" "callback/transaction evidence")
+fsim_require_token(
+  tests/runtime/runtime_uvm_register_map_tests.cpp
+  "BigFifo" "complete register-map endian evidence")
+fsim_require_token(
+  tests/runtime/runtime_uvm_register_frontdoor_tests.cpp
+  "register_predictor" "adapter/predictor evidence")
+fsim_require_token(
+  tests/runtime/runtime_uvm_register_backdoor_tests.cpp
+  "SystemVerilogUvmRegisterHdlKind::Vhpi" "VPI/VHPI backdoor evidence")
+fsim_require_token(
+  tests/runtime/runtime_uvm_register_sequence_tests.cpp
+  "Kind::Access"
+  "standard register-sequence evidence")
+fsim_require_token(
+  tests/runtime/runtime_uvm_register_coverage_tests.cpp
+  "register_coverage_model" "register callback/coverage evidence")
+fsim_require_token(
   tests/app/application_test_artifact_phases.cpp
   "replay_checkpoints[0] == replay_checkpoints[1]" "restart parity evidence")
 fsim_require_token(
@@ -106,6 +168,12 @@ fsim_require_token(
 fsim_require_token(
   tests/app/uvm_phase_tlm_application_test.cpp
   "race=5 deadlock=FSIM-UVM-PHASE-008" "cross-engine race/deadlock transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_sequence_probe.cpp
+  "sequence=arb/lock/response/virtual" "exact sequence environment transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_register_probe.cpp
+  "register=frontdoor/backdoor/predictor" "exact register environment transcript")
 
 set(FSIM_RUNNER "${FSIM_SOURCE_DIR}/cmake/RunUvmPhaseTlmExample.cmake")
 foreach(FSIM_TOKEN IN ITEMS
@@ -127,4 +195,4 @@ fsim_require_token(
   "UVM 2020.3.1 matrix registration")
 
 message(STATUS
-  "UVM phase/TLM matrix: 33 diagnostics and aggregate execution contracts verified")
+  "UVM matrix: 64 diagnostics and aggregate execution contracts verified")

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <limits>
 #include <sstream>
+#include <type_traits>
 
 namespace fsim::app {
 
@@ -29,6 +30,36 @@ void add_payload_bytes(
     fail(kResourceLimit, "UVM debug payload-byte ceiling exceeded");
   }
   total += bytes;
+}
+
+void add_text_bytes(
+    std::size_t& total,
+    const std::string_view text,
+    const std::size_t maximum) {
+  if (text.size() > maximum - total) {
+    fail(kResourceLimit, "UVM debug payload-byte ceiling exceeded");
+  }
+  total += text.size();
+}
+
+void add_attribute_bytes(
+    std::size_t& total,
+    const runtime::SystemVerilogUvmTransactionAttribute& attribute,
+    const std::size_t maximum) {
+  add_text_bytes(total, attribute.name, maximum);
+  std::visit(
+      [&](const auto& value) {
+        using Value = std::remove_cvref_t<decltype(value)>;
+        if constexpr (std::is_same_v<Value, std::string>) {
+          add_text_bytes(total, value, maximum);
+        } else {
+          if (sizeof(value) > maximum - total) {
+            fail(kResourceLimit, "UVM debug payload-byte ceiling exceeded");
+          }
+          total += sizeof(value);
+        }
+      },
+      attribute.value);
 }
 
 void add_payload_bytes(
@@ -73,6 +104,10 @@ UvmDebugSnapshot Simulation::uvm_debug_snapshot(
   const auto objection_revision = uvm_objections().mutation_count();
   const auto tlm1_revision = uvm_tlm1().mutation_count();
   const auto tlm2_revision = uvm_tlm2().mutation_count();
+  const auto callback_revision = uvm_callbacks().mutation_count();
+  const auto transaction_revision = uvm_transactions().mutation_count();
+  const auto sequence_revision = uvm_sequences().mutation_count();
+  const auto register_revision = uvm_register_model().mutation_count();
   UvmDebugSnapshot result;
   result.time = start_time;
   result.delta = start_delta;
@@ -131,6 +166,152 @@ UvmDebugSnapshot Simulation::uvm_debug_snapshot(
           payload_bytes, snapshot.payload, limits.maximum_payload_bytes);
       result.tlm2_transactions.push_back(std::move(snapshot));
     }
+    result.callbacks = uvm_callbacks().snapshots();
+    reserve(result.callbacks.size());
+    for (const auto& callback : result.callbacks) {
+      add_text_bytes(payload_bytes, callback.target_type,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, callback.callback_type,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, callback.name,
+                     limits.maximum_payload_bytes);
+    }
+    result.callback_failures.assign(
+        uvm_callbacks().failures().begin(), uvm_callbacks().failures().end());
+    reserve(result.callback_failures.size());
+    for (const auto& failure : result.callback_failures) {
+      add_text_bytes(payload_bytes, failure.diagnostic_code,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, failure.message,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, failure.callback.target_type,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, failure.callback.callback_type,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, failure.callback.name,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, failure.invocation.target_type,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, failure.invocation.callback_type,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, failure.invocation.operation,
+                     limits.maximum_payload_bytes);
+      for (const auto& [name, value] : failure.invocation.attributes) {
+        add_text_bytes(payload_bytes, name, limits.maximum_payload_bytes);
+        add_text_bytes(payload_bytes, value, limits.maximum_payload_bytes);
+      }
+    }
+    result.transactions = uvm_transactions().snapshots();
+    reserve(result.transactions.size());
+    for (const auto& transaction : result.transactions) {
+      add_text_bytes(payload_bytes, transaction.name,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, transaction.stream,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, transaction.kind,
+                     limits.maximum_payload_bytes);
+      for (const auto& attribute : transaction.attributes) {
+        add_attribute_bytes(
+            payload_bytes, attribute, limits.maximum_payload_bytes);
+      }
+      for (const auto& link : transaction.links) {
+        add_text_bytes(payload_bytes, link.relation,
+                       limits.maximum_payload_bytes);
+      }
+    }
+    result.transaction_trace_records.assign(
+        uvm_transactions().trace_records().begin(),
+        uvm_transactions().trace_records().end());
+    reserve(result.transaction_trace_records.size());
+    for (const auto& record : result.transaction_trace_records) {
+      add_text_bytes(payload_bytes, record.name,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, record.value,
+                     limits.maximum_payload_bytes);
+    }
+    for (const auto& sequencer : uvm_sequences().sequencers()) {
+      reserve(1);
+      auto value = uvm_sequences().snapshot(sequencer);
+      add_text_bytes(payload_bytes, value.debug_name,
+                     limits.maximum_payload_bytes);
+      result.sequencers.push_back(std::move(value));
+    }
+    for (const auto& sequence : uvm_sequences().sequences()) {
+      reserve(1);
+      auto value = uvm_sequences().snapshot(sequence);
+      add_text_bytes(payload_bytes, value.full_name,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, value.nominal_type,
+                     limits.maximum_payload_bytes);
+      result.sequences.push_back(std::move(value));
+    }
+    for (const auto& item : uvm_sequences().items()) {
+      reserve(1);
+      auto value = uvm_sequences().snapshot(item);
+      add_text_bytes(payload_bytes, value.full_name,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, value.nominal_type,
+                     limits.maximum_payload_bytes);
+      result.sequence_items.push_back(std::move(value));
+    }
+    result.register_blocks = uvm_register_model().blocks();
+    reserve(result.register_blocks.size());
+    result.register_maps = uvm_register_model().maps();
+    reserve(result.register_maps.size());
+    result.registers = uvm_register_model().registers();
+    reserve(result.registers.size());
+    result.register_fields = uvm_register_model().fields();
+    reserve(result.register_fields.size());
+    result.register_memories = uvm_register_model().memories();
+    reserve(result.register_memories.size());
+    result.register_sequences = uvm_register_model().standard_sequences();
+    reserve(result.register_sequences.size());
+    result.register_callbacks = uvm_register_model().register_callbacks();
+    reserve(result.register_callbacks.size());
+    result.register_coverage = uvm_register_model().coverage_models();
+    reserve(result.register_coverage.size());
+    for (const auto& value : result.register_blocks) {
+      add_text_bytes(payload_bytes, value.full_name,
+                     limits.maximum_payload_bytes);
+    }
+    for (const auto& value : result.register_maps) {
+      add_text_bytes(payload_bytes, value.full_name,
+                     limits.maximum_payload_bytes);
+    }
+    for (const auto& value : result.registers) {
+      add_text_bytes(payload_bytes, value.full_name,
+                     limits.maximum_payload_bytes);
+    }
+    for (const auto& value : result.register_fields) {
+      add_text_bytes(payload_bytes, value.full_name,
+                     limits.maximum_payload_bytes);
+    }
+    for (const auto& value : result.register_memories) {
+      add_text_bytes(payload_bytes, value.full_name,
+                     limits.maximum_payload_bytes);
+    }
+    for (const auto& value : result.register_sequences) {
+      add_text_bytes(payload_bytes, value.reset_kind,
+                     limits.maximum_payload_bytes);
+      for (const auto& failure : value.failures) {
+        add_text_bytes(payload_bytes, failure.target,
+                       limits.maximum_payload_bytes);
+        add_text_bytes(payload_bytes, failure.message,
+                       limits.maximum_payload_bytes);
+      }
+    }
+    for (const auto& value : result.register_callbacks) {
+      add_text_bytes(payload_bytes, value.name,
+                     limits.maximum_payload_bytes);
+    }
+    for (const auto& value : result.register_coverage) {
+      add_text_bytes(payload_bytes, value.name,
+                     limits.maximum_payload_bytes);
+      for (const auto& [name, count] : value.bins) {
+        (void)count;
+        add_text_bytes(payload_bytes, name, limits.maximum_payload_bytes);
+      }
+    }
   } catch (const UvmDebugError&) {
     throw;
   } catch (const std::exception& error) {
@@ -143,7 +324,11 @@ UvmDebugSnapshot Simulation::uvm_debug_snapshot(
       || uvm_phases().mutation_count() != phase_revision
       || uvm_objections().mutation_count() != objection_revision
       || uvm_tlm1().mutation_count() != tlm1_revision
-      || uvm_tlm2().mutation_count() != tlm2_revision) {
+      || uvm_tlm2().mutation_count() != tlm2_revision
+      || uvm_callbacks().mutation_count() != callback_revision
+      || uvm_transactions().mutation_count() != transaction_revision
+      || uvm_sequences().mutation_count() != sequence_revision
+      || uvm_register_model().mutation_count() != register_revision) {
     fail(kInvalidSnapshot, "UVM state advanced during debug snapshot capture");
   }
   return result;
@@ -179,7 +364,15 @@ std::string format_uvm_debug_snapshot(
         snapshot.drains.size(), " tlm1 ", snapshot.tlm1_endpoints.size(),
         "/", snapshot.tlm1_operations.size(), " tlm2 ",
         snapshot.tlm2_sockets.size(), "/",
-        snapshot.tlm2_transactions.size());
+        snapshot.tlm2_transactions.size(), " callbacks ",
+        snapshot.callbacks.size(), "/", snapshot.callback_failures.size(),
+        " transactions ", snapshot.transactions.size(), "/",
+        snapshot.transaction_trace_records.size(), " sequences ",
+        snapshot.sequencers.size(), "/", snapshot.sequences.size(), "/",
+        snapshot.sequence_items.size(), " register-model ",
+        snapshot.register_blocks.size(), "/", snapshot.registers.size(), "/",
+        snapshot.register_fields.size(), "/",
+        snapshot.register_memories.size());
   }
   if (selected(UvmDebugSection::phases)) {
     for (const auto& value : snapshot.domains) {
@@ -251,6 +444,100 @@ std::string format_uvm_debug_snapshot(
           static_cast<unsigned>(value.state), " bytes ",
           value.payload.data.size(), " delay ", value.delay, " hops ",
           value.hops, " callbacks ", value.callbacks);
+    }
+  }
+  if (selected(UvmDebugSection::callbacks)) {
+    for (const auto& value : snapshot.callbacks) {
+      append(
+          "callback ", value.target_type, ":", value.callback_type, ":",
+          value.name, " scope ", static_cast<unsigned>(value.scope),
+          " instance ", value.instance, " mask ", value.mask,
+          " invocations ", value.invocations);
+    }
+    for (const auto& value : snapshot.callback_failures) {
+      append(
+          "callback failure ", value.callback.name, " code ",
+          value.diagnostic_code, " operation ", value.invocation.operation,
+          " message ", value.message);
+    }
+  }
+  if (selected(UvmDebugSection::transactions)) {
+    for (const auto& value : snapshot.transactions) {
+      append(
+          "transaction ", value.identity, " stream ", value.stream,
+          " name ", value.name, " state ",
+          static_cast<unsigned>(value.state), " parent ",
+          value.parent_identity.value_or(0), " attributes ",
+          value.attributes.size(), " links ", value.links.size(), " time ",
+          value.begin_time, ":", value.begin_delta, "-", value.end_time,
+          ":", value.end_delta);
+    }
+    for (const auto& value : snapshot.transaction_trace_records) {
+      append(
+          "transaction trace ", value.sequence, " kind ",
+          static_cast<unsigned>(value.kind), " transaction ",
+          value.transaction_identity, " related ",
+          value.related_identity.value_or(0), " time ", value.time, ":",
+          value.delta, " name ", value.name, " value ", value.value);
+    }
+  }
+  if (selected(UvmDebugSection::sequences)) {
+    for (const auto& value : snapshot.sequencers) {
+      append("sequencer ", value.debug_name, " state ",
+             static_cast<unsigned>(value.state), " arbitration ",
+             static_cast<unsigned>(value.arbitration), " requests ",
+             value.requests.size(), " transactions ",
+             value.transactions.size());
+    }
+    for (const auto& value : snapshot.sequences) {
+      append("sequence ", value.full_name, " state ",
+             static_cast<unsigned>(value.state), " executions ",
+             value.execution_count, " children ", value.children.size(),
+             " items ", value.items.size());
+    }
+    for (const auto& value : snapshot.sequence_items) {
+      append("sequence item ", value.full_name, " state ",
+             static_cast<unsigned>(value.state), " role ",
+             static_cast<unsigned>(value.role), " type ",
+             value.nominal_type);
+    }
+  }
+  if (selected(UvmDebugSection::register_model)) {
+    for (const auto& value : snapshot.register_blocks) {
+      append("register block ", value.full_name, " state ",
+             static_cast<unsigned>(value.state), " depth ", value.depth);
+    }
+    for (const auto& value : snapshot.register_maps) {
+      append("register map ", value.full_name, " base ", value.base_offset,
+             " bus-width ", value.bus_width_bytes, " endian ",
+             static_cast<unsigned>(value.endianness));
+    }
+    for (const auto& value : snapshot.registers) {
+      append("register ", value.full_name, " width ", value.width_bits,
+             " offset ", value.offset);
+    }
+    for (const auto& value : snapshot.register_fields) {
+      append("register field ", value.full_name, " width ",
+             value.width_bits, " lsb ", value.least_significant_bit,
+             " access ", static_cast<unsigned>(value.access));
+    }
+    for (const auto& value : snapshot.register_memories) {
+      append("register memory ", value.full_name, " width ",
+             value.word_width_bits, " words ", value.word_count);
+    }
+    for (const auto& value : snapshot.register_sequences) {
+      append("register sequence kind ", static_cast<unsigned>(value.kind),
+             " order ", value.execution_order, " operations ",
+             value.operations, " failures ", value.failures.size());
+    }
+    for (const auto& value : snapshot.register_callbacks) {
+      append("register callback ", value.name, " scope ",
+             static_cast<unsigned>(value.scope), " invocations ",
+             value.invocations, " failures ", value.failures);
+    }
+    for (const auto& value : snapshot.register_coverage) {
+      append("register coverage ", value.name, " samples ", value.samples,
+             " bins ", value.bins.size());
     }
   }
   return result;

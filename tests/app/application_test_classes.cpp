@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
+#include "application_test_uvm_virtual.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
@@ -56,7 +57,7 @@ void ApplicationTestFixture::test_class_simulation_integration() {
 
   using EngineSnapshot = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t,
                                     std::uint64_t, std::uint64_t, std::uint64_t,
-                                    std::uint64_t, std::size_t, std::size_t>;
+                                    std::uint64_t, std::size_t, std::uint64_t>;
   std::vector<EngineSnapshot> engine_snapshots;
   std::vector<fsim::runtime::SystemVerilogUvmCheckpointArtifact>
       portable_uvm_snapshots;
@@ -342,6 +343,10 @@ void ApplicationTestFixture::test_class_simulation_integration() {
         uvm_item_specialization, "api_root", uvm_object_identity);
     const auto uvm_child = simulation.allocate_uvm_object(
         uvm_item_specialization, "api_child", uvm_object_identity);
+    const auto uvm_virtual_sequence_object = simulation.allocate_uvm_object(
+        uvm_item_specialization, "api_virtual_sequence", uvm_object_identity);
+    const auto uvm_domain_sequence_object = simulation.allocate_uvm_object(
+        uvm_item_specialization, "api_domain_sequence", uvm_object_identity);
     const auto api_component_root = simulation.create_uvm_root("api-first");
     const auto api_component_second_root =
         simulation.create_uvm_root("api-second");
@@ -354,6 +359,115 @@ void ApplicationTestFixture::test_class_simulation_integration() {
     const auto api_component_isolated = simulation.allocate_uvm_component(
         test_uvm_component_specialization, "api_top", 0,
         api_component_second_root, uvm_component_identity);
+    auto &api_sequences = simulation.uvm_sequences();
+    const fsim::runtime::SystemVerilogUvmSequenceProfile api_sequence_profile{
+        uvm_item_specialization, uvm_item_specialization};
+    const auto api_sequencer = api_sequences.register_sequencer(
+        {api_component_top, test_uvm_component_specialization,
+         api_sequence_profile});
+    ApplicationVirtualSequenceProbe api_virtual_probe{
+        simulation,
+        api_component_child,
+        api_sequencer,
+        uvm_virtual_sequence_object,
+        uvm_domain_sequence_object,
+        test_uvm_component_specialization,
+        uvm_item_specialization,
+        api_sequence_profile};
+    std::size_t api_agent_role_callbacks{};
+    std::size_t api_driver_role_callbacks{};
+    std::size_t api_driver_role_tasks{};
+    std::size_t api_passive_agent_role_callbacks{};
+    fsim::runtime::SystemVerilogUvmSequenceRoleDescriptor
+        api_agent_role_descriptor;
+    api_agent_role_descriptor.component = api_component_top;
+    api_agent_role_descriptor.kind =
+        fsim::runtime::SystemVerilogUvmSequenceRoleKind::Agent;
+    api_agent_role_descriptor.default_agent_mode =
+        fsim::runtime::SystemVerilogUvmAgentMode::Passive;
+    api_agent_role_descriptor.function_dispatch =
+        [&](const auto, const auto, const auto) { ++api_agent_role_callbacks; };
+    const auto api_agent_role =
+        api_sequences.register_role(std::move(api_agent_role_descriptor));
+    fsim::runtime::SystemVerilogUvmSequenceRoleDescriptor
+        api_driver_role_descriptor;
+    api_driver_role_descriptor.component = api_component_child;
+    api_driver_role_descriptor.kind =
+        fsim::runtime::SystemVerilogUvmSequenceRoleKind::Driver;
+    api_driver_role_descriptor.agent = api_agent_role;
+    api_driver_role_descriptor.sequencer = api_sequencer;
+    api_driver_role_descriptor.automatic_objection = true;
+    api_driver_role_descriptor.function_dispatch = [&](const auto, const auto,
+                                                       const auto) {
+      ++api_driver_role_callbacks;
+    };
+    api_driver_role_descriptor.task_dispatch = [&](const auto, const auto phase,
+                                                   const auto process) {
+      ++api_driver_role_tasks;
+      return api_virtual_probe.dispatch(phase, process);
+    };
+    const auto api_driver_role =
+        api_sequences.register_role(std::move(api_driver_role_descriptor));
+    fsim::runtime::SystemVerilogUvmSequenceRoleDescriptor
+        api_passive_agent_role_descriptor;
+    api_passive_agent_role_descriptor.component = api_component_isolated;
+    api_passive_agent_role_descriptor.kind =
+        fsim::runtime::SystemVerilogUvmSequenceRoleKind::Agent;
+    api_passive_agent_role_descriptor.default_agent_mode =
+        fsim::runtime::SystemVerilogUvmAgentMode::Active;
+    api_passive_agent_role_descriptor.function_dispatch =
+        [&](const auto, const auto, const auto) {
+          ++api_passive_agent_role_callbacks;
+        };
+    const auto api_passive_agent_role = api_sequences.register_role(
+        std::move(api_passive_agent_role_descriptor));
+    const auto configure_agent_mode =
+        [&](const fsim::runtime::SystemVerilogClassHandle component,
+            const fsim::runtime::SystemVerilogUvmAgentMode mode) {
+          const auto snapshot = simulation.uvm_components().snapshot(component);
+          const fsim::runtime::SystemVerilogUvmConfigContext context{
+              std::string{
+                  simulation.uvm_components().root_identity(snapshot.root)} +
+                  ":" + snapshot.full_name,
+              snapshot.depth};
+          const auto resource = simulation.uvm_config_db().set(
+              context, {}, "is_active",
+              {"uvm_pkg::uvm_active_passive_enum",
+               fsim::runtime::SystemVerilogUvmResourceValueKind::Packed, 1},
+              fsim::runtime::PackedLogic4::from_aval_bval(
+                  1,
+                  mode == fsim::runtime::SystemVerilogUvmAgentMode::Active ? 1
+                                                                           : 0,
+                  0),
+              fsim::runtime::SystemVerilogUvmConfigPhase::Build);
+          simulation.uvm_resources().set_auditing(resource, false);
+        };
+    configure_agent_mode(api_component_top,
+                         fsim::runtime::SystemVerilogUvmAgentMode::Active);
+    configure_agent_mode(api_component_isolated,
+                         fsim::runtime::SystemVerilogUvmAgentMode::Passive);
+    std::size_t api_sequence_callbacks{};
+    fsim::runtime::SystemVerilogUvmSequenceDescriptor api_sequence_descriptor;
+    api_sequence_descriptor.object = uvm_root;
+    api_sequence_descriptor.name = "api_sequence";
+    api_sequence_descriptor.nominal_type = uvm_item_specialization;
+    api_sequence_descriptor.profile = api_sequence_profile;
+    api_sequence_descriptor.sequencer = api_sequencer;
+    const auto api_sequence_callback = [&](const auto) {
+      ++api_sequence_callbacks;
+    };
+    api_sequence_descriptor.hooks = {
+        api_sequence_callback, api_sequence_callback, api_sequence_callback,
+        api_sequence_callback, api_sequence_callback};
+    const auto api_sequence =
+        api_sequences.register_sequence(std::move(api_sequence_descriptor));
+    const auto api_sequence_item = api_sequences.register_item(
+        {uvm_child,
+         "api_request",
+         uvm_item_specialization,
+         fsim::runtime::SystemVerilogUvmSequenceItemRole::Request,
+         api_sequence,
+         {}});
     const fsim::runtime::SystemVerilogUvmTlm1Profile api_tlm_profile{
         fsim::runtime::SystemVerilogUvmTlm1Interface::Bidirectional,
         fsim::runtime::SystemVerilogUvmTlm1Direction::Bidirectional,
@@ -493,10 +607,48 @@ void ApplicationTestFixture::test_class_simulation_integration() {
         simulation.uvm_components().children(api_component_top) ==
             std::vector<fsim::runtime::SystemVerilogClassHandle>{
                 api_component_child} &&
+        api_sequences.snapshot(api_sequencer).root == api_component_root &&
+        api_sequences.snapshot(api_sequence).sequencer == api_sequencer &&
+        api_sequences.snapshot(api_sequence_item).owner_sequence ==
+            api_sequence &&
+        api_sequences.sequence_count() == 3 &&
+        api_sequences.item_count() == 1 && api_sequences.role_count() == 3 &&
+        api_sequence_callbacks == 0 &&
         uvm_phases.snapshot(api_phase_domain).roots ==
             std::vector<fsim::runtime::SystemVerilogUvmRootHandle>{
                 api_component_root, api_component_second_root} &&
         uvm_phases.snapshot(api_build_phase).identity == "build"));
+    const auto api_sequence_result = api_sequences.start(api_sequence);
+    const auto api_sequence_lock = api_sequences.request_lock(api_sequence);
+    assert((api_sequences.has_lock(api_sequence) &&
+            api_sequences.access_snapshot(api_sequence_lock).state ==
+                fsim::runtime::SystemVerilogUvmSequenceAccessState::Granted));
+    api_sequences.unlock(api_sequence);
+    api_sequences.configure_arbitration(
+        api_sequencer,
+        fsim::runtime::SystemVerilogUvmSequenceArbitrationMode::StrictFifo,
+        0x1610'0003ULL);
+    const auto api_sequence_request =
+        api_sequences.macro_send(api_sequence_item, 160);
+    const auto api_sequence_acquisition =
+        api_sequences.get_next_item(api_sequencer);
+    assert(api_sequence_acquisition.transaction);
+    api_sequences.item_done(api_sequence_acquisition.transaction->handle);
+    const auto api_sequence_transaction = api_sequences.transaction_snapshot(
+        api_sequence_acquisition.transaction->handle);
+    assert((
+        api_sequence_result.success() &&
+        api_sequence_result.final_state ==
+            fsim::runtime::SystemVerilogUvmSequenceState::Finished &&
+        api_sequence_result.events.size() == 7 && api_sequence_callbacks == 5 &&
+        api_sequence_acquisition.status ==
+            fsim::runtime::SystemVerilogUvmSequenceAcquireStatus::Acquired &&
+        api_sequence_transaction.request.handle == api_sequence_request &&
+        api_sequence_transaction.sequence == api_sequence &&
+        api_sequence_transaction.request_item == api_sequence_item &&
+        api_sequence_transaction.state ==
+            fsim::runtime::SystemVerilogUvmSequenceTransactionState::
+                Completed));
     const auto uvm_debug = simulation.uvm_debug_snapshot();
     const auto uvm_debug_text = fsim::app::format_uvm_debug_snapshot(
         uvm_debug, fsim::app::UvmDebugSection::all);
@@ -695,7 +847,11 @@ void ApplicationTestFixture::test_class_simulation_integration() {
             callback_order(build_result) ==
                 std::vector<fsim::runtime::SystemVerilogClassHandle>{
                     api_component_top, api_component_child,
-                    api_component_isolated}));
+                    api_component_isolated} &&
+            api_sequences.role_snapshot(api_agent_role).agent_mode ==
+                fsim::runtime::SystemVerilogUvmAgentMode::Active &&
+            api_sequences.role_snapshot(api_passive_agent_role).agent_mode ==
+                fsim::runtime::SystemVerilogUvmAgentMode::Passive));
     const std::array remaining_function_phases{
         fsim::runtime::SystemVerilogUvmPhaseKind::Connect,
         fsim::runtime::SystemVerilogUvmPhaseKind::EndOfElaboration,
@@ -755,23 +911,38 @@ void ApplicationTestFixture::test_class_simulation_integration() {
         fsim::runtime::SystemVerilogUvmPhaseKind::PreShutdown,
         fsim::runtime::SystemVerilogUvmPhaseKind::Shutdown,
         fsim::runtime::SystemVerilogUvmPhaseKind::PostShutdown};
+    std::vector<fsim::runtime::SystemVerilogUvmPhaseProcessSnapshot>
+        api_run_final_processes;
     for (const auto kind : task_phases) {
       const auto phase_result =
           simulation.execute_uvm_task_phase(api_schedule.phase(kind));
-      assert((phase_result.success() &&
-              phase_result.final_state ==
-                  fsim::runtime::SystemVerilogUvmPhaseState::Done &&
-              callback_order(phase_result) ==
-                  std::vector<fsim::runtime::SystemVerilogClassHandle>{
-                      api_component_top, api_component_child,
-                      api_component_isolated} &&
-              phase_result.processes.size() == 3 &&
-              phase_result.final_processes.size() == 3));
+      if (kind == fsim::runtime::SystemVerilogUvmPhaseKind::Run) {
+        api_run_final_processes = phase_result.final_processes;
+      }
+      assert(
+          (phase_result.success() &&
+           phase_result.final_state ==
+               fsim::runtime::SystemVerilogUvmPhaseState::Done &&
+           callback_order(phase_result) ==
+               std::vector<fsim::runtime::SystemVerilogClassHandle>{
+                   api_component_top, api_component_child,
+                   api_component_isolated} &&
+           phase_result.processes.size() == 3 &&
+           phase_result.final_processes.size() ==
+               (kind == fsim::runtime::SystemVerilogUvmPhaseKind::Run ? 5U
+                                                                      : 3U)));
       for (const auto &process : phase_result.final_processes) {
         assert(process.state ==
                fsim::runtime::SystemVerilogUvmPhaseProcessState::Completed);
       }
     }
+    assert((api_driver_role_tasks == 1 && api_agent_role_callbacks != 0 &&
+            api_driver_role_callbacks != 0 &&
+            api_passive_agent_role_callbacks != 0 &&
+            api_sequences.role_snapshot(api_driver_role).state ==
+                fsim::runtime::SystemVerilogUvmSequenceRoleState::Stopped &&
+            !api_sequences.role_snapshot(api_driver_role).objection_raised));
+    assert(api_virtual_probe.verify(api_run_final_processes));
     for (const auto expected :
          {fsim::runtime::SystemVerilogUvmActivityKind::Graph,
           fsim::runtime::SystemVerilogUvmActivityKind::PhaseState,
@@ -1197,6 +1368,10 @@ void ApplicationTestFixture::test_class_simulation_integration() {
                context.uvm_reports().server().severity_count(
                    fsim::runtime::SystemVerilogUvmReportSeverity::Info) == 0 &&
                context.uvm_components().roots().empty() &&
+               context.uvm_sequences().sequencers().empty() &&
+               context.uvm_sequences().sequences().empty() &&
+               context.uvm_sequences().items().empty() &&
+               context.uvm_sequences().roles().empty() &&
                context.uvm_tlm1().endpoints().empty() &&
                context.uvm_tlm2().sockets().empty() &&
                context.uvm_phases().standard_schedule() &&
@@ -1218,6 +1393,20 @@ void ApplicationTestFixture::test_class_simulation_integration() {
         const auto peer_top = peer.allocate_uvm_component(
             test_uvm_component_specialization, "api_top", 0, peer_root,
             uvm_component_identity);
+        const auto peer_sequence_object = peer.allocate_uvm_object(
+            uvm_item_specialization, "peer_sequence", uvm_object_identity);
+        const auto peer_sequencer = peer.uvm_sequences().register_sequencer(
+            {peer_top, test_uvm_component_specialization,
+             api_sequence_profile});
+        fsim::runtime::SystemVerilogUvmSequenceDescriptor
+            peer_sequence_descriptor;
+        peer_sequence_descriptor.object = peer_sequence_object;
+        peer_sequence_descriptor.name = "peer_sequence";
+        peer_sequence_descriptor.nominal_type = uvm_item_specialization;
+        peer_sequence_descriptor.profile = api_sequence_profile;
+        peer_sequence_descriptor.sequencer = peer_sequencer;
+        const auto peer_sequence = peer.uvm_sequences().register_sequence(
+            std::move(peer_sequence_descriptor));
         const auto peer_schedule = *peer.uvm_phases().standard_schedule();
         const auto peer_phase_domain = peer_schedule.common_domain;
         const auto peer_build_phase = peer_schedule.phase(
@@ -1241,6 +1430,9 @@ void ApplicationTestFixture::test_class_simulation_integration() {
                peer.uvm_phases().contains(peer_build_phase) &&
                !uvm_phases.contains(peer_phase_domain) &&
                !peer.uvm_phases().contains(api_phase_domain) &&
+               peer.uvm_sequences().contains(peer_sequence) &&
+               !api_sequences.contains(peer_sequence) &&
+               !peer.uvm_sequences().contains(api_sequence) &&
                simulation.uvm_components().lookup_root(
                    api_component_root, "api_top") == api_component_top &&
                peer_report_count == 1 &&
@@ -1970,7 +2162,9 @@ void ApplicationTestFixture::test_class_simulation_integration() {
     debugger.execute({"class", "frames"});
     debugger.execute({"uvm", "summary"});
     debugger.execute({"uvm", "tlm2"});
-    debugger.execute({"break", "phase", "final"});
+    debugger.execute({"uvm", "callbacks"}); debugger.execute({"uvm", "sequences"});
+    debugger.execute({"uvm", "transactions"}); debugger.execute({"uvm", "registers"});
+    debugger.execute({"break", "phase", "final"}); debugger.execute({"break", "uvm", "*"});
     debugger.execute({"breakpoints"});
     assert(debug_error.str().empty());
     assert(debug_output.str().find(derived_identity) != std::string::npos);
@@ -1983,7 +2177,9 @@ void ApplicationTestFixture::test_class_simulation_integration() {
     assert(debug_output.str().find("uvm time ") != std::string::npos);
     assert(debug_output.str().find("api-first:api_top.initiator_socket") !=
            std::string::npos);
-    assert(debug_output.str().find("phase common.final") != std::string::npos);
+    assert(debug_output.str().find("api_type_callback") != std::string::npos && debug_output.str().find("sequence api_") != std::string::npos);
+    assert(debug_output.str().find("transaction trace ") != std::string::npos && debug_output.str().find("register block ") != std::string::npos);
+    assert(debug_output.str().find("phase common.final") != std::string::npos && debug_output.str().find("uvm *") != std::string::npos);
     const auto resumed = simulation.class_methods().resume(
         suspended.continuation, suspended_actuals);
     assert(resumed.status ==
@@ -2014,7 +2210,8 @@ void ApplicationTestFixture::test_class_simulation_integration() {
             .aval,
         source_object_state.random_root_seed,
         source_object_state.random_object_seed, source_random_sample,
-        simulation.class_heap().live_objects(), trace_values.size());
+        simulation.class_heap().live_objects(),
+        api_virtual_probe.trace_signature() ^ trace_values.size());
     std::cerr << "application classes: engine " << static_cast<unsigned>(engine)
               << " complete\n";
   }

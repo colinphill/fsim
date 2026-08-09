@@ -5,11 +5,140 @@ package fsim_uvm_phase_tlm_example_pkg;
   import uvm_pkg::uvm_phase;
   import uvm_pkg::uvm_blocking_put_port;
   import uvm_pkg::uvm_tlm_fifo;
+  import uvm_pkg::uvm_sequence_item;
+  import uvm_pkg::uvm_sequence;
+  import uvm_pkg::uvm_sequencer;
+  import uvm_pkg::uvm_driver;
+  import uvm_pkg::uvm_monitor;
+  import uvm_pkg::uvm_agent;
+  import uvm_pkg::uvm_scoreboard;
+  import uvm_pkg::uvm_env;
+  import uvm_pkg::uvm_callback;
+  import uvm_pkg::uvm_reg;
+  import uvm_pkg::uvm_reg_block;
+  import uvm_pkg::uvm_reg_adapter;
+  import uvm_pkg::uvm_reg_bus_op;
+  import uvm_pkg::uvm_reg_predictor;
+  import uvm_pkg::uvm_reg_sequence;
+  import uvm_pkg::uvm_reg_cbs;
 
   class fsim_uvm_payload extends uvm_object;
     int value;
 
     function new(string name = "fsim_uvm_payload");
+      super.new(name);
+    endfunction
+  endclass
+
+  class fsim_uvm_item extends uvm_sequence_item;
+    int value;
+
+    function new(string name = "fsim_uvm_item");
+      super.new(name);
+    endfunction
+  endclass
+
+  class fsim_uvm_sequence extends uvm_sequence #(fsim_uvm_item);
+    function new(string name = "fsim_uvm_sequence");
+      super.new(name);
+    endfunction
+  endclass
+
+  class fsim_uvm_virtual_sequence extends uvm_sequence #(fsim_uvm_item);
+    function new(string name = "fsim_uvm_virtual_sequence");
+      super.new(name);
+    endfunction
+  endclass
+
+  class fsim_uvm_sequencer extends uvm_sequencer #(fsim_uvm_item);
+    function new(string name = "fsim_uvm_sequencer",
+                 uvm_component parent = null);
+      super.new(name, parent);
+    endfunction
+  endclass
+
+  class fsim_uvm_driver extends uvm_driver #(fsim_uvm_item);
+    function new(string name = "fsim_uvm_driver",
+                 uvm_component parent = null);
+      super.new(name, parent);
+    endfunction
+  endclass
+
+  class fsim_uvm_monitor extends uvm_monitor;
+    function new(string name = "fsim_uvm_monitor",
+                 uvm_component parent = null);
+      super.new(name, parent);
+    endfunction
+  endclass
+
+  class fsim_uvm_agent extends uvm_agent;
+    function new(string name = "fsim_uvm_agent",
+                 uvm_component parent = null);
+      super.new(name, parent);
+    endfunction
+  endclass
+
+  class fsim_uvm_scoreboard extends uvm_scoreboard;
+    function new(string name = "fsim_uvm_scoreboard",
+                 uvm_component parent = null);
+      super.new(name, parent);
+    endfunction
+  endclass
+
+  class fsim_uvm_env extends uvm_env;
+    function new(string name = "fsim_uvm_env",
+                 uvm_component parent = null);
+      super.new(name, parent);
+    endfunction
+  endclass
+
+  class fsim_uvm_callback extends uvm_callback;
+    function new(string name = "fsim_uvm_callback");
+      super.new(name);
+    endfunction
+  endclass
+
+  class fsim_uvm_reg extends uvm_reg;
+    function new(string name = "fsim_uvm_reg");
+      super.new(name, 32, 0);
+    endfunction
+  endclass
+
+  class fsim_uvm_reg_block extends uvm_reg_block;
+    function new(string name = "fsim_uvm_reg_block");
+      super.new(name, 0);
+    endfunction
+  endclass
+
+  class fsim_uvm_reg_adapter extends uvm_reg_adapter;
+    function new(string name = "fsim_uvm_reg_adapter");
+      super.new(name);
+    endfunction
+
+    virtual function uvm_sequence_item reg2bus(const ref uvm_reg_bus_op rw);
+      return null;
+    endfunction
+
+    virtual function void bus2reg(uvm_sequence_item bus_item,
+                                  ref uvm_reg_bus_op rw);
+    endfunction
+  endclass
+
+  class fsim_uvm_reg_predictor extends uvm_reg_predictor #(fsim_uvm_item);
+    function new(string name = "fsim_uvm_reg_predictor",
+                 uvm_component parent = null);
+      super.new(name, parent);
+    endfunction
+  endclass
+
+  class fsim_uvm_reg_sequence extends uvm_reg_sequence;
+    function new(string name = "fsim_uvm_reg_sequence");
+      super.new(name);
+    endfunction
+  endclass
+
+  class fsim_uvm_reg_callback extends uvm_reg_cbs;
+    function new(string name = "fsim_uvm_reg_callback");
       super.new(name);
     endfunction
   endclass

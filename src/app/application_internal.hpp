@@ -1073,6 +1073,7 @@ enum class DebugBreakpointKind {
   signal,
   source,
   phase,
+  uvm,
 };
 
 struct DebugBreakpoint {
@@ -1212,6 +1213,7 @@ class DebuggerSession final {
   std::optional<std::string> phase_transition_;
   std::uint64_t next_breakpoint_{1};
   std::uint64_t observer_{};
+  std::uint64_t uvm_observer_{};
   bool executing_{};
   bool stop_on_phase_transition_{};
 };

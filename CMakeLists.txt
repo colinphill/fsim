@@ -457,14 +457,31 @@ add_library(
     src/runtime/uvm_component.cpp
     src/runtime/uvm_phase.cpp
     src/runtime/uvm_activity.cpp
+    src/runtime/uvm_callback.cpp
+    src/runtime/uvm_register_model.cpp
+    src/runtime/uvm_register_model_values.cpp
+    src/runtime/uvm_register_model_maps.cpp
+  src/runtime/uvm_register_model_frontdoor.cpp
+  src/runtime/uvm_register_model_backdoor.cpp
+  src/runtime/uvm_register_model_sequences.cpp
+  src/runtime/uvm_register_model_coverage.cpp
     src/runtime/uvm_checkpoint.cpp
     src/runtime/uvm_foreign.cpp
+    src/runtime/uvm_foreign_integration.cpp
     src/runtime/uvm_objection.cpp
     src/runtime/uvm_tlm1.cpp
     src/runtime/uvm_tlm1_execution.cpp
     src/runtime/uvm_tlm1_analysis.cpp
     src/runtime/uvm_tlm2.cpp
     src/runtime/uvm_tlm2_transport.cpp
+    src/runtime/uvm_sequence.cpp
+    src/runtime/uvm_sequence_execution.cpp
+    src/runtime/uvm_sequence_arbitration.cpp
+    src/runtime/uvm_sequence_access.cpp
+    src/runtime/uvm_sequence_macros.cpp
+    src/runtime/uvm_sequence_handshake.cpp
+    src/runtime/uvm_sequence_roles.cpp
+    src/runtime/uvm_sequence_virtual.cpp
   src/runtime/uvm_registry.cpp
   src/runtime/uvm_factory.cpp
   src/runtime/uvm_resource.cpp

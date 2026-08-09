@@ -75,6 +75,569 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     request/response profiles, transactional construction, resource ceilings,
     cataloged invalid-handle/hierarchy/type/limit diagnostics, and focused
     evidence that does not execute sequence bodies early.
+13. Change 1 is complete in the intentionally dirty Batch 161 worktree. Each
+    `Simulation` directly owns a `SystemVerilogUvmSequenceService` with opaque
+    generation-checked item, sequence, and sequencer handles; root-qualified
+    identities; exact component, parent, child, item, and sequencer ownership;
+    nominal request/response profiles; frozen lifecycle states; one source-order
+    declaration stream; and dormant pre-start/pre-body/body/post-body/post-start
+    callbacks. Registration and leaf-first release are transactional and
+    resource bounded. Cataloged `FSIM-UVM-SEQ-001` through `006` failures cover
+    stale backing state, foreign simulations, type/profile mismatches,
+    hierarchy/root/name errors, lifecycle misuse, and every count, byte, depth,
+    fanout, registration, and mutation ceiling without partial publication or
+    skipped declaration order.
+14. Focused runtime proof covers the positive ownership/lifecycle model, equal
+    top-level names isolated across roots, rollback, stale/cross-owner handles,
+    all diagnostics and limits, orderly invalidation, and zero callback calls
+    before execution. Application proof covers direct public ownership through
+    interpreter, compiled, and debug contexts, peer-simulation isolation, and
+    clean fresh state. The eight-worker exact-LLVM Debug build completed 150
+    steps warning-clean and rebuilt five affected steps after the final
+    root-isolation audit. Final `fsim.runtime` and `fsim.application` pass 2/2
+    in 30.60 seconds; `fsim.llvm`, `fsim.diagnostics-catalog`,
+    `fsim.source-line-budget`, `fsim.uvm-source-harness`, and
+    `fsim.installed-public-contract` pass 5/5 in 3.94 seconds. `git diff
+    --check` is clean. Preserve all Change 1 files and proceed to Batch 161
+    Change 2 without committing or pushing before Change 20.
+15. Change 2 is complete in the intentionally dirty Batch 161 worktree. Sequence
+    execution now advances pre-start, optional pre-body, body, optional
+    post-body, post-start, ended, and finished states with one retained global
+    event order. Nested children inherit their active parent phase and own real
+    synchronous child identities in the task-phase process tree. Normal
+    completion and recursive kill cancellation survive in the phase's final
+    process snapshots before reclamation. Automatic objections bind each
+    sequence object/root and balance raise/drop. Cooperative stop, recursive
+    kill, cross-root/process misuse, callback exceptions, and cleanup failures
+    are deterministic; callback failures are contained as cataloged
+    `FSIM-UVM-SEQ-007` results. Typed response items route and pop FIFO from the
+    owning sequence, and active execution, retained event/failure, response,
+    plus mutation limits reject transactionally.
+16. Runtime evidence covers exact nested callback and state order, reusable
+    finished sequences, balanced objections, phase-process ancestry, completed
+    and cancelled process states, stop/kill, response routing, callback failure
+    containment, trace order, invalid lifecycle/cross-root cases, rollback, and
+    every new ceiling. The application executes all five callbacks in its
+    interpreter, compiled, and debug loop. The eight-worker exact-LLVM Debug
+    build completed 81 affected steps warning-clean. `fsim.runtime`,
+    `fsim.application`, `fsim.llvm`, `fsim.diagnostics-catalog`,
+    `fsim.source-line-budget`, `fsim.uvm-source-harness`, and
+    `fsim.installed-public-contract` pass 7/7 in 28.91 seconds. Preserve all
+    Changes 1-2 files and proceed to Batch 161 Change 3 without committing or
+    pushing before Change 20.
+17. Change 3 is complete in the intentionally dirty Batch 161 worktree.
+    Sequencers now own source-ordered, generation-checked request queues with
+    positive bounded priorities, static/callback relevance, explicit wakeup,
+    bounded wait-for-relevant state, and transactional selection/cancellation.
+    FIFO, random, strict-FIFO, strict-random, weighted, and user arbitration are
+    complete. Strict modes honor maximum priority and stable ties; random modes
+    use independent per-sequencer SplitMix64 streams with unbiased bounded
+    draws; weighted mode uses priority weights; user callbacks see only
+    relevant candidates in stable order. Reseeding exactly replays a stream,
+    and peer equal-seed streams do not consume each other's state. Invalid
+    arbitration is cataloged as `FSIM-UVM-SEQ-008`; existing resource code
+    `FSIM-UVM-SEQ-006` bounds wait starvation, selection/random work, pending
+    queues, per-sequencer queues, identities, generations, and mutations.
+18. Runtime evidence covers every mode, priorities and stable ties, relevance
+    wakeup and callback failure, wait bounds, reseed replay, independent peer
+    streams, weighted replay/distribution, user selection and failure, stale and
+    foreign requests, rollback, and every new ceiling. The application selects
+    its completed sequence in interpreter, compiled, and debug contexts. The
+    eight-worker exact-LLVM Debug build completed 79 affected steps
+    warning-clean. `fsim.runtime`, `fsim.application`, `fsim.llvm`,
+    `fsim.diagnostics-catalog`, `fsim.source-line-budget`,
+    `fsim.uvm-source-harness`, and `fsim.installed-public-contract` pass 7/7 in
+    27.40 seconds. Preserve all Changes 1-3 files and proceed to Batch 161
+    Change 4 without committing or pushing before Change 20.
+19. Change 4 is complete in the intentionally dirty Batch 161 worktree.
+    Sequencers now own generation-checked lock/grab identities, ordered pending
+    queues, nested grant stacks, exact unlock/ungrab ownership, descendant
+    nesting, grab precedence, bounded lock-starvation prevention, explicit
+    cancellation, and leaf-first stop/kill cleanup. Response queues implement
+    bounded error, drop-oldest, and drop-newest policy with exact dropped-item
+    results and transactional reconfiguration. Cataloged `FSIM-UVM-SEQ-009`
+    covers invalid response depth/policy/overflow action, while
+    `FSIM-UVM-SEQ-010` covers invalid lock/grab ownership and operations.
+    Item/sequence macro adapters factory-create and register objects, enqueue
+    exact sequence/request-item identities, integrate completed transactional
+    class randomization, and start randomized sequences. Provisional requests
+    and their identity/order/mutation publication roll back on unsatisfiable,
+    resource-exhausted, or throwing constraint configuration; equal object seed
+    and call identity replay exactly, and failed random-start invokes no body.
+20. Runtime evidence covers immediate and nested grants, grab precedence,
+    starvation bounds, exact release kind/owner, pending/granted/stop
+    cancellation, stale/foreign/unbound/duplicate negatives, access count/depth
+    and policy ceilings, all response overflow/reconfiguration policies, macro
+    create/send/random-send/random-start for items and sequences, inline/class
+    constraints, replay, exceptions, and complete object/queue rollback. The
+    application acquires/releases a lock and macro-sends its exact item in
+    interpreter, compiled, and debug contexts. The eight-worker exact-LLVM
+    Debug build completed 150 affected steps warning-clean. `fsim.runtime`,
+    `fsim.application`, `fsim.llvm`, `fsim.diagnostics-catalog`,
+    `fsim.source-line-budget`, `fsim.uvm-source-harness`, and
+    `fsim.installed-public-contract` pass 7/7 in 36.91 seconds. Preserve all
+    Changes 1-4 files and proceed to Batch 161 Change 5 without committing or
+    pushing before Change 20.
+21. Change 5 is complete in the intentionally dirty Batch 161 worktree. Each
+    sequencer now owns bounded generation-checked driver-handshake transactions
+    retaining the exact selected request snapshot, sequence/sequencer, optional
+    request item, request object, optional response, pull/push kind, phase and
+    process, deadline, state, completion order, and cancellation reason.
+    Blocking get-next/get/peek/push distinguish waiting from nonblocking
+    try-next empty; repeated peek returns one identity; get completes directly;
+    get-next/try-next require item-done; and push FIFO, configurable pipelining,
+    and backpressure preserve unconsumed arbitration order. Item-done and later
+    put-response route exact owned responses. Timeout, process synchronization,
+    the transaction-aware phase-jump wrapper, cooperative stop, and recursive
+    kill retain distinct cancellations. Terminal snapshots persist until
+    explicit stale-making release and block premature owned-object teardown.
+    Cataloged `FSIM-UVM-SEQ-011` covers invalid handshakes, contexts, response
+    associations, state transitions, cancellation reasons, and reconfiguration;
+    `FSIM-UVM-SEQ-006` bounds every new count, depth, timeout, identity, order,
+    and mutation resource.
+22. Runtime evidence covers blocking/nonblocking waits, relevance, all pull
+    forms, repeated peek/get identity, request-only sequence objects, three-deep
+    pull pipelines, push FIFO and capacity backpressure, item-done and separate
+    put-response, wrong-owner rollback, request/response retention, explicit,
+    timeout, real process, actual phase-jump, stop, and kill cancellation,
+    stale/foreign/cross-root misuse, live reconfiguration, lifecycle release,
+    and every resource ceiling. The application completes its macro-sent exact
+    item through get-next-item/item-done and inspects the retained transaction in
+    interpreter, compiled, and debug contexts. The eight-worker exact-LLVM
+    Debug build completed 150 affected steps warning-clean. `fsim.runtime`,
+    `fsim.application`, `fsim.llvm`, `fsim.diagnostics-catalog`,
+    `fsim.source-line-budget`, `fsim.uvm-source-harness`, and
+    `fsim.installed-public-contract` pass 7/7 in 34.03 seconds. Preserve all
+    Changes 1-5 files and proceed to Batch 161 Change 6 without committing or
+    pushing before Change 20.
+23. Change 6 is complete in the intentionally dirty Batch 161 worktree. The
+    sequence service now owns generation-checked driver, monitor, agent,
+    subscriber, and scoreboard role identities, snapshots, events, failures,
+    source callback dispatch, and bounded lifecycle state. Root-qualified
+    config-db lookup resolves each agent's exact active/passive mode during
+    build. Drivers bind same-root sequencers, execute the completed handshake,
+    and balance automatic run objections; passive agents reject drivers while
+    retaining operational monitors. Monitors own typed TLM1 analysis ports and
+    subscribers/scoreboards own typed implementations with deterministic
+    same-root fanout. Checked endpoint release plus leaf-first role teardown
+    removes connections and callbacks before component destruction, cancels
+    root-local active work, makes role handles stale, and preserves peer roots.
+    Cataloged `FSIM-UVM-SEQ-012` covers invalid role hierarchy, configuration,
+    sequencer/analysis bindings, phase/process context, callbacks, objections,
+    and operations; `FSIM-UVM-SEQ-006` bounds every new role, root, dispatch,
+    event, failure, connection, publication, identity, order, and mutation
+    resource.
+24. Runtime evidence covers active/passive config overrides, exact
+    build/connect/run lifecycle, driver get-next-item/item-done, subscriber and
+    scoreboard fanout, passive monitoring, balanced objections, cross-root,
+    duplicate, malformed, passive-driver, stale-handle, teardown-order, and
+    count/dispatch/publication-limit cases with rollback and peer isolation.
+    Application evidence dispatches active agent, driver, and passive agent
+    roles beside actual SystemVerilog class build/connect/run callbacks through
+    interpreter, compiled, and debug engines and proves fresh state. The final
+    eight-worker exact-LLVM Debug build completed 174 affected steps
+    warning-clean. `fsim.runtime`, `fsim.application`, `fsim.llvm`,
+    `fsim.diagnostics-catalog`, `fsim.source-line-budget`,
+    `fsim.uvm-source-harness`, and `fsim.installed-public-contract` pass 7/7 in
+    31.61 seconds. `git diff --check` is clean. Preserve all Changes 1-6 files
+    and proceed to Batch 161 Change 7 without committing or pushing before
+    Change 20.
+25. Change 7 is complete in the intentionally dirty Batch 161 worktree.
+    Existing generation-checked sequencer identities now retain explicit
+    virtual/domain metadata, a single virtual parent, unique names, exact child
+    handles and request/response profiles, and common-root ownership. Virtual
+    sequences reuse the completed lifecycle and coordinate only from an active
+    body with a live task-phase process. Each validated child step applies its
+    priority through the request queue, optional lock/grab through the access
+    service, automatic objection through the objection service, and start
+    through a real child of the virtual phase process. The resulting A/B child
+    processes are exact siblings even though their typed sequencers are
+    separate components.
+26. Coordinated reset cancels only the active child transaction/process with
+    `VirtualReset`, restores the epoch's response baselines, clears unconsumed
+    requests/access, and replays the plan within a bounded restart count.
+    Cooperative stop, recursive parent kill, child failure, and lost process
+    state stop the remaining plan without leaked request, response, or access
+    state; parent kill follows ephemeral cross-domain children as well as
+    ordinary sequence children. `FSIM-UVM-SEQ-013` catalogs invalid virtual
+    bindings/operations and `FSIM-UVM-SEQ-006` bounds domains, steps, restarts,
+    and events. Runtime proof covers distinct A/B profiles, 700/900 priorities,
+    lock/grab, balanced objections, reset/restart, exact sibling ancestry,
+    response de-duplication, parent kill, cross-root/lifecycle/release
+    negatives, rollback, and every new limit. Application proof executes a
+    priority-161 locked virtual child from the real Run-phase driver process in
+    interpreter, compiled, and debug engines; its helper was split into a
+    dedicated source so `fsim.source-line-budget` remains green. The
+    eight-worker exact-LLVM Debug build completed 166 affected steps
+    warning-clean. Before the helper split, `fsim.runtime` and
+    `fsim.application` passed 2/2 in 30.04 seconds; after the split,
+    `fsim.application` and `fsim.source-line-budget` passed 2/2 in 29.16
+    seconds. Final `fsim.runtime`, `fsim.application`, `fsim.llvm`,
+    `fsim.diagnostics-catalog`, `fsim.source-line-budget`,
+    `fsim.uvm-source-harness`, and `fsim.installed-public-contract` pass 7/7 in
+    32.96 seconds. Preserve all Changes 1-7 files and proceed to Batch 161
+    Change 8 without committing or pushing before Change 20.
+27. Change 8 is complete in the intentionally dirty Batch 161 worktree. A
+    simulation-owned callback service now provides generation-checked type-wide
+    and exact-instance registrations, global append/prepend order, masks,
+    frozen iterator-safe mutation, immutable routing, exception containment,
+    attribute rollback, bounded recursive re-entry, and retained failures.
+    `FSIM-UVM-CALLBACK-001` catalogs invalid callback handles, ownership,
+    scopes, types, masks, and operations; `FSIM-UVM-CALLBACK-002` bounds
+    callbacks, fanout, failures, text, attributes, mutations, and re-entry.
+    Runtime proof covers exact matching and order, delete-before-turn, deferred
+    addition, disabling, exception continuation, stale/cross-service handles,
+    all zero limits, and live count/fanout/failure/attribute ceilings.
+28. The paired transaction recorder retains stable pointer-free identities,
+    same-root parents and links, typed attributes, scheduler time/delta,
+    begin/attribute/link/end trace records, completed/cancelled/failed state,
+    callback masks, activity/VCD events, and safe terminal release. Activity
+    rejection rolls snapshot, trace, and lifecycle state back atomically.
+    `FSIM-UVM-TR-001` catalogs invalid handles, roots, parents, links, states,
+    attributes, and values; `FSIM-UVM-TR-002` bounds recorder resources.
+    Runtime proof covers parent/child identity, exact callback order, contiguous
+    traces, timing, typed and callback-added attributes, lifecycle negatives,
+    aggregate bytes, capacity rollback, and every zero/live limit. Application
+    proof records a source-backed Run-phase transaction and proves callback
+    order, completed state, debugger output, and identical stable trace
+    signatures in interpreter, compiled, and debug engines. The eight-worker
+    exact-LLVM Debug build completed 79 affected steps warning-clean;
+    `fsim.runtime`, `fsim.application`, `fsim.application.classes`, `fsim.llvm`,
+    `fsim.diagnostics-catalog`, `fsim.source-line-budget`,
+    `fsim.uvm-source-harness`, and `fsim.installed-public-contract` pass 8/8 in
+    39.36 seconds. `git diff --check` is clean. Preserve all Changes 1-8 files
+    and proceed to Batch 161 Change 9 without committing or pushing before
+    Change 20.
+29. Change 9 is complete in the intentionally dirty Batch 161 worktree. A
+    simulation-owned register-model service now provides strongly typed block,
+    map, register, field, and memory handles with stable numeric identities,
+    exact root/parent/depth ownership, deterministic root-qualified full names,
+    and one globally contiguous mixed-kind declaration stream. Blocks reject
+    duplicate names across child kinds; registers reject duplicate,
+    overlapping, and out-of-range fields. Registers, fields, maps, and
+    multidimensional memories retain checked widths, offsets, dimensions, and
+    word counts, including exact 64-bit span-overflow rejection. Locking through
+    a top block revalidates the live root and recursively freezes its complete
+    child-block hierarchy.
+30. `FSIM-UVM-REG-001` catalogs invalid handles, roots, hierarchy, ownership,
+    names, shapes, fields, address spans, build state, and lock operations;
+    `FSIM-UVM-REG-002` bounds every node count, global/per-owner declarations,
+    depth, text, width, dimension, extent, word count, identity, order, and
+    mutation resource. Runtime proof covers all typed metadata, exact source
+    order, recursive freeze, stale/cross-service/cross-root handles, stale root,
+    duplicate names, field fit/overlap, memory shape, overflow, every zero limit,
+    and live saturation of every resource category. The application locks a
+    source-backed model and hashes every stable declaration field into the
+    existing interpreter/compiled/debug signature, proving engine equality and
+    fresh-simulation isolation. Graph audit reports maximum cognitive
+    complexity 16, loop depth 1, and no scan-in-loop hotspot. The final
+    eight-worker exact-LLVM Debug build completed 97 affected steps
+    warning-clean; `fsim.runtime`, `fsim.application`,
+    `fsim.application.classes`, `fsim.llvm`, `fsim.diagnostics-catalog`,
+    `fsim.source-line-budget`, `fsim.uvm-source-harness`, and
+    `fsim.installed-public-contract` pass 8/8 in 41.44 seconds. Preserve all
+    Changes 1-9 files and proceed to Batch 161 Change 10 without committing or
+    pushing before Change 20.
+31. Change 10 is complete in the intentionally dirty Batch 161 worktree. The
+    register model implements all twenty-six standard field access policies,
+    access-aware desired values, independent mirrors, volatile update
+    detection, compare masks, direct/read/write prediction, pre-side-effect
+    read results, read-clear/read-set behavior, W1/WO1 physical write-once
+    state, and named exact-width resets. Only HARD reset rearms W1/WO1 fields.
+    Register operations preserve non-writable modeled slices. Multidimensional
+    memories use checked row-major indices and sparse desired/mirrored words.
+    Invalid widths, X/Z values, rights, prediction kinds, reset kinds, indices,
+    and all operation/storage ceilings reject atomically through cataloged
+    `FSIM-UVM-REG-003` and `FSIM-UVM-REG-004` results.
+32. Runtime proof enumerates every policy across set, first/second writes,
+    SOFT/HARD reset, read result, and read side effects, plus mixed registers,
+    volatile/compare behavior, prediction, multidimensional memory, rights,
+    rollback, and every new zero/live/aggregate ceiling. Application proof
+    resets, writes, reads, and hashes stable value state identically through
+    interpreter, compiled, and debug engines. The final eight-worker exact-LLVM
+    Debug build completed 151 steps warning-clean. `fsim.runtime`,
+    `fsim.application`, `fsim.application.classes`, `fsim.llvm`,
+    `fsim.diagnostics-catalog`, `fsim.source-line-budget`,
+    `fsim.uvm-source-harness`, and `fsim.installed-public-contract` pass 8/8
+    in 39.94 seconds. A direct runtime test passes in 0.02 seconds with maximum
+    RSS 14,092 KiB; `git diff --check` is clean. Preserve all Changes 1-10 and
+    proceed to Batch 161 Change 11 without committing or pushing before Change
+    20.
+33. Change 11 is complete in the intentionally dirty Batch 161 worktree. The
+    register model now retains byte- or word-addressed maps, exact bus widths,
+    all four little/big/FIFO endian modes, hierarchical submaps using the
+    narrowest bus, multiple-map membership, independent per-map rights,
+    explicitly unmapped entries, stable direct/hierarchical inventories, exact
+    register-beat and multidimensional-memory-word lookup, and dynamic physical
+    beat byte enables. Locking transactionally validates address-unit and bus
+    alignment, checked 64-bit spans, and register, memory, and submap overlap.
+    Policy-aware burst writes preserve disabled bytes, and sparse touched-word
+    backup restores desired, mirrored, written, operation, mutation, and
+    materialized-bit state after injected mid-burst failure. Cataloged
+    `FSIM-UVM-REG-005` covers invalid map construction/access and
+    `FSIM-UVM-REG-006` bounds memberships, hierarchy, bus/beat/byte-enable,
+    burst/value-bit, lookup/work, identity, order, and mutation resources.
+34. Runtime evidence covers both address-unit modes, every endian profile,
+    hierarchical addresses, partial beats, inventories, lookup, RO/WO and
+    unmapped behavior, policy-aware byte writes, bursts, transactional
+    alignment/overlap/overflow rejection, and every new zero/live ceiling. The
+    application maps a source-backed status register and memory, performs burst
+    traffic and lookup, and hashes stable map configuration/inventory equally
+    through interpreter, compiled, and debug engines. The final eight-worker
+    exact-LLVM Debug build completed 24 affected steps warning-clean.
+    `fsim.runtime`, `fsim.application`, `fsim.application.classes`, `fsim.llvm`,
+    `fsim.diagnostics-catalog`, `fsim.source-line-budget`,
+    `fsim.uvm-source-harness`, and `fsim.installed-public-contract` pass 8/8 in
+    41.78 seconds. A direct runtime test passes in 0.02 seconds with maximum RSS
+    14,260 KiB. Graph audit reports maximum cognitive complexity 19, loop depth
+    2, and no recursion; heuristic scan flags are bounded dimension walks or
+    logarithmic ordered/sparse lookups, and overlap detection is sort plus
+    adjacent comparison. `git diff --check` is clean. Preserve Changes 1-11 and
+    proceed to Batch 161 Change 12 without committing or pushing before Change
+    20.
+35. Change 12 is complete in the intentionally dirty Batch 161 worktree.
+    Register adapters own exact root, sequencer, nonvirtual sequence, priority,
+    auto-predict policy, and conversion/drive callbacks. Generic bus items
+    retain selected map/target, exact address/data/byte enables, logical byte
+    offset, beat index/count, and operation order. Register and memory
+    read/write, register update/mirror, clean no-op update, multi-beat response
+    assembly, mismatch checking, auto-prediction, explicit register/memory
+    prediction, and TLM analysis predictors execute through real sequence
+    items and retained handshake transactions. Explicit completion, timeout,
+    phase-owned and explicit cancellation retain deterministic terminal state.
+    Callback, response, ownership, rights, and prediction failures are
+    contained without partial mirror publication. Cataloged
+    `FSIM-UVM-REG-007` covers invalid frontdoor state and
+    `FSIM-UVM-REG-008` bounds every adapter, predictor, operation, pending,
+    bus-item, value-bit, byte-enable, observation, identity, order, and mutation
+    resource.
+36. Runtime evidence covers exact multi-beat register/memory traffic,
+    write/read/update/no-op/mirror, auto/explicit/TLM prediction,
+    timeout/phase/explicit cancellation, cross-root and rights rejection,
+    failed status, callback exceptions, invalid response ownership, unmapped
+    prediction, rollback, and every new zero/live ceiling. Application proof
+    executes real frontdoor write, mirror, update, and memory read with exact
+    sequence items and transactions in interpreter, compiled, and debug
+    engines, including stable trace hashing. The final eight-worker exact-LLVM
+    Debug build completed 77 affected steps warning-clean. `fsim.runtime`,
+    `fsim.application`, `fsim.application.classes`, `fsim.llvm`,
+    `fsim.diagnostics-catalog`, `fsim.source-line-budget`,
+    `fsim.uvm-source-harness`, and `fsim.installed-public-contract` pass 8/8 in
+    45.41 seconds. Direct runtime passes in 0.02 seconds with maximum RSS 14,324
+    KiB. The graph reports maximum cognitive complexity 19, loop depth 1, no
+    recursion, and only bounded physical-beat rights-check scan flags. `git
+    diff --check` is clean. Preserve Changes 1-12 and proceed to Batch 161
+    Change 13 without committing or pushing before Change 20.
+37. Change 13 is complete in the intentionally dirty Batch 161 worktree. User
+    frontdoors retain exact roots, register/field/memory-word targets, and
+    contained read/write callbacks. HDL paths retain ordered VPI/VHPI slices,
+    canonical names, exact physical/logical placement, stable inventories, and
+    complete nonoverlapping logical coverage. Registration and every access
+    re-resolve canonical paths, preventing stale engine identities after
+    relocation. Reads assemble mixed-language concatenations and predict the
+    selected target. Deposit and force preserve outside-slice bits; release
+    re-reads and predicts the deposited value; preflight and rollback prevent
+    partial concatenated writes. Cataloged `FSIM-UVM-REG-009` covers invalid
+    frontdoor, target, callback, HDL path/slice, resolution, access, relocation,
+    and rollback state. `FSIM-UVM-REG-010` bounds frontdoor, path, slice, text,
+    operation, value-bit, identity, order, and mutation resources.
+38. Runtime evidence covers user callbacks and containment, mixed VPI/VHPI
+    concatenations, register/field/sparse-memory paths, read/deposit/force/
+    release, physical-bit preservation, rollback, overlap rejection,
+    canonical-path removal/recreation, and every zero/live resource ceiling.
+    Application proof executes a real user frontdoor and canonical VPI-backed
+    design-signal read with stable state across interpreter, compiled, and
+    debug engines. The final eight-worker exact-LLVM Debug build completed 77
+    affected steps warning-clean. `fsim.runtime`, `fsim.application`,
+    `fsim.application.classes`, `fsim.llvm`, `fsim.diagnostics-catalog`,
+    `fsim.source-line-budget`, `fsim.uvm-source-harness`, and
+    `fsim.installed-public-contract` pass 8/8 in 41.02 seconds. Direct runtime
+    passes in 0.02 seconds with maximum RSS 14,196 KiB. Graph audit reports
+    maximum cognitive complexity 18, loop depth 2, no recursion, and no
+    backdoor scan-in-loop flags. `git diff --check` is clean. Preserve Changes
+    1-13 and proceed to Batch 161 Change 14 without committing or pushing
+    before Change 20.
+39. Change 14 is complete in the intentionally dirty Batch 161 worktree. The
+    standard register-sequence service runs reset, hardware-reset, bit-bash,
+    register access, shared access, memory access, memory walk, and model
+    traversal against a locked root and optional selected hierarchical map.
+    Exact full-name/subtree exclusions carry per-kind masks. Map rights,
+    unmapped entries, field access/volatility/compare policies, and memory
+    access policies suppress illegal operations. Hardware reset contains its
+    DUT callback before reset/mirror checking. Bit bash restores every eligible
+    field; access/shared-access use deterministic SplitMix64 streams and restore
+    registers; memory sequences cover every selected multidimensional word.
+    Callback or direct-model reads/writes validate status and exact width while
+    retaining bounded failures. `FSIM-UVM-REG-011` catalogs invalid sequence
+    ownership/configuration/access state and `FSIM-UVM-REG-012` bounds retained
+    sequences, operations, failures/text, exclusions/text, identities, order,
+    and mutation.
+40. Runtime evidence covers all eight kinds, exact resets, bit and word
+    traversal, multiply mapped registers, RO suppression, deterministic replay,
+    exclusions, callback containment, invalid selections, and every new
+    zero/live/aggregate ceiling. Application proof executes and hashes one
+    seeded access sequence equally across interpreter, compiled, and debug
+    engines. The final eight-worker exact-LLVM Debug build completed 24 affected
+    steps warning-clean. `fsim.runtime`, `fsim.application`,
+    `fsim.application.classes`, `fsim.llvm`, `fsim.diagnostics-catalog`,
+    `fsim.source-line-budget`, `fsim.uvm-source-harness`, and
+    `fsim.installed-public-contract` pass 8/8 in 40.32 seconds. Direct runtime
+    passes in 0.02 seconds with maximum RSS 14,468 KiB. Graph audit reports
+    maximum cognitive complexity 17, loop depth 2, no recursion, and no
+    scan-in-loop flags. `git diff --check` is clean. Preserve Changes 1-14 and
+    proceed to Batch 161 Change 15 without committing or pushing before Change
+    20.
+41. Change 15 is complete in the intentionally dirty Batch 161 worktree.
+    Callback-aware register, field, and multidimensional memory-word accesses
+    own block, map, register, memory, and field callbacks with exact phase masks,
+    signed priority, identity, and order. Pre dispatch runs outer-to-inner and
+    post dispatch reverses it. Mutable value/status contexts reach physical
+    writes and final read prediction, while target/map/phase/width mutation,
+    explicit stop, exceptions, ownership, and selected-map-right failures are
+    contained and counted. Standard register sequences reuse this path.
+    Coverage models select locked block subtrees and retain per-map read/write,
+    per-field mirrored-value, and named-reset/desired/mirror cross bins.
+    `FSIM-UVM-REG-013` catalogs invalid callback/coverage/access state and
+    `FSIM-UVM-REG-014` bounds callbacks, per-access dispatch, invocations,
+    failures, coverage models/samples/bins/text, identities, order, and mutation.
+42. Runtime proof covers all five scopes/four phases, stable order/priority,
+    valid and invalid mutation, memory words, exception containment, RO
+    rejection before dispatch, exact coverage bins/crosses, inventories,
+    sequence coexistence, and every new zero/live/aggregate ceiling. Application
+    proof runs four scoped callbacks and one coverage model through a seeded
+    standard access sequence and hashes exact invocation/sample/bin state across
+    interpreter, compiled, and debug engines. The final eight-worker exact-LLVM
+    Debug build completed 77 affected steps warning-clean. `fsim.runtime`,
+    `fsim.application`, `fsim.application.classes`, `fsim.llvm`,
+    `fsim.diagnostics-catalog`, `fsim.source-line-budget`,
+    `fsim.uvm-source-harness`, and `fsim.installed-public-contract` pass 8/8 in
+    40.03 seconds. Direct runtime passes in 0.02 seconds with maximum RSS 14,520
+    KiB. Graph audit reports maximum cognitive complexity 18, loop depth 1, no
+    recursion, and no scan-in-loop flags. `git diff --check` is clean. Preserve
+    Changes 1-15 and proceed to Batch 161 Change 16 without committing or
+    pushing before Change 20.
+43. Change 16 is complete in the intentionally dirty Batch 161 worktree.
+    `uvm sequences`, `uvm registers`, and `break uvm IDENTITY|*` expose the new
+    services through the existing bounded debugger and activity surfaces.
+    Sequence registration/execution plus register callback, coverage, and
+    standard-sequence operations publish contained activity that automatically
+    reaches VCD and DPI/VPI/VHPI observers. The append-only foreign ABI retains
+    version 1 and its exact C layouts while adding thirteen sequence/callback/
+    transaction/register record kinds. Application-owned foreign hosts encode
+    canonical identities, ordering, RNG replay state, desired/mirrored/reset
+    values, transaction state, callbacks, and coverage without host pointers.
+    Checkpoint validation and the `FSIMUVM1` portable codec retain exact content,
+    cache, artifact, and root provenance. Integrated record/text ceilings are
+    enforced before each intermediate record is retained, preventing oversized
+    models from ballooning memory before a resource rejection.
+44. Application proof formats both debugger sections, observes both activity
+    kinds, round-trips the completed virtual sequence/register checkpoint,
+    rejects a one-record-short ceiling, and finds sequence, mirrored-field, and
+    seeded standard-sequence foreign records. Existing relocated-artifact,
+    wrong-simulation handle, fresh-context, engine-signature, and cold/warm-
+    cache proofs retain deterministic replay and isolation. The final
+    eight-worker exact-LLVM Debug build completed 81 affected steps warning-
+    clean. `fsim.runtime`, `fsim.application`, `fsim.application.classes`,
+    `fsim.llvm`, `fsim.diagnostics-catalog`, `fsim.source-line-budget`,
+    `fsim.uvm-source-harness`, and `fsim.installed-public-contract` pass 8/8 in
+    38.80 seconds. Direct runtime passes in 0.02 seconds with maximum RSS 14,320
+    KiB. Graph audit of the new foreign collector reports cognitive complexity
+    31, loop depth 2, no scan-in-loop flag, and no recursion. `git diff --check`
+    is clean. Preserve Changes 1-16 and proceed to Batch 161 Change 17 without
+    committing or pushing before Change 20.
+45. Change 17 is complete in the intentionally dirty Batch 161 worktree. One
+    exact source environment imports the unmodified UVM 1.2 and UVM 2020-3.1
+    sequence item, sequence, sequencer, driver, monitor, agent, scoreboard,
+    environment, and callback surfaces. It proves strict-FIFO arbitration,
+    lock plus pending grab ownership, request/response completion, monitor-to-
+    scoreboard analysis, a real phase-process virtual sequence and child,
+    type-wide plus instance callback order, and transaction recording. Exact
+    parameterized upstream classes whose specialization ancestry ends early are
+    recognized through inherited property and canonical method ownership.
+    Explicit object/component allocation registers the requested specialization
+    and transactionally enforces initialized component ownership.
+46. The exact release matrices pass direct source, portable `.fsimobj`, O0/O2
+    `.fsimdesign`, interpreter, compiled cold/warm native cache, and debug
+    execution with the stable suffix `sequence=arb/lock/response/virtual
+    roles=agent/driver/monitor/scoreboard callback=6 transaction=5 cap=records`.
+    UVM 1.2 passes in 398.26 seconds and UVM 2020-3.1 passes in 497.39 seconds.
+    The final eight-worker exact-LLVM Debug affected build completes 68 steps
+    warning-clean. `fsim.runtime`, `fsim.application`,
+    `fsim.application.classes`, `fsim.llvm`, `fsim.diagnostics-catalog`,
+    `fsim.source-line-budget`, `fsim.uvm-source-harness`, and
+    `fsim.installed-public-contract` pass 8/8 in 29.88 seconds. Direct runtime
+    passes in 0.02 seconds with maximum RSS 14,400 KiB. Graph audit reports
+    maximum cognitive complexity 17, loop depth 2, one bounded inventory
+    scan-in-loop flag, and no recursion. `git diff --check` is clean. Preserve
+    Changes 1-17 and proceed to Batch 161 Change 18 without committing or
+    pushing before Change 20.
+47. Change 18 is complete in the intentionally dirty Batch 161 worktree. The
+    exact fixture derives register, register-block, adapter, predictor,
+    register-sequence, and register-callback classes from both unmodified
+    upstream releases and allocates them in a dedicated exact register
+    environment. Its simulation-owned model drives a 32-bit register and
+    memory through little- and big-endian 16-bit maps, exact two-beat
+    frontdoors, `1010` byte enables, reset/desired/mirror state, TLM analysis
+    prediction, combined VPI/VHPI backdoor deposit/read/force/release, a scoped
+    callback, coverage, and the seeded access sequence. The integrated
+    checkpoint round-trips from a relocated origin and rejects a one-record-
+    short cap without partial capture.
+48. The stable suffix is `register=frontdoor/backdoor/predictor
+    maps=little/big byte_enable=1010 callback_coverage=1 sequence=access
+    replay=relocated cap=records`. Direct source, portable `.fsimobj`, O0/O2
+    `.fsimdesign`, interpreter, compiled cold/warm native cache, and debug pass
+    for exact UVM 1.2 in 432.29 seconds and UVM 2020-3.1 in 541.39 seconds, 2/2
+    in 973.69 seconds overall. The final eight-worker exact-LLVM Debug affected
+    build completes three steps warning-clean. `fsim.runtime`,
+    `fsim.application`, `fsim.application.classes`, `fsim.llvm`,
+    `fsim.diagnostics-catalog`, `fsim.source-line-budget`,
+    `fsim.uvm-source-harness`, and `fsim.installed-public-contract` pass 8/8 in
+    27.53 seconds. Direct runtime passes in 0.02 seconds with maximum RSS 14,364
+    KiB. Graph audit reports cognitive complexity 11, loop depth 2, no
+    scan-in-loop flag, and no recursion. `git diff --check` is clean. Preserve
+    Changes 1-18 and proceed to Batch 161 Change 19 without committing or
+    pushing before Change 20.
+49. Change 19 is complete in the intentionally dirty Batch 161 worktree. The
+    aggregate UVM matrix scans the full phase/TLM, sequence, role, callback/
+    transaction, and register evidence set plus both exact-source probes,
+    freezes all 64 cataloged UVM diagnostic families, and requires
+    representative arbitration, access, handshake, role, virtual-sequence,
+    callback, transaction, endian-map, predictor, mixed-VPI/VHPI, standard-
+    sequence, coverage, exact-sequence, and exact-register tokens. README, the
+    public UVM guide/transcript, architecture, language support, diagnostics,
+    provenance/resource baselines, feature matrix, release audits, inventory,
+    and release-candidate corpus now describe one Batch 161 boundary.
+50. The reviewed inventory is 2,054 diagnostics, 809 bounded C/C++ sources,
+    910 SPDX-owned authored files, and 305 authored test/control files. The
+    release matrix is 1,262 executable rows with 5,048 evidence cells across
+    579 exact paths (254 test, 303 production, and 22 release) and 138 runtime
+    owners. Matrix/evidence SHA-256 values are
+    `3f6bc26424dd6dabe984f1efbef858808c2370b50c0969c6d82340499410e506`
+    and `ca0f3e8d6e9eff61b4949b948e7c539ad61d6ea25031e1b547ec5b79240dafc2`.
+    The complete documentation, conformance, inventory, installed-public, and
+    portability tranche passes 28/28 in 18.16 seconds with maximum RSS 57,108
+    KiB. `git diff --check` is clean. Preserve Changes 1-19 and proceed to
+    Change 20 without committing or pushing.
+51. Change 20 and Batch 161 are complete in the accumulated implementation
+    worktree. Clean-first exact-LLVM 22.1.8 Debug and Release eight-worker builds
+    each complete 721 steps warning-free in 9:05.64 and 7:52.60 with peak RSS
+    4,035,212 and 2,485,712 KiB. Their complete regressions pass 118/118 in
+    384.37 and 323.00 seconds with peak RSS 3,779,552 and 3,787,920 KiB. The
+    dedicated governed-UVM tree refreshes 201 steps warning-free in 2:59.64
+    with peak RSS 3,982,708 KiB.
+52. Exact UVM 1.2 passes in 467.47 seconds and exact UVM 2020-3.1 passes in
+    566.45 seconds, 2/2 in 1,033.92 seconds with peak RSS 4,775,752 KiB. Every
+    direct, portable-object, O0/O2 design, compiled cold/warm, and debug stage
+    emits the full sequence/register transcript. All fourteen traces are 17,833
+    bytes with SHA-256
+    `95caf4dbb04fa7f1b1397df9b40e03a1fdbc19b90c6387221a8b59635ebd5eff`.
+    Final audits retain 2,054 diagnostics, 809 bounded sources, 910 SPDX-owned
+    files, 305 test/control owners, 1,262 executable rows, 5,048 evidence cells,
+    579 evidence paths, and 138 runtime owners. No sanitizer or hosted-CI
+    inspection ran at this non-monitoring boundary. Run the post-documentation
+    contracts, commit and push the single Changes 1-20 implementation, then
+    save/push the Batch 162 restart plan and clear context before implementing
+    Batch 162.
 
 ## Batch 160 planned restart checkpoint - 2026-08-08
 

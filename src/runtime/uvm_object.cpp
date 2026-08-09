@@ -92,6 +92,11 @@ void SystemVerilogUvmObjectService::register_type(
   }
 }
 
+bool SystemVerilogUvmObjectService::contains_type(
+    const std::string_view specialization_identity) const noexcept {
+  return descriptors_.contains(specialization_identity);
+}
+
 void SystemVerilogUvmObjectService::initialize(
     const SystemVerilogClassHandle object,
     std::string object_name) {
@@ -588,7 +593,8 @@ SystemVerilogUvmObjectService::descriptor(
   const auto found = descriptors_.find(class_object.specialization_identity);
   if (found == descriptors_.end()) {
     throw std::out_of_range{
-        "class specialization is not registered as a UVM object"};
+        "class specialization is not registered as a UVM object: " +
+        class_object.specialization_identity};
   }
   return found->second;
 }

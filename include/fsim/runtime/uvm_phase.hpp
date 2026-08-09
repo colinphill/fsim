@@ -465,6 +465,8 @@ class SystemVerilogUvmPhaseService final {
       const TaskPhaseCallback& task_callback);
   void complete_task_process(SystemVerilogUvmPhaseProcessHandle process);
   void cancel_task_process(SystemVerilogUvmPhaseProcessHandle process);
+  [[nodiscard]] SystemVerilogUvmPhaseProcessHandle begin_child_process(
+      SystemVerilogUvmPhaseProcessHandle parent);
   [[nodiscard]] SystemVerilogUvmPhaseProcessHandle schedule_child_process(
       SystemVerilogUvmPhaseProcessHandle parent,
       SimulationTick delay,

@@ -253,3 +253,12 @@ reviewed inventory to 2,023 diagnostics, 769 bounded C/C++ sources, 870
 authored artifacts, and 285 authored test/control files. The exact upstream
 UVM trees remain governed external build products; the new fixture imports
 their unmodified types and is itself clean-room authored evidence.
+
+v2 Batch 161 adds simulation-owned UVM sequence, callback, transaction, and
+register-model services plus exact runtime/application matrices as 40 SPDX-
+owned bounded C/C++ files: 20 production headers/sources and 20 test/control
+owners. Thirty-one production diagnostic codes advance the reviewed inventory
+to 2,054 diagnostics, 809 bounded C/C++ sources, 910 authored artifacts, and
+305 authored test/control files. The exact upstream UVM trees remain governed
+external build products; all adapters, services, probes, and tests are
+clean-room authored code.

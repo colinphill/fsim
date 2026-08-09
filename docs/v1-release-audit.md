@@ -9,13 +9,13 @@ remains the final Task 10 boundary.
 
 ## Matrix baseline
 
-The current matrix contains exactly 1,250 required rows. Every row is classified
+The current matrix contains exactly 1,262 required rows. Every row is classified
 `execute`, has nonempty positive parse, negative diagnostic, elaboration, and
 runtime evidence, and names evidence paths that exist in the checkout.
 
 | Surface | Prefix | Required rows | Final review owner |
 |---|---|---:|---:|
-| SystemVerilog language | `SV` | 810 | Task 2 plus v2 Batches 144-157 and 159-160 |
+| SystemVerilog language | `SV` | 822 | Task 2 plus v2 Batches 144-157 and 159-161 |
 | SystemVerilog release contract | `V1-SV` | 9 | Task 2 |
 | VHDL language | `VH` | 279 | Task 3 plus v2 Batches 140-143 and 158 |
 | VHDL release contract | `V1-VH` | 8 | Task 3 |
@@ -25,7 +25,7 @@ runtime evidence, and names evidence paths that exist in the checkout.
 | Common release contract | `V1-CM` | 10 | Tasks 5 through 9 |
 
 The Task 1 baseline matrix digest is
-`25300a46781d8945f884358d4fabf05489415cbbee97405edffee7e4a0be4943`.
+`3f6bc26424dd6dabe984f1efbef858808c2370b50c0969c6d82340499410e506`.
 Changing any row requires an intentional audit update and the owning focused
 gate; the digest is evidence of review, not a substitute for semantic tests.
 Corrective Batch 131 re-reviewed the affected container rows after replacing
@@ -83,15 +83,20 @@ graphs and execution, objections/drains/quiescence, typed TLM1 and TLM2,
 activity/debug and foreign snapshots, portable checkpoints, deterministic
 race/deadlock handling, all 33 cataloged diagnostic families, and exact
 unmodified UVM 1.2/2020.3.1 engine/artifact/cache parity.
+V2 Batch 161 adds `SV-811` through `SV-822` for sequence lifecycle,
+arbitration, access, driver handshakes, component roles, virtual sequences,
+callbacks and transaction recording, the register model/maps/frontdoors/
+backdoors/standard sequences/callbacks/coverage, integrated checkpoint state,
+and exact unmodified UVM 1.2/2020.3.1 sequence/register parity.
 
 ## Existing release evidence
 
 The composed local gates currently establish:
 
-- 2,023 production diagnostics are cataloged;
-- 769 authored C/C++ sources remain within the 2,500-line hard limit; any file
+- 2,054 production diagnostics are cataloged;
+- 809 authored C/C++ sources remain within the 2,500-line hard limit; any file
   that exceeds it must be refactored below the 2,000-line target;
-- all 1,250 required matrix rows are executable with no explicit evidence gap;
+- all 1,262 required matrix rows are executable with no explicit evidence gap;
 - 105 independently authored conformance expectations in 28 fixtures are
   owned by 27 CTests;
 - 20 exact portability rows cover Debug/Release, interpreter/LLVM O0/O2,

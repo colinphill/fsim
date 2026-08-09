@@ -315,10 +315,34 @@ DebuggerSession::DebuggerSession(
                   + std::to_string(delta)};
           simulation_.request_stop();
         });
+    uvm_observer_ = simulation_.add_uvm_activity_hook(
+        [this](const runtime::SystemVerilogUvmActivityEvent& event) {
+          if (!executing_ || hit_) {
+            return;
+          }
+          const auto found = std::find_if(
+              breakpoints_.begin(), breakpoints_.end(),
+              [&](const DebugBreakpoint& breakpoint) {
+                return breakpoint.kind == DebugBreakpointKind::uvm
+                    && (breakpoint.path == "*"
+                        || breakpoint.path == event.identity);
+              });
+          if (found == breakpoints_.end()) {
+            return;
+          }
+          hit_ = DebugBreakpointHit{
+              found->id,
+              "UVM activity " + event.identity + " action "
+                  + std::to_string(static_cast<unsigned>(event.action))
+                  + " at time " + std::to_string(event.time) + ", delta "
+                  + std::to_string(event.delta)};
+          simulation_.request_stop();
+        });
   }
 
 DebuggerSession::~DebuggerSession()  {
     simulation_.remove_signal_change_hook(observer_);
+    simulation_.remove_uvm_activity_hook(uvm_observer_);
     simulation_.set_execution_point_hook({});
     install_interrupt_hook(simulation_);
   }
@@ -1089,7 +1113,7 @@ DebuggerSession::phase_states() const {
 void DebuggerSession::uvm_command(
     const std::vector<std::string>& command) {
   if (command.size() > 2) {
-    output_ << "usage: uvm [summary|phases|objections|tlm1|tlm2|all]\n";
+    output_ << "usage: uvm [summary|phases|objections|tlm1|tlm2|callbacks|transactions|sequences|registers|all]\n";
     return;
   }
   auto section = UvmDebugSection::summary;
@@ -1102,10 +1126,18 @@ void DebuggerSession::uvm_command(
       section = UvmDebugSection::tlm1;
     } else if (command[1] == "tlm2") {
       section = UvmDebugSection::tlm2;
+    } else if (command[1] == "callbacks") {
+      section = UvmDebugSection::callbacks;
+    } else if (command[1] == "transactions") {
+      section = UvmDebugSection::transactions;
+    } else if (command[1] == "sequences") {
+      section = UvmDebugSection::sequences;
+    } else if (command[1] == "registers") {
+      section = UvmDebugSection::register_model;
     } else if (command[1] == "all") {
       section = UvmDebugSection::all;
     } else if (command[1] != "summary") {
-      output_ << "usage: uvm [summary|phases|objections|tlm1|tlm2|all]\n";
+      output_ << "usage: uvm [summary|phases|objections|tlm1|tlm2|callbacks|transactions|sequences|registers|all]\n";
       return;
     }
   }
@@ -1294,6 +1326,15 @@ void DebuggerSession::add_breakpoint(const std::vector<std::string>& command)  {
               << location << '\n';
       return;
     }
+    if (kind == "uvm") {
+      breakpoint.kind = DebugBreakpointKind::uvm;
+      breakpoint.id = next_breakpoint_++;
+      breakpoint.path = std::string{location};
+      breakpoints_.push_back(breakpoint);
+      output_ << "breakpoint " << breakpoint.id << " set on UVM activity "
+              << location << '\n';
+      return;
+    }
     if (kind == "source") {
       const auto separator = location.rfind(':');
       const auto line_text =
@@ -1326,7 +1367,8 @@ void DebuggerSession::add_breakpoint(const std::vector<std::string>& command)  {
     }
     output_ << "usage: break time TIME | "
                "break signal SIGNAL [==|!= VALUE] | "
-               "break source [PATH:]LINE | break phase IDENTITY|*\n";
+               "break source [PATH:]LINE | break phase IDENTITY|* | "
+               "break uvm IDENTITY|*\n";
   }
 
 void DebuggerSession::list_breakpoints() const  {
@@ -1354,8 +1396,10 @@ void DebuggerSession::list_breakpoints() const  {
           output_ << breakpoint.path << ':';
         }
         output_ << breakpoint.line;
-      } else {
+      } else if (breakpoint.kind == DebugBreakpointKind::phase) {
         output_ << "phase " << breakpoint.path;
+      } else {
+        output_ << "uvm " << breakpoint.path;
       }
       output_ << '\n';
     }

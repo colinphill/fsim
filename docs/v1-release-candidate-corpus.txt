@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Batch 130 Task 9 final release-candidate corpus.
 # Every required row is classified execute and owns nonempty P+/P-/E/R links.
-# matrix-rows: 1250
-# matrix-sha256: 25300a46781d8945f884358d4fabf05489415cbbee97405edffee7e4a0be4943
-# evidence-slots: 5000
-# evidence-paths: 545
-# evidence-sha256: 49f1bb1b659bf6e63aa95402f9e0e302330647d0efa8d9c08f6d7cb1be2d62ba
-# test-evidence-paths: 237
-# production-evidence-paths: 286
+# matrix-rows: 1262
+# matrix-sha256: 3f6bc26424dd6dabe984f1efbef858808c2370b50c0969c6d82340499410e506
+# evidence-slots: 5048
+# evidence-paths: 579
+# evidence-sha256: ca0f3e8d6e9eff61b4949b948e7c539ad61d6ea25031e1b547ec5b79240dafc2
+# test-evidence-paths: 254
+# production-evidence-paths: 303
 # release-evidence-paths: 22
-# runtime-evidence-paths: 135
+# runtime-evidence-paths: 138
 # corpus-ctests: 36
 # required-status: execute
 #
@@ -100,3 +100,14 @@
 # portable checkpoints, deterministic race/deadlock behavior, all 33 cataloged
 # diagnostic families, and exact unmodified UVM 1.2/2020.3.1 engine/artifact/
 # cache parity. Sanitizer and hosted CI remain owned by Change 20.
+#
+# Batch 161 advances the reviewed matrix to 1262 rows and 5048 evidence cells
+# across 579 exact paths (254 test, 303 production, 22 release), with 138
+# runtime owners. SV-811 through SV-822 close sequence lifecycle/arbitration,
+# locks and handshakes, component roles, virtual sequences, callbacks and
+# transaction recording, the register model/maps/frontdoors/backdoors/standard
+# sequences/callbacks/coverage, checkpoint integration, and exact unmodified
+# UVM 1.2/2020.3.1 sequence/register parity. Change 20 passes clean exact-LLVM
+# Debug and Release regressions 118/118 in 384.37 and 323.00 seconds and the
+# exact two-release matrix 2/2 in 1,033.92 seconds. Sanitizer and hosted CI
+# monitoring are intentionally excluded at this non-monitoring boundary.

@@ -38,19 +38,25 @@ The downloaded archives, extracted sources, and generated manifests are build
 products and remain outside fsim's authored source, license, and release
 inventories.
 
-## Batch 160 phase/TLM execution resource baseline
+## Batch 160-161 exact UVM execution resource baseline
 
 The final package-only analysis peaks at approximately 1.69 GiB for UVM 1.2
-and 1.94 GiB for UVM 2020-3.1 under a 3-GiB address-space ceiling. The final
-exact phase/TLM direct source runs peak at 4,242,276 KiB for UVM 1.2 and
-4,735,592 KiB for UVM 2020-3.1 under 6-GiB ceilings.
+and 1.94 GiB for UVM 2020-3.1 under a 3-GiB address-space ceiling. With the
+Batch 161 exact sequence and register environments included, direct source
+runs peak at 4,273,188 KiB for UVM 1.2 and 4,775,952 KiB for UVM 2020-3.1
+under 6-GiB ceilings.
 
 Portable compile peaks at 3,308,520 KiB for UVM 1.2 and 3,672,868 KiB for UVM
 2020-3.1 under 5/6-GiB ceilings. Two-root O0/O2 phase/TLM design publication
 peaks at 3,198,008/3,198,256 KiB for UVM 1.2 and 3,441,912/3,441,688 KiB for
 UVM 2020-3.1 under 5/5.5-GiB ceilings. Every interpreter, compiled O0/O2,
-debug, VCD/FST, cold/warm cache, and relocated-artifact execution remains below
-1,000,000 KiB under a 3-GiB ceiling and produces the exact transcript through
-the tick-5 race and cataloged deadlock. These measurements are local evidence
-from the exact governed sources and are ceilings/baselines, not a general host-
-memory guarantee.
+debug, VCD/FST, cold/warm cache, and relocated-artifact execution in the Batch
+160 baseline remains below 1,000,000 KiB under a 3-GiB ceiling. The expanded
+Batch 161 final matrices pass in 467.47 seconds for UVM 1.2 and 566.45 seconds
+for UVM 2020-3.1, 2/2 in 1,033.92 seconds. Their sequence/register probes reject
+one-record-short integrated
+checkpoint limits before partial capture. All fourteen current traces are
+17,833 bytes with SHA-256
+`95caf4dbb04fa7f1b1397df9b40e03a1fdbc19b90c6387221a8b59635ebd5eff`.
+These measurements are local evidence from the exact governed sources and are
+ceilings/baselines, not a general host-memory guarantee.

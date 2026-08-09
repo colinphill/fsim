@@ -129,3 +129,11 @@ traces, checkpoint restart, a tick-5 objection race, and cataloged deadlock
 advance the linked totals to 487 interpreter, 404 LLVM, 268 cache, 111
 debugger, 138 VCD/trace, 462 scheduling, and 112 failure rows. The reviewed
 36-CTest corpus inventory is unchanged.
+
+Batch 161's twelve UVM sequence/register rows advance the reviewed differential
+inventory to 1,262 required rows and 138 runtime owners. Sequence arbitration,
+handshakes, component roles, virtual execution, callbacks, transaction records,
+register access, checkpoints, exact source, artifacts, relocation, caches, and
+contained negative behavior advance the linked totals to 487 interpreter, 404
+LLVM, 268 cache, 111 debugger, 138 VCD/trace, 472 scheduling, and 114 failure
+rows. The reviewed 36-CTest corpus inventory is unchanged.

@@ -40,6 +40,12 @@ struct Simulation::Impl {
         uvm_objections(uvm_objects, uvm_components, uvm_phases),
         uvm_tlm1(class_heap, uvm_components),
         uvm_tlm2(uvm_components),
+        uvm_sequences(
+            class_heap, uvm_objects, uvm_components, uvm_phases,
+            uvm_objections),
+        uvm_callbacks(uvm_objects, uvm_components),
+        uvm_transactions(uvm_objects, uvm_components, uvm_callbacks),
+        uvm_register_model(uvm_components),
         uvm_foreign(
             uvm_phases, uvm_objections, uvm_tlm1, uvm_tlm2, uvm_activity),
         uvm_registry(
@@ -95,7 +101,51 @@ struct Simulation::Impl {
     uvm_tlm1.set_phase_service(uvm_phases);
     uvm_tlm2.set_scheduler(interpreter->scheduler());
     uvm_tlm2.set_activity_service(uvm_activity);
+    uvm_sequences.set_activity_service(uvm_activity);
+    uvm_sequences.set_role_services(uvm_tlm1, uvm_config_db);
+    uvm_register_model.set_frontdoor_services(uvm_sequences, uvm_tlm1,
+                                              uvm_phases);
+    uvm_register_model.set_activity_service(uvm_activity);
+    uvm_register_model.set_backdoor_transport({
+        [this](const auto, const std::string_view path)
+            -> std::optional<std::size_t> {
+          const auto signal = backdoor_signal(path);
+          return signal ? std::optional<std::size_t>{
+                              interpreter->signal_value(*signal).width()}
+                        : std::nullopt;
+        },
+        [this](const auto, const std::string_view path) {
+          const auto signal = backdoor_signal(path);
+          if (!signal)
+            throw std::invalid_argument{"UVM HDL path does not resolve"};
+          return interpreter->signal_value(*signal);
+        },
+        [this](const auto, const std::string_view path, const auto kind,
+               const runtime::PackedLogic4 &value) {
+          const auto signal = backdoor_signal(path);
+          if (!signal)
+            throw std::invalid_argument{"UVM HDL path does not resolve"};
+          switch (kind) {
+          case runtime::SystemVerilogUvmRegisterBackdoorKind::Deposit:
+            interpreter->deposit_signal(*signal, value);
+            return;
+          case runtime::SystemVerilogUvmRegisterBackdoorKind::Force:
+            interpreter->force_signal(*signal, value);
+            return;
+          case runtime::SystemVerilogUvmRegisterBackdoorKind::Release:
+            interpreter->release_signal(*signal);
+            return;
+          case runtime::SystemVerilogUvmRegisterBackdoorKind::Read:
+            break;
+          }
+          throw std::invalid_argument{"invalid UVM HDL write operation"};
+        }});
+    uvm_callbacks.set_activity_service(uvm_activity);
+    uvm_transactions.set_scheduler(interpreter->scheduler());
+    uvm_transactions.set_activity_service(uvm_activity);
     uvm_foreign.set_scheduler(interpreter->scheduler());
+    uvm_foreign.set_integrated_services(
+        uvm_sequences, uvm_callbacks, uvm_transactions, uvm_register_model);
     (void)uvm_phases.create_standard_schedule();
     if (built.systemverilog_uvm_checkpoint) {
       const auto& saved = *built.systemverilog_uvm_checkpoint;
@@ -1519,6 +1569,21 @@ struct Simulation::Impl {
 
 #include "application_simulation_uvm_phase.tpp"
 
+  [[nodiscard]] std::optional<runtime::simir::SignalId>
+  backdoor_signal(const std::string_view path) const noexcept {
+    const auto found = std::ranges::find_if(
+        built.design_ir.objects(), [&](const auto &object) {
+          return design_object_is_signal_bearing(object) &&
+                 object.path == path &&
+                 object.runtime_index <=
+                     std::numeric_limits<runtime::simir::SignalId>::max();
+        });
+    return found == built.design_ir.objects().end()
+               ? std::nullopt
+               : std::optional<runtime::simir::SignalId>{static_cast<
+                     runtime::simir::SignalId>(found->runtime_index)};
+  }
+
   ~Impl() {
     if (systemc_start_attempted && !systemc_ended) {
       try {
@@ -1580,6 +1645,10 @@ struct Simulation::Impl {
   runtime::SystemVerilogUvmObjectionService uvm_objections;
   runtime::SystemVerilogUvmTlm1Service uvm_tlm1;
   runtime::SystemVerilogUvmTlm2Service uvm_tlm2;
+  runtime::SystemVerilogUvmSequenceService uvm_sequences;
+  runtime::SystemVerilogUvmCallbackService uvm_callbacks;
+  runtime::SystemVerilogUvmTransactionRecorderService uvm_transactions;
+  runtime::SystemVerilogUvmRegisterModelService uvm_register_model;
   runtime::SystemVerilogUvmForeignService uvm_foreign;
   runtime::SystemVerilogUvmRegistryService uvm_registry;
   runtime::SystemVerilogUvmFactoryService uvm_factory;

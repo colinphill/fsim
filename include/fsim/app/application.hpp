@@ -11,6 +11,8 @@
 #include "fsim/runtime/class_methods.hpp"
 #include "fsim/runtime/uvm_context.hpp"
 #include "fsim/runtime/uvm_activity.hpp"
+#include "fsim/runtime/uvm_callback.hpp"
+#include "fsim/runtime/uvm_register_model.hpp"
 #include "fsim/runtime/uvm_checkpoint.hpp"
 #include "fsim/runtime/uvm_foreign.hpp"
 #include "fsim/runtime/uvm_component.hpp"
@@ -25,6 +27,7 @@
 #include "fsim/runtime/uvm_config_db.hpp"
 #include "fsim/runtime/uvm_command_line.hpp"
 #include "fsim/runtime/uvm_report.hpp"
+#include "fsim/runtime/uvm_sequence.hpp"
 #include "fsim/runtime/systemverilog_chandle.hpp"
 #include "fsim/semantic/model.hpp"
 #include "fsim/semantic/design_ir.hpp"
@@ -323,6 +326,10 @@ enum class UvmDebugSection : std::uint8_t {
   objections,
   tlm1,
   tlm2,
+  callbacks,
+  transactions,
+  sequences,
+  register_model,
   all,
 };
 
@@ -351,6 +358,26 @@ struct UvmDebugSnapshot {
   std::vector<runtime::SystemVerilogUvmTlm2SocketSnapshot> tlm2_sockets;
   std::vector<runtime::SystemVerilogUvmTlm2TransactionSnapshot>
       tlm2_transactions;
+  std::vector<runtime::SystemVerilogUvmCallbackSnapshot> callbacks;
+  std::vector<runtime::SystemVerilogUvmCallbackFailure> callback_failures;
+  std::vector<runtime::SystemVerilogUvmTransactionSnapshot> transactions;
+  std::vector<runtime::SystemVerilogUvmTransactionTraceRecord>
+      transaction_trace_records;
+  std::vector<runtime::SystemVerilogUvmSequencerSnapshot> sequencers;
+  std::vector<runtime::SystemVerilogUvmSequenceSnapshot> sequences;
+  std::vector<runtime::SystemVerilogUvmSequenceItemSnapshot> sequence_items;
+  std::vector<runtime::SystemVerilogUvmRegisterBlockSnapshot> register_blocks;
+  std::vector<runtime::SystemVerilogUvmRegisterMapSnapshot> register_maps;
+  std::vector<runtime::SystemVerilogUvmRegisterSnapshot> registers;
+  std::vector<runtime::SystemVerilogUvmRegisterFieldSnapshot> register_fields;
+  std::vector<runtime::SystemVerilogUvmRegisterMemorySnapshot>
+      register_memories;
+  std::vector<runtime::SystemVerilogUvmRegisterStandardSequenceSnapshot>
+      register_sequences;
+  std::vector<runtime::SystemVerilogUvmRegisterCallbackSnapshot>
+      register_callbacks;
+  std::vector<runtime::SystemVerilogUvmRegisterCoverageSnapshot>
+      register_coverage;
 };
 
 [[nodiscard]] std::string format_uvm_debug_snapshot(
@@ -491,6 +518,22 @@ class Simulation final {
   uvm_tlm2() noexcept;
   [[nodiscard]] const runtime::SystemVerilogUvmTlm2Service&
   uvm_tlm2() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmSequenceService&
+  uvm_sequences() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmSequenceService&
+  uvm_sequences() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmCallbackService&
+  uvm_callbacks() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmCallbackService&
+  uvm_callbacks() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmTransactionRecorderService&
+  uvm_transactions() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmTransactionRecorderService&
+  uvm_transactions() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmRegisterModelService&
+  uvm_register_model() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmRegisterModelService&
+  uvm_register_model() const noexcept;
   [[nodiscard]] UvmDebugSnapshot uvm_debug_snapshot(
       UvmDebugLimits limits = {}) const;
   [[nodiscard]] runtime::SystemVerilogUvmCheckpointCaptureResult

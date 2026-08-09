@@ -74,7 +74,37 @@ bool is_systemverilog_uvm_type(
         : &find_specialization(
               specializations, current->base_specialization_identity);
   }
-  return false;
+  const auto inherited_property = std::ranges::any_of(
+      specialization.properties, [&](const auto& property) {
+        return class_leaf_name(property.owner_identity) == base_name;
+      });
+  if (inherited_property) return true;
+  const auto owner_fragment = "::" + std::string{base_name} + "::";
+  return std::ranges::any_of(
+      specialization.methods, [&](const auto& method) {
+        return method.canonical_identity.find(owner_fragment)
+            != std::string::npos;
+      });
+}
+
+void ensure_systemverilog_uvm_object_type(
+    const frontend::SystemVerilogClassSpecialization& specialization,
+    runtime::SystemVerilogUvmObjectService& objects) {
+  if (objects.contains_type(specialization.specialization_identity)) return;
+  runtime::SystemVerilogUvmObjectDescriptor descriptor;
+  descriptor.specialization_identity = specialization.specialization_identity;
+  descriptor.type_name =
+      std::string{class_leaf_name(specialization.declaration_identity)};
+  for (const auto& property : specialization.properties) {
+    if (property.is_static
+        || class_leaf_name(property.owner_identity) == "uvm_object") {
+      continue;
+    }
+    descriptor.fields.push_back({
+        property.owner_identity + "::" + property.name,
+        runtime::SystemVerilogUvmFieldFlag::None});
+  }
+  objects.register_type(std::move(descriptor));
 }
 
 void register_systemverilog_uvm_object_types(
@@ -82,24 +112,10 @@ void register_systemverilog_uvm_object_types(
         specializations,
     runtime::SystemVerilogUvmObjectService& objects) {
   for (const auto& specialization : specializations) {
-    if (!is_systemverilog_uvm_type(
+    if (is_systemverilog_uvm_type(
             specializations, specialization, "uvm_object")) {
-      continue;
+      ensure_systemverilog_uvm_object_type(specialization, objects);
     }
-    runtime::SystemVerilogUvmObjectDescriptor descriptor;
-    descriptor.specialization_identity = specialization.specialization_identity;
-    descriptor.type_name =
-        std::string{class_leaf_name(specialization.declaration_identity)};
-    for (const auto& property : specialization.properties) {
-      if (property.is_static
-          || class_leaf_name(property.owner_identity) == "uvm_object") {
-        continue;
-      }
-      descriptor.fields.push_back({
-          property.owner_identity + "::" + property.name,
-          runtime::SystemVerilogUvmFieldFlag::None});
-    }
-    objects.register_type(std::move(descriptor));
   }
 }
 

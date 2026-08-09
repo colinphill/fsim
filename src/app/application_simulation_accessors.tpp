@@ -197,6 +197,46 @@ Simulation::uvm_tlm2() const noexcept {
   return impl_->uvm_tlm2;
 }
 
+runtime::SystemVerilogUvmSequenceService&
+Simulation::uvm_sequences() noexcept {
+  return impl_->uvm_sequences;
+}
+
+const runtime::SystemVerilogUvmSequenceService&
+Simulation::uvm_sequences() const noexcept {
+  return impl_->uvm_sequences;
+}
+
+runtime::SystemVerilogUvmCallbackService&
+Simulation::uvm_callbacks() noexcept {
+  return impl_->uvm_callbacks;
+}
+
+const runtime::SystemVerilogUvmCallbackService&
+Simulation::uvm_callbacks() const noexcept {
+  return impl_->uvm_callbacks;
+}
+
+runtime::SystemVerilogUvmTransactionRecorderService&
+Simulation::uvm_transactions() noexcept {
+  return impl_->uvm_transactions;
+}
+
+const runtime::SystemVerilogUvmTransactionRecorderService&
+Simulation::uvm_transactions() const noexcept {
+  return impl_->uvm_transactions;
+}
+
+runtime::SystemVerilogUvmRegisterModelService&
+Simulation::uvm_register_model() noexcept {
+  return impl_->uvm_register_model;
+}
+
+const runtime::SystemVerilogUvmRegisterModelService&
+Simulation::uvm_register_model() const noexcept {
+  return impl_->uvm_register_model;
+}
+
 runtime::SystemVerilogUvmRegistryService& Simulation::uvm_registry() noexcept {
   return impl_->uvm_registry;
 }
@@ -271,6 +311,9 @@ runtime::SystemVerilogClassHandle Simulation::allocate_uvm_object(
       || impl_->lifecycle == Impl::Lifecycle::poisoned) {
     throw std::logic_error{"simulation class heap is no longer mutable"};
   }
+  application_detail::ensure_systemverilog_uvm_object_type(
+      impl_->class_specialization(specialization_identity),
+      impl_->uvm_objects);
   const auto handle = impl_->allocate_class(
       specialization_identity, declared_type);
   try {
@@ -308,11 +351,33 @@ runtime::SystemVerilogClassHandle Simulation::allocate_uvm_component(
       || impl_->lifecycle == Impl::Lifecycle::poisoned) {
     throw std::logic_error{"simulation class heap is no longer mutable"};
   }
+  application_detail::ensure_systemverilog_uvm_object_type(
+      impl_->class_specialization(specialization_identity),
+      impl_->uvm_objects);
+  const auto component_name = name;
   std::array actuals{
       runtime::PackedLogic4(64),
       runtime::PackedLogic4::from_aval_bval(64, parent, 0)};
   std::array string_actuals{std::move(name), std::string{}};
-  return impl_->construct_class(
+  const auto handle = impl_->construct_class(
       specialization_identity, declared_type, actuals, string_actuals,
       std::span<const std::string>{}, "$api", root);
+  if (impl_->uvm_components.contains(handle)) return handle;
+  try {
+    if (!impl_->uvm_objects.contains(handle)) {
+      impl_->uvm_objects.initialize(handle, component_name);
+    }
+    impl_->uvm_components.initialize(handle, component_name, parent, root);
+  } catch (...) {
+    if (impl_->uvm_components.contains(handle)) {
+      impl_->uvm_components.release(handle);
+    } else {
+      if (impl_->uvm_objects.contains(handle)) {
+        impl_->uvm_objects.erase(handle);
+      }
+      (void)impl_->class_heap.release(handle);
+    }
+    throw;
+  }
+  return handle;
 }

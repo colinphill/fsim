@@ -108,6 +108,8 @@ class SystemVerilogUvmObjectService final {
       SystemVerilogUvmObjectLimits limits = {});
 
   void register_type(SystemVerilogUvmObjectDescriptor descriptor);
+  [[nodiscard]] bool
+  contains_type(std::string_view specialization_identity) const noexcept;
   void initialize(SystemVerilogClassHandle object, std::string name = {});
   [[nodiscard]] bool contains(
       SystemVerilogClassHandle object) const noexcept;

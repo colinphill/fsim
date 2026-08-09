@@ -3,6 +3,9 @@
 
 #include "fsim/runtime/uvm_foreign_abi.h"
 #include "fsim/runtime/uvm_objection.hpp"
+#include "fsim/runtime/uvm_callback.hpp"
+#include "fsim/runtime/uvm_register_model.hpp"
+#include "fsim/runtime/uvm_sequence.hpp"
 #include "fsim/runtime/uvm_tlm1.hpp"
 #include "fsim/runtime/uvm_tlm2.hpp"
 
@@ -46,6 +49,11 @@ class SystemVerilogUvmForeignService final {
       const SystemVerilogUvmForeignService&) = delete;
 
   void set_scheduler(Scheduler& scheduler) noexcept { scheduler_ = &scheduler; }
+  void set_integrated_services(
+      SystemVerilogUvmSequenceService& sequences,
+      SystemVerilogUvmCallbackService& callbacks,
+      SystemVerilogUvmTransactionRecorderService& transactions,
+      SystemVerilogUvmRegisterModelService& register_model) noexcept;
   [[nodiscard]] fsim_uvm_foreign_status_v1 capture(
       fsim_uvm_foreign_snapshot_v1& result) noexcept;
   [[nodiscard]] fsim_uvm_foreign_status_v1 copy_record(
@@ -83,12 +91,19 @@ class SystemVerilogUvmForeignService final {
     std::vector<SystemVerilogUvmForeignRecord> records;
   };
   void set_error(std::string code, std::string message) const;
+  [[nodiscard]] std::vector<SystemVerilogUvmForeignRecord>
+  integrated_records(std::size_t maximum_records,
+                     std::size_t maximum_text_bytes) const;
 
   SystemVerilogUvmPhaseService* phases_{};
   SystemVerilogUvmObjectionService* objections_{};
   SystemVerilogUvmTlm1Service* tlm1_{};
   SystemVerilogUvmTlm2Service* tlm2_{};
   SystemVerilogUvmActivityService* activity_{};
+  SystemVerilogUvmSequenceService* sequences_{};
+  SystemVerilogUvmCallbackService* uvm_callbacks_{};
+  SystemVerilogUvmTransactionRecorderService* transactions_{};
+  SystemVerilogUvmRegisterModelService* register_model_{};
   Scheduler* scheduler_{};
   SystemVerilogUvmForeignLimits limits_;
   std::uint64_t simulation_identity_{};

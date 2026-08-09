@@ -58,7 +58,7 @@ bool valid_records(const SystemVerilogUvmCheckpointArtifact &artifact,
   std::size_t payload_bytes{};
   for (const auto &record : artifact.records) {
     if (record.kind < FSIM_UVM_FOREIGN_PHASE ||
-        record.kind > FSIM_UVM_FOREIGN_TLM2_TRANSACTION ||
+        record.kind > FSIM_UVM_FOREIGN_REGISTER_COVERAGE ||
         record.kind == FSIM_UVM_FOREIGN_PHASE_PROCESS ||
         record.identity.empty() ||
         record.identity.size() > limits.maximum_text_bytes - text_bytes ||

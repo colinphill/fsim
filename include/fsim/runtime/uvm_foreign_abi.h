@@ -36,7 +36,20 @@ typedef enum fsim_uvm_foreign_record_kind_v1 {
   FSIM_UVM_FOREIGN_TLM1_FIFO = 6,
   FSIM_UVM_FOREIGN_TLM1_OPERATION = 7,
   FSIM_UVM_FOREIGN_TLM2_SOCKET = 8,
-  FSIM_UVM_FOREIGN_TLM2_TRANSACTION = 9
+  FSIM_UVM_FOREIGN_TLM2_TRANSACTION = 9,
+  FSIM_UVM_FOREIGN_SEQUENCER = 10,
+  FSIM_UVM_FOREIGN_SEQUENCE = 11,
+  FSIM_UVM_FOREIGN_SEQUENCE_ITEM = 12,
+  FSIM_UVM_FOREIGN_CALLBACK = 13,
+  FSIM_UVM_FOREIGN_TRANSACTION = 14,
+  FSIM_UVM_FOREIGN_REGISTER_BLOCK = 15,
+  FSIM_UVM_FOREIGN_REGISTER_MAP = 16,
+  FSIM_UVM_FOREIGN_REGISTER = 17,
+  FSIM_UVM_FOREIGN_REGISTER_FIELD = 18,
+  FSIM_UVM_FOREIGN_REGISTER_MEMORY = 19,
+  FSIM_UVM_FOREIGN_REGISTER_SEQUENCE = 20,
+  FSIM_UVM_FOREIGN_REGISTER_CALLBACK = 21,
+  FSIM_UVM_FOREIGN_REGISTER_COVERAGE = 22
 } fsim_uvm_foreign_record_kind_v1;
 
 typedef struct fsim_uvm_foreign_snapshot_v1 {
@@ -104,7 +117,7 @@ typedef fsim_uvm_foreign_status_v1(FSIM_UVM_FOREIGN_CALL
 typedef fsim_uvm_foreign_status_v1(FSIM_UVM_FOREIGN_CALL
     *fsim_uvm_foreign_remove_callback_v1)(void* context, uint64_t token);
 
-/* Append-only host table shared by DPI and VPI integrations. */
+/* Append-only host table shared by DPI, VPI, and VHPI integrations. */
 typedef struct fsim_uvm_foreign_host_v1 {
   uint32_t abi_version;
   uint32_t struct_size;

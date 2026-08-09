@@ -56,7 +56,21 @@ add_executable(
   runtime_uvm_tlm1_execution_tests.cpp
   runtime_uvm_analysis_tests.cpp
   runtime_uvm_tlm2_tests.cpp
+  runtime_uvm_sequence_tests.cpp
+  runtime_uvm_sequence_access_tests.cpp
+  runtime_uvm_sequence_macro_tests.cpp
+  runtime_uvm_sequence_handshake_tests.cpp
+  runtime_uvm_sequence_role_tests.cpp
+  runtime_uvm_sequence_virtual_tests.cpp
   runtime_uvm_activity_tests.cpp
+  runtime_uvm_callback_tests.cpp
+  runtime_uvm_register_model_tests.cpp
+  runtime_uvm_register_value_tests.cpp
+  runtime_uvm_register_map_tests.cpp
+  runtime_uvm_register_frontdoor_tests.cpp
+  runtime_uvm_register_backdoor_tests.cpp
+  runtime_uvm_register_sequence_tests.cpp
+  runtime_uvm_register_coverage_tests.cpp
   runtime_uvm_checkpoint_tests.cpp
   runtime_uvm_foreign_abi_c_test.c
   runtime_uvm_registry_tests.cpp

@@ -1,9 +1,9 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# SystemVerilog UVM foundation
+# SystemVerilog UVM execution boundary
 
-Fsim executes a bounded object/factory/configuration/reporting foundation from
+Fsim executes a bounded UVM environment from
 the unmodified Accellera UVM 1.2 and IEEE 1800.2-2020 kit version 2020.3.1
-sources. This document describes the implemented Batch 160 boundary. It is not
+sources. This document describes the implemented Batch 161 boundary. It is not
 a claim of complete UVM conformance.
 
 ## Supported releases and source policy
@@ -46,15 +46,23 @@ The current executable foundation includes:
   request/response and analysis fanout, plus typed TLM2 initiator/target/
   passthrough sockets, generic payloads, extensions, byte enables, DMI,
   blocking/debug/nonblocking transport, phases, timing, and cleanup;
+- sequence items, sequences, sequencers, every standard arbitration mode,
+  relevance, locks/grabs, responses, constraint-aware macros, driver pull/push
+  handshakes, virtual sequences, coordinated reset, and process cancellation;
+- active/passive agents, drivers, monitors, subscribers, and scoreboards with
+  configuration, phase, objection, and analysis ownership;
+- type-wide and instance callbacks plus engine-neutral transaction recording;
+- register blocks, maps, registers, fields, multidimensional memories, every
+  field access policy, desired/mirrored/reset state, byte enables, all endian
+  modes, multiple maps, adapters, predictors, frontdoors, VPI/VHPI backdoors,
+  standard sequences, callbacks, and coverage;
 - immutable activity events, public debugger snapshots, DPI/VPI foreign
   snapshots and callbacks, and schema-1 portable UVM checkpoints; and
 - simulation-owned isolation across roots, sequential simulations, engines,
   caches, portable artifacts, and relocation.
 
-The following remain explicit future work: sequences, sequencers, drivers,
-monitors, agents, scoreboards, the register model, remaining policy classes,
-and complete UVM 1.2/2020 compatibility. Those boundaries are assigned to
-Batches 161-162 in the v2 plan.
+Remaining policy classes and complete UVM 1.2/2020 compatibility are explicit
+future work assigned to Batch 162 in the v2 plan.
 
 ## Minimal object/factory/config/report example
 
@@ -116,9 +124,9 @@ module example;
 endmodule
 ```
 
-## Exact phase, objection, and TLM example
+## Exact phase, TLM, sequence, and register example
 
-The registered Batch 160 fixture imports the real `uvm_object`,
+The registered Batch 161 fixture imports the real `uvm_object`,
 `uvm_component`, `uvm_phase`, parameterized blocking-put port, and TLM FIFO
 types from either governed release. One derived component implements real
 build, connect, end-of-elaboration, start-of-simulation, run, extract, check,
@@ -131,11 +139,22 @@ The aggregate fixture then creates a two-root custom domain. A ready-to-end
 callback raises and drops a new objection against a two-tick drain, producing a
 deterministic completion at tick 5. A following phase deliberately suspends
 without scheduler work and must reject with `FSIM-UVM-PHASE-008`, cancel every
-process, and leave the phase and objection services quiescent. The exact
+process, and leave the phase and objection services quiescent.
+
+The same exact source derives sequence item, sequence, sequencer, driver,
+monitor, agent, scoreboard, environment, and callback classes. Its dedicated
+environment proves strict-FIFO priority, lock/grab ownership, typed responses,
+monitor-to-scoreboard analysis, a real virtual-sequence process tree, type and
+instance callback order, transaction recording, and retained checkpoint caps.
+It also derives register, block, adapter, predictor, register-sequence, and
+register-callback classes. A second environment proves little/big-endian
+multiple maps, byte enables, resets and mirrors, frontdoor adapters, TLM
+prediction, combined VPI/VHPI backdoors, callbacks, coverage, the access
+sequence, relocated checkpoint replay, and atomic record limits. The exact
 transcript is:
 
 ```text
-FSIM-UVM-PHASE-TLM-PASS phases=build/connect/eoe/sos/run/extract/check/report/final roots=left,right objection=1/0 drain=3 payload=37 result=42 source=37/42/1 race=5 deadlock=FSIM-UVM-PHASE-008
+FSIM-UVM-PHASE-TLM-PASS phases=build/connect/eoe/sos/run/extract/check/report/final roots=left,right objection=1/0 drain=3 payload=37 result=42 source=37/42/1 race=5 deadlock=FSIM-UVM-PHASE-008 sequence=arb/lock/response/virtual roles=agent/driver/monitor/scoreboard callback=6 transaction=5 cap=records register=frontdoor/backdoor/predictor maps=little/big byte_enable=1010 callback_coverage=1 sequence=access replay=relocated cap=records
 ```
 
 ## Direct execution
@@ -159,7 +178,8 @@ build/llvm22-ninja-debug/fsim run \
 
 Use explicit address-space controls in automation. The final clean package-only
 analysis peaks near 1.69 GiB for UVM 1.2 and 1.94 GiB for UVM 2020-3.1. Exact
-phase/TLM direct runs use 6-GiB ceilings; portable compile uses 5/6 GiB,
+Batch 161 direct runs peak at 4,273,188 and 4,775,952 KiB respectively under
+6-GiB ceilings; portable compile uses 5/6 GiB,
 O0/O2 elaboration uses 5/5.5 GiB, and execution uses 3 GiB. Exact measurements
 are recorded in [the source-provenance record](uvm-source-provenance.md).
 
@@ -202,9 +222,9 @@ through:
 
 The compact object/factory/config/report simulations complete at tick 0, delta
 0 and emit one `FSIM-UVM-EXAMPLE-PASS payload=7 configured=11` line per root.
-The phase/TLM fixture completes at tick 5 and all fourteen direct/O0/O2 cold/
-warm/debug traces from both releases are 10,357 bytes with SHA-256
-`f78d9f125531a9d4764e6c5336e0bfdf8d9893577932f1cbb0d198355fb7c7ac`.
+The aggregate fixture completes at tick 5. All fourteen direct/O0/O2 cold/
+warm/debug traces from both releases are 17,833 bytes with SHA-256
+`95caf4dbb04fa7f1b1397df9b40e03a1fdbc19b90c6387221a8b59635ebd5eff`.
 
 ## Ownership and resource behavior
 
@@ -212,14 +232,16 @@ UVM services are members of the application simulation, not static globals.
 Roots inside one simulation intentionally share factory, resource, config,
 command-line, reporting, phase, objection, TLM, activity, and foreign state. A
 new simulation in the same process receives a clean UVM context. Object,
-component, phase, process, endpoint, socket, transaction, callback, and snapshot
-handles are generation checked or opaque and monotonic within their owner.
+component, phase, process, endpoint, socket, sequence, handshake, role,
+transaction, callback, register-model, and snapshot handles are generation
+checked or opaque and monotonic within their owner.
 
 Every service has checked storage/work limits. Malformed names/profiles/values,
 nominal type mismatches, stale or cross-owner handles, override loops, invalid
-patterns, callback failures or re-entry, sink failures, and resource ceilings
-reject transactionally. Failed operations do not partially publish heap,
-hierarchy, factory use, resources, callbacks, routes, or report accounting.
+patterns, callback failures or re-entry, sink failures, register rights or
+layout errors, and resource ceilings reject transactionally. Failed operations
+do not partially publish heap, hierarchy, factory use, resources, callbacks,
+sequence queues, register mirrors, routes, or report accounting.
 
 ## Evidence inventory
 
@@ -228,8 +250,8 @@ The primary evidence owners are:
 - `fsim.uvm-source-harness` for offline governed metadata;
 - `fsim.frontend` and `fsim.elaboration` for the unmodified language surface;
 - `fsim.runtime` for object/component/registry/factory/resource/config/
-  command-line/report plus phase/objection/TLM/activity/foreign/checkpoint
-  positive and negative matrices;
+  command-line/report, phase/objection/TLM, sequence/role/callback/transaction,
+  register, activity/foreign/checkpoint positive and negative matrices;
 - `fsim.application` and `fsim.llvm` for source execution, multiple contexts,
   callbacks, restart isolation, phase/TLM execution, and engine parity;
 - `fsim.library.artifact`, `fsim.artifact.object`, and
@@ -238,8 +260,9 @@ The primary evidence owners are:
 - `fsim.diagnostics-catalog` and `fsim.source-line-budget` for public error and
   maintainability contracts; and
 - `fsim.uvm-phase-tlm-matrix` plus the two
-  `fsim.application.uvm_phase_tlm.*` tests for all 33 exact diagnostics and the
-  unmodified-release direct/artifact/cache/debug/race/deadlock matrix.
+  `fsim.application.uvm_phase_tlm.*` tests for all 64 exact UVM diagnostics and
+  the unmodified-release direct/artifact/cache/debug/race/deadlock/sequence/
+  register matrix.
 
 Exact upstream identities are in [the provenance record](uvm-source-provenance.md),
 feature-to-test mappings are in [the feature matrix](feature-matrix.md), and

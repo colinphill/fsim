@@ -29,6 +29,10 @@ void register_systemverilog_uvm_object_types(
     std::span<const frontend::SystemVerilogClassSpecialization> specializations,
     runtime::SystemVerilogUvmObjectService& objects);
 
+void ensure_systemverilog_uvm_object_type(
+    const frontend::SystemVerilogClassSpecialization& specialization,
+    runtime::SystemVerilogUvmObjectService& objects);
+
 void register_systemverilog_uvm_registry_types(
     std::span<const frontend::SystemVerilogClassSpecialization> specializations,
     runtime::SystemVerilogUvmRegistryService& registry);
