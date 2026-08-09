@@ -5870,20 +5870,88 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 162 - UVM 1.2 and UVM 2020-3.1 conformance closure
 
-- **Changes 1-4:** close printer, comparer, packer, recorder, copier, transaction,
-  event/barrier/pool/queue, heartbeat, spell-challenge, and policy-class behavior.
-- **Changes 5-8:** close command-line processor, plusargs, test selection,
-  topology/reporting switches, timeout, seed handling, objection tracing, and
-  factory/config tracing.
-- **Changes 9-12:** close UVM 1.2 compatibility macros/APIs and UVM 2020-3.1
-  additions, deprecations, behavioral differences, and version selection.
-- **Changes 13-16:** run standard and project-owned smoke suites for factory,
-  phases, sequences, TLM, callbacks, register model, coverage, DPI, and
-  VPI/VHPI backdoors across platforms and engines.
-- **Changes 17-19:** close every diagnosed UVM gap, freeze compatibility docs
-  and evidence inventories, and publish a producer-independent tutorial.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+- **Change 1:** close deterministic `uvm_printer` line, tree, and table policy;
+  complete comparer knobs, field/object/array traversal, cycle handling,
+  mismatch accounting, stable formatting, resource ceilings, cataloged
+  malformed-policy diagnostics, and focused two-release evidence.
+- **Change 2:** close deep/shallow/reference copier behavior, object automation
+  hooks, field-macro participation, clone/copy ownership, recursion and alias
+  preservation, rollback, exception containment, stale/cross-owner rejection,
+  and bounded exact UVM 1.2/2020.3.1 evidence.
+- **Change 3:** close packer and recorder policies for scalar, string, real,
+  object, array, and metadata profiles; endian and bit/byte/int packing;
+  unpack validation; transaction begin/attribute/link/end integration;
+  deterministic replay; retained-record limits; and negative evidence.
+- **Change 4:** close event, event-pool, barrier, pool, queue, heartbeat,
+  spell-challenge, and remaining policy-class behavior, including callbacks,
+  waits, threshold/reset/cancellation, process ownership, deterministic order,
+  lifecycle teardown, bounded storage/work, and exact two-release tests.
+- **Change 5:** implement the complete command-line processor query surface,
+  ordered argv retention, exact and prefix matches, value extraction,
+  plusargs, tool/version arguments, duplicate handling, malformed input,
+  simulation isolation, and bounded query/text resources.
+- **Change 6:** close `run_test`, test-name selection, topology printing,
+  global timeout, seed selection/reporting, command precedence, repeated-run
+  cleanup, fatal/finish behavior, and deterministic interpreter/compiled/debug
+  execution for both governed releases.
+- **Change 7:** close verbosity, severity/action/file/report switches and
+  objection trace controls, including hierarchical overrides, phase-aware
+  output, callbacks/catchers, command-line precedence, resource limits, and
+  stable cross-engine transcripts.
+- **Change 8:** close factory, configuration, and resource tracing switches;
+  print/usage inventories; wildcard and instance/type override reporting;
+  root isolation; callback containment; deterministic order; debugger/activity
+  integration; and cataloged invalid-option and resource diagnostics.
+- **Change 9:** close UVM 1.2 legacy field/object/component/sequence/register
+  macros, callback declarations, factory utilities, report helpers, and their
+  exact expansion/call signatures without modifying the governed source tree.
+- **Change 10:** close remaining UVM 1.2 legacy APIs and behavioral contracts
+  across phases, objections, TLM, sequences, callbacks, registers, policies,
+  command-line processing, deprecation aliases, and negative diagnostics.
+- **Change 11:** close UVM 2020-3.1 additions, IEEE 1800.2 names/signatures,
+  policy and reporting additions, deprecated/removed aliases, version macros,
+  and release-specific behavior while preserving the common simulation-owned
+  runtime model.
+- **Change 12:** implement explicit dual-release selection and normalized
+  compatibility dispatch; retain source/release provenance through objects,
+  designs, caches, checkpoints, and replay; reject mixed or mismatched release
+  state transactionally; and freeze the complete difference matrix.
+- **Change 13:** run and retain governed standard plus project-owned smoke
+  suites for object policies, factory, resource/configuration, command-line,
+  reporting, callbacks, test selection, topology, timeout, and seed behavior
+  through direct source and portable objects for both releases.
+- **Change 14:** run and retain governed phase, objection, sequence, sequencer,
+  driver/monitor/agent, virtual-sequence, TLM1/TLM2, callback, transaction, and
+  cancellation smoke suites across interpreter, LLVM O0/O2, cold/warm cache,
+  debug, multiple roots, and replay.
+- **Change 15:** run and retain governed register block/map/field/memory,
+  adapter/predictor/frontdoor/backdoor, standard-sequence, callback, coverage,
+  DPI, VPI, and VHPI smoke suites with relocation, byte-enable/endian, mixed-
+  abstraction, negative, checkpoint, and retained-cap evidence.
+- **Change 16:** complete Linux/Windows-facing source and ABI portability
+  contracts for the two releases and run the combined direct/object/design,
+  interpreter/O0/O2, cache, debug, trace, foreign, relocation, and replay
+  matrix under explicit wall-time and address-space ceilings.
+- **Change 17:** execute the complete governed standard/project conformance
+  inventory, classify every observed mismatch against the locked supported
+  boundary, and implement every diagnosed in-scope gap with focused positive,
+  negative, ownership, rollback, and cross-engine evidence; no allowlisted
+  supported failure may remain.
+- **Change 18:** consolidate the full two-release compatibility and behavioral-
+  difference matrix, race/cancellation/stale/cross-owner/resource diagnostics,
+  source and complexity audits, retained memory/trace baselines, artifact/cache
+  provenance, and an explicit zero-unresolved-supported-gap audit.
+- **Change 19:** synchronize README, the public UVM/conformance/version guides,
+  architecture, language support, diagnostics, feature/evidence matrices,
+  source provenance, resource baselines, release inventories/audits, and the
+  restart handoff; publish a producer-independent UVM tutorial and pass every
+  documentation, installed-public, portability, and release contract.
+- **Change 20:** run fresh full non-sanitized exact-LLVM 22.1.8 Debug and Release
+  eight-worker builds, all regressions, both governed standard/conformance
+  matrices, memory/source/license/inventory audits, installed/public/platform
+  contracts, and release gates. Commit and push the one accumulated Changes
+  1-20 implementation only after every local gate is clean; Batch 162 is not a
+  sanitizer or hosted-CI monitoring boundary.
 
 ### Batch 163 - VHDL-2008 and PSL digital-language closure
 

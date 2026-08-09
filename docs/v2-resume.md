@@ -5,6 +5,72 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
+## Batch 162 planned restart checkpoint - 2026-08-09
+
+1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
+   expanded Batch 162 allocation in `implementation_plan_v2.md`, and verify
+   branch `codex/v2` is clean and synchronized at Batch 161 implementation
+   `a8417d17d1dec11945ff5a153dfcc18ea2f6b0d6` plus this documentation-only
+   Batch 162 planning checkpoint.
+2. This checkpoint implements the required pre-batch flow. Batch 162 is
+   expanded into exactly twenty changes without broadening the locked UVM 1.2
+   and UVM 2020-3.1 conformance-closure scope. No Batch 162 implementation file
+   has changed; clear context after pushing this plan and resume only from this
+   section and the authoritative allocation.
+3. Preserve complete Batch 161 sequence/sequencer lifecycle and arbitration,
+   locks/grabs/responses/macros, driver handshakes, active/passive roles,
+   virtual sequences, callbacks/transactions, register hierarchy/values/maps,
+   frontdoors/backdoors, standard register sequences, callback/coverage,
+   debugger/activity/foreign/checkpoint integration, and exact two-release
+   sequence/register environments at pushed commit `a8417d1`.
+4. Batch 161's clean-first exact-LLVM 22.1.8 Debug and Release eight-worker
+   builds complete 721 steps warning-free in 9:05.64 and 7:52.60; complete
+   regressions pass 118/118 in 384.37 and 323.00 seconds. Exact UVM 1.2 and UVM
+   2020-3.1 pass 2/2 in 1,033.92 seconds. All fourteen traces are 17,833 bytes
+   with SHA-256
+   `95caf4dbb04fa7f1b1397df9b40e03a1fdbc19b90c6387221a8b59635ebd5eff`.
+5. The final Batch 161 build/test peaks are 4,035,212 KiB for the Debug build,
+   2,485,712 KiB for the Release build, 3,779,552/3,787,920 KiB for their full
+   regressions, 3,982,708 KiB for the governed-UVM refresh, and 4,775,752 KiB
+   for the exact two-release run. Preserve serial exact-source execution and
+   explicit ceilings; the former over-20-GiB fsim-sv behavior must not return.
+6. Changes 1-4 close printer/comparer, copier, packer/recorder/transaction, and
+   event/barrier/pool/queue/heartbeat/spell/policy behavior with deterministic
+   two-release execution, ownership, rollback, diagnostics, and limits.
+7. Changes 5-8 close command-line/plusarg/test selection, topology/timeout/seed,
+   reporting/objection tracing, and factory/config/resource tracing. Changes
+   9-12 close exact UVM 1.2 legacy macros/APIs, UVM 2020-3.1 additions and
+   deprecations, release differences, version selection, provenance, and
+   transactional mixed-release rejection.
+8. Changes 13-16 run governed standard and project-owned smoke suites across
+   policies/factory/config/report, phase/sequence/TLM/callback/transaction,
+   register/coverage/DPI/VPI/VHPI, direct/object/design, interpreter/LLVM O0/O2,
+   cache/debug/trace, roots, relocation, replay, and platform contracts.
+9. Changes 17-19 execute and close the full conformance gap inventory, require
+   zero unresolved supported gaps, consolidate negative/resource/race/memory/
+   source/provenance evidence, synchronize every public/release contract, and
+   publish the producer-independent tutorial. Change 20 owns all final local
+   gates and the sole implementation commit/push.
+10. Accumulate Changes 1-20 in one dirty Batch 162 worktree. Use at least eight
+    workers for local builds, retain exact test/memory/trace output, update this
+    handoff after every completed change, and do not reset, commit, or push the
+    implementation before Change 20.
+11. Batch 162 is not a sanitizer or hosted-CI monitoring boundary. Do not run a
+    sanitizer or inspect hosted CI unless a new failure requires it. Change 20
+    runs fresh full non-sanitized exact-LLVM Debug and Release builds, all
+    regressions, governed conformance matrices, audits, installed/public/
+    platform contracts, and release gates before the single implementation
+    commit/push.
+12. Before Batch 163 implementation, repeat this flow: expand and save its exact
+    restart plan, commit and push the documentation-only checkpoint, then clear
+    context. Do not begin Batch 162 Change 1 until this checkpoint itself is
+    committed, pushed, and followed by a context clear.
+13. Next action after that clear: implement Batch 162 Change 1 only, beginning
+    with deterministic UVM printer line/tree/table policies and comparer knobs,
+    field/object/array traversal, cycle handling, mismatch accounting, stable
+    formatting, resource ceilings, cataloged malformed-policy diagnostics, and
+    focused unmodified UVM 1.2/2020.3.1 evidence.
+
 ## Batch 161 planned restart checkpoint - 2026-08-09
 
 1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
