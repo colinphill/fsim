@@ -156,8 +156,9 @@ jobs:
     # Visual Studio 2022 DIA SDK and retains that SDK path in its CMake targets.
     runs-on: windows-2022
     # Debug plus the bounded 900-second SystemC matrix and 1,200-second
-    # container differential can exceed the general 45-minute job ceiling.
-    timeout-minutes: 70
+    # container differential can exceed 70 minutes on a contended hosted
+    # runner, so retain enough headroom for the complete 118-test suite.
+    timeout-minutes: 120
     # The official archive uses the release MSVC STL ABI. CL augments every
     # compiler invocation without replacing CMake's /EHsc and configuration
     # flags, including plug-ins compiled by the SystemC source-compiler tests.

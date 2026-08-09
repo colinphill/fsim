@@ -5104,7 +5104,7 @@ carry an explicit evidence-backed scope disposition approved by the user.
   portability, UVM matrix, and release-candidate gates pass in 17.87 seconds;
   all synchronized authored files remain below policy and `git diff --check`
   is clean.
-- **Change 20 - Local qualification complete; hosted closeout current.** The
+- **Change 20 - Complete.** The
   fresh LLVM-disabled GCC 13.3 ASan/UBSan tree built warning-clean with eight
   workers. Its first 116/117 run exposed one stale VITAL relocation fixture
   that copied the six pre-Batch-160 design-state payloads but omitted required
@@ -5124,29 +5124,124 @@ carry an explicit evidence-backed scope disposition approved by the user.
   fourteen direct/O0/O2 cold/warm/debug traces, each 10,357 bytes with SHA-256
   `f78d9f125531a9d4764e6c5336e0bfdf8d9893577932f1cbb0d198355fb7c7ac`.
   All four qualification trees are no-op under eight workers and every final
-  log is free of sanitizer, CTest-failure, and runtime-error markers. Commit
-  and push the one accumulated Changes 1-20 implementation next, inspect every
-  non-documentation GitHub Actions job, and keep repairing/re-running until all
-  Linux, Windows, sanitizer, and fuzz jobs are green. Then save and push Batch
-  161's restart plan and clear context before its implementation.
+  log is free of sanitizer, CTest-failure, and runtime-error markers. The
+  accumulated implementation is commit
+  `2b5810303c7f8e39f9846955d95871ada5bfcd2c`. Hosted portability repairs are
+  commits `95d3bd6`, `75f5d47`, `a7a96eb`, `73313eb`, `97d6378`, `7e70919`,
+  `534d31c`, `a94bc9e`, `7434520`, and `bc2a8ed`. Run `31286177825` then exposed
+  a 44-byte malformed-SystemVerilog fuzz input that grew beyond 20 GiB and a
+  recursive UVM clone that retained invalidated class-heap vector references on
+  Windows. Commit `2158b2cd484b9b06f66621d2d3dca5eabb9cb322` adds parser
+  progress invariants and exact fuzz evidence, snapshots UVM copy state across
+  recursive allocation, and forces the reallocation case in its regression.
+  Locally, the exact fuzz reproducer falls from `std::bad_alloc` at 1,925,644
+  KiB RSS to success at 33,424 KiB; a deterministic 20,000-run fuzz campaign
+  passes at 43,232 KiB maximum RSS; focused Debug, Release, sanitizer, repeated
+  VHDL-composite, clang-cl `/W4 /WX`, portability, and full eight-worker builds
+  pass.
+
+  Replacement run `31304022606` passes the frontend fuzz smoke, all four Ubuntu
+  jobs, both Windows clang-cl jobs, both ordinary Windows MSVC jobs, and Windows
+  MSVC/LLVM Release. Its sole non-green job, Windows MSVC/LLVM Debug, passes
+  tests 1-75 of 118 before GitHub cancels the still-running
+  `fsim.application.sv_containers` test at the workflow's 70-minute job ceiling;
+  the log contains no test failure. On 2026-08-09 the user explicitly accepted
+  that result, directed increasing the Windows LLVM job ceiling to 120 minutes,
+  and directed advancement to Batch 161. Batch 160 is therefore closed under
+  that explicit acceptance. Save and push Batch 161's restart checkpoint and
+  clear context before its implementation.
 
 ### Batch 161 - UVM sequences, callbacks, and register model
 
-- **Changes 1-4:** implement sequence items/sequences, sequencer arbitration,
-  locks/grabs, priorities, relevance, response queues, macros, and deterministic
-  randomization integration.
-- **Changes 5-8:** implement drivers, monitors, agents, scoreboards,
-  sequence-driver handshakes, virtual sequences/sequencers, callbacks, and
-  transaction recording.
-- **Changes 9-12:** implement UVM register blocks/maps/registers/fields/memories,
-  adapters, predictors, frontdoor/backdoor access, mirrors, reset, and rights.
-- **Changes 13-16:** implement register sequences, HDL paths through VPI/VHPI,
-  coverage, byte enables, endianness, multiple maps, callbacks, and debugger
-  inspection.
-- **Changes 17-19:** add representative sequence and register environments,
-  arbitration/model negatives, engine/artifact parity, docs, evidence, and handoff.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+- **Change 1:** define simulation-owned, generation-checked sequence-item,
+  sequence, and sequencer identities; exact parent/child and item ownership;
+  lifecycle states; source-order registration; nominal request/response
+  profiles; transactional construction; resource ceilings; and cataloged stale,
+  cross-simulation, type, hierarchy, and limit diagnostics. Add focused runtime
+  ownership and lifecycle evidence without executing sequence bodies early.
+- **Change 2:** execute sequence pre-start, pre-body, body, post-body, and
+  post-start callbacks with deterministic parent/child nesting, automatic phase
+  objections, kill/stop semantics, response routing, exception containment,
+  phase-process ownership, and exact interpreter/compiled/debug behavior.
+- **Change 3:** implement sequencer request queues and all standard FIFO,
+  random, strict-FIFO, strict-random, weighted, and user arbitration modes with
+  priorities, relevance, wait-for-relevant, deterministic random streams,
+  reseeding, bounded selection work, and stable tie breaking.
+- **Change 4:** implement sequence lock and grab queues, unlock/ungrab, nested and
+  child ownership, response-queue depth/error policy, item/sequence macros, and
+  deterministic constraint-randomization integration. Prove cancellation,
+  starvation bounds, stale handles, illegal ownership, and rollback.
+- **Change 5:** implement driver-sequencer pull and push handshakes, including
+  get-next-item/item-done, try-next-item, get/peek, put-response, request/response
+  identity, pipelining, backpressure, phase timeout/jump cancellation, and
+  retained completed/cancelled transaction snapshots.
+- **Change 6:** integrate drivers, monitors, active/passive agents, subscribers,
+  and scoreboards with component construction, configuration, phases, TLM1
+  analysis, objections, and deterministic multiple-root teardown. Add bounded
+  source-level UVM dispatch and focused positive/negative role evidence.
+- **Change 7:** implement virtual sequencers and virtual sequences across
+  multiple typed child sequencers, coordinated starts, priorities, locks,
+  objections, reset/restart, sibling-domain execution, and exact process-tree
+  cancellation without leaking requests or responses.
+- **Change 8:** implement type-wide and instance UVM callbacks with ordered
+  add/delete/prepend, iterator-safe mutation, callback masks, exception
+  containment, and bounded re-entry. Add begin/end transaction recording,
+  parent/link identity, attributes, timing, activity events, debugger visibility,
+  and stable engine-neutral trace records.
+- **Change 9:** define simulation-owned register-model block, map, register,
+  field, and memory identities with hierarchy, build/lock/freeze, source-order
+  declaration, widths, offsets, dimensions, ownership, bounded construction,
+  and cataloged invalid-model diagnostics.
+- **Change 10:** implement register-field access policies, volatile behavior,
+  reset kinds/values, desired and mirrored values, predict modes, compare policy,
+  individual-field/register/memory operations, status propagation, and atomic
+  rollback for invalid rights, widths, indices, and values.
+- **Change 11:** implement register maps with hierarchical submaps, bus widths,
+  byte addressing/enables, little/big/FIFO endianness, unmapped registers,
+  multiple maps, per-map rights, address lookup, burst memory access, and
+  deterministic overlap/alignment/overflow rejection.
+- **Change 12:** implement register adapters and predictors over the completed
+  sequencer/driver/TLM services, generic bus items, frontdoor read/write/update/
+  mirror operations, auto-prediction, explicit prediction, response/status
+  conversion, and phase-owned timeout/cancellation behavior.
+- **Change 13:** implement user frontdoors and VPI/VHPI-backed HDL paths for
+  register, field, memory, and sliced/concatenated paths; support read, deposit,
+  force/release where legal, multiple abstraction kinds, language-mixed roots,
+  relocation-safe identities, and exact access diagnostics.
+- **Change 14:** implement standard reset, hardware-reset, bit-bash, access,
+  shared-access, memory-access, memory-walk, and register-model traversal
+  sequences with resource-map selection, exclusions, rights awareness,
+  deterministic random streams, and bounded failure aggregation.
+- **Change 15:** implement register pre/post read/write callbacks at field,
+  register, memory, map, and block scopes plus register coverage models,
+  per-map/per-field sampling, reset/desired/mirror crosses, callback mutation,
+  exception containment, and governed coverage/resource ceilings.
+- **Change 16:** integrate sequences, callbacks, transactions, and register
+  models with debugger commands/breakpoints, activity/VCD, DPI/VPI/VHPI foreign
+  snapshots, portable object/design artifacts, relocation, checkpoint/restart,
+  deterministic replay, cache provenance, and multiple-simulation isolation.
+- **Change 17:** run one representative source environment against exact,
+  unmodified UVM 1.2 and UVM 2020-3.1 sequence/driver/monitor/agent/scoreboard
+  surfaces. Prove arbitration, locks, responses, virtual sequences, callbacks,
+  and transaction recording through direct source, portable objects, O0/O2
+  designs, interpreter, compiled cold/warm cache, and debug execution under
+  retained memory caps.
+- **Change 18:** run one representative exact UVM register environment through
+  frontdoor and VPI/VHPI backdoor access, adapters/predictors, mirrors/resets,
+  byte enables, endianness, multiple maps, callbacks, coverage, standard
+  register sequences, artifacts, relocation, replay, and all execution engines.
+- **Change 19:** consolidate the arbitration, handshake, callback, register,
+  bounds, race, cancellation, stale/cross-owner, and negative diagnostic
+  matrices; synchronize the public UVM guide/example, architecture, language
+  support, diagnostics, provenance, resource baselines, conformance evidence,
+  inventories, audits, and restart handoff; pass all documentation and release
+  contracts.
+- **Change 20:** run fresh full non-sanitized exact-LLVM 22.1.8 Debug and Release
+  eight-worker builds, all regressions, exact upstream UVM sequence/register
+  tests, memory and source audits, installed/public/portability contracts, and
+  release gates. Commit and push the one accumulated Changes 1-20
+  implementation only after every local gate is clean; Batch 161 is not a
+  sanitizer or hosted-CI monitoring boundary.
 
 ### Batch 162 - UVM 1.2 and UVM 2020-3.1 conformance closure
 

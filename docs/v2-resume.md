@@ -5,6 +5,77 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
+## Batch 161 planned restart checkpoint - 2026-08-09
+
+1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
+   expanded Batch 161 allocation in `implementation_plan_v2.md`, and verify
+   branch `codex/v2` is clean and synchronized at Batch 160 implementation
+   `2b5810303c7f8e39f9846955d95871ada5bfcd2c`, the complete hosted portability
+   and correctness repair chain through
+   `2158b2cd484b9b06f66621d2d3dca5eabb9cb322`, and this Batch 161 planning and
+   CI-budget checkpoint.
+2. This checkpoint implements the required pre-batch flow. Batch 161 is
+   expanded into twenty exact changes without broadening the locked UVM
+   sequence, callback, transaction-recording, and register-model scope. No
+   Batch 161 implementation file has changed; clear context after pushing this
+   plan and resume only from this section and the authoritative allocation.
+3. Preserve the complete Batch 160 phase, objection, TLM1/TLM2, debugger,
+   activity, foreign, artifact, checkpoint, and exact-UVM implementation. Its
+   final sanitizer passes 117/117 in 1,180.07 seconds; fresh exact-LLVM 22.1.8
+   Debug and Release pass 117/117 in 381.93 and 314.14 seconds; and the governed
+   exact UVM 1.2/2020-3.1 tests pass 2/2 in 856.23 seconds. All fourteen final
+   traces are 10,357 bytes with SHA-256
+   `f78d9f125531a9d4764e6c5336e0bfdf8d9893577932f1cbb0d198355fb7c7ac`.
+   Hosted run `31304022606` passes ten of eleven jobs. Its sole non-green job
+   passes tests 1-75 of 118 before the 70-minute Windows MSVC/LLVM Debug job
+   ceiling cancels it during `fsim.application.sv_containers`, with no test
+   failure in the log. The user explicitly accepted that result on 2026-08-09,
+   directed raising the Windows LLVM ceiling to 120 minutes, and directed
+   advancement to Batch 161.
+4. Changes 1-4 define simulation-owned sequence-item, sequence, and sequencer
+   identities and lifecycle; execute exact sequence callbacks; implement every
+   standard deterministic arbitration mode; and complete locks, grabs,
+   responses, macros, and constraint-randomization integration with bounded
+   negative evidence.
+5. Changes 5-8 implement driver/sequencer pull and push handshakes; integrate
+   drivers, monitors, agents, subscribers, and scoreboards; execute virtual
+   sequencers/sequences across child domains; and complete callbacks plus
+   engine-neutral transaction recording.
+6. Changes 9-12 define register-model block/map/register/field/memory identity
+   and hierarchy; implement rights, reset, desired/mirror/predict state; own
+   hierarchical maps, addressing, byte enables, endianness, memories, and
+   multiple maps; and connect adapters, predictors, and frontdoor operations.
+7. Changes 13-16 implement user frontdoors and mixed VPI/VHPI HDL backdoors,
+   standard register sequences, register callbacks and coverage, then integrate
+   sequences/registers with debugger, activity, foreign state, artifacts,
+   relocation, checkpoint/restart, replay, cache provenance, and isolation.
+8. Changes 17-18 run representative unmodified UVM 1.2 and UVM 2020-3.1
+   sequence and register environments through direct source, portable objects,
+   O0/O2 interpreter/compiled cold/warm/debug paths, frontdoor/backdoor access,
+   artifacts, relocation, replay, and retained resource caps. Change 19 freezes
+   the complete positive/negative/race/cancellation matrices, docs, inventories,
+   audits, evidence, and handoff.
+9. Accumulate Changes 1-20 in one dirty Batch 161 worktree. Use at least eight
+   workers for local builds, retain exact test and memory output, update this
+   handoff after every completed change, and do not reset, commit, or push the
+   implementation before Change 20.
+10. Batch 161 is not a sanitizer or hosted-CI monitoring boundary. Do not run a
+    sanitizer or inspect hosted CI for Batch 161 unless a new failure requires
+    it. Change 20 instead runs fresh full non-sanitized exact-LLVM 22.1.8 Debug
+    and Release eight-worker builds, all regressions, exact upstream sequence
+    and register tests, memory/source audits, public/installed/portability
+    contracts, and release gates before the single implementation commit/push.
+11. Before Batch 162 implementation, repeat this flow: expand and save its exact
+    restart plan, commit and push the documentation-only checkpoint, then clear
+    context. Do not begin Batch 161 Change 1 until this checkpoint itself is
+    committed, pushed, and followed by a context clear.
+12. Next action after that clear: implement Batch 161 Change 1 only, beginning
+    with simulation-owned, generation-checked sequence-item, sequence, and
+    sequencer identities, exact ownership/lifecycle/registration, nominal
+    request/response profiles, transactional construction, resource ceilings,
+    cataloged invalid-handle/hierarchy/type/limit diagnostics, and focused
+    evidence that does not execute sequence bodies early.
+
 ## Batch 160 planned restart checkpoint - 2026-08-08
 
 1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
@@ -527,6 +598,33 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     Linux, Windows, sanitizer, and fuzz job until green. After hosted closeout,
     save and push the exact Batch 161 restart plan and clear context before any
     Batch 161 implementation.
+61. The Batch 160 implementation is commit
+    `2b5810303c7f8e39f9846955d95871ada5bfcd2c`. Hosted portability repairs are
+    `95d3bd6`, `75f5d47`, `a7a96eb`, `73313eb`, `97d6378`, `7e70919`,
+    `534d31c`, `a94bc9e`, `7434520`, and `bc2a8ed`. Hosted run `31286177825`
+    then exposed a 44-byte malformed-SystemVerilog parser OOM and invalidated
+    class-heap references during recursive UVM clone on Windows.
+62. Repair `2158b2cd484b9b06f66621d2d3dca5eabb9cb322` adds progress invariants to
+    module/package parsing, an exact 43-byte source regression, allocation-safe
+    recursive UVM copy state, and a forced class-heap reallocation regression.
+    The exact fuzz input falls from `std::bad_alloc` at 1,925,644 KiB RSS to a
+    0.01-second pass at 33,424 KiB; deterministic 20,000-run fuzz passes at
+    43,232 KiB maximum RSS. Focused frontend/runtime Debug and Release,
+    sanitizer, 20 repeated VHDL-composite runs, direct clang-cl `/W4 /WX`, all
+    twelve focused policy gates, and both full exact-LLVM eight-worker builds
+    pass.
+63. Replacement hosted run `31304022606` passes the fuzz job, all four Ubuntu
+    jobs, both Windows clang-cl jobs, ordinary Windows MSVC Debug and Release,
+    and Windows MSVC/LLVM Release. Windows MSVC/LLVM Debug passes tests 1-75 of
+    118 before GitHub cancels the still-running `fsim.application.sv_containers`
+    test at the 70-minute job ceiling; its log records no failed test. The user
+    explicitly accepted this result on 2026-08-09 and directed advancement.
+64. This pre-Batch-161 checkpoint raises only the `windows-llvm22` workflow
+    ceiling from 70 to 120 minutes, preserving the test suite and every bounded
+    per-test limit. Commit and push this planning/CI-budget checkpoint, verify a
+    clean synchronized branch, do not monitor its resulting workflow, clear
+    context, and resume at Batch 161 Change 1 from the checkpoint at the top of
+    this file.
 
 ## Batch 159 active checkpoint - 2026-08-07
 
