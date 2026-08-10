@@ -1392,7 +1392,9 @@ Lowerer::lower_container_expression_graph(
             || literal->value.width() != width
             || ((value_kind == PredicateKind::index
                  || runtime_type.two_state)
-                && literal->value.low_word().bval != 0)) {
+                && std::ranges::any_of(
+                    literal->value.bval_words(),
+                    [](const auto word) { return word != 0; }))) {
           if (!value
               && contains_identifier(
                   contains_identifier, candidate)) {

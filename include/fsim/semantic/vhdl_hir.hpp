@@ -17,6 +17,7 @@ enum class UnitKind : std::uint8_t {
     configuration,
     package,
     context,
+    psl_verification_unit,
 };
 
 enum class Direction : std::uint8_t {
@@ -58,6 +59,10 @@ enum class DeclarationForm : std::uint8_t {
     component,
     enumeration_literal,
     generated,
+    attribute_declaration,
+    attribute_specification,
+    group_template,
+    group_instance,
 };
 
 enum class TypeForm : std::uint8_t {
@@ -86,6 +91,57 @@ enum class ContextKind : std::uint8_t {
     library_clause,
     use_clause,
     context_reference,
+};
+
+enum class PslVerificationUnitKind : std::uint8_t {
+    unit,
+    property,
+    mode,
+};
+
+enum class PslDeclarationKind : std::uint8_t {
+    default_clock,
+    boolean,
+    sequence,
+    property,
+    endpoint,
+};
+
+enum class PslDirectiveKind : std::uint8_t {
+    assert_directive,
+    assume,
+    restrict,
+    cover,
+};
+
+enum class PslExpressionClass : std::uint8_t {
+    invalid,
+    boolean,
+    sequence,
+    property,
+    endpoint,
+    static_integer,
+};
+
+enum class PslTemporalOperatorKind : std::uint8_t {
+    sequence_concatenation,
+    sequence_fusion,
+    consecutive_repetition,
+    nonconsecutive_repetition,
+    goto_repetition,
+    overlapped_suffix_implication,
+    nonoverlapped_suffix_implication,
+    next,
+    previous,
+    eventually,
+    always,
+    until,
+    before,
+    within,
+};
+
+enum class PslUnknownPolicy : std::uint8_t {
+    false_value,
 };
 
 enum class AssociationKind : std::uint8_t {
@@ -187,13 +243,13 @@ struct Name {
 };
 
 struct RangeConstraint {
-    RangeKind kind{RangeKind::discrete};
+    RangeKind kind { RangeKind::discrete };
     std::optional<std::int64_t> left;
     std::optional<std::int64_t> right;
     std::optional<ExpressionId> left_expression;
     std::optional<ExpressionId> right_expression;
-    bool descending{};
-    bool null{};
+    bool descending { };
+    bool null { };
     SourceSpanId source;
 };
 
@@ -207,7 +263,7 @@ struct AggregateAssociation {
 struct Expression {
     ExpressionId id;
     ScopeId scope;
-    ExpressionKind kind{ExpressionKind::invalid};
+    ExpressionKind kind { ExpressionKind::invalid };
     std::string text;
     SourceSpanId source;
     OriginId origin;
@@ -220,8 +276,8 @@ struct Expression {
 };
 
 struct DelayValue {
-    std::uint64_t magnitude{};
-    std::uint64_t divisor{1};
+    std::uint64_t magnitude { };
+    std::uint64_t divisor { 1 };
     std::string unit;
     std::optional<ExpressionId> expression;
     SourceSpanId source;
@@ -238,7 +294,7 @@ struct Delay {
 struct WaveformElement {
     ExpressionId value;
     std::optional<Delay> delay;
-    bool disconnect{};
+    bool disconnect { };
     SourceSpanId source;
 };
 
@@ -257,14 +313,14 @@ struct ProcedureAssociation {
 struct CaseAlternative {
     std::vector<ExpressionId> choices;
     std::vector<StatementId> statements;
-    bool is_default{};
+    bool is_default { };
     SourceSpanId source;
 };
 
 struct Statement {
     StatementId id;
     ScopeId scope;
-    StatementKind kind{StatementKind::null_statement};
+    StatementKind kind { StatementKind::null_statement };
     std::string label;
     SourceSpanId source;
     OriginId origin;
@@ -279,12 +335,14 @@ struct Statement {
     std::string loop_control_label;
     std::optional<ExpressionId> loop_initial;
     std::optional<ExpressionId> loop_limit;
-    bool loop_descending{};
+    bool loop_descending { };
     std::optional<Delay> delay;
     std::optional<DelayMechanism> delay_mechanism;
     std::optional<Delay> rejection_limit;
+    bool postponed { };
+    std::optional<Delay> disconnection_delay;
     std::vector<WaveformElement> waveform;
-    bool unaffected{};
+    bool unaffected { };
     std::optional<ExpressionId> report;
     std::optional<ExpressionId> severity;
     std::vector<StatementId> statements;
@@ -298,6 +356,7 @@ struct Process {
     ProcessId id;
     ScopeId scope;
     std::string name;
+    bool postponed { };
     SourceSpanId source;
     OriginId origin;
     std::vector<DeclarationId> declarations;
@@ -309,8 +368,8 @@ struct SubtypeIndication {
     TypeReference type_mark;
     Name resolution_function;
     std::vector<RangeConstraint> constraints;
-    bool signed_value{};
-    bool unconstrained{};
+    bool signed_value { };
+    bool unconstrained { };
 };
 
 struct RecordElement {
@@ -322,14 +381,14 @@ struct RecordElement {
 struct ArrayDimension {
     Name index_subtype;
     std::optional<RangeConstraint> constraint;
-    bool unconstrained{};
+    bool unconstrained { };
     SourceSpanId source;
 };
 
 struct EnumerationLiteral {
     DeclarationId declaration;
     std::string spelling;
-    std::uint32_t ordinal{};
+    std::uint32_t ordinal { };
     SourceSpanId source;
 };
 
@@ -344,7 +403,7 @@ struct PhysicalUnit {
 struct TypeDefinition {
     TypeId id;
     DeclarationId declaration;
-    TypeForm form{TypeForm::unresolved};
+    TypeForm form { TypeForm::unresolved };
     std::string name;
     SubtypeIndication base;
     std::vector<EnumerationLiteral> enumeration_literals;
@@ -362,16 +421,16 @@ struct TypeDefinition {
 
 struct Association {
     std::optional<Name> formal;
-    AssociationKind kind{AssociationKind::expression};
+    AssociationKind kind { AssociationKind::expression };
     std::optional<ExpressionId> expression;
     std::optional<SubtypeIndication> type;
     SourceSpanId source;
 };
 
 struct CallableProfile {
-    bool function{};
-    bool pure{};
-    bool defined{};
+    bool function { };
+    bool pure { };
+    bool defined { };
     std::optional<SubtypeIndication> return_type;
     std::vector<DeclarationId> formals;
 };
@@ -388,13 +447,27 @@ struct ComponentProfile {
 struct PackageProfile {
     Name template_name;
     std::vector<Association> generic_map;
-    bool generic_map_box{};
+    bool generic_map_box { };
+};
+
+struct AttributeProfile {
+    bool specification { };
+    std::optional<SubtypeIndication> subtype;
+    std::vector<Name> entity_names;
+    std::string entity_class;
+    std::optional<ExpressionId> value;
+};
+
+struct GroupProfile {
+    bool template_declaration { };
+    std::optional<Name> template_name;
+    std::vector<Name> entries;
 };
 
 struct Declaration {
     DeclarationId id;
     ScopeId scope;
-    DeclarationForm form{DeclarationForm::constant};
+    DeclarationForm form { DeclarationForm::constant };
     std::string name;
     SourceSpanId source;
     OriginId origin;
@@ -403,14 +476,19 @@ struct Declaration {
     std::optional<SubtypeIndication> subtype;
     std::optional<SubtypeIndication> default_type;
     std::optional<ExpressionId> initializer;
-    ObjectClass object_class{ObjectClass::constant};
-    Direction direction{Direction::unknown};
-    bool shared{};
-    bool local{};
+    ObjectClass object_class { ObjectClass::constant };
+    Direction direction { Direction::unknown };
+    bool shared { };
+    bool local { };
     std::optional<ScopeId> nested_scope;
     std::optional<CallableProfile> callable;
     std::optional<ComponentProfile> component;
     std::optional<PackageProfile> package;
+    std::optional<AttributeProfile> attribute;
+    std::optional<GroupProfile> group;
+    bool deferred { };
+    std::optional<DeclarationId> completion;
+    std::optional<SourceSpanId> completion_source;
     std::vector<DeclarationId> children;
     std::vector<StatementId> statements;
 };
@@ -422,13 +500,13 @@ struct OverloadSet {
 };
 
 struct ContextItem {
-    ContextKind kind{ContextKind::library_clause};
+    ContextKind kind { ContextKind::library_clause };
     std::vector<Name> selected_names;
     SourceSpanId source;
 };
 
 struct BindingIndication {
-    BindingKind kind{BindingKind::entity};
+    BindingKind kind { BindingKind::entity };
     Name entity;
     std::string architecture;
     Name configuration;
@@ -438,7 +516,7 @@ struct BindingIndication {
 };
 
 struct ComponentConfiguration {
-    InstanceSelection selection{InstanceSelection::labels};
+    InstanceSelection selection { InstanceSelection::labels };
     std::vector<std::string> labels;
     Name component;
     BindingIndication binding;
@@ -456,7 +534,7 @@ struct BlockConfiguration {
 struct GenerateRegion {
     DeclarationId declaration;
     ScopeId scope;
-    GenerateKind kind{GenerateKind::conditional};
+    GenerateKind kind { GenerateKind::conditional };
     std::string label;
     std::string alternative_label;
     std::string iterator;
@@ -474,16 +552,96 @@ struct GenerateRegion {
     OriginId origin;
 };
 
+struct PslFormal {
+    std::string name;
+    std::vector<std::string> profile_tokens;
+    PslExpressionClass expression_class { PslExpressionClass::invalid };
+    std::optional<std::uint64_t> static_default;
+    SourceSpanId source;
+};
+
+struct PslStaticRange {
+    std::optional<std::uint64_t> minimum;
+    std::optional<std::uint64_t> maximum;
+    std::string minimum_formal;
+    std::string maximum_formal;
+    bool unbounded { };
+    SourceSpanId source;
+};
+
+struct PslClock {
+    std::vector<std::string> expression_tokens;
+    std::string canonical_identity;
+    bool explicit_override { };
+    bool unknown_is_no_edge { true };
+    SourceSpanId source;
+};
+
+struct PslTemporalOperator {
+    PslTemporalOperatorKind kind {
+        PslTemporalOperatorKind::sequence_concatenation
+    };
+    std::vector<std::string> left_tokens;
+    std::vector<std::string> right_tokens;
+    std::optional<PslStaticRange> range;
+    SourceSpanId source;
+};
+
+struct PslReference {
+    std::string name;
+    PslExpressionClass expression_class { PslExpressionClass::invalid };
+    SourceSpanId source;
+};
+
+struct PslAnalyzedExpression {
+    PslExpressionClass expression_class { PslExpressionClass::invalid };
+    std::vector<std::string> expression_tokens;
+    std::vector<PslTemporalOperator> temporal_operators;
+    std::vector<PslReference> references;
+    std::vector<std::string> sampled_names;
+    std::optional<PslClock> clock;
+    PslUnknownPolicy unknown_policy { PslUnknownPolicy::false_value };
+    SourceSpanId source;
+};
+
+struct PslDeclaration {
+    PslDeclarationKind kind { PslDeclarationKind::boolean };
+    std::string name;
+    std::vector<PslFormal> formals;
+    std::vector<std::string> body_tokens;
+    std::optional<PslAnalyzedExpression> analyzed_expression;
+    bool comment_embedded { };
+    SourceSpanId source;
+};
+
+struct PslDirective {
+    PslDirectiveKind kind { PslDirectiveKind::assert_directive };
+    std::string label;
+    std::vector<std::string> property_tokens;
+    std::optional<PslAnalyzedExpression> analyzed_property;
+    bool comment_embedded { };
+    SourceSpanId source;
+};
+
+struct PslVerificationUnit {
+    PslVerificationUnitKind kind { PslVerificationUnitKind::unit };
+    std::vector<std::string> target_tokens;
+    bool comment_embedded { };
+};
+
 struct Unit {
     UnitId id;
     ScopeId scope;
-    UnitKind kind{UnitKind::entity};
+    UnitKind kind { UnitKind::entity };
     std::string library;
     std::string name;
     std::string primary_name;
     SourceSpanId source;
     OriginId origin;
     std::vector<ContextItem> context;
+    std::optional<PslVerificationUnit> psl_verification_unit;
+    std::vector<PslDeclaration> psl_declarations;
+    std::vector<PslDirective> psl_directives;
     std::vector<DeclarationId> declarations;
     std::vector<ProcessId> processes;
     std::vector<StatementId> concurrent_statements;

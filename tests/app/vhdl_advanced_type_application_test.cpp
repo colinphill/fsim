@@ -31,8 +31,9 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 3> values;
+  std::array<std::string, 5> values;
   std::uint64_t protected_value{};
+  std::string protected_wide;
   std::string access_local;
   std::string physical_local;
   std::string debugger_output;
@@ -57,6 +58,9 @@ package Counter_Types is
     procedure Add(Value : integer);
     impure function Read return integer;
   end protected Counter;
+  type Wide_Store is protected
+    procedure Fill;
+  end protected Wide_Store;
 end package;
 
 package body Counter_Types is
@@ -71,6 +75,13 @@ package body Counter_Types is
       return Current_Value;
     end function;
   end protected body Counter;
+  type Wide_Store is protected body
+    variable Wide_Value : bit_vector(136 downto 0);
+    procedure Fill is
+    begin
+      Wide_Value := (others => '1');
+    end procedure;
+  end protected body Wide_Store;
 end package body;
 
 entity Advanced_Types is
@@ -84,23 +95,38 @@ architecture rtl of advanced_types is
     mm = 1000 um;
   end units Distance;
   shared variable Shared_Counter : Counter;
+  shared variable Shared_Wide : Wide_Store;
   signal Access_Result : bit_vector(7 downto 0);
   signal Was_Null : boolean;
+  signal Was_Deallocated : boolean;
+  signal Fresh_Identity : boolean;
   signal Physical_Result : Distance;
 begin
   exercise : process
     variable Pointer : Byte_Pointer;
+    variable Alias_Value : Byte_Pointer;
     variable Local_Distance : Distance;
   begin
     Was_Null <= Pointer = null;
     Pointer := new bit_vector'("10100101");
+    Alias_Value := Pointer;
     Access_Result <= Pointer.all;
+    Deallocate(Pointer);
+    Was_Deallocated <= Pointer = null;
+    Pointer := new bit_vector'("01011010");
+    Fresh_Identity <= Alias_Value /= Pointer;
     Local_Distance := 2 mm;
     Physical_Result <= Local_Distance + )"
          << increment << R"( um;
     Shared_Counter.Add()"
          << increment << R"();
     Shared_Counter.Add(Shared_Counter.Read());
+    wait;
+  end process;
+
+  wide_exercise : process
+  begin
+    Shared_Wide.Fill;
     wait;
   end process;
 end architecture;
@@ -164,7 +190,9 @@ Capture run_once(
   assert(access_local && physical_local);
   const auto protected_member = project->design.find_container(
       "advanced_types.shared_counter.current_value");
-  assert(protected_member);
+  const auto protected_wide = project->design.find_container(
+      "advanced_types.shared_wide.wide_value");
+  assert(protected_member && protected_wide);
 
   Capture capture;
   capture.analysis_cache_hit = project->cache_hit;
@@ -175,13 +203,15 @@ Capture run_once(
   capture.compiled_modules = simulation.compiled_module_count();
   capture.cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 3> paths{
+  constexpr std::array<std::string_view, 5> paths{
       "advanced_types.access_result",
       "advanced_types.was_null",
+      "advanced_types.was_deallocated",
+      "advanced_types.fresh_identity",
       "advanced_types.physical_result"};
-  constexpr std::array<std::size_t, 3> widths{8, 1, 32};
-  std::array<fsim::runtime::simir::SignalId, 3> signals{};
-  std::array<fsim::runtime::VcdSignal, 3> traces{};
+  constexpr std::array<std::size_t, 5> widths{8, 1, 1, 1, 32};
+  std::array<fsim::runtime::simir::SignalId, 5> signals{};
+  std::array<fsim::runtime::VcdSignal, 5> traces{};
   std::ostringstream vcd_output;
   fsim::runtime::VcdWriter vcd{vcd_output, "1ns", 64};
   for (std::size_t index = 0; index < paths.size(); ++index) {
@@ -219,6 +249,9 @@ Capture run_once(
   capture.protected_value =
       simulation.read_container_object(*protected_member)
           .elements.at(0).low_word().aval;
+  capture.protected_wide =
+      simulation.read_container_object(*protected_wide)
+          .elements.at(0).to_msb_string();
   capture.access_local = simulation.read_process_local(
       access_local->first, access_local->second).to_msb_string();
   capture.physical_local = simulation.read_process_local(
@@ -244,13 +277,16 @@ void verify_capture(
   assert(capture.result.status == fsim::runtime::RunStatus::completed);
   assert(capture.values[0] == "10100101");
   assert(capture.values[1] == "1");
+  assert(capture.values[2] == "1");
+  assert(capture.values[3] == "1");
   assert(
-      capture.values[2]
+      capture.values[4]
       == fsim::runtime::PackedLogic4::from_aval_bval(
              32, 2000 + increment, 0).to_msb_string());
   assert(capture.protected_value == 2 * (7 + increment));
+  assert(capture.protected_wide == std::string(137, '1'));
   assert(capture.access_local
-         == "00000000000000000000000000000001");
+         == "00000000000000000000000000000010");
   assert(
       capture.physical_local
       == "00000000000000000000011111010000");
@@ -261,7 +297,7 @@ void verify_capture(
       capture.debugger_output.find("physical_result = ")
       != std::string::npos);
   assert(capture.vcd.find("b10100101") != std::string::npos);
-  assert(capture.vcd.find(capture.values[2]) != std::string::npos);
+  assert(capture.vcd.find(capture.values[4]) != std::string::npos);
 }
 
 }  // namespace

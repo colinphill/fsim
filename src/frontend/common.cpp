@@ -144,6 +144,113 @@ std::optional<std::uint64_t> Type::width() const noexcept {
   return std::nullopt;
 }
 
+namespace {
+
+bool same_expression_shape(const Expression &left, const Expression &right) {
+  if (left.kind != right.kind || left.text != right.text ||
+      left.nominal_type != right.nominal_type ||
+      left.aggregate_choices != right.aggregate_choices ||
+      left.operands.size() != right.operands.size() ||
+      left.aggregate_choice_expressions.size() !=
+          right.aggregate_choice_expressions.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < left.operands.size(); ++index) {
+    if (!same_expression_shape(left.operands[index], right.operands[index])) {
+      return false;
+    }
+  }
+  for (std::size_t index = 0;
+       index < left.aggregate_choice_expressions.size(); ++index) {
+    const auto &left_choices = left.aggregate_choice_expressions[index];
+    const auto &right_choices = right.aggregate_choice_expressions[index];
+    if (left_choices.size() != right_choices.size()) {
+      return false;
+    }
+    for (std::size_t choice = 0; choice < left_choices.size(); ++choice) {
+      if (!same_expression_shape(left_choices[choice], right_choices[choice])) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool same_packed_range(const std::optional<PackedRange> &left,
+                       const std::optional<PackedRange> &right) {
+  return left.has_value() == right.has_value() &&
+         (!left || (left->left == right->left && left->right == right->right &&
+                    left->descending == right->descending));
+}
+
+bool same_packed_range_expression(
+    const std::optional<PackedRangeExpression> &left,
+    const std::optional<PackedRangeExpression> &right) {
+  return left.has_value() == right.has_value() &&
+         (!left || (left->descending == right->descending &&
+                    same_expression_shape(left->left, right->left) &&
+                    same_expression_shape(left->right, right->right)));
+}
+
+bool same_integer_range(const std::optional<IntegerRange> &left,
+                        const std::optional<IntegerRange> &right) {
+  return left.has_value() == right.has_value() &&
+         (!left || (left->left == right->left && left->right == right->right &&
+                    left->descending == right->descending));
+}
+
+bool same_integer_range_expression(
+    const std::optional<IntegerRangeExpression> &left,
+    const std::optional<IntegerRangeExpression> &right) {
+  return left.has_value() == right.has_value() &&
+         (!left || (left->descending == right->descending &&
+                    same_expression_shape(left->left, right->left) &&
+                    same_expression_shape(left->right, right->right)));
+}
+
+bool same_discrete_range_expression(
+    const std::optional<DiscreteRangeExpression> &left,
+    const std::optional<DiscreteRangeExpression> &right) {
+  return left.has_value() == right.has_value() &&
+         (!left || (left->descending == right->descending &&
+                    same_expression_shape(left->left, right->left) &&
+                    same_expression_shape(left->right, right->right)));
+}
+
+} // namespace
+
+bool vhdl_subtype_indications_conform(const Type &left, const Type &right) {
+  if (left.domain != right.domain || left.spelling != right.spelling ||
+      left.named_type != right.named_type ||
+      left.nominal_type != right.nominal_type ||
+      left.is_signed != right.is_signed ||
+      left.vhdl_resolution_function != right.vhdl_resolution_function ||
+      !same_packed_range(left.packed_range, right.packed_range) ||
+      !same_packed_range_expression(left.packed_range_expression,
+                                    right.packed_range_expression) ||
+      !same_integer_range(left.integer_range, right.integer_range) ||
+      !same_integer_range_expression(left.integer_range_expression,
+                                     right.integer_range_expression) ||
+      !same_discrete_range_expression(left.discrete_range_expression,
+                                      right.discrete_range_expression) ||
+      left.vhdl_array_constraints.size() !=
+          right.vhdl_array_constraints.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < left.vhdl_array_constraints.size();
+       ++index) {
+    const auto &left_constraint = left.vhdl_array_constraints[index];
+    const auto &right_constraint = right.vhdl_array_constraints[index];
+    if (left_constraint.descending != right_constraint.descending ||
+        !same_expression_shape(left_constraint.left, right_constraint.left) ||
+        !same_expression_shape(left_constraint.right,
+                               right_constraint.right)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 const DesignUnit* ParsedDesign::find(UnitKind kind,
                                      std::string_view name) const noexcept {
   const auto found =

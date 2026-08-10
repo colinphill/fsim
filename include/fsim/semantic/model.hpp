@@ -142,6 +142,7 @@ enum class UnitKind : std::uint8_t {
     verilog_module,
     systemc_factory,
     systemverilog_program,
+    vhdl_psl_verification_unit,
 };
 
 enum class TypeKind : std::uint8_t {
@@ -161,6 +162,7 @@ enum class ValueKind : std::uint8_t {
     procedure,
     enumeration_literal,
     implicit,
+    constant,
 };
 
 enum class DeclarationKind : std::uint8_t {
@@ -182,6 +184,8 @@ enum class DeclarationKind : std::uint8_t {
     generate,
     enumeration_literal,
     implicit,
+    attribute,
+    group,
 };
 
 struct TypeReference {

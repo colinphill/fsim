@@ -101,13 +101,155 @@ standard-library injection. Root and transitive input digests enter in manifest
 and first-use order; units remain in canonical source order; declarations use
 physical source offset with stable category/index tie breakers. A preassigned
 dense type-ID range permits forward local type references without pointer
-fixups. VHDL identifiers use their case-insensitive canonical key and
-Verilog/SystemVerilog identifiers remain case-sensitive. The temporary
+fixups. VHDL basic identifiers arrive on their case-insensitive canonical key,
+VHDL extended identifiers remain case-sensitive, and Verilog/SystemVerilog
+identifiers remain case-sensitive. The temporary
 conversion adapter reads `ParsedDesign`, but its result remains valid after
 the parse tree is cleared. Parsed source spans own preprocessor token expansion
 stacks; HIR conversion interns their complete parent chains. SystemC
 translation-unit roots enter the same source table with normalized generic
 paths and exact content digests.
+
+The VHDL-2008 lexical boundary decodes doubled backslashes in extended names
+and normalizes exact B/O/X/D signed or unsigned bit strings into the same
+owning string-literal value used by typed HIR. Unsized expansion is complete,
+arbitrary-precision decimal conversion is independent of host-word width, and
+sized expansion uses a requested-width ring while retaining the uniformity of
+discarded characters for lossless-adjustment validation. Only the owning result
+width consumes proportional storage; non-host-addressable lengths receive a
+distinct recovery diagnostic. Nested-comment state retains its explicit
+64-level diagnostic ceiling. The
+design-file collector validates context-clause shape and requires every pending
+clause to attach to a following library unit. Source admission owns one
+library-scoped namespace for primary units and separate entity/architecture
+and package/package-body secondary identities; it emits the VHDL-specific
+identity diagnostic before the compatible generic duplicate-unit diagnostic
+removes an exact repeated unit.
+
+VHDL declaration ownership now retains incomplete-type markers until a
+same-region full declaration replaces them, allowing an intervening access type
+to keep the recursive nominal reference without leaking an incomplete type into
+a successful parse. Design units separately own ordered user-defined attribute
+declarations/specifications and group templates/instances; their payloads keep
+canonical names, subtype or target/class/value data, template linkage, raw
+canonical entries, and source spans. These frontend vectors are intentionally
+distinct from executable attributes and from type aliases. They propagate
+through nested function, procedure, process, block, and generate regions and
+publish explicit semantic-HIR declarations and profiles. Deferred package
+constants link their specification declaration to a structurally conforming
+body completion, and portable artifacts retain that completion provenance.
+
+The VHDL lexer treats case-insensitive `-- psl` as an owning marker token while
+discarding ordinary comments. The parser uses that marker to assemble multiline
+embedded PSL without copying or reparsing source text. Native and embedded
+verification units carry a distinct library-unit identity and exact target token
+stream. Each VHDL design unit separately owns source-ordered PSL default clocks,
+Boolean/sequence/property/endpoint declarations, formal profiles, and labeled
+assert/assume/restrict/cover directives. Project analysis converts these records
+to frontend-independent VHDL semantic-HIR enums, owned token spellings, and
+interned source spans.
+
+The PSL analysis layer assigns Boolean, sequence, property, endpoint, and
+static-integer-formal classes without reparsing source text. It resolves sampled
+objects through the target entity/architecture, normalizes equivalent rising-
+and falling-edge clock spellings, and chooses an explicit, local default,
+target-inherited, or referenced declaration clock. Typed operation records own
+sequence concatenation/fusion/repetition, suffix implication, bounded prefix
+operators, recurrence, until/before/within operands, exact source spans, and
+static range identity. A numeric formal remains symbolic even when its default
+is normalized, so later elaboration can specialize it without freezing the
+declaration. Cross-clock references and cycles are rejected before elaboration;
+sampled unknown values have an explicit false policy and unknown clock values
+produce no edge.
+
+The VHDL PSL execution layer observes after scheduler update publication and
+before reactive/postponed work, so interpreter and native executors sample one
+identical stable value set. Canonical Boolean or rising/falling clocks share one
+history, while source-ordered monitors spawn deterministic overlapping attempts.
+The evaluator specializes declaration formals/defaults and executes sequence,
+repetition, implication, recurrence, strength, and abort forms without lowering
+them into engine-specific processes. Monitor/history/attempt/evaluation/temporal-
+step ceilings and conservative owned-byte accounting bound both time and memory;
+unknown clocks cannot manufacture an edge, reset releases dynamic state, and
+finite completion distinguishes strong failure from weak vacuity.
+
+Directive publication decorates each retained attempt with assertion,
+assumption, restriction, or cover kind; unit/instance identity; semantic source-
+span identity; and source-order slot. The immutable attempt vector is the
+bounded trace/artifact record, while a monitor-sized coverage table counts pass,
+failure, vacuous, and aborted completions without copying attempt payloads.
+Dedicated PSL and common assertion observers receive completion-order events;
+observer exceptions are contained after counters commit. Assert/assume failures
+route as errors, restriction failures as warnings, and cover failures remain
+coverage-only. Public simulation inspection supplies the trace and coverage to
+debugger or external trace backends identically for interpreter and native
+execution.
+
+VHDL PSL is layered on the existing IEEE/VITAL environment rather than a second
+value or delay model. Resolved `std_logic` clocks and predicates are converted
+from the common packed signal value at the post-update boundary; wide numeric,
+fixed, file, protected, and physical objects retain their ordinary VHDL owners
+and do not become scalar predicates accidentally. A PSL monitor may observe a
+signal driven by the existing VITAL path-delay runtime on a later clock sample,
+preserving the same delta ordering as every other signal consumer. Portable
+library units retain the frontend PSL declaration/directive token and source-
+span ownership through owning-unit schema 17. Standalone designs additionally
+carry a checksummed `FSIMVHIR` payload containing the complete owning VHDL HIR,
+including analyzed PSL clocks, declarations, temporal operators, directives,
+and source IDs. Loading validates every retained semantic ID and enum before
+publishing a `BuiltProject`; missing, corrupt, future-schema, trailing, or
+cross-payload-inconsistent state rejects transactionally.
+
+PSL execution is occurrence-owned at mixed-language boundaries. `DesignIR`
+supplies VHDL specialization occurrences in configured root order, including
+the exact architecture selected by an `entity(architecture)` target. Clock and
+sample keys carry the occurrence path, so identical local names in duplicated
+VHDL roots or adjacent SystemVerilog/SystemC roots cannot alias. The same path
+is published through attempt, coverage, and callback identity. A nested
+SV-to-VHDL-to-SystemC path samples the resolved SystemC result only after the
+common stable-delta publication point. When several clocks edge together, their
+history records share one immutable observation value map; per-clock timing and
+sample indices remain distinct while retained value storage scales linearly
+with observations and roots.
+
+Each live simulation also projects this occurrence ownership into one bounded
+VHDL observability snapshot and one simulation-owned VHPI registry. Scope,
+declaration, and process paths use the same configured-root identity as PSL;
+nested DesignIR paths create explicit parent regions, and equivalent duplicate
+representations may share a handle only when their canonical parent, name, and
+VHPI kind agree. Declarations retain type class, source span, driver count,
+alias identity, live packed value where available, and a generation-qualified
+handle. Processes retain active/postponed region identity, while PSL attempts
+and coverage retain their exact sample/time/delta coordinates. Snapshot record,
+payload, and formatting ceilings are transactional. The debugger's `vhdl`
+views, callback activity, and VCD signal projection consume the same stable
+state without publishing native addresses; released, stale, and foreign-
+simulation handles remain distinguishable.
+
+The VHDL/PSL artifact boundary is source-free and replayable. `.fsimobj` and
+relocated `.fsimlib` inputs rebuild the same semantic HIR from schema-17 owning
+units, while `.fsimdesign` restores the HIR directly beside semantic, DesignIR,
+and runtime payloads. Compiler-supplied IEEE package contents remain part of
+the standard-source digest set, and the explicit standard-library identity is
+`ieee-1076-2019-16a01232-vhdl-psl-wide-v2`; both whole-design and per-
+specialization native keys include it. A relocated design therefore receives
+fresh simulation-owned VHPI handles, then the existing name-based portable
+VHPI checkpoint flow verifies content/cache compatibility and remaps exported
+handles. In-flight native callbacks or host addresses are never serialized;
+deterministic replay reconstructs monitors and reproduces attempt, coverage,
+debug, and waveform results across interpreter and LLVM cold/warm execution.
+
+The final VHDL/PSL release boundary is governed by a 33-row clause inventory
+and a 44-row closure matrix. All 29 active supported rows have positive,
+negative, and execution owners; no active row is unresolved. One registered
+aggregate contract freezes 17 direct/interpreter/LLVM/cache/debug/trace/
+artifact/relocation/replay/root/mixed stages, platform-neutral 6 GiB process
+containment, installed `fsim-vhdl` execution, diagnostic/source/provenance
+counts, and the exact inventory digests. The public
+[`vhdl-psl.md`](vhdl-psl.md),
+[`vhdl-psl-tutorial.md`](vhdl-psl-tutorial.md), and
+[`vhdl-psl-closure-audit.md`](vhdl-psl-closure-audit.md) describe the same
+machine-enforced boundary.
 
 The VHDL declaration/type layer is now a separate owning
 `semantic::vhdl::Hir`. It uses the shared unit, scope, declaration, type,
@@ -281,20 +423,23 @@ profile changes.
 The numeric package stage uses the same projection and provenance boundary.
 `numeric_std` records an explicit standard-logic dependency; `numeric_bit`
 selects two-state signed/unsigned types while `numeric_std` selects nine-state
-types. Their bounded conversion, resize, shift, and rotate calls lower directly
+types. Their arbitrary-width conversion, resize, shift, and rotate calls lower directly
 to the existing typed SimIR resize, copy, arithmetic, and shift operations, so
 the interpreter and LLVM backends do not carry a parallel package evaluator.
-Result-size and integer-width checks occur before execution, while runtime
-integer range checks retain the existing deterministic failure path.
+Only positive SimIR-representable result sizes are admitted. Wide `to_integer`
+values are narrowed and restored for a full-width equality/unknown assertion
+before the predefined integer result is copied, preserving one deterministic
+failure path across interpreter and LLVM.
 
 The fixed-point stage extends that boundary through `math_real`,
 `fixed_float_types`, `fixed_generic_pkg`, and `fixed_pkg` in deterministic
 dependency order. A constrained `ufixed` or `sfixed` remains an exact packed
 nine-state value; its declared descending range supplies the binary-point
 position, so no parallel runtime value kind is needed. Static integer
-conversion performs checked 64-bit scale alignment and saturation during
-lowering. Resize uses typed copies and existing arithmetic/shift operations for
-scale alignment and bounded unsigned nearest rounding. Equal-range addition,
+conversion builds arbitrary-width packed constants with scale alignment and
+saturation during lowering, without host-word masks. Resize uses typed copies
+and existing arithmetic/shift operations for arbitrary-width scale alignment
+and unsigned nearest rounding. Equal-range addition,
 subtraction, comparison, and slices reuse the common packed kernels, preserving
 interpreter/LLVM and cache identity.
 
@@ -472,6 +617,12 @@ Only selected branches/alternatives and realized iterations enter DesignIR.
 Declared block/alternative labels become stable path components; loop
 iterations use the common `label[index]` spelling so explicit mixed-language
 bindings do not depend on source-language hierarchy syntax.
+Each recursive child starts from a lightweight hierarchy checkpoint. If that
+child or any descendant reports a diagnostic, the builder shrinks every dense
+runtime/design collection to its prior size and removes only paths, names,
+boundary drivers, configuration/interface records, resolver insertions, and
+owned SystemC descriptions introduced by the failed subtree. This avoids both
+partial-state cascades and a full-design copy at every hierarchy level.
 VHDL selection choices retain an optional directed upper bound. Elaboration
 normalizes every non-null inclusive range to a signed 64-bit interval, detects
 interval/scalar overlap without enumerating its values, and treats a
@@ -516,6 +667,12 @@ package materialization publishes selected constants, types, and callables.
 Lexical generated-package prefixes are excluded from pre-expansion external
 package discovery, and the realized package binding participates in
 specialization and native-cache identity.
+Same-language VHDL input-expression port actuals are represented by owned child
+formal signals and synthesized reactive assignments. A statically indexed
+one-dimensional output actual similarly uses an owned child formal plus a
+parent slice-writing bridge process. Its exact `DriverRegion` lets the ordinary
+resolved-signal machinery distinguish disjoint subelements while retaining
+multiple driver identities on an overlapping resolved element.
 VHDL conditional, iterative, and case-alternative bodies retain their
 declarative part separately from concurrent statements; any nonempty
 declarative part requires the grammar's separating `begin`. Expansion applies
@@ -1449,6 +1606,37 @@ but turn incomplete conversion into an exact runtime failure. TextIO writes
 append through `StringMethod` formatting, so interpreter and compiled paths
 share width, justification, byte-limit, and Boolean spelling behavior. Schema
 73 keys every added TextIO/file operation field.
+
+Batch 163 Change 8 completes the lifetime boundary for that file service and
+the adjacent VHDL access/protected storage. The file registry retains closed
+entries, limits a simulation to 4,096 lifetime opens, and therefore never
+aliases a stale handle to a later stream. Every operation validates a nonzero
+known handle, its owning process, open state, and mode; interpreter destruction
+closes any remaining host stream. Error text is SimIR-generic because VHDL and
+SystemVerilog intentionally share this service.
+
+Each concrete VHDL access type lowers to two process-local associative
+containers: a live object map keyed by the opaque 32-bit handle, and a one-bit
+append-only issued-handle ledger. The next handle is the ledger size plus one;
+allocation checks both representation-derived capacities before publishing
+either structure. Dereference first probes the live map, while deallocation
+deletes its exact key and writes null back to the access variable. Consequently
+aliases retain designated-value identity, a freed identity cannot be reused,
+and null, stale, or foreign-type/process handles fail before a container read or
+write.
+
+Protected shared objects remain container-backed, simulation-owned instances.
+Their methods are inlined as wait-free source-ordered scheduler segments, making
+each call atomic relative to every other process without a host mutex. The
+lowerer tracks the active protected invocation and rejects recursive reentry,
+nested protected procedure calls, and waits deterministically; pure ordinary
+functions also reject calls to impure protected functions. Private-member widths
+now use the full positive `uint32_t` container representation instead of a
+64-bit policy cap. Container construction, two-state validation, conditional
+coercion, predicate evaluation, and reduction identities operate over every
+packed word, with existing owning-storage/work ceilings bounding materialization.
+Fresh interpreter/simulation construction recreates member defaults and drops
+all prior protected, access, and file state.
 VHDL's predefined `time` is a nonnegative signed-64-bit tick value. Before
 elaboration, the application recursively rewrites standard physical units
 from `fs` through `hr` into exact project ticks, including units nested in

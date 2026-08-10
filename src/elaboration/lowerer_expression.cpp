@@ -393,6 +393,52 @@ Lowerer::ExpressionAttempt Lowerer::lower_primary_expression(
         }
 
         if (expression.kind == ExpressionKind::Call
+            && expression.text == "@vhdl-external") {
+            if (expression.operands.size() != 2
+                || expression.operands[0].kind
+                    != ExpressionKind::Identifier) {
+                report(
+                    "FSIM-ELAB-VHEXTERNAL-001",
+                    "a VHDL external signal name has malformed semantic HIR",
+                    expression.span);
+                return std::nullopt;
+            }
+            const auto& target = expression.operands[0];
+            const auto& declared = expression.operands[1];
+            const auto* actual = object_type(target.text);
+            const auto actual_width =
+                actual == nullptr ? std::optional<std::uint64_t>{}
+                                  : actual->width();
+            const bool width_mismatch =
+                declared.call_result_width != 0
+                && (!actual_width
+                    || *actual_width != declared.call_result_width);
+            const bool domain_mismatch =
+                actual != nullptr
+                && declared.call_result_domain
+                    != frontend::ValueDomain::Unknown
+                && actual->domain != declared.call_result_domain;
+            const bool signed_mismatch =
+                actual != nullptr
+                && actual->is_signed != declared.call_result_signed;
+            const bool nominal_mismatch =
+                actual != nullptr
+                && !declared.nominal_type.empty()
+                && actual->nominal_type != declared.nominal_type;
+            if (actual == nullptr || width_mismatch || domain_mismatch
+                || signed_mismatch || nominal_mismatch) {
+                report(
+                    "FSIM-ELAB-VHEXTERNAL-001",
+                    "external signal subtype does not match target '"
+                        + target.text + "'",
+                    expression.span);
+                return std::nullopt;
+            }
+            return ExpressionAttempt{lower_expression(
+                target, expected_width, expected_type)};
+        }
+
+        if (expression.kind == ExpressionKind::Call
             && expression.text.starts_with("@sv-cast:")) {
             if (expression.operands.size() != 1) {
                 report(

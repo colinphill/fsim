@@ -478,15 +478,15 @@ end architecture;
   }
   assert(null_defaults >= 5);
   assert(
-      process.container_register_count == 3
-      && process.container_register_types.size() == 3
-      && process.container_register_types[0].queue
-      && process.container_register_types[0].maximum_elements
-          == fsim::runtime::simir::maximum_container_elements(
-              process.container_register_types[0])
+      process.container_register_count == 6
+      && process.container_register_types.size() == 6
+      && process.container_register_types[0].associative
+      && !process.container_register_types[0].maximum_elements
       && process.container_register_types[0].element_width == 8
-      && process.container_register_types[1].element_width == 32
-      && process.container_register_types[2].element_width == 5);
+      && process.container_register_types[1].queue
+      && process.container_register_types[1].element_width == 1
+      && process.container_register_types[2].element_width == 32
+      && process.container_register_types[4].element_width == 5);
   const auto observed_initial =
       elaborated.design->find_signal("observed_initial");
   const auto observed_updated =
@@ -640,31 +640,95 @@ end architecture;
           rejected_escape, "FSIM-ELAB-VHACCESS-021"));
 
   const auto deallocation = fsim::frontend::parse_text(
-      "invalid_access_deallocation.vhd",
+      "access_deallocation.vhd",
       R"(
-entity Invalid_Access_Deallocation is
+entity Access_Deallocation is
 end entity;
-architecture rtl of invalid_access_deallocation is
+architecture rtl of access_deallocation is
   type Bit_Pointer is access bit;
+  signal Released_Null : boolean;
+  signal Fresh_Identity : boolean;
+  signal Fresh_Value : bit;
 begin
-  fail : process
-    variable Local : Bit_Pointer;
+  exercise : process
+    variable First : Bit_Pointer;
+    variable Alias : Bit_Pointer;
+    variable Fresh : Bit_Pointer;
   begin
-    Deallocate(Local);
+    First := new bit;
+    Alias := First;
+    Deallocate(First);
+    Deallocate(First);
+    Fresh := new bit;
+    Released_Null <= First = null;
+    Fresh_Identity <= Alias /= Fresh;
+    Fresh_Value <= Fresh.all;
     wait;
   end process;
 end architecture;
 )",
       fsim::frontend::Language::Vhdl2008);
   assert(deallocation.ok());
-  const auto rejected_deallocation =
-      fsim::elaboration::elaborate(
-          deallocation.design,
-          "vhdl:work.invalid_access_deallocation(rtl)");
+  const auto deallocated = fsim::elaboration::elaborate(
+      deallocation.design,
+      "vhdl:work.access_deallocation(rtl)");
+  assert(deallocated.ok());
+  const auto released_null =
+      deallocated.design->find_signal("released_null");
+  const auto fresh_identity =
+      deallocated.design->find_signal("fresh_identity");
+  const auto fresh_value =
+      deallocated.design->find_signal("fresh_value");
   assert(
-      !rejected_deallocation.ok()
-      && has_diagnostic(
-          rejected_deallocation, "FSIM-ELAB-VHACCESS-022"));
+      released_null && fresh_identity && fresh_value);
+  const auto deallocation_interpreter =
+      deallocated.design->create_interpreter();
+  assert(
+      deallocation_interpreter->run().status
+          == fsim::runtime::RunStatus::completed
+      && deallocation_interpreter->signal_value(*released_null)
+             .to_msb_string() == "1"
+      && deallocation_interpreter->signal_value(*fresh_identity)
+             .to_msb_string() == "1"
+      && deallocation_interpreter->signal_value(*fresh_value)
+             .to_msb_string() == "0");
+
+  const auto stale_dereference = fsim::frontend::parse_text(
+      "stale_access_dereference.vhd",
+      R"(
+entity Stale_Access_Dereference is
+end entity;
+architecture rtl of stale_access_dereference is
+  type Bit_Pointer is access bit;
+  signal Observed : bit;
+begin
+  fail : process
+    variable Pointer : Bit_Pointer;
+    variable Alias : Bit_Pointer;
+  begin
+    Pointer := new bit;
+    Alias := Pointer;
+    Deallocate(Pointer);
+    Observed <= Alias.all;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(stale_dereference.ok());
+  const auto stale_design = fsim::elaboration::elaborate(
+      stale_dereference.design,
+      "vhdl:work.stale_access_dereference(rtl)");
+  assert(stale_design.ok());
+  auto stale_interpreter = stale_design.design->create_interpreter();
+  bool saw_stale_failure = false;
+  try {
+    (void)stale_interpreter->run();
+  } catch (const fsim::runtime::simir::AssertionError& error) {
+    saw_stale_failure = std::string_view{error.what()}.find(
+        "null, stale, or foreign handle") != std::string_view::npos;
+  }
+  assert(saw_stale_failure);
 
   const auto null_dereference =
       fsim::frontend::parse_text(
@@ -695,9 +759,9 @@ end architecture;
   bool saw_null_failure = false;
   try {
     (void)null_interpreter->run();
-  } catch (const fsim::runtime::simir::InterpreterError& error) {
+  } catch (const fsim::runtime::simir::AssertionError& error) {
     saw_null_failure = std::string_view{error.what()}.find(
-        "container index is out of range")
+        "null, stale, or foreign handle")
         != std::string_view::npos;
   }
   assert(saw_null_failure);
@@ -752,7 +816,9 @@ void test_vhdl_protected_type_storage() {
 package Counter_Types is
   type Counter is protected
     procedure Add(Value : integer);
+    procedure Fill_Wide;
     impure function Read return integer;
+    impure function Read_Wide_Bit(Index : integer) return bit;
   end protected Counter;
 end package;
 
@@ -760,13 +826,22 @@ package body Counter_Types is
   type Counter is protected body
     variable Current_Value : integer := 7;
     variable Enabled : bit := '1';
+    variable Wide_Value : bit_vector(136 downto 0);
     procedure Add(Value : integer) is
     begin
       Current_Value := Current_Value + Value;
     end procedure;
+    procedure Fill_Wide is
+    begin
+      Wide_Value := (others => '1');
+    end procedure;
     impure function Read return integer is
     begin
       return Current_Value;
+    end function;
+    impure function Read_Wide_Bit(Index : integer) return bit is
+    begin
+      return Wide_Value(Index);
     end function;
   end protected body Counter;
 end package body;
@@ -777,11 +852,16 @@ end entity;
 use work.Counter_Types.all;
 architecture rtl of protected_storage is
   shared variable Shared_Counter : Counter;
+  signal Wide_High : bit;
+  signal Wide_Low : bit;
 begin
   first : process
   begin
     Shared_Counter.Add(2);
     Shared_Counter.Add(Shared_Counter.Read());
+    Shared_Counter.Fill_Wide;
+    Wide_High <= Shared_Counter.Read_Wide_Bit(136);
+    Wide_Low <= Shared_Counter.Read_Wide_Bit(0);
     wait;
   end process;
   second : process
@@ -818,20 +898,25 @@ end architecture;
           == "protected_storage.shared_counter"
       && objects[0].type_name == "counter"
       && !objects[0].nominal_type.empty()
-      && objects[0].members.size() == 2
+      && objects[0].members.size() == 3
       && objects[0].members[0].name == "current_value"
       && objects[0].members[0].offset == 0
       && objects[0].members[0].width == 32
       && objects[0].members[1].name == "enabled"
       && objects[0].members[1].offset == 32
       && objects[0].members[1].width == 1
+      && objects[0].members[2].name == "wide_value"
+      && objects[0].members[2].offset == 33
+      && objects[0].members[2].width == 137
       && !elaborated.design->find_signal(
           "shared_counter.current_value"));
   const auto current = elaborated.design->find_container(
       "shared_counter.current_value");
   const auto enabled = elaborated.design->find_container(
       "shared_counter.enabled");
-  assert(current && enabled);
+  const auto wide_high = elaborated.design->find_signal("wide_high");
+  const auto wide_low = elaborated.design->find_signal("wide_low");
+  assert(current && enabled && wide_high && wide_low);
   const auto protected_paths = elaborated.design->container_paths();
   assert(
       std::ranges::any_of(
@@ -859,7 +944,16 @@ end architecture;
   assert(
       run.status == fsim::runtime::RunStatus::completed
       && interpreter->container_object_value(*current)
-              .elements.at(0).low_word().aval == 21);
+              .elements.at(0).low_word().aval == 21
+      && interpreter->signal_value(*wide_high).to_msb_string() == "1"
+      && interpreter->signal_value(*wide_low).to_msb_string() == "1");
+  const auto fresh_interpreter =
+      elaborated.design->create_interpreter();
+  assert(
+      fresh_interpreter->container_object_value(*current)
+              .elements.at(0).low_word().aval == 7
+      && fresh_interpreter->container_object_value(*enabled)
+              .elements.at(0).to_msb_string() == "1");
 
   const auto mismatched = fsim::frontend::parse_text(
       "vhdl_protected_mismatch.vhd",
@@ -919,6 +1013,52 @@ end architecture;
       && has_diagnostic(
           invalid_shared_result,
           "FSIM-ELAB-VHPROTECTED-008"));
+
+  const auto invalid_pure_access = fsim::frontend::parse_text(
+      "vhdl_invalid_pure_protected_access.vhd",
+      R"(
+package Pure_Access_Types is
+  type Counter is protected
+    impure function Read return integer;
+  end protected Counter;
+end package;
+package body Pure_Access_Types is
+  type Counter is protected body
+    variable Value : integer := 4;
+    impure function Read return integer is
+    begin
+      return Value;
+    end function;
+  end protected body Counter;
+end package body;
+entity Invalid_Pure_Protected_Access is
+end entity;
+use work.Pure_Access_Types.all;
+architecture rtl of invalid_pure_protected_access is
+  shared variable Shared_Counter : Counter;
+  pure function Illegal return integer is
+  begin
+    return Shared_Counter.Read();
+  end function;
+  signal Observed : integer;
+begin
+  exercise : process
+  begin
+    Observed <= Illegal();
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(invalid_pure_access.ok());
+  const auto invalid_pure_result = fsim::elaboration::elaborate(
+      invalid_pure_access.design,
+      "vhdl:work.invalid_pure_protected_access(rtl)");
+  assert(
+      !invalid_pure_result.ok()
+      && has_diagnostic(
+          invalid_pure_result,
+          "FSIM-ELAB-VHPROTECTED-022"));
 
   const auto invalid_execution = fsim::frontend::parse_text(
       "vhdl_invalid_protected_execution.vhd",

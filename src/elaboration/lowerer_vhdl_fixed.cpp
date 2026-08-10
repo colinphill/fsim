@@ -28,6 +28,72 @@ bool signed_fixed_type(const frontend::Type& type) {
   return type.is_signed || name == "sfixed" || name == "unresolved_sfixed";
 }
 
+PackedLogic4 fixed_integer_value(
+    const std::int64_t integer,
+    const std::size_t width,
+    const std::size_t scale,
+    const bool signed_result) {
+  PackedLogic4 result(width, Logic4::zero);
+  const auto magnitude = integer < 0
+      ? static_cast<std::uint64_t>(-(integer + 1)) + 1U
+      : static_cast<std::uint64_t>(integer);
+  const auto sign_index = width - 1U;
+  bool overflow = false;
+  if (!signed_result) {
+    const auto value_bits = width > scale ? width - scale : 0U;
+    overflow = integer > 0 && value_bits < 64U
+        && magnitude >= (std::uint64_t{1} << value_bits);
+    if (overflow) {
+      for (std::size_t bit = 0; bit < width; ++bit) {
+        result.set(bit, Logic4::one);
+      }
+      return result.promoted_to_logic9();
+    }
+    if (integer <= 0) {
+      return result.promoted_to_logic9();
+    }
+  } else if (integer > 0) {
+    const auto value_bits = sign_index > scale ? sign_index - scale : 0U;
+    overflow = value_bits < 63U
+        && magnitude >= (std::uint64_t{1} << value_bits);
+    if (overflow) {
+      for (std::size_t bit = 0; bit < sign_index; ++bit) {
+        result.set(bit, Logic4::one);
+      }
+      return result.promoted_to_logic9();
+    }
+  } else if (integer < 0) {
+    const auto value_bits = sign_index >= scale ? sign_index - scale : 0U;
+    overflow = sign_index < scale
+        || (value_bits < 64U
+            && magnitude > (std::uint64_t{1} << value_bits));
+    if (overflow) {
+      result.set(sign_index, Logic4::one);
+      return result.promoted_to_logic9();
+    }
+  }
+
+  const auto encoded = static_cast<std::uint64_t>(integer);
+  for (std::size_t bit = scale; bit < width; ++bit) {
+    const auto source_bit = bit - scale;
+    const bool one = source_bit < 64U
+        ? ((encoded >> source_bit) & 1U) != 0
+        : integer < 0;
+    if (one) {
+      result.set(bit, Logic4::one);
+    }
+  }
+  return result.promoted_to_logic9();
+}
+
+PackedLogic4 one_hot_value(
+    const std::size_t bit,
+    const std::size_t width) {
+  PackedLogic4 result(width, Logic4::zero);
+  result.set(bit, Logic4::one);
+  return result.promoted_to_logic9();
+}
+
 }  // namespace
 
 Lowerer::ExpressionAttempt Lowerer::lower_vhdl_fixed_function_expression(
@@ -68,10 +134,10 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_fixed_function_expression(
     return std::nullopt;
   }
   const auto distance = index_distance(*left, *right);
-  if (distance >= 64) {
+  if (distance >= std::numeric_limits<std::uint32_t>::max()) {
     report(
         "FSIM-ELAB-VHFIX-002",
-        "fixed-point execution supports result widths from 1 through 64",
+        "fixed-point result width is not representable by SimIR",
         expression.span);
     return std::nullopt;
   }
@@ -99,54 +165,27 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_fixed_function_expression(
       return std::nullopt;
     }
     const auto integer = static_integer_value(expression.operands.front());
-    if (!integer || *right > 0 || *right < -63) {
+    if (!integer || *right > 0) {
       report(
           "FSIM-ELAB-VHFIX-003",
           std::string{name}
-              + " requires a locally static integer and a binary point from 0 through -63",
+              + " requires a locally static integer and a nonpositive "
+                "binary-point index",
           expression.span);
       return std::nullopt;
     }
     const bool signed_result = name == "to_sfixed";
-    const auto scale = static_cast<unsigned>(-*right);
-    std::uint64_t bits = 0;
-    if (!signed_result) {
-      const auto maximum = result_width == 64
-          ? std::numeric_limits<std::uint64_t>::max()
-          : (std::uint64_t{1} << result_width) - 1U;
-      const auto maximum_integer = maximum >> scale;
-      if (*integer > 0
-          && static_cast<std::uint64_t>(*integer) > maximum_integer) {
-        bits = maximum;
-      } else if (*integer > 0) {
-        bits = static_cast<std::uint64_t>(*integer) << scale;
-      }
-    } else {
-      const auto sign_index = result_width - 1U;
-      const auto minimum_bits = std::uint64_t{1} << sign_index;
-      const auto maximum = minimum_bits - 1U;
-      if (*integer > 0
-          && (scale > sign_index
-              || static_cast<std::uint64_t>(*integer)
-                  > (maximum >> scale))) {
-        bits = maximum;
-      } else if (*integer < 0) {
-        const auto magnitude = static_cast<std::uint64_t>(
-            -(*integer + 1)) + 1U;
-        const auto maximum_magnitude = scale > sign_index
-            ? std::uint64_t{0}
-            : std::uint64_t{1} << (sign_index - scale);
-        bits = magnitude > maximum_magnitude
-            ? minimum_bits
-            : static_cast<std::uint64_t>(*integer) << scale;
-      } else {
-        bits = static_cast<std::uint64_t>(*integer) << scale;
-      }
+    const auto scale_value = index_distance(0, *right);
+    if (scale_value > std::numeric_limits<std::size_t>::max()) {
+      report(
+          "FSIM-ELAB-VHFIX-003",
+          "fixed-point binary-point distance exceeds host address space",
+          expression.span);
+      return std::nullopt;
     }
-    if (result_width < 64) {
-      bits &= (std::uint64_t{1} << result_width) - 1U;
-    }
-    auto value = unsigned_value(bits, result_width).promoted_to_logic9();
+    auto value = fixed_integer_value(
+        *integer, result_width,
+        static_cast<std::size_t>(scale_value), signed_result);
     const auto result = allocate_register(
         result_width, frontend::ValueDomain::Logic9);
     process_.operations.emplace_back(LoadConstant{result, std::move(value)});
@@ -163,10 +202,11 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_fixed_function_expression(
     return std::nullopt;
   }
   const auto source_width_value = source_type->packed_range->width();
-  if (source_width_value == 0 || source_width_value > 64) {
+  if (source_width_value == 0
+      || source_width_value > std::numeric_limits<std::uint32_t>::max()) {
     report(
         "FSIM-ELAB-VHFIX-002",
-        "fixed-point resize source width must be from 1 through 64",
+        "fixed-point resize source width is not representable by SimIR",
         expression.operands.front().span);
     return std::nullopt;
   }
@@ -179,11 +219,34 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_fixed_function_expression(
   const bool signed_source = signed_fixed_type(*source_type);
   const auto source_right = source_type->packed_range->right;
   if (source_right < *right) {
-    const auto amount = static_cast<std::size_t>(*right - source_right);
-    if (signed_source || source_width == 64 || amount >= source_width) {
+    const auto amount_value = index_distance(*right, source_right);
+    if (amount_value > std::numeric_limits<std::size_t>::max()) {
       report(
           "FSIM-ELAB-VHFIX-003",
-          "rounded resize supports bounded unsigned fractional narrowing",
+          "fixed-point resize distance exceeds host address space",
+          expression.span);
+      return std::nullopt;
+    }
+    const auto amount = static_cast<std::size_t>(amount_value);
+    if (signed_source) {
+      report(
+          "FSIM-ELAB-VHFIX-003",
+          "rounded resize does not yet support signed fractional narrowing",
+          expression.span);
+      return std::nullopt;
+    }
+    if (amount > source_width) {
+      const auto zero = allocate_register(
+          result_width, frontend::ValueDomain::Logic9);
+      process_.operations.emplace_back(LoadConstant{
+          zero, PackedLogic4(result_width, Logic4::zero)
+                    .promoted_to_logic9()});
+      return zero;
+    }
+    if (source_width == std::numeric_limits<std::uint32_t>::max()) {
+      report(
+          "FSIM-ELAB-VHFIX-003",
+          "rounded resize requires an intermediate width representable by SimIR",
           expression.span);
       return std::nullopt;
     }
@@ -192,10 +255,7 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_fixed_function_expression(
     const auto half = allocate_register(
         work_width, frontend::ValueDomain::Logic9);
     process_.operations.emplace_back(LoadConstant{
-        half,
-        unsigned_value(
-            std::uint64_t{1} << (amount - 1U), work_width)
-            .promoted_to_logic9()});
+        half, one_hot_value(amount - 1U, work_width)});
     const auto rounded = allocate_register(
         work_width, frontend::ValueDomain::Logic9);
     process_.operations.emplace_back(Binary{
@@ -209,25 +269,35 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_fixed_function_expression(
         ShiftOperator::logical_right, shifted, rounded, count, false});
     source = shifted;
   } else if (source_right > *right) {
-    const auto amount = static_cast<std::size_t>(source_right - *right);
-    if (amount >= 64
-        || source_width > 64 - amount) {
+    const auto amount_value = index_distance(source_right, *right);
+    if (amount_value > std::numeric_limits<std::size_t>::max()) {
       report(
           "FSIM-ELAB-VHFIX-003",
-          "fixed-point resize scale expansion exceeds 64 bits",
+          "fixed-point resize distance exceeds host address space",
           expression.span);
       return std::nullopt;
     }
-    const auto work_width = std::max(result_width, source_width + amount);
+    const auto amount = static_cast<std::size_t>(amount_value);
+    const auto work_width = result_width;
     source = resize_register(*source, work_width, signed_source);
-    const auto count = allocate_register(32, frontend::ValueDomain::Bit2);
-    process_.operations.emplace_back(LoadConstant{
-        count, unsigned_value(amount, 32)});
-    const auto shifted = allocate_register(
-        work_width, frontend::ValueDomain::Logic9);
-    process_.operations.emplace_back(Shift{
-        ShiftOperator::logical_left, shifted, *source, count, false});
-    source = shifted;
+    if (amount >= work_width) {
+      const auto zero = allocate_register(
+          work_width, frontend::ValueDomain::Logic9);
+      process_.operations.emplace_back(LoadConstant{
+          zero, PackedLogic4(work_width, Logic4::zero)
+                    .promoted_to_logic9()});
+      source = zero;
+    } else {
+      const auto count = allocate_register(
+          32, frontend::ValueDomain::Bit2);
+      process_.operations.emplace_back(LoadConstant{
+          count, unsigned_value(amount, 32)});
+      const auto shifted = allocate_register(
+          work_width, frontend::ValueDomain::Logic9);
+      process_.operations.emplace_back(Shift{
+          ShiftOperator::logical_left, shifted, *source, count, false});
+      source = shifted;
+    }
   }
   auto resized = resize_register(*source, result_width, signed_source);
   if (register_domain(resized) != frontend::ValueDomain::Logic9) {

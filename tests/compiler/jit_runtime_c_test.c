@@ -185,7 +185,16 @@ _Static_assert(offsetof(fsim_jit_runtime_v1, vital_timing_check) == 552,
                "runtime VITAL timing helper was not appended");
 _Static_assert(offsetof(fsim_jit_runtime_v1, vital_delay) == 560,
                "runtime VITAL delay helper was not appended");
-_Static_assert(sizeof(fsim_jit_runtime_v1) == 568,
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, force_driver_signal_slice) == 568,
+    "runtime driver force helper was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, force_driver_signal_slice_logic9) == 576,
+    "runtime exact driver force helper was not appended");
+_Static_assert(
+    offsetof(fsim_jit_runtime_v1, release_driver_signal_slice) == 584,
+    "runtime driver release helper was not appended");
+_Static_assert(sizeof(fsim_jit_runtime_v1) == 592,
                "unexpected extended runtime ABI size");
 _Static_assert(sizeof(fsim_jit_projected_element_v1) == 24,
                "unexpected projected-waveform element size");
@@ -722,7 +731,10 @@ int main(void) {
       signal_driving_value_logic9,
       read_simulation_time,
       vital_timing_check,
-      vital_delay};
+      vital_delay,
+      NULL,
+      NULL,
+      NULL};
   uint64_t bval = UINT64_MAX;
   const uint64_t aval = runtime.read_signal(runtime.context, 0, &bval);
   runtime.write_signal(runtime.context, 0, aval, bval);

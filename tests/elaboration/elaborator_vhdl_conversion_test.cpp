@@ -17,6 +17,8 @@ architecture rtl of qualified_conversion is
   subtype Nibble_T is Bits_Base_T(3 downto 0);
   subtype Nibble_Copy_T is Bits_Base_T(3 downto 0);
   subtype Logic_Nibble_T is std_logic_vector(3 downto 0);
+  type Wide_T is array (natural range <>) of bit;
+  subtype Bounded_Wide_T is Wide_T(64 downto 0);
   type Pair_T is record
     Mode : State_T;
     Data : Nibble_T;
@@ -44,6 +46,7 @@ architecture rtl of qualified_conversion is
   signal Qualified_Record : Pair_T;
   signal Function_Result : Active_T;
   signal Return_Result : Active_T;
+  signal Wide_Qualified : Bounded_Wide_T;
 begin
   drive : process
   begin
@@ -60,6 +63,8 @@ begin
       Data => Nibble_T'("1100")));
     Function_Result <= Keep(Active_T'(Run));
     Return_Result <= Qualified_Return(Done);
+    Wide_Qualified <= Bounded_Wide_T'(
+      "00000000000000000000000000000000000000000000000000000000000001101");
     wait;
   end process;
 end architecture;
@@ -92,10 +97,11 @@ end architecture;
   const auto function =
       elaborated.design->find_signal("function_result");
   const auto returned = elaborated.design->find_signal("return_result");
+  const auto wide = elaborated.design->find_signal("wide_qualified");
   assert(
       state && active && integer && natural && positive && qualified_bits
       && converted_bits && logic_bits && qualified_record && function
-      && returned);
+      && returned && wide);
 
   auto interpreter = elaborated.design->create_interpreter();
   const auto run = interpreter->run();
@@ -117,7 +123,9 @@ end architecture;
       && interpreter->signal_value(*qualified_record).to_msb_string()
           == "011100"
       && interpreter->signal_value(*function).to_msb_string() == "01"
-      && interpreter->signal_value(*returned).to_msb_string() == "10");
+      && interpreter->signal_value(*returned).to_msb_string() == "10"
+      && interpreter->signal_value(*wide).to_msb_string()
+          == std::string(61, '0') + "1101");
 
   const auto reject = [](
       const std::string_view filename,
@@ -278,19 +286,6 @@ begin
 end architecture;
 )",
       "FSIM-ELAB-VHCONV-004");
-  reject(
-      "vhdl_qualified_oversize.vhd",
-      R"(
-entity Invalid is end entity;
-architecture rtl of invalid is
-  type Wide_T is array (natural range <>) of bit;
-  subtype Bounded_Wide_T is Wide_T(64 downto 0);
-  signal Value : bit;
-begin
-  Value <= Bounded_Wide_T'("0");
-end architecture;
-)",
-      "FSIM-ELAB-VHQUAL-002");
   reject(
       "vhdl_qualified_record_nominal.vhd",
       R"(

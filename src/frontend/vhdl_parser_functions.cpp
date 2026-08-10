@@ -834,7 +834,9 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
             function.variables,
             function.package_instances,
             function.functions,
-            function.procedures)) {
+            function.procedures,
+            function.vhdl_attributes,
+            function.vhdl_groups)) {
       continue;
     }
     if (!match_keyword("variable", true)) {
@@ -1043,7 +1045,9 @@ ProcedureDeclaration VhdlParser::parse_vhdl_procedure(
             procedure.variables,
             procedure.package_instances,
             procedure.functions,
-            procedure.procedures)) {
+            procedure.procedures,
+            procedure.vhdl_attributes,
+            procedure.vhdl_groups)) {
       continue;
     }
     if (!match_keyword("variable", true)) {

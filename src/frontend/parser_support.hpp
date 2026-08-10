@@ -44,7 +44,17 @@ inline bool iequals(std::string_view left, std::string_view right) {
 
 inline std::string vhdl_name(std::string_view raw) {
   if (raw.size() >= 2 && raw.front() == '\\' && raw.back() == '\\') {
-    return std::string(raw.substr(1, raw.size() - 2));
+    raw = raw.substr(1, raw.size() - 2);
+    std::string result;
+    result.reserve(raw.size());
+    for (std::size_t index = 0; index < raw.size(); ++index) {
+      result.push_back(raw[index]);
+      if (raw[index] == '\\' && index + 1 < raw.size()
+          && raw[index + 1] == '\\') {
+        ++index;
+      }
+    }
+    return result;
   }
   return ascii_lower(raw);
 }

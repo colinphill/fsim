@@ -1105,9 +1105,17 @@ private:
     bool lower_vhdl_vital_state_table_call(const Statement&);
     bool lower_vhdl_vital_procedure_call(const Statement&);
     bool lower_vhdl_access_assignment(const Statement&);
-    std::optional<ContainerRegisterId> vhdl_access_heap(
+    bool lower_vhdl_access_deallocation(const Statement&);
+    struct VhdlAccessHeap {
+        ContainerRegisterId objects{};
+        ContainerRegisterId issued_handles{};
+        std::uint64_t maximum_live_objects{};
+    };
+    VhdlAccessHeap* vhdl_access_heap(
         const frontend::Type&, const frontend::SourceSpan&);
     std::optional<RegisterId> vhdl_access_index(const Expression&, const frontend::Type&);
+    bool validate_vhdl_access_handle(
+        const VhdlAccessHeap&, RegisterId, const frontend::SourceSpan&);
     ExpressionAttempt lower_vhdl_conversion_expression(
         const Expression&, std::size_t, const frontend::Type*);
     ExpressionAttempt lower_vhdl_composite_expression(const Expression&,
@@ -1497,7 +1505,7 @@ private:
         string_locals_;
     std::unordered_map<std::string, ContainerRegisterId>
         container_locals_;
-    std::unordered_map<std::string, ContainerRegisterId> vhdl_access_heaps_;
+    std::unordered_map<std::string, VhdlAccessHeap> vhdl_access_heaps_;
     bool active_vhdl_protected_method_{};
     std::unordered_map<std::string, bool> local_signed_;
     std::unordered_map<
@@ -1662,6 +1670,34 @@ private:
     using PortAliases = HierarchyPortAliases;
     using ContainerBoundaryDriver = HierarchyContainerBoundaryDriver;
     using ConfiguredVhdlInstance = HierarchyConfiguredVhdlInstance;
+
+    struct HierarchyCheckpoint {
+        std::string path;
+        std::size_t diagnostics{};
+        std::size_t signals{};
+        std::size_t boundary_conversions{};
+        std::size_t strings{};
+        std::size_t containers{};
+        std::size_t container_aliases{};
+        std::size_t protected_objects{};
+        std::size_t processes{};
+        std::size_t specializations{};
+        std::size_t udp_tables{};
+        std::size_t specify_paths{};
+        std::size_t timing_checks{};
+        std::size_t systemc_instances{};
+        std::size_t systemc_processes{};
+        std::size_t systemc_objects{};
+        std::size_t owned_systemc_instances{};
+        std::size_t stack_depth{};
+        std::size_t boundary_resolver_insertions{};
+        std::size_t vhdl_resolution_kind_insertions{};
+        std::uint64_t next_interface_handle{};
+    };
+
+    [[nodiscard]] HierarchyCheckpoint hierarchy_checkpoint(
+        std::string path) const;
+    void rollback_hierarchy(const HierarchyCheckpoint& checkpoint);
 
     static std::vector<std::string> selected_name_parts(
         const std::string_view name);
@@ -2122,8 +2158,10 @@ private:
     std::unordered_map<SignalId, std::vector<std::string>>
         boundary_driver_paths_;
     std::unordered_map<SignalId, std::string> resolver_by_signal_;
+    std::vector<SignalId> boundary_resolver_insertions_;
     std::unordered_map<std::string, ResolutionKind>
         vhdl_resolution_kinds_;
+    std::vector<std::string> vhdl_resolution_kind_insertions_;
     std::unordered_map<
         ContainerObjectId,
         std::vector<ContainerBoundaryDriver>>

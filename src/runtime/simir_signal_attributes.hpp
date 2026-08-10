@@ -26,7 +26,7 @@ template <typename Owner>
 }
 
 template <typename Owner>
-[[nodiscard]] const PackedLogic4& driving_value(
+[[nodiscard]] PackedLogic4 driving_value(
     Owner& owner,
     const ProcessId process,
     const SignalId signal) {

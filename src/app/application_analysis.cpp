@@ -627,6 +627,8 @@ std::string unit_key(const frontend::DesignUnit& unit)  {
           + unit.name;
     case frontend::UnitKind::VhdlContext:
       return "vhdl:" + unit.library + ":context:" + unit.name;
+    case frontend::UnitKind::VhdlPslVerificationUnit:
+      return "vhdl:" + unit.library + ":psl-verification-unit:" + unit.name;
     case frontend::UnitKind::SystemVerilogPackage:
       return "systemverilog:" + unit.library + ":package:"
           + unit.name;

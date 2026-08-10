@@ -49,7 +49,7 @@ llvm::StructType* create_jit_runtime_type(llvm::LLVMContext& context) {
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer,
        pointer, pointer, pointer, pointer, pointer, pointer, pointer,
-       pointer, pointer, pointer},
+       pointer, pointer, pointer, pointer, pointer, pointer},
       "fsim_jit_runtime_v1");
 }
 
@@ -225,13 +225,19 @@ void SignalOperationLowerer::lower(const ForceSignalSlice& operation) {
   if (signal_kind == ValueKind::logic9) {
     store_logic9_word(logic9_word_slot, source);
     builder.CreateCall(
-        write_slice_logic9_type, force_signal_slice_logic9_callback,
+        write_slice_logic9_type,
+        operation.driving_value
+            ? force_driver_signal_slice_logic9_callback
+            : force_signal_slice_logic9_callback,
         {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
          offset,
          llvm::ConstantInt::get(i32, source.width), logic9_word_slot});
   } else {
     builder.CreateCall(
-        write_slice_type, force_signal_slice_callback,
+        write_slice_type,
+        operation.driving_value
+            ? force_driver_signal_slice_callback
+            : force_signal_slice_callback,
         {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
          offset,
          llvm::ConstantInt::get(i32, source.width), source.aval, source.bval});
@@ -244,7 +250,10 @@ void SignalOperationLowerer::lower(const ReleaseSignalSlice& operation) {
       ? builder.CreateTrunc(dynamic_offset(*operation.selection), i32)
       : llvm::ConstantInt::get(i32, operation.offset);
   builder.CreateCall(
-      release_slice_type, release_signal_slice_callback,
+      release_slice_type,
+      operation.driving_value
+          ? release_driver_signal_slice_callback
+          : release_signal_slice_callback,
       {context_pointer, llvm::ConstantInt::get(i32, operation.signal),
        offset,
        llvm::ConstantInt::get(i32, operation.width)});

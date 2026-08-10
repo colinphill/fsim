@@ -36,6 +36,9 @@ enum class TokenKind {
   At,
   Question,
   Backtick,
+  // VHDL line-comment embedding marker (`-- psl`). The following tokens on
+  // that physical line use the ordinary VHDL/PSL lexical surface.
+  PslDirective,
 
   Assign,
   Less,

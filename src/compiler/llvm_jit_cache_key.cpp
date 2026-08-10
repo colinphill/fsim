@@ -1568,6 +1568,7 @@ void add_container_type_key(
             add_key_u64(builder, "source", value.source);
             add_key_u64(builder, "offset", value.offset);
             add_key_u64(builder, "dynamic", value.selection.has_value());
+            add_key_u64(builder, "driving-value", value.driving_value);
             if (value.selection) {
               add_dynamic_index_key(builder, *value.selection);
             }
@@ -1579,6 +1580,7 @@ void add_container_type_key(
             add_key_u64(builder, "offset", value.offset);
             add_key_u64(builder, "width", value.width);
             add_key_u64(builder, "dynamic", value.selection.has_value());
+            add_key_u64(builder, "driving-value", value.driving_value);
             if (value.selection) {
               add_dynamic_index_key(builder, *value.selection);
             }

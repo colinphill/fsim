@@ -33,6 +33,7 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
+  std::vector<fsim::runtime::VhdlPslAttemptSnapshot> psl_attempts;
   std::string value;
   std::string vcd;
   std::string identity;
@@ -214,7 +215,10 @@ end entity;
 architecture rtl of Typed_Boundary_Vhdl_Middle is
   signal Native_Value : std_logic;
   signal Native_Result : std_logic;
+  -- psl default clock is Native_Value = '1';
+  -- psl property Native_Inverted is Native_Result = '0';
 begin
+  -- psl CHECK_NATIVE_INVERTED: assert Native_Inverted;
   Native_Value <= Value(0);
   native : boundary_native_placeholder
     port map (value => Native_Value, inverted => Native_Result);
@@ -442,6 +446,7 @@ Capture run_once(
         vcd.change(trace, value);
       });
   capture.result = simulation.run();
+  capture.psl_attempts = simulation.vhdl_psl_attempts();
   capture.value = simulation.read_signal(*result_signal).to_msb_string();
   vcd.flush();
   capture.vcd = vcd_output.str();
@@ -452,6 +457,7 @@ void compare_capture(const Capture& reference, const Capture& actual) {
   assert(reference.result.status == actual.result.status);
   assert(reference.result.time == actual.result.time);
   assert(reference.result.delta == actual.result.delta);
+  assert(reference.psl_attempts == actual.psl_attempts);
   assert(reference.value == actual.value);
   assert(reference.vcd == actual.vcd);
   assert(reference.identity == actual.identity);
@@ -510,6 +516,16 @@ int main() {
     compare_capture(reference, cold);
     compare_capture(reference, warm);
     compare_capture(reference, debug);
+    assert(reference.psl_attempts.size() == 1);
+    assert(
+        reference.psl_attempts.front().monitor
+        == "work:rtl:check_native_inverted");
+    assert(
+        reference.psl_attempts.front().instance_identity
+        == "typed_boundary_sv_top.middle");
+    assert(
+        reference.psl_attempts.front().outcome
+        == fsim::runtime::VhdlPslAttemptOutcome::pass);
     assert(reference.value == "0");
     assert(reference.result.status == fsim::runtime::RunStatus::stopped);
     assert(reference.result.time == 1);
@@ -532,6 +548,7 @@ int main() {
     const auto edited = run_once(
         config, fsim::app::SimulationEngine::compiled, sources);
     compare_capture(edited_reference, edited);
+    assert(edited.psl_attempts.empty());
     assert(edited.value == "1");
     assert(edited.keys != cold.keys);
 #if defined(FSIM_HAS_LLVM)

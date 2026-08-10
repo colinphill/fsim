@@ -774,10 +774,64 @@ using namespace elaboration_detail;
                     && candidate_library == package_library;
             });
         if (package_body != parsed_.units.end()) {
-            effective_package.parameters.insert(
-                effective_package.parameters.end(),
-                package_body->parameters.begin(),
-                package_body->parameters.end());
+            for (const auto& body_parameter : package_body->parameters) {
+                if (body_parameter.kind
+                    != frontend::ParameterKind::Value) {
+                    effective_package.parameters.push_back(body_parameter);
+                    continue;
+                }
+                const auto declaration = std::ranges::find_if(
+                    effective_package.parameters,
+                    [&](const auto& candidate) {
+                      return candidate.kind
+                              == frontend::ParameterKind::Value
+                          && candidate.name == body_parameter.name;
+                    });
+                if (declaration == effective_package.parameters.end()) {
+                    effective_package.parameters.push_back(body_parameter);
+                    continue;
+                }
+                if (!declaration->vhdl_deferred) {
+                    report(
+                        "FSIM-ELAB-VHLEGAL-012",
+                        "VHDL package body redeclares nondeferred constant '"
+                            + body_parameter.name + "'",
+                        body_parameter.span);
+                    continue;
+                }
+                declaration->vhdl_completion_span = body_parameter.span;
+                if (!frontend::vhdl_subtype_indications_conform(
+                        declaration->type, body_parameter.type)) {
+                    report(
+                        "FSIM-ELAB-VHLEGAL-011",
+                        "full declaration of deferred VHDL package constant '"
+                            + body_parameter.name
+                            + "' does not conform to its subtype indication",
+                        body_parameter.span);
+                    continue;
+                }
+                declaration->default_value = body_parameter.default_value;
+                declaration->vhdl_deferred = false;
+            }
+            for (const auto& declaration : effective_package.parameters) {
+                if (declaration.kind == frontend::ParameterKind::Value
+                    && declaration.vhdl_deferred
+                    && !declaration.vhdl_completion_span) {
+                    report(
+                        "FSIM-ELAB-VHLEGAL-010",
+                        "deferred VHDL package constant '" + declaration.name
+                            + "' has no full declaration in the package body",
+                        declaration.span);
+                }
+            }
+            effective_package.vhdl_attributes.insert(
+                effective_package.vhdl_attributes.end(),
+                package_body->vhdl_attributes.begin(),
+                package_body->vhdl_attributes.end());
+            effective_package.vhdl_groups.insert(
+                effective_package.vhdl_groups.end(),
+                package_body->vhdl_groups.begin(),
+                package_body->vhdl_groups.end());
             effective_package.type_aliases.insert(
                 effective_package.type_aliases.end(),
                 package_body->type_aliases.begin(),
@@ -947,6 +1001,17 @@ using namespace elaboration_detail;
                            .source_dependencies.end()) {
                 effective_package.source_dependencies.push_back(
                     body_source);
+            }
+        } else {
+            for (const auto& declaration : effective_package.parameters) {
+                if (declaration.kind == frontend::ParameterKind::Value
+                    && declaration.vhdl_deferred) {
+                    report(
+                        "FSIM-ELAB-VHLEGAL-010",
+                        "deferred VHDL package constant '" + declaration.name
+                            + "' has no full declaration in the package body",
+                        declaration.span);
+                }
             }
         }
         const bool generic_package = std::ranges::any_of(

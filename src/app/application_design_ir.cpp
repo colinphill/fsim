@@ -157,11 +157,13 @@ class DesignIrBuilder final {
       if (unit.language != input_language || unit.library != input.library) {
         continue;
       }
-      if (unit.name == primary
-          || (!secondary.empty()
-              && unit.name == secondary
-              && unit.secondary_name == primary)
-          || unit.secondary_name == primary) {
+      if (!secondary.empty()) {
+        if (unit.name == secondary && unit.secondary_name == primary) {
+          return unit.id;
+        }
+        continue;
+      }
+      if (unit.name == primary || unit.secondary_name == primary) {
         return unit.id;
       }
     }

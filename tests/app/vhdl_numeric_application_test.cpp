@@ -176,6 +176,25 @@ void verify_diagnostics(
   }
 }
 
+void verify_runtime_failure(
+    const fsim::project::Config& config,
+    const fsim::app::SimulationEngine engine,
+    const std::string_view expected) {
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  assert(project);
+  fsim::app::Simulation simulation{
+      std::move(*project), config.run.max_deltas, engine};
+  bool failed = false;
+  try {
+    (void)simulation.run();
+  } catch (const fsim::runtime::simir::AssertionError& error) {
+    failed = std::string_view{error.what()}.find(expected)
+        != std::string_view::npos;
+  }
+  assert(failed);
+}
+
 }  // namespace
 
 int main() {
@@ -207,7 +226,13 @@ architecture rtl of numeric_std_app is
   signal wide_u, wide_s : signed(11 downto 0);
   signal shifted, rotated, converted : unsigned(7 downto 0);
   signal integer_s : integer;
+  signal integer_s_wide : integer;
   signal compared : boolean;
+  signal u65 : unsigned(64 downto 0);
+  signal s129 : signed(128 downto 0);
+  signal converted129 : unsigned(128 downto 0);
+  signal resized257, sum257 : unsigned(256 downto 0);
+  signal shifted521 : unsigned(520 downto 0);
 begin
   u <= to_unsigned(13, 8);
   s <= to_signed(-5, 8);
@@ -225,6 +250,13 @@ begin
   rotated <= rotate_right(u, 1);
   converted <= unsigned(s);
   integer_s <= to_integer(to_signed(-5, 8));
+  u65 <= to_unsigned(13, 65);
+  s129 <= to_signed(-5, 129);
+  converted129 <= unsigned(s129);
+  resized257 <= resize(u65, 257);
+  sum257 <= resized257 + to_unsigned(3, 257);
+  shifted521 <= shift_left(resize(u65, 521), 500);
+  integer_s_wide <= to_integer(to_signed(-5, 129));
   compared <= u > to_unsigned(12, 8);
 end architecture;
 )";
@@ -248,6 +280,11 @@ architecture rtl of numeric_bit_app is
   signal sum, shifted, converted : unsigned(7 downto 0);
   signal wide : signed(11 downto 0);
   signal integer_u : integer;
+  signal integer_u_wide : integer;
+  signal u65 : unsigned(64 downto 0);
+  signal s129 : signed(128 downto 0);
+  signal resized257 : signed(256 downto 0);
+  signal rotated521 : unsigned(520 downto 0);
 begin
   u <= to_unsigned(9, 8);
   s <= to_signed(-3, 8);
@@ -256,6 +293,11 @@ begin
   converted <= unsigned(s);
   wide <= resize(s, 12);
   integer_u <= to_integer(to_unsigned(9, 8));
+  u65 <= to_unsigned(9, 65);
+  s129 <= to_signed(-3, 129);
+  resized257 <= resize(s129, 257);
+  rotated521 <= rotate_left(resize(u65, 521), 517);
+  integer_u_wide <= to_integer(to_unsigned(9, 65));
 end architecture;
 )";
     assert(output.good());
@@ -275,10 +317,46 @@ use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 architecture rtl of numeric_invalid is
   signal bad_size : unsigned(0 downto 0);
-  signal bad_integer : integer;
+  signal bad_resource : unsigned(0 downto 0);
 begin
   bad_size <= to_unsigned(1, 0);
-  bad_integer <= to_integer("11111111111111111111111111111111");
+  bad_resource <= to_unsigned(1, 4294967296);
+end architecture;
+)";
+    assert(output.good());
+  }
+
+  const auto out_of_range = directory.path / "numeric_out_of_range.vhd";
+  {
+    std::ofstream output{out_of_range};
+    output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+entity numeric_out_of_range is end entity;
+architecture rtl of numeric_out_of_range is
+  signal result : integer;
+begin
+  result <= to_integer(shift_left(to_unsigned(1, 65), 31));
+end architecture;
+)";
+    assert(output.good());
+  }
+
+  const auto unknown = directory.path / "numeric_unknown.vhd";
+  {
+    std::ofstream output{unknown};
+    output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+entity numeric_unknown is
+  port (seed : in unsigned(64 downto 0));
+end entity;
+architecture rtl of numeric_unknown is
+  signal result : integer;
+begin
+  result <= to_integer(seed);
 end architecture;
 )";
     assert(output.good());
@@ -303,7 +381,11 @@ end architecture;
             "numeric_std_app.wide_u", "numeric_std_app.wide_s",
             "numeric_std_app.shifted", "numeric_std_app.rotated",
             "numeric_std_app.converted", "numeric_std_app.integer_s",
-            "numeric_std_app.compared",
+            "numeric_std_app.compared", "numeric_std_app.u65",
+            "numeric_std_app.s129", "numeric_std_app.resized257",
+            "numeric_std_app.converted129",
+            "numeric_std_app.sum257", "numeric_std_app.shifted521",
+            "numeric_std_app.integer_s_wide",
         },
         {
             "00001101", "11111011", "00010000", "00001010",
@@ -311,6 +393,13 @@ end architecture;
             "11111001", "00000101", "000000001101", "111111111011",
             "00110100", "10000110", "11111011",
             "11111111111111111111111111111011", "1",
+            std::string(61, '0') + "1101",
+            std::string(125, '1') + "1011",
+            std::string(253, '0') + "1101",
+            std::string(125, '1') + "1011",
+            std::string(252, '0') + "10000",
+            std::string(17, '0') + "1101" + std::string(500, '0'),
+            std::string(28, '1') + "1011",
         });
 
     const auto bit_config = make_config(
@@ -324,18 +413,44 @@ end architecture;
             "numeric_bit_app.u", "numeric_bit_app.s",
             "numeric_bit_app.sum", "numeric_bit_app.shifted",
             "numeric_bit_app.converted", "numeric_bit_app.wide",
-            "numeric_bit_app.integer_u",
+            "numeric_bit_app.integer_u", "numeric_bit_app.u65",
+            "numeric_bit_app.s129", "numeric_bit_app.resized257",
+            "numeric_bit_app.rotated521",
+            "numeric_bit_app.integer_u_wide",
         },
         {
             "00001001", "11111101", "00001110", "00000100",
             "11111101", "111111111101",
             "00000000000000000000000000001001",
+            std::string(61, '0') + "1001",
+            std::string(127, '1') + "01",
+            std::string(255, '1') + "01",
+            "1001" + std::string(517, '0'),
+            std::string(28, '0') + "1001",
         });
   }
   verify_diagnostics(
       make_config(
           directory.path, invalid, "numeric_invalid", "numeric-invalid",
           fsim::project::Optimization::o0),
-      {"FSIM-ELAB-VHNUM-002", "FSIM-ELAB-VHNUM-003"});
+      {"FSIM-ELAB-VHNUM-002"});
+  const auto range_config = make_config(
+      directory.path, out_of_range, "numeric_out_of_range",
+      "numeric-out-of-range", fsim::project::Optimization::o0);
+  verify_runtime_failure(
+      range_config, fsim::app::SimulationEngine::interpreter,
+      "outside the predefined integer range");
+  verify_runtime_failure(
+      range_config, fsim::app::SimulationEngine::compiled,
+      "outside the predefined integer range");
+  const auto unknown_config = make_config(
+      directory.path, unknown, "numeric_unknown",
+      "numeric-unknown", fsim::project::Optimization::o0);
+  verify_runtime_failure(
+      unknown_config, fsim::app::SimulationEngine::interpreter,
+      "unknown or outside the predefined integer range");
+  verify_runtime_failure(
+      unknown_config, fsim::app::SimulationEngine::compiled,
+      "unknown or outside the predefined integer range");
   return 0;
 }

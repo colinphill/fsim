@@ -25,6 +25,7 @@ enum class UnitKind {
   SystemVerilogInterface,
   VerilogModule,
   SystemVerilogProgram,
+  VhdlPslVerificationUnit,
 };
 enum class PortDirection {
   Unknown,
@@ -100,18 +101,18 @@ struct Expression {
   std::uint64_t call_result_width{};
   ValueDomain call_result_domain{ValueDomain::Unknown};
   bool call_result_signed{};
-  SystemVerilogScalarKind systemverilog_scalar_kind{SystemVerilogScalarKind::None};
+  SystemVerilogScalarKind systemverilog_scalar_kind{
+      SystemVerilogScalarKind::None};
   Expression() = default;
 
-  Expression(ExpressionKind expression_kind, std::string expression_text,
-             std::vector<Expression> expression_operands,
-             SourceSpan expression_span,
-             std::vector<std::string> expression_aggregate_choices = {},
-             std::vector<std::vector<Expression>>
-                 expression_aggregate_choice_expressions = {},
-             std::string expression_nominal_type = {},
-             std::optional<std::string> expression_decoded_string =
-                 std::nullopt)
+  Expression(
+      ExpressionKind expression_kind, std::string expression_text,
+      std::vector<Expression> expression_operands, SourceSpan expression_span,
+      std::vector<std::string> expression_aggregate_choices = {},
+      std::vector<std::vector<Expression>>
+          expression_aggregate_choice_expressions = {},
+      std::string expression_nominal_type = {},
+      std::optional<std::string> expression_decoded_string = std::nullopt)
       : kind(expression_kind), text(std::move(expression_text)),
         operands(std::move(expression_operands)),
         span(std::move(expression_span)),
@@ -182,9 +183,8 @@ struct VerilogDriveStrength {
   VerilogStrength one{VerilogStrength::Strong};
   SourceSpan span;
 
-  friend bool operator==(
-      const VerilogDriveStrength&,
-      const VerilogDriveStrength&) = default;
+  friend bool operator==(const VerilogDriveStrength &,
+                         const VerilogDriveStrength &) = default;
 };
 
 /// Charge retained by a trireg after its active drivers disconnect.
@@ -192,9 +192,8 @@ struct VerilogChargeStrength {
   VerilogStrength rank{VerilogStrength::Medium};
   SourceSpan span;
 
-  friend bool operator==(
-      const VerilogChargeStrength&,
-      const VerilogChargeStrength&) = default;
+  friend bool operator==(const VerilogChargeStrength &,
+                         const VerilogChargeStrength &) = default;
 };
 
 struct PackedRangeExpression {
@@ -342,8 +341,7 @@ struct VhdlAccessInfo {
   // addresses. The frontend limit defaults to the full non-null 32-bit handle
   // domain; elaboration additionally applies the runtime owning-storage budget.
   std::uint32_t handle_width{32};
-  std::uint32_t maximum_objects{
-      std::numeric_limits<std::uint32_t>::max()};
+  std::uint32_t maximum_objects{std::numeric_limits<std::uint32_t>::max()};
   bool nullable{true};
   bool owns_designated_object{true};
   // Explicit deallocation is outside the bounded v1 subset, so allocated
@@ -392,8 +390,7 @@ enum class SystemVerilogContainerKind {
 /// Keeping the container kind and optional queue maximum separate prevents an
 /// unpacked object from being mistaken for a wider packed vector.
 struct SystemVerilogContainerInfo {
-  SystemVerilogContainerKind kind{
-      SystemVerilogContainerKind::DynamicArray};
+  SystemVerilogContainerKind kind{SystemVerilogContainerKind::DynamicArray};
   // Present for `[$:N]`. The expression remains specialization-aware until
   // elaboration converts the maximum index to a maximum element count.
   std::optional<Expression> queue_maximum;
@@ -481,8 +478,7 @@ struct Type {
   // A derived enumeration constraint retains its resolved base independently
   // so specialization can prove containment after folding bound constants.
   std::optional<EnumerationRange> enumeration_base_range;
-  std::optional<DiscreteRangeExpression>
-      enumeration_base_range_expression;
+  std::optional<DiscreteRangeExpression> enumeration_base_range_expression;
   // Non-empty for a bounded packed struct or union. A member may retain one
   // nested aggregate or enum type in PackedMember::nested_types.
   std::vector<PackedMember> packed_members;
@@ -535,20 +531,21 @@ struct Type {
       systemverilog_class_parameter_actuals;
 
   Type() = default;
-  Type(
-      ValueDomain domain_value,
-      std::string spelling_value,
-      std::optional<PackedRange> range_value,
-      bool signed_value,
-      std::optional<PackedRangeExpression> range_expression = {})
-      : domain(domain_value),
-        spelling(std::move(spelling_value)),
-        packed_range(std::move(range_value)),
-        is_signed(signed_value),
+  Type(ValueDomain domain_value, std::string spelling_value,
+       std::optional<PackedRange> range_value, bool signed_value,
+       std::optional<PackedRangeExpression> range_expression = {})
+      : domain(domain_value), spelling(std::move(spelling_value)),
+        packed_range(std::move(range_value)), is_signed(signed_value),
         packed_range_expression(std::move(range_expression)) {}
 
   [[nodiscard]] std::optional<std::uint64_t> width() const noexcept;
 };
+
+/// Compare two VHDL subtype indications for declaration/body conformance.
+/// Source locations and resolved cache provenance do not participate; the
+/// selected type mark, scalar domain, direction, and retained constraints do.
+[[nodiscard]] bool vhdl_subtype_indications_conform(const Type &left,
+                                                    const Type &right);
 
 struct EnumLiteralDeclaration {
   std::string name;
@@ -568,6 +565,7 @@ enum class TypeDeclarationKind {
   VhdlRecord,
   VhdlSubtype,
   SystemVerilogTypedef,
+  VhdlIncomplete,
 };
 
 struct TypeAliasDeclaration {
@@ -579,8 +577,25 @@ struct TypeAliasDeclaration {
   // local parameters carry explicit values through specialization; VHDL
   // literals remain contextual and use declaration-order ordinals.
   std::vector<EnumLiteralDeclaration> enum_literals;
-  TypeDeclarationKind declaration_kind{
-      TypeDeclarationKind::Alias};
+  TypeDeclarationKind declaration_kind{TypeDeclarationKind::Alias};
+};
+
+struct VhdlAttributeDeclaration {
+  std::string name;
+  Type type;
+  bool specification{};
+  std::vector<std::string> entity_names;
+  std::string entity_class;
+  Expression value;
+  SourceSpan span;
+};
+
+struct VhdlGroupDeclaration {
+  std::string name;
+  bool template_declaration{};
+  std::string template_name;
+  std::vector<std::string> entries;
+  SourceSpan span;
 };
 
 struct SignalDeclaration {
@@ -607,19 +622,14 @@ struct SignalDeclaration {
 
   SignalDeclaration() = default;
   SignalDeclaration(
-      std::string signal_name,
-      Type signal_type,
-      PortDirection signal_direction,
-      bool signal_is_port,
-      SourceSpan signal_span,
+      std::string signal_name, Type signal_type, PortDirection signal_direction,
+      bool signal_is_port, SourceSpan signal_span,
       std::optional<Delay> signal_net_delay = std::nullopt,
-      std::string signal_interface_type = {},
-      std::string signal_modport = {},
+      std::string signal_interface_type = {}, std::string signal_modport = {},
       std::optional<Expression> signal_default_value = std::nullopt)
       : name(std::move(signal_name)), type(std::move(signal_type)),
         direction(signal_direction), is_port(signal_is_port),
-        span(std::move(signal_span)),
-        net_delay(std::move(signal_net_delay)),
+        span(std::move(signal_span)), net_delay(std::move(signal_net_delay)),
         interface_type(std::move(signal_interface_type)),
         modport(std::move(signal_modport)),
         default_value(std::move(signal_default_value)) {}
@@ -643,17 +653,13 @@ struct VariableDeclaration {
 
   VariableDeclaration() = default;
   VariableDeclaration(
-      std::string variable_name,
-      Type variable_type,
-      std::optional<Expression> variable_initializer,
-      SourceSpan variable_span,
-      bool variable_vhdl_shared = false,
-      bool variable_vhdl_file = false,
+      std::string variable_name, Type variable_type,
+      std::optional<Expression> variable_initializer, SourceSpan variable_span,
+      bool variable_vhdl_shared = false, bool variable_vhdl_file = false,
       std::optional<Expression> variable_file_open_kind = std::nullopt)
       : name(std::move(variable_name)), type(std::move(variable_type)),
         initializer(std::move(variable_initializer)),
-        span(std::move(variable_span)),
-        vhdl_shared(variable_vhdl_shared),
+        span(std::move(variable_span)), vhdl_shared(variable_vhdl_shared),
         vhdl_file(variable_vhdl_file),
         vhdl_file_open_kind(std::move(variable_file_open_kind)) {}
 };
@@ -668,14 +674,11 @@ struct FunctionArgument {
   bool vhdl_file{};
 
   FunctionArgument() = default;
-  FunctionArgument(
-      std::string argument_name,
-      Type argument_type,
-      PortDirection argument_direction,
-      SourceSpan argument_span,
-      bool argument_reference = false,
-      std::optional<Expression> argument_default = std::nullopt,
-      bool argument_vhdl_file = false)
+  FunctionArgument(std::string argument_name, Type argument_type,
+                   PortDirection argument_direction, SourceSpan argument_span,
+                   bool argument_reference = false,
+                   std::optional<Expression> argument_default = std::nullopt,
+                   bool argument_vhdl_file = false)
       : name(std::move(argument_name)), type(std::move(argument_type)),
         direction(argument_direction), span(std::move(argument_span)),
         reference(argument_reference),
@@ -739,14 +742,11 @@ struct ParameterOverride {
 
   ParameterOverride() = default;
 
-  ParameterOverride(
-      std::optional<std::string> parameter_name,
-      Expression parameter_value,
-      SourceSpan parameter_span,
-      std::optional<Type> parameter_type_value = std::nullopt,
-      const bool parameter_default_box = false)
-      : name(std::move(parameter_name)),
-        value(std::move(parameter_value)),
+  ParameterOverride(std::optional<std::string> parameter_name,
+                    Expression parameter_value, SourceSpan parameter_span,
+                    std::optional<Type> parameter_type_value = std::nullopt,
+                    const bool parameter_default_box = false)
+      : name(std::move(parameter_name)), value(std::move(parameter_value)),
         span(std::move(parameter_span)),
         type_value(std::move(parameter_type_value)),
         default_box(parameter_default_box) {}
@@ -889,55 +889,39 @@ struct ParameterDeclaration {
   // syntax to constant class and input mode.
   InterfaceObjectClass object_class{InterfaceObjectClass::Constant};
   PortDirection direction{PortDirection::Input};
+  // A constant declaration without an initializer in a package declaration.
+  // Its full declaration must appear in the corresponding package body.
+  bool vhdl_deferred{};
+  std::optional<SourceSpan> vhdl_completion_span;
   ParameterDeclaration() = default;
 
-  ParameterDeclaration(
-      std::string parameter_name,
-      Type parameter_type,
-      Expression parameter_default,
-      bool parameter_local,
-      SourceSpan parameter_span)
-      : name(std::move(parameter_name)),
-        type(std::move(parameter_type)),
-        default_value(std::move(parameter_default)),
-        local(parameter_local),
+  ParameterDeclaration(std::string parameter_name, Type parameter_type,
+                       Expression parameter_default, bool parameter_local,
+                       SourceSpan parameter_span)
+      : name(std::move(parameter_name)), type(std::move(parameter_type)),
+        default_value(std::move(parameter_default)), local(parameter_local),
         span(std::move(parameter_span)) {}
 
-  ParameterDeclaration(
-      std::string parameter_name,
-      Type parameter_type,
-      Expression parameter_default,
-      bool parameter_local,
-      SourceSpan parameter_span,
-      ParameterKind parameter_kind,
-      std::optional<Type> parameter_default_type)
-      : name(std::move(parameter_name)),
-        type(std::move(parameter_type)),
-        default_value(std::move(parameter_default)),
-        local(parameter_local),
-        span(std::move(parameter_span)),
-        kind(parameter_kind),
+  ParameterDeclaration(std::string parameter_name, Type parameter_type,
+                       Expression parameter_default, bool parameter_local,
+                       SourceSpan parameter_span, ParameterKind parameter_kind,
+                       std::optional<Type> parameter_default_type)
+      : name(std::move(parameter_name)), type(std::move(parameter_type)),
+        default_value(std::move(parameter_default)), local(parameter_local),
+        span(std::move(parameter_span)), kind(parameter_kind),
         default_type(std::move(parameter_default_type)) {}
 
-  ParameterDeclaration(
-      std::string parameter_name,
-      Type parameter_type,
-      Expression parameter_default,
-      bool parameter_local,
-      SourceSpan parameter_span,
-      ParameterKind parameter_kind,
-      std::optional<Type> parameter_default_type,
-      InterfaceObjectClass parameter_object_class,
-      PortDirection parameter_direction)
-      : name(std::move(parameter_name)),
-        type(std::move(parameter_type)),
-        default_value(std::move(parameter_default)),
-        local(parameter_local),
-        span(std::move(parameter_span)),
-        kind(parameter_kind),
+  ParameterDeclaration(std::string parameter_name, Type parameter_type,
+                       Expression parameter_default, bool parameter_local,
+                       SourceSpan parameter_span, ParameterKind parameter_kind,
+                       std::optional<Type> parameter_default_type,
+                       InterfaceObjectClass parameter_object_class,
+                       PortDirection parameter_direction)
+      : name(std::move(parameter_name)), type(std::move(parameter_type)),
+        default_value(std::move(parameter_default)), local(parameter_local),
+        span(std::move(parameter_span)), kind(parameter_kind),
         default_type(std::move(parameter_default_type)),
-        object_class(parameter_object_class),
-        direction(parameter_direction) {}
+        object_class(parameter_object_class), direction(parameter_direction) {}
 };
 
 enum class VhdlComponentDeclarationRegion {
@@ -1008,8 +992,7 @@ struct Instance {
   bool vhdl_configuration_instance{};
   // Compilation-directive state at the instance declaration. Pull values
   // apply only to omitted input ports.
-  VerilogUnconnectedDrive unconnected_drive{
-      VerilogUnconnectedDrive::None};
+  VerilogUnconnectedDrive unconnected_drive{VerilogUnconnectedDrive::None};
   SourceSpan span;
 };
 
@@ -1043,6 +1026,15 @@ struct VhdlWaveformElement {
   Expression value;
   std::optional<Delay> delay;
   bool disconnect{};
+  SourceSpan span;
+};
+
+struct VhdlDisconnectionSpecification {
+  std::vector<std::string> signals;
+  std::string type_mark;
+  Delay delay;
+  bool all{};
+  bool others{};
   SourceSpan span;
 };
 
@@ -1123,7 +1115,8 @@ enum class OutputFormat {
   Decimal,
   Character,
   String,
-  RealScientific, RealFixed,
+  RealScientific,
+  RealFixed,
   RealGeneral,
   Hierarchy,
   Time,
@@ -1234,6 +1227,12 @@ struct Statement {
   // A concurrent guarded assignment retains the keyword plus the implicit
   // block GUARD expression attached during generated-scope expansion.
   bool vhdl_guarded_assignment{};
+  // A postponed concurrent assertion or procedure call executes in the same
+  // read-only region as a postponed process.
+  bool vhdl_postponed{};
+  // Delay selected by a declarative VHDL disconnection specification. This
+  // is independent of the guarded assignment's ordinary waveform delay.
+  std::optional<Delay> vhdl_disconnection_delay;
   Expression vhdl_guard;
   // Verilog/SystemVerilog intra-assignment timing. The associated `delay` or
   // `sensitivities` payload is distinct from statement-level timing controls.
@@ -1245,8 +1244,7 @@ struct Statement {
   // SystemVerilog update syntax remains explicit even though `value` retains
   // the normalized binary expression used by older consumers. Elaboration
   // uses this metadata to capture the lvalue once for read-modify-write.
-  ProceduralUpdateKind procedural_update_kind{
-      ProceduralUpdateKind::None};
+  ProceduralUpdateKind procedural_update_kind{ProceduralUpdateKind::None};
   std::string procedural_update_operator;
   std::optional<Delay> delay;
   // A SystemVerilog ## control counts occurrences of the enclosing/default
@@ -1271,6 +1269,9 @@ struct Statement {
   // assignments from the Verilog/SystemVerilog frontends leave this empty.
   std::optional<VhdlDelayMechanism> vhdl_delay_mechanism;
   std::optional<Delay> vhdl_rejection_limit;
+  // VHDL force/release `out` mode targets this process-owned driver rather
+  // than the signal's effective value. Default and `in` leave this false.
+  bool vhdl_force_driving_value{};
   // VHDL signal-assignment leaves preserve their complete ordered waveform.
   // `value` and `delay` mirror the first element for source compatibility
   // with consumers that have not yet opted into the multi-element form.
@@ -1356,6 +1357,7 @@ struct ProcedureDeclaration;
 
 struct Process {
   ProcessKind kind{ProcessKind::VhdlProcess};
+  bool vhdl_postponed{};
   std::string name;
   std::vector<ParameterDeclaration> constants;
   std::vector<TypeAliasDeclaration> type_aliases;
@@ -1367,6 +1369,8 @@ struct Process {
   std::vector<Sensitivity> sensitivities;
   std::vector<Statement> statements;
   SourceSpan span;
+  std::vector<VhdlAttributeDeclaration> vhdl_attributes;
+  std::vector<VhdlGroupDeclaration> vhdl_groups;
 };
 
 /// Typed source-level HDL function.
@@ -1400,6 +1404,8 @@ struct FunctionDeclaration {
   // Nonempty on an elaboration copy made visible through a package. Used to
   // distinguish use-visible homographs from duplicates in one local region.
   std::string visibility_owner;
+  std::vector<VhdlAttributeDeclaration> vhdl_attributes;
+  std::vector<VhdlGroupDeclaration> vhdl_groups;
 };
 
 struct TaskArgument {
@@ -1411,13 +1417,10 @@ struct TaskArgument {
   std::optional<Expression> default_value;
 
   TaskArgument() = default;
-  TaskArgument(
-      std::string argument_name,
-      Type argument_type,
-      PortDirection argument_direction,
-      SourceSpan argument_span,
-      bool argument_reference = false,
-      std::optional<Expression> argument_default = std::nullopt)
+  TaskArgument(std::string argument_name, Type argument_type,
+               PortDirection argument_direction, SourceSpan argument_span,
+               bool argument_reference = false,
+               std::optional<Expression> argument_default = std::nullopt)
       : name(std::move(argument_name)), type(std::move(argument_type)),
         direction(argument_direction), span(std::move(argument_span)),
         reference(argument_reference),
@@ -1502,16 +1505,14 @@ struct SystemVerilogClassMethod {
   std::string canonical_identity;
   std::string library;
   std::string compilation_unit_identity;
-  SystemVerilogClassMethodKind kind{
-      SystemVerilogClassMethodKind::Function};
+  SystemVerilogClassMethodKind kind{SystemVerilogClassMethodKind::Function};
   Type return_type;
   std::vector<FunctionArgument> arguments;
   std::vector<TypeAliasDeclaration> type_aliases;
   std::vector<VariableDeclaration> variables;
   std::vector<Statement> statements;
   SystemVerilogClassVisibility visibility{SystemVerilogClassVisibility::Public};
-  SystemVerilogClassLifetime lifetime{
-      SystemVerilogClassLifetime::Inherited};
+  SystemVerilogClassLifetime lifetime{SystemVerilogClassLifetime::Inherited};
   bool is_static{};
   bool is_virtual{};
   bool is_pure{};
@@ -1526,8 +1527,7 @@ struct SystemVerilogClassConstraint {
   std::string name;
   std::string canonical_identity;
   std::vector<Expression> expressions;
-  SystemVerilogClassVisibility visibility{
-      SystemVerilogClassVisibility::Public};
+  SystemVerilogClassVisibility visibility{SystemVerilogClassVisibility::Public};
   bool is_static{};
   bool is_pure{};
   bool is_extern{};
@@ -1535,4 +1535,4 @@ struct SystemVerilogClassConstraint {
   SourceSpan span;
 };
 
-}  // namespace fsim::frontend
+} // namespace fsim::frontend

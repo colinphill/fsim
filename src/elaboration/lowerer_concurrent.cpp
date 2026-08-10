@@ -35,6 +35,7 @@ Process Lowerer::lower_concurrent(
   local_scope_.clear();
   loop_controls_.clear();
   process_.id = static_cast<ProcessId>(design_.processes_.size());
+  process_.postponed = statement.vhdl_postponed;
   process_.name = name + "."
       + (statement.label.empty()
              ? "concurrent_" + std::to_string(order)
@@ -151,10 +152,14 @@ Process Lowerer::lower_concurrent(
         disconnect.vhdl_guarded_assignment = false;
         disconnect.vhdl_unaffected = false;
         disconnect.value = {};
+        disconnect.delay = statement.vhdl_disconnection_delay;
         disconnect.vhdl_waveform.clear();
         disconnect.vhdl_waveform.push_back(
             frontend::VhdlWaveformElement{
-                {}, source->delay, true, source->span});
+                {},
+                statement.vhdl_disconnection_delay,
+                true,
+                source->span});
         lower_assignment(disconnect);
       } else {
         report(

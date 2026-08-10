@@ -438,6 +438,8 @@ struct Interpreter::Impl {
   std::vector<PackedLogic4> driven_values;
   std::vector<std::map<ProcessId, PackedLogic4>> driver_values;
   std::vector<std::map<ProcessId, DriveStrength>> driver_strengths;
+  std::vector<std::map<ProcessId, PackedLogic4>> forced_driver_values;
+  std::vector<std::map<ProcessId, PackedLogic4>> forced_driver_masks;
   std::vector<std::optional<PackedLogic4>> external_driver_values;
   std::vector<std::optional<ScheduledTaskHandle>> charge_decay_handles;
   std::vector<std::optional<PackedLogic4>> charge_values;
@@ -775,6 +777,21 @@ struct Interpreter::Impl {
   void release_slice(
       SignalId signal_id, std::size_t offset, std::size_t width);
 
+  [[nodiscard]] PackedLogic4 apply_driver_force(
+      SignalId signal_id, ProcessId process, PackedLogic4 value) const;
+
+  [[nodiscard]] Logic4 driver_force_logic4_at(
+      SignalId signal_id, ProcessId process,
+      const PackedLogic4& value, std::size_t bit) const;
+
+  void force_driver_slice(
+      ProcessId process, SignalId signal_id,
+      PackedLogic4 value, std::size_t offset);
+
+  void release_driver_slice(
+      ProcessId process, SignalId signal_id,
+      std::size_t offset, std::size_t width);
+
   void commit(SignalId signal_id, PackedLogic4 value);
 
   void refresh_switch_network();
@@ -820,9 +837,12 @@ struct Interpreter::Impl {
       const SignalId signal_id,
       PackedLogic4 value);
 
-  [[nodiscard]] const PackedLogic4& current_driver_value(
+  [[nodiscard]] PackedLogic4 current_driver_value(
       const ProcessId process,
       const SignalId signal_id) const;
+
+  [[nodiscard]] PackedLogic4 underlying_driver_value(
+      ProcessId process, SignalId signal_id) const;
 
   void commit_slice(
       const SignalId signal_id,

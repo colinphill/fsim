@@ -159,10 +159,14 @@ architecture rtl of statement_inventory is
 begin
   direct_write: result <= source;
   direct_call: tick(result);
+  postponed_assert: postponed assert result = result;
+  postponed_call: postponed tick(result);
   generated: if true generate
     generated_select: with selector select
       result <= source when '1', '0' when others;
     generated_call: tick(result);
+    generated_postponed_assert: postponed assert result = result;
+    generated_postponed_call: postponed tick(result);
   end generate generated;
   reactive: process(all)
   begin
@@ -184,6 +188,10 @@ begin
     end case choice;
     suspended: wait;
   end process worker;
+  observer: postponed process(result)
+  begin
+    null;
+  end postponed process observer;
 end architecture;
 )",
       Language::Vhdl2008);
@@ -192,7 +200,7 @@ end architecture;
       "labeled sequential/concurrent statement inventory must parse");
   const auto& inventory_unit = inventory.design.units.front();
   require(
-      inventory_unit.concurrent_statements.size() == 2
+      inventory_unit.concurrent_statements.size() == 4
           && inventory_unit.concurrent_statements[0].label
               == "direct_write"
           && inventory_unit.concurrent_statements[0]
@@ -201,22 +209,32 @@ end architecture;
           && inventory_unit.concurrent_statements[1].label
               == "direct_call"
           && inventory_unit.concurrent_statements[1].kind
-              == StatementKind::ProcedureCall,
-      "labeled concurrent assignment and procedure-call HIR");
+              == StatementKind::ProcedureCall
+          && inventory_unit.concurrent_statements[2].label
+              == "postponed_assert"
+          && inventory_unit.concurrent_statements[2].vhdl_postponed
+          && inventory_unit.concurrent_statements[3].label
+              == "postponed_call"
+          && inventory_unit.concurrent_statements[3].vhdl_postponed,
+      "ordinary and postponed concurrent statement HIR");
   require(
       inventory_unit.generate_regions.size() == 1
           && inventory_unit.generate_regions.front()
                  .then_body.concurrent_statements.size()
-              == 2
+              == 4
           && inventory_unit.generate_regions.front()
                  .then_body.concurrent_statements[0].label
               == "generated_select"
           && inventory_unit.generate_regions.front()
                  .then_body.concurrent_statements[1].label
-              == "generated_call",
-      "generated selected assignment and procedure-call HIR");
+              == "generated_call"
+          && inventory_unit.generate_regions.front()
+                 .then_body.concurrent_statements[2].vhdl_postponed
+          && inventory_unit.generate_regions.front()
+                 .then_body.concurrent_statements[3].vhdl_postponed,
+      "generated ordinary and postponed concurrent statement HIR");
   require(
-      inventory_unit.processes.size() == 2
+      inventory_unit.processes.size() == 3
           && inventory_unit.processes[0].name == "reactive"
           && inventory_unit.processes[0].sensitivities.size() == 1
           && inventory_unit.processes[0].sensitivities.front().signal
@@ -224,8 +242,10 @@ end architecture;
           && inventory_unit.processes[1].name == "worker"
           && inventory_unit.processes[1].span.begin.offset
               < inventory_unit.processes[1].statements.front()
-                    .span.begin.offset,
-      "process(all), opening/end label, and complete source span");
+                    .span.begin.offset
+          && inventory_unit.processes[2].name == "observer"
+          && inventory_unit.processes[2].vhdl_postponed,
+      "process(all), postponed process, labels, and complete source span");
   const auto& sequential =
       inventory_unit.processes[1].statements;
   require(
@@ -250,6 +270,25 @@ end architecture;
               == "fallback_null"
           && sequential[4].label == "suspended",
       "labeled sequential selected/if/case/simple statement HIR");
+
+  const auto invalid_postponed = parse_text(
+      "invalid_postponed.vhd",
+      R"(
+architecture rtl of invalid_postponed is
+  signal result : std_logic;
+begin
+  postponed result <= '1';
+end architecture;
+)",
+      Language::Vhdl2008);
+  require(
+      !invalid_postponed.ok()
+          && std::ranges::any_of(
+              invalid_postponed.diagnostics,
+              [](const auto& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-104";
+              }),
+      "postponed must reject ineligible concurrent statements");
 
   const auto bad_end_labels = parse_text(
       "bad_statement_end_labels.vhd",
@@ -378,21 +417,35 @@ end architecture;
       R"(architecture rtl of guarded_assignments is
   signal enabled : boolean; signal selector, source, result : std_logic;
 begin
-  scope: block (enabled) begin
+  scope: block (enabled) is
+    signal local_explicit, local_other : std_logic;
+    disconnect local_explicit : std_logic after 2 ns;
+    disconnect others : std_logic after 3 ns;
+  begin
     simple: result <= guarded transport null after 1 ns,
                                       source after 3 ns;
     result <= guarded source when enabled else null;
     with selector select result <= guarded reject 1 ns inertial
       source after 2 ns when '1', null after 2 ns when others;
+    local_explicit <= guarded source;
+    local_other <= guarded source;
   end block scope;
+  all_scope: block (enabled) is
+    signal local_all : std_logic;
+    disconnect all : std_logic after 4 ns;
+  begin
+    local_all <= guarded source;
+  end block all_scope;
   process begin result <= guarded source; wait; end process;
 end architecture;)",
       Language::Vhdl2008);
   const auto& guarded_body =
       guarded.design.units.front().generate_regions.front().then_body;
+  const auto& all_body =
+      guarded.design.units.front().generate_regions[1].then_body;
   require(
       !guarded.ok()
-          && guarded_body.concurrent_statements.size() == 3
+          && guarded_body.concurrent_statements.size() == 5
           && guarded_body.concurrent_statements[0]
                  .vhdl_guarded_assignment
           && guarded_body.concurrent_statements[0]
@@ -408,12 +461,54 @@ end architecture;)",
           && guarded_body.concurrent_statements[2]
                  .case_alternatives.back().statements.front()
                  .vhdl_waveform.front().disconnect
+          && guarded_body.concurrent_statements[3]
+                 .vhdl_disconnection_delay
+          && guarded_body.concurrent_statements[3]
+                 .vhdl_disconnection_delay->magnitude == 2
+          && guarded_body.concurrent_statements[4]
+                 .vhdl_disconnection_delay
+          && guarded_body.concurrent_statements[4]
+                 .vhdl_disconnection_delay->magnitude == 3
+          && all_body.concurrent_statements.size() == 1
+          && all_body.concurrent_statements.front()
+                 .vhdl_disconnection_delay
+          && all_body.concurrent_statements.front()
+                 .vhdl_disconnection_delay->magnitude == 4
           && std::ranges::any_of(
               guarded.diagnostics,
               [](const Diagnostic& diagnostic) {
                 return diagnostic.code == "FSIM-VHDL-SEM-087";
               }),
       "guarded simple, conditional, selected, null, and context HIR");
+
+  const auto invalid_disconnections = parse_text(
+      "invalid_disconnections.vhd",
+      R"(architecture rtl of invalid_disconnections is
+  signal enabled : boolean;
+begin
+  scope: block (enabled) is
+    signal value : std_logic;
+    disconnect value : integer after 1 ns;
+    disconnect all : std_logic after 2 ns;
+    disconnect all : std_logic after 3 ns;
+  begin
+    value <= guarded '1';
+  end block scope;
+end architecture;)",
+      Language::Vhdl2008);
+  require(
+      !invalid_disconnections.ok()
+          && std::ranges::any_of(
+              invalid_disconnections.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-105";
+              })
+          && std::ranges::any_of(
+              invalid_disconnections.diagnostics,
+              [](const Diagnostic& diagnostic) {
+                return diagnostic.code == "FSIM-VHDL-SEM-106";
+              }),
+      "disconnection type mismatch and overlapping selections are targeted");
 
   const auto malformed = parse_text(
       "bad_delay_mechanisms.vhd",
@@ -462,6 +557,8 @@ begin
   begin
     result(1 downto 0) <=
         inertial "10" after 2 ns, "01" after 5 ns;
+    result <= force out "11";
+    result <= release out;
     wait;
   end process;
 end architecture;
@@ -507,6 +604,16 @@ end architecture;
                  .target.kind
               == ExpressionKind::Slice,
       "sequential slice waveform HIR");
+  require(
+      unit.processes[0].statements.size() == 4
+          && unit.processes[0].statements[1].kind
+              == StatementKind::Force
+          && unit.processes[0].statements[1].value.text == "\"11\""
+          && unit.processes[0].statements[1].vhdl_force_driving_value
+          && unit.processes[0].statements[2].kind
+              == StatementKind::Release
+          && unit.processes[0].statements[2].vhdl_force_driving_value,
+      "sequential VHDL force and release retain executable statement HIR");
 
   const auto malformed = parse_text(
       "malformed_waveforms.vhd",
@@ -1007,7 +1114,12 @@ package constants is
   constant next_value : integer := width + 1;
   constant enabled : boolean := true;
   constant initial_bit : bit := '1';
+  constant deferred_vector : bit_vector(256 downto 0);
 end package constants;
+
+package body constants is
+  constant deferred_vector : bit_vector(256 downto 0) := (others => '0');
+end package body constants;
 
 use work.constants.all;
 entity package_user is
@@ -1016,13 +1128,13 @@ end entity package_user;
       Language::Vhdl2008);
   require(parsed.ok(), "bounded VHDL package constants must parse");
   require(
-      parsed.design.units.size() == 2,
-      "package and following entity are retained");
+      parsed.design.units.size() == 3,
+      "package, package body, and following entity are retained");
   const auto& package = parsed.design.units[0];
   require(
       package.kind == UnitKind::VhdlPackage
           && package.name == "constants"
-          && package.parameters.size() == 5,
+          && package.parameters.size() == 6,
       "package declaration records each constant");
   require(
       package.parameters[0].name == "width"
@@ -1032,16 +1144,18 @@ end entity package_user;
           && package.parameters[3].type.domain
               == ValueDomain::Boolean
           && package.parameters[4].type.domain
-              == ValueDomain::Bit2,
-      "package constant names, expressions, and scalar types survive");
+              == ValueDomain::Bit2
+          && package.parameters[5].vhdl_deferred
+          && package.parameters[5].type.width() == 257,
+      "package constants retain scalar, arbitrary-width, and deferred forms");
   require(
       package.vhdl_context.size() == 1
           && package.vhdl_context.front().kind
               == VhdlContextItemKind::LibraryClause,
       "package retains its own context");
   require(
-      parsed.design.units[1].vhdl_context.size() == 1
-          && parsed.design.units[1]
+      parsed.design.units[2].vhdl_context.size() == 1
+          && parsed.design.units[2]
                  .vhdl_context.front()
                  .selected_names.front()
               == "work.constants.all",
@@ -1088,6 +1202,9 @@ package invalid_constants is
   constant missing : natural;
   constant vector_value : bit_vector(3 downto 0) := "0000";
 end package invalid_constants;
+package body invalid_constants is
+  constant missing : natural;
+end package body invalid_constants;
 )",
       Language::Vhdl2008);
   require(!invalid.ok(), "invalid package constants must fail");
@@ -1102,7 +1219,7 @@ end package invalid_constants;
   require(
       has_code("FSIM-VHDL-SEM-020")
           && has_code("FSIM-VHDL-PARSE-088")
-          && has_code("FSIM-VHDL-UNSUPPORTED-023"),
+          && !has_code("FSIM-VHDL-UNSUPPORTED-023"),
       "invalid package constants have targeted diagnostics");
 
   const auto body = parse_text(

@@ -125,6 +125,124 @@ void Interpreter::Impl::release_slice(
       apply_force(signal_id, driven_values[signal_id]));
 }
 
+PackedLogic4 Interpreter::Impl::apply_driver_force(
+    const SignalId signal_id,
+    const ProcessId process,
+    PackedLogic4 value) const {
+  const auto forced = forced_driver_values.at(signal_id).find(process);
+  if (forced == forced_driver_values.at(signal_id).end()) {
+    return value;
+  }
+  const auto mask = forced_driver_masks.at(signal_id).find(process);
+  if (mask == forced_driver_masks.at(signal_id).end()) {
+    throw std::logic_error{"forced driver has no force mask"};
+  }
+  for (std::size_t bit = 0; bit < value.width(); ++bit) {
+    if (mask->second.get(bit) != Logic4::one) {
+      continue;
+    }
+    if (value.is_logic9()) {
+      value.set_logic9(bit, forced->second.get_logic9(bit));
+    } else {
+      value.set(bit, forced->second.get(bit));
+    }
+  }
+  return value;
+}
+
+Logic4 Interpreter::Impl::driver_force_logic4_at(
+    const SignalId signal_id,
+    const ProcessId process,
+    const PackedLogic4& value,
+    const std::size_t bit) const {
+  const auto forced = forced_driver_values.at(signal_id).find(process);
+  if (forced == forced_driver_values.at(signal_id).end()) {
+    return value.get(bit);
+  }
+  const auto mask = forced_driver_masks.at(signal_id).find(process);
+  if (mask == forced_driver_masks.at(signal_id).end()) {
+    throw std::logic_error{"forced driver has no force mask"};
+  }
+  return mask->second.get(bit) == Logic4::one
+      ? forced->second.get(bit)
+      : value.get(bit);
+}
+
+void Interpreter::Impl::force_driver_slice(
+    const ProcessId process,
+    const SignalId signal_id,
+    PackedLogic4 value,
+    const std::size_t offset) {
+  const auto& signal = get_signal(signal_id);
+  if (offset > signal.initial_value.width()
+      || value.width() > signal.initial_value.width() - offset) {
+    throw std::invalid_argument{
+        "SimIR driver force slice is out of range"};
+  }
+  if (signal.resolution == ResolutionKind::none) {
+    force_slice(signal_id, std::move(value), offset);
+    return;
+  }
+  value = coerce_value_kind(std::move(value), signal.value_kind);
+  auto& forced = forced_driver_values.at(signal_id);
+  auto& masks = forced_driver_masks.at(signal_id);
+  auto [forced_entry, inserted] = forced.try_emplace(
+      process, driver_slot(process, signal_id));
+  if (inserted) {
+    masks.emplace(
+        process,
+        PackedLogic4{signal.initial_value.width(), Logic4::zero});
+  }
+  forced_entry->second = insert_value(
+      std::move(forced_entry->second), value, offset);
+  auto& mask = masks.at(process);
+  for (std::size_t bit = 0; bit < value.width(); ++bit) {
+    mask.set(offset + bit, Logic4::one);
+  }
+  auto resolved = resolved_driver_value(signal_id);
+  driven_values[signal_id] = resolved;
+  publish(signal_id, apply_force(signal_id, std::move(resolved)));
+}
+
+void Interpreter::Impl::release_driver_slice(
+    const ProcessId process,
+    const SignalId signal_id,
+    const std::size_t offset,
+    const std::size_t width) {
+  const auto& signal = get_signal(signal_id);
+  if (offset > signal.initial_value.width()
+      || width > signal.initial_value.width() - offset) {
+    throw std::invalid_argument{
+        "SimIR driver release slice is out of range"};
+  }
+  if (signal.resolution == ResolutionKind::none) {
+    release_slice(signal_id, offset, width);
+    return;
+  }
+  auto& forced = forced_driver_values.at(signal_id);
+  auto& masks = forced_driver_masks.at(signal_id);
+  const auto forced_entry = forced.find(process);
+  const auto mask_entry = masks.find(process);
+  if (forced_entry == forced.end() || mask_entry == masks.end()) {
+    return;
+  }
+  for (std::size_t bit = 0; bit < width; ++bit) {
+    mask_entry->second.set(offset + bit, Logic4::zero);
+  }
+  bool any_forced = false;
+  for (std::size_t bit = 0; bit < signal.initial_value.width(); ++bit) {
+    any_forced = any_forced
+        || mask_entry->second.get(bit) == Logic4::one;
+  }
+  if (!any_forced) {
+    forced.erase(forced_entry);
+    masks.erase(mask_entry);
+  }
+  auto resolved = resolved_driver_value(signal_id);
+  driven_values[signal_id] = resolved;
+  publish(signal_id, apply_force(signal_id, std::move(resolved)));
+}
+
 [[nodiscard]] PackedLogic4 Interpreter::Impl::initial_driver_value(
     const SignalId signal_id) const  {
     const auto& signal = get_signal(signal_id);
@@ -177,13 +295,16 @@ PackedLogic4& Interpreter::Impl::driver_slot(
     };
     std::vector<PackedLogic4> drivers;
     std::vector<DriverContribution> strength_drivers;
-    drivers.reserve(values.size());
+    drivers.reserve(
+        values.size()
+        + (external_driver_values.at(signal_id) ? 1U : 0U));
     strength_drivers.reserve(
         values.size() + (external_driver_values.at(signal_id) ? 1U : 0U));
     for (const auto& [process, value] : values) {
-      drivers.push_back(value);
+      drivers.push_back(
+          apply_driver_force(signal_id, process, value));
       strength_drivers.push_back({
-          &value, driver_strengths.at(signal_id).at(process)});
+          &drivers.back(), driver_strengths.at(signal_id).at(process)});
     }
     if (external_driver_values.at(signal_id)) {
       drivers.push_back(
@@ -499,8 +620,9 @@ DriveStrength Interpreter::Impl::resolved_signal_strength(
   }
   for (const auto& [process, value] : driver_values.at(signal_id)) {
     const auto strength = driver_strengths.at(signal_id).at(process);
-    for (std::size_t bit = 0; bit < value.width(); ++bit) {
-      include(value.get(bit), strength);
+    const auto effective = apply_driver_force(signal_id, process, value);
+    for (std::size_t bit = 0; bit < effective.width(); ++bit) {
+      include(effective.get(bit), strength);
     }
   }
   if (external_driver_values.at(signal_id)) {
@@ -659,7 +781,8 @@ void Interpreter::Impl::commit_resolved(
     };
     for (const auto& [process, driver] : driver_values.at(signal_id)) {
       if (contributes(
-              driver.get(bit),
+              driver_force_logic4_at(
+                  signal_id, process, driver, bit),
               driver_strengths.at(signal_id).at(process))) {
         return true;
       }
@@ -706,7 +829,8 @@ void Interpreter::Impl::commit_resolved(
         const auto active = [&](const std::size_t bit) {
           for (const auto& [process, driver] :
                driver_values.at(signal_id)) {
-            const auto logic = driver.get(bit);
+            const auto logic = driver_force_logic4_at(
+                signal_id, process, driver, bit);
             const auto strength =
                 driver_strengths.at(signal_id).at(process);
             if ((logic == Logic4::zero
@@ -730,21 +854,33 @@ void Interpreter::Impl::commit_resolved(
       });
 }
 
-[[nodiscard]] const PackedLogic4& Interpreter::Impl::current_driver_value(
+[[nodiscard]] PackedLogic4 Interpreter::Impl::underlying_driver_value(
     const ProcessId process,
-    const SignalId signal_id) const  {
+    const SignalId signal_id) const
+{
     if (get_signal(signal_id).resolution
         == ResolutionKind::none) {
-      return driven_values.at(signal_id);
+        return driven_values.at(signal_id);
     }
     const auto& values = driver_values.at(signal_id);
     const auto found = values.find(process);
     if (found == values.end()) {
-      throw std::out_of_range(
-          "process has no driver slot for SimIR signal");
+        throw std::out_of_range(
+            "process has no driver slot for SimIR signal");
     }
     return found->second;
-  }
+}
+
+[[nodiscard]] PackedLogic4 Interpreter::Impl::current_driver_value(
+    const ProcessId process,
+    const SignalId signal_id) const
+{
+    auto value = underlying_driver_value(process, signal_id);
+    if (get_signal(signal_id).resolution == ResolutionKind::none) {
+        return apply_force(signal_id, std::move(value));
+    }
+    return apply_driver_force(signal_id, process, std::move(value));
+}
 
 void Interpreter::Impl::commit_slice(
     const SignalId signal_id,

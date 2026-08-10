@@ -103,12 +103,49 @@ class Lexer {
                    std::move(message), span(begin, current_location()), {}});
   }
 
+  [[nodiscard]] bool vhdl_psl_comment() const noexcept {
+    if (!is_vhdl() || peek() != '-' || peek(1) != '-') {
+      return false;
+    }
+    std::size_t offset = 2;
+    while (peek(offset) == ' ' || peek(offset) == '\t') {
+      ++offset;
+    }
+    const auto lower = [](const char value) {
+      return static_cast<char>(
+          std::tolower(static_cast<unsigned char>(value)));
+    };
+    if (lower(peek(offset)) != 'p' || lower(peek(offset + 1)) != 's'
+        || lower(peek(offset + 2)) != 'l') {
+      return false;
+    }
+    const auto following = peek(offset + 3);
+    return following == '\0' || following == ' ' || following == '\t'
+        || following == '\r' || following == '\n';
+  }
+
+  void lex_vhdl_psl_directive() {
+    const auto begin = current_location();
+    advance();
+    advance();
+    while (peek() == ' ' || peek() == '\t') {
+      advance();
+    }
+    advance();
+    advance();
+    advance();
+    emit(TokenKind::PslDirective, begin);
+  }
+
   void skip_trivia() {
     for (;;) {
       while (std::isspace(static_cast<unsigned char>(peek()))) {
         advance();
       }
       if (is_vhdl() && peek() == '-' && peek(1) == '-') {
+        if (vhdl_psl_comment()) {
+          return;
+        }
         while (!at_end() && peek() != '\n' && peek() != '\r') {
           advance();
         }
@@ -127,19 +164,38 @@ class Lexer {
         }
         continue;
       }
-      if (!is_vhdl() && peek() == '/' && peek(1) == '*') {
+      if (peek() == '/' && peek(1) == '*') {
         const auto begin = current_location();
         advance();
         advance();
-        while (!at_end() && !(peek() == '*' && peek(1) == '/')) {
+        std::size_t depth = 1;
+        bool nesting_reported = false;
+        while (!at_end() && depth != 0) {
+          if (is_vhdl() && peek() == '/' && peek(1) == '*') {
+            advance();
+            advance();
+            ++depth;
+            if (depth > 64 && !nesting_reported) {
+              diagnose(
+                  "FSIM-FE-LEX-007",
+                  "VHDL block-comment nesting exceeds 64 levels",
+                  begin);
+              nesting_reported = true;
+            }
+            continue;
+          }
+          if (peek() == '*' && peek(1) == '/') {
+            advance();
+            advance();
+            --depth;
+            continue;
+          }
           advance();
         }
-        if (at_end()) {
+        if (depth != 0) {
           diagnose("FSIM-FE-LEX-002", "unterminated block comment", begin);
           return;
         }
-        advance();
-        advance();
         continue;
       }
       return;
@@ -164,6 +220,18 @@ class Lexer {
     while (identifier_continue(peek(), !is_vhdl())) {
       advance();
     }
+    if (is_vhdl()) {
+      const auto text = source_.text.substr(
+          begin.offset, current_location().offset - begin.offset);
+      if (text.front() == '_' || text.back() == '_'
+          || text.find("__") != std::string::npos) {
+        diagnose(
+            "FSIM-FE-LEX-005",
+            "a VHDL basic identifier must start with a letter and cannot "
+            "contain adjacent or trailing underscores",
+            begin);
+      }
+    }
     emit(TokenKind::Identifier, begin);
   }
 
@@ -175,18 +243,34 @@ class Lexer {
       emit(TokenKind::Identifier, begin);
       return;
     }
-    while (!at_end() && peek() != '\\' &&
-           (!is_vhdl() || (peek() != '\n' && peek() != '\r'))) {
+    bool content = false;
+    while (!at_end()
+           && (!is_vhdl() || (peek() != '\n' && peek() != '\r'))) {
       if (!is_vhdl() &&
           std::isspace(static_cast<unsigned char>(peek()))) {
         break;
       }
+      if (peek() == '\\') {
+        if (is_vhdl() && peek(1) == '\\') {
+          advance();
+          advance();
+          content = true;
+          continue;
+        }
+        break;
+      }
       advance();
+      content = true;
     }
     if (is_vhdl()) {
       if (!consume_if('\\')) {
         diagnose("FSIM-FE-LEX-003", "unterminated extended identifier",
                  begin);
+      } else if (!content) {
+        diagnose(
+            "FSIM-FE-LEX-006",
+            "a VHDL extended identifier cannot be empty",
+            begin);
       }
     }
     emit(TokenKind::Identifier, begin);
@@ -330,6 +414,10 @@ class Lexer {
   void lex_one() {
     const auto begin = current_location();
     const char character = peek();
+    if (vhdl_psl_comment()) {
+      lex_vhdl_psl_directive();
+      return;
+    }
     if (identifier_start(character, !is_vhdl())) {
       lex_identifier();
       return;
@@ -629,6 +717,8 @@ const char* to_string(TokenKind kind) noexcept {
       return "'?'";
     case TokenKind::Backtick:
       return "'`'";
+    case TokenKind::PslDirective:
+      return "VHDL PSL comment marker";
     case TokenKind::Assign:
       return "'='";
     case TokenKind::Less:

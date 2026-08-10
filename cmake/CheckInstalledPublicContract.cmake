@@ -64,6 +64,9 @@ set(FSIM_EXPECTED_PATHS
   "${FSIM_STAGE}/${FSIM_DOCDIR}/systemverilog-uvm.md"
   "${FSIM_STAGE}/${FSIM_DOCDIR}/uvm-tutorial.md"
   "${FSIM_STAGE}/${FSIM_DOCDIR}/uvm-closure-audit.md"
+  "${FSIM_STAGE}/${FSIM_DOCDIR}/vhdl-psl.md"
+  "${FSIM_STAGE}/${FSIM_DOCDIR}/vhdl-psl-tutorial.md"
+  "${FSIM_STAGE}/${FSIM_DOCDIR}/vhdl-psl-closure-audit.md"
   "${FSIM_STAGE}/${FSIM_DOCDIR}/v1-release-audit.md"
   "${FSIM_STAGE}/share/fsim/vhdl/ieee-1076-2019/SHA256SUMS"
 )
@@ -113,6 +116,21 @@ if(NOT FSIM_HELP_RESULT EQUAL 0
   message(FATAL_ERROR
     "installed alias help contract failed with ${FSIM_HELP_RESULT}\n"
     "${FSIM_HELP_OUTPUT}${FSIM_HELP_ERROR}")
+endif()
+
+execute_process(
+  COMMAND
+    "${FSIM_STAGE}/${FSIM_BINDIR}/${FSIM_VHDL_EXECUTABLE_NAME}"
+    --help
+  RESULT_VARIABLE FSIM_VHDL_HELP_RESULT
+  OUTPUT_VARIABLE FSIM_VHDL_HELP_OUTPUT
+  ERROR_VARIABLE FSIM_VHDL_HELP_ERROR
+)
+if(NOT FSIM_VHDL_HELP_RESULT EQUAL 0
+    OR NOT FSIM_VHDL_HELP_OUTPUT MATCHES "^Usage: fsim-vhdl")
+  message(FATAL_ERROR
+    "installed VHDL alias help contract failed with ${FSIM_VHDL_HELP_RESULT}\n"
+    "${FSIM_VHDL_HELP_OUTPUT}${FSIM_VHDL_HELP_ERROR}")
 endif()
 
 execute_process(

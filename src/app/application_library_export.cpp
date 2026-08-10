@@ -51,6 +51,8 @@ std::string unit_kind(const frontend::UnitKind kind) {
       return "package";
     case frontend::UnitKind::VhdlContext:
       return "context";
+    case frontend::UnitKind::VhdlPslVerificationUnit:
+      return "psl-verification-unit";
     case frontend::UnitKind::SystemVerilogPackage:
       return "package";
     case frontend::UnitKind::SystemVerilogInterface:

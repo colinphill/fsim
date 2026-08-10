@@ -709,6 +709,39 @@ std::optional<Statement> VhdlParser::parse_assignment(bool concurrent) {
   statement.kind = StatementKind::Assignment;
   statement.assignment_kind = kind;
   statement.target = std::move(target);
+  if (kind != AssignmentKind::Blocking
+      && (keyword("force", 0, true)
+          || keyword("release", 0, true))) {
+    const auto operation = advance();
+    const bool force = vhdl_name(operation.text) == "force";
+    statement.kind = force ? StatementKind::Force
+                           : StatementKind::Release;
+    if (concurrent) {
+      error(operation, "FSIM-VHDL-SEM-102",
+            "VHDL force and release assignments are sequential statements");
+    }
+    if (match_keyword("in", true)) {
+      // The default and explicit in modes both force the effective value.
+    } else if (match_keyword("out", true)) {
+      statement.vhdl_force_driving_value = true;
+    }
+    if (force) {
+      if (at(TokenKind::Semicolon)) {
+        error(current(), "FSIM-VHDL-PARSE-280",
+              "a VHDL force assignment requires a forcing expression");
+      } else {
+        statement.value = parse_expression();
+      }
+    } else if (!at(TokenKind::Semicolon)) {
+      error(current(), "FSIM-VHDL-PARSE-281",
+            "a VHDL release assignment has no expression");
+      (void)parse_expression();
+    }
+    expect(TokenKind::Semicolon, "';' after VHDL force or release assignment",
+           "FSIM-VHDL-PARSE-282");
+    statement.span = span_from(start, previous());
+    return statement;
+  }
   if (kind != AssignmentKind::Blocking) {
     if (match_keyword("guarded", true)) {
       statement.vhdl_guarded_assignment = true;
@@ -790,7 +823,7 @@ Statement VhdlParser::parse_vhdl_selected_assignment(
     assignment.vhdl_guarded_assignment =
         common_assignment.vhdl_guarded_assignment;
     if (assignment_kind == AssignmentKind::Blocking) {
-      assignment.value = parse_expression();
+      assignment.value = parse_expression(0, false);
       diagnose_misplaced_vhdl_delay_mechanism();
     } else {
       parse_vhdl_waveform(assignment);
@@ -933,7 +966,7 @@ void VhdlParser::parse_vhdl_waveform(Statement& statement) {
       element.value = Expression{
           ExpressionKind::IntegerLiteral, "0", {}, current().span};
     } else {
-      element.value = parse_expression();
+      element.value = parse_expression(0, false);
     }
     diagnose_misplaced_vhdl_delay_mechanism();
     if (match_keyword("after", true)) {
@@ -1029,7 +1062,7 @@ Expression VhdlParser::parse_conditional_assignment_value() {
 
 Delay VhdlParser::parse_vhdl_delay(const Token& start) {
   Delay delay;
-  auto expression = parse_expression();
+  auto expression = parse_expression(0, false);
   delay.span = cover(start.span, expression.span);
   constexpr std::string_view physical_prefix{"@vhdl-physical:"};
   if (expression.kind == ExpressionKind::Call

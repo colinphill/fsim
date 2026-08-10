@@ -415,6 +415,7 @@ std::optional<CheckedProject> check_project(
   for (auto& ordered : ordered_units) {
     const auto key = unit_key(ordered.unit);
     if (!known_units.insert(key).second) {
+      report_vhdl_duplicate_design_unit(ordered.unit, diagnostics);
       diagnostics.error(
           "FSIM-FE-0002",
           "duplicate design unit '" + key + "'",
@@ -467,6 +468,7 @@ std::optional<CheckedProject> check_project(
   }
   inject_vhdl_standard_libraries(checked, diagnostics);
   validate_vhdl_analysis_order(checked.parsed.units, diagnostics);
+  validate_vhdl_package_declarations(checked.parsed.units, diagnostics);
   std::vector<frontend::Diagnostic> class_diagnostics;
   (void)frontend::resolve_systemverilog_classes(
       checked.parsed, class_diagnostics);

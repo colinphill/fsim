@@ -704,8 +704,8 @@ end architecture;
         artifact / "fsim-design.bin", relocated / "fsim-design.bin");
     for (const std::string_view payload : {
              "runtime.bin", "semantics.bin", "design-ir.bin",
-             "classes.bin", "sv-constraint-hir.bin", "sv-coverage.bin",
-             "sv-uvm.bin"}) {
+             "classes.bin", "sv-constraint-hir.bin", "vhdl-hir.bin",
+             "sv-coverage.bin", "sv-uvm.bin"}) {
       std::filesystem::copy_file(
           artifact / "state" / payload,
           relocated / "state" / payload);

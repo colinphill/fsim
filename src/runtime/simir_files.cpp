@@ -104,9 +104,13 @@ FileHandle Interpreter::Impl::open_file(
     const ProcessId process,
     const std::string_view path_text,
     const std::string_view mode_text) {
+  if (files.size() >= maximum_open_file_handles) {
+    throw std::length_error{
+        "SimIR file-handle lifetime ceiling is exhausted"};
+  }
   if (file_root.empty()) {
     throw std::runtime_error{
-        "SystemVerilog file access has no configured project root"};
+        "SimIR file access has no configured project root"};
   }
   const bool multichannel =
       mode_text == multichannel_write_mode;
@@ -114,7 +118,7 @@ FileHandle Interpreter::Impl::open_file(
       file_mode(multichannel ? std::string_view{"w"} : mode_text);
   if (!mode) {
     throw std::runtime_error{
-        "unsupported SystemVerilog text file mode '"
+        "unsupported SimIR text file mode '"
         + std::string{mode_text} + "'"};
   }
   std::filesystem::path relative;
@@ -122,17 +126,17 @@ FileHandle Interpreter::Impl::open_file(
     relative = fsim::support::path_from_utf8(path_text).lexically_normal();
   } catch (const std::exception&) {
     throw std::runtime_error{
-        "SystemVerilog filename is not a valid UTF-8 path"};
+        "SimIR filename is not a valid UTF-8 path"};
   }
   if (relative.empty() || relative.is_absolute()
       || relative.has_root_name()) {
     throw std::runtime_error{
-        "SystemVerilog filename must be manifest-root-relative"};
+        "SimIR filename must be manifest-root-relative"};
   }
   for (const auto& component : relative) {
     if (component == "..") {
       throw std::runtime_error{
-          "SystemVerilog filename escapes the manifest root"};
+          "SimIR filename escapes the manifest root"};
     }
   }
   const auto joined = file_root / relative;
@@ -144,7 +148,7 @@ FileHandle Interpreter::Impl::open_file(
       error);
   if (error) {
     throw std::runtime_error{
-        "cannot resolve SystemVerilog filename '"
+        "cannot resolve SimIR filename '"
         + std::string{path_text} + "': " + error.message()};
   }
   if (mode->writable) {
@@ -152,14 +156,14 @@ FileHandle Interpreter::Impl::open_file(
   }
   if (!below_root(file_root, checked)) {
     throw std::runtime_error{
-        "SystemVerilog filename resolves outside the manifest root"};
+        "SimIR filename resolves outside the manifest root"};
   }
 
   auto stream =
       std::make_unique<std::fstream>(checked, mode->flags);
   if (!stream->is_open()) {
     throw std::runtime_error{
-        "cannot open SystemVerilog text file '"
+        "cannot open SimIR text file '"
         + std::string{path_text} + "' in mode '"
         + std::string{mode_text} + "'"};
   }
@@ -198,21 +202,21 @@ Interpreter::Impl::FileState& Interpreter::Impl::checked_file(
     const FileHandle handle) {
   if (handle == 0) {
     throw std::runtime_error{
-        "invalid zero SystemVerilog file handle"};
+        "invalid zero SimIR file handle"};
   }
   const auto found = files.find(handle);
   if (found == files.end()) {
     throw std::runtime_error{
-        "unknown SystemVerilog file handle "
+        "unknown SimIR file handle "
         + std::to_string(handle)};
   }
   if (found->second.owner != process) {
     throw std::runtime_error{
-        "SystemVerilog file handle is owned by another process"};
+        "SimIR file handle is owned by another process"};
   }
   if (found->second.closed || !found->second.stream) {
     throw std::runtime_error{
-        "SystemVerilog file handle is already closed"};
+        "SimIR file handle is already closed"};
   }
   return found->second;
 }
@@ -260,7 +264,7 @@ void Interpreter::Impl::write_file(
   const auto validate = [](FileState& file) {
     if (!file.writable) {
       throw std::runtime_error{
-          "SystemVerilog file handle is not open for writing"};
+          "SimIR file handle is not open for writing"};
     }
   };
   const auto write_one = [&](FileState& file) {
@@ -269,7 +273,7 @@ void Interpreter::Impl::write_file(
     if (newline) file.stream->put('\n');
     file.stream->flush();
     if (!file.stream->good()) {
-      file.last_error = "failed to write SystemVerilog text file";
+      file.last_error = "failed to write SimIR text file";
       throw std::runtime_error{file.last_error};
     }
   };
@@ -312,7 +316,7 @@ std::string Interpreter::Impl::read_file_line(
   auto& file = checked_file(process, handle);
   if (!file.readable) {
     throw std::runtime_error{
-        "SystemVerilog file handle is not open for reading"};
+        "SimIR file handle is not open for reading"};
   }
   std::string line;
   line.reserve(128);
@@ -357,7 +361,7 @@ std::int32_t Interpreter::Impl::read_file_character(
   auto& file = checked_file(process, handle);
   if (!file.readable) {
     throw std::runtime_error{
-        "SystemVerilog file handle is not open for reading"};
+        "SimIR file handle is not open for reading"};
   }
   if (file.pushback) {
     const auto character = *file.pushback;
@@ -369,7 +373,7 @@ std::int32_t Interpreter::Impl::read_file_character(
     return static_cast<unsigned char>(character);
   }
   if (!file.stream->eof()) {
-    file.last_error = "failed to read SystemVerilog text file character";
+    file.last_error = "failed to read SimIR text file character";
   }
   return -1;
 }
@@ -381,7 +385,7 @@ std::int32_t Interpreter::Impl::unread_file_character(
   auto& file = checked_file(process, handle);
   if (!file.readable) {
     throw std::runtime_error{
-        "SystemVerilog file handle is not open for reading"};
+        "SimIR file handle is not open for reading"};
   }
   if (file.pushback || character < 0 || character > 255) {
     return -1;

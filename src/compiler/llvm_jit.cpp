@@ -114,7 +114,13 @@ static_assert(
 static_assert(offsetof(fsim_jit_runtime_v1, read_simulation_time) == 544);
 static_assert(offsetof(fsim_jit_runtime_v1, vital_timing_check) == 552);
 static_assert(offsetof(fsim_jit_runtime_v1, vital_delay) == 560);
-static_assert(sizeof(fsim_jit_runtime_v1) == 568);
+static_assert(
+    offsetof(fsim_jit_runtime_v1, force_driver_signal_slice) == 568);
+static_assert(
+    offsetof(fsim_jit_runtime_v1, force_driver_signal_slice_logic9) == 576);
+static_assert(
+    offsetof(fsim_jit_runtime_v1, release_driver_signal_slice) == 584);
+static_assert(sizeof(fsim_jit_runtime_v1) == 592);
 static_assert(sizeof(fsim_jit_projected_element_v1) == 24);
 static_assert(sizeof(fsim_jit_logic9_word_v1) == 32);
 static_assert(sizeof(fsim_jit_logic9_projected_element_v1) == 40);
@@ -146,6 +152,8 @@ constexpr auto kJitRuntimeFileSize =
 constexpr auto kJitRuntimeForceSize =
     static_cast<std::uint32_t>(
         offsetof(fsim_jit_runtime_v1, read_simulation_time));
+constexpr auto kJitRuntimeDriverForceSize =
+    static_cast<std::uint32_t>(sizeof(fsim_jit_runtime_v1));
 
 class PersistentLlvmObjectCache final : public llvm::ObjectCache {
 public:
@@ -344,6 +352,8 @@ struct LlvmJit::Impl {
     bool uses_write_projected_waveform_slice{};
     bool uses_force_signal_slice{};
     bool uses_release_signal_slice{};
+    bool uses_force_driver_signal_slice{};
+    bool uses_release_driver_signal_slice{};
     bool uses_debug_points{};
     bool uses_signal_event{};
     bool uses_signal_last_value{};
@@ -520,6 +530,8 @@ void LlvmJit::add_process_module(
         validated.uses_write_projected_waveform_slice,
         validated.uses_force_signal_slice,
         validated.uses_release_signal_slice,
+        validated.uses_force_driver_signal_slice,
+        validated.uses_release_driver_signal_slice,
         validated.uses_debug_points,
         validated.uses_signal_event,
         validated.uses_signal_last_value,
@@ -846,6 +858,28 @@ LlvmJit::resume(const JitProcessHandle process,
         || runtime.release_signal_slice == nullptr) {
       throw LlvmJitError(
           "JIT runtime ABI requires release_signal_slice for this process");
+    }
+  }
+  if (entry.info.uses_force_driver_signal_slice) {
+    if (runtime.struct_size < kJitRuntimeDriverForceSize) {
+      throw LlvmJitError(
+          "JIT runtime ABI structure does not include "
+          "force_driver_signal_slice");
+    }
+    if (runtime.force_driver_signal_slice == nullptr
+        || (entry.info.frame_layout.uses_logic9
+            && runtime.force_driver_signal_slice_logic9 == nullptr)) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires force_driver_signal_slice callbacks for "
+          "this process");
+    }
+  }
+  if (entry.info.uses_release_driver_signal_slice) {
+    if (runtime.struct_size < kJitRuntimeDriverForceSize
+        || runtime.release_driver_signal_slice == nullptr) {
+      throw LlvmJitError(
+          "JIT runtime ABI requires release_driver_signal_slice for this "
+          "process");
     }
   }
   if (entry.info.uses_write_inertial_slice) {

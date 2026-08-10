@@ -86,6 +86,507 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     negative, execution, diagnostic, and resource owners, freeze supported/
     unsupported/deferred scope, and make duplicate, missing, or unowned active
     rows fail a registered contract.
+16. Change 1 is complete in the intentionally dirty Batch 163 worktree. The
+    authoritative 33-row TSV freezes 14 supported IEEE 1076-2008 baselines
+    covering clauses 2 through 15, 15 unsupported closure rows owned one-to-one
+    by Changes 2 through 16, and four explicit Batch 170/post-v2 deferrals. Its
+    fixed 15-column schema requires existing parser, analyzer, elaboration,
+    runtime, positive, negative, execution, diagnostic, and resource paths for
+    every row. The registered contract rejects duplicate IDs, empty scope,
+    unknown boundaries, misplaced/missing owners, absent/repeated closure
+    owners, missing clause baselines, scope drift, and failure escapes.
+17. The exact-LLVM Debug tree regenerates warning-clean with eight workers and
+    no compilation. The direct and registered inventory checks pass, and the
+    complete static diagnostic/source/license/inventory/conformance/
+    documentation/public/portability/release slice passes 33/33 in 9.18
+    seconds. Two new SPDX-authored release files advance the repository count
+    from 937 to 939; diagnostics remain 2,071, bounded C/C++ sources 826, and
+    authored test/control owners 313. The whitespace check is clean. Preserve
+    Change 1 without reset, commit, push, sanitizer, or hosted CI. Next implement
+    Change 2's remaining lexical and design-unit behavior only.
+18. The authoritative roadmap now carries an explicit cross-cutting requirement
+    for both upcoming digital-language batches: Batch 164 must remove arbitrary
+    Verilog bit-string/based-number width limits, and Batch 165 must do the same
+    for SystemVerilog bit-string, based-number, unbased, and unsized literals.
+    These are language-correctness requirements, not requests for a larger
+    replacement constant: preserve exact values beyond host-word width, retain
+    only host-addressability or governed resource ceilings with distinct
+    diagnostics, and prove parsing-through-execution/artifact behavior above
+    every former implementation cap.
+19. Change 2 is complete in the same intentionally dirty worktree. VHDL-2008
+    basic and extended identifiers, doubled-quote strings, character literals,
+    delimiters, nested comments, library/use/context clauses, context
+    declarations, trailing-clause recovery, library-scoped primary/secondary
+    identity, duplicate admission order, and exact `2008`/`08` project selection
+    now have focused positive and negative evidence. Bit-string decoding accepts
+    B/O/X/D, UB/UO/UX, and SB/SO/SX without a host-word semantic cap: a
+    requested-width ring validates lossless truncation, null/zero-length results
+    are retained, decimal conversion uses arbitrary-precision 32-bit limbs, and
+    65-/129-/257-/4,097-bit witnesses pass. Non-host-addressable materialization
+    failures remain a physical-representation diagnostic rather than a language
+    width rule.
+20. The final Change 2 incremental exact-LLVM Debug build completes 22 steps
+    warning-free with eight workers in 32.72 seconds, peak RSS 4,070,388 KiB,
+    and zero swaps. Frontend/project/expression/analysis-order tests pass 4/4;
+    the complete VHDL label passes 33/33 in 33.89 seconds at peak RSS 194,780
+    KiB and zero swaps; and the static diagnostic/source/license/inventory/
+    conformance/documentation/public/portability/release slice passes 33/33 in
+    19.54 seconds. Counts are 939 authored files, 2,078 diagnostics, 826 bounded
+    C/C++ sources, and 313 authored test/control owners. Preserve Changes 1-2
+    without reset, commit, push, sanitizer, or hosted CI. Next implement Change
+    3's remaining declarations and types only.
+21. Change 3 is complete. Its first slice implements same-region
+    incomplete-type completion, recursive access identity, integer record
+    members, and structural ownership for user-defined attribute declarations/
+    specifications plus group templates/instances. Duplicate/uncompleted
+    incomplete types, duplicate/undeclared attributes, and duplicate/unresolved
+    groups receive exact cataloged diagnostics. Deferred package constants now
+    accept arbitrary constrained subtypes, require a structurally conforming
+    body completion, merge its initializer, and retain completion provenance.
+    Attributes and groups propagate through nested declarative regions and
+    publish explicit semantic-HIR declarations/profiles; portable owning-unit
+    schema 15 retains the new fields. Warning-clean 390-step and 27-step eight-
+    worker builds complete, focused frontend/library/elaboration/application/
+    catalog/source/inventory evidence passes 7/7, the full VHDL label passes
+    33/33, and the live catalog is 2,093. Next execute Change 4, beginning with
+    its mandatory arbitrary-width IEEE numeric correction. Preserve the entire
+    dirty Changes 1-3 worktree without commit, push, sanitizer, or hosted-CI
+    inspection.
+22. Batch 163 Change 4 has a mandatory wide-IEEE-numeric correction. Remove the
+    arbitrary 64-bit result/source/inference limits in `numeric_std`,
+    `numeric_bit`, `fixed_generic_pkg`, and `fixed_pkg`; do not substitute a
+    larger constant. Wide `to_signed`, `to_unsigned`, `resize`, shifts/rotates,
+    fixed conversion/resizing, and ordinary arithmetic must remain exact for
+    every representable constrained width. A wide `to_integer` operand is legal
+    when its value fits fsim's predefined integer range, so diagnose unknown or
+    out-of-range values rather than rejecting from operand width. Require
+    65-/129-/257-bit and larger non-power-of-two elaboration, interpreter, LLVM
+    O0/O2, native-cache, and negative integer-range/resource evidence. Preserve
+    Change 3 ordering: finish declarations/types before starting this Change 4
+    expression work.
+23. Change 4's mandatory arbitrary-width IEEE numeric/fixed correction is
+    complete, while the rest of Change 4 remains in progress. Numeric and fixed
+    inference/lowering now accept every positive SimIR-representable constrained
+    width; fixed constant construction and scale shifts use arbitrary-width
+    packed values rather than host-word masks. Wide `to_integer` checks unknown
+    state and predefined-integer value fit by narrowing/restoring the complete
+    operand. The adjacent packed-generic and VHDL qualification/conversion 64-
+    bit gates are also removed. Application evidence covers 65, 129, 257, and
+    521 bits in `numeric_std`, `numeric_bit`, and the `fixed_generic_pkg`/
+    `fixed_pkg` chain through interpreter, LLVM O0/O2, and cold/warm native
+    cache, with unknown, out-of-range, and representation-resource negatives.
+    A warning-clean 17-step eight-worker full dependency build and the complete
+    VHDL label passing 33/33 validate the accumulated Changes 1-4 worktree.
+    Continue Change 4's remaining expression/name/reusable-unit allocation;
+    do not commit, push, run sanitizer, or inspect hosted CI before Change 20.
+24. The next Change 4 expression slice adds general VHDL conditional
+    expressions without consuming top-level conditional/selected waveform
+    delimiters. Architecture constants and executable parenthesized waveform
+    values retain `?:` HIR; VHDL static evaluation selects only the chosen
+    alternative, and constrained vectors stay in arbitrary-width packed form
+    rather than entering the former `int64_t` specialization path. The residual
+    packed-scalar helper no longer rejects an operand merely because its width
+    exceeds 64; it diagnoses only unknown digits or a value that cannot fit the
+    scalar environment. Runtime lowering uses real branches, proven by an
+    unselected divide-by-zero alternative, and 129-bit declaration/execution
+    evidence passes interpreter plus compiled-engine O0/O2. A warning-clean
+    21-step eight-worker dependency build, focused frontend/expression/numeric/
+    fixed gates passing 4/4, and the full VHDL label passing 33/33 validate this
+    slice. Preserve the dirty Changes 1-4 worktree and continue Change 4 with
+    case expressions and the remaining name/reusable-unit closure; do not
+    commit, push, run sanitizer, or inspect hosted CI before Change 20.
+25. Change 4 now also accepts bounded VHDL-2008 case expressions. Scalar
+    choices, `|` lists, directional ranges, exhaustive Boolean alternatives,
+    and final `others` lower into the branch-short-circuited conditional form;
+    malformed separators, repeated/nonfinal `others`, and nonexhaustive bounded
+    forms have cataloged diagnostics. Frontend HIR covers static and executable
+    cases, while the expression application covers a dynamic choice list, a
+    static integer range, an arbitrary-width packed static alternative, and
+    interpreter/compiled O0/O2 equality. Preserve the accumulated dirty
+    Changes 1-4 worktree and continue Change 4 with name, overload, and
+    reusable-unit closure; do not commit, push, run sanitizer, or inspect
+    hosted CI before Change 20.
+26. Change 4 now gives local and rooted dot-separated VHDL-2008 external signal
+    names executable identity. The parser retains a distinct external-name HIR
+    wrapper plus declared subtype metadata; qualified-package discovery skips
+    that wrapper, and lowering resolves its target through the hierarchy signal
+    map only after validating width, value domain, signedness, and nominal type.
+    The expression application proves the rooted signal through interpreter and
+    LLVM O0/O2 and rejects a mismatched external subtype with
+    `FSIM-ELAB-VHEXTERNAL-001`; frontend/catalog coverage also diagnoses
+    unsupported object classes and malformed delimiters. Preserve the dirty
+    Changes 1-4 worktree and continue the remaining overload/reusable-unit
+    audit before declaring Change 4 complete. Do not commit, push, run
+    sanitizer, or inspect hosted CI before Change 20.
+27. Batch 163 Change 4 is complete in the intentionally dirty worktree. The
+    mandatory arbitrary-width numeric/fixed correction covers 65, 129, 257,
+    and 521 bits; general conditional and bounded case expressions use
+    branch-short-circuited execution; external signal names resolve real local
+    or rooted identity and enforce their declared subtype. The existing
+    overload, generic type/function/procedure/package/subprogram,
+    package-instantiation, configuration, component, context, aggregate,
+    conversion, physical, fixed, numeric, and analysis-order applications all
+    remain green. Final validation is a warning-clean 28-step eight-worker
+    dependency build, focused frontend/catalog/expression gates passing 3/3,
+    and the complete VHDL label passing 33/33 in 30.77 seconds. Preserve the
+    accumulated Changes 1-4 worktree and begin Change 5 sequential assignment,
+    timing, and control semantics. Do not commit, push, run sanitizer, or
+    inspect hosted CI before Change 20.
+28. Change 5 is complete with executable VHDL-2008 sequential force/release.
+    Default and explicit `in` modes produce Force/Release HIR and reuse the
+    existing packed whole-signal/index/slice runtime operations with distinct
+    `FSIM-ELAB-VHFORCE-*` diagnostics. The projected-waveform application
+    proves a forced value masks an intervening ordinary update and release
+    reveals that current driver value across interpreter and compiled O0/O2;
+    frontend/catalog/projected gates pass 3/3. Explicit driving-value `out`
+    mode now preserves process-driver identity with per-driver masks and
+    append-only native callbacks; a second resolved driver proves `0` to `X`
+    to `0` behavior through interpreter and cold/warm compiled execution.
+    Immediate `'driving_value` assertions prove the forced overlay and the
+    restored underlying driver. The clause-10 audit retains the existing
+    wait/assert/report, assignment, procedure-call, loop/control, case,
+    waveform, timing, cancellation, and delta evidence. The warning-clean
+    eight-worker dependency build passes, focused frontend/catalog/C-ABI/LLVM/
+    projected/runtime gates pass 6/6, and the complete VHDL label passes 33/33
+    in 35.03 seconds. The repository-wide clang-format default is now the
+    WebKit preset in `.clang-format`; the current environment supplies
+    clang-format 22.1.8 and Change 9's new sources were formatted through that
+    preset. Preserve the accumulated Changes 1-5 worktree and begin Change
+    6 concurrent/process closure. Do not commit, push, run sanitizer, or
+    inspect hosted CI before Change 20.
+29. Change 6 is complete in the same intentionally dirty worktree. VHDL
+    postponed processes, concurrent assertions, and concurrent procedure calls
+    retain phase ownership from frontend through semantic HIR and SimIR and
+    execute after ordinary active/update work; invalid reactive-plus-postponed
+    runtime ownership is rejected. Architecture, block, and generate
+    disconnection specifications retain explicit, `all`, and exclusion-aware
+    `others` selection, exact type marks, and independent delays. The
+    synthesized disconnect transaction now uses that delay rather than the
+    guarded assignment's waveform delay. Focused evidence diagnoses type
+    mismatch, duplicate/overlapping selection, and illegal postponed use, and
+    executes pending-disconnect cancellation/restart, two distinct resolved
+    driver owners, delayed fallback to the remaining driver, interpreter
+    teardown isolation, and bounded concurrent nonconvergence. The complete
+    elaboration executable passes; warning-clean eight-worker focused builds
+    and frontend/library/object/design/catalog/application-artifact/projected/
+    runtime gates pass 8/8, and the complete VHDL label passes 33/33 in 32.67
+    seconds. The catalog contains 2,118 diagnostics. Preserve Changes 1-6 and
+    begin Change 7 block, generate,
+    configuration, and resolved-hierarchy closure without commit, push,
+    sanitizer, or hosted-CI inspection before Change 20.
+30. Change 7 is complete in the same intentionally dirty worktree. Existing
+    for/if/case generate selection, locally static alternatives, nested block/
+    generated configuration paths, lexical components, `all`/`others`/`open`,
+    referenced configurations, and composed generic/port maps remain green.
+    VHDL input expressions materialize owned child signals and reactive
+    drivers; locally static array-element output actuals use owned formals and
+    slice bridge processes. The configuration application proves a dynamic
+    input expression, two child drivers resolving element zero to `X`, an
+    independently driven element one retaining `1`, and interpreter plus LLVM
+    O0/O2 cold/warm equality. Recursive child elaboration now checkpoints
+    collection sizes and path/mutation ownership; any child diagnostic removes
+    its signals, processes, specializations, names, configuration/interface/
+    SystemC state, resolver insertions, and boundary-driver records without a
+    full-design copy. A late recursive failure followed by a reused path and an
+    independent boundary writer proves no duplicate-path or leaked-driver
+    cascade. Warning-clean eight-worker focused builds and frontend/catalog/
+    source/gap-inventory/elaboration/configuration/analysis-order/component
+    gates pass 8/8; the final complete VHDL label passes 33/33 in 33.54 seconds.
+    Preserve Changes 1-7 and begin Change 8 access, file, protected, and
+    shared-object execution without commit, push, sanitizer, or hosted-CI
+    inspection before Change 20.
+31. Change 8 is complete in the same intentionally dirty worktree. VHDL access
+    allocation uses a process/type-owned associative live heap and a separate
+    append-only issued-handle ledger, so 32-bit identities are never reused.
+    `Deallocate` removes a live designated value and nulls its variable; null
+    deallocation is harmless, while null, stale, or foreign dereference fails
+    before access. Both live and lifetime storage use explicit representation-
+    derived ceilings. The shared SimIR file service retains closed identities,
+    enforces a 4,096-open simulation lifetime ceiling, process ownership and
+    read/write mode, and finalizes open streams. Existing VHDL direct/TextIO
+    application evidence covers mode, `endfile`, read/write, close, aliases,
+    and interpreter/compiled O0/O2 behavior; runtime evidence covers stale,
+    unknown, closed, cross-owner, and finalization paths.
+
+    Protected shared objects execute each wait-free method as one atomic
+    source-ordered scheduler segment. Active reentry, nested protected
+    procedure calls, and waits reject deterministically; an ordinary pure
+    function cannot call an impure protected function. The former 64-bit
+    private-member limit is gone, and all container default/write/conditional/
+    predicate/reduction paths now operate over arbitrary packed word counts.
+    Focused evidence executes a 137-bit private member, two-process atomic
+    updates, reentry/wait/purity negatives, and fresh-simulation defaults. The
+    complete eight-worker exact-LLVM Debug dependency build finishes 109 steps
+    warning-clean. The full VHDL label passes 33/33 in 34.43 seconds; catalog,
+    source, gap-inventory, elaboration, combined file application, advanced-
+    type application, and runtime gates pass 7/7. The live catalog is 2,119,
+    touched C/C++ sources remain below 2,000 lines, and `git diff --check` is
+    clean. Preserve Changes 1-8 and begin Change 9 embedded PSL lexical,
+    grammar, and declaration ownership. Do not commit, push, run sanitizer, or
+    inspect hosted CI before Change 20.
+32. Change 9 is complete in the same intentionally dirty worktree. The VHDL-
+    2008 lexer now distinguishes case-insensitive `-- psl` markers from
+    ordinary comments. Native and embedded `vunit`, `vprop`, and `vmode`
+    library units retain source context, exact targets, and distinct kinds;
+    entity, architecture, package, and verification-unit regions own default
+    clocks, Boolean/sequence/property/endpoint declarations, formal profiles,
+    and labeled assert/assume/restrict/cover directives. Entity statement parts
+    accept concurrent embedded directives, and explicit native `assert
+    property` is not confused with an ordinary VHDL assertion. Project analysis
+    copies every retained record into frontend-independent semantic HIR with
+    owned token spellings and interned spans. All nine `FSIM-VHDL-PSL-*`
+    malformed/duplicate/placement diagnostics have focused negative evidence.
+
+    The complete eight-worker exact-LLVM Debug dependency build finishes 161
+    steps warning-clean. The final full VHDL label passes 33/33 in 34.33
+    seconds; frontend, analysis-order, catalog, source-budget, gap-inventory,
+    and release gates also pass. The live catalog is 2,128 and 828 authored
+    C/C++ sources remain below the 2,500-line hard ceiling with a 2,000-line
+    refactor target. Preserve Changes 1-9 and begin Change 10 PSL clock and
+    temporal-expression analysis. Do not commit, push, run sanitizer, or
+    inspect hosted CI before Change 20.
+
+    An intentionally broader static probe also confirms two already-stale
+    Change 19 synchronization owners: `fsim.v1-inventory-release` still freezes
+    2,118 diagnostics rather than the live 2,128, and the Windows/resource ABI
+    contracts still freeze `sizeof(fsim_jit_runtime_v1) == 568` despite earlier
+    accumulated runtime-table growth. Do not rewrite those release baselines in
+    Change 10; synchronize them with all other counts and public/platform
+    contracts in Change 19, then require them in Change 20.
+33. Change 10 is complete in the same intentionally dirty worktree. PSL
+    analysis resolves visible scalar Boolean/bit/logic samples through owning
+    and targeted VHDL units; retains local, inherited, referenced, and explicit
+    clocks with canonical rising/falling-edge identity; rejects incompatible
+    clocks; and records unknown-clock-as-no-edge plus sampled-unknown-as-false
+    policy. Frontend and semantic HIR distinguish Boolean, sequence, property,
+    endpoint, and static-integer-formal classes and retain typed concatenation,
+    fusion, three repetition forms, both suffix implications, next/prev/
+    eventually/always, until/before/within, endpoints, exact spans, and static
+    ranges. Numeric formals remain symbolic with optional normalized defaults
+    and are legal only inside locally static temporal bounds. Ten new
+    `FSIM-VHDL-PSL-010` through `019` diagnostics cover clock, sample, type,
+    bound, endpoint, name, override, cross-clock, and cycle failures.
+
+    Focused frontend, project-analysis, catalog, source-budget, and PSL-gap
+    gates pass. The complete eight-worker exact-LLVM Debug dependency build
+    finishes 161 steps warning-clean in 3:48.16 with peak RSS 4,177,472 KiB and
+    zero swaps; the full VHDL label passes 33/33 in 35.02 seconds with peak RSS
+    194,780 KiB and zero swaps. The live catalog is 2,138 and 829 authored C/C++
+    sources remain under the 2,500-line hard ceiling with a 2,000-line refactor
+    target. Preserve Changes 1-10 and begin Change 11 PSL elaboration and
+    execution without commit, push, sanitizer, or hosted-CI inspection before
+    Change 20. The intentionally stale Change 19 inventory/ABI synchronization
+    owners remain deferred exactly as recorded in item 32.
+34. Batch 163 Change 11 is complete in the intentionally dirty worktree. The
+    simulation retains analyzed VHDL PSL HIR and samples after scheduler update
+    publication through one engine-neutral attempt service. Boolean and edge
+    clocks share canonical histories; source-ordered overlapping attempts execute
+    concatenation/fusion, all three repetition families, declaration defaults and
+    actuals, within/implication/recurrence/strength/abort forms, exact finite
+    completion, disable/reset cleanup, and unknown-no-edge policy. `[=]` retains
+    its trailing non-match span while `[->]` ends on the chosen occurrence.
+    Monitor, history, active/lifetime attempt, observation-evaluation, inner
+    temporal-step, nesting, and conservative 512-MiB owned-storage ceilings bound
+    CPU and memory. The live application produces 51 deterministic attempts
+    across interpreter, debug, LLVM O0/O2, and cold/warm cache; runtime resource
+    and lifecycle evidence remains green. A warning-clean 103-step eight-worker
+    dependency build completed in 2:44.69 at 4,206,252 KiB maximum RSS with zero
+    swaps, followed by a final warning-clean 13-step relink. The complete VHDL
+    label passed 34/34 in 36.08 seconds at 194,608 KiB maximum RSS with zero
+    swaps; focused frontend/runtime/application/catalog/source/inventory evidence
+    passed 7/7. The repository-wide
+    `.clang-format` continues to resolve the WebKit preset under clang-format
+    22.1.8 and all touched Change 11 sources pass its dry-run check. Preserve
+    Changes 1-11 and begin Change 12 without commit, push, sanitizer, or hosted-CI
+    inspection before Change 20.
+35. Batch 163 Change 12 is complete in the intentionally dirty worktree. Every
+    retained PSL attempt now carries assert/assume/restrict/cover kind, stable
+    unit/instance and semantic source-span identity, source-order slot, exact
+    sample/time/delta coordinates, and pass/failure/vacuous/aborted outcome.
+    Public simulation trace and coverage APIs expose 60 attempts from 20 live
+    directives and separate all four outcome counters. Dedicated PSL and common
+    assertion callbacks run in deterministic completion order; deliberately
+    throwing first observers are contained without losing later publication.
+    Assert/assume failures route as errors, restriction failures as warnings,
+    and cover failures remain coverage-only: the differential retains 31 reports
+    with exactly one warning. Interpreter, debug, LLVM O0/O2, and cold/warm cache
+    traces/counters agree exactly. The warning-clean 97-step eight-worker build
+    completed in 2:38.95 at 4,206,868 KiB maximum RSS with zero swaps. Existing
+    SystemVerilog assertion plus focused contracts pass 8/8; the complete VHDL
+    label passes 34/34 in 35.41 seconds at 194,572 KiB maximum RSS with zero
+    swaps. WebKit formatting and whitespace checks are clean. Preserve Changes
+    1-12 and begin Change 13 without commit, push, sanitizer, or hosted-CI
+    inspection before Change 20.
+36. Batch 163 Change 13 is complete in the intentionally dirty worktree. The live
+    PSL design now uses resolved IEEE `std_logic` clocks/predicates, co-resides
+    with a 129-bit `numeric_std` value plus physical/file/protected declarations,
+    and samples a path-sensitive `VitalPathDelay` output at the stable scheduler
+    boundary. All 21 directives publish 63 deterministic attempts across
+    interpreter, debug, LLVM O0/O2, and cold/warm cache. Existing numeric, fixed,
+    VITAL, file, protected, and physical applications remain green and own their
+    specialized execution/negative matrices. Portable owning-unit schema 16
+    round trips PSL default clock, declaration/formal/default, property,
+    directive label, tokens, and source spans without reparsing; durable
+    semantic-HIR/running-attempt artifacts remain Change 16. No SDF ownership was
+    pulled forward from Batch 170. The focused integration slice passes 11/11,
+    the eight-worker dependency tree is current with no work, and the full VHDL
+    label passes 34/34 in 36.49 seconds at 194,604 KiB maximum RSS with zero
+    swaps. WebKit formatting and whitespace checks are clean. Preserve Changes
+    1-13 and begin Change 14 without commit, push, sanitizer, or hosted-CI
+    inspection before Change 20.
+37. Batch 163 Change 14 is complete in the intentionally dirty worktree. VHDL
+    PSL monitors now expand over ordered `DesignIR` occurrences, qualify every
+    clock/sample by exact instance path, and publish occurrence identity through
+    attempts, coverage, and callbacks. Explicit `entity(architecture)` targets
+    now select the named architecture rather than an earlier primary-name match.
+    Duplicated and reversed VHDL roots plus colliding-name SystemVerilog and
+    SystemC roots prove isolation and configured order. The governed
+    SV-to-VHDL-to-SystemC graph proves converted ports, resolved values, and PSL
+    sampling after stable delta propagation across interpreter, debug, LLVM
+    O0/O2, cold/warm cache, and source edits. Simultaneous clock histories share
+    one immutable observation map, removing quadratic retained-value copies
+    while preserving resource preflight and the 512 MiB ceiling. The focused
+    boundary slice passes 6/6. The warning-clean 84-step eight-worker build
+    completes in 2:17.36 at 4,208,056 KiB peak RSS with zero swaps; the full
+    VHDL label passes 34/34 in 37.15 seconds at 195,120 KiB peak RSS with zero
+    swaps. Repository formatting defaults to WebKit and touched PSL sources plus
+    whitespace checks are clean. Preserve Changes 1-14 and begin Change 15
+    without commit, push, sanitizer, or hosted-CI inspection before Change 20.
+38. Batch 163 Change 15 is complete in the intentionally dirty worktree. Every
+    simulation now owns an occurrence-qualified, generation-checked VHPI graph
+    and a bounded VHDL snapshot covering ordered scopes, typed declarations,
+    alias/external-name-derived state, live values, drivers, active/postponed
+    processes, source identity, PSL attempts, named outcomes, and coverage. The
+    debugger exposes `vhdl summary|scopes|objects|processes|psl|all`; VCD signal
+    activity, callback ordering, and normalized snapshots agree across
+    interpreter, debug, LLVM O0/O2, and cold/warm cache. Record, payload, and
+    formatted-byte ceilings fail transactionally. Foreign handles reject, and
+    released/recreated handles become stale. Nested generic-subprogram paths
+    publish parent regions and coalesce only exact canonical duplicate objects.
+
+    The focused runtime/debugger/expression/advanced-type/projected-waveform/
+    PSL/typed-boundary slice passes 7/7 in 29.61 seconds. The warning-clean
+    90-step eight-worker full build completes in 2:36.35 at 4,231,040 KiB peak
+    RSS with zero swaps, followed by a warning-clean 13-step relink in 28.36
+    seconds at 4,230,576 KiB. The complete VHDL label passes 34/34 in 35.64
+    seconds at 195,172 KiB peak RSS with zero swaps. WebKit formatting and
+    whitespace checks are clean. Preserve Changes 1-15 and begin Change 16's
+    durable artifact/checkpoint/cache/relocation/replay state without commit,
+    push, sanitizer, or hosted-CI inspection before Change 20.
+39. Batch 163 Change 16 is complete in the intentionally dirty worktree.
+    Owning-unit schema 17 preserves frontend PSL through `.fsimobj` and
+    `.fsimlib`; standalone designs now carry a checksummed schema-1 `FSIMVHIR`
+    payload for the complete owning VHDL declaration/type/expression/process
+    HIR and analyzed PSL state. Publication/load validates enum ranges, unique
+    record identities, every semantic-ID link, schema/checksum/trailing bytes,
+    and semantic/DesignIR/runtime consistency before returning a project. The
+    IEEE standard-library/cache identity is
+    `ieee-1076-2019-16a01232-vhdl-psl-wide-v2`.
+
+    The full PSL fixture now compiles through the non-project object phase,
+    exports and relocates a mapped library, elaborates and relocates a
+    standalone design, then replays after its producer source moves away.
+    Direct, mapped, and design-artifact interpreter/LLVM O2 cold/warm attempts,
+    coverage, normalized debugger snapshots, and VCD match exactly. Portable
+    VHPI checkpoint restore verifies artifact/cache identity and remaps every
+    exported stable object name to a fresh generation-qualified handle.
+    Corrupt, truncated, future-schema, trailing, and out-of-range semantic-ID
+    payloads reject transactionally. The focused application/artifact/library/
+    PSL slice passes 5/5 in 2.47 seconds at 195,172 KiB peak RSS with zero
+    swaps. After repairing the VITAL fixture's explicit copied-payload list,
+    the complete VHDL label passes 34/34 in 36.21 seconds at 195,068 KiB peak
+    RSS with zero swaps; catalog, source-budget, and gap-inventory contracts
+    pass 3/3. WebKit formatting for the new/touched PSL sources and whitespace
+    checks are clean. Preserve Changes 1-16 and begin Change 17's complete
+    clause-indexed conformance inventory without commit, push, sanitizer, or
+    hosted-CI inspection before Change 20.
+40. Batch 163 Change 17 is complete in the intentionally dirty worktree. The
+    authoritative 33-row clause inventory now contains 29 supported IEEE
+    1076-2008 and embedded-PSL rows, zero unresolved active rows, and four
+    exact Batch 170/post-v2 deferrals. Every supported row names existing
+    independent positive, negative, and execution evidence plus parser,
+    analyzer, elaboration, runtime, diagnostic, and resource owners. Its
+    registered contract rejects active unsupported rows, non-test witnesses,
+    duplicate or missing Change 2-16 closure identities, missing IEEE clause
+    baselines, misplaced owners, and failure escapes.
+
+    The complete frontend, elaboration, runtime, artifact/library, VHDL, PSL,
+    and typed-boundary evidence slice passes 35/35 in 39.38 seconds at 195,020
+    KiB peak RSS with zero swaps. Preserve Changes 1-17 and begin Change 18's
+    governed cross-engine, cache, debugger, trace, relocation, replay, mixed,
+    platform, and resource matrix without commit, push, sanitizer, or hosted-
+    CI inspection before Change 20.
+41. Batch 163 Change 18 is complete in the intentionally dirty worktree. The
+    governed PSL application now executes 17 named direct, interpreter, LLVM
+    O0/O2, cold/warm cache, debugger, VCD, object/library/design artifact,
+    relocation, replay, checkpoint, multiple-root, SystemVerilog, and SystemC
+    stages. POSIX `RLIMIT_AS` and a Windows Job Object enforce a 6 GiB process
+    address-space ceiling; delta work remains capped at 1,000, trace signals at
+    64, and the CTest at 1,200 seconds. The staged installed-public contract
+    now executes `fsim-vhdl --help` and verifies the alias directly.
+
+    The authoritative 44-row release-closure matrix and registered aggregate
+    audit freeze 29 supported rows, four deferrals, 87 witnesses, 19 PSL
+    diagnostics in the 2,138-code catalog, 835 bounded sources, 316 authored
+    test/control files, malformed/race/cancellation/nonconvergence/resource
+    behavior, platform/public/artifact provenance, and zero unresolved rows.
+    Refreshed graph review reports maximum cognitive complexity 20, loop depth
+    1, no recursion, and no scan-in-loop flag. The direct runner passes in 1.71
+    seconds at 195,272 KiB peak RSS with zero swaps. The final 13-test closure,
+    installed-public, platform, catalog, source, frontend, runtime, and PSL
+    slice passes in 3.81 seconds at 195,064 KiB with zero swaps. A stale Windows
+    ABI check was corrected to the C probe's append-only 592-byte runtime table
+    with its old 560-byte tail and new callbacks at offsets 568/576/584; the
+    strict C probe and Windows contract pass 3/3. Preserve Changes 1-18 and
+    begin Change 19 documentation/count/digest synchronization without commit,
+    push, sanitizer, or hosted-CI inspection before Change 20.
+42. Batch 163 Change 19 is complete in the intentionally dirty worktree. New
+    public VHDL/PSL support, producer-independent tutorial, and closure-audit
+    documents are synchronized with README, language support, architecture,
+    VHPI, diagnostics, feature/evidence matrices, UVM/current release audits,
+    and the installed Markdown surface. The installed contract executes
+    `fsim-vhdl --help`; the documentation contract freezes both VHDL/PSL
+    inventory digests, the 29/0/4 boundary, 17 governed stages, pass criteria,
+    platform/resource limits, graph complexity, and exact ABI offsets.
+
+    Live inventories are 2,138 diagnostics, 835 bounded C/C++ sources, 955
+    SPDX-owned files including `.clang-format`, 316 authored test/control
+    files, 1,279 executable rows, 5,116 evidence cells, 604 paths split
+    265/312/27 test/production/release, 138 runtime files, and 36 corpus CTests.
+    Exact digests are feature matrix
+    `e38217f0ced26556c13e4ef6d4f32aa4d46172192ec54e926e739d165abbbab7`,
+    evidence
+    `2d9a2bf8fdc360b6b484087848eeb00def2a61cff5fecfacf9400fadcec2010b`,
+    gap inventory
+    `0a60ca24775a1e5e7282059b282557d36656e1f926d4207f1f3df48f4c8b891b`,
+    and closure matrix
+    `169bc75fd1d0713fcc5760da8a22fe12376f0e655b26510566e33d78a336de35`.
+    The complete non-governed-UVM CMake documentation/inventory/release slice
+    passes 34/34 in 20.25 seconds at 60,644 KiB peak RSS with zero swaps.
+    WebKit formatting and whitespace checks are clean. Preserve Changes 1-19
+    and begin Change 20's fresh clean-first Debug/Release builds, complete
+    regressions, governed VHDL/PSL/mixed matrices, and release-candidate gates.
+    Do not commit or push until every local Change 20 gate is clean; do not run
+    sanitizer or inspect hosted CI at this boundary.
+43. Batch 163 Change 20 is complete. Fresh clean-first exact-LLVM 22.1.8 Debug
+    and Release eight-worker builds complete 741 steps warning-free in 10:19.03
+    and 8:39.05 at 4,286,220 and 3,017,072 KiB peak RSS with zero swaps. Full
+    Debug and Release regressions pass 126/126 in 6:16.02 and 5:28.32 at
+    3,785,680 and 3,766,280 KiB peak RSS with zero swaps; explicit VHDL-labelled
+    matrices pass 36/36 in 37.77 and 35.80 seconds. The first Debug regression
+    correctly caught a stored-driver API regression beneath an unresolved
+    signal force. Separating underlying driver reads from VHDL
+    `'driving_value` force overlays restores both contracts; focused API,
+    runtime, resolution, and projected-waveform evidence and both full
+    regressions pass. The governed VHDL/PSL, arbitrary-width IEEE numeric/fixed,
+    mixed-language, artifact, installed/public, platform/portability, and
+    release-candidate gates are all green. New Batch 163 sources and the exact
+    Change 20 correction ranges pass the WebKit formatting gate, and the
+    repository whitespace check is clean; legacy files are not bulk-reformatted
+    here. No sanitizer or hosted-CI inspection ran. Commit and push
+    this sole Batch 163 implementation changeset, then create and push the
+    documentation-only Batch 164 restart checkpoint and clear context before
+    any Batch 164 implementation.
 
 ## Batch 162 planned restart checkpoint - 2026-08-09
 

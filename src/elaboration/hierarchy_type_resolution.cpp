@@ -623,7 +623,9 @@ using namespace elaboration_detail;
                         return false;
                     }
                     const auto width = variable.type.width();
-                    if (!width || *width == 0 || *width > 64
+                    if (!width || *width == 0
+                        || *width
+                            > std::numeric_limits<std::uint32_t>::max()
                         || variable.type.domain
                             == frontend::ValueDomain::String
                         || variable.type.domain
@@ -636,7 +638,8 @@ using namespace elaboration_detail;
                             "protected private variable '"
                                 + variable.name
                                 + "' requires a bounded scalar or packed "
-                                  "value with width in 1..64",
+                                  "value representable by executable "
+                                  "container storage",
                             variable.span);
                         return false;
                     }

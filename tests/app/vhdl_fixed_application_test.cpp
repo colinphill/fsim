@@ -179,6 +179,10 @@ architecture rtl of fixed_app is
   signal rounded : ufixed(1 downto -2);
   signal selected : ufixed(1 downto -2);
   signal compared : boolean;
+  signal wide65 : ufixed(64 downto 0);
+  signal wide129 : sfixed(64 downto -64);
+  signal resized257 : ufixed(128 downto -128);
+  signal wide521, sum521 : ufixed(260 downto -260);
 begin
   u <= to_ufixed(3, 3, -4);
   s <= to_sfixed(-2, 3, -4);
@@ -190,6 +194,11 @@ begin
   rounded <= resize(round_source, 1, -2);
   selected <= u(1 downto -2);
   compared <= u > to_ufixed(2, 3, -4);
+  wide65 <= to_ufixed(3, 64, 0);
+  wide129 <= to_sfixed(-2, 64, -64);
+  resized257 <= resize(wide65, 128, -128);
+  wide521 <= to_ufixed(1, 260, -260);
+  sum521 <= wide521 + to_ufixed(1, 260, -260);
 end architecture;
 )";
     assert(output.good());
@@ -206,10 +215,10 @@ library ieee;
 use ieee.fixed_pkg.all;
 architecture rtl of fixed_invalid is
   signal ascending : ufixed(-4 to 3);
-  signal too_wide : ufixed(64 downto -1);
+  signal bad_resource : ufixed(0 downto 0);
 begin
   ascending <= to_ufixed(1, 3, -4);
-  too_wide <= to_ufixed(1, 64, -1);
+  bad_resource <= to_ufixed(1, 4294967295, 0);
 end architecture;
 )";
     assert(output.good());
@@ -219,10 +228,18 @@ end architecture;
       "fixed_app.u", "fixed_app.s", "fixed_app.add_u",
       "fixed_app.sub_u", "fixed_app.saturated_u",
       "fixed_app.saturated_s", "fixed_app.round_source",
-      "fixed_app.rounded", "fixed_app.selected", "fixed_app.compared"};
+      "fixed_app.rounded", "fixed_app.selected", "fixed_app.compared",
+      "fixed_app.wide65", "fixed_app.wide129",
+      "fixed_app.resized257", "fixed_app.wide521",
+      "fixed_app.sum521"};
   const std::vector<std::string> expected{
       "00110000", "11100000", "01000000", "00100000",
-      "11111111", "01111111", "000110", "0010", "1100", "1"};
+      "11111111", "01111111", "000110", "0010", "1100", "1",
+      std::string(63, '0') + "11",
+      std::string(64, '1') + std::string(65, '0'),
+      std::string(127, '0') + "11" + std::string(128, '0'),
+      std::string(260, '0') + "1" + std::string(260, '0'),
+      std::string(259, '0') + "1" + std::string(261, '0')};
   for (const auto optimization : {
            fsim::project::Optimization::o0,
            fsim::project::Optimization::o2}) {

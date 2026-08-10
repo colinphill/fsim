@@ -97,7 +97,7 @@ namespace {
     const ContainerType& type) {
   if (type.element_kind == ContainerElementKind::Scalar
       || type.two_state) {
-    return PackedLogic4::from_aval_bval(type.element_width, 0, 0);
+    return PackedLogic4(type.element_width, Logic4::zero);
   }
   return PackedLogic4{type.element_width, Logic4::x};
 }

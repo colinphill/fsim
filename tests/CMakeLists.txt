@@ -41,6 +41,7 @@ add_executable(
   frontend/frontend_vhdl_statement_tests.cpp
   frontend/frontend_vhdl_attribute_tests.cpp
   frontend/frontend_vhdl_time_file_tests.cpp
+  frontend/frontend_vhdl_psl_tests.cpp
   frontend/frontend_declaration_tests.cpp
   frontend/frontend_chandle_tests.cpp
   frontend/frontend_coverage_tests.cpp
@@ -151,6 +152,27 @@ add_test(
     "${CMAKE_COMMAND}"
     "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckV1VhdlMatrix.cmake"
+)
+add_test(
+  NAME fsim.vhdl-psl-gap-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckVhdlPslGapInventory.cmake"
+)
+add_test(
+  NAME fsim.vhdl-psl-closure-audit
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckVhdlPslClosureAudit.cmake"
+)
+add_test(
+  NAME fsim.vhdl-psl-documentation
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckVhdlPslDocumentation.cmake"
 )
 add_test(
   NAME fsim.v1-mixed-conversion-matrix
@@ -365,6 +387,18 @@ add_test(
 set_tests_properties(
   fsim.v1-vhdl-matrix
   PROPERTIES LABELS "fast;vhdl;matrix;cmake"
+)
+set_tests_properties(
+  fsim.vhdl-psl-gap-inventory
+  PROPERTIES LABELS "fast;vhdl;psl;conformance;inventory;positive;negative;resources;cmake"
+)
+set_tests_properties(
+  fsim.vhdl-psl-closure-audit
+  PROPERTIES LABELS "fast;vhdl;psl;closure;release;artifact;cache;debug;trace;portability;resources;cmake"
+)
+set_tests_properties(
+  fsim.vhdl-psl-documentation
+  PROPERTIES LABELS "fast;vhdl;psl;documentation;installed;release;cmake"
 )
 set_tests_properties(
   fsim.v1-mixed-conversion-matrix
@@ -1163,6 +1197,10 @@ if(TARGET fsim_application)
       fsim.application.vhdl_analysis_order
       fast analysis-order packages contexts configurations vhdl)
     fsim_add_application_case(
+      2 vhdl_psl app/vhdl_psl_application_test.cpp
+      fsim.application.vhdl_psl
+      fast vhdl psl timing llvm cache)
+    fsim_add_application_case(
       2 vhdl_components app/vhdl_component_application_test.cpp
       fsim.application.vhdl_components
       fast components vhdl cache hierarchy debugger)
@@ -1252,6 +1290,10 @@ if(TARGET fsim_application)
     )
     set_tests_properties(
       fsim.application.sv_containers
+      PROPERTIES TIMEOUT 1200
+    )
+    set_tests_properties(
+      fsim.application.vhdl_psl
       PROPERTIES TIMEOUT 1200
     )
     if(

@@ -348,6 +348,16 @@ Lowerer::lower_procedural_update_expression(
 
 void Lowerer::lower_force_release(const Statement& statement) {
   const bool force = statement.kind == StatementKind::Force;
+  const bool vhdl = language_ == frontend::Language::Vhdl2008;
+  const auto target_code =
+      vhdl ? "FSIM-ELAB-VHFORCE-001" : "FSIM-ELAB-SVFORCE-001";
+  const auto visibility_code =
+      vhdl ? "FSIM-ELAB-VHFORCE-002" : "FSIM-ELAB-SVFORCE-002";
+  const auto domain_code =
+      vhdl ? "FSIM-ELAB-VHFORCE-003" : "FSIM-ELAB-SVFORCE-003";
+  const auto language_name =
+      vhdl ? std::string_view{"VHDL"}
+           : std::string_view{"procedural"};
   const Expression* base = &statement.target;
   if ((statement.target.kind == ExpressionKind::Index
        && statement.target.operands.size() == 2)
@@ -356,16 +366,18 @@ void Lowerer::lower_force_release(const Statement& statement) {
     base = &statement.target.operands.front();
   } else if (statement.target.kind != ExpressionKind::Identifier) {
     report(
-        "FSIM-ELAB-SVFORCE-001",
-        "procedural force/release supports a signal, static bit-select, or "
+        target_code,
+        std::string{language_name}
+            + " force/release supports a signal, static bit-select, or "
         "static part-select",
         statement.target.span);
     return;
   }
   if (base->kind != ExpressionKind::Identifier) {
     report(
-        "FSIM-ELAB-SVFORCE-001",
-        "nested or runtime-selected procedural force/release targets are "
+        target_code,
+        "nested or runtime-selected " + std::string{language_name}
+            + " force/release targets are "
         "not supported",
         statement.target.span);
     return;
@@ -384,7 +396,7 @@ void Lowerer::lower_force_release(const Statement& statement) {
           || selected->lsb_offset
               > std::numeric_limits<std::uint32_t>::max()) {
         report(
-            "FSIM-ELAB-SVFORCE-002",
+            visibility_code,
             "packed force/release member has no executable layout",
             statement.target.span);
         return;
@@ -398,7 +410,7 @@ void Lowerer::lower_force_release(const Statement& statement) {
   const auto signal = signals_.find(target_name);
   if (signal == signals_.end()) {
     report(
-        "FSIM-ELAB-SVFORCE-002",
+        visibility_code,
         locals_.contains(target_name)
             ? "procedural force/release of automatic local variables is not "
               "supported"
@@ -429,7 +441,7 @@ void Lowerer::lower_force_release(const Statement& statement) {
         || static_cast<std::uint64_t>(offset) + *selected
             > std::numeric_limits<std::uint32_t>::max()) {
       report(
-          "FSIM-ELAB-SVFORCE-001",
+          target_code,
           "procedural force/release bit-select requires a static in-range "
           "index",
           statement.target.span);
@@ -447,7 +459,7 @@ void Lowerer::lower_force_release(const Statement& statement) {
         || selected->width
             > std::numeric_limits<std::uint32_t>::max()) {
       report(
-          "FSIM-ELAB-SVFORCE-001",
+          target_code,
           "procedural force/release part-select requires static in-range "
           "bounds and width",
           statement.target.span);
@@ -462,7 +474,8 @@ void Lowerer::lower_force_release(const Statement& statement) {
         signal->second,
         dynamic_selection ? 0U : offset,
         static_cast<std::uint32_t>(width),
-        dynamic_selection});
+        dynamic_selection,
+        statement.vhdl_force_driving_value});
     return;
   }
   const auto* target_type =
@@ -482,7 +495,7 @@ void Lowerer::lower_force_release(const Statement& statement) {
   if (is_two_state_domain(domain)
       && !is_two_state_domain(register_domain(*value))) {
     report(
-        "FSIM-ELAB-SVFORCE-003",
+        domain_code,
         "force of a two-state target requires an explicit conversion",
         statement.value.span);
     return;
@@ -492,7 +505,8 @@ void Lowerer::lower_force_release(const Statement& statement) {
           signal->second,
           *value,
           dynamic_selection ? 0U : offset,
-          dynamic_selection});
+          dynamic_selection,
+          statement.vhdl_force_driving_value});
 }
 
 }  // namespace fsim::elaboration

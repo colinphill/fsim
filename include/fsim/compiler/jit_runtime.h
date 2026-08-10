@@ -573,6 +573,29 @@ typedef struct fsim_jit_runtime_v1 {
   /* Append-only intrinsic VITAL path/wire-delay callback. */
   void (*vital_delay)(
       void* context, uint32_t process, uint32_t instruction);
+
+  /*
+   * Append-only VHDL driver-value force/release callbacks. These alter only
+   * the current process's driver; the resolver still combines other drivers.
+   */
+  void (*force_driver_signal_slice)(
+      void* context,
+      uint32_t signal,
+      uint32_t offset,
+      uint32_t width,
+      uint64_t aval,
+      uint64_t bval);
+  void (*force_driver_signal_slice_logic9)(
+      void* context,
+      uint32_t signal,
+      uint32_t offset,
+      uint32_t width,
+      const fsim_jit_logic9_word_v1* value);
+  void (*release_driver_signal_slice)(
+      void* context,
+      uint32_t signal,
+      uint32_t offset,
+      uint32_t width);
 } fsim_jit_runtime_v1;
 
 /*

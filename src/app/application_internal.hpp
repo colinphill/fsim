@@ -10,11 +10,11 @@
 #endif
 #include "fsim/frontend/parser.hpp"
 #include "fsim/frontend/preprocessor.hpp"
-#include "fsim/runtime/constraint_solver.hpp"
 #include "fsim/runtime/class_randomize.hpp"
+#include "fsim/runtime/constraint_solver.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
-#include "fsim/support/sha256.hpp"
 #include "fsim/support/environment.hpp"
+#include "fsim/support/sha256.hpp"
 #include "fsim/systemc/hierarchy.hpp"
 #include "fsim/systemc/incremental.hpp"
 #include "fsim/systemc/plugin_compiler.hpp"
@@ -23,15 +23,15 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <charconv>
 #include <csignal>
-#include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <future>
-#include <exception>
 #include <iostream>
 #include <iterator>
 #include <limits>
@@ -56,6 +56,34 @@
 
 namespace fsim::app::application_detail {
 
+class VhdlPslExecution {
+public:
+    using SignalReader = std::function<runtime::PackedLogic4(
+        runtime::simir::SignalId)>;
+
+    VhdlPslExecution(
+        const semantic::vhdl::Hir& hir,
+        const elaboration::ElaboratedDesign& design,
+        const semantic::design::DesignIr& design_ir,
+        SignalReader reader);
+    ~VhdlPslExecution();
+    VhdlPslExecution(const VhdlPslExecution&) = delete;
+    VhdlPslExecution& operator=(const VhdlPslExecution&) = delete;
+
+    void observe(runtime::SimulationTick time, std::uint64_t delta);
+    void finish(runtime::SimulationTick time, std::uint64_t delta);
+    [[nodiscard]] const std::vector<runtime::VhdlPslAttemptSnapshot>&
+    attempts() const noexcept;
+    [[nodiscard]] std::vector<ConcurrentAssertionCoverage> coverage() const;
+    void set_completion_hook(runtime::VhdlPslCompletionHook hook);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+[[nodiscard]] std::unique_ptr<runtime::VhdlVhpiObjectRegistry>
+make_vhdl_debug_registry(const BuiltProject& project);
 
 [[nodiscard]] std::string_view report_severity_name(
     const runtime::simir::AssertionSeverity severity) noexcept;
@@ -94,7 +122,7 @@ void complete_vhdl_executable_hir(
     const frontend::ParsedDesign& parsed,
     semantic::Model& semantics,
     std::span<frontend::SystemVerilogClassSpecialization>
-        class_specializations = {});
+        class_specializations = { });
 
 [[nodiscard]] runtime::SystemVerilogConstraintVariableProfile
 systemverilog_constraint_profile(
@@ -105,18 +133,17 @@ lower_systemverilog_constraint_expression(
     const semantic::sv::ConstraintExpression& expression,
     std::string_view specialization_identity,
     const std::map<std::string,
-                   runtime::SystemVerilogConstraintVariableId>& variables,
+        runtime::SystemVerilogConstraintVariableId>& variables,
     std::vector<runtime::SystemVerilogConstraintVariableId>& dependencies,
     std::string& error,
-    const std::map<std::string, std::vector<
-        runtime::SystemVerilogConstraintVariableId>>& container_variables = {});
+    const std::map<std::string, std::vector<runtime::SystemVerilogConstraintVariableId>>& container_variables = { });
 
 [[nodiscard]] std::optional<runtime::SystemVerilogConstraintDistribution>
 lower_systemverilog_constraint_distribution(
     const semantic::sv::ConstraintExpression& expression,
     std::string_view specialization_identity,
     const std::map<std::string,
-                   runtime::SystemVerilogConstraintVariableId>& variables,
+        runtime::SystemVerilogConstraintVariableId>& variables,
     std::span<const runtime::SystemVerilogConstraintVariable>
         solver_variables,
     std::string canonical_identity,
@@ -129,7 +156,7 @@ lower_systemverilog_solve_before(
     const semantic::sv::ConstraintExpression& expression,
     std::string_view specialization_identity,
     const std::map<std::string,
-                   runtime::SystemVerilogConstraintVariableId>& variables,
+        runtime::SystemVerilogConstraintVariableId>& variables,
     std::string& error);
 
 void configure_systemverilog_class_constraints(
@@ -137,7 +164,7 @@ void configure_systemverilog_class_constraints(
     const runtime::SystemVerilogClassRandomizeVariables& variables,
     const semantic::sv::Hir& hir,
     const frontend::SystemVerilogClassSpecialization& specialization,
-    const std::function<bool(std::string_view)>& constraint_enabled = {});
+    const std::function<bool(std::string_view)>& constraint_enabled = { });
 
 [[nodiscard]] const frontend::SystemVerilogClassMethodProfile*
 systemverilog_randomize_callback(
@@ -172,553 +199,574 @@ void complete_systemverilog_executable_hir(
 
 class SystemCProcessExecutor final
     : public runtime::simir::ProcessExecutor {
- public:
-  SystemCProcessExecutor(
-      std::shared_ptr<systemc::HierarchyRegistry> hierarchy,
-      const std::uint64_t process);
+public:
+    SystemCProcessExecutor(
+        std::shared_ptr<systemc::HierarchyRegistry> hierarchy,
+        const std::uint64_t process);
 
-  [[nodiscard]] runtime::simir::ProcessResumeResult resume(
-      runtime::simir::ProcessExecutionContext& context,
-      runtime::simir::InstructionIndex) override;
+    [[nodiscard]] runtime::simir::ProcessResumeResult resume(
+        runtime::simir::ProcessExecutionContext& context,
+        runtime::simir::InstructionIndex) override;
 
-  void update_channel(
-      const std::uint64_t channel,
-      runtime::simir::ProcessExecutionContext& context) override;
+    void update_channel(
+        const std::uint64_t channel,
+        runtime::simir::ProcessExecutionContext& context) override;
 
- private:
-  std::shared_ptr<systemc::HierarchyRegistry> hierarchy_;
-  std::uint64_t process_{};
+private:
+    std::shared_ptr<systemc::HierarchyRegistry> hierarchy_;
+    std::uint64_t process_ { };
 };
 
 #if defined(FSIM_HAS_LLVM)
 
 class LlvmProcessExecutor final : public runtime::simir::ProcessExecutor {
- public:
-  LlvmProcessExecutor(
-      compiler::LlvmJit& jit,
-      const compiler::JitProcessHandle handle,
-      const runtime::simir::Process& process,
-      std::span<const std::uint32_t> signal_widths,
-      std::span<const runtime::simir::ValueKind> signal_value_kinds);
-
-  [[nodiscard]] std::unique_ptr<runtime::simir::ProcessExecutor>
-  fork_clone(
-      runtime::simir::InstructionIndex start_instruction) override;
-
-  [[nodiscard]] runtime::simir::ProcessResumeResult resume(
-      runtime::simir::ProcessExecutionContext& context,
-      const runtime::simir::InstructionIndex start_instruction) override;
-
-  [[nodiscard]] PackedLogic4 read_register(
-      const runtime::simir::RegisterId id,
-      const std::size_t width) const override;
-
-  void write_register(
-      const runtime::simir::RegisterId id,
-      const PackedLogic4& value) override;
-
-  [[nodiscard]] std::string read_string_register(
-      runtime::simir::StringRegisterId id) const override;
-  void write_string_register(
-      runtime::simir::StringRegisterId id,
-      std::string_view value) override;
-  [[nodiscard]] runtime::simir::ContainerValue
-  read_container_register(
-      runtime::simir::ContainerRegisterId id) const override;
-  void write_container_register(
-      runtime::simir::ContainerRegisterId id,
-      const runtime::simir::ContainerValue& value) override;
-
- private:
-  struct FrameStorage {
-    std::vector<std::uint64_t> register_aval;
-    std::vector<std::uint64_t> register_bval;
-    std::vector<std::uint64_t> register_logic9_plane2;
-    std::vector<std::uint64_t> register_logic9_plane3;
-    std::vector<std::uint8_t> register_initialized;
-    std::vector<std::string> string_registers;
-    std::vector<runtime::simir::ContainerValue> container_registers;
-    std::vector<runtime::simir::VitalMemoryState> vital_memories;
-  };
-
-  LlvmProcessExecutor(
-      compiler::LlvmJit& jit,
-      compiler::JitProcessHandle handle,
-      const runtime::simir::Process& process,
-      std::span<const std::uint32_t> signal_widths,
-      std::span<const runtime::simir::ValueKind> signal_value_kinds,
-      std::shared_ptr<FrameStorage> storage,
-      const fsim_jit_frame_v1& parent_frame,
-      runtime::simir::InstructionIndex start_instruction);
-
-  struct CallbackState {
-    LlvmProcessExecutor* executor{};
-    runtime::simir::ProcessExecutionContext* context{};
-    const runtime::simir::Process* process{};
-    std::span<const std::uint32_t> signal_widths;
-    std::span<const runtime::simir::ValueKind> signal_value_kinds;
-    std::exception_ptr failure;
-  };
-
-  template <typename Boundary>
-  void require_boundary(
-      const runtime::simir::InstructionIndex instruction,
-      const std::string_view status) const;
-
-  static void capture_failure(CallbackState& state) noexcept;
-  static void capture_file_failure(
-      CallbackState&, std::uint32_t, std::uint32_t) noexcept;
-
-  static std::uint32_t load_string(
-      void*, std::uint32_t, const char*, std::uint64_t) noexcept;
-  static std::uint32_t copy_string(
-      void*, std::uint32_t, std::uint32_t) noexcept;
-  static std::uint32_t read_string_object(
-      void*, std::uint32_t, std::uint32_t) noexcept;
-  static std::uint32_t write_string_object(
-      void*, std::uint32_t, std::uint32_t) noexcept;
-  static std::uint32_t concatenate_strings(
-      void*, std::uint32_t, std::uint32_t, std::uint32_t,
-      const std::uint32_t*, std::uint32_t) noexcept;
-  static std::uint32_t compare_strings(
-      void*, std::uint32_t, std::uint32_t, std::uint32_t,
-      std::uint32_t*) noexcept;
-  static std::uint32_t string_length(
-      void*, std::uint32_t, std::uint32_t*) noexcept;
-  static std::uint32_t string_index(
-      void*, std::uint32_t, std::uint32_t, std::uint32_t,
-      std::uint64_t, std::uint64_t, std::uint32_t,
-      std::uint32_t*) noexcept;
-  static std::uint32_t string_replace_code_point(
-      void*, std::uint32_t, std::uint32_t, std::uint32_t,
-      std::uint64_t, std::uint64_t, std::uint32_t,
-      std::uint64_t, std::uint64_t) noexcept;
-  static std::uint32_t write_string_output(
-      void*, std::uint32_t, std::uint32_t, const char*, std::uint64_t,
-      const char*, std::uint64_t, std::uint32_t, std::uint32_t) noexcept;
-  static std::uint32_t file_open(
-      void*, std::uint32_t, std::uint32_t, std::uint32_t*) noexcept;
-  static std::uint32_t file_close(
-      void*, std::uint32_t, std::uint32_t,
-      std::uint64_t, std::uint64_t) noexcept;
-  static std::uint32_t file_write(
-      void*, std::uint32_t, std::uint32_t,
-      std::uint64_t, std::uint64_t) noexcept;
-  static std::uint32_t file_read_line(
-      void*, std::uint32_t, std::uint32_t,
-      std::uint64_t, std::uint64_t, std::uint32_t*) noexcept;
-  static std::uint32_t file_end_of_file(
-      void*, std::uint32_t, std::uint32_t,
-      std::uint64_t, std::uint64_t, std::uint32_t*) noexcept;
-  static std::uint32_t file_error(
-      void*, std::uint32_t, std::uint32_t,
-      std::uint64_t, std::uint64_t, std::uint32_t*) noexcept;
-  static std::uint32_t container_operation(
-      void*, std::uint32_t, std::uint32_t,
-      std::uint64_t, std::uint64_t,
-      std::uint64_t, std::uint64_t,
-      std::uint64_t*, std::uint64_t*) noexcept;
-  static runtime::simir::FileHandle checked_file_handle(
-      std::uint64_t aval, std::uint64_t bval);
-  static const runtime::simir::Operation& callback_operation(
-      const CallbackState&, std::uint32_t, std::uint32_t);
-
-  static std::uint64_t read_signal(
-      void* context,
-      const std::uint32_t signal,
-      std::uint64_t* bval) noexcept;
-
-  static void read_signal_logic9(
-      void* context,
-      const std::uint32_t signal,
-      fsim_jit_logic9_word_v1* result) noexcept;
-
-  static void write_signal(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint64_t aval,
-      const std::uint64_t bval) noexcept;
-
-  static void write_signal_logic9(
-      void* context,
-      const std::uint32_t signal,
-      const fsim_jit_logic9_word_v1* value) noexcept;
-
-  static void write_update(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint64_t aval,
-      const std::uint64_t bval) noexcept;
-
-  static void write_update_logic9(
-      void* context,
-      const std::uint32_t signal,
-      const fsim_jit_logic9_word_v1* value) noexcept;
-
-  static void write_after(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint64_t aval,
-      const std::uint64_t bval,
-      const std::uint64_t delay) noexcept;
-
-  static void write_after_logic9(
-      void* context,
-      const std::uint32_t signal,
-      const fsim_jit_logic9_word_v1* value,
-      const std::uint64_t delay) noexcept;
-
-  static void write_inertial(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint64_t aval,
-      const std::uint64_t bval,
-      const std::uint64_t rise_delay,
-      const std::uint64_t fall_delay,
-      const std::uint64_t turnoff_delay) noexcept;
-
-  static void write_inertial_logic9(
-      void* context,
-      const std::uint32_t signal,
-      const fsim_jit_logic9_word_v1* value,
-      const std::uint64_t rise_delay,
-      const std::uint64_t fall_delay,
-      const std::uint64_t turnoff_delay) noexcept;
-
-  static void write_projected(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint64_t aval,
-      const std::uint64_t bval,
-      const std::uint64_t delay,
-      const std::uint64_t rejection,
-      const std::uint32_t mode) noexcept;
-
-  static void write_projected_logic9(
-      void* context,
-      const std::uint32_t signal,
-      const fsim_jit_logic9_word_v1* value,
-      const std::uint64_t delay,
-      const std::uint64_t rejection,
-      const std::uint32_t mode) noexcept;
-
-  static void write_signal_slice(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint32_t offset,
-      const std::uint32_t width,
-      const std::uint64_t aval,
-      const std::uint64_t bval) noexcept;
-
-  static void write_signal_slice_logic9(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint32_t offset,
-      const std::uint32_t width,
-      const fsim_jit_logic9_word_v1* value) noexcept;
-
-  static void force_signal_slice(
-      void* context,
-      std::uint32_t signal,
-      std::uint32_t offset,
-      std::uint32_t width,
-      std::uint64_t aval,
-      std::uint64_t bval) noexcept;
-
-  static void force_signal_slice_logic9(
-      void* context,
-      std::uint32_t signal,
-      std::uint32_t offset,
-      std::uint32_t width,
-      const fsim_jit_logic9_word_v1* value) noexcept;
-
-  static void release_signal_slice(
-      void* context,
-      std::uint32_t signal,
-      std::uint32_t offset,
-      std::uint32_t width) noexcept;
-
-  static void write_update_slice(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint32_t offset,
-      const std::uint32_t width,
-      const std::uint64_t aval,
-      const std::uint64_t bval) noexcept;
-
-  static void write_update_slice_logic9(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint32_t offset,
-      const std::uint32_t width,
-      const fsim_jit_logic9_word_v1* value) noexcept;
-
-  static void write_after_slice(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint32_t offset,
-      const std::uint32_t width,
-      const std::uint64_t aval,
-      const std::uint64_t bval,
-      const std::uint64_t delay) noexcept;
-
-  static void write_after_slice_logic9(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint32_t offset,
-      const std::uint32_t width,
-      const fsim_jit_logic9_word_v1* value,
-      const std::uint64_t delay) noexcept;
-
-  static void write_inertial_slice(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint32_t offset,
-      const std::uint32_t width,
-      const std::uint64_t aval,
-      const std::uint64_t bval,
-      const std::uint64_t rise_delay,
-      const std::uint64_t fall_delay,
-      const std::uint64_t turnoff_delay) noexcept;
-
-  static void write_inertial_slice_logic9(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint32_t offset,
-      const std::uint32_t width,
-      const fsim_jit_logic9_word_v1* value,
-      const std::uint64_t rise_delay,
-      const std::uint64_t fall_delay,
-      const std::uint64_t turnoff_delay) noexcept;
-
-  static void write_projected_slice(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint32_t offset,
-      const std::uint32_t width,
-      const std::uint64_t aval,
-      const std::uint64_t bval,
-      const std::uint64_t delay,
-      const std::uint64_t rejection,
-      const std::uint32_t mode) noexcept;
-
-  static void write_projected_slice_logic9(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint32_t offset,
-      const std::uint32_t width,
-      const fsim_jit_logic9_word_v1* value,
-      const std::uint64_t delay,
-      const std::uint64_t rejection,
-      const std::uint32_t mode) noexcept;
-
-  static void write_projected_waveform(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint32_t width,
-      const fsim_jit_projected_element_v1* elements,
-      const std::uint32_t count,
-      const std::uint64_t rejection,
-      const std::uint32_t mode) noexcept;
-
-  static void write_projected_waveform_logic9(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint32_t width,
-      const fsim_jit_logic9_projected_element_v1* elements,
-      const std::uint32_t count,
-      const std::uint64_t rejection,
-      const std::uint32_t mode) noexcept;
-
-  static void write_projected_waveform_slice(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint32_t offset,
-      const std::uint32_t width,
-      const fsim_jit_projected_element_v1* elements,
-      const std::uint32_t count,
-      const std::uint64_t rejection,
-      const std::uint32_t mode) noexcept;
-
-  static void write_projected_waveform_slice_logic9(
-      void* context,
-      const std::uint32_t signal,
-      const std::uint32_t offset,
-      const std::uint32_t width,
-      const fsim_jit_logic9_projected_element_v1* elements,
-      const std::uint32_t count,
-      const std::uint64_t rejection,
-      const std::uint32_t mode) noexcept;
-
-  [[nodiscard]] static runtime::simir::ProjectedDelayMode
-  projected_delay_mode(const std::uint32_t mode);
-
-  [[nodiscard]] static runtime::Logic4Word checked_write_word(
-      const CallbackState& state,
-      const std::uint32_t signal,
-      const std::uint64_t aval,
-      const std::uint64_t bval);
-
-  static void clear_logic9_word(
-      fsim_jit_logic9_word_v1* value) noexcept;
-
-  static void require_logic9_signal(
-      const CallbackState& state,
-      const std::uint32_t signal,
-      const fsim_jit_logic9_word_v1* value);
-
-  [[nodiscard]] static PackedLogic4 checked_logic9_value(
-      const CallbackState& state,
-      const std::uint32_t signal,
-      const fsim_jit_logic9_word_v1* value);
-
-  [[nodiscard]] static PackedLogic4 checked_logic9_slice(
-      const CallbackState& state,
-      const std::uint32_t signal,
-      const std::uint32_t offset,
-      const std::uint32_t width,
-      const fsim_jit_logic9_word_v1* value);
-
-  [[nodiscard]] static runtime::Logic4Word checked_slice_word(
-      const CallbackState& state,
-      const std::uint32_t signal,
-      const std::uint32_t offset,
-      const std::uint32_t width,
-      const std::uint64_t aval,
-      const std::uint64_t bval);
-
-  static void assert_failed(
-      void* context,
-      std::uint32_t,
-      std::uint32_t,
-      const char*,
-      std::uint64_t) noexcept;
-
-  static std::uint32_t signal_event(
-      void* context,
-      const std::uint32_t signal) noexcept;
-
-  static std::uint64_t signal_last_value(
-      void* context,
-      const std::uint32_t signal,
-      std::uint64_t* bval) noexcept;
-
-  static void signal_last_value_logic9(
-      void* context,
-      const std::uint32_t signal,
-      fsim_jit_logic9_word_v1* result) noexcept;
-
-  static std::uint64_t signal_last_event(
-      void* context,
-      const std::uint32_t signal) noexcept;
-
-  static std::uint64_t read_simulation_time(void* context) noexcept;
-
-  static std::uint32_t vital_timing_check(
-      void* context,
-      std::uint32_t process,
-      std::uint32_t instruction) noexcept;
-
-  static void vital_delay(
-      void* context,
-      std::uint32_t process,
-      std::uint32_t instruction) noexcept;
-
-  static std::uint32_t signal_active(
-      void* context,
-      const std::uint32_t signal) noexcept;
-
-  static std::uint64_t signal_last_active(
-      void* context,
-      const std::uint32_t signal) noexcept;
-
-  static std::uint32_t signal_driving(
-      void* context,
-      const std::uint32_t signal) noexcept;
-
-  static std::uint64_t signal_driving_value(
-      void* context,
-      const std::uint32_t signal,
-      std::uint64_t* bval) noexcept;
-
-  static void signal_driving_value_logic9(
-      void* context,
-      const std::uint32_t signal,
-      fsim_jit_logic9_word_v1* result) noexcept;
-
-  static void write_output(
-      void* context,
-      const std::uint32_t,
-      const char* text,
-      const std::uint64_t text_size,
-      const std::uint32_t newline) noexcept;
-
-  static void schedule_output(
-      void* context,
-      const std::uint32_t,
-      const char* text,
-      const std::uint64_t text_size,
-      const std::uint32_t newline) noexcept;
-
-  static void write_report(
-      void* context,
-      const std::uint32_t process,
-      const std::uint32_t instruction) noexcept;
-
-  static void write_formatted(
-      void* context,
-      const std::uint32_t process,
-      const std::uint32_t instruction,
-      const std::uint32_t width,
-      const std::uint64_t aval,
-      const std::uint64_t bval) noexcept;
-
-  static void write_formatted_logic9(
-      void* context,
-      const std::uint32_t process,
-      const std::uint32_t instruction,
-      const std::uint32_t width,
-      const fsim_jit_logic9_word_v1* value) noexcept;
-
-  static void write_time(
-      void* context,
-      const std::uint32_t process,
-      const std::uint32_t instruction) noexcept;
-
-  static void install_monitor(
-      void* context,
-      const std::uint32_t process,
-      const std::uint32_t instruction) noexcept;
-
-  static void control_monitor(
-      void* context,
-      const std::uint32_t process,
-      const std::uint32_t instruction) noexcept;
-
-  static std::uint64_t random_value(
-      void* context,
-      const std::uint32_t process,
-      const std::uint32_t instruction,
-      const std::uint64_t maximum_aval,
-      const std::uint64_t maximum_bval,
-      const std::uint64_t minimum_aval,
-      const std::uint64_t minimum_bval,
-      std::uint64_t* result_bval) noexcept;
-
-  compiler::LlvmJit& jit_;
-  compiler::JitProcessHandle handle_;
-  const runtime::simir::Process& process_;
-  std::span<const std::uint32_t> signal_widths_;
-  std::span<const runtime::simir::ValueKind> signal_value_kinds_;
-  std::shared_ptr<FrameStorage> storage_;
-  fsim_jit_frame_v1 frame_{};
-  std::vector<std::uint64_t>& register_aval_;
-  std::vector<std::uint64_t>& register_bval_;
-  std::vector<std::uint64_t>& register_logic9_plane2_;
-  std::vector<std::uint64_t>& register_logic9_plane3_;
-  std::vector<std::uint8_t>& register_initialized_;
-  std::vector<std::string>& string_registers_;
-  std::vector<runtime::simir::ContainerValue>& container_registers_;
+public:
+    LlvmProcessExecutor(
+        compiler::LlvmJit& jit,
+        const compiler::JitProcessHandle handle,
+        const runtime::simir::Process& process,
+        std::span<const std::uint32_t> signal_widths,
+        std::span<const runtime::simir::ValueKind> signal_value_kinds);
+
+    [[nodiscard]] std::unique_ptr<runtime::simir::ProcessExecutor>
+    fork_clone(
+        runtime::simir::InstructionIndex start_instruction) override;
+
+    [[nodiscard]] runtime::simir::ProcessResumeResult resume(
+        runtime::simir::ProcessExecutionContext& context,
+        const runtime::simir::InstructionIndex start_instruction) override;
+
+    [[nodiscard]] PackedLogic4 read_register(
+        const runtime::simir::RegisterId id,
+        const std::size_t width) const override;
+
+    void write_register(
+        const runtime::simir::RegisterId id,
+        const PackedLogic4& value) override;
+
+    [[nodiscard]] std::string read_string_register(
+        runtime::simir::StringRegisterId id) const override;
+    void write_string_register(
+        runtime::simir::StringRegisterId id,
+        std::string_view value) override;
+    [[nodiscard]] runtime::simir::ContainerValue
+    read_container_register(
+        runtime::simir::ContainerRegisterId id) const override;
+    void write_container_register(
+        runtime::simir::ContainerRegisterId id,
+        const runtime::simir::ContainerValue& value) override;
+
+private:
+    struct FrameStorage {
+        std::vector<std::uint64_t> register_aval;
+        std::vector<std::uint64_t> register_bval;
+        std::vector<std::uint64_t> register_logic9_plane2;
+        std::vector<std::uint64_t> register_logic9_plane3;
+        std::vector<std::uint8_t> register_initialized;
+        std::vector<std::string> string_registers;
+        std::vector<runtime::simir::ContainerValue> container_registers;
+        std::vector<runtime::simir::VitalMemoryState> vital_memories;
+    };
+
+    LlvmProcessExecutor(
+        compiler::LlvmJit& jit,
+        compiler::JitProcessHandle handle,
+        const runtime::simir::Process& process,
+        std::span<const std::uint32_t> signal_widths,
+        std::span<const runtime::simir::ValueKind> signal_value_kinds,
+        std::shared_ptr<FrameStorage> storage,
+        const fsim_jit_frame_v1& parent_frame,
+        runtime::simir::InstructionIndex start_instruction);
+
+    struct CallbackState {
+        LlvmProcessExecutor* executor { };
+        runtime::simir::ProcessExecutionContext* context { };
+        const runtime::simir::Process* process { };
+        std::span<const std::uint32_t> signal_widths;
+        std::span<const runtime::simir::ValueKind> signal_value_kinds;
+        std::exception_ptr failure;
+    };
+
+    template <typename Boundary>
+    void require_boundary(
+        const runtime::simir::InstructionIndex instruction,
+        const std::string_view status) const;
+
+    static void capture_failure(CallbackState& state) noexcept;
+    static void capture_file_failure(
+        CallbackState&, std::uint32_t, std::uint32_t) noexcept;
+
+    static std::uint32_t load_string(
+        void*, std::uint32_t, const char*, std::uint64_t) noexcept;
+    static std::uint32_t copy_string(
+        void*, std::uint32_t, std::uint32_t) noexcept;
+    static std::uint32_t read_string_object(
+        void*, std::uint32_t, std::uint32_t) noexcept;
+    static std::uint32_t write_string_object(
+        void*, std::uint32_t, std::uint32_t) noexcept;
+    static std::uint32_t concatenate_strings(
+        void*, std::uint32_t, std::uint32_t, std::uint32_t,
+        const std::uint32_t*, std::uint32_t) noexcept;
+    static std::uint32_t compare_strings(
+        void*, std::uint32_t, std::uint32_t, std::uint32_t,
+        std::uint32_t*) noexcept;
+    static std::uint32_t string_length(
+        void*, std::uint32_t, std::uint32_t*) noexcept;
+    static std::uint32_t string_index(
+        void*, std::uint32_t, std::uint32_t, std::uint32_t,
+        std::uint64_t, std::uint64_t, std::uint32_t,
+        std::uint32_t*) noexcept;
+    static std::uint32_t string_replace_code_point(
+        void*, std::uint32_t, std::uint32_t, std::uint32_t,
+        std::uint64_t, std::uint64_t, std::uint32_t,
+        std::uint64_t, std::uint64_t) noexcept;
+    static std::uint32_t write_string_output(
+        void*, std::uint32_t, std::uint32_t, const char*, std::uint64_t,
+        const char*, std::uint64_t, std::uint32_t, std::uint32_t) noexcept;
+    static std::uint32_t file_open(
+        void*, std::uint32_t, std::uint32_t, std::uint32_t*) noexcept;
+    static std::uint32_t file_close(
+        void*, std::uint32_t, std::uint32_t,
+        std::uint64_t, std::uint64_t) noexcept;
+    static std::uint32_t file_write(
+        void*, std::uint32_t, std::uint32_t,
+        std::uint64_t, std::uint64_t) noexcept;
+    static std::uint32_t file_read_line(
+        void*, std::uint32_t, std::uint32_t,
+        std::uint64_t, std::uint64_t, std::uint32_t*) noexcept;
+    static std::uint32_t file_end_of_file(
+        void*, std::uint32_t, std::uint32_t,
+        std::uint64_t, std::uint64_t, std::uint32_t*) noexcept;
+    static std::uint32_t file_error(
+        void*, std::uint32_t, std::uint32_t,
+        std::uint64_t, std::uint64_t, std::uint32_t*) noexcept;
+    static std::uint32_t container_operation(
+        void*, std::uint32_t, std::uint32_t,
+        std::uint64_t, std::uint64_t,
+        std::uint64_t, std::uint64_t,
+        std::uint64_t*, std::uint64_t*) noexcept;
+    static runtime::simir::FileHandle checked_file_handle(
+        std::uint64_t aval, std::uint64_t bval);
+    static const runtime::simir::Operation& callback_operation(
+        const CallbackState&, std::uint32_t, std::uint32_t);
+
+    static std::uint64_t read_signal(
+        void* context,
+        const std::uint32_t signal,
+        std::uint64_t* bval) noexcept;
+
+    static void read_signal_logic9(
+        void* context,
+        const std::uint32_t signal,
+        fsim_jit_logic9_word_v1* result) noexcept;
+
+    static void write_signal(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint64_t aval,
+        const std::uint64_t bval) noexcept;
+
+    static void write_signal_logic9(
+        void* context,
+        const std::uint32_t signal,
+        const fsim_jit_logic9_word_v1* value) noexcept;
+
+    static void write_update(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint64_t aval,
+        const std::uint64_t bval) noexcept;
+
+    static void write_update_logic9(
+        void* context,
+        const std::uint32_t signal,
+        const fsim_jit_logic9_word_v1* value) noexcept;
+
+    static void write_after(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint64_t aval,
+        const std::uint64_t bval,
+        const std::uint64_t delay) noexcept;
+
+    static void write_after_logic9(
+        void* context,
+        const std::uint32_t signal,
+        const fsim_jit_logic9_word_v1* value,
+        const std::uint64_t delay) noexcept;
+
+    static void write_inertial(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint64_t aval,
+        const std::uint64_t bval,
+        const std::uint64_t rise_delay,
+        const std::uint64_t fall_delay,
+        const std::uint64_t turnoff_delay) noexcept;
+
+    static void write_inertial_logic9(
+        void* context,
+        const std::uint32_t signal,
+        const fsim_jit_logic9_word_v1* value,
+        const std::uint64_t rise_delay,
+        const std::uint64_t fall_delay,
+        const std::uint64_t turnoff_delay) noexcept;
+
+    static void write_projected(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint64_t aval,
+        const std::uint64_t bval,
+        const std::uint64_t delay,
+        const std::uint64_t rejection,
+        const std::uint32_t mode) noexcept;
+
+    static void write_projected_logic9(
+        void* context,
+        const std::uint32_t signal,
+        const fsim_jit_logic9_word_v1* value,
+        const std::uint64_t delay,
+        const std::uint64_t rejection,
+        const std::uint32_t mode) noexcept;
+
+    static void write_signal_slice(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint32_t offset,
+        const std::uint32_t width,
+        const std::uint64_t aval,
+        const std::uint64_t bval) noexcept;
+
+    static void write_signal_slice_logic9(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint32_t offset,
+        const std::uint32_t width,
+        const fsim_jit_logic9_word_v1* value) noexcept;
+
+    static void force_signal_slice(
+        void* context,
+        std::uint32_t signal,
+        std::uint32_t offset,
+        std::uint32_t width,
+        std::uint64_t aval,
+        std::uint64_t bval) noexcept;
+
+    static void force_signal_slice_logic9(
+        void* context,
+        std::uint32_t signal,
+        std::uint32_t offset,
+        std::uint32_t width,
+        const fsim_jit_logic9_word_v1* value) noexcept;
+
+    static void release_signal_slice(
+        void* context,
+        std::uint32_t signal,
+        std::uint32_t offset,
+        std::uint32_t width) noexcept;
+
+    static void force_driver_signal_slice(
+        void* context,
+        std::uint32_t signal,
+        std::uint32_t offset,
+        std::uint32_t width,
+        std::uint64_t aval,
+        std::uint64_t bval) noexcept;
+
+    static void force_driver_signal_slice_logic9(
+        void* context,
+        std::uint32_t signal,
+        std::uint32_t offset,
+        std::uint32_t width,
+        const fsim_jit_logic9_word_v1* value) noexcept;
+
+    static void release_driver_signal_slice(
+        void* context,
+        std::uint32_t signal,
+        std::uint32_t offset,
+        std::uint32_t width) noexcept;
+
+    static void write_update_slice(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint32_t offset,
+        const std::uint32_t width,
+        const std::uint64_t aval,
+        const std::uint64_t bval) noexcept;
+
+    static void write_update_slice_logic9(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint32_t offset,
+        const std::uint32_t width,
+        const fsim_jit_logic9_word_v1* value) noexcept;
+
+    static void write_after_slice(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint32_t offset,
+        const std::uint32_t width,
+        const std::uint64_t aval,
+        const std::uint64_t bval,
+        const std::uint64_t delay) noexcept;
+
+    static void write_after_slice_logic9(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint32_t offset,
+        const std::uint32_t width,
+        const fsim_jit_logic9_word_v1* value,
+        const std::uint64_t delay) noexcept;
+
+    static void write_inertial_slice(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint32_t offset,
+        const std::uint32_t width,
+        const std::uint64_t aval,
+        const std::uint64_t bval,
+        const std::uint64_t rise_delay,
+        const std::uint64_t fall_delay,
+        const std::uint64_t turnoff_delay) noexcept;
+
+    static void write_inertial_slice_logic9(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint32_t offset,
+        const std::uint32_t width,
+        const fsim_jit_logic9_word_v1* value,
+        const std::uint64_t rise_delay,
+        const std::uint64_t fall_delay,
+        const std::uint64_t turnoff_delay) noexcept;
+
+    static void write_projected_slice(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint32_t offset,
+        const std::uint32_t width,
+        const std::uint64_t aval,
+        const std::uint64_t bval,
+        const std::uint64_t delay,
+        const std::uint64_t rejection,
+        const std::uint32_t mode) noexcept;
+
+    static void write_projected_slice_logic9(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint32_t offset,
+        const std::uint32_t width,
+        const fsim_jit_logic9_word_v1* value,
+        const std::uint64_t delay,
+        const std::uint64_t rejection,
+        const std::uint32_t mode) noexcept;
+
+    static void write_projected_waveform(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint32_t width,
+        const fsim_jit_projected_element_v1* elements,
+        const std::uint32_t count,
+        const std::uint64_t rejection,
+        const std::uint32_t mode) noexcept;
+
+    static void write_projected_waveform_logic9(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint32_t width,
+        const fsim_jit_logic9_projected_element_v1* elements,
+        const std::uint32_t count,
+        const std::uint64_t rejection,
+        const std::uint32_t mode) noexcept;
+
+    static void write_projected_waveform_slice(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint32_t offset,
+        const std::uint32_t width,
+        const fsim_jit_projected_element_v1* elements,
+        const std::uint32_t count,
+        const std::uint64_t rejection,
+        const std::uint32_t mode) noexcept;
+
+    static void write_projected_waveform_slice_logic9(
+        void* context,
+        const std::uint32_t signal,
+        const std::uint32_t offset,
+        const std::uint32_t width,
+        const fsim_jit_logic9_projected_element_v1* elements,
+        const std::uint32_t count,
+        const std::uint64_t rejection,
+        const std::uint32_t mode) noexcept;
+
+    [[nodiscard]] static runtime::simir::ProjectedDelayMode
+    projected_delay_mode(const std::uint32_t mode);
+
+    [[nodiscard]] static runtime::Logic4Word checked_write_word(
+        const CallbackState& state,
+        const std::uint32_t signal,
+        const std::uint64_t aval,
+        const std::uint64_t bval);
+
+    static void clear_logic9_word(
+        fsim_jit_logic9_word_v1* value) noexcept;
+
+    static void require_logic9_signal(
+        const CallbackState& state,
+        const std::uint32_t signal,
+        const fsim_jit_logic9_word_v1* value);
+
+    [[nodiscard]] static PackedLogic4 checked_logic9_value(
+        const CallbackState& state,
+        const std::uint32_t signal,
+        const fsim_jit_logic9_word_v1* value);
+
+    [[nodiscard]] static PackedLogic4 checked_logic9_slice(
+        const CallbackState& state,
+        const std::uint32_t signal,
+        const std::uint32_t offset,
+        const std::uint32_t width,
+        const fsim_jit_logic9_word_v1* value);
+
+    [[nodiscard]] static runtime::Logic4Word checked_slice_word(
+        const CallbackState& state,
+        const std::uint32_t signal,
+        const std::uint32_t offset,
+        const std::uint32_t width,
+        const std::uint64_t aval,
+        const std::uint64_t bval);
+
+    static void assert_failed(
+        void* context,
+        std::uint32_t,
+        std::uint32_t,
+        const char*,
+        std::uint64_t) noexcept;
+
+    static std::uint32_t signal_event(
+        void* context,
+        const std::uint32_t signal) noexcept;
+
+    static std::uint64_t signal_last_value(
+        void* context,
+        const std::uint32_t signal,
+        std::uint64_t* bval) noexcept;
+
+    static void signal_last_value_logic9(
+        void* context,
+        const std::uint32_t signal,
+        fsim_jit_logic9_word_v1* result) noexcept;
+
+    static std::uint64_t signal_last_event(
+        void* context,
+        const std::uint32_t signal) noexcept;
+
+    static std::uint64_t read_simulation_time(void* context) noexcept;
+
+    static std::uint32_t vital_timing_check(
+        void* context,
+        std::uint32_t process,
+        std::uint32_t instruction) noexcept;
+
+    static void vital_delay(
+        void* context,
+        std::uint32_t process,
+        std::uint32_t instruction) noexcept;
+
+    static std::uint32_t signal_active(
+        void* context,
+        const std::uint32_t signal) noexcept;
+
+    static std::uint64_t signal_last_active(
+        void* context,
+        const std::uint32_t signal) noexcept;
+
+    static std::uint32_t signal_driving(
+        void* context,
+        const std::uint32_t signal) noexcept;
+
+    static std::uint64_t signal_driving_value(
+        void* context,
+        const std::uint32_t signal,
+        std::uint64_t* bval) noexcept;
+
+    static void signal_driving_value_logic9(
+        void* context,
+        const std::uint32_t signal,
+        fsim_jit_logic9_word_v1* result) noexcept;
+
+    static void write_output(
+        void* context,
+        const std::uint32_t,
+        const char* text,
+        const std::uint64_t text_size,
+        const std::uint32_t newline) noexcept;
+
+    static void schedule_output(
+        void* context,
+        const std::uint32_t,
+        const char* text,
+        const std::uint64_t text_size,
+        const std::uint32_t newline) noexcept;
+
+    static void write_report(
+        void* context,
+        const std::uint32_t process,
+        const std::uint32_t instruction) noexcept;
+
+    static void write_formatted(
+        void* context,
+        const std::uint32_t process,
+        const std::uint32_t instruction,
+        const std::uint32_t width,
+        const std::uint64_t aval,
+        const std::uint64_t bval) noexcept;
+
+    static void write_formatted_logic9(
+        void* context,
+        const std::uint32_t process,
+        const std::uint32_t instruction,
+        const std::uint32_t width,
+        const fsim_jit_logic9_word_v1* value) noexcept;
+
+    static void write_time(
+        void* context,
+        const std::uint32_t process,
+        const std::uint32_t instruction) noexcept;
+
+    static void install_monitor(
+        void* context,
+        const std::uint32_t process,
+        const std::uint32_t instruction) noexcept;
+
+    static void control_monitor(
+        void* context,
+        const std::uint32_t process,
+        const std::uint32_t instruction) noexcept;
+
+    static std::uint64_t random_value(
+        void* context,
+        const std::uint32_t process,
+        const std::uint32_t instruction,
+        const std::uint64_t maximum_aval,
+        const std::uint64_t maximum_bval,
+        const std::uint64_t minimum_aval,
+        const std::uint64_t minimum_bval,
+        std::uint64_t* result_bval) noexcept;
+
+    compiler::LlvmJit& jit_;
+    compiler::JitProcessHandle handle_;
+    const runtime::simir::Process& process_;
+    std::span<const std::uint32_t> signal_widths_;
+    std::span<const runtime::simir::ValueKind> signal_value_kinds_;
+    std::shared_ptr<FrameStorage> storage_;
+    fsim_jit_frame_v1 frame_ { };
+    std::vector<std::uint64_t>& register_aval_;
+    std::vector<std::uint64_t>& register_bval_;
+    std::vector<std::uint64_t>& register_logic9_plane2_;
+    std::vector<std::uint64_t>& register_logic9_plane3_;
+    std::vector<std::uint8_t>& register_initialized_;
+    std::vector<std::string>& string_registers_;
+    std::vector<runtime::simir::ContainerValue>& container_registers_;
 };
 
 [[nodiscard]] compiler::JitOptimizationLevel jit_optimization(
@@ -734,17 +782,17 @@ static_assert(
 extern "C" void handle_interrupt(int);
 
 class InterruptSignalGuard final {
- public:
-  InterruptSignalGuard() noexcept;
+public:
+    InterruptSignalGuard() noexcept;
 
-  ~InterruptSignalGuard();
+    ~InterruptSignalGuard();
 
-  InterruptSignalGuard(const InterruptSignalGuard&) = delete;
-  InterruptSignalGuard& operator=(const InterruptSignalGuard&) = delete;
+    InterruptSignalGuard(const InterruptSignalGuard&) = delete;
+    InterruptSignalGuard& operator=(const InterruptSignalGuard&) = delete;
 
- private:
-  using Handler = void (*)(int);
-  Handler previous_{SIG_ERR};
+private:
+    using Handler = void (*)(int);
+    Handler previous_ { SIG_ERR };
 };
 
 diagnostic::SourcePosition position(const frontend::SourceLocation& source);
@@ -758,27 +806,27 @@ void import_diagnostic(
 frontend::Language frontend_language(const project::Language language);
 
 struct ParseInput {
-  std::filesystem::path path;
-  frontend::Language language{frontend::Language::SystemVerilog2017};
-  std::string library{"work"};
-  std::size_t source_order{};
+    std::filesystem::path path;
+    frontend::Language language { frontend::Language::SystemVerilog2017 };
+    std::string library { "work" };
+    std::size_t source_order { };
 };
 
 struct ParseGroup {
-  frontend::Language language{frontend::Language::SystemVerilog2017};
-  std::string standard;
-  std::vector<ParseInput> inputs;
-  std::vector<std::filesystem::path> include_directories;
-  std::vector<std::string> defines;
+    frontend::Language language { frontend::Language::SystemVerilog2017 };
+    std::string standard;
+    std::vector<ParseInput> inputs;
+    std::vector<std::filesystem::path> include_directories;
+    std::vector<std::string> defines;
 };
 
 struct ParsedSnapshot {
-  frontend::ParseResult result;
-  std::vector<CheckedSource> sources;
-  std::vector<std::size_t> unit_source_orders;
-  std::vector<std::size_t> udp_source_orders;
-  std::vector<std::size_t> class_source_orders;
-  std::vector<std::size_t> class_method_source_orders;
+    frontend::ParseResult result;
+    std::vector<CheckedSource> sources;
+    std::vector<std::size_t> unit_source_orders;
+    std::vector<std::size_t> udp_source_orders;
+    std::vector<std::size_t> class_source_orders;
+    std::vector<std::size_t> class_method_source_orders;
 };
 
 bool same_source_path(
@@ -800,8 +848,8 @@ std::optional<systemc::PluginCompileRequest> systemc_request(
     const project::Config& config);
 
 struct SystemCLibraryCompileRequest {
-  std::string library;
-  systemc::PluginCompileRequest request;
+    std::string library;
+    systemc::PluginCompileRequest request;
 };
 
 std::vector<SystemCLibraryCompileRequest> systemc_requests(
@@ -812,13 +860,21 @@ std::shared_ptr<systemc::HierarchyRegistry> load_systemc_plugin(
     diagnostic::Engine& diagnostics);
 
 struct SystemCLibraryRegistry {
-  std::string library;
-  std::shared_ptr<systemc::HierarchyRegistry> registry;
+    std::string library;
+    std::shared_ptr<systemc::HierarchyRegistry> registry;
 };
 
 std::string unit_key(const frontend::DesignUnit& unit);
 
+void report_vhdl_duplicate_design_unit(
+    const frontend::DesignUnit& unit,
+    diagnostic::Engine& diagnostics);
+
 void validate_vhdl_analysis_order(
+    std::span<const frontend::DesignUnit> units,
+    diagnostic::Engine& diagnostics);
+
+void validate_vhdl_package_declarations(
     std::span<const frontend::DesignUnit> units,
     diagnostic::Engine& diagnostics);
 
@@ -832,9 +888,9 @@ std::vector<project::ProjectSection::TopLevel> selected_tops(
     diagnostic::Engine& diagnostics);
 
 struct BindingTarget {
-  std::string language;
-  std::string qualifier;
-  std::string unit;
+    std::string language;
+    std::string qualifier;
+    std::string unit;
 };
 
 std::optional<BindingTarget> parse_binding_target(std::string_view target);
@@ -865,54 +921,55 @@ construct_systemc_instances(
 class ApplicationSystemCFactoryProvider final
     : public elaboration::SystemCFactoryProvider {
 public:
-  ApplicationSystemCFactoryProvider(
-      std::span<const SystemCLibraryRegistry> registries,
-      const std::span<
-          const elaboration::SystemCInstanceDescription> eager_instances,
-      std::vector<std::uint64_t>& lifecycle_roots);
+    ApplicationSystemCFactoryProvider(
+        std::span<const SystemCLibraryRegistry> registries,
+        const std::span<
+            const elaboration::SystemCInstanceDescription>
+            eager_instances,
+        std::vector<std::uint64_t>& lifecycle_roots);
 
-  [[nodiscard]] std::shared_ptr<systemc::HierarchyRegistry>
-  registry_for_handle(std::uint64_t handle) const;
+    [[nodiscard]] std::shared_ptr<systemc::HierarchyRegistry>
+    registry_for_handle(std::uint64_t handle) const;
 
-  std::vector<elaboration::SystemCFactoryCandidate>
-  candidates() const override;
+    std::vector<elaboration::SystemCFactoryCandidate>
+    candidates() const override;
 
-  std::vector<std::string> libraries() const override;
+    std::vector<std::string> libraries() const override;
 
-  std::optional<std::vector<
-      elaboration::SystemCConstructionParameter>>
-  schema(
-      const std::string_view target,
-      std::string& error) override;
+    std::optional<std::vector<
+        elaboration::SystemCConstructionParameter>>
+    schema(
+        const std::string_view target,
+        std::string& error) override;
 
-  std::optional<elaboration::SystemCInstanceDescription>
-  instantiate(
-      const std::string_view path,
-      const std::string_view target,
-      const std::span<
-          const std::pair<std::string, std::int64_t>>
-          construction_values,
-      std::string& error) override;
+    std::optional<elaboration::SystemCInstanceDescription>
+    instantiate(
+        const std::string_view path,
+        const std::string_view target,
+        const std::span<
+            const std::pair<std::string, std::int64_t>>
+            construction_values,
+        std::string& error) override;
 
 private:
-  void record_handles(
-      const std::string& path,
-      const elaboration::SystemCInstanceDescription& description,
-      systemc::HierarchyRegistry* registry);
+    void record_handles(
+        const std::string& path,
+        const elaboration::SystemCInstanceDescription& description,
+        systemc::HierarchyRegistry* registry);
 
-  void record_handles(
-      const std::string& path,
-      const systemc::ModuleDescription& description,
-      systemc::HierarchyRegistry* registry);
+    void record_handles(
+        const std::string& path,
+        const systemc::ModuleDescription& description,
+        systemc::HierarchyRegistry* registry);
 
-  struct HandleOwner {
-    fsim_sc_handle_v1 handle{};
-    systemc::HierarchyRegistry* registry{};
-  };
+    struct HandleOwner {
+        fsim_sc_handle_v1 handle { };
+        systemc::HierarchyRegistry* registry { };
+    };
 
-  std::vector<SystemCLibraryRegistry> registries_;
-  std::vector<std::uint64_t>& lifecycle_roots_;
-  std::map<std::string, HandleOwner> handles_;
+    std::vector<SystemCLibraryRegistry> registries_;
+    std::vector<std::uint64_t>& lifecycle_roots_;
+    std::map<std::string, HandleOwner> handles_;
 };
 
 void validate_bindings(
@@ -946,8 +1003,8 @@ bool trace_selected(
     const std::string_view name);
 
 struct VcdScale {
-  std::string timescale;
-  SimulationTick tick_multiplier{1};
+    std::string timescale;
+    SimulationTick tick_multiplier { 1 };
 };
 
 std::optional<VcdScale> vcd_scale(
@@ -955,17 +1012,17 @@ std::optional<VcdScale> vcd_scale(
     diagnostic::Engine& diagnostics);
 
 struct TraceState {
-  ~TraceState();
+    ~TraceState();
 
-  std::ofstream stream;
-  std::unique_ptr<runtime::VcdWriter> writer;
-  std::vector<std::vector<runtime::VcdSignal>> handles;
-  std::vector<bool> enabled;
-  std::vector<runtime::SystemVerilogScalarKind> scalar_kinds;
-  std::array<runtime::VcdSignal, 7> uvm_activity_handles{};
-  Simulation* simulation{};
-  std::uint64_t uvm_activity_observer{};
-  SimulationTick tick_multiplier{1};
+    std::ofstream stream;
+    std::unique_ptr<runtime::VcdWriter> writer;
+    std::vector<std::vector<runtime::VcdSignal>> handles;
+    std::vector<bool> enabled;
+    std::vector<runtime::SystemVerilogScalarKind> scalar_kinds;
+    std::array<runtime::VcdSignal, 7> uvm_activity_handles { };
+    Simulation* simulation { };
+    std::uint64_t uvm_activity_observer { };
+    SimulationTick tick_multiplier { 1 };
 };
 
 void write_trace_signal_value(
@@ -1069,153 +1126,157 @@ void print_debug_help(std::ostream& output);
 std::vector<std::string> words(const std::string& line);
 
 enum class DebugBreakpointKind {
-  time,
-  signal,
-  source,
-  phase,
-  uvm,
+    time,
+    signal,
+    source,
+    phase,
+    uvm,
 };
 
 struct DebugBreakpoint {
-  std::uint64_t id{};
-  DebugBreakpointKind kind{DebugBreakpointKind::time};
-  SimulationTick time{};
-  SignalId signal{};
-  std::string path;
-  std::uint32_t line{};
-  std::optional<PackedLogic4> signal_condition;
-  bool signal_condition_equal{true};
+    std::uint64_t id { };
+    DebugBreakpointKind kind { DebugBreakpointKind::time };
+    SimulationTick time { };
+    SignalId signal { };
+    std::string path;
+    std::uint32_t line { };
+    std::optional<PackedLogic4> signal_condition;
+    bool signal_condition_equal { true };
 };
 
 struct DebugBreakpointHit {
-  std::uint64_t id{};
-  std::string description;
+    std::uint64_t id { };
+    std::string description;
 };
 
 class DebuggerSession final {
- public:
-  DebuggerSession(
-      Simulation& simulation,
-      std::ostream& output,
-      std::ostream& error,
-      TraceState* trace = nullptr);
+public:
+    DebuggerSession(
+        Simulation& simulation,
+        std::ostream& output,
+        std::ostream& error,
+        TraceState* trace = nullptr);
 
-  ~DebuggerSession();
+    ~DebuggerSession();
 
-  DebuggerSession(const DebuggerSession&) = delete;
-  DebuggerSession& operator=(const DebuggerSession&) = delete;
+    DebuggerSession(const DebuggerSession&) = delete;
+    DebuggerSession& operator=(const DebuggerSession&) = delete;
 
-  void execute(const std::vector<std::string>& command);
+    void execute(const std::vector<std::string>& command);
 
- private:
-  struct ExecutionGuard {
-    bool& executing;
-    ~ExecutionGuard();
-  };
+private:
+    struct ExecutionGuard {
+        bool& executing;
+        ~ExecutionGuard();
+    };
 
-  [[nodiscard]] static std::string format_value(
-      const PackedLogic4& value,
-      const std::vector<std::string>& enumeration_literals);
+    [[nodiscard]] static std::string format_value(
+        const PackedLogic4& value,
+        const std::vector<std::string>& enumeration_literals);
 
-  [[nodiscard]] bool canonical_path(const std::string_view path) const;
+    [[nodiscard]] bool canonical_path(const std::string_view path) const;
 
-  [[nodiscard]] std::vector<std::string> lexical_paths(
-      std::string_view name) const;
+    [[nodiscard]] std::vector<std::string> lexical_paths(
+        std::string_view name) const;
 
-  [[nodiscard]] std::optional<std::string> resolve_scope(
-      const std::string_view requested) const;
+    [[nodiscard]] std::optional<std::string> resolve_scope(
+        const std::string_view requested) const;
 
-  [[nodiscard]] std::optional<std::pair<std::string, SignalId>>
-  resolve_signal(const std::string_view name);
+    [[nodiscard]] std::optional<std::pair<std::string, SignalId>>
+    resolve_signal(const std::string_view name);
 
-  [[nodiscard]] std::optional<std::pair<
-      std::string, runtime::simir::StringObjectId>>
-  resolve_string_object(std::string_view name) const;
-  [[nodiscard]] std::optional<std::pair<
-      std::string, runtime::simir::ContainerObjectId>>
-  resolve_container_object(std::string_view name) const;
+    [[nodiscard]] std::optional<std::pair<
+        std::string, runtime::simir::StringObjectId>>
+    resolve_string_object(std::string_view name) const;
+    [[nodiscard]] std::optional<std::pair<
+        std::string, runtime::simir::ContainerObjectId>>
+    resolve_container_object(std::string_view name) const;
 
-  [[nodiscard]] std::optional<SimulationTick> command_time(
-      const std::string_view text);
+    [[nodiscard]] std::optional<SimulationTick> command_time(
+        const std::string_view text);
 
-  void scope_command(const std::vector<std::string>& command);
+    void scope_command(const std::vector<std::string>& command);
 
-  void scopes_command(const std::vector<std::string>& command);
+    void scopes_command(const std::vector<std::string>& command);
 
-  void signals_command(const std::vector<std::string>& command);
+    void signals_command(const std::vector<std::string>& command);
 
-  void modify_signal(const std::vector<std::string>& command);
+    void modify_signal(const std::vector<std::string>& command);
 
-  void show_locals();
+    void show_locals();
 
-  void uvm_command(const std::vector<std::string>& command);
+    void uvm_command(const std::vector<std::string>& command);
 
-  [[nodiscard]] std::vector<std::pair<
-      std::string, runtime::SystemVerilogUvmPhaseState>> phase_states() const;
+    void vhdl_command(const std::vector<std::string>& command);
 
-  void trace_command(const std::vector<std::string>& command);
+    [[nodiscard]] std::vector<std::pair<
+        std::string, runtime::SystemVerilogUvmPhaseState>>
+    phase_states() const;
 
-  void set_trace_enabled(const SignalId signal, const bool enable);
+    void trace_command(const std::vector<std::string>& command);
 
-  void add_breakpoint(const std::vector<std::string>& command);
+    void set_trace_enabled(const SignalId signal, const bool enable);
 
-  void list_breakpoints() const;
+    void add_breakpoint(const std::vector<std::string>& command);
 
-  void delete_breakpoint(const std::string_view id_text);
+    void list_breakpoints() const;
 
-  [[nodiscard]] std::optional<DebugBreakpoint> earliest_time_breakpoint(
-      const SimulationTick start,
-      const std::optional<SimulationTick> requested_limit) const;
+    void delete_breakpoint(const std::string_view id_text);
 
-  [[nodiscard]] static bool source_path_matches(
-      const std::string_view requested,
-      const std::string_view actual);
+    [[nodiscard]] std::optional<DebugBreakpoint> earliest_time_breakpoint(
+        const SimulationTick start,
+        const std::optional<SimulationTick> requested_limit) const;
 
-  [[nodiscard]] static bool is_statement_point(
-      const runtime::simir::ExecutionPointKind kind) noexcept;
+    [[nodiscard]] static bool source_path_matches(
+        const std::string_view requested,
+        const std::string_view actual);
 
-  void install_execution_hook(
-      const std::optional<DebugBreakpoint>& time_breakpoint,
-      const std::function<bool(runtime::Scheduler&, runtime::SchedulerPhase)>&
-          additional_stop = {},
-      const std::function<bool(const runtime::simir::ExecutionPoint&)>&
-          additional_execution_stop = {});
+    [[nodiscard]] static bool is_statement_point(
+        const runtime::simir::ExecutionPointKind kind) noexcept;
 
-  void report_execution_point();
+    void install_execution_hook(
+        const std::optional<DebugBreakpoint>& time_breakpoint,
+        const std::function<bool(runtime::Scheduler&, runtime::SchedulerPhase)>&
+            additional_stop = { },
+        const std::function<bool(const runtime::simir::ExecutionPoint&)>&
+            additional_execution_stop = { });
 
-  void report_result(const runtime::RunResult& result);
+    void report_execution_point();
 
-  [[nodiscard]] bool can_execute();
+    void report_result(const runtime::RunResult& result);
 
-  void run(const std::optional<SimulationTick> requested_limit);
+    [[nodiscard]] bool can_execute();
 
-  void step(const bool delta_step);
+    void run(const std::optional<SimulationTick> requested_limit);
 
-  void step_phase();
+    void step(const bool delta_step);
 
-  void step_execution(const bool process_step);
+    void step_phase();
 
-  Simulation& simulation_;
-  std::ostream& output_;
-  std::ostream& error_;
-  TraceState* trace_{};
-  std::string scope_;
-  std::vector<std::pair<std::string, SignalId>> signal_paths_;
-  std::vector<std::pair<
-      std::string, runtime::simir::ContainerObjectId>>
-      container_paths_;
-  std::vector<std::string> execution_scope_paths_;
-  std::vector<DebugBreakpoint> breakpoints_;
-  std::optional<DebugBreakpointHit> hit_;
-  std::optional<runtime::simir::ExecutionPoint> current_execution_point_;
-  std::vector<std::pair<
-      std::string, runtime::SystemVerilogUvmPhaseState>> phase_states_;
-  std::optional<std::string> phase_transition_;
-  std::uint64_t next_breakpoint_{1};
-  std::uint64_t observer_{};
-  std::uint64_t uvm_observer_{};
-  bool executing_{};
-  bool stop_on_phase_transition_{};
+    void step_execution(const bool process_step);
+
+    Simulation& simulation_;
+    std::ostream& output_;
+    std::ostream& error_;
+    TraceState* trace_ { };
+    std::string scope_;
+    std::vector<std::pair<std::string, SignalId>> signal_paths_;
+    std::vector<std::pair<
+        std::string, runtime::simir::ContainerObjectId>>
+        container_paths_;
+    std::vector<std::string> execution_scope_paths_;
+    std::vector<DebugBreakpoint> breakpoints_;
+    std::optional<DebugBreakpointHit> hit_;
+    std::optional<runtime::simir::ExecutionPoint> current_execution_point_;
+    std::vector<std::pair<
+        std::string, runtime::SystemVerilogUvmPhaseState>>
+        phase_states_;
+    std::optional<std::string> phase_transition_;
+    std::uint64_t next_breakpoint_ { 1 };
+    std::uint64_t observer_ { };
+    std::uint64_t uvm_observer_ { };
+    bool executing_ { };
+    bool stop_on_phase_transition_ { };
 };
 
 int run_debug_repl_impl(
@@ -1234,8 +1295,8 @@ int handle_debug(
     std::ostream& error_output);
 
 struct ParsedMagnitude {
-  std::uint64_t magnitude{};
-  std::string unit;
+    std::uint64_t magnitude { };
+    std::string unit;
 };
 
 std::optional<ParsedMagnitude> magnitude_and_unit(std::string_view text);
@@ -1272,6 +1333,5 @@ bool validate_declared_time_precisions(
     const frontend::ParsedDesign& parsed,
     const std::string_view resolution,
     diagnostic::Engine& diagnostics);
-
 
 } // namespace fsim::app::application_detail

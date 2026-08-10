@@ -160,14 +160,15 @@ Lowerer::ExpressionAttempt Lowerer::lower_vhdl_conversion_expression(
   }
 
   const auto width = conversion_type->width();
-  if (!width || *width == 0 || *width > 64) {
+  if (!width || *width == 0
+      || *width > std::numeric_limits<std::uint32_t>::max()) {
     report(
         qualified ? "FSIM-ELAB-VHQUAL-002"
                   : "FSIM-ELAB-VHCONV-002",
         std::string{qualified ? "VHDL qualification type '"
                               : "VHDL conversion type '"}
             + std::string{conversion_name}
-            + "' has no executable width in 1..64",
+            + "' has no SimIR-representable executable width",
         expression.span);
     return std::nullopt;
   }

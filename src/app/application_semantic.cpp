@@ -35,6 +35,8 @@ namespace {
       return semantic::UnitKind::vhdl_package;
     case frontend::UnitKind::VhdlContext:
       return semantic::UnitKind::vhdl_context;
+    case frontend::UnitKind::VhdlPslVerificationUnit:
+      return semantic::UnitKind::vhdl_psl_verification_unit;
     case frontend::UnitKind::SystemVerilogPackage:
       return semantic::UnitKind::systemverilog_package;
     case frontend::UnitKind::SystemVerilogInterface:
@@ -96,10 +98,10 @@ template <typename Target>
     std::string value,
     const frontend::Language language) {
   if (language == frontend::Language::Vhdl2008) {
-    std::transform(value.begin(), value.end(), value.begin(), [](const char c) {
-      return static_cast<char>(
-          std::tolower(static_cast<unsigned char>(c)));
-    });
+    // The VHDL parser already folds basic identifiers and intentionally
+    // preserves extended-identifier case. Re-folding here would collapse two
+    // distinct extended names.
+    return value;
   }
   return value;
 }

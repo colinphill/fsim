@@ -24,7 +24,7 @@ when that update explicitly retains it for a particular operation.
 |---|---|---|---|
 | VHDL units | `library`/`use`/context-reference clauses retained on their following unit; reusable context declarations containing bounded context items; package declarations containing bounded constants, subtypes, non-nested records, user-defined enumerations, bounded multidimensional arrays with scalar/vector/record/enumeration/nested-array elements, and scalar function/procedure declarations, plus matching bounded package subprogram bodies; bounded generic package declarations and entity/architecture-local package instantiations over existing scalar value/type/function/procedure generic families; bounded generic function/procedure templates and local or package-visible instantiations over those families; entities and architectures with package/entity/architecture type and subtype declarations over scalar logic/bit/Boolean, enumerations including ascending/descending constraints, constrained signed/unsigned or logic/bit vectors, constrained or `integer`/`natural`/`positive range <>` user arrays, portable integer ranges, and bounded records; scalar integer/Boolean/bit/enumeration or subtype-typed generics; VHDL-2008 unclassified interface type plus bounded interface function, procedure, and package generics; parameterized packed and enumeration ranges; record/subtype/enumeration/user-array or packed scalar/vector ports, signals, and bounded packed process variables; and `integer`/`natural`/`positive`/explicit integer-range ports, signals, and process variables; direct-entity and component-style instances with positional-then-named `generic map` actuals including `open` value-default selection, labeled `if`/`else`, integer-range `for`, scalar/inclusive-range-choice `case` generate regions, and labeled block statements with optional Boolean guards and implicit reactive `GUARD` signals containing bounded constants, local packed signals, concurrent assignments, processes, instances, and nested regions; block interfaces may bind bounded value/type/function/procedure/package generics and generic-dependent ports with positional-then-named maps, defaults, and `open` | Recursive acyclic `context library.name` expansion; explicit use visibility and direct `package.item`/`library.package.item` references for declaration-ordered scalar constants and bounded record/subtype/enumeration/array declarations and literals, including precise transitive context/package source provenance; directly visible package functions and procedures merged from matching bounded bodies; independently resolved entity and architecture type regions with entity subtype visibility in the associated architecture; chained subtype resolution, derived integer/enumeration-base containment, packed reconstraint legality, specialization-dependent packed/enumeration/array bounds, subtype-left defaults, checked enumeration constants/generics/stores, nominal user-array values, and directionally safe hierarchy aliases; declaration-order record layouts and minimum-width nominal enumeration ordinals, element-domain defaults, same-language nominal port aliases/copy/comparison, enum-typed constants/generics, contextual identifier/character literals and case choices, record/array subtype aliases, contextually typed positional/named/final-`others` record aggregates and recursive positional/discrete/range/choice-list/final-`others` multidimensional array aggregates, multidimensional member/index/slice access, persistent debug-visible record/subtype/enumeration/array locals, and explicit mixed-boundary rejection; recursively elaborated per-occurrence value/type/function/procedure/package generic specializations with named/positional whole-signal plus bounded static/dynamic expression and `open`/default `port map` associations, declaration-ordered local package and generic-subprogram specialization, selected package constants/types/functions/procedures, exact interface-package and instantiated-subprogram forwarding with transitive body provenance, declaration-ordered generated-constant and pure-function folding, interval-based selection with null-range handling, specialization-selected or always-selected scoped behavior with scope-qualified locals, delayed block-interface binding after enclosing local-package specialization, persistent process-variable registers, and signed 32-bit two-state integer-family objects with specialized constraints, subtype-left initialization, and range-safe aliases | Complete project package bodies and general package subprograms, general or nested generic package units, nested generic subprogram templates, unreviewed standard-library packages, and general visibility/overload resolution are not implemented; record types remain non-nested and packed and exclude integer/access/protected elements, nested aggregates, element-choice groups, and qualified aggregate expressions; user arrays support bounded multidimensional scalar/vector/record/enumeration/nested-array elements, recursive aggregates, null executable objects, and same-language callable/hierarchy boundaries but exclude qualified aggregate expressions, dynamically chosen aggregate associations, unbounded runtime-sized slices, and cross-language composite values; enumeration literal visibility is currently contextual rather than a complete overload candidate-set implementation; package/context visibility cycles are rejected; no configurations, mixed-language interface-package/subprogram actuals, VHDL-2019 classified interface types, process-local subtype declarations, nonintegral case-generate choices, generated variable/file/alias/attribute/use/group declarations, general qualified/function-call or dynamically composed aggregate port actuals, or process declarative items beyond bounded variables; scalar constraints outside the portable signed 32-bit interval are rejected |
 | VHDL statements | Concurrent assignments, labeled/unlabeled `with`/`select` selected signal assignments and concurrent assertions, process sensitivity lists, `if`/`elsif`/`else`, ordered packed `case`/`when`/`others`, locally static sequential `for`, Boolean `while`, unconditional and labeled loops, conditional/targeted `exit` and `next`, simple and chained VHDL-2008 conditional signal/variable assignments, signal/variable assignment including one-level record-element targets, `null`, ordered waveform elements, `unaffected` alternatives, exact integer `after`, implicit/explicit `inertial`, `transport`, and `reject TIME inertial`, bare/`on`/`until`/`for` wait clauses in every legal combination including nested procedure bodies, sequential `assert` with optional general string `report` and `severity_level` expressions, and sequential `report` statements | Whole-record and whole/constant-selected packed signal/local assignments, contextually typed record and recursive multidimensional/composite array aggregate initializers and whole-object values, constant or executable multidimensional record-member/index/slice writes, dynamic single-element and fixed-width runtime-slice signal/local writes with signed 32-bit `integer`-family bounds and execution-time target capture for delayed/projected waveforms, source-ordered Boolean conditional-assignment alternatives including record aggregates, selected concurrent assignments with grouped exact choices, final `others`, independent ordered waveform lists or `unaffected` on every conditional/selected alternative, and inferred reactive sensitivity; complete new signal waveforms atomically edit cancelable projected transactions per scalar subelement, with transport truncation and exact inertial mark/delete using an explicit rejection limit or the first delay by default; guarded simple/conditional/selected assignments in Boolean-guarded blocks retain one reactive driver identity each and route false-guard or explicit-`null` nine-state values through the same delayed projected-waveform path as resolution-neutral `Z`; nested Boolean-typed conditional branches, exact `|`-separated case choices with nested statement lists, ascending/descending/null `for` ranges with implicit-constant substitution and bounded unrolling, executable loop backedges with persistent locals, nested/named loop transfers, edge-guarded clock processes, waits nested through conditionals, loops, and exact overload-resolved procedure chains, first-suspending condition waits, event-or-timeout races with preserved absolute deadlines, Boolean assertions and sequential reports with runtime string concatenation and severity values, skipped passing-expression evaluation, exact source metadata, and nonfailure severities continuing, reactive concurrent-assertion sensitivity, integer/logic/vector/Boolean literals, and selected operations | Bounded selected assignments require a final `others` and do not support matching-select `?`; guarded/null disconnection is limited to nine-state signal targets and does not implement disconnection specifications or arbitrary resolution-function driver removal; case ranges, qualified aggregate expressions, unbounded runtime-sized slices or selection beyond the supported multidimensional/record chains, general nested/chained record selections or local scopes, configurable assertion stop levels, dynamic time-valued objects, or nonstandard physical-time units remain unsupported; standard physical time is normalized exactly and waveform times must be strictly ascending |
-| VHDL expressions | Identifiers and bounded multidimensional array/record selected names, decimal/logic/string/Boolean literals, identifier/character enumeration literals, record and array aggregates, calls, index/slice syntax, common unary/binary syntax | Identifiers/literals and objects resolved through bounded scalar/vector/record/enumeration/user-array subtype chains; contextual enumeration literals in initializers, assignments, conditional alternatives, comparisons, and case choices with nominal identity and ordinal relational ordering; enumeration type/subtype-mark `left`/`right`/`low`/`high`/`length`/`ascending` and checked `pos`/`val`/`succ`/`pred`/`leftof`/`rightof` over each resolved ascending or descending subtype range, including package/generic folding, base-declaration ordinals, and dynamic failures; contextually typed positional/named/final-`others` bounded record aggregates in initializers, whole-object assignments, equality/inequality, and conditional alternatives; whole nominal user-array copy/equality, recursive multidimensional/composite aggregates, null values, constant or executable multidimensional indexing/slicing and supported record/array chains, dynamic single-element indexing, and context-sized 1-through-64-bit runtime slices with signed 32-bit `integer`-family bounds, declared-range mapping, exact direction/length checks, and packed record-member chains; record-member reads with constant element bit/slice selection, unary plus/minus, checked integer-family and bounded packed signed `abs`, Boolean and packed `not`/`and`/`or`/`xor`, Boolean `nand`/`nor`/`xnor`, equal-width signed/unsigned packed arithmetic plus checked signed 32-bit integer-family `+`, `-`, `*`, `/`, `rem`, `mod`, and locally static nonnegative `**`, equality/inequality/relational comparisons including whole same-record-type equality, packed `sll`/`srl`/`sla`/`sra` and `rol`/`ror` with locally static or dynamic integer counts and negative-count reversal, constant in-range indexed names/slices with declared-range mapping, and width-summing packed `&` concatenation | Selected/qualified type marks in attribute prefixes, qualified expressions, dynamic/negative integer exponentiation, unbounded runtime-sized slices or selections beyond the supported chains, most calls/operators, dynamically chosen aggregate associations, and complete overload/self-determined sizing are not lowered; out-of-range or unknown dynamic indices and invalid runtime slice bounds fail deterministically; explicitly mixed signed/unsigned numeric operands require conversion |
+| VHDL expressions | Identifiers and bounded multidimensional array/record selected names, decimal/logic/string/Boolean literals, identifier/character enumeration literals, record and array aggregates, calls, index/slice syntax, common unary/binary syntax | Identifiers/literals and objects resolved through bounded scalar/vector/record/enumeration/user-array subtype chains; local and rooted dot-separated VHDL-2008 external signal names resolve to the existing signal identity with exact subtype validation; contextual enumeration literals in initializers, assignments, conditional alternatives, comparisons, and case choices with nominal identity and ordinal relational ordering; enumeration type/subtype-mark `left`/`right`/`low`/`high`/`length`/`ascending` and checked `pos`/`val`/`succ`/`pred`/`leftof`/`rightof` over each resolved ascending or descending subtype range, including package/generic folding, base-declaration ordinals, and dynamic failures; contextually typed positional/named/final-`others` bounded record aggregates in initializers, whole-object assignments, equality/inequality, and conditional alternatives; whole nominal user-array copy/equality, recursive multidimensional/composite aggregates, null values, constant or executable multidimensional indexing/slicing and supported record/array chains, dynamic single-element indexing, and context-sized 1-through-64-bit runtime slices with signed 32-bit `integer`-family bounds, declared-range mapping, exact direction/length checks, and packed record-member chains; record-member reads with constant element bit/slice selection, unary plus/minus, checked integer-family and bounded packed signed `abs`, Boolean and packed `not`/`and`/`or`/`xor`, Boolean `nand`/`nor`/`xnor`, equal-width signed/unsigned packed arithmetic plus checked signed 32-bit integer-family `+`, `-`, `*`, `/`, `rem`, `mod`, and locally static nonnegative `**`, equality/inequality/relational comparisons including whole same-record-type equality, general branch-short-circuited conditional expressions including arbitrary-width static packed alternatives, bounded case expressions with choice lists, scalar ranges, exhaustive Boolean alternatives, and final `others`, packed `sll`/`srl`/`sla`/`sra` and `rol`/`ror` with locally static or dynamic integer counts and negative-count reversal, constant in-range indexed names/slices with declared-range mapping, and width-summing packed `&` concatenation | External variable/constant names, relative parent paths, generated-path indices, selected/qualified type marks in attribute prefixes, qualified expressions, dynamic/negative integer exponentiation, unbounded runtime-sized slices or selections beyond the supported chains, most calls/operators, dynamically chosen aggregate associations, and complete overload/self-determined sizing are not lowered; out-of-range or unknown dynamic indices and invalid runtime slice bounds fail deterministically; explicitly mixed signed/unsigned numeric operands require conversion |
 | Verilog/SV units | Modules; bounded packages containing integral parameters/localparams, packed integral typedef aliases, packed enums, non-nested packed structs, equal-width packed unions, imports, bounded functions, and bounded tasks; compilation-unit or unit-local wildcard/selected imports; ANSI and classic callable formals plus named/default actuals; ANSI and basic non-ANSI packed ports plus one-dimensional integral static-array, dynamic-array, queue, bounded-queue, and integral-key associative-array ports, nets/variables, packed constant or parameterized ranges, integral value parameters/localparams using implicit, `byte`, `shortint`, `longint`, `time`, `int`/`integer`, or packed `bit`/`logic`/`reg` types with explicit signedness, bounded same-language `parameter type`/`localparam type` declarations, module instances with named or positional value/type overrides, explicit or implicit conditional/inline-or-module-`genvar` iterative/constant-choice generates, and direct or named static contents in explicit generate regions containing bounded parameters/localparams, local packed signals, functions/tasks, continuous assignments, processes, instances, and nested regions | Recursive case-sensitive package imports, `package::constant` folding, imported/scoped/local typedef resolution, enum enumerator visibility, declaration-order packed-struct layout, and offset-zero packed-union overlay layout for parameters, ports, signals, generated signals, and procedural locals with precise source provenance; explicit/implicit enum values are checked for packed base fit/uniqueness; typed 1–64-bit parameter defaults, overrides, localparams, and non-iterative generated parameters preserve width, signedness, state domain, and the complete unsigned-64 range after specialization-dependent range folding; bounded type parameters resolve integral builtins, local/imported/package-selected typedef marks, dependent packed ports/signals/typedefs/value constants, and nested formal forwarding with `sv-type-v1` cache identity; bounded module/package/generated automatic functions and tasks admit integral, byte-string, dynamic/queue/associative-container, and one-dimensional locally constant static unpacked-array values, with module objects/automatic locals, whole or direct compatible slice value-copy actuals, nested nonrecursive calls, suspension-safe atomic copy-out, and transitive source provenance; bounded static/implicit callables preserve packed body-scope locals across sequential calls; packed function output/inout and direct-local automatic ref plus nonsuspending direct-local task ref use checked call-boundary transfer; direct same-language whole-container port actuals preserve exact specialized element, kind, queue-bound, associative-index, or static-range metadata, while compatible direct static-array colon or locally constant indexed-slice actuals use formal-typed recursive ordinal aliases with read-only input and atomic selected output/inout updates through nested/generated hierarchy; whole packed aggregates, constant member reads/writes, and one-level constant member bit/part-selects with specialization-folded parameter or package-constant bounds execute through common extract/insert/sliced-write SimIR operations; recursive hierarchy with per-instance integral constant/type specialization, declaration-ordered generated-parameter folding, specialization-selected or always-selected generated behavior with scope-qualified locals, loop-variable substitution, and named or positional whole-object or direct static-slice connections | Nested structs/aggregates, unequal-width or tagged unions, unpacked members, member initializers, anonymous structs/enums, interfaces, classes, unsupported task/function forms, and export package items are not implemented; dynamic or recursively chained member selects and nominal struct/union/enum assignment/cast legality are not yet enforced; bounded aliases ultimately resolve to `bit`, `logic`, `reg`, `int`, or `integer`, while enum bases and aggregate members use packed `bit`/`logic`/`reg`; module integer objects use executable signed 32-bit two-state storage; constant/type widths above 64 bits, complete LRM expression typing, genvar-dependent typed constants, and generated type declarations are not implemented; package names resolve within the owning manifest library; no standard descriptor aliases, multichannel descriptors, unrestricted host I/O, noncanonical generate-loop updates, general expression or runtime-variable/dynamic-container port actuals, cross-language containers, string associative indices, suspending/static ref callables, or unrestricted allocation |
 | Verilog/SV statements | `assign`, bounded scalar and static-array built-in gate primitives, event-controlled or path-safe body-timed `always`, edge-controlled `always_ff`, and inferred `always @*`/`always_comb`/`always_latch`, `initial`, SystemVerilog `final`, blocks, leading packed procedural variables, `if`/`else`, `case`/`casez`/`casex`, bounded `case inside` with comma-separated choices, and bounded `case matches` with one constant or `.*` pattern per item, `default`, and optional SystemVerilog `unique`/`unique0`/`priority` qualifiers, bounded inline or external-variable procedural `for`, locally static or runtime integral `repeat`, runtime `while`/`do-while`, and path-safe suspending or exiting `forever`, nested `break`/`continue`, blocking/NBA assignments, SystemVerilog compound assignments and standalone prefix/postfix increment/decrement, procedural force/release, exact decimal/scientific and locally constant integral parameter/localparam delays, parenthesized `min:typ:max` delays, one/two/three-value continuous-assignment transition delays, one/two-value logic-gate and one/two/three-value tri-state-gate delays, direct any-change/`posedge`/`negedge`/wildcard controls, exact general packed any-change expressions, and repeated intra-assignment event controls, condition waits, `$stop`, `$finish`, standalone `$info`/`$warning`/`$error`/`$fatal`, immediate assertions with simple or lexical-block pass/failure actions, the nonsuspending statement subset inside bounded automatic/static functions, and the supported scheduler controls inside bounded automatic tasks plus nonsuspending static tasks, bounded SystemVerilog-2017 `$fopen`/`$fclose`/`$fdisplay`/`$fwrite`/`$fgets`/`$feof`/`$ferror` text-file forms, and `$readmemb`/`$readmemh` into bounded static memories | Whole, chained static packed, constant bit/part-selected, constant or runtime-base `+:`/`-:` indexed-selected, and dynamic single-bit packed signal/local assignments use one checked lvalue capture; partial runtime-base writes update only representable bits, while unknown or wholly out-of-range bases do nothing; dynamic delayed/NBA targets capture their selection at assignment execution. SystemVerilog compound assignments accept delay/event controls and evaluate the target once; expression and statement prefix/postfix `++`/`--` retain new/old result ordering. Whole, packed-member, static-bit, and static-part signal force/release masks only the selected region while underlying drivers continue. Bounded function bodies execute blocking local assignments, blocks, conditionals, exact case, canonical loops, break/continue, nested nonrecursive calls, function-name assignment, value return, typed named/default inputs, and packed output/inout/ref transfer; bounded task bodies add statement delays, named-event waits/triggers, and condition waits to the shared control subset with nested function/task calls, valueless early return, persistent formals/locals, named/default actuals, direct-local bounded ref, and deferred ordered input/output/inout copy-in/copy-out; `$stop` pauses before the following statement and resumes after the application clears the stop; severity tasks retain an optional bounded literal message, with note/warning/error continuing and `$fatal` accepting an optional ignored numeric finish control before terminating; final procedures execute exactly once after ordinary quiescence or `$finish` and may contain the supported nonsuspending blocking statement subset; comma-separated optionally named `buf`/`not`/`and`/`nand`/`or`/`nor`/`xor`/`xnor`/`bufif0`/`bufif1`/`notif0`/`notif1` primitives, plus resource-governed static arrays with direction-aware scalar/vector terminal mapping, lower to indexed common four-state continuous processes; inline `int`/`integer` or external-variable procedural loops with integral `<`/`<=`/`>`/`>=` bounds, positive constant steps, deterministic static unrolling or runtime backedges, null ranges, and update-point `continue`; locally static or single-evaluated runtime integral repeat counts with negative and unknown values producing zero iterations; executable pre/post-test loop backedges with nested control transfers; path-safe timed, event-controlled, terminating, or deterministic-break `forever`; body-timed `always` re-entry only after a proven suspension or termination; nested `if`/`else` with packed four-state truth conversion; transitive cycle-safe wildcard dependencies through visible function/task bodies; time-zero `always_comb`/`always_latch`; ordered exact, symmetric selector-or-choice wildcard, right-choice-wildcard value/range `case inside` matching, and exact constant or unconditional-wildcard `case matches` matching, plus source-aware alternative-level `unique`/`unique0`/`priority` checks; exact packed-expression value-change filtering, repeated event suspension, direct edge suspension, and immediate-test condition waits; packed-condition immediate assertions with implicit error and scoped pass/failure actions; delays inherit the active time context, select `min`/`typ`/`max`, then round to SystemVerilog precision; delayed continuous whole/slice writes and net-declaration propagation delays select rise/fall/turnoff from actual changed four-state elements, combine checked driver and net delays, use the shortest applicable packed transition, retain same-value transactions, and cancel superseded inertial updates; manifest-relative text and memory files use opaque process-owned services with deterministic byte/element bounds and interpreter/native lifecycle parity | SDF parsing and annotation are not implemented; `$stop` accepts but ignores its optional verbosity argument; final procedures reject timing controls, waits, `$stop`, `$finish`, and NBAs; nonprogressing `always`/`forever` paths are rejected; procedural `for` updates remain positive constant steps toward a direct comparison bound; edge-qualified general packed expressions and mixed general-expression event lists remain unsupported; runtime-selected targets followed by another selection, automatic process variables beyond the substituted loop index, nested or nonintegral static callable locals, suspending static tasks, nonlocal/suspending ref actuals, nonintegral writable function formals, binary/positioned/multichannel files and standard descriptor aliases, multidimensional or aggregate/string-element memories, unrestricted dynamic allocation, formatted/dynamic severity-task messages, or force/release of automatic locals and runtime-selected targets |
 | Verilog/SV expressions | Identifiers, sized literals, strings, unary and common binary syntax, conditional (`?:`), index/part-select/concatenation syntax, call syntax | Identifiers/literals, unary plus/minus, bitwise complement (`~`), vector-aware logical negation (`!`), mixed-width logical and/or, unary and/or/xor reductions and their `~&`/`~|`/`~^`/`^~` complements, bitwise and/or/xor plus binary `~^`/`^~` XNOR, logical and arithmetic left/right shifts with signedness-sensitive four-state sign fill, left-associative fixed-width `**`, bounded SystemVerilog sizing/conversion, equal-width signed/unsigned add/subtract/multiply/divide/remainder and relational comparisons, equality/inequality with unknown propagation, exact known-result case equality/inequality (`===`/`!==`), right-operand-masked SystemVerilog wildcard equality/inequality (`==?`/`!=?`), short-circuit logical operators, equal-width conditional alternatives under a scalar condition with four-state bit merging and skipped-branch behavior, constant in-range bit/part selects, dynamic single-bit selects using the common signed 32-bit index representation, constant and runtime-base `+:`/`-:` indexed part-select reads with declared-range mapping, packed concatenations, bounded fixed-width integral left/right streaming concatenations, direct locally constant colon or indexed static-array selections in supported contextual assignment, consumer, callable, ordering, and module-port forms, checked constant replication concatenations of statically sized operands, bounded nonnegative integral `$clog2` constant calls, width/bit-preserving `$signed`/`$unsigned` casts, packed `$isunknown`, `$onehot`, and `$onehot0`, signed 32-bit `$countones` and constant-control `$countbits`, 32-bit `$bits` results for statically sized packed expressions and direct one-dimensional integral unpacked containers, signed 32-bit `$left`/`$right`/`$low`/`$high`/`$size`/`$increment` results with an optional constant dimension `1` over packed objects and supported unpacked containers, packed/unpacked `$dimensions`/`$unpacked_dimensions` counts, direct contextual positional/keyed assignment patterns for supported whole containers including bounded static-array default/index-key patterns, exact-element-type `sum`/`product`/`and`/`or`/`xor` reductions with an optional bounded pure `item`/`item.index` conditional transformation, no-argument `min`/`max`/`unique`/`unique_index` queue locators, bounded pure-predicate `find`/`find_index`/`find_first`/`find_first_index`/`find_last`/`find_last_index` queue locators on supported direct unpacked containers, and bounded local/imported/package-selected function calls with supported lifetime, positional/named/default associations, and packed writable/reference formals in eligible constant or runtime expressions | Widths above 64 bits, general aggregate/container streaming, runtime stream slice sizes, dynamic `$countbits` controls, query type references, indirect or multidimensional container queries or reductions, named or arithmetic/function/side-effecting reduction transformations, no-argument locator `with` clauses, type-keyed or nested assignment patterns and defaults outside direct one-dimensional static arrays, predicate iterator calls/side effects/arithmetic, dimension arguments other than `1`, arbitrary vector-valued/negative `$clog2` arguments, unrestricted function profiles and recursion are not lowered; DPI profiles outside the bounded Batch 156 surface are rejected; out-of-range or unknown dynamic indices fail at runtime |
@@ -97,23 +97,237 @@ controls select conductance per lane. Strength, topology, charge, and decay
 metadata survive portable/object/design/library artifacts and interpreter/LLVM
 O0/O2 cold/warm/edit cache paths.
 
+Batch 163 Change 2 closes the IEEE 1076-2008 lexical and design-unit
+surface. Basic identifiers canonicalize case while rejecting leading,
+adjacent, and trailing underscores; extended identifiers retain case and
+decode doubled backslashes. Character and doubled-quote string literals, all
+simple/compound/matching/box/external-name delimiters, line comments, and
+nested delimited comments are retained with line-oriented recovery. Bit-string
+literals accept B/O/X/D, UB/UO/UX, and SB/SO/SX spellings, zero or positive
+host-addressable widths, underscores between value characters, nine-state
+replication, null values, arbitrary-precision decimal conversion, and only
+lossless unsigned or signed adjustment. Unsized values preserve their complete
+source-determined expansion; sized values retain exactly the requested suffix
+while checking every discarded character, so literal legality is independent
+of host-word width. Comment nesting above 64 produces one cataloged resource
+diagnostic. Library, use, and context clauses require their exact selected-name
+shape; trailing clauses cannot disappear at end of file. Primary-unit and
+architecture/package-body secondary identities are library-scoped,
+deterministically ordered, and diagnosed independently of the legacy generic
+duplicate-unit error. Project manifests select only the implemented `2008` or
+`08` VHDL mode; older and post-2008 modes are rejected rather than silently
+reinterpreted.
+
+Batch 163 Change 3 declaration work is complete. An incomplete type may
+precede an access type that designates it and is replaced by its full declaration
+in the same declarative region; duplicate and never-completed markers fail
+exactly. Record declarations admit integer members and recursively named access/
+composite members without pretending every record is already a flat packed
+value. User-defined attribute declarations/specifications and group templates/
+instances are retained as typed, source-spanned, source-ordered frontend
+metadata with canonical target/class/value and template/entry ownership.
+Deferred package constants may use arbitrary constrained subtypes, require a
+structurally conforming full declaration in the package body, and merge that
+initializer into the effective declaration. Attributes and groups propagate
+through function, procedure, process, block, and generate declarative regions
+and publish explicit semantic-HIR profiles. Portable artifacts retain deferred/
+completion provenance at owning-unit schema 15, with exact diagnostics for
+missing, mismatched, and illegal completions.
+
+Batch 163 Change 5 sequential closure is complete. Sequential VHDL-2008
+signal assignments accept effective-value force and release in default or
+explicit `in` mode for whole packed signals, static slices, and supported
+indices. Force overrides intervening ordinary driver updates until release and
+then reveals the current driven value; interpreter and compiled O0/O2 execution
+agree. Driving-value `out` mode targets only the current process driver with a
+per-driver force mask before resolution, so other drivers continue to
+participate; interpreter and native cold/warm compiled execution agree on the
+resolved `0` to `X` to `0` transition across force, competing drive, and
+release.
+
+Batch 163 Change 6 concurrent/process closure is complete. Sensitized and
+all-sensitive processes retain the existing direct/transitive wait legality;
+ordinary and postponed processes, concurrent assertions, and concurrent
+procedure calls now carry distinct phase ownership through frontend, semantic
+HIR, SimIR, interpreter, and compiled execution. Postponed work observes the
+settled value after active/update publication. Boolean-guarded blocks retain
+one stable driver owner per guarded simple, conditional, or selected assignment.
+Disconnection specifications in architecture, block, and generate declarative
+regions select explicit signals, all matching signals, or matching `others`
+not explicitly named elsewhere; their type mark and independent delay remain
+owned and diagnosed. A false guard schedules resolution-neutral disconnection
+after that specification delay, reactivation cancels the pending transaction,
+and a later false transition restarts it. Multiple drivers resolve before and
+after disconnection, interpreter destruction drops pending work without
+cross-instance leakage, and a configured delta-cycle ceiling bounds a
+nonconverging concurrent assignment. Guarded disconnection remains restricted
+to the supported nine-state resolved target family; arbitrary user-defined
+resolution-function invocation is outside this bounded execution slice.
+This status supersedes the compact table's older statement that disconnection
+specifications themselves were unimplemented.
+
+Batch 163 Change 8 access/file/protected status is complete. Each VHDL access
+type uses a process-owned associative live-object heap and a separate
+append-only issued-identity ledger. Allocation returns a nonzero 32-bit handle
+that is never reused during the simulation; deallocation removes the live
+designated value and nulls the owning variable, and deallocating null is a
+no-op. Null, stale, or foreign-owner dereference and assignment reject before
+accessing storage. Live-object and lifetime counts are bounded by explicit
+representation-derived container ceilings rather than an arbitrary language
+width limit.
+
+VHDL direct and TextIO file operations share the manifest-confined SimIR file
+service. Read/write/append modes, lookahead `endfile`, direct integer and line
+read/write, status opens, close, file-formal aliasing, and early-return or
+simulation finalization agree across interpreter and compiled engines. File
+handles are process-owned, never reused after close, and have a documented
+4,096-open lifetime ceiling; null, unknown, stale, closed, cross-owner, and
+wrong-mode use rejects deterministically.
+
+Shared variables remain restricted to protected types. A protected method is a
+wait-free source-ordered scheduler segment, so two processes cannot interleave
+private-member updates. Active recursion/reentry, nested protected procedure
+calls, and waits reject explicitly instead of blocking. An ordinary pure VHDL
+function cannot call an impure protected function. Protected private members
+accept every positive width representable in the container metadata; focused
+execution covers a 137-bit member, deterministic two-process updates, and fresh
+simulation defaults. Protected methods still use the bounded scalar callable
+profile documented below; supporting suspending or recursively reentrant
+protected execution would require a different scheduler contract and remains
+outside this profile.
+
+Batch 163 Change 9 establishes the embedded PSL source and ownership boundary.
+In VHDL-2008 mode, case-insensitive `-- psl` comments retain an explicit lexical
+marker while ordinary comments remain trivia. Native or comment-embedded
+`vunit`, `vprop`, and `vmode` library units preserve their VHDL target, source
+context, and unit kind. Entity, architecture, package, and verification-unit
+declarative regions own default-clock, Boolean, sequence, property, and endpoint
+declarations with ordered formal profiles and body tokens; entity/architecture
+statement regions and verification units own labeled `assert`, `assume`,
+`restrict`, and `cover` directives. The project analyzer publishes those records
+in the owning VHDL semantic HIR without reparsing source text. Duplicate clocks,
+declarations, formals, or labels; malformed bodies/targets/delimiters; illegal
+placement; and unsupported verification-unit items receive the cataloged
+`FSIM-VHDL-PSL-001` through `009` diagnostics. Temporal typing, clock inference,
+execution, outcomes, and coverage remain Changes 10 through 12 rather than being
+implied by this parse-level support.
+
+Batch 163 Change 10 completes PSL temporal analysis. Visible scalar VHDL
+Boolean/bit/logic objects are sampled through the owning or targeted entity and
+architecture. Local, inherited, referenced, and explicit clocks are retained
+with canonical edge identity; equivalent `rising_edge(clk)` and
+`clk'event and clk = '1'` spellings agree, incompatible clocks reject, unknown
+clock values produce no edge, and sampled unknowns use an explicit false policy.
+Boolean, sequence, property, endpoint, and static-integer-formal classes are
+distinct. Sequence concatenation/fusion and consecutive/nonconsecutive/goto
+repetition, overlapped/nonoverlapped suffix implication, next/prev/eventually/
+always, until/before/within, endpoints, and static ranges retain typed semantic
+HIR. Literal bounds normalize numerically; typed integer formals retain symbolic
+identity and any static default for later specialization. `FSIM-VHDL-PSL-010`
+through `019` cover missing/invalid clocks, invalid sampled objects, temporal
+type errors, nonstatic/malformed ranges, cross-clock references, endpoint and
+name failures, malformed overrides, and reference cycles.
+
+Batch 163 Change 11 executes that temporal HIR at the stable post-update sampling
+boundary. Boolean default clocks and canonical rising/falling forms share clocked
+history; unknown clock values create no edge. Source-ordered overlapping attempts
+execute concatenation/fusion, consecutive/nonconsecutive/goto repetition,
+declaration actual/default specialization, `within`, suffix implication,
+`next`/`next_a`/`next_e`, `prev`, bounded or unbounded `eventually`, `always`,
+`until`, `before`, strong/weak completion, and synchronous/asynchronous aborts.
+The `[=]` form admits its trailing non-match span while `[->]` ends on the selected
+occurrence. Interpreter, debug, LLVM O0/O2, and cold/warm cache paths retain exact
+attempt identity and pass/failure/vacuous/aborted outcomes. Monitor, shared-
+history, active/lifetime-attempt, evaluation, inner temporal-step, nesting, and
+conservatively accounted 512-MiB owned-storage ceilings prevent unbounded runtime
+growth.
+
+Batch 163 Change 12 publishes every assert, assume, restrict, and cover attempt
+with its directive kind, unit/instance identity, semantic source-span identity,
+source-order slot, clock/sample/time/delta coordinates, and pass/failure/vacuous/
+aborted outcome. Public trace and per-directive coverage views remain stable
+across interpreter, debug, LLVM O0/O2, and cold/warm cache. Dedicated PSL and
+common assertion callbacks run in deterministic completion order and contain
+observer exceptions after coverage commit. Assert/assume failures use error
+report routing, restrict failures use warning routing, and cover failures remain
+coverage-only. The bounded attempt trace is retained directly rather than copied
+into a second unbounded event history.
+
+Batch 163 Change 13 integrates this execution with the existing IEEE and VITAL
+profiles. Resolved `std_logic` clocks/predicates sample through the common packed
+runtime value, while arbitrary-width `numeric_std`/fixed vectors, file objects,
+protected objects, and physical values keep their normal VHDL semantics and are
+not implicitly coerced into PSL Booleans. Signals produced by existing
+`VitalPathDelay` calls are visible at the same stable sampling boundary. Portable
+schema-17 library units preserve parsed PSL clocks, declarations, formals,
+defaults, properties, directives, tokens, and source spans without source
+reparse. SDF ownership remains explicitly deferred to Batch 170.
+
+Batch 163 Change 14 makes PSL execution occurrence-aware across multiple and
+mixed-language roots. Explicit `entity(architecture)` targets retain the named
+architecture in `DesignIR`; configured root order controls deterministic monitor
+and callback order; and clock/sample lookup is qualified by the exact VHDL
+occurrence path. Duplicate VHDL roots and adjacent SystemVerilog or SystemC
+roots may therefore reuse local signal names without ambiguity. A governed
+SV-to-VHDL-to-SystemC graph proves converted port values, resolved SystemC
+updates, and PSL sampling at the common stable-delta boundary across interpreter,
+debug, LLVM O0/O2, cold/warm cache, and source edits. Simultaneous root clocks
+share one immutable retained value snapshot, keeping history storage linear
+under the existing explicit resource ceilings.
+
+Batch 163 Change 15 exposes the resulting VHDL state through a bounded public
+snapshot, generation-checked simulation-owned VHPI handles, and the debugger's
+`vhdl summary|scopes|objects|processes|psl|all` views. Ordered occurrence scopes,
+file/access/protected/physical declarations, aliases and external-name-derived
+signals, live values, driver counts, active/postponed processes, source spans,
+PSL attempts, named outcomes, and coverage counters remain stable across
+interpreter, debug, LLVM O0/O2, and cold/warm cache. Existing VCD signal tracing
+uses the same occurrence paths. Snapshot record/payload/text ceilings reject
+transactionally, and foreign, released, or generation-stale VHPI handles cannot
+be reused across simulations.
+
+Batch 163 Change 16 makes that state durable. A versioned `FSIMVHIR` design
+payload preserves the complete owning VHDL declaration/type/expression/process
+HIR plus analyzed PSL clocks, declarations, operators, directives, and source
+identity. The loader admits it only after schema, checksum, trailing-byte,
+enum, unique-ID, semantic-ID-range, DesignIR, and runtime-projection checks all
+succeed. Owning-unit schema 17 carries the frontend form through `.fsimobj` and
+relocated `.fsimlib`; relocated `.fsimdesign` restores the semantic HIR without
+the producer source. The IEEE standard-library identity advances to
+`ieee-1076-2019-16a01232-vhdl-psl-wide-v2` and participates in whole-design and
+per-specialization native keys. Direct, mapped-library, and design-artifact
+execution reproduce the same PSL attempts, coverage, debugger snapshot, and
+VCD across interpreter and LLVM O2 cold/warm runs. Portable VHPI checkpoint
+restore verifies the artifact/cache identity and remaps stable object names to
+fresh generation-qualified handles rather than serializing host addresses.
+
+Batch 163 Changes 17-18 close and govern that boundary. The clause inventory
+contains 29 supported VHDL-2008/embedded-PSL rows, zero unresolved active rows,
+and four exact deferrals, with 87 positive/negative/execution witnesses. The
+44-row release matrix requires 17 direct/interpreter/LLVM/cache/debug/trace/
+artifact/relocation/replay/root/mixed stages and consolidates malformed, race,
+cancellation, nonconvergence, resource, platform, installed-public, provenance,
+and reviewed-complexity evidence. The runner has a 6 GiB process address-space
+ceiling and completed at 195,272 KiB peak RSS. See the public
+[`vhdl-psl.md`](vhdl-psl.md) support boundary,
+[`vhdl-psl-tutorial.md`](vhdl-psl-tutorial.md) usage flow, and
+[`vhdl-psl-closure-audit.md`](vhdl-psl-closure-audit.md) exact evidence.
+
 Batch 118 type status update: VHDL-2008 access declarations resolve one
 concrete bounded designated subtype and use opaque 32-bit nullable handles,
-process-owned allocation storage, simulation lifetime, checked dereferences,
-same-nominal equality/copy/callable transfer, and explicit escape/deallocation
-diagnostics. Protected declarations and bodies require exact public-profile
-conformance; architecture shared objects construct source-ordered private
-members, and wait-free procedures plus direct-return functions execute as
-deterministic non-reentrant scheduler segments. Bounded physical types use a
+process-owned allocation storage, checked dereferences, and same-nominal
+equality/copy/callable transfer. Protected declarations and bodies require
+exact public-profile conformance; architecture shared objects construct source-
+ordered private members. Bounded physical types use a
 signed 32-bit primary-unit representation with positive declaration-ordered
 secondary scales, static literal folding, checked arithmetic/comparison,
 explicit conversion, range and overflow failures, and same-nominal legality.
 The three families retain hierarchy, debugger, specialization, and cache
-metadata and agree across interpreter and LLVM O0/O2. General access
-deallocation, access-to-protected or nine-state designated objects, suspending
-or re-entrant protected methods, broader protected method profiles, physical
-values outside signed 32-bit ticks, and complete physical-time integration
-remain outside this bounded slice.
+metadata and agree across interpreter and LLVM O0/O2. Access-to-protected or
+nine-state designated objects, suspending or recursively reentrant protected
+methods, broader protected method profiles, and physical values outside signed
+32-bit ticks remain outside this bounded slice. The Change 8 status above
+supersedes this historical paragraph's former deallocation/lifetime limits.
 
 Batch 116 layout status update: VHDL array declarations retain
 every ordered `integer`/`natural`/`positive` index subtype and constraint,
@@ -721,6 +935,10 @@ generate specifications, general block-specification ranges, positional
 binding-indication maps, complete default-binding rules, and mixed-language
 configuration references remain unsupported. This update supersedes the
 compact table's blanket statement that configurations are unavailable.
+Failed recursive children are removed transactionally from dense runtime state,
+name/path indexes, configuration/interface ownership, and boundary-driver
+tracking before later siblings elaborate; the checkpoint stores sizes and
+mutation identities rather than cloning the complete design.
 Bounded VHDL-2008 component declarations retain their architecture, entity,
 package, block, or selected-generate owner, lexical scope, declaration order,
 optional end name, value/type/function/procedure/package generic profiles and
@@ -760,8 +978,14 @@ target formals, configuration identity, profile, and target, so a callable/
 package/type/default or visible-profile edit invalidates component consumers
 without invalidating unrelated direct-entity children. Whole-signal composite
 ports execute through the existing same-language nominal boundary model.
+Bounded VHDL input expressions materialize an owned formal signal and, when the
+actual is not static, a reactive child-local driver over aliased parent inputs.
+A locally static one-dimensional array-element output actual materializes an
+owned formal and a scheduler-visible slice bridge; separate children may drive
+the same resolved element while disjoint elements retain independent driver
+regions. Dynamic output indices and selected output slices remain unsupported.
 New generic families, nested package/template forms, nested or otherwise
-unsupported composite interfaces, general expression/aggregate port actuals,
+unsupported composite interfaces, general aggregate port actuals,
 dynamic or mixed-language defaults, entity-port defaults, incremental
 configurations, complete library analysis-order semantics, and general
 overload resolution remain unsupported. Required unassociated direct-entity
@@ -1149,26 +1373,27 @@ the execution path for supported read/write profiles.
 
 Explicit `ieee.numeric_std` and `ieee.numeric_bit` use clauses likewise load
 their checksum-pinned declarations and bodies; `numeric_std` loads
-`std_logic_1164` first. The bounded profiles cover one- through 64-element
-signed and unsigned vectors, with `numeric_bit` selecting a two-state element
+`std_logic_1164` first. The profiles cover every positive SimIR-representable
+constrained signed and unsigned vector width, with `numeric_bit` selecting a two-state element
 domain and `numeric_std` retaining nine-state values. Equal-width arithmetic,
 comparison, absolute value, shifts and rotates share the common packed
 execution kernels. `to_signed`, `to_unsigned`, `resize`, and `to_integer`
-cover locally static result sizes and signed 32-bit integer inputs/results;
-unsigned `to_integer` inputs are bounded to 31 bits. Direct equal-width
-signed/unsigned type conversions preserve bits. Null arrays, widths above 64,
-unbounded result sizes, arbitrary overload profiles, and the remaining package
-utilities are outside this reviewed stage.
+accept arbitrary representable constrained vector widths. `to_integer` checks
+the complete operand for unknown states and value fit in the predefined integer
+range rather than rejecting by operand width. Direct equal-width signed/
+unsigned type conversions and packed value generics preserve arbitrary-width
+bits. Null arrays, unbounded result sizes, arbitrary overload profiles, and the
+remaining package utilities are outside this reviewed stage.
 
 Explicit `ieee.fixed_pkg` or `ieee.fixed_generic_pkg` use activates the pinned
 `std_logic_1164`, `numeric_std`, `math_real`, `fixed_float_types`, and fixed
-package sources in dependency order. The bounded default package profile
-supports descending constrained `ufixed`/`sfixed` values from one through 64
-bits. Locally static signed-32-bit integer conversion aligns to the declared
-binary point and saturates; equal-range addition, subtraction, comparison, and
-slices retain exact packed semantics. `resize` supports scale-preserving
-signed/unsigned resizing and nearest-rounded unsigned fractional narrowing.
-Ascending fixed ranges, wider values, dynamic integer conversion, signed
+package sources in dependency order. The default package profile supports every
+positive SimIR-representable descending constrained `ufixed`/`sfixed` width.
+Locally static integer conversion aligns to an arbitrary declared binary point
+and saturates without host-word masks; equal-range addition, subtraction,
+comparison, and slices retain exact packed semantics. `resize` supports
+arbitrary-width scale-preserving signed/unsigned resizing and nearest-rounded
+unsigned fractional narrowing. Ascending fixed ranges, dynamic integer conversion, signed
 fractional rounding, custom generic package profiles, wrap overflow, and the
 remaining fixed arithmetic/utilities are outside this reviewed slice and
 receive targeted diagnostics.

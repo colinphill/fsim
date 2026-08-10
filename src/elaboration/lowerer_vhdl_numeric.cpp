@@ -12,6 +12,13 @@ std::string_view simple_name(const std::string_view name) {
       separator == std::string_view::npos ? 0 : separator + 1);
 }
 
+SourceLocation numeric_source_location(const frontend::SourceSpan& span) {
+  return SourceLocation{
+      span.source_name,
+      static_cast<std::uint32_t>(span.begin.line),
+      static_cast<std::uint32_t>(span.begin.column)};
+}
+
 }  // namespace
 
 Lowerer::ExpressionAttempt
@@ -67,10 +74,10 @@ Lowerer::lower_vhdl_numeric_function_expression(
     const auto width = infer_width(expression.operands.front());
     const bool signed_operand =
         is_signed_expression(expression.operands.front());
-    if (!width || *width == 0 || *width > (signed_operand ? 32U : 31U)) {
+    if (!width || *width == 0) {
       report(
           "FSIM-ELAB-VHNUM-003",
-          "to_integer supports signed widths 1..32 and unsigned widths 1..31",
+          "to_integer requires a constrained signed or unsigned vector",
           expression.operands.front().span);
       return std::nullopt;
     }
@@ -79,14 +86,26 @@ Lowerer::lower_vhdl_numeric_function_expression(
     if (!source) {
       return std::nullopt;
     }
-    const auto resized = resize_register(*source, 32, signed_operand);
+    const auto value_width = signed_operand ? std::size_t{32}
+                                            : std::size_t{31};
+    const auto narrowed = resize_register(
+        *source, value_width, signed_operand);
+    const auto restored = resize_register(
+        narrowed, *width, signed_operand);
+    const auto fits = allocate_register(
+        1, frontend::ValueDomain::Logic4);
+    process_.operations.emplace_back(Binary{
+        BinaryOperator::equal, fits, *source, restored});
+    process_.operations.emplace_back(Assert{
+        fits,
+        "VHDL numeric to_integer operand is unknown or outside the "
+        "predefined integer range",
+        AssertionSeverity::failure,
+        numeric_source_location(expression.operands.front().span)});
+    const auto resized = resize_register(narrowed, 32, signed_operand);
     const auto result = allocate_register(
         32, frontend::ValueDomain::Integer);
     process_.operations.emplace_back(CopyRegister{result, resized});
-    process_.operations.emplace_back(IntegerCheck{
-        result,
-        std::numeric_limits<std::int32_t>::min(),
-        std::numeric_limits<std::int32_t>::max()});
     return result;
   }
 
@@ -99,11 +118,14 @@ Lowerer::lower_vhdl_numeric_function_expression(
     return std::nullopt;
   }
   const auto requested = static_integer_value(expression.operands[1]);
-  if (!requested || *requested < 1 || *requested > 64) {
+  if (!requested || *requested < 1
+      || static_cast<std::uint64_t>(*requested)
+          > std::numeric_limits<std::uint32_t>::max()) {
     report(
         "FSIM-ELAB-VHNUM-002",
         std::string{name}
-            + " requires a locally static result size from 1 through 64",
+            + " requires a positive locally static result size "
+              "representable by SimIR",
         expression.operands[1].span);
     return std::nullopt;
   }
@@ -121,7 +143,7 @@ Lowerer::lower_vhdl_numeric_function_expression(
 
   if (name == "resize") {
     const auto source_width = infer_width(expression.operands.front());
-    if (!source_width || *source_width == 0 || *source_width > 64) {
+    if (!source_width || *source_width == 0) {
       report(
           "FSIM-ELAB-VHNUM-001",
           "resize requires a bounded signed or unsigned vector",

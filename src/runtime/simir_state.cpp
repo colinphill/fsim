@@ -343,9 +343,11 @@ void Interpreter::Impl::queue_at(ProcessId id, SimulationTick time)  {
       return;
     }
     process.queued = true;
-    const auto phase = process.program.reactive
-        ? SchedulerPhase::reactive
-        : SchedulerPhase::active;
+    const auto phase = process.program.postponed
+        ? SchedulerPhase::postponed
+        : process.program.reactive
+            ? SchedulerPhase::reactive
+            : SchedulerPhase::active;
     scheduler.schedule_at(
         time, phase, id,
         [this, id](Scheduler &) {
@@ -363,9 +365,11 @@ void Interpreter::Impl::queue_next_delta(ProcessId id)  {
       return;
     }
     process.queued = true;
-    const auto phase = process.program.reactive
-        ? SchedulerPhase::reactive
-        : SchedulerPhase::active;
+    const auto phase = process.program.postponed
+        ? SchedulerPhase::postponed
+        : process.program.reactive
+            ? SchedulerPhase::reactive
+            : SchedulerPhase::active;
     scheduler.schedule_next_delta(
         phase, id,
         [this, id](Scheduler &) {
@@ -400,9 +404,11 @@ void Interpreter::Impl::queue_active_current(ProcessId id)  {
       return;
     }
     process.queued = true;
-    const auto phase = process.program.reactive
-        ? SchedulerPhase::reactive
-        : SchedulerPhase::active;
+    const auto phase = process.program.postponed
+        ? SchedulerPhase::postponed
+        : process.program.reactive
+            ? SchedulerPhase::reactive
+            : SchedulerPhase::active;
     scheduler.schedule(
         phase, id,
         [this, id](Scheduler&) {

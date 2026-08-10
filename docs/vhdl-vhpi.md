@@ -1,6 +1,11 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # VHDL VHPI support
 
+For occurrence-qualified VHDL/embedded-PSL debugger state, artifact replay,
+and portable handle remapping, also see the public
+[`vhdl-psl.md`](vhdl-psl.md) support boundary and
+[`vhdl-psl-tutorial.md`](vhdl-psl-tutorial.md).
+
 fsim v2 provides a simulation-owned, versioned VHPI boundary for VHDL-2008.
 The implementation uses stable integer identities and owning C++ services;
 plug-ins and portable artifacts never receive addresses of simulator objects.

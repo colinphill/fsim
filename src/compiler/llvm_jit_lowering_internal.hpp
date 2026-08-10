@@ -409,6 +409,9 @@ struct SignalOperationLowerer {
   llvm::Value* force_signal_slice_callback;
   llvm::Value* force_signal_slice_logic9_callback;
   llvm::Value* release_signal_slice_callback;
+  llvm::Value* force_driver_signal_slice_callback;
+  llvm::Value* force_driver_signal_slice_logic9_callback;
+  llvm::Value* release_driver_signal_slice_callback;
   llvm::Value* write_projected_waveform_callback;
   llvm::Value* write_projected_waveform_logic9_callback;
   llvm::Value* write_projected_callback;

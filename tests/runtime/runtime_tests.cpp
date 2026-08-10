@@ -63,8 +63,10 @@ int main() {
     test_systemverilog_scalar_text_and_time();
     test_systemverilog_scalar_execution_surfaces();
     test_systemverilog_chandle_registry();
-    test_systemverilog_unicode_strings();
-    test_scheduler_phase_order();
+  test_systemverilog_unicode_strings();
+  test_vhdl_psl_attempt_engine();
+  test_vhdl_psl_attempt_limits();
+  test_scheduler_phase_order();
     test_scheduler_stop_resume();
     test_scheduler_ownership_and_failure_containment();
     test_scheduler_time_limit_before_future_event();
@@ -89,6 +91,7 @@ int main() {
     test_simir_insert_and_partial_writes();
     test_simir_dynamic_packed_indices();
     test_simir_force_release();
+    test_simir_postponed_process_ordering();
     test_simir_design_stop_identity();
     test_simir_pause_resume_lifecycle();
     test_simir_final_process_lifecycle();

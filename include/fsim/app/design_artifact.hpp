@@ -13,13 +13,14 @@
 
 namespace fsim::app {
 
-inline constexpr std::uint32_t kRuntimeStateSchema = 18;
+inline constexpr std::uint32_t kRuntimeStateSchema = 19;
 inline constexpr std::uint32_t kSemanticStateSchema = 2;
 inline constexpr std::uint32_t kDesignIrStateSchema = 2;
 inline constexpr std::uint32_t kClassStateSchema = 9;
 inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 3;
 inline constexpr std::uint32_t kSystemVerilogCoverageStateSchema = 1;
 inline constexpr std::uint32_t kSystemVerilogUvmStateSchema = 2;
+inline constexpr std::uint32_t kVhdlHirStateSchema = 1;
 
 [[nodiscard]] std::optional<std::string> serialize_runtime_state(
     const elaboration::ElaboratedDesign& design,
@@ -85,6 +86,16 @@ serialize_systemverilog_uvm_state(
 deserialize_systemverilog_uvm_state(
     std::string_view bytes,
     std::string source_name,
+    diagnostic::Engine& diagnostics);
+
+[[nodiscard]] std::optional<std::string> serialize_vhdl_hir_state(
+    const semantic::vhdl::Hir& hir,
+    const semantic::Model& semantics,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<semantic::vhdl::Hir> deserialize_vhdl_hir_state(
+    std::string_view bytes,
+    std::string source_name,
+    const semantic::Model& semantics,
     diagnostic::Engine& diagnostics);
 
 [[nodiscard]] bool publish_design_artifact(

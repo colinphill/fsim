@@ -36,6 +36,8 @@ struct ValidatedProcess {
   bool uses_write_projected_waveform_slice{};
   bool uses_force_signal_slice{};
   bool uses_release_signal_slice{};
+  bool uses_force_driver_signal_slice{};
+  bool uses_release_driver_signal_slice{};
   bool uses_debug_points{};
   bool uses_signal_event{};
   bool uses_signal_last_value{};

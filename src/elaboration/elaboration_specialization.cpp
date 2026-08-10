@@ -80,7 +80,11 @@ bool parameter_name_matches(
 namespace {
 
 bool vhdl_composite_constant_type(const frontend::Type& type) {
-    return type.vhdl_array.has_value() || !type.packed_members.empty();
+    return type.vhdl_array.has_value() || !type.packed_members.empty()
+        || (type.packed_range.has_value()
+            && type.enumeration_literals.empty()
+            && !type.vhdl_physical
+            && type.domain != frontend::ValueDomain::Integer);
 }
 
 void annotate_systemverilog_constant_casts(
@@ -208,18 +212,29 @@ std::optional<std::int64_t> packed_vhdl_static_value(
         return std::nullopt;
     }
     const auto packed = static_vhdl_value(expression, type, error);
-    if (!packed || packed->width() > 64) {
-        if (packed && error.empty()) {
-            error = "the packed aggregate exceeds 64 bits";
-        }
+    if (!packed) {
         return std::nullopt;
+    }
+    for (std::size_t bit = 0; bit < packed->width(); ++bit) {
+        const auto digit = packed->get(bit);
+        if (digit != Logic4::zero && digit != Logic4::one) {
+            error = "the packed aggregate contains an unknown or "
+                    "high-impedance element";
+            return std::nullopt;
+        }
+    }
+    if (packed->width() > 64) {
+        const auto extension = type.is_signed
+            ? packed->get(63) : Logic4::zero;
+        for (std::size_t bit = 64; bit < packed->width(); ++bit) {
+            if (packed->get(bit) != extension) {
+                error = "the packed aggregate value does not fit its "
+                        "portable scalar representation";
+                return std::nullopt;
+            }
+        }
     }
     const auto word = packed->low_word();
-    if (word.bval != 0) {
-        error = "the packed aggregate contains an unknown or high-impedance "
-                "element";
-        return std::nullopt;
-    }
     if (type.vhdl_physical) {
         return static_cast<std::int64_t>(
             static_cast<std::int32_t>(
@@ -688,7 +703,10 @@ SpecializedUnit specialize_unit(
                     error);
                 if (!packed) {
                     diagnostics.push_back({
-                        code(SpecializationDiagnostic::actual_evaluation),
+                        code(error.starts_with(
+                                 "the packed value does not fit")
+                            ? SpecializationDiagnostic::subtype_constraint
+                            : SpecializationDiagnostic::actual_evaluation),
                         "cannot evaluate " + std::string{object_kind}
                             + " actual: " + error,
                         override.span});

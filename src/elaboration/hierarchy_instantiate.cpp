@@ -8,6 +8,33 @@ using namespace elaboration_detail;
 
 namespace {
 
+template <typename Callback>
+class ScopeExit final {
+public:
+  explicit ScopeExit(Callback callback)
+      : callback_{std::move(callback)} {}
+
+  ScopeExit(const ScopeExit&) = delete;
+  ScopeExit& operator=(const ScopeExit&) = delete;
+
+  ~ScopeExit() { callback_(); }
+
+private:
+  Callback callback_;
+};
+
+template <typename Callback>
+ScopeExit(Callback) -> ScopeExit<Callback>;
+
+bool belongs_to_hierarchy(
+    const std::string_view candidate,
+    const std::string_view path) {
+  return candidate == path
+      || (candidate.size() > path.size()
+          && candidate.starts_with(path)
+          && candidate[path.size()] == '.');
+}
+
 template <typename SignalMap>
 void adapt_vhdl_array_port_shapes(
     DesignUnit& unit,
@@ -82,6 +109,134 @@ void adapt_vhdl_array_port_shapes(
 }
 
 }  // namespace
+
+HierarchyBuilder::HierarchyCheckpoint
+HierarchyBuilder::hierarchy_checkpoint(std::string path) const {
+  return {
+      std::move(path),
+      diagnostics_.size(),
+      design_.signals_.size(),
+      design_.boundary_conversions_.size(),
+      design_.string_objects_.size(),
+      design_.container_objects_.size(),
+      design_.container_signal_aliases_.size(),
+      design_.vhdl_protected_object_info_.size(),
+      design_.processes_.size(),
+      design_.specializations_.size(),
+      design_.udp_tables_.size(),
+      design_.verilog_specify_paths_.size(),
+      design_.verilog_timing_checks_.size(),
+      design_.systemc_instances_.size(),
+      design_.systemc_processes_.size(),
+      design_.systemc_objects_.size(),
+      owned_systemc_instances_.size(),
+      stack_.size(),
+      boundary_resolver_insertions_.size(),
+      vhdl_resolution_kind_insertions_.size(),
+      next_systemverilog_interface_handle_};
+}
+
+void HierarchyBuilder::rollback_hierarchy(
+    const HierarchyCheckpoint& checkpoint) {
+  design_.signal_info_.resize(checkpoint.signals);
+  design_.signals_.resize(checkpoint.signals);
+  design_.boundary_conversions_.resize(checkpoint.boundary_conversions);
+  design_.string_object_info_.resize(checkpoint.strings);
+  design_.string_objects_.resize(checkpoint.strings);
+  design_.container_object_info_.resize(checkpoint.containers);
+  design_.container_objects_.resize(checkpoint.containers);
+  design_.container_signal_aliases_.resize(checkpoint.container_aliases);
+  design_.vhdl_protected_object_info_.resize(checkpoint.protected_objects);
+  design_.processes_.resize(checkpoint.processes);
+  design_.specializations_.resize(checkpoint.specializations);
+  design_.udp_tables_.resize(checkpoint.udp_tables);
+  design_.verilog_specify_paths_.resize(checkpoint.specify_paths);
+  design_.verilog_timing_checks_.resize(checkpoint.timing_checks);
+  design_.systemc_instances_.resize(checkpoint.systemc_instances);
+  design_.systemc_processes_.resize(checkpoint.systemc_processes);
+  design_.systemc_objects_.resize(checkpoint.systemc_objects);
+
+  const auto erase_named_objects = [&](auto& names, const std::size_t size) {
+    std::erase_if(names, [&](const auto& entry) {
+      return static_cast<std::size_t>(entry.second) >= size
+          || belongs_to_hierarchy(entry.first, checkpoint.path);
+    });
+  };
+  erase_named_objects(design_.signal_by_name_, checkpoint.signals);
+  erase_named_objects(design_.string_by_name_, checkpoint.strings);
+  erase_named_objects(design_.container_by_name_, checkpoint.containers);
+
+  const auto erase_paths = [&](auto& paths) {
+    std::erase_if(paths, [&](const auto& entry) {
+      return belongs_to_hierarchy(entry, checkpoint.path);
+    });
+  };
+  erase_paths(instance_paths_);
+  erase_paths(systemverilog_interface_port_paths_);
+  erase_paths(systemverilog_read_only_interface_member_paths_);
+
+  const auto erase_path_map = [&](auto& paths) {
+    std::erase_if(paths, [&](const auto& entry) {
+      return belongs_to_hierarchy(entry.first, checkpoint.path);
+    });
+  };
+  erase_path_map(vhdl_configurations_by_path_);
+  erase_path_map(systemverilog_interface_instances_);
+  erase_path_map(systemverilog_interface_handles_);
+  erase_path_map(systemverilog_interface_parameter_identities_);
+  erase_path_map(systemverilog_interface_modport_views_);
+  std::erase_if(udp_table_by_identity_, [&](const auto& entry) {
+    return static_cast<std::size_t>(entry.second) >= checkpoint.udp_tables;
+  });
+
+  const auto rollback_driver_paths = [&](auto& drivers) {
+    std::erase_if(drivers, [&](auto& entry) {
+      std::erase_if(entry.second, [&](const auto& driver) {
+        if constexpr (requires { driver.path; }) {
+          return belongs_to_hierarchy(driver.path, checkpoint.path);
+        } else {
+          return belongs_to_hierarchy(driver, checkpoint.path);
+        }
+      });
+      return entry.second.empty();
+    });
+  };
+  rollback_driver_paths(boundary_driver_paths_);
+  rollback_driver_paths(string_boundary_driver_paths_);
+  rollback_driver_paths(container_boundary_driver_paths_);
+  for (auto index = boundary_resolver_insertions_.size();
+       index > checkpoint.boundary_resolver_insertions;
+       --index) {
+    resolver_by_signal_.erase(boundary_resolver_insertions_[index - 1]);
+  }
+  boundary_resolver_insertions_.resize(
+      checkpoint.boundary_resolver_insertions);
+  for (auto index = vhdl_resolution_kind_insertions_.size();
+       index > checkpoint.vhdl_resolution_kind_insertions;
+       --index) {
+    vhdl_resolution_kinds_.erase(
+        vhdl_resolution_kind_insertions_[index - 1]);
+  }
+  vhdl_resolution_kind_insertions_.resize(
+      checkpoint.vhdl_resolution_kind_insertions);
+  std::erase_if(resolver_by_signal_, [&](const auto& entry) {
+    return static_cast<std::size_t>(entry.first) >= checkpoint.signals;
+  });
+
+  stack_.resize(checkpoint.stack_depth);
+  next_systemverilog_interface_handle_ = checkpoint.next_interface_handle;
+  std::erase_if(systemc_instances_, [&](const auto& entry) {
+    for (auto index = checkpoint.owned_systemc_instances;
+         index < owned_systemc_instances_.size();
+         ++index) {
+      if (entry.second == &owned_systemc_instances_[index]) {
+        return true;
+      }
+    }
+    return false;
+  });
+  owned_systemc_instances_.resize(checkpoint.owned_systemc_instances);
+}
 
     void HierarchyBuilder::instantiate(
         const DesignUnit& unit,
@@ -404,8 +559,10 @@ void adapt_vhdl_array_port_shapes(
                 local.emplace(
                     path + "." + alias.name, actual->second);
             }
-            design_.signal_by_name_.emplace(
-                alias.name, actual->second);
+            if (design_.roots_.size() == 1 && path == active_root_) {
+                design_.signal_by_name_.emplace(
+                    alias.name, actual->second);
+            }
             if (!path.empty()) {
                 design_.signal_by_name_.emplace(
                     path + "." + alias.name,
@@ -472,7 +629,16 @@ void adapt_vhdl_array_port_shapes(
                     const auto& member =
                         protected_info.variables[member_index];
                     const auto width = member.type.width();
-                    if (!width || *width == 0 || *width > 64) {
+                    if (!width || *width == 0
+                        || *width
+                            > std::numeric_limits<std::uint32_t>::max()) {
+                        report(
+                            "FSIM-ELAB-VHPROTECTED-017",
+                            "protected private storage for '"
+                                + object.name + "." + member.name
+                                + "' exceeds the executable container "
+                                  "representation",
+                            member.span);
                         continue;
                     }
                     ContainerType storage_type;
@@ -1295,6 +1461,12 @@ void adapt_vhdl_array_port_shapes(
         validate_vhdl_component_configurations(unit, path);
         for (const auto& instance : unit.instances) {
             const auto child_path = path + "." + instance.name;
+            const auto checkpoint = hierarchy_checkpoint(child_path);
+            const ScopeExit rollback_failed_child{[&, checkpoint] {
+              if (diagnostics_.size() != checkpoint.diagnostics) {
+                rollback_hierarchy(checkpoint);
+              }
+            }};
             const auto* binding = binding_for(child_path);
             const auto build_systemc =
                 [&](const frontend::Instance& selected_instance,

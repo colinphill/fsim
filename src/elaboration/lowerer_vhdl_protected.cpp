@@ -99,6 +99,19 @@ Lowerer::lower_vhdl_protected_expression(
     return ExpressionAttempt{std::nullopt};
   }
   const auto& function = *matches.front();
+  if (active_function_
+      && function_frames_.at(*active_function_).source != nullptr
+      && function_frames_.at(*active_function_).source->pure
+      && !function.pure) {
+    report(
+        "FSIM-ELAB-VHPROTECTED-022",
+        "pure VHDL function '"
+            + function_frames_.at(*active_function_).source->name
+            + "' cannot call impure protected function '"
+            + expression.text + "'",
+        expression.span);
+    return ExpressionAttempt{std::nullopt};
+  }
   if (active_vhdl_protected_method_) {
     report(
         "FSIM-ELAB-VHPROTECTED-014",
@@ -118,7 +131,7 @@ Lowerer::lower_vhdl_protected_expression(
     return ExpressionAttempt{std::nullopt};
   }
   const auto result_width = function.return_type.width();
-  if (!result_width || *result_width == 0 || *result_width > 64
+  if (!result_width || *result_width == 0
       || *result_width != expected_width
       || (expected_type != nullptr
           && !vhdl_callable_type_matches(
@@ -135,7 +148,7 @@ Lowerer::lower_vhdl_protected_expression(
        index < function.arguments.size(); ++index) {
     const auto& formal = function.arguments[index];
     const auto width = formal.type.width();
-    if (!width || *width == 0 || *width > 64) {
+    if (!width || *width == 0) {
       return ExpressionAttempt{std::nullopt};
     }
     const auto actual = lower_expression(
@@ -183,7 +196,8 @@ Lowerer::lower_vhdl_protected_expression(
         selected->object + "." + member.name);
     const auto width = member.type.width();
     if (storage == container_objects_.end()
-        || !width || *width == 0 || *width > 64) {
+        || !width || *width == 0
+        || *width > std::numeric_limits<std::uint32_t>::max()) {
       report(
           "FSIM-ELAB-VHPROTECTED-017",
           "protected private storage for '" + selected->object
@@ -306,7 +320,7 @@ bool Lowerer::lower_vhdl_protected_procedure_call(
        index < procedure.arguments.size(); ++index) {
     const auto& formal = procedure.arguments[index];
     const auto width = formal.type.width();
-    if (!width || *width == 0 || *width > 64) {
+    if (!width || *width == 0) {
       return true;
     }
     const auto actual = lower_expression(
@@ -362,7 +376,8 @@ bool Lowerer::lower_vhdl_protected_procedure_call(
         selected->object + "." + member.name);
     const auto width = member.type.width();
     if (found == container_objects_.end()
-        || !width || *width == 0 || *width > 64) {
+        || !width || *width == 0
+        || *width > std::numeric_limits<std::uint32_t>::max()) {
       report(
           "FSIM-ELAB-VHPROTECTED-017",
           "protected private storage for '" + selected->object

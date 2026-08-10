@@ -499,6 +499,71 @@ void test_simir_force_release() {
       "final selected release must reveal the complete underlying value");
 }
 
+void test_simir_postponed_process_ordering() {
+  using namespace fsim::runtime;
+  using namespace fsim::runtime::simir;
+
+  Interpreter interpreter;
+  Process active;
+  active.id = 0;
+  active.name = "active";
+  active.operations = {Display{"active", true}, Halt{}};
+  (void)interpreter.add_process(std::move(active));
+
+  Process postponed;
+  postponed.id = 1;
+  postponed.name = "postponed";
+  postponed.postponed = true;
+  postponed.operations = {Display{"postponed", true}, Halt{}};
+  (void)interpreter.add_process(std::move(postponed));
+
+  struct Event {
+    std::string text;
+    SchedulerPhase phase{SchedulerPhase::active};
+  };
+  std::vector<Event> events;
+  interpreter.set_output_hook(
+      [&events, &interpreter](
+          const ProcessId,
+          const std::string_view text,
+          const bool,
+          const SimulationTick,
+          const std::uint64_t) {
+        events.push_back(
+            {
+                std::string{text},
+                interpreter.scheduler()
+                    .current_phase()
+                    .value_or(SchedulerPhase::active)});
+      });
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed
+          && events.size() == 2
+          && events[0].text == "active"
+          && events[0].phase == SchedulerPhase::active
+          && events[1].text == "postponed"
+          && events[1].phase == SchedulerPhase::postponed,
+      "postponed processes must execute after active processes");
+
+  Interpreter malformed;
+  Process incompatible;
+  incompatible.id = 0;
+  incompatible.name = "reactive_and_postponed";
+  incompatible.reactive = true;
+  incompatible.postponed = true;
+  incompatible.operations = {Halt{}};
+  bool rejected = false;
+  try {
+    (void)malformed.add_process(std::move(incompatible));
+  } catch (const std::invalid_argument& error) {
+    rejected = std::string_view{error.what()}.find(
+                   "both reactive and postponed")
+        != std::string_view::npos;
+  }
+  require(rejected, "incompatible process scheduling phases must be rejected");
+}
+
 void test_simir_design_stop_identity() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;

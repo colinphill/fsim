@@ -526,6 +526,57 @@ end architecture;
   assert(has_diagnostic(
       nonconforming_body_result, "FSIM-ELAB-VHLEGAL-004"));
 
+  const auto deferred_constants = fsim::frontend::parse_text(
+      "vhdl-deferred-package-constants.vhd",
+      R"(
+package missing_constant is
+  constant value : integer;
+end package;
+
+package mismatched_constant is
+  constant value : integer;
+end package;
+package body mismatched_constant is
+  constant value : boolean := true;
+end package body;
+
+package redeclared_constant is
+  constant value : integer := 1;
+end package;
+package body redeclared_constant is
+  constant value : integer := 2;
+end package body;
+
+entity missing_constant_top is end entity;
+use work.missing_constant.all;
+architecture rtl of missing_constant_top is begin end architecture;
+
+entity mismatched_constant_top is end entity;
+use work.mismatched_constant.all;
+architecture rtl of mismatched_constant_top is begin end architecture;
+
+entity redeclared_constant_top is end entity;
+use work.redeclared_constant.all;
+architecture rtl of redeclared_constant_top is begin end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(deferred_constants.ok());
+  const auto missing_constant_result = fsim::elaboration::elaborate(
+      deferred_constants.design,
+      "vhdl:work.missing_constant_top(rtl)");
+  const auto mismatched_constant_result = fsim::elaboration::elaborate(
+      deferred_constants.design,
+      "vhdl:work.mismatched_constant_top(rtl)");
+  const auto redeclared_constant_result = fsim::elaboration::elaborate(
+      deferred_constants.design,
+      "vhdl:work.redeclared_constant_top(rtl)");
+  assert(has_diagnostic(
+      missing_constant_result, "FSIM-ELAB-VHLEGAL-010"));
+  assert(has_diagnostic(
+      mismatched_constant_result, "FSIM-ELAB-VHLEGAL-011"));
+  assert(has_diagnostic(
+      redeclared_constant_result, "FSIM-ELAB-VHLEGAL-012"));
+
   const auto purity = fsim::frontend::parse_text(
       "vhdl-pure-function-legality.vhd",
       R"(

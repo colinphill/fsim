@@ -98,7 +98,7 @@ namespace {
           || ((node.value_kind
                        == ContainerPredicateValueKind::index
                    || type.two_state)
-              && node.constant.low_word().bval != 0)) {
+              && has_unknown(node.constant))) {
         throw std::invalid_argument{
             "SimIR container predicate constant type mismatch"};
       }
@@ -222,21 +222,19 @@ PackedLogic4 reduce_container_value(
     throw std::invalid_argument{
         "SimIR container reduction transformation is invalid"};
   }
-  auto identity = std::uint64_t{0};
   auto binary = BinaryOperator::add_unsigned;
+  auto result = PackedLogic4(
+      value.type.element_width, Logic4::zero);
   switch (operation) {
   case ContainerReductionOperator::sum:
     binary = BinaryOperator::add_unsigned;
     break;
   case ContainerReductionOperator::product:
-    identity = 1;
+    result.set(0, Logic4::one);
     binary = BinaryOperator::multiply_unsigned;
     break;
   case ContainerReductionOperator::bit_and:
-    identity =
-        value.type.element_width == 64
-            ? std::numeric_limits<std::uint64_t>::max()
-            : (UINT64_C(1) << value.type.element_width) - 1U;
+    result.fill(Logic4::one);
     binary = BinaryOperator::bit_and;
     break;
   case ContainerReductionOperator::bit_or:
@@ -249,8 +247,6 @@ PackedLogic4 reduce_container_value(
     throw std::invalid_argument{
         "invalid SimIR container reduction operator"};
   }
-  auto result = PackedLogic4::from_aval_bval(
-      value.type.element_width, identity, 0);
   const auto declared_index =
       [&](const std::size_t offset) {
         return value.type.fixed

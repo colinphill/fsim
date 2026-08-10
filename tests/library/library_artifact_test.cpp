@@ -52,7 +52,7 @@ fsim::library::Metadata example_metadata() {
 }  // namespace
 
 int main() {
-  static_assert(fsim::library::kOwningUnitSchemaVersion == 14);
+  static_assert(fsim::library::kOwningUnitSchemaVersion == 17);
   static_assert(fsim::library::kPortableSchemaVersion == 9);
   const auto expected = example_metadata();
   const auto serialized = fsim::library::serialize_metadata(expected);
@@ -252,6 +252,9 @@ endmodule
       {}};
   portable_const.systemverilog_const = true;
   source_unit.variables.push_back(std::move(portable_const));
+  source_unit.parameters.front().vhdl_deferred = true;
+  source_unit.parameters.front().vhdl_completion_span =
+      source_unit.parameters.front().span;
   fsim::diagnostic::Engine unit_write_diagnostics;
   const auto unit_bytes = fsim::library::serialize_portable_unit(
       source_unit, unit_write_diagnostics);
@@ -267,6 +270,8 @@ endmodule
          == "fixture-compilation-unit");
   assert(restored_unit->name == "stage");
   assert(restored_unit->parameters.size() == 3);
+  assert(restored_unit->parameters.front().vhdl_deferred);
+  assert(restored_unit->parameters.front().vhdl_completion_span);
   assert(restored_unit->functions.size() == 1);
   assert(restored_unit->systemverilog_covergroups.size() == 1);
   const auto restored_const = std::ranges::find(
@@ -285,6 +290,51 @@ endmodule
   assert(restored_coverage.effective_instance_goal == 80);
   assert(restored_coverage.coverage_declarations.size() == 1);
   assert(restored_coverage.coverage_declarations.front().bins.size() == 2);
+
+  const auto parsed_vhdl_psl = fsim::frontend::parse_text(
+      "sources/portable_psl.vhd",
+      R"vhdl(library ieee;
+use ieee.std_logic_1164.all;
+entity portable_psl is
+  port (clk, request, acknowledge : in std_logic);
+end entity;
+architecture rtl of portable_psl is
+  -- psl default clock is rising_edge(clk);
+  -- psl sequence response(delay : natural := 1) is
+  -- psl   {request = '1'; acknowledge = '1'};
+  -- psl property completes is response(1);
+begin
+  -- psl CHECK_RESPONSE: assert completes;
+end architecture;
+)vhdl",
+      fsim::frontend::Language::Vhdl2008);
+  assert(parsed_vhdl_psl.ok());
+  const auto psl_architecture = std::ranges::find(
+      parsed_vhdl_psl.design.units,
+      fsim::frontend::UnitKind::VhdlArchitecture,
+      &fsim::frontend::DesignUnit::kind);
+  assert(psl_architecture != parsed_vhdl_psl.design.units.end());
+  fsim::diagnostic::Engine psl_write_diagnostics;
+  const auto psl_bytes = fsim::library::serialize_portable_unit(
+      *psl_architecture, psl_write_diagnostics);
+  assert(psl_bytes && !psl_write_diagnostics.has_error());
+  fsim::diagnostic::Engine psl_read_diagnostics;
+  const auto restored_psl = fsim::library::deserialize_portable_unit(
+      *psl_bytes, "units/portable-psl.fsimir", psl_read_diagnostics);
+  assert(restored_psl && !psl_read_diagnostics.has_error());
+  assert(restored_psl->vhdl_psl_declarations.size() == 3U);
+  assert(restored_psl->vhdl_psl_declarations[1].name == "response");
+  assert(restored_psl->vhdl_psl_declarations[1].formals.size() == 1U);
+  assert(restored_psl->vhdl_psl_declarations[1].formals.front().name
+      == "delay");
+  assert(restored_psl->vhdl_psl_directives.size() == 1U);
+  assert(restored_psl->vhdl_psl_directives.front().label
+      == "check_response");
+  assert(restored_psl->vhdl_psl_directives.front().property_tokens.size()
+      == 1U);
+  assert(restored_psl->vhdl_psl_directives.front().property_tokens.front().text
+      == "completes");
+
   auto portable_interface = *interface_unit;
   portable_interface.library = "vendor";
   portable_interface.compilation_unit_identity =

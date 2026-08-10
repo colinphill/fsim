@@ -89,6 +89,10 @@ namespace fsim::app::application_detail {
     runtime.force_signal_slice = force_signal_slice;
     runtime.force_signal_slice_logic9 = force_signal_slice_logic9;
     runtime.release_signal_slice = release_signal_slice;
+    runtime.force_driver_signal_slice = force_driver_signal_slice;
+    runtime.force_driver_signal_slice_logic9 =
+        force_driver_signal_slice_logic9;
+    runtime.release_driver_signal_slice = release_driver_signal_slice;
     runtime.load_string = load_string;
     runtime.copy_string = copy_string;
     runtime.read_string_object = read_string_object;

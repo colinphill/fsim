@@ -1100,6 +1100,7 @@ void print_debug_help(std::ostream& output)  {
       << "          classes, class HANDLE [PROPERTY], chandles, "
          "chandle HANDLE,\n"
       << "          uvm [summary|phases|objections|tlm1|tlm2|all],\n"
+      << "          vhdl [summary|scopes|objects|processes|psl|all],\n"
       << "          deposit SIGNAL VALUE, force SIGNAL VALUE, release SIGNAL,\n"
       << "          trace add|remove SIGNAL, trace all|clear|list,\n"
       << "          locals, where, help, quit\n";

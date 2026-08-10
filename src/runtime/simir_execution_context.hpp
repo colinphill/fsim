@@ -161,6 +161,19 @@ struct Interpreter::Impl::ExecutionContext final
       const std::size_t width) override {
     owner.release_slice(signal, offset, width);
   }
+  void force_driver_signal_slice(
+      const SignalId signal,
+      PackedLogic4 value,
+      const std::size_t offset) override {
+    owner.force_driver_slice(
+        process, signal, std::move(value), offset);
+  }
+  void release_driver_signal_slice(
+      const SignalId signal,
+      const std::size_t offset,
+      const std::size_t width) override {
+    owner.release_driver_slice(process, signal, offset, width);
+  }
 
   void write_update(
       const SignalId signal, PackedLogic4 value) override {

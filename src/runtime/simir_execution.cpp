@@ -199,7 +199,7 @@ void Interpreter::Impl::handle_boundary(
     }
     if (delay == 0) {
       process.status = ProcessStatus::waiting;
-      if (process.program.reactive) {
+      if (process.program.reactive || process.program.postponed) {
         queue_next_delta(process.program.id);
       } else {
         process.queued = true;
@@ -1553,10 +1553,18 @@ void Interpreter::Impl::execute(ProcessId id) {
               const auto offset = op.selection
                   ? selected_offset(*op.selection)
                   : op.offset;
-              force_slice(
-                  op.signal,
-                  get_register(process, op.source),
-                  offset);
+              if (op.driving_value) {
+                force_driver_slice(
+                    process.program.id,
+                    op.signal,
+                    get_register(process, op.source),
+                    offset);
+              } else {
+                force_slice(
+                    op.signal,
+                    get_register(process, op.source),
+                    offset);
+              }
             } catch (const std::invalid_argument& error) {
               fail(process, error.what());
             }
@@ -1566,8 +1574,12 @@ void Interpreter::Impl::execute(ProcessId id) {
               const auto offset = op.selection
                   ? selected_offset(*op.selection)
                   : op.offset;
-              release_slice(
-                  op.signal, offset, op.width);
+              if (op.driving_value) {
+                release_driver_slice(
+                    process.program.id, op.signal, offset, op.width);
+              } else {
+                release_slice(op.signal, offset, op.width);
+              }
             } catch (const std::invalid_argument& error) {
               fail(process, error.what());
             }

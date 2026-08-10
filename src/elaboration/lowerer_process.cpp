@@ -189,6 +189,7 @@ bool Lowerer::report_unsupported_cross_root_reference(
                    ? "process_" + std::to_string(process_.id)
                    : source.name);
         process_.final = source.kind == ProcessKind::Final;
+        process_.postponed = source.vhdl_postponed;
         if (process_.final) {
             process_.initialize = false;
         }

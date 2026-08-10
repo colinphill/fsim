@@ -4,33 +4,48 @@
 namespace fsim::frontend {
 
 VhdlParser::VhdlParser(LexResult lexed)
-    : ParserBase(std::move(lexed.tokens),
-                 std::move(lexed.diagnostics)) {}
+    : ParserBase(std::move(lexed.tokens), std::move(lexed.diagnostics)) {}
 
 ParseResult VhdlParser::run() {
   ParsedDesign design;
   std::vector<VhdlContextItem> pending_context;
   while (!at_end()) {
-    numeric_bit_context_ = std::ranges::any_of(
-        pending_context,
-        [](const VhdlContextItem& item) {
-          return item.kind == VhdlContextItemKind::UseClause
-              && std::ranges::any_of(
-                  item.selected_names,
-                  [](const std::string_view name) {
-                    return name == "ieee.numeric_bit"
-                        || name.starts_with("ieee.numeric_bit.");
-                  });
+    numeric_bit_context_ =
+        std::ranges::any_of(pending_context, [](const VhdlContextItem &item) {
+          return item.kind == VhdlContextItemKind::UseClause &&
+                 std::ranges::any_of(
+                     item.selected_names, [](const std::string_view name) {
+                       return name == "ieee.numeric_bit" ||
+                              name.starts_with("ieee.numeric_bit.");
+                     });
         });
-    if (keyword("context", 0, true)
-        && at(TokenKind::Identifier, 1)
-        && keyword("is", 2, true)) {
+    if (at(TokenKind::PslDirective)) {
+      const auto marker = advance();
+      skip_vhdl_psl_markers();
+      if (any_keyword({"vunit", "vprop", "vmode"}, true)) {
+        const auto start = advance();
+        auto unit = parse_vhdl_psl_verification_unit(start, true);
+        unit.vhdl_context = std::exchange(pending_context, {});
+        unit.span = cover(marker.span, unit.span);
+        design.units.push_back(std::move(unit));
+      } else {
+        error(marker, "FSIM-VHDL-PSL-009",
+              "a top-level embedded PSL comment must start a vunit, vprop, "
+              "or vmode verification unit");
+        skip_to_semicolon();
+      }
+    } else if (any_keyword({"vunit", "vprop", "vmode"}, true)) {
+      const auto start = advance();
+      auto unit = parse_vhdl_psl_verification_unit(start, false);
+      unit.vhdl_context = std::exchange(pending_context, {});
+      design.units.push_back(std::move(unit));
+    } else if (keyword("context", 0, true) && at(TokenKind::Identifier, 1) &&
+        keyword("is", 2, true)) {
       const auto start = advance();
       auto unit = parse_context_declaration(start);
-      unit.vhdl_context.insert(
-          unit.vhdl_context.begin(),
-          std::make_move_iterator(pending_context.begin()),
-          std::make_move_iterator(pending_context.end()));
+      unit.vhdl_context.insert(unit.vhdl_context.begin(),
+                               std::make_move_iterator(pending_context.begin()),
+                               std::make_move_iterator(pending_context.end()));
       pending_context.clear();
       design.units.push_back(std::move(unit));
     } else if (any_keyword({"library", "use", "context"}, true)) {
@@ -63,31 +78,48 @@ ParseResult VhdlParser::run() {
     } else {
       const auto unexpected = advance();
       error(unexpected, "FSIM-VHDL-UNSUPPORTED-001",
-            "unsupported VHDL design unit or context item '" +
-                unexpected.text + "'");
+            "unsupported VHDL design unit or context item '" + unexpected.text +
+                "'");
       skip_to_semicolon();
     }
   }
+  if (!pending_context.empty()) {
+    error(Token{TokenKind::EndOfFile, {}, pending_context.front().span, {}},
+          "FSIM-VHDL-PARSE-264",
+          "VHDL context clauses must be followed by a library unit");
+  }
+  for (const auto &unit : design.units) {
+    for (const auto &declaration : unit.type_aliases) {
+      if (declaration.declaration_kind != TypeDeclarationKind::VhdlIncomplete) {
+        continue;
+      }
+      diagnostics_.push_back(Diagnostic{
+          DiagnosticSeverity::Error,
+          "FSIM-VHDL-SEM-097",
+          "incomplete VHDL type '" + declaration.name +
+              "' has no full declaration in the same declarative region",
+          declaration.span,
+          {}});
+    }
+  }
+  analyze_vhdl_psl(design);
   return ParseResult{std::move(design), std::move(diagnostics_)};
 }
 
-SourceSpan VhdlParser::span_from(const Token& first, const Token& last) {
+SourceSpan VhdlParser::span_from(const Token &first, const Token &last) {
   return cover(first.span, last.span);
 }
 
-std::string VhdlParser::string_literal_text(const Token& token) {
-  if (token.text.size() >= 2 && token.text.front() == '"'
-      && token.text.back() == '"') {
-    const auto spelling =
-        token.text.substr(1, token.text.size() - 2);
+std::string VhdlParser::string_literal_text(const Token &token) {
+  if (token.text.size() >= 2 && token.text.front() == '"' &&
+      token.text.back() == '"') {
+    const auto spelling = token.text.substr(1, token.text.size() - 2);
     std::string result;
     result.reserve(spelling.size());
-    for (std::size_t index = 0;
-         index < spelling.size();
-         ++index) {
+    for (std::size_t index = 0; index < spelling.size(); ++index) {
       result.push_back(spelling[index]);
-      if (spelling[index] == '"' && index + 1 < spelling.size()
-          && spelling[index + 1] == '"') {
+      if (spelling[index] == '"' && index + 1 < spelling.size() &&
+          spelling[index + 1] == '"') {
         ++index;
       }
     }
@@ -98,21 +130,17 @@ std::string VhdlParser::string_literal_text(const Token& token) {
 
 std::optional<VhdlContextItem> VhdlParser::parse_context_item() {
   const auto start = advance();
-  const auto context_kind =
-      detail::iequals(start.text, "library")
-          ? VhdlContextItemKind::LibraryClause
-          : detail::iequals(start.text, "use")
-              ? VhdlContextItemKind::UseClause
-              : VhdlContextItemKind::ContextReference;
+  const auto context_kind = detail::iequals(start.text, "library")
+                                ? VhdlContextItemKind::LibraryClause
+                            : detail::iequals(start.text, "use")
+                                ? VhdlContextItemKind::UseClause
+                                : VhdlContextItemKind::ContextReference;
 
-  if (context_kind == VhdlContextItemKind::ContextReference
-      && at(TokenKind::Identifier)
-      && keyword("is", 1, true)) {
-    error(
-        start,
-        "FSIM-VHDL-UNSUPPORTED-015",
-        "a context declaration cannot be nested where a context "
-        "reference is required");
+  if (context_kind == VhdlContextItemKind::ContextReference &&
+      at(TokenKind::Identifier) && keyword("is", 1, true)) {
+    error(start, "FSIM-VHDL-UNSUPPORTED-015",
+          "a context declaration cannot be nested where a context "
+          "reference is required");
     while (!at_end()) {
       if (match_keyword("end", true)) {
         match_keyword("context", true);
@@ -170,11 +198,24 @@ std::optional<VhdlContextItem> VhdlParser::parse_context_item() {
   if (!match(TokenKind::Semicolon)) {
     malformed = true;
   }
+  std::vector<std::string> unique_names;
+  for (const auto &name : item.selected_names) {
+    const auto part_count =
+        static_cast<std::size_t>(std::ranges::count(name, '.')) + 1;
+    const bool valid_shape =
+        context_kind == VhdlContextItemKind::LibraryClause ? part_count == 1
+        : context_kind == VhdlContextItemKind::UseClause   ? part_count >= 2
+                                                           : part_count == 2;
+    if (!valid_shape ||
+        std::ranges::find(unique_names, name) != unique_names.end()) {
+      malformed = true;
+    } else {
+      unique_names.push_back(name);
+    }
+  }
   if (malformed) {
-    error(
-        start,
-        "FSIM-VHDL-PARSE-044",
-        "malformed or unterminated VHDL context clause");
+    error(start, "FSIM-VHDL-PARSE-044",
+          "malformed or unterminated VHDL context clause");
   }
   item.span = span_from(start, previous());
   return item;
@@ -184,7 +225,7 @@ Token VhdlParser::expect_identifier(std::string_view description) {
   return expect(TokenKind::Identifier, description, "FSIM-VHDL-PARSE-001");
 }
 
-DesignUnit VhdlParser::parse_context_declaration(const Token& start) {
+DesignUnit VhdlParser::parse_context_declaration(const Token &start) {
   DesignUnit unit;
   unit.kind = UnitKind::VhdlContext;
   unit.language = Language::Vhdl2008;
@@ -199,11 +240,8 @@ DesignUnit VhdlParser::parse_context_declaration(const Token& start) {
       continue;
     }
     const auto declaration = advance();
-    error(
-        declaration,
-        "FSIM-VHDL-UNSUPPORTED-024",
-        "unsupported context declaration item '"
-            + declaration.text + "'");
+    error(declaration, "FSIM-VHDL-UNSUPPORTED-024",
+          "unsupported context declaration item '" + declaration.text + "'");
     skip_to_semicolon();
   }
   expect_keyword("end", true, "FSIM-VHDL-PARSE-091");
@@ -211,23 +249,17 @@ DesignUnit VhdlParser::parse_context_declaration(const Token& start) {
   if (at(TokenKind::Identifier)) {
     const auto end_name = advance();
     if (vhdl_name(end_name.text) != unit.name) {
-      error(
-          end_name,
-          "FSIM-VHDL-PARSE-092",
-          "context end name does not match '" + unit.name + "'");
+      error(end_name, "FSIM-VHDL-PARSE-092",
+            "context end name does not match '" + unit.name + "'");
     }
   }
-  expect(
-      TokenKind::Semicolon,
-      "';' after context declaration",
-      "FSIM-VHDL-PARSE-093");
+  expect(TokenKind::Semicolon, "';' after context declaration",
+         "FSIM-VHDL-PARSE-093");
   unit.span = span_from(start, previous());
   return unit;
 }
 
-DesignUnit VhdlParser::parse_package(
-  const Token& start,
-  const bool body) {
+DesignUnit VhdlParser::parse_package(const Token &start, const bool body) {
   vhdl_named_types_.clear();
   DesignUnit unit;
   unit.kind = UnitKind::VhdlPackage;
@@ -242,82 +274,74 @@ DesignUnit VhdlParser::parse_package(
   }
   expect_keyword("is", true, "FSIM-VHDL-PARSE-086");
   while (!at_end() && !keyword("end", 0, true)) {
-    if (keyword("generic", 0, true)
-        && vhdl_generic_clause_precedes_subprogram()) {
+    if (parse_vhdl_psl_declaration(unit)) {
+      continue;
+    }
+    if (keyword("generic", 0, true) &&
+        vhdl_generic_clause_precedes_subprogram()) {
       const auto generic_start = advance();
-      parse_vhdl_generic_subprogram(
-          unit, generic_start, true);
+      parse_vhdl_generic_subprogram(unit, generic_start, true);
     } else if (!body && match_keyword("generic", true)) {
       parse_vhdl_generics(unit, previous());
     } else if (match_keyword("constant", true)) {
-      parse_package_constant(unit, previous());
-    } else if (
-        (keyword("pure", 0, true)
-         || keyword("impure", 0, true))
-        && keyword("function", 1, true)) {
+      parse_package_constant(unit, previous(), body);
+    } else if ((keyword("pure", 0, true) || keyword("impure", 0, true)) &&
+               keyword("function", 1, true)) {
       const bool pure = match_keyword("pure", true);
       if (!pure) {
         (void)match_keyword("impure", true);
       }
-      const auto function_start =
-          expect_keyword("function", true);
-      parse_vhdl_function_item(
-          unit, function_start, pure, true);
+      const auto function_start = expect_keyword("function", true);
+      parse_vhdl_function_item(unit, function_start, pure, true);
     } else if (match_keyword("function", true)) {
-      parse_vhdl_function_item(
-          unit, previous(), true, true);
+      parse_vhdl_function_item(unit, previous(), true, true);
     } else if (match_keyword("procedure", true)) {
-      parse_vhdl_procedure_item(
-          unit, previous(), true);
+      parse_vhdl_procedure_item(unit, previous(), true);
     } else if (match_keyword("file", true)) {
-      parse_vhdl_file_declaration(
-          unit.variables, previous());
+      parse_vhdl_file_declaration(unit.variables, previous());
     } else if (match_keyword("type", true)) {
       parse_type_declaration(unit, previous());
     } else if (match_keyword("subtype", true)) {
       parse_subtype_declaration(unit, previous());
     } else if (!body && match_keyword("component", true)) {
       const auto component_start = previous();
-      auto declaration =
-          parse_vhdl_component_declaration(
-              component_start,
-              unit.vhdl_component_declarations.size());
-      declaration.region =
-          VhdlComponentDeclarationRegion::Package;
+      auto declaration = parse_vhdl_component_declaration(
+          component_start, unit.vhdl_component_declarations.size());
+      declaration.region = VhdlComponentDeclarationRegion::Package;
       declaration.owner_name = unit.name;
-      add_vhdl_component_declaration(
-          unit.vhdl_component_declarations,
-          std::move(declaration),
-          component_start);
+      add_vhdl_component_declaration(unit.vhdl_component_declarations,
+                                     std::move(declaration), component_start);
+    } else if (match_keyword("attribute", true)) {
+      parse_vhdl_attribute_declaration(unit, previous());
+    } else if (match_keyword("group", true)) {
+      parse_vhdl_group_declaration(unit, previous());
+    } else if (match_keyword("disconnect", true)) {
+      parse_vhdl_disconnection_specification(
+          unit.vhdl_disconnections, previous());
+    } else if (match(TokenKind::PslDirective)) {
+      error(previous(), "FSIM-VHDL-PSL-009",
+            "a PSL directive is not legal in a package declarative region");
+      skip_to_semicolon();
     } else {
       const auto declaration = advance();
-      error(
-          declaration,
-          "FSIM-VHDL-UNSUPPORTED-022",
-          "unsupported package declaration '"
-              + declaration.text + "'");
+      error(declaration, "FSIM-VHDL-UNSUPPORTED-022",
+            "unsupported package declaration '" + declaration.text + "'");
       skip_to_semicolon();
     }
   }
   if (body) {
-    expect_keyword(
-        "end", true, "FSIM-VHDL-PARSE-166");
+    expect_keyword("end", true, "FSIM-VHDL-PARSE-166");
     (void)match_keyword("package", true);
     (void)match_keyword("body", true);
     if (at(TokenKind::Identifier)) {
       const auto end_name = advance();
       if (vhdl_name(end_name.text) != unit.name) {
-        error(
-            end_name,
-            "FSIM-VHDL-SEM-047",
-            "package body end name does not match '"
-                + unit.name + "'");
+        error(end_name, "FSIM-VHDL-SEM-047",
+              "package body end name does not match '" + unit.name + "'");
       }
     }
-    expect(
-        TokenKind::Semicolon,
-        "';' after package body",
-        "FSIM-VHDL-PARSE-167");
+    expect(TokenKind::Semicolon, "';' after package body",
+           "FSIM-VHDL-PARSE-167");
   } else {
     parse_vhdl_end("package");
   }
@@ -325,71 +349,47 @@ DesignUnit VhdlParser::parse_package(
   return unit;
 }
 
-void VhdlParser::parse_package_constant(
-  DesignUnit& unit, const Token& start) {
+void VhdlParser::parse_package_constant(DesignUnit &unit, const Token &start,
+                                        const bool body) {
   std::vector<Token> names;
   names.push_back(expect_identifier("package constant name"));
   while (match(TokenKind::Comma)) {
-    names.push_back(
-        expect_identifier("package constant name"));
+    names.push_back(expect_identifier("package constant name"));
   }
-  expect(
-      TokenKind::Colon,
-      "':' after package constant names",
-      "FSIM-VHDL-PARSE-087");
+  expect(TokenKind::Colon, "':' after package constant names",
+         "FSIM-VHDL-PARSE-087");
   const auto type = parse_vhdl_type(true);
-  if (type.named_type.empty()
-      && (type.packed_range
-          || (type.domain != ValueDomain::Integer
-              && type.domain != ValueDomain::Boolean
-              && type.domain != ValueDomain::Bit2))) {
-    error(
-        names.front(),
-        "FSIM-VHDL-UNSUPPORTED-023",
-        "package constants are bounded to scalar integer, Boolean, and "
-        "bit types");
-  }
   Expression value;
+  bool deferred = false;
   if (match(TokenKind::ColonEqual)) {
     value = parse_expression();
+  } else if (!body) {
+    deferred = true;
   } else {
-    error(
-        current(),
-        "FSIM-VHDL-PARSE-088",
-        "a package constant requires a default expression");
+    error(current(), "FSIM-VHDL-PARSE-088",
+          "a package constant requires a default expression");
   }
-  expect(
-      TokenKind::Semicolon,
-      "';' after package constant declaration",
-      "FSIM-VHDL-PARSE-089");
-  for (const auto& constant_name : names) {
-    const auto canonical =
-        vhdl_name(constant_name.text);
-    if (std::any_of(
-            unit.parameters.begin(),
-            unit.parameters.end(),
-            [&](const ParameterDeclaration& existing) {
-              return existing.name == canonical;
-            })) {
-      error(
-          constant_name,
-          "FSIM-VHDL-SEM-020",
-          "duplicate package constant declaration '"
-              + canonical + "'");
+  expect(TokenKind::Semicolon, "';' after package constant declaration",
+         "FSIM-VHDL-PARSE-089");
+  for (const auto &constant_name : names) {
+    const auto canonical = vhdl_name(constant_name.text);
+    if (std::any_of(unit.parameters.begin(), unit.parameters.end(),
+                    [&](const ParameterDeclaration &existing) {
+                      return existing.name == canonical;
+                    })) {
+      error(constant_name, "FSIM-VHDL-SEM-020",
+            "duplicate package constant declaration '" + canonical + "'");
       continue;
     }
-    unit.parameters.push_back(ParameterDeclaration{
-        canonical,
-        type,
-        value,
-        true,
-        span_from(start, previous()),
-        ParameterKind::Value,
-        std::nullopt});
+    auto declaration = ParameterDeclaration{
+        canonical, type, value, true, span_from(start, previous()),
+        ParameterKind::Value, std::nullopt};
+    declaration.vhdl_deferred = deferred;
+    unit.parameters.push_back(std::move(declaration));
   }
 }
 
-DesignUnit VhdlParser::parse_entity(const Token& start) {
+DesignUnit VhdlParser::parse_entity(const Token &start) {
   vhdl_named_types_.clear();
   DesignUnit unit;
   unit.kind = UnitKind::VhdlEntity;
@@ -398,54 +398,44 @@ DesignUnit VhdlParser::parse_entity(const Token& start) {
   unit.name = vhdl_name(name.text);
   expect_keyword("is", true, "FSIM-VHDL-PARSE-002");
 
-  while (!at_end() && !keyword("end", 0, true)) {
-    if (keyword("generic", 0, true)
-        && vhdl_generic_clause_precedes_subprogram()) {
+  while (!at_end() && !keyword("begin", 0, true)
+         && !keyword("end", 0, true)) {
+    if (parse_vhdl_psl_declaration(unit)) {
+      continue;
+    }
+    if (keyword("generic", 0, true) &&
+        vhdl_generic_clause_precedes_subprogram()) {
       const auto generic_start = advance();
-      parse_vhdl_generic_subprogram(
-          unit, generic_start, true);
+      parse_vhdl_generic_subprogram(unit, generic_start, true);
     } else if (match_keyword("port", true)) {
       parse_vhdl_ports(unit);
     } else if (match_keyword("generic", true)) {
       parse_vhdl_generics(unit, previous());
-    } else if (
-        (keyword("pure", 0, true)
-         || keyword("impure", 0, true))
-        && keyword("function", 1, true)) {
+    } else if ((keyword("pure", 0, true) || keyword("impure", 0, true)) &&
+               keyword("function", 1, true)) {
       const bool pure = match_keyword("pure", true);
       if (!pure) {
         (void)match_keyword("impure", true);
       }
-      const auto function_start =
-          expect_keyword("function", true);
-      parse_vhdl_function_item(
-          unit, function_start, pure, true);
+      const auto function_start = expect_keyword("function", true);
+      parse_vhdl_function_item(unit, function_start, pure, true);
     } else if (match_keyword("function", true)) {
-      parse_vhdl_function_item(
-          unit, previous(), true, true);
+      parse_vhdl_function_item(unit, previous(), true, true);
     } else if (match_keyword("procedure", true)) {
-      parse_vhdl_procedure_item(
-          unit, previous(), true);
+      parse_vhdl_procedure_item(unit, previous(), true);
     } else if (match_keyword("file", true)) {
-      parse_vhdl_file_declaration(
-          unit.variables, previous());
+      parse_vhdl_file_declaration(unit.variables, previous());
     } else if (match_keyword("package", true)) {
       const auto package_start = previous();
-      auto instance =
-          parse_vhdl_package_instantiation(package_start);
-      if (std::ranges::any_of(
-              unit.package_instances,
-              [&](const auto& existing) {
-                return existing.name == instance.name;
-              })) {
-        error(
-            package_start,
-            "FSIM-VHDL-SEM-059",
-            "duplicate local package instance '"
-                + instance.name + "'");
+      auto instance = parse_vhdl_package_instantiation(package_start);
+      if (std::ranges::any_of(unit.package_instances,
+                              [&](const auto &existing) {
+                                return existing.name == instance.name;
+                              })) {
+        error(package_start, "FSIM-VHDL-SEM-059",
+              "duplicate local package instance '" + instance.name + "'");
       } else {
-        unit.package_instances.push_back(
-            std::move(instance));
+        unit.package_instances.push_back(std::move(instance));
       }
     } else if (match_keyword("type", true)) {
       parse_type_declaration(unit, previous());
@@ -453,21 +443,20 @@ DesignUnit VhdlParser::parse_entity(const Token& start) {
       parse_subtype_declaration(unit, previous());
     } else if (match_keyword("component", true)) {
       const auto component_start = previous();
-      auto declaration =
-          parse_vhdl_component_declaration(
-              component_start,
-              unit.vhdl_component_declarations.size());
-      declaration.region =
-          VhdlComponentDeclarationRegion::Entity;
+      auto declaration = parse_vhdl_component_declaration(
+          component_start, unit.vhdl_component_declarations.size());
+      declaration.region = VhdlComponentDeclarationRegion::Entity;
       declaration.owner_name = unit.name;
-      add_vhdl_component_declaration(
-          unit.vhdl_component_declarations,
-          std::move(declaration),
-          component_start);
+      add_vhdl_component_declaration(unit.vhdl_component_declarations,
+                                     std::move(declaration), component_start);
     } else if (match_keyword("attribute", true)) {
-      // Attribute declarations/specifications are static design metadata.
-      // Accept them for VITAL and vendor-library compatibility; queried
-      // user-defined attribute semantics remain outside this batch.
+      parse_vhdl_attribute_declaration(unit, previous());
+    } else if (match_keyword("group", true)) {
+      parse_vhdl_group_declaration(unit, previous());
+    } else if (match(TokenKind::PslDirective)) {
+      error(previous(), "FSIM-VHDL-PSL-009",
+            "this embedded PSL item is not a declaration in the entity "
+            "declarative region");
       skip_to_semicolon();
     } else {
       const auto declaration = advance();
@@ -477,300 +466,227 @@ DesignUnit VhdlParser::parse_entity(const Token& start) {
     }
   }
 
+  if (match_keyword("begin", true)) {
+    while (!at_end() && !keyword("end", 0, true)) {
+      parse_concurrent_statement(unit);
+    }
+  }
+
   parse_vhdl_end("entity");
   unit.span = span_from(start, previous());
   return unit;
 }
 
-void VhdlParser::add_vhdl_generic(
-  DesignUnit& unit,
-  ParameterDeclaration generic,
-  const Token& name) {
+void VhdlParser::add_vhdl_generic(DesignUnit &unit,
+                                  ParameterDeclaration generic,
+                                  const Token &name) {
   const auto canonical = generic.name;
   const auto type_conflict =
-      generic.kind == ParameterKind::Type
-      && (vhdl_named_types_.contains(canonical)
-          || std::ranges::any_of(
-              unit.type_aliases,
-              [&](const auto& declaration) {
-                return declaration.name == canonical;
-              }));
+      generic.kind == ParameterKind::Type &&
+      (vhdl_named_types_.contains(canonical) ||
+       std::ranges::any_of(unit.type_aliases, [&](const auto &declaration) {
+         return declaration.name == canonical;
+       }));
   const auto object_conflict =
-      std::any_of(
-          unit.ports.begin(),
-          unit.ports.end(),
-          [&](const SignalDeclaration& declaration) {
-            return declaration.name == canonical;
-          })
-      || std::any_of(
-          unit.signals.begin(),
-          unit.signals.end(),
-          [&](const SignalDeclaration& declaration) {
-            return declaration.name == canonical;
-          });
+      std::any_of(unit.ports.begin(), unit.ports.end(),
+                  [&](const SignalDeclaration &declaration) {
+                    return declaration.name == canonical;
+                  }) ||
+      std::any_of(unit.signals.begin(), unit.signals.end(),
+                  [&](const SignalDeclaration &declaration) {
+                    return declaration.name == canonical;
+                  });
   if (type_conflict) {
-    error(
-        name,
-        "FSIM-VHDL-SEM-036",
-        "interface type generic '" + canonical
-            + "' conflicts with a bounded type declaration");
+    error(name, "FSIM-VHDL-SEM-036",
+          "interface type generic '" + canonical +
+              "' conflicts with a bounded type declaration");
     return;
   }
   if (object_conflict) {
-    error(
-        name,
-        "FSIM-VHDL-SEM-014",
-        "generic '" + canonical
-            + "' conflicts with an object declaration");
+    error(name, "FSIM-VHDL-SEM-014",
+          "generic '" + canonical + "' conflicts with an object declaration");
     return;
   }
-  if (std::any_of(
-          unit.parameters.begin(),
-          unit.parameters.end(),
-          [&](const ParameterDeclaration& existing) {
-            return existing.name == canonical;
-          })) {
-    error(
-        name,
-        "FSIM-VHDL-SEM-013",
-        "duplicate generic declaration '" + canonical + "'");
+  if (std::any_of(unit.parameters.begin(), unit.parameters.end(),
+                  [&](const ParameterDeclaration &existing) {
+                    return existing.name == canonical;
+                  })) {
+    error(name, "FSIM-VHDL-SEM-013",
+          "duplicate generic declaration '" + canonical + "'");
     return;
   }
   unit.parameters.push_back(std::move(generic));
 }
 
-void VhdlParser::parse_vhdl_generics(
-  DesignUnit& unit,
-  const Token& start,
-  const bool expect_terminating_semicolon) {
-  expect(
-      TokenKind::LeftParen,
-      "'(' after generic",
-      "FSIM-VHDL-PARSE-050");
+void VhdlParser::parse_vhdl_generics(DesignUnit &unit, const Token &start,
+                                     const bool expect_terminating_semicolon) {
+  expect(TokenKind::LeftParen, "'(' after generic", "FSIM-VHDL-PARSE-050");
   while (!at_end() && !at(TokenKind::RightParen)) {
     if (match_keyword("package", true)) {
       const auto package_start = previous();
-      auto generic =
-          parse_vhdl_interface_package(package_start);
+      auto generic = parse_vhdl_interface_package(package_start);
       Token name;
       name.kind = TokenKind::Identifier;
       name.text = generic.name;
       name.span = generic.span;
-      add_vhdl_generic(
-          unit, std::move(generic), name);
-      if (!match(TokenKind::Semicolon)
-          && !at(TokenKind::RightParen)) {
-        error(
-            current(),
-            "FSIM-VHDL-PARSE-052",
-            "expected ';' between generic declarations");
+      add_vhdl_generic(unit, std::move(generic), name);
+      if (!match(TokenKind::Semicolon) && !at(TokenKind::RightParen)) {
+        error(current(), "FSIM-VHDL-PARSE-052",
+              "expected ';' between generic declarations");
         skip_to_semicolon();
       }
       continue;
     }
-    if ((keyword("pure", 0, true)
-         || keyword("impure", 0, true))
-        && keyword("function", 1, true)) {
+    if ((keyword("pure", 0, true) || keyword("impure", 0, true)) &&
+        keyword("function", 1, true)) {
       const bool pure = match_keyword("pure", true);
       if (!pure) {
         (void)match_keyword("impure", true);
       }
-      const auto function_start =
-          expect_keyword("function", true);
-      auto generic =
-          parse_vhdl_interface_function(function_start, pure);
+      const auto function_start = expect_keyword("function", true);
+      auto generic = parse_vhdl_interface_function(function_start, pure);
       Token name;
       name.kind = TokenKind::Identifier;
       name.text = generic.name;
       name.span = generic.span;
-      add_vhdl_generic(
-          unit, std::move(generic), name);
-      if (!match(TokenKind::Semicolon)
-          && !at(TokenKind::RightParen)) {
-        error(
-            current(),
-            "FSIM-VHDL-PARSE-052",
-            "expected ';' between generic declarations");
+      add_vhdl_generic(unit, std::move(generic), name);
+      if (!match(TokenKind::Semicolon) && !at(TokenKind::RightParen)) {
+        error(current(), "FSIM-VHDL-PARSE-052",
+              "expected ';' between generic declarations");
         skip_to_semicolon();
       }
       continue;
     }
     if (match_keyword("function", true)) {
       const auto function_start = previous();
-      auto generic =
-          parse_vhdl_interface_function(function_start, true);
+      auto generic = parse_vhdl_interface_function(function_start, true);
       Token name;
       name.kind = TokenKind::Identifier;
       name.text = generic.name;
       name.span = generic.span;
-      add_vhdl_generic(
-          unit, std::move(generic), name);
-      if (!match(TokenKind::Semicolon)
-          && !at(TokenKind::RightParen)) {
-        error(
-            current(),
-            "FSIM-VHDL-PARSE-052",
-            "expected ';' between generic declarations");
+      add_vhdl_generic(unit, std::move(generic), name);
+      if (!match(TokenKind::Semicolon) && !at(TokenKind::RightParen)) {
+        error(current(), "FSIM-VHDL-PARSE-052",
+              "expected ';' between generic declarations");
         skip_to_semicolon();
       }
       continue;
     }
     if (match_keyword("procedure", true)) {
       const auto procedure_start = previous();
-      auto generic =
-          parse_vhdl_interface_procedure(procedure_start);
+      auto generic = parse_vhdl_interface_procedure(procedure_start);
       Token name;
       name.kind = TokenKind::Identifier;
       name.text = generic.name;
       name.span = generic.span;
-      add_vhdl_generic(
-          unit, std::move(generic), name);
-      if (!match(TokenKind::Semicolon)
-          && !at(TokenKind::RightParen)) {
-        error(
-            current(),
-            "FSIM-VHDL-PARSE-052",
-            "expected ';' between generic declarations");
+      add_vhdl_generic(unit, std::move(generic), name);
+      if (!match(TokenKind::Semicolon) && !at(TokenKind::RightParen)) {
+        error(current(), "FSIM-VHDL-PARSE-052",
+              "expected ';' between generic declarations");
         skip_to_semicolon();
       }
       continue;
     }
     if (match_keyword("type", true)) {
       const auto type_start = previous();
-      const auto name =
-          expect_identifier("interface type generic name");
+      const auto name = expect_identifier("interface type generic name");
       ParameterDeclaration generic;
       generic.name = vhdl_name(name.text);
       generic.span = span_from(type_start, name);
       generic.kind = ParameterKind::Type;
       add_vhdl_generic(unit, std::move(generic), name);
-      if (match_keyword("is", true)
-          || match(TokenKind::ColonEqual)) {
-        error(
-            previous(),
-            "FSIM-VHDL-UNSUPPORTED-028",
-            "VHDL-2019 classified or invalid default-like interface type "
-            "syntax is not part of the VHDL-2008 unclassified 'type T' "
-            "form");
+      if (match_keyword("is", true) || match(TokenKind::ColonEqual)) {
+        error(previous(), "FSIM-VHDL-UNSUPPORTED-028",
+              "VHDL-2019 classified or invalid default-like interface type "
+              "syntax is not part of the VHDL-2008 unclassified 'type T' "
+              "form");
         skip_to_semicolon();
       }
-      if (!match(TokenKind::Semicolon)
-          && !at(TokenKind::RightParen)) {
-        error(
-            current(),
-            "FSIM-VHDL-PARSE-052",
-            "expected ';' between generic declarations");
+      if (!match(TokenKind::Semicolon) && !at(TokenKind::RightParen)) {
+        error(current(), "FSIM-VHDL-PARSE-052",
+              "expected ';' between generic declarations");
         skip_to_semicolon();
       }
       continue;
     }
-    InterfaceObjectClass object_class =
-        InterfaceObjectClass::Constant;
-    if (!match_keyword("constant", true)
-        && (match_keyword("variable", true)
-            || match_keyword("signal", true)
-            || match_keyword("file", true))) {
-      error(
-          previous(),
-          "FSIM-VHDL-SEM-076",
-          "a VHDL value generic must have constant object class");
+    InterfaceObjectClass object_class = InterfaceObjectClass::Constant;
+    if (!match_keyword("constant", true) &&
+        (match_keyword("variable", true) || match_keyword("signal", true) ||
+         match_keyword("file", true))) {
+      error(previous(), "FSIM-VHDL-SEM-076",
+            "a VHDL value generic must have constant object class");
     }
     std::vector<Token> names;
     names.push_back(expect_identifier("generic name"));
     while (match(TokenKind::Comma)) {
       names.push_back(expect_identifier("generic name"));
     }
-    expect(
-        TokenKind::Colon,
-        "':' after generic name",
-        "FSIM-VHDL-PARSE-051");
+    expect(TokenKind::Colon, "':' after generic name", "FSIM-VHDL-PARSE-051");
     PortDirection direction = PortDirection::Input;
-    if (!match_keyword("in", true)
-        && (match_keyword("out", true)
-            || match_keyword("inout", true)
-            || match_keyword("buffer", true))) {
+    if (!match_keyword("in", true) &&
+        (match_keyword("out", true) || match_keyword("inout", true) ||
+         match_keyword("buffer", true))) {
       direction = PortDirection::Unknown;
-      error(
-          previous(),
-          "FSIM-VHDL-SEM-077",
-          "a VHDL value generic must have input mode");
+      error(previous(), "FSIM-VHDL-SEM-077",
+            "a VHDL value generic must have input mode");
     }
     const auto type = parse_vhdl_type(true);
-    const bool supported_packed =
-        type.packed_range
-        && type.packed_members.empty()
-        && type.width().value_or(0) <= 64
-        && (type.domain == ValueDomain::Bit2
-            || type.domain == ValueDomain::Logic4
-            || type.domain == ValueDomain::Logic9);
-    if (type.named_type.empty()
-        && type.nominal_type != "@builtin:time"
-        && (type.packed_range
-                ? !supported_packed
-                : (type.domain != ValueDomain::Integer
-                && type.domain != ValueDomain::Boolean
-                && type.domain != ValueDomain::Bit2
-                && type.domain != ValueDomain::Logic4
-                && type.domain != ValueDomain::Logic9))) {
-      error(
-          names.front(),
-          "FSIM-VHDL-UNSUPPORTED-018",
-          "this generic type is outside the bounded scalar integer, "
-          "Boolean, bit, up-to-64-bit packed logic, and physical-time "
-          "subset");
+    const auto packed_width = type.width();
+    const bool supported_packed = type.packed_range &&
+                                  type.packed_members.empty() &&
+                                  packed_width && *packed_width != 0 &&
+                                  *packed_width <=
+                                      std::numeric_limits<std::uint32_t>::max() &&
+                                  (type.domain == ValueDomain::Bit2 ||
+                                   type.domain == ValueDomain::Logic4 ||
+                                   type.domain == ValueDomain::Logic9);
+    if (type.named_type.empty() && type.nominal_type != "@builtin:time" &&
+        (type.packed_range ? !supported_packed
+                           : (type.domain != ValueDomain::Integer &&
+                              type.domain != ValueDomain::Boolean &&
+                              type.domain != ValueDomain::Bit2 &&
+                              type.domain != ValueDomain::Logic4 &&
+                              type.domain != ValueDomain::Logic9))) {
+      error(names.front(), "FSIM-VHDL-UNSUPPORTED-018",
+            "this generic type is outside the scalar integer, Boolean, bit, "
+            "SimIR-representable packed logic, and physical-time subset");
     }
     Expression default_value;
     if (match(TokenKind::ColonEqual)) {
       default_value = parse_expression();
     }
-    for (const auto& name : names) {
-      add_vhdl_generic(
-          unit,
-          ParameterDeclaration{
-              vhdl_name(name.text),
-              type,
-              default_value,
-              false,
-              span_from(name, previous()),
-              ParameterKind::Value,
-              std::nullopt,
-              object_class,
-              direction},
-          name);
+    for (const auto &name : names) {
+      add_vhdl_generic(unit,
+                       ParameterDeclaration{
+                           vhdl_name(name.text), type, default_value, false,
+                           span_from(name, previous()), ParameterKind::Value,
+                           std::nullopt, object_class, direction},
+                       name);
     }
-    if (!match(TokenKind::Semicolon)
-        && !at(TokenKind::RightParen)) {
-      error(
-          current(),
-          "FSIM-VHDL-PARSE-052",
-          "expected ';' between generic declarations");
+    if (!match(TokenKind::Semicolon) && !at(TokenKind::RightParen)) {
+      error(current(), "FSIM-VHDL-PARSE-052",
+            "expected ';' between generic declarations");
       skip_to_semicolon();
     }
   }
-  expect(
-      TokenKind::RightParen,
-      "')' after generic declarations",
-      "FSIM-VHDL-PARSE-053");
+  expect(TokenKind::RightParen, "')' after generic declarations",
+         "FSIM-VHDL-PARSE-053");
   if (expect_terminating_semicolon) {
-    expect(
-        TokenKind::Semicolon,
-        "';' after generic clause",
-        "FSIM-VHDL-PARSE-054");
+    expect(TokenKind::Semicolon, "';' after generic clause",
+           "FSIM-VHDL-PARSE-054");
   }
   (void)start;
 }
 
-void VhdlParser::parse_vhdl_ports(DesignUnit& unit) {
-  expect(TokenKind::LeftParen, "'(' after port",
-         "FSIM-VHDL-PARSE-003");
+void VhdlParser::parse_vhdl_ports(DesignUnit &unit) {
+  expect(TokenKind::LeftParen, "'(' after port", "FSIM-VHDL-PARSE-003");
   while (!at_end() && !at(TokenKind::RightParen)) {
     std::vector<Token> names;
     names.push_back(expect_identifier("port name"));
     while (match(TokenKind::Comma)) {
       names.push_back(expect_identifier("port name"));
     }
-    expect(TokenKind::Colon, "':' after port name",
-           "FSIM-VHDL-PARSE-004");
+    expect(TokenKind::Colon, "':' after port name", "FSIM-VHDL-PARSE-004");
 
     PortDirection direction = PortDirection::Unknown;
     if (match_keyword("in", true)) {
@@ -782,8 +698,7 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit) {
     } else if (match_keyword("buffer", true)) {
       direction = PortDirection::Buffer;
     } else {
-      error(current(), "FSIM-VHDL-PARSE-005",
-            "expected VHDL port mode");
+      error(current(), "FSIM-VHDL-PARSE-005", "expected VHDL port mode");
     }
 
     Type type = parse_vhdl_type(true, true);
@@ -792,49 +707,35 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit) {
       const auto initializer = previous();
       default_value = parse_expression();
       if (direction != PortDirection::Input) {
-        error(
-            initializer,
-            "FSIM-VHDL-SEM-075",
-            "a VHDL port default is permitted only on an input formal");
+        error(initializer, "FSIM-VHDL-SEM-075",
+              "a VHDL port default is permitted only on an input formal");
       }
     }
-    for (const auto& name : names) {
+    for (const auto &name : names) {
       const auto canonical = vhdl_name(name.text);
-      const auto duplicate = std::find_if(
-          unit.ports.begin(),
-          unit.ports.end(),
-          [&](const SignalDeclaration& port) {
-            return port.name == canonical;
-          });
+      const auto duplicate = std::find_if(unit.ports.begin(), unit.ports.end(),
+                                          [&](const SignalDeclaration &port) {
+                                            return port.name == canonical;
+                                          });
       if (duplicate != unit.ports.end()) {
-        error(
-            name,
-            "FSIM-VHDL-SEM-002",
-            "duplicate port declaration '" + canonical + "'");
-      } else if (
-          std::any_of(
-              unit.parameters.begin(),
-              unit.parameters.end(),
-              [&](const ParameterDeclaration& generic) {
-                return generic.name == canonical;
-              })) {
-        error(
-            name,
-            "FSIM-VHDL-SEM-014",
-            "port '" + canonical
-                + "' conflicts with a generic declaration");
+        error(name, "FSIM-VHDL-SEM-002",
+              "duplicate port declaration '" + canonical + "'");
+      } else if (std::any_of(unit.parameters.begin(), unit.parameters.end(),
+                             [&](const ParameterDeclaration &generic) {
+                               return generic.name == canonical;
+                             })) {
+        error(name, "FSIM-VHDL-SEM-014",
+              "port '" + canonical + "' conflicts with a generic declaration");
       } else {
-        unit.ports.push_back(
-            SignalDeclaration{
-                canonical,
-                type,
-                direction,
-                true,
-                span_from(name, previous()),
-                std::nullopt,
-                {},
-                {},
-                default_value});
+        unit.ports.push_back(SignalDeclaration{canonical,
+                                               type,
+                                               direction,
+                                               true,
+                                               span_from(name, previous()),
+                                               std::nullopt,
+                                               {},
+                                               {},
+                                               default_value});
       }
     }
 
@@ -846,13 +747,11 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit) {
   }
   expect(TokenKind::RightParen, "')' after port declarations",
          "FSIM-VHDL-PARSE-007");
-  expect(TokenKind::Semicolon, "';' after port clause",
-         "FSIM-VHDL-PARSE-008");
+  expect(TokenKind::Semicolon, "';' after port clause", "FSIM-VHDL-PARSE-008");
 }
 
-Type VhdlParser::parse_vhdl_type(
-  const bool allow_integer,
-  const bool /*runtime_base_integer_only*/) {
+Type VhdlParser::parse_vhdl_type(const bool allow_integer,
+                                 const bool /*runtime_base_integer_only*/) {
   const auto first = expect_identifier("subtype indication");
   std::string spelling = vhdl_name(first.text);
   while (match(TokenKind::Dot)) {
@@ -869,29 +768,27 @@ Type VhdlParser::parse_vhdl_type(
                           : spelling.find_last_of('.') + 1);
   if (simple_name == "bit" || simple_name == "bit_vector") {
     type.domain = ValueDomain::Bit2;
-  } else if (simple_name == "std_logic" ||
-             simple_name == "std_logic_vector" ||
+  } else if (simple_name == "std_logic" || simple_name == "std_logic_vector" ||
              simple_name == "std_ulogic" ||
              simple_name == "std_ulogic_vector") {
     type.domain = ValueDomain::Logic9;
   } else if (simple_name == "signed" || simple_name == "unsigned") {
-    type.domain = numeric_bit_context_
-            || spelling.starts_with("ieee.numeric_bit.")
-        ? ValueDomain::Bit2
-        : ValueDomain::Logic9;
+    type.domain =
+        numeric_bit_context_ || spelling.starts_with("ieee.numeric_bit.")
+            ? ValueDomain::Bit2
+            : ValueDomain::Logic9;
     type.is_signed = simple_name == "signed";
-  } else if (simple_name == "ufixed" || simple_name == "sfixed"
-             || simple_name == "unresolved_ufixed"
-             || simple_name == "unresolved_sfixed") {
+  } else if (simple_name == "ufixed" || simple_name == "sfixed" ||
+             simple_name == "unresolved_ufixed" ||
+             simple_name == "unresolved_sfixed") {
     type.domain = ValueDomain::Logic9;
-    type.is_signed = simple_name == "sfixed"
-        || simple_name == "unresolved_sfixed";
-  } else if (simple_name == "float" || simple_name == "unresolved_float"
-             || simple_name == "u_float") {
+    type.is_signed =
+        simple_name == "sfixed" || simple_name == "unresolved_sfixed";
+  } else if (simple_name == "float" || simple_name == "unresolved_float" ||
+             simple_name == "u_float") {
     type.domain = ValueDomain::Logic9;
-  } else if (simple_name == "float32"
-             || simple_name == "unresolved_float32"
-             || simple_name == "u_float32") {
+  } else if (simple_name == "float32" || simple_name == "unresolved_float32" ||
+             simple_name == "u_float32") {
     type.domain = ValueDomain::Logic9;
     type.packed_range = PackedRange{8, -23, true};
   } else if (simple_name == "boolean") {
@@ -905,24 +802,22 @@ Type VhdlParser::parse_vhdl_type(
   } else if (simple_name == "severity_level") {
     type.domain = ValueDomain::Bit2;
     type.packed_range = PackedRange{1, 0, true};
-    type.enumeration_literals = {
-        "note", "warning", "error", "failure"};
+    type.enumeration_literals = {"note", "warning", "error", "failure"};
   } else if (simple_name == "file_open_kind") {
     type.domain = ValueDomain::Bit2;
     type.packed_range = PackedRange{1, 0, true};
-    type.enumeration_literals = {
-        "read_mode", "write_mode", "append_mode"};
+    type.enumeration_literals = {"read_mode", "write_mode", "append_mode"};
   } else if (simple_name == "file_open_status") {
     type.domain = ValueDomain::Bit2;
     type.packed_range = PackedRange{1, 0, true};
-    type.enumeration_literals = {
-        "open_ok", "status_error", "name_error", "mode_error"};
+    type.enumeration_literals = {"open_ok", "status_error", "name_error",
+                                 "mode_error"};
   } else if (simple_name == "time") {
     type.domain = ValueDomain::Integer;
     type.is_signed = true;
     type.packed_range = PackedRange{63, 0, true};
-    type.integer_range = IntegerRange{
-        0, std::numeric_limits<std::int64_t>::max(), false};
+    type.integer_range =
+        IntegerRange{0, std::numeric_limits<std::int64_t>::max(), false};
     type.nominal_type = "@builtin:time";
     type.vhdl_type_declaration = type.nominal_type;
   } else if (simple_name == "integer" || simple_name == "natural" ||
@@ -933,24 +828,18 @@ Type VhdlParser::parse_vhdl_type(
         std::int64_t{std::numeric_limits<std::int32_t>::min()};
     constexpr auto integer_last =
         std::int64_t{std::numeric_limits<std::int32_t>::max()};
-    type.integer_range = IntegerRange{
-        simple_name == "integer"
-            ? integer_first
-            : simple_name == "natural" ? 0 : 1,
-        integer_last,
-        false};
+    type.integer_range = IntegerRange{simple_name == "integer"   ? integer_first
+                                      : simple_name == "natural" ? 0
+                                                                 : 1,
+                                      integer_last, false};
   }
   if (type.domain == ValueDomain::Unknown) {
     type.named_type = spelling;
-    type.named_type_span =
-        cover(first.span, previous().span);
-  } else if (
-      type.domain == ValueDomain::Integer && !allow_integer) {
-    error(
-        first,
-        "FSIM-VHDL-UNSUPPORTED-014",
-        "VHDL integer-family objects are parsed but not executable "
-        "in this frontend slice");
+    type.named_type_span = cover(first.span, previous().span);
+  } else if (type.domain == ValueDomain::Integer && !allow_integer) {
+    error(first, "FSIM-VHDL-UNSUPPORTED-014",
+          "VHDL integer-family objects are parsed but not executable "
+          "in this frontend slice");
   }
 
   if (match_keyword("range", true)) {
@@ -960,45 +849,34 @@ Type VhdlParser::parse_vhdl_type(
     if (match_keyword("downto", true)) {
       descending = true;
     } else if (!match_keyword("to", true)) {
-      error(
-          current(),
-          "FSIM-VHDL-PARSE-009",
-          "expected 'to' or 'downto' in discrete subtype constraint");
+      error(current(), "FSIM-VHDL-PARSE-009",
+            "expected 'to' or 'downto' in discrete subtype constraint");
     }
     auto right_expression = parse_expression();
     const auto left = simple_integer_constant(left_expression);
     const auto right = simple_integer_constant(right_expression);
     if (type.domain == ValueDomain::Integer) {
       type.integer_base_range = type.integer_range;
-      type.integer_base_range_expression =
-          type.integer_range_expression;
+      type.integer_base_range_expression = type.integer_range_expression;
       if (left && right) {
-        type.integer_range =
-            IntegerRange{*left, *right, descending};
+        type.integer_range = IntegerRange{*left, *right, descending};
       } else {
         type.integer_range.reset();
       }
       type.integer_range_expression = IntegerRangeExpression{
-          std::move(left_expression),
-          std::move(right_expression),
-          cover(range_start.span, previous().span),
-          descending};
+          std::move(left_expression), std::move(right_expression),
+          cover(range_start.span, previous().span), descending};
     } else {
-      type.discrete_range_expression =
-          DiscreteRangeExpression{
-              std::move(left_expression),
-              std::move(right_expression),
-              cover(range_start.span, previous().span),
-              descending};
+      type.discrete_range_expression = DiscreteRangeExpression{
+          std::move(left_expression), std::move(right_expression),
+          cover(range_start.span, previous().span), descending};
     }
   } else if (match(TokenKind::LeftParen)) {
     const auto range_start = previous();
     if (type.domain == ValueDomain::Integer) {
-      error(
-          range_start,
-          "FSIM-VHDL-PARSE-009",
-          "an integer subtype constraint uses 'range', not a packed "
-          "parenthesized range");
+      error(range_start, "FSIM-VHDL-PARSE-009",
+            "an integer subtype constraint uses 'range', not a packed "
+            "parenthesized range");
     }
     do {
       const auto constraint_start = current().span;
@@ -1014,37 +892,27 @@ Type VhdlParser::parse_vhdl_type(
               "constraint");
       }
       auto right_expression = parse_expression();
-      type.vhdl_array_constraints.push_back(
-          DiscreteRangeExpression{
-              std::move(left_expression),
-              std::move(right_expression),
-              cover(constraint_start, previous().span),
-              descending});
+      type.vhdl_array_constraints.push_back(DiscreteRangeExpression{
+          std::move(left_expression), std::move(right_expression),
+          cover(constraint_start, previous().span), descending});
     } while (match(TokenKind::Comma));
-    expect(TokenKind::RightParen, "')' after range",
-           "FSIM-VHDL-PARSE-010");
-    if (type.vhdl_array_constraints.size() > 1
-        && type.domain != ValueDomain::Unknown) {
-      error(
-          range_start,
-          "FSIM-VHDL-UNSUPPORTED-027",
-          "a built-in scalar or vector subtype cannot have multiple "
-          "array constraints");
+    expect(TokenKind::RightParen, "')' after range", "FSIM-VHDL-PARSE-010");
+    if (type.vhdl_array_constraints.size() > 1 &&
+        type.domain != ValueDomain::Unknown) {
+      error(range_start, "FSIM-VHDL-UNSUPPORTED-027",
+            "a built-in scalar or vector subtype cannot have multiple "
+            "array constraints");
     }
     if (type.vhdl_array_constraints.size() == 1) {
-      const auto& constraint =
-          type.vhdl_array_constraints.front();
+      const auto &constraint = type.vhdl_array_constraints.front();
       const auto left = simple_integer_constant(constraint.left);
       const auto right = simple_integer_constant(constraint.right);
       if (left && right) {
-        type.packed_range = PackedRange{
-            *left, *right, constraint.descending};
+        type.packed_range = PackedRange{*left, *right, constraint.descending};
       }
       type.packed_range_expression = PackedRangeExpression{
-          constraint.left,
-          constraint.right,
-          cover(range_start.span, previous().span),
-          constraint.descending};
+          constraint.left, constraint.right,
+          cover(range_start.span, previous().span), constraint.descending};
     }
   }
   return type;
@@ -1056,11 +924,10 @@ void VhdlParser::parse_vhdl_end(std::string_view expected_kind) {
   if (at(TokenKind::Identifier)) {
     advance();
   }
-  expect(TokenKind::Semicolon, "';' after end clause",
-         "FSIM-VHDL-PARSE-013");
+  expect(TokenKind::Semicolon, "';' after end clause", "FSIM-VHDL-PARSE-013");
 }
 
-DesignUnit VhdlParser::parse_architecture(const Token& start) {
+DesignUnit VhdlParser::parse_architecture(const Token &start) {
   vhdl_named_types_.clear();
   DesignUnit unit;
   unit.kind = UnitKind::VhdlArchitecture;
@@ -1073,61 +940,49 @@ DesignUnit VhdlParser::parse_architecture(const Token& start) {
   expect_keyword("is", true, "FSIM-VHDL-PARSE-015");
 
   while (!at_end() && !keyword("begin", 0, true)) {
-    if (keyword("generic", 0, true)
-        && vhdl_generic_clause_precedes_subprogram()) {
+    if (parse_vhdl_psl_declaration(unit)) {
+      continue;
+    }
+    if (keyword("generic", 0, true) &&
+        vhdl_generic_clause_precedes_subprogram()) {
       const auto generic_start = advance();
-      parse_vhdl_generic_subprogram(
-          unit, generic_start, true);
+      parse_vhdl_generic_subprogram(unit, generic_start, true);
     } else if (match_keyword("signal", true)) {
       parse_signal_declaration(unit.signals, &unit.parameters);
     } else if (match_keyword("shared", true)) {
       parse_vhdl_shared_variable(unit, previous());
     } else if (match_keyword("file", true)) {
-      parse_vhdl_file_declaration(
-          unit.variables, previous());
+      parse_vhdl_file_declaration(unit.variables, previous());
     } else if (match_keyword("alias", true)) {
       parse_vhdl_object_alias(unit.signal_aliases, previous());
     } else if (match_keyword("constant", true)) {
       GenerateBody declarations;
       declarations.constants = std::move(unit.parameters);
-      parse_vhdl_generate_constant(
-          declarations, previous());
+      parse_vhdl_generate_constant(declarations, previous());
       unit.parameters = std::move(declarations.constants);
-    } else if (
-        (keyword("pure", 0, true)
-         || keyword("impure", 0, true))
-        && keyword("function", 1, true)) {
+    } else if ((keyword("pure", 0, true) || keyword("impure", 0, true)) &&
+               keyword("function", 1, true)) {
       const bool pure = match_keyword("pure", true);
       if (!pure) {
         (void)match_keyword("impure", true);
       }
-      const auto function_start =
-          expect_keyword("function", true);
-      parse_vhdl_function_item(
-          unit, function_start, pure, true);
+      const auto function_start = expect_keyword("function", true);
+      parse_vhdl_function_item(unit, function_start, pure, true);
     } else if (match_keyword("function", true)) {
-      parse_vhdl_function_item(
-          unit, previous(), true, true);
+      parse_vhdl_function_item(unit, previous(), true, true);
     } else if (match_keyword("procedure", true)) {
-      parse_vhdl_procedure_item(
-          unit, previous(), true);
+      parse_vhdl_procedure_item(unit, previous(), true);
     } else if (match_keyword("package", true)) {
       const auto package_start = previous();
-      auto instance =
-          parse_vhdl_package_instantiation(package_start);
-      if (std::ranges::any_of(
-              unit.package_instances,
-              [&](const auto& existing) {
-                return existing.name == instance.name;
-              })) {
-        error(
-            package_start,
-            "FSIM-VHDL-SEM-059",
-            "duplicate local package instance '"
-                + instance.name + "'");
+      auto instance = parse_vhdl_package_instantiation(package_start);
+      if (std::ranges::any_of(unit.package_instances,
+                              [&](const auto &existing) {
+                                return existing.name == instance.name;
+                              })) {
+        error(package_start, "FSIM-VHDL-SEM-059",
+              "duplicate local package instance '" + instance.name + "'");
       } else {
-        unit.package_instances.push_back(
-            std::move(instance));
+        unit.package_instances.push_back(std::move(instance));
       }
     } else if (match_keyword("type", true)) {
       parse_type_declaration(unit, previous());
@@ -1136,29 +991,32 @@ DesignUnit VhdlParser::parse_architecture(const Token& start) {
     } else if (match_keyword("component", true)) {
       const auto component_start = previous();
       auto declaration = parse_vhdl_component_declaration(
-          component_start,
-          unit.vhdl_component_declarations.size());
-      declaration.region =
-          VhdlComponentDeclarationRegion::Architecture;
+          component_start, unit.vhdl_component_declarations.size());
+      declaration.region = VhdlComponentDeclarationRegion::Architecture;
       declaration.owner_name = unit.name;
-      add_vhdl_component_declaration(
-          unit.vhdl_component_declarations,
-          std::move(declaration),
-          component_start);
+      add_vhdl_component_declaration(unit.vhdl_component_declarations,
+                                     std::move(declaration), component_start);
     } else if (match_keyword("for", true)) {
       const auto specification =
           parse_vhdl_component_configuration(previous(), false);
       unit.vhdl_configuration_specifications.push_back(
           std::move(specification));
     } else if (match_keyword("attribute", true)) {
-      // Preserve compatibility with VITAL_LEVEL0/1 and analogous vendor
-      // metadata without assigning executable semantics to the attribute.
+      parse_vhdl_attribute_declaration(unit, previous());
+    } else if (match_keyword("group", true)) {
+      parse_vhdl_group_declaration(unit, previous());
+    } else if (match_keyword("disconnect", true)) {
+      parse_vhdl_disconnection_specification(
+          unit.vhdl_disconnections, previous());
+    } else if (match(TokenKind::PslDirective)) {
+      error(previous(), "FSIM-VHDL-PSL-009",
+            "this embedded PSL item is not a declaration in the architecture "
+            "declarative region");
       skip_to_semicolon();
     } else {
       const auto declaration = advance();
       error(declaration, "FSIM-VHDL-UNSUPPORTED-004",
-            "unsupported architecture declaration '" + declaration.text +
-                "'");
+            "unsupported architecture declaration '" + declaration.text + "'");
       skip_to_semicolon();
     }
   }
@@ -1167,9 +1025,13 @@ DesignUnit VhdlParser::parse_architecture(const Token& start) {
   while (!at_end() && !keyword("end", 0, true)) {
     parse_concurrent_statement(unit);
   }
+  apply_vhdl_disconnection_specifications(
+      unit.signals,
+      unit.vhdl_disconnections,
+      unit.concurrent_statements);
   parse_vhdl_end("architecture");
   unit.span = span_from(start, previous());
   return unit;
 }
 
-}  // namespace fsim::frontend
+} // namespace fsim::frontend

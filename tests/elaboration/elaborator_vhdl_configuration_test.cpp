@@ -992,6 +992,71 @@ end configuration;
     assert(!recursive_result.ok());
     assert(has_diagnostic(
         recursive_result, "FSIM-ELAB-HIER-002"));
+
+    auto transactional = fsim::frontend::parse_text(
+        "transactional_hierarchy.vhd",
+        R"(
+entity rollback_leaf is
+  port (output_path : out integer);
+end entity;
+architecture rtl of rollback_leaf is
+begin
+  output_path <= 1;
+end architecture;
+
+entity rollback_bad is
+  port (
+    output_path : out integer;
+    output_boundary : out integer);
+end entity;
+architecture rtl of rollback_bad is
+begin
+  output_path <= 2;
+  output_boundary <= 3;
+  recurse: entity work.rollback_top(rtl)
+    port map ();
+end architecture;
+
+entity rollback_top is
+end entity;
+architecture rtl of rollback_top is
+  signal path_signal : integer;
+  signal boundary_signal : integer;
+begin
+  failed: entity work.rollback_bad(rtl)
+    port map (
+      output_path => path_signal,
+      output_boundary => boundary_signal);
+  recovered: entity work.rollback_leaf(rtl)
+    port map (output_path => path_signal);
+  independent: entity work.rollback_leaf(rtl)
+    port map (output_path => boundary_signal);
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(transactional.ok());
+    auto rollback_top = std::ranges::find_if(
+        transactional.design.units,
+        [](const auto& unit) {
+          return unit.kind
+                     == fsim::frontend::UnitKind::VhdlArchitecture
+              && unit.primary_name == "rollback_top"
+              && unit.name == "rtl";
+        });
+    assert(rollback_top != transactional.design.units.end());
+    assert(rollback_top->instances.size() == 3);
+    rollback_top->instances[1].name = "failed";
+    const auto transactional_result =
+        fsim::elaboration::elaborate(
+            transactional.design,
+            "vhdl:work.rollback_top(rtl)");
+    assert(!transactional_result.ok());
+    assert(has_diagnostic(
+        transactional_result, "FSIM-ELAB-HIER-002"));
+    assert(!has_diagnostic(
+        transactional_result, "FSIM-ELAB-HIER-001"));
+    assert(!has_diagnostic(
+        transactional_result, "FSIM-ELAB-BIND-024"));
 }
 
 }  // namespace fsim::tests::elaboration

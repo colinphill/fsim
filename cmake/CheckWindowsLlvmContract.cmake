@@ -119,7 +119,11 @@ foreach(FSIM_ABI_POLICY IN ITEMS
   endif()
 endforeach()
 foreach(FSIM_ABI_EVIDENCE IN ITEMS
-    "sizeof(fsim_jit_runtime_v1) == 568"
+    "offsetof(fsim_jit_runtime_v1, vital_delay) == 560"
+    "offsetof(fsim_jit_runtime_v1, force_driver_signal_slice) == 568"
+    "offsetof(fsim_jit_runtime_v1, force_driver_signal_slice_logic9) == 576"
+    "offsetof(fsim_jit_runtime_v1, release_driver_signal_slice) == 584"
+    "sizeof(fsim_jit_runtime_v1) == 592"
     "sizeof(fsim_jit_frame_v1) == 80"
     "sizeof(fsim_jit_resume_result_v1) == 24")
   string(FIND "${FSIM_ABI_TEST_CONTENTS}" "${FSIM_ABI_EVIDENCE}" FSIM_INDEX)

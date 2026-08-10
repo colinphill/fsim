@@ -84,6 +84,50 @@ std::optional<PackedLogic4> static_vhdl_value(
           }
           return value;
         };
+    const auto pack_integral =
+        [&](const std::int64_t value)
+            -> std::optional<PackedLogic4> {
+          const bool fits = [&] {
+            if (type.domain == frontend::ValueDomain::Integer) {
+                return true;
+            }
+            if (type.is_signed) {
+                if (width >= 64) {
+                    return true;
+                }
+                const auto bound = std::int64_t{1} << (width - 1U);
+                return value >= -bound && value < bound;
+            }
+            if (value < 0) {
+                return false;
+            }
+            return width >= 64
+                || static_cast<std::uint64_t>(value)
+                    < (std::uint64_t{1} << width);
+          }();
+          if (!fits) {
+              error = "the packed value does not fit its contextual width";
+              return std::nullopt;
+          }
+          return normalize(unsigned_value(
+              static_cast<std::uint64_t>(value), width));
+        };
+
+    if (expression.kind == ExpressionKind::Call
+        && expression.text == "?:"
+        && expression.operands.size() == 3) {
+        std::string condition_error;
+        const auto condition = evaluate_constant_expression(
+            expression.operands[0], {}, condition_error);
+        if (!condition) {
+            error = condition_error.empty()
+                ? "the conditional expression condition is not static"
+                : std::move(condition_error);
+            return std::nullopt;
+        }
+        return static_vhdl_value(
+            expression.operands[*condition != 0 ? 1 : 2], type, error);
+    }
 
     if (expression.kind != ExpressionKind::Aggregate) {
         std::string physical_error;
@@ -103,6 +147,17 @@ std::optional<PackedLogic4> static_vhdl_value(
             return normalize(unsigned_value(
                 static_cast<std::uint64_t>(*ordinal), width));
         }
+        if (expression.kind == ExpressionKind::IntegerLiteral) {
+            std::string evaluation_error;
+            if (const auto value = evaluate_constant_expression(
+                    expression, {}, evaluation_error)) {
+                return pack_integral(*value);
+            }
+            error = evaluation_error.empty()
+                ? "the integer literal is not a supported static VHDL value"
+                : std::move(evaluation_error);
+            return std::nullopt;
+        }
         if (auto literal = literal_value(
                 expression,
                 width,
@@ -113,13 +168,7 @@ std::optional<PackedLogic4> static_vhdl_value(
         if (const auto value =
                 evaluate_constant_expression(
                     expression, {}, evaluation_error)) {
-            return normalize(
-                type.domain == frontend::ValueDomain::Integer
-                    ? unsigned_value(
-                          static_cast<std::uint64_t>(*value), width)
-                    : unsigned_value(
-                          static_cast<std::uint64_t>(*value),
-                          width));
+            return pack_integral(*value);
         }
         error = evaluation_error.empty()
             ? "the expression is not a supported static VHDL value"

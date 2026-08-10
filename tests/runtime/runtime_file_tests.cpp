@@ -498,13 +498,13 @@ void test_simir_text_files() {
        LoadStringConstant{1, "r"},
        FileOpen{0, 0, 1},
        Halt{}},
-      "cannot open SystemVerilog text file");
+      "cannot open SimIR text file");
   expect_failure(
       {LoadStringConstant{0, "invalid.txt"},
        LoadStringConstant{1, "rt"},
        FileOpen{0, 0, 1},
        Halt{}},
-      "unsupported SystemVerilog text file mode");
+      "unsupported SimIR text file mode");
   expect_failure(
       {LoadStringConstant{0, "closed.txt"},
        LoadStringConstant{1, "w"},
@@ -522,7 +522,7 @@ void test_simir_text_files() {
       {LoadConstant{0, number(99)},
        FileClose{0},
        Halt{}},
-      "unknown SystemVerilog file handle");
+      "unknown SimIR file handle");
 
   {
     Interpreter lifecycle;

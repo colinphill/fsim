@@ -438,6 +438,8 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_expressions.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_functions.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_packages.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_psl.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_psl_analysis.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/vhdl_parser_statements.cpp"
 )
 add_library(fsim_frontend STATIC ${FSIM_FRONTEND_SOURCES})
@@ -535,6 +537,7 @@ add_library(
     src/runtime/vpi_time.cpp
     src/runtime/packed_value.cpp
     src/runtime/scheduler.cpp
+    src/runtime/vhdl_psl.cpp
     src/runtime/scope_randomize.cpp
     src/runtime/systemverilog_scalar.cpp
     src/runtime/systemverilog_scalar_text.cpp
@@ -917,6 +920,8 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_systemverilog_hir.cpp
       src/app/application_systemverilog_executable_hir.cpp
       src/app/application_vhdl_hir.cpp
+  src/app/application_vhdl_psl.cpp
+  src/app/application_vhdl_debug.cpp
       src/app/application_vhdl_executable_hir.cpp
       src/app/application_services.cpp
       src/app/application_class_inspection.cpp

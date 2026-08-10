@@ -30,6 +30,7 @@ struct TemporaryDirectory {
 struct Capture {
   fsim::runtime::RunResult result;
   std::array<std::string, 4> values;
+  std::string resolved_sub_elements;
   std::vector<std::pair<std::string, std::string>> keys;
   std::vector<fsim::runtime::simir::ExecutionPoint> points;
   fsim::app::NativeCacheStatistics cache;
@@ -114,7 +115,7 @@ Capture run_once(
     }
   }
   assert(project);
-  assert(project->design.specializations().size() == 9);
+  assert(project->design.specializations().size() == 12);
   assert(
       specialization(
           *project,
@@ -225,6 +226,14 @@ Capture run_once(
             bits(values[index])));
     output_ids[index] = *output;
   }
+  const auto resolved_source = simulation.find_signal(
+      "runtime_configuration.resolved_source");
+  const auto resolved_sub_elements = simulation.find_signal(
+      "runtime_configuration.resolved_sub_elements");
+  assert(resolved_source && resolved_sub_elements);
+  simulation.deposit_signal(
+      *resolved_source,
+      fsim::runtime::PackedLogic4::from_msb_string("0"));
 
   capture.result = simulation.run();
   for (std::size_t index = 0;
@@ -233,6 +242,8 @@ Capture run_once(
         simulation.read_signal(output_ids[index])
             .to_msb_string();
   }
+  capture.resolved_sub_elements =
+      simulation.read_signal(*resolved_sub_elements).to_msb_string();
   return capture;
 }
 
@@ -249,6 +260,7 @@ void verify(
               bits(fast_configured ? 24 : 124),
               bits(35),
               bits(40)}));
+  assert(capture.resolved_sub_elements == "1X");
   assert(
       std::ranges::count_if(
           capture.points,
@@ -318,6 +330,18 @@ architecture rtl of configuration_stable is
 begin
   output_value <= input_value;
 end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+entity configuration_resolved_leaf is
+  port (
+    input_value : in std_logic;
+    output_value : out std_logic);
+end entity;
+architecture rtl of configuration_resolved_leaf is
+begin
+  output_value <= input_value;
+end architecture;
 )";
     assert(output.good());
   }
@@ -351,6 +375,8 @@ end architecture;
   {
     std::ofstream output(top_hierarchy, std::ios::binary);
     output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
 entity configuration_top is
 end entity;
 architecture rtl of configuration_top is
@@ -362,6 +388,8 @@ architecture rtl of configuration_top is
   signal direct_output : integer;
   signal stable_input : integer;
   signal stable_output : integer;
+  signal resolved_source : std_logic;
+  signal resolved_sub_elements : std_logic_vector(1 downto 0);
   component configuration_leaf is
     generic (component_amount : integer := 1);
     port (
@@ -396,6 +424,18 @@ begin
     port map ();
   direct_configuration_child:
     configuration work.wrapper_configuration;
+  resolved_first: entity work.configuration_resolved_leaf(rtl)
+    port map (
+      input_value => not resolved_source,
+      output_value => resolved_sub_elements(0));
+  resolved_second: entity work.configuration_resolved_leaf(rtl)
+    port map (
+      input_value => '0',
+      output_value => resolved_sub_elements(0));
+  resolved_upper: entity work.configuration_resolved_leaf(rtl)
+    port map (
+      input_value => '1',
+      output_value => resolved_sub_elements(1));
 end architecture;
 )";
     assert(output.good());
@@ -472,6 +512,12 @@ end configuration;
     verify(warm, true);
     assert(reference.values == cold.values);
     assert(cold.values == warm.values);
+    assert(
+        reference.resolved_sub_elements
+        == cold.resolved_sub_elements);
+    assert(
+        cold.resolved_sub_elements
+        == warm.resolved_sub_elements);
     assert(reference.keys == cold.keys);
     assert(cold.keys == warm.keys);
 #if defined(FSIM_HAS_LLVM)
@@ -501,7 +547,10 @@ end configuration;
              "runtime_configuration.wrapper_child",
              "runtime_configuration.wrapper_child.nested",
              "runtime_configuration.direct_configuration_child",
-             "runtime_configuration.direct_configuration_child.nested"}) {
+             "runtime_configuration.direct_configuration_child.nested",
+             "runtime_configuration.resolved_first",
+             "runtime_configuration.resolved_second",
+             "runtime_configuration.resolved_upper"}) {
       assert(
           key_for(cold, path)
           == key_for(changed, path));
@@ -532,7 +581,10 @@ end configuration;
              "runtime_configuration.configured_child",
              "runtime_configuration.remaining_child",
              "runtime_configuration.direct_child",
-             "runtime_configuration.stable_child"}) {
+             "runtime_configuration.stable_child",
+             "runtime_configuration.resolved_first",
+             "runtime_configuration.resolved_second",
+             "runtime_configuration.resolved_upper"}) {
       assert(
           key_for(changed, path)
           == key_for(nested_changed, path));

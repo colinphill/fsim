@@ -287,9 +287,12 @@ using namespace elaboration_detail;
                     expression.operands[1], {}, left_error);
                 const auto right = evaluate_constant_expression(
                     expression.operands[2], {}, right_error);
-                if (left && right && *left >= *right
-                    && static_cast<std::uint64_t>(*left - *right) < 64) {
-                    return static_cast<std::size_t>(*left - *right + 1);
+                if (left && right && *left >= *right) {
+                    const auto distance = index_distance(*left, *right);
+                    if (distance
+                        < std::numeric_limits<std::uint32_t>::max()) {
+                        return static_cast<std::size_t>(distance + 1U);
+                    }
                 }
             }
             if ((name == "to_signed" || name == "to_unsigned"
@@ -298,7 +301,9 @@ using namespace elaboration_detail;
                 std::string error;
                 const auto width = evaluate_constant_expression(
                     expression.operands[1], {}, error);
-                if (width && *width > 0 && *width <= 64) {
+                if (width && *width > 0
+                    && static_cast<std::uint64_t>(*width)
+                        <= std::numeric_limits<std::uint32_t>::max()) {
                     return static_cast<std::size_t>(*width);
                 }
             }

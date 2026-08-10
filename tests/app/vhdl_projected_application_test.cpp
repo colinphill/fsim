@@ -93,7 +93,7 @@ Capture run_once(
   capture.compiled_processes = simulation.compiled_process_count();
   capture.native_cache = simulation.native_cache_statistics();
 
-  constexpr std::array<std::string_view, 13> names{
+  constexpr std::array<std::string_view, 15> names{
       "vhdl_projected.default_output",
       "vhdl_projected.explicit_output",
       "vhdl_projected.transport_output",
@@ -106,7 +106,9 @@ Capture run_once(
       "vhdl_projected.conditional_waveform_output",
       "vhdl_projected.selected_waveform_output",
       "vhdl_projected.resolved_output",
-      "vhdl_projected.delta_output"};
+      "vhdl_projected.delta_output",
+      "vhdl_projected.forced_output",
+      "vhdl_projected.forced_driver_output"};
   std::array<fsim::runtime::simir::SignalId, names.size()> signals{};
   std::array<fsim::runtime::VcdSignal, names.size()> vcd_signals{};
   std::ostringstream vcd_output;
@@ -252,6 +254,14 @@ void verify_capture(const Capture& capture) {
           std::string,
           fsim::runtime::SimulationTick,
           std::uint64_t>>{{"0", 0, 2}}));
+  assert((
+      changes_for(capture, "vhdl_projected.forced_output")
+      == std::vector<TimedValue>{
+          {"0", 0}, {"1", 2}, {"0", 6}}));
+  assert((
+      changes_for(capture, "vhdl_projected.forced_driver_output")
+      == std::vector<TimedValue>{
+          {"0", 0}, {"X", 2}, {"0", 6}}));
   assert(capture.vcd.find("$timescale 1ps $end")
          != std::string::npos);
   assert(capture.vcd.find("#28") != std::string::npos);
@@ -350,6 +360,11 @@ end architecture;
 void verify_executable_hir(const fsim::project::Config& config) {
   fsim::diagnostic::Engine diagnostics;
   auto checked = fsim::app::check_project(config, diagnostics);
+  if (!checked) {
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
   assert(checked);
   const auto architecture = std::ranges::find_if(
       checked->vhdl_hir.units(), [](const auto& unit) {
@@ -359,7 +374,32 @@ void verify_executable_hir(const fsim::project::Config& config) {
             && unit.primary_name == "vhdl_projected";
       });
   assert(architecture != checked->vhdl_hir.units().end());
-  assert(architecture->processes.size() == 2);
+  assert(architecture->processes.size() == 5);
+  assert(std::ranges::any_of(
+      checked->vhdl_hir.processes(),
+      [](const auto& process) {
+        return process.name == "settled_observer"
+            && process.postponed;
+      }));
+  assert(std::ranges::any_of(
+      checked->vhdl_hir.statements(),
+      [](const auto& statement) {
+        return statement.label == "settled_concurrent_observer"
+            && statement.postponed;
+      }));
+  assert(std::ranges::any_of(
+      checked->vhdl_hir.statements(),
+      [](const auto& statement) {
+        return statement.label == "settled_procedure_observer"
+            && statement.postponed;
+      }));
+  assert(std::ranges::any_of(
+      checked->vhdl_hir.statements(),
+      [](const auto& statement) {
+        return statement.label == "guarded_driver"
+            && statement.disconnection_delay
+            && statement.disconnection_delay->primary.magnitude == 2;
+      }));
   assert(!architecture->concurrent_statements.empty());
   const auto waveform = std::ranges::find_if(
       checked->vhdl_hir.statements(), [](const auto& statement) {
@@ -445,8 +485,16 @@ architecture rtl of vhdl_projected is
   signal delta_source : std_logic;
   signal delta_middle : std_logic;
   signal delta_output : std_logic;
+  signal forced_output : std_logic;
+  signal forced_driver_output : std_logic;
+  signal guard_enabled : boolean;
+  signal guarded_value : std_logic;
   constant rejection_limit : time := 2 ps;
   constant projected_delay : time := 5 ps;
+  procedure observe_settled(value : in std_logic) is
+  begin
+    null;
+  end procedure;
 begin
   default_output <= default_drive after 5 ps;
   explicit_output <=
@@ -476,6 +524,28 @@ begin
   resolved_output <= transport resolved_b after 1 ps;
   delta_middle <= transport delta_source;
   delta_output <= transport delta_middle;
+
+  guarded_scope: block (guard_enabled) is
+    disconnect guarded_value : std_logic after 2 ps;
+  begin
+    guarded_driver: guarded_value <= guarded '1';
+  end block guarded_scope;
+
+  settled_concurrent_observer: postponed assert
+      not delta_source'event or delta_source = '0'
+    report "postponed concurrent assertion missed the committed value"
+    severity failure;
+
+  settled_procedure_observer: postponed observe_settled(delta_source);
+
+  settled_observer: postponed process(delta_source)
+  begin
+    if delta_source'event then
+      assert delta_source = '0'
+        report "postponed process missed the committed triggering value"
+        severity failure;
+    end if;
+  end postponed process settled_observer;
 
   stimulus: process
   begin
@@ -518,6 +588,33 @@ begin
     sequential_output <= reject 2 ps inertial '0' after 5 ps;
     wait;
   end process;
+
+  forcing: process
+  begin
+    forced_output <= '0';
+    forced_driver_output <= 'Z';
+    wait for 2 ps;
+    forced_output <= force in '1';
+    forced_driver_output <= force out '1';
+    assert forced_driver_output'driving_value = '1'
+      report "force out must update driving_value"
+      severity failure;
+    wait for 2 ps;
+    forced_output <= '0';
+    wait for 2 ps;
+    forced_output <= release in;
+    forced_driver_output <= release out;
+    assert forced_driver_output'driving_value = 'Z'
+      report "release out must restore driving_value"
+      severity failure;
+    wait;
+  end process;
+
+  other_forced_driver: process
+  begin
+    forced_driver_output <= '0';
+    wait;
+  end process;
 end architecture;
 )";
     assert(output.good());
@@ -550,11 +647,11 @@ end architecture;
     assert(reference.final_values == warm.final_values);
     assert(reference.vcd == warm.vcd);
 #if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 16);
+    assert(cold.compiled_processes == 23);
     assert(cold.native_cache.hits == 0);
     assert(cold.native_cache.misses == 1);
     assert(cold.native_cache.stores == 1);
-    assert(warm.compiled_processes == 16);
+    assert(warm.compiled_processes == 23);
     assert(warm.native_cache.hits == 1);
     assert(warm.native_cache.misses == 0);
 #else

@@ -14,6 +14,10 @@ const semantic::design::DesignIr& Simulation::design_ir() const noexcept {
   return impl_->built.design_ir;
 }
 
+const semantic::vhdl::Hir& Simulation::vhdl_hir() const noexcept {
+  return impl_->built.vhdl_hir;
+}
+
 const semantic::Model& Simulation::semantics() const noexcept {
   return impl_->built.semantics;
 }
@@ -42,7 +46,7 @@ std::optional<SignalId> Simulation::find_signal(
             static_cast<SignalId>(found->runtime_index)};
 }
 
-const PackedLogic4& Simulation::read_driver(
+PackedLogic4 Simulation::read_driver(
     const runtime::simir::ProcessId process,
     const SignalId signal) const {
   return impl_->interpreter->driver_value(process, signal);

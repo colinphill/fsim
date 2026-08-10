@@ -48,6 +48,7 @@ inline constexpr std::size_t maximum_string_bytes = 4096;
 inline constexpr std::size_t maximum_container_predicate_nodes = 64;
 inline constexpr std::size_t maximum_memory_file_bytes =
     1024U * 1024U;
+inline constexpr std::size_t maximum_open_file_handles = 4'096;
 
 struct LoadStringConstant {
   StringRegisterId destination{};
@@ -847,6 +848,7 @@ struct ForceSignalSlice {
   RegisterId source{};
   std::uint32_t offset{};
   std::optional<DynamicIndex> selection;
+  bool driving_value{};
 };
 
 /// Release a static packed force region and reveal current driven bits.
@@ -855,6 +857,7 @@ struct ReleaseSignalSlice {
   std::uint32_t offset{};
   std::uint32_t width{};
   std::optional<DynamicIndex> selection;
+  bool driving_value{};
 };
 struct WriteInertialDynamicSlice {
   SignalId signal{};
@@ -1361,6 +1364,9 @@ struct Process {
   // Program-owned processes execute in the SystemVerilog reactive region
   // after active/inactive updates and before postponed observation.
   bool reactive{};
+  // VHDL postponed processes execute after all ordinary update/reactive work
+  // for the current simulation cycle.
+  bool postponed{};
   // A SystemVerilog final process is excluded from ordinary initialization
   // and queued exactly once when ordinary simulation terminates.
   bool final{};
@@ -1514,6 +1520,20 @@ public:
       std::size_t) {
     throw std::logic_error{
         "alternate process executor does not support procedural release"};
+  }
+  virtual void force_driver_signal_slice(
+      SignalId,
+      PackedLogic4,
+      std::size_t) {
+    throw std::logic_error{
+        "alternate process executor does not support driver-value force"};
+  }
+  virtual void release_driver_signal_slice(
+      SignalId,
+      std::size_t,
+      std::size_t) {
+    throw std::logic_error{
+        "alternate process executor does not support driver-value release"};
   }
 
   virtual void write_update(SignalId signal, PackedLogic4 value) = 0;
@@ -2097,7 +2117,7 @@ public:
       ContainerObjectId object, ContainerValue value);
   /// Return one process-owned driver slot. For an unresolved signal this is
   /// the single underlying driven value.
-  [[nodiscard]] const PackedLogic4& driver_value(
+  [[nodiscard]] PackedLogic4 driver_value(
       ProcessId process, SignalId signal) const;
   [[nodiscard]] PackedLogic4 read_debug_local(
       ProcessId process, std::size_t local_index) const;

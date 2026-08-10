@@ -283,7 +283,7 @@ void test_vhdl_shift_rotate(
   assert(reference_project);
   assert(compiled_project);
 
-  const std::array<std::string, 21> signal_paths{
+  const std::array<std::string, 26> signal_paths{
       "shift_rotate_app.arithmetic_left",
       "shift_rotate_app.rotated_left",
       "shift_rotate_app.rotated_right",
@@ -302,6 +302,11 @@ void test_vhdl_shift_rotate(
       "shift_rotate_app.conditional_false",
       "shift_rotate_app.conditional_chain",
       "shift_rotate_app.conditional_selected",
+      "shift_rotate_app.expression_conditional",
+      "shift_rotate_app.short_circuit_conditional",
+      "shift_rotate_app.case_expression",
+      "shift_rotate_app.case_range_expression",
+      "shift_rotate_app.external_name_expression",
       "shift_rotate_app.selected_choice",
       "shift_rotate_app.selected_default",
       "shift_rotate_app.selected_dynamic"};
@@ -340,18 +345,49 @@ void test_vhdl_shift_rotate(
           "01011010",
           "00000010",
           "ZZZZ0110",
+          "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+          "00000000000000000000000000000111",
+          "00111100",
+          "00000000000000000000000000001011",
+          "11111011",
           "10100101",
           "01011010",
           "01011010"}));
   assert(reference.compiled_processes == 0);
   assert(reference.compiled_modules == 0);
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 7);
+  assert(compiled.compiled_processes == 11);
   assert(compiled.compiled_modules == 1);
 #else
   assert(compiled.compiled_processes == 0);
   assert(compiled.compiled_modules == 0);
 #endif
+}
+
+void test_vhdl_external_name_mismatch(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source) {
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = "vhdl-external-name-mismatch-test";
+  config.project.top = "vhdl:work.external_mismatch_app(rtl)";
+  config.build.cache_path = directory / "vhdl-external-mismatch-cache";
+
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::vhdl;
+  sources.standard = "2008";
+  sources.library = "work";
+  sources.files.push_back(source);
+  config.source_sets.push_back(std::move(sources));
+
+  fsim::diagnostic::Engine diagnostics;
+  const auto project = fsim::app::build_project(config, diagnostics);
+  assert(!project);
+  assert(std::ranges::any_of(
+      diagnostics.diagnostics(),
+      [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-ELAB-VHEXTERNAL-001";
+      }));
 }
 
 void test_verilog_power(
@@ -1103,6 +1139,16 @@ entity shift_rotate_app is
 end entity;
 
 architecture rtl of shift_rotate_app is
+  constant declaration_conditional : std_logic_vector(128 downto 0) :=
+    129X"1" when true else 129X"0";
+  constant case_declaration : std_logic_vector(128 downto 0) :=
+    (case false is
+       when true => 129X"2",
+       when others => declaration_conditional);
+  constant case_range_declaration : integer :=
+    (case 2 is
+       when 1 to 3 => 11,
+       when others => 22);
   signal value : signed(7 downto 0);
   signal known_value : signed(7 downto 0);
   signal arithmetic_left : signed(7 downto 0);
@@ -1123,13 +1169,18 @@ architecture rtl of shift_rotate_app is
   signal conditional_false : std_logic_vector(7 downto 0);
   signal conditional_chain : std_logic_vector(7 downto 0);
   signal conditional_selected : std_logic_vector(7 downto 0);
+  signal expression_conditional : std_logic_vector(128 downto 0);
+  signal short_circuit_conditional : integer;
+  signal case_expression : std_logic_vector(7 downto 0);
+  signal case_range_expression : integer;
+  signal external_name_expression : signed(7 downto 0);
   signal selected_choice : std_logic_vector(7 downto 0);
   signal selected_default : std_logic_vector(7 downto 0);
   signal dynamic_selector : std_logic_vector(1 downto 0);
   signal selected_dynamic : std_logic_vector(7 downto 0);
 begin
-  value <= "10X0000Z";
-  known_value <= "11111011";
+  value <= 8B"10X0_000Z";
+  known_value <= 8X"FB";
   calculate: process(value, known_value)
   begin
     arithmetic_left <= value sla 1;
@@ -1147,7 +1198,7 @@ begin
     power_negative <= "11111110" ** 3;
     power_zero <= "00000111" ** 0;
     conditional_true <=
-      "10100101" when true else "01011010";
+      8X"A5" when true else 8X"5A";
     conditional_false <=
       "10100101" when false else "01011010";
     conditional_chain <=
@@ -1158,10 +1209,22 @@ begin
       "0110" when true else "1001";
   end process;
 
+  expression_conditional <=
+    (129X"2" when false else case_declaration);
+  short_circuit_conditional <=
+    (7 when true else 1 / 0);
+  case_expression <=
+    (case dynamic_selector is
+       when "10" | "11" => 8X"3C",
+       when others => 8X"C3");
+  case_range_expression <= case_range_declaration;
+  external_name_expression <=
+    << signal .shift_rotate_app.known_value : signed(7 downto 0) >>;
+
   choose_known: with "01" select
     selected_choice <=
-      "10100101" when "00" | "01",
-      "01011010" when others;
+      8O"245" when "00" | "01",
+      8D"90" when others;
 
   choose_default: with "10" select
     selected_default <=
@@ -1180,6 +1243,23 @@ begin
     selected_dynamic <=
       "10100101" when "00" | "01",
       "01011010" when others;
+end architecture;
+)";
+  }
+  const auto external_mismatch_source =
+      directory.path / "external_mismatch.vhd";
+  {
+    std::ofstream output(external_mismatch_source);
+    output << R"(
+entity external_mismatch_app is
+end entity;
+
+architecture rtl of external_mismatch_app is
+  signal source_value : signed(7 downto 0);
+  signal result : signed(7 downto 0);
+begin
+  result <=
+    << signal .external_mismatch_app.source_value : signed(6 downto 0) >>;
 end architecture;
 )";
   }
@@ -1621,6 +1701,8 @@ end architecture;
       directory.path,
       vhdl_source,
       fsim::project::Optimization::o2);
+  test_vhdl_external_name_mismatch(
+      directory.path, external_mismatch_source);
   test_verilog_power(
       directory.path,
       verilog_power_source,

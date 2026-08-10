@@ -272,6 +272,10 @@ void substitute_parameters(
 void collect_qualified_identifiers(
     const Expression& expression,
     QualifiedIdentifierMap& identifiers) {
+    if (expression.kind == ExpressionKind::Call
+        && expression.text == "@vhdl-external") {
+        return;
+    }
     if ((expression.kind == ExpressionKind::Identifier
          || expression.kind == ExpressionKind::Call)
         && !expression.text.starts_with("@sv-")

@@ -954,6 +954,24 @@ std::optional<std::int64_t> evaluate_constant_expression(
     if (expression.text == "||") {
         return *right != 0 ? 1 : 0;
     }
+    if (expression.text == "and") {
+        return *left != 0 && *right != 0 ? 1 : 0;
+    }
+    if (expression.text == "or") {
+        return *left != 0 || *right != 0 ? 1 : 0;
+    }
+    if (expression.text == "nand") {
+        return !(*left != 0 && *right != 0) ? 1 : 0;
+    }
+    if (expression.text == "nor") {
+        return !(*left != 0 || *right != 0) ? 1 : 0;
+    }
+    if (expression.text == "xor") {
+        return (*left != 0) != (*right != 0) ? 1 : 0;
+    }
+    if (expression.text == "xnor") {
+        return (*left != 0) == (*right != 0) ? 1 : 0;
+    }
     if (expression.text == "==" || expression.text == "==="
         || expression.text == "=") {
         return *left == *right ? 1 : 0;

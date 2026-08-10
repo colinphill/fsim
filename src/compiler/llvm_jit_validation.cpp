@@ -1771,7 +1771,11 @@ using runtime::Logic9; using namespace runtime::simir;
               validate_dynamic_selection(
                   *operation.selection, target_width, index);
             }
-            result.uses_force_signal_slice = true;
+            if (operation.driving_value) {
+              result.uses_force_driver_signal_slice = true;
+            } else {
+              result.uses_force_signal_slice = true;
+            }
           } else if constexpr (std::is_same_v<OperationType, ReleaseSignalSlice>) {
             const auto target_width = signal_width(operation.signal, index);
             if (operation.width == 0) {
@@ -1788,7 +1792,11 @@ using runtime::Logic9; using namespace runtime::simir;
               validate_dynamic_selection(
                   *operation.selection, target_width, index);
             }
-            result.uses_release_signal_slice = true;
+            if (operation.driving_value) {
+              result.uses_release_driver_signal_slice = true;
+            } else {
+              result.uses_release_signal_slice = true;
+            }
           } else if constexpr (std::is_same_v<OperationType, WriteInertialDynamicSlice>) {
             const auto target_width =
                 signal_width(operation.signal, index);

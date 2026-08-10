@@ -17,7 +17,9 @@ architecture rtl of vhdl_guarded_assignments is begin
   simple_base: simple_value <= '1';
   conditional_base: conditional_value <= '1';
   selected_base: selected_value <= '1';
-  scope: block (enabled) begin
+  scope: block (enabled) is
+    disconnect simple_value : std_logic after 2 ns;
+  begin
     simple_drive: simple_value <= guarded transport source after 1 ns;
     conditional_drive: conditional_value <= guarded transport
       source after 1 ns when selector = '1' else null after 1 ns;
@@ -48,6 +50,16 @@ end architecture;
       elaborated.design->find_signal("conditional_value");
   const auto selected = elaborated.design->find_signal("selected_value");
   assert(enabled && selector && source && simple && conditional && selected);
+  const auto simple_driver_count = std::ranges::count_if(
+      elaborated.design->processes(),
+      [&](const auto& process) {
+        return std::ranges::any_of(
+            process.driver_regions,
+            [&](const auto& region) {
+              return region.signal == *simple;
+            });
+      });
+  assert(simple_driver_count == 2);
   auto interpreter = elaborated.design->create_interpreter();
   const auto deposit = [&](const fsim::runtime::simir::SignalId signal,
                            const std::string_view value) {
@@ -73,8 +85,49 @@ end architecture;
   expect("X", "X", "X");
   deposit(*selector, "0");
   expect("X", "1", "1");
+  const auto disconnect_start = interpreter->scheduler().now();
   deposit(*enabled, "0");
-  expect("1", "1", "1");
+  const auto before_disconnect = interpreter->run(disconnect_start + 1);
+  assert(before_disconnect.status == fsim::runtime::RunStatus::time_limit);
+  assert(interpreter->signal_value(*simple).to_msb_string() == "X");
+  deposit(*enabled, "1");
+  assert(interpreter->run().status
+         == fsim::runtime::RunStatus::completed);
+  assert(interpreter->signal_value(*simple).to_msb_string() == "X");
+  const auto restarted_disconnect = interpreter->scheduler().now();
+  deposit(*enabled, "0");
+  const auto before_restarted_disconnect =
+      interpreter->run(restarted_disconnect + 1);
+  assert(before_restarted_disconnect.status
+         == fsim::runtime::RunStatus::time_limit);
+  assert(interpreter->signal_value(*simple).to_msb_string() == "X");
+  const auto after_disconnect = interpreter->run();
+  assert(after_disconnect.status == fsim::runtime::RunStatus::completed);
+  assert(interpreter->signal_value(*simple).to_msb_string() == "1");
+  assert(interpreter->signal_value(*conditional).to_msb_string() == "1");
+  assert(interpreter->signal_value(*selected).to_msb_string() == "1");
+
+  {
+    auto pending = elaborated.design->create_interpreter();
+    pending->deposit_signal(
+        *source,
+        fsim::runtime::PackedLogic4::from_msb_string("0"));
+    pending->deposit_signal(
+        *enabled,
+        fsim::runtime::PackedLogic4::from_msb_string("1"));
+    assert(pending->run().status
+           == fsim::runtime::RunStatus::completed);
+    const auto pending_start = pending->scheduler().now();
+    pending->deposit_signal(
+        *enabled,
+        fsim::runtime::PackedLogic4::from_msb_string("0"));
+    assert(pending->run(pending_start + 1).status
+           == fsim::runtime::RunStatus::time_limit);
+  }
+  auto isolated = elaborated.design->create_interpreter();
+  assert(isolated->run().status
+         == fsim::runtime::RunStatus::completed);
+  assert(isolated->signal_value(*simple).to_msb_string() == "1");
 
   const auto outside = fsim::frontend::parse_text(
       "guarded_outside_block.vhd",
@@ -103,6 +156,28 @@ end architecture;
   assert(!rejected_target.ok());
   assert(has_diagnostic(
       rejected_target, "FSIM-ELAB-VHDLGUARD-002"));
+
+  const auto oscillating = fsim::frontend::parse_text(
+      "vhdl_concurrent_nonconvergence.vhd",
+      "entity oscillating is end; "
+      "architecture rtl of oscillating is signal q : boolean; begin "
+      "q <= not q; end architecture;",
+      fsim::frontend::Language::Vhdl2008);
+  assert(oscillating.ok());
+  const auto oscillating_result = fsim::elaboration::elaborate(
+      oscillating.design, "vhdl:work.oscillating(rtl)");
+  assert(oscillating_result.ok() && oscillating_result.design);
+  auto oscillating_runtime = oscillating_result.design->create_interpreter(
+      fsim::runtime::SchedulerOptions{8, 4});
+  bool bounded_nonconvergence = false;
+  try {
+    (void)oscillating_runtime->run();
+  } catch (const fsim::runtime::DeltaCycleLimitError& error) {
+    bounded_nonconvergence = error.time() == 0
+        && error.limit() == 8
+        && !error.pending_orders().empty();
+  }
+  assert(bounded_nonconvergence);
 
   const auto scoped = fsim::frontend::parse_text(
       "vhdl_statement_scopes.vhd",

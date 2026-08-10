@@ -148,7 +148,7 @@ auto archive_fields(T& value) {
       value.name, value.type, value.default_value, value.local, value.span,
       value.kind, value.default_type, value.function_profile,
       value.procedure_profile, value.package_profile, value.object_class,
-      value.direction);
+      value.direction, value.vhdl_deferred, value.vhdl_completion_span);
 }
 
 template <typename T>

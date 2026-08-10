@@ -164,6 +164,9 @@ void HierarchyBuilder::register_vhdl_resolution_functions(
             : ResolutionKind::vhdl_user_and;
         const auto [existing, inserted] =
             vhdl_resolution_kinds_.emplace(resolver, kind);
+        if (inserted) {
+            vhdl_resolution_kind_insertions_.push_back(resolver);
+        }
         if (!inserted && existing->second != kind) {
             report(
                 "FSIM-ELAB-VHRESOLVE-003",

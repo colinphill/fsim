@@ -526,19 +526,34 @@ bool VhdlParser::parse_vhdl_generate_declarations(
       continue;
     }
     if (match_keyword("attribute", true)) {
-      // User-defined attributes are elaboration metadata unless a later
-      // language feature explicitly queries them. VITAL vendor models use
-      // VITAL_LEVEL0/1 declarations and specifications pervasively; preserve
-      // source acceptance without attaching simulator semantics to them.
       parsed = true;
-      skip_to_semicolon();
+      DesignUnit declarations;
+      declarations.vhdl_attributes = std::move(body.vhdl_attributes);
+      declarations.vhdl_groups = std::move(body.vhdl_groups);
+      parse_vhdl_attribute_declaration(declarations, previous());
+      body.vhdl_attributes = std::move(declarations.vhdl_attributes);
+      body.vhdl_groups = std::move(declarations.vhdl_groups);
+      continue;
+    }
+    if (match_keyword("group", true)) {
+      parsed = true;
+      DesignUnit declarations;
+      declarations.vhdl_attributes = std::move(body.vhdl_attributes);
+      declarations.vhdl_groups = std::move(body.vhdl_groups);
+      parse_vhdl_group_declaration(declarations, previous());
+      body.vhdl_attributes = std::move(declarations.vhdl_attributes);
+      body.vhdl_groups = std::move(declarations.vhdl_groups);
+      continue;
+    }
+    if (match_keyword("disconnect", true)) {
+      parsed = true;
+      parse_vhdl_disconnection_specification(
+          body.vhdl_disconnections, previous());
       continue;
     }
     if (keyword("variable", 0, true)
         || keyword("shared", 0, true)
         || keyword("use", 0, true)
-        || keyword("group", 0, true)
-        || keyword("disconnect", 0, true)
         || keyword("package", 0, true)) {
       parsed = true;
       const auto unsupported = advance();
@@ -629,16 +644,42 @@ void VhdlParser::parse_vhdl_generate_branch(
       label = advance();
       advance();
     }
+    const auto postponed_token = match_keyword("postponed", true)
+        ? std::optional<Token>{previous()} : std::nullopt;
     if (keyword("process", 0, true)) {
-      body.processes.push_back(parse_process(label));
+      body.processes.push_back(
+          parse_process(label, postponed_token.has_value()));
       continue;
     }
     if (match_keyword("assert", true)) {
       auto statement = parse_vhdl_assertion(previous());
+      statement.vhdl_postponed = postponed_token.has_value();
+      if (postponed_token) {
+        statement.span = cover(postponed_token->span, statement.span);
+      }
       if (label) {
         statement.label = vhdl_name(label->text);
       }
       body.concurrent_statements.push_back(std::move(statement));
+      continue;
+    }
+    if (postponed_token) {
+      if (auto procedure = parse_vhdl_procedure_call()) {
+        procedure->vhdl_postponed = true;
+        procedure->span = cover(postponed_token->span, procedure->span);
+        if (label) {
+          procedure->label = vhdl_name(label->text);
+          procedure->span = cover(label->span, procedure->span);
+        }
+        body.concurrent_statements.push_back(std::move(*procedure));
+        continue;
+      }
+      error(
+          *postponed_token,
+          "FSIM-VHDL-SEM-104",
+          "postponed is permitted only on a process, concurrent assertion, "
+          "or concurrent procedure call");
+      skip_to_semicolon();
       continue;
     }
     if (match_keyword("with", true)) {
@@ -711,6 +752,10 @@ void VhdlParser::parse_vhdl_generate_branch(
         "unsupported concurrent item in generate branch");
     skip_to_semicolon();
   }
+  apply_vhdl_disconnection_specifications(
+      body.signals,
+      body.vhdl_disconnections,
+      body.concurrent_statements);
 }
 
 Instance VhdlParser::parse_vhdl_instance(const Token& label) {
@@ -943,11 +988,14 @@ void VhdlParser::skip_vhdl_connection_actual() {
   }
 }
 
-Process VhdlParser::parse_process(std::optional<Token> label) {
+Process VhdlParser::parse_process(
+    std::optional<Token> label,
+    const bool postponed) {
   const auto start =
       expect_keyword("process", true, "FSIM-VHDL-PARSE-019");
   Process process;
   process.kind = ProcessKind::VhdlProcess;
+  process.vhdl_postponed = postponed;
   process.name = label ? vhdl_name(label->text) : std::string{};
 
   if (match(TokenKind::LeftParen)) {
@@ -997,7 +1045,9 @@ Process VhdlParser::parse_process(std::optional<Token> label) {
             process.variables,
             process.package_instances,
             process.functions,
-            process.procedures)) {
+            process.procedures,
+            process.vhdl_attributes,
+            process.vhdl_groups)) {
       continue;
     }
     if (!match_keyword("variable", true)) {
@@ -1075,6 +1125,13 @@ Process VhdlParser::parse_process(std::optional<Token> label) {
         "wait statement");
   }
   expect_keyword("end", true, "FSIM-VHDL-PARSE-022");
+  const bool closing_postponed = match_keyword("postponed", true);
+  if (closing_postponed && !postponed) {
+    error(
+        previous(),
+        "FSIM-VHDL-SEM-103",
+        "an ordinary process cannot use postponed in its closing clause");
+  }
   match_keyword("process", true);
   parse_statement_end_label(process.name, "process");
   expect(TokenKind::Semicolon, "';' after process",

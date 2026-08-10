@@ -445,6 +445,13 @@ class VhdlExecutableBuilder final {
       output.rejection_limit = delay(
           *input.vhdl_rejection_limit, child_scope, statement_origin);
     }
+    output.postponed = input.vhdl_postponed;
+    if (input.vhdl_disconnection_delay) {
+      output.disconnection_delay = delay(
+          *input.vhdl_disconnection_delay,
+          child_scope,
+          statement_origin);
+    }
     for (const auto& waveform : input.vhdl_waveform) {
       const auto value = expression(
           waveform.value, child_scope, statement_origin);

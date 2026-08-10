@@ -132,20 +132,21 @@ end architecture;
   assert((named.parameter_values
       == std::vector<std::pair<std::string, std::string>>{
           {"width", "4"}, {"enabled", "true"}, {"offset", "-3"},
-          {"pattern", "10"}, {"last", "3"}}));
+          {"pattern", "1010"}, {"last", "3"}}));
   assert((positional.parameter_values
       == std::vector<std::pair<std::string, std::string>>{
           {"width", "4"}, {"enabled", "false"}, {"offset", "2"},
-          {"pattern", "5"}, {"last", "3"}}));
+          {"pattern", "0101"}, {"last", "3"}}));
   assert((defaults.parameter_values
       == std::vector<std::pair<std::string, std::string>>{
           {"width", "4"}, {"enabled", "false"}, {"offset", "1"},
-          {"pattern", "3"}, {"last", "3"}}));
+          {"pattern", "0011"}, {"last", "3"}}));
   for (const auto* specialization : {&named, &positional, &defaults}) {
     assert(std::ranges::all_of(
         specialization->parameter_identity_values,
         [](const auto& value) {
-          return value.second.starts_with("vhdlconst-v1;");
+          return value.second.starts_with("vhdlconst-v1;")
+              || value.second.starts_with("vhdlcomposite-v1;");
         }));
   }
 

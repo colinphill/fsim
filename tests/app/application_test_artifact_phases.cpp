@@ -13,19 +13,21 @@
 #include <iterator>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 namespace fsim::test {
 
 void ApplicationTestFixture::test_artifact_phase_semantics() {
-  static_assert(app::kRuntimeStateSchema == 18);
+  static_assert(app::kRuntimeStateSchema == 19);
   static_assert(app::kSemanticStateSchema == 2);
   static_assert(app::kDesignIrStateSchema == 2);
   static_assert(app::kClassStateSchema == 9);
   static_assert(app::kSystemVerilogConstraintHirStateSchema == 3);
   static_assert(app::kSystemVerilogCoverageStateSchema == 1);
   static_assert(app::kSystemVerilogUvmStateSchema == 2);
+  static_assert(app::kVhdlHirStateSchema == 1);
   const auto sv_source = directory / "artifact_phase.sv";
   const auto vhdl_source = directory / "artifact_phase.vhd";
   const auto sv_object = directory / "artifact-sv.fsimobj";
@@ -202,7 +204,9 @@ architecture rtl of phase_counter is
   signal attribute_source : std_logic;
   signal stable_probe : boolean;
   signal vital_probe : std_logic;
+  -- psl default clock is rising_edge(clk);
 begin
+  -- psl ARTIFACT_CLOCK: cover clk = '1';
   vital_probe <= VitalMUX2('H', '1', 'X');
   process (clk)
   begin
@@ -322,6 +326,53 @@ end architecture;
   auto coverage_checkpoint = app::load_design_artifact(
       active_design, coverage_load_diagnostics);
   assert(coverage_checkpoint && !coverage_load_diagnostics.has_error());
+  assert(!coverage_checkpoint->vhdl_hir.units().empty());
+  assert(std::ranges::any_of(
+      coverage_checkpoint->vhdl_hir.units(), [](const auto& unit) {
+        return std::ranges::any_of(
+            unit.psl_directives, [](const auto& directive) {
+              return directive.label == "artifact_clock";
+            });
+      }));
+  diagnostic::Engine vhdl_hir_codec_diagnostics;
+  const auto vhdl_hir_bytes = app::serialize_vhdl_hir_state(
+      coverage_checkpoint->vhdl_hir, coverage_checkpoint->semantics,
+      vhdl_hir_codec_diagnostics);
+  assert(vhdl_hir_bytes && !vhdl_hir_codec_diagnostics.has_error());
+  auto restored_vhdl_hir = app::deserialize_vhdl_hir_state(
+      *vhdl_hir_bytes, "vhdl-hir.bin", coverage_checkpoint->semantics,
+      vhdl_hir_codec_diagnostics);
+  assert(restored_vhdl_hir && !vhdl_hir_codec_diagnostics.has_error());
+  assert(restored_vhdl_hir->units().size()
+      == coverage_checkpoint->vhdl_hir.units().size());
+  assert(restored_vhdl_hir->declarations().size()
+      == coverage_checkpoint->vhdl_hir.declarations().size());
+  assert(restored_vhdl_hir->processes().size()
+      == coverage_checkpoint->vhdl_hir.processes().size());
+  const auto repeated_vhdl_hir = app::serialize_vhdl_hir_state(
+      *restored_vhdl_hir, coverage_checkpoint->semantics,
+      vhdl_hir_codec_diagnostics);
+  assert(repeated_vhdl_hir == vhdl_hir_bytes);
+  auto future_vhdl_hir = *vhdl_hir_bytes;
+  future_vhdl_hir[8] = static_cast<char>(app::kVhdlHirStateSchema + 1U);
+  diagnostic::Engine future_vhdl_hir_diagnostics;
+  assert(!app::deserialize_vhdl_hir_state(
+      future_vhdl_hir, "future-vhdl-hir.bin",
+      coverage_checkpoint->semantics, future_vhdl_hir_diagnostics));
+  diagnostic::Engine truncated_vhdl_hir_diagnostics;
+  assert(!app::deserialize_vhdl_hir_state(
+      vhdl_hir_bytes->substr(0, vhdl_hir_bytes->size() - 1U),
+      "truncated-vhdl-hir.bin", coverage_checkpoint->semantics,
+      truncated_vhdl_hir_diagnostics));
+  auto invalid_vhdl_hir = *restored_vhdl_hir;
+  invalid_vhdl_hir.mutable_units().front().id =
+      semantic::UnitId::from_index(
+          static_cast<std::uint32_t>(
+              coverage_checkpoint->semantics.units().size()));
+  diagnostic::Engine invalid_vhdl_hir_diagnostics;
+  assert(!app::serialize_vhdl_hir_state(
+      invalid_vhdl_hir, coverage_checkpoint->semantics,
+      invalid_vhdl_hir_diagnostics));
   assert(coverage_checkpoint->systemverilog_uvm_checkpoint);
   const auto& uvm_checkpoint =
       *coverage_checkpoint->systemverilog_uvm_checkpoint;
@@ -391,6 +442,34 @@ end architecture;
       corrupt_uvm_design, corrupt_uvm_diagnostics));
   assert(corrupt_uvm_diagnostics.has_error());
   std::filesystem::remove_all(corrupt_uvm_design);
+  const auto corrupt_vhdl_hir_design =
+      directory / "artifact-corrupt-vhdl-hir.fsimdesign";
+  std::filesystem::create_directories(corrupt_vhdl_hir_design);
+  for (const auto& entry :
+       std::filesystem::recursive_directory_iterator(active_design)) {
+    const auto destination = corrupt_vhdl_hir_design
+        / entry.path().lexically_relative(active_design);
+    if (entry.is_directory()) {
+      std::filesystem::create_directories(destination);
+    } else if (entry.is_regular_file()) {
+      std::filesystem::copy_file(entry.path(), destination);
+      std::filesystem::permissions(
+          destination, std::filesystem::perms::owner_write,
+          std::filesystem::perm_options::add);
+    }
+  }
+  {
+    std::ofstream corrupt(
+        corrupt_vhdl_hir_design / "state" / "vhdl-hir.bin",
+        std::ios::binary | std::ios::app);
+    corrupt.put('\0');
+  }
+  diagnostic::Engine corrupt_vhdl_hir_diagnostics;
+  assert(!app::load_design_artifact(
+      corrupt_vhdl_hir_design, corrupt_vhdl_hir_diagnostics));
+  assert(corrupt_vhdl_hir_diagnostics.has_error());
+  std::filesystem::remove_all(corrupt_vhdl_hir_design);
+  assert(std::filesystem::remove(vhdl_source));
   auto coverage_state = coverage_checkpoint->systemverilog_coverage;
   assert(coverage_state.declarations.size() == 1);
   assert(coverage_state.instances.size() == 1);
@@ -501,6 +580,13 @@ end architecture;
     assert(built->systemverilog_coverage.declarations.size() == 1);
     assert(built->systemverilog_coverage.instances.size() == 1);
     assert(built->systemverilog_coverage.reports.size() == 1);
+    assert(std::ranges::any_of(
+        built->vhdl_hir.units(), [](const auto& unit) {
+          return std::ranges::any_of(
+              unit.psl_directives, [](const auto& directive) {
+                return directive.label == "artifact_clock";
+              });
+        }));
     for (const auto& file : built->semantics.source_files()) {
       assert(!std::filesystem::path(file.physical_name).is_absolute());
     }
@@ -578,9 +664,11 @@ end architecture;
         "show", "main.counter.attribute_source'stable(1)"});
     assert(debugger_error.str().empty());
     assert(debugger_output.str().find("1") != std::string::npos);
-    return std::pair{
+    assert(!simulation.vhdl_psl_attempts().empty());
+    return std::tuple{
         simulation.read_signal(*counter).to_msb_string(),
-        simulation.read_signal(*watch).to_msb_string()};
+        simulation.read_signal(*watch).to_msb_string(),
+        simulation.vhdl_psl_attempts()};
   };
   const auto interpreted = run_engine(app::SimulationEngine::interpreter);
   const auto compiled = run_engine(app::SimulationEngine::compiled);
@@ -591,8 +679,8 @@ end architecture;
       replay_checkpoints.size() == 3
       && replay_checkpoints[0] == replay_checkpoints[1]
       && replay_checkpoints[1] == replay_checkpoints[2]);
-  assert(interpreted.first == "00000001");
-  assert(interpreted.second == "1");
+  assert(std::get<0>(interpreted) == "00000001");
+  assert(std::get<1>(interpreted) == "1");
 
   const auto relocated_design = directory / "relocated.fsimdesign";
   std::filesystem::rename(active_design, relocated_design);

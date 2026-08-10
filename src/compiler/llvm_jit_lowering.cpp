@@ -217,6 +217,30 @@ void lower_process(llvm::Module &module, const std::string &symbol,
             runtime_type, runtime_argument, 65),
         "release_signal_slice");
   }
+  llvm::Value* force_driver_signal_slice_callback = nullptr;
+  llvm::Value* force_driver_signal_slice_logic9_callback = nullptr;
+  if (validated.uses_force_driver_signal_slice) {
+    force_driver_signal_slice_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 73),
+        "force_driver_signal_slice");
+    if (validated.uses_logic9) {
+      force_driver_signal_slice_logic9_callback = builder.CreateLoad(
+          pointer,
+          builder.CreateStructGEP(
+              runtime_type, runtime_argument, 74),
+          "force_driver_signal_slice_logic9");
+    }
+  }
+  llvm::Value* release_driver_signal_slice_callback = nullptr;
+  if (validated.uses_release_driver_signal_slice) {
+    release_driver_signal_slice_callback = builder.CreateLoad(
+        pointer,
+        builder.CreateStructGEP(
+            runtime_type, runtime_argument, 75),
+        "release_driver_signal_slice");
+  }
   llvm::Value* runtime_flags = nullptr;
   if (validated.uses_debug_points) {
     runtime_flags = builder.CreateLoad(
@@ -1176,6 +1200,9 @@ void lower_process(llvm::Module &module, const std::string &symbol,
         force_signal_slice_callback,
         force_signal_slice_logic9_callback,
         release_signal_slice_callback,
+        force_driver_signal_slice_callback,
+        force_driver_signal_slice_logic9_callback,
+        release_driver_signal_slice_callback,
         write_projected_waveform_callback,
         write_projected_waveform_logic9_callback,
         write_projected_callback,

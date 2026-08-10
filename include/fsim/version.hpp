@@ -16,6 +16,6 @@ inline constexpr std::string_view production_llvm_version = "22.1.8";
 // the explicit marker prevents activating one without invalidating native
 // objects.
 inline constexpr std::string_view standard_library_cache_version =
-    "ieee-1076-2019-16a01232-float-v1";
+    "ieee-1076-2019-16a01232-vhdl-psl-wide-v2";
 
 } // namespace fsim

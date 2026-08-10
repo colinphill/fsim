@@ -125,6 +125,7 @@ struct TestRuntime {
   std::vector<std::uint32_t> random_instructions;
   std::vector<InertialWrite> inertial_writes;
   std::vector<ProjectedWrite> projected_writes;
+  std::vector<std::array<std::uint32_t, 3>> released_slices;
   std::array<std::string, 32> strings;
   std::array<std::string, 8> string_objects;
 };
@@ -400,6 +401,17 @@ extern "C" inline void write_signal_slice(
       | ((bval << offset) & mask);
   runtime.writes.emplace_back(
       signal, runtime.signals[signal]);
+}
+
+extern "C" inline void release_signal_slice(
+    void* opaque,
+    const std::uint32_t signal,
+    const std::uint32_t offset,
+    const std::uint32_t width) {
+  auto& runtime = *static_cast<TestRuntime*>(opaque);
+  assert(signal < runtime.signals.size());
+  assert(offset < 64 && width <= 64 - offset);
+  runtime.released_slices.push_back({signal, offset, width});
 }
 
 extern "C" inline void write_update_slice(
@@ -938,6 +950,9 @@ extern "C" inline std::uint32_t write_string_output(
   result.write_projected_waveform_slice_logic9 =
       &write_projected_waveform_slice_logic9;
   result.write_formatted_logic9 = &write_formatted_logic9;
+  result.force_signal_slice = &write_signal_slice;
+  result.force_signal_slice_logic9 = &write_signal_slice_logic9;
+  result.release_signal_slice = &release_signal_slice;
   result.load_string = &load_string;
   result.copy_string = &copy_string;
   result.read_string_object = &read_string_object;
@@ -948,6 +963,9 @@ extern "C" inline std::uint32_t write_string_output(
   result.string_index = &string_index;
   result.string_replace_code_point = &string_replace_code_point;
   result.write_string_output = &write_string_output;
+  result.force_driver_signal_slice = &write_signal_slice;
+  result.force_driver_signal_slice_logic9 = &write_signal_slice_logic9;
+  result.release_driver_signal_slice = &release_signal_slice;
   return result;
 }
 

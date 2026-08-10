@@ -111,7 +111,8 @@ end architecture;
   const auto siblings = fsim::elaboration::elaborate(
       sibling_design, "sv:work.sibling_driver_top", sibling_bindings);
   assert(!siblings.ok());
-  assert(has_diagnostic(siblings, "FSIM-ELAB-DRV-001"));
+  assert(has_diagnostic(siblings, "FSIM-ELAB-BIND-024"));
+  assert(!has_diagnostic(siblings, "FSIM-ELAB-DRV-001"));
 
   const auto input_writer = fsim::frontend::parse_text(
       "input_driver_writer.vhd",

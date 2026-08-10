@@ -85,6 +85,11 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-FE-VHORDER-006` | error | A VHDL configuration declaration or binding names an architecture that has not yet been analyzed. |
 | `FSIM-FE-VHORDER-007` | error | A VHDL entity binding names an entity that has not yet been analyzed. |
 | `FSIM-FE-VHORDER-008` | error | A VHDL configuration binding names a configuration that has not yet been analyzed. |
+| `FSIM-FE-VHORDER-009` | error | A VHDL library repeats a primary entity, package, configuration, or context identity. |
+| `FSIM-FE-VHORDER-010` | error | A VHDL library repeats a secondary architecture or package-body identity. |
+| `FSIM-FE-VHDECL-001` | error | A deferred VHDL package constant has no full declaration in the corresponding package body. |
+| `FSIM-FE-VHDECL-002` | error | A deferred VHDL package constant and its full declaration have nonconforming subtype indications. |
+| `FSIM-FE-VHDECL-003` | error | A package body redeclares a nondeferred constant from the package declaration. |
 | `FSIM-FE-VHSTD-001` | error | A required compiler-supplied IEEE 1076-2019 source file is unavailable or unreadable. |
 | `FSIM-FE-VHSTD-002` | error | A compiler-supplied IEEE 1076-2019 source file does not match its pinned upstream checksum. |
 | `FSIM-FE-VHSTD-003` | error | fsim's intrinsic semantic projection of a pinned IEEE package is internally invalid. |
@@ -108,9 +113,12 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-FE-IO-002` | error | Reading an HDL source file failed after it was opened. |
 | `FSIM-FE-IO-003` | error | HDL language inference failed for the source-file extension. |
 | `FSIM-FE-LEX-001` | error | The lexer encountered an unexpected character. |
-| `FSIM-FE-LEX-002` | error | A Verilog/SystemVerilog block comment is unterminated. |
+| `FSIM-FE-LEX-002` | error | A VHDL, Verilog, or SystemVerilog block comment is unterminated. |
 | `FSIM-FE-LEX-003` | error | An extended identifier is unterminated. |
 | `FSIM-FE-LEX-004` | error | A string literal is unterminated. |
+| `FSIM-FE-LEX-005` | error | A VHDL basic identifier starts with an underscore or contains adjacent or trailing underscores. |
+| `FSIM-FE-LEX-006` | error | A VHDL extended identifier is empty. |
+| `FSIM-FE-LEX-007` | error | VHDL-2008 delimited-comment nesting exceeds the bounded 64-level policy. |
 | `FSIM-FE-PARSE-001` | error | A parser expectation using the common fallback code failed. |
 | `FSIM-FE-PP-0001` | error | Include directories or macro definitions were supplied for a VHDL source set; these settings apply only to Verilog/SystemVerilog or SystemC. |
 
@@ -390,6 +398,53 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-VHDL-PARSE-260` | error | A VHDL file object declaration is missing its terminating semicolon. |
 | `FSIM-VHDL-PARSE-261` | error | A VHDL report statement or assertion report clause is missing its expression. |
 | `FSIM-VHDL-PARSE-262` | error | A VHDL severity clause is missing its expression. |
+| `FSIM-VHDL-PARSE-263` | error | A VHDL bit-string literal has an invalid or separated base/width, malformed digits, lossy signed/unsigned adjustment, or a result that cannot be materialized in host-addressable storage. |
+| `FSIM-VHDL-PARSE-264` | error | One or more VHDL context clauses at end of file are not followed by a library unit. |
+| `FSIM-VHDL-PARSE-265` | error | A VHDL attribute declaration or specification has malformed form or termination. |
+| `FSIM-VHDL-PARSE-266` | error | A VHDL attribute specification has an empty or missing entity-name list or entity-class separator. |
+| `FSIM-VHDL-PARSE-267` | error | A VHDL attribute specification is missing `is` before its value. |
+| `FSIM-VHDL-PARSE-268` | error | A VHDL group declaration has no template/instance separator or terminating semicolon. |
+| `FSIM-VHDL-PARSE-269` | error | A VHDL group declaration has malformed, empty, or unterminated entries. |
+| `FSIM-VHDL-PARSE-270` | error | A VHDL case expression is missing `is` after its selector. |
+| `FSIM-VHDL-PARSE-271` | error | A VHDL case-expression alternative is missing `when`. |
+| `FSIM-VHDL-PARSE-272` | error | `others` is combined with another case-expression choice. |
+| `FSIM-VHDL-PARSE-273` | error | A VHDL case-expression choice list is missing `=>`. |
+| `FSIM-VHDL-PARSE-274` | error | A VHDL case expression repeats `others` or places it before another alternative. |
+| `FSIM-VHDL-PARSE-275` | error | A bounded VHDL case expression lacks `others` and does not contain exhaustive Boolean choices. |
+| `FSIM-VHDL-PARSE-276` | error | A bounded VHDL external name uses an object class other than `signal`. |
+| `FSIM-VHDL-PARSE-277` | error | A bounded VHDL external signal name is not a local or absolute dot-separated path. |
+| `FSIM-VHDL-PARSE-278` | error | A VHDL external signal name is missing the colon before its subtype indication. |
+| `FSIM-VHDL-PARSE-279` | error | A VHDL external signal name is missing its closing `>>`. |
+| `FSIM-VHDL-PARSE-280` | error | A VHDL force assignment omits its forcing expression. |
+| `FSIM-VHDL-PARSE-281` | error | A VHDL release assignment incorrectly includes an expression. |
+| `FSIM-VHDL-PARSE-282` | error | A VHDL force or release assignment is missing its semicolon. |
+| `FSIM-VHDL-PARSE-283` | error | A VHDL disconnection specification is missing the colon after its guarded-signal list. |
+| `FSIM-VHDL-PARSE-284` | error | A VHDL disconnection specification is missing `after` before its time expression. |
+| `FSIM-VHDL-PARSE-285` | error | A VHDL disconnection specification is missing its terminating semicolon. |
+
+### Embedded VHDL PSL parsing and ownership
+
+| Code | Severity | Meaning |
+|---|---|---|
+| `FSIM-VHDL-PSL-001` | error | A PSL verification unit has no name, target, balanced target delimiters, braced body, or closing brace. |
+| `FSIM-VHDL-PSL-002` | error | A PSL default-clock, Boolean, sequence, property, or endpoint declaration has a missing name, separator, body, or terminator. |
+| `FSIM-VHDL-PSL-003` | error | A VHDL declarative region repeats a PSL declaration name. |
+| `FSIM-VHDL-PSL-004` | error | A VHDL declarative region contains more than one PSL default-clock declaration. |
+| `FSIM-VHDL-PSL-005` | error | A PSL formal-parameter list contains an empty, unnamed, duplicate, unbalanced, or unterminated formal. |
+| `FSIM-VHDL-PSL-006` | error | A PSL assert, assume, restrict, or cover directive has no property or terminating semicolon. |
+| `FSIM-VHDL-PSL-007` | error | A VHDL statement region repeats a PSL directive label. |
+| `FSIM-VHDL-PSL-008` | error | A PSL verification unit contains an item outside the retained declaration and directive grammar. |
+| `FSIM-VHDL-PSL-009` | error | A comment-embedded PSL item appears at top level or in a declarative region where that item kind is not legal. |
+| `FSIM-VHDL-PSL-010` | error | A temporal PSL declaration or directive has no inferable default, referenced, or explicit clock. |
+| `FSIM-VHDL-PSL-011` | error | A PSL clock expression does not sample a visible scalar Boolean, bit, or logic signal. |
+| `FSIM-VHDL-PSL-012` | error | A PSL sampled name denotes a nonscalar object outside the Boolean, bit, or logic sampling domain. |
+| `FSIM-VHDL-PSL-013` | error | A PSL declaration contains a temporal operator or declaration/formal reference that is incompatible with its Boolean, sequence, property, endpoint, or static-bound context. |
+| `FSIM-VHDL-PSL-014` | error | A PSL next/repetition/recurrence bound is unbalanced, nonstatic, negative, reversed, or otherwise outside the bounded range grammar. |
+| `FSIM-VHDL-PSL-015` | error | A PSL declaration references a declaration analyzed under an incompatible clock. |
+| `FSIM-VHDL-PSL-016` | error | A PSL endpoint declaration does not denote a sequence expression. |
+| `FSIM-VHDL-PSL-017` | error | A simple PSL declaration or sampled name cannot be resolved in its VHDL target scope. |
+| `FSIM-VHDL-PSL-018` | error | A PSL explicit clock override has no expression or no clock expression. |
+| `FSIM-VHDL-PSL-019` | error | PSL declarations form a cyclic reference graph. |
 
 ### VHDL semantics and bounded-subset rejections
 
@@ -480,6 +535,16 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-VHDL-SEM-094` | error | A VHDL declarative region repeats a file-object name. |
 | `FSIM-VHDL-SEM-095` | error | A VHDL file interface declaration incorrectly specifies a parameter mode. |
 | `FSIM-VHDL-SEM-096` | error | A VHDL file interface declaration incorrectly specifies a default expression. |
+| `FSIM-VHDL-SEM-097` | error | An incomplete VHDL type has no full declaration in the same declarative region. |
+| `FSIM-VHDL-SEM-098` | error | A VHDL declarative region repeats an attribute declaration name. |
+| `FSIM-VHDL-SEM-099` | error | A VHDL attribute specification references an attribute not declared earlier in the region. |
+| `FSIM-VHDL-SEM-100` | error | A VHDL declarative region repeats a group declaration name. |
+| `FSIM-VHDL-SEM-101` | error | A VHDL group instance references a template not declared earlier in the region. |
+| `FSIM-VHDL-SEM-102` | error | A VHDL force or release assignment appears outside a sequential statement region. |
+| `FSIM-VHDL-SEM-103` | error | An ordinary VHDL process uses `postponed` in its closing clause. |
+| `FSIM-VHDL-SEM-104` | error | A VHDL `postponed` prefix appears on a concurrent statement other than a process, assertion, or procedure call. |
+| `FSIM-VHDL-SEM-105` | error | A VHDL disconnection specification's type mark does not match an explicitly selected signal. |
+| `FSIM-VHDL-SEM-106` | error | VHDL disconnection specifications overlap or repeat one guarded signal. |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -493,7 +558,6 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-VHDL-UNSUPPORTED-018` | error | A generic type is outside the bounded scalar integer, Boolean, bit, and physical-time subset. |
 | `FSIM-VHDL-UNSUPPORTED-020` | error | A generate branch contains an item outside the bounded constant, local-signal, assignment, process, instance, and nested-generate subset. |
 | `FSIM-VHDL-UNSUPPORTED-022` | error | A package declaration item is outside the bounded constant, type, subtype, or function subset. |
-| `FSIM-VHDL-UNSUPPORTED-023` | error | A package constant is outside the scalar integer, Boolean, or bit subset. |
 | `FSIM-VHDL-UNSUPPORTED-024` | error | A context declaration contains an item other than a library clause, use clause, or context reference. |
 | `FSIM-VHDL-UNSUPPORTED-025` | error | A `null` waveform element appears outside a guarded concurrent signal assignment. |
 | `FSIM-VHDL-UNSUPPORTED-026` | error | A bounded VHDL type or record element is outside the architecture-local, non-nested packed record subset. |
@@ -1436,7 +1500,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-VHFUNC-007` | error | A selected function actual has no executable body. |
 | `FSIM-ELAB-VHFUNC-008` | error | A selected function actual is impure in the bounded interface-function subset. |
 | `FSIM-ELAB-VHFUNC-009` | error | An interface-function binding conflicts with a child-local function name. |
-| `FSIM-ELAB-VHCONV-002` | error | A visible VHDL conversion target has no bounded executable width from 1 through 64 bits. |
+| `FSIM-ELAB-VHCONV-002` | error | A visible VHDL conversion target has no positive SimIR-representable executable width. |
 | `FSIM-ELAB-VHCONV-003` | error | A VHDL conversion operand is not a supported closely related type or would change packed width or state domain. |
 | `FSIM-ELAB-VHCONV-004` | error | A VHDL conversion result is incompatible with its contextual type. |
 | `FSIM-ELAB-VHOVER-001` | error | A VHDL function call is ambiguous among the visible overloads after result and actual-profile filtering. |
@@ -1446,7 +1510,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-VHOVER-005` | error | A VHDL procedure call matches no visible overload after actual-profile filtering. |
 | `FSIM-ELAB-VHOVER-006` | error | Two visible VHDL procedure declarations have the same callable profile. |
 | `FSIM-ELAB-VHQUAL-001` | error | A VHDL qualified expression names a type mark that is not visible. |
-| `FSIM-ELAB-VHQUAL-002` | error | A VHDL qualification target has no bounded executable width from 1 through 64 bits. |
+| `FSIM-ELAB-VHQUAL-002` | error | A VHDL qualification target has no positive SimIR-representable executable width. |
 | `FSIM-ELAB-VHQUAL-003` | error | A VHDL qualified expression operand does not have the target base type, exact bounded shape, width, nominal identity, or state domain. |
 | `FSIM-ELAB-VHQUAL-004` | error | A VHDL qualified-expression result is incompatible with its contextual type. |
 | `FSIM-ELAB-VHLEGAL-001` | error | A VHDL package function body does not conform to any same-designator declaration. |
@@ -1458,6 +1522,9 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-VHLEGAL-007` | error | A VHDL function formal default does not match its subtype. |
 | `FSIM-ELAB-VHLEGAL-008` | error | A VHDL procedure formal default does not match its subtype. |
 | `FSIM-ELAB-VHLEGAL-009` | error | A VHDL function contains a wait or calls a suspending procedure. |
+| `FSIM-ELAB-VHLEGAL-010` | error | A deferred VHDL package constant has no full declaration in the corresponding package body. |
+| `FSIM-ELAB-VHLEGAL-011` | error | A deferred VHDL package constant and its full declaration have nonconforming subtype indications. |
+| `FSIM-ELAB-VHLEGAL-012` | error | A package body redeclares a nondeferred constant from the package declaration. |
 | `FSIM-ELAB-VHREPORT-001` | error | A VHDL report expression does not have string type. |
 | `FSIM-ELAB-VHREPORT-002` | error | A VHDL severity expression does not have severity_level type. |
 | `FSIM-ELAB-VHFILE-001` | error | A VHDL scope declares the same file object more than once. |
@@ -1633,6 +1700,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-VHPROTECTED-019` | error | A protected procedure call ambiguously matches multiple public profiles. |
 | `FSIM-ELAB-VHPROTECTED-020` | error | A protected method attempts to suspend. |
 | `FSIM-ELAB-VHPROTECTED-021` | error | A protected method makes a nested procedure call outside the bounded non-reentrant policy. |
+| `FSIM-ELAB-VHPROTECTED-022` | error | A pure VHDL function calls an impure protected function. |
 | `FSIM-ELAB-VHAGG-001` | error | A VHDL aggregate appears without a supported contextual record or array target type. |
 | `FSIM-ELAB-VHAGG-002` | error | A contextual record layout or aggregate-association HIR payload is internally inconsistent. |
 | `FSIM-ELAB-VHAGG-003` | error | A named aggregate association does not name an element of the contextual record type. |
@@ -1657,6 +1725,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-VHARRAY-003` | error | A VHDL array constraint lies outside its `integer`, `natural`, or `positive` index subtype. |
 | `FSIM-ELAB-VHARRAY-004` | error | A VHDL array constraint width overflows the packed runtime representation. |
 | `FSIM-ELAB-VHARRAY-005` | error | A VHDL array object uses an unconstrained or otherwise nonconcrete array subtype. |
+| `FSIM-ELAB-VHEXTERNAL-001` | error | A VHDL external signal name has malformed HIR, names no visible signal, or declares a subtype incompatible with its target. |
 | `FSIM-ELAB-VHARRAY-006` | error | Assignment or comparison mixes values from different nominal VHDL array types. |
 | `FSIM-ELAB-VHARRAY-007` | error | An operator other than equality, inequality, or matching equality is applied to a VHDL array value in the current bounded semantic path. |
 | `FSIM-ELAB-VHARRAY-008` | error | The number of constraints on a VHDL array subtype indication does not match the base array rank. |
@@ -1740,6 +1809,9 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-ELAB-SVFORCE-001` | error | A procedural force or release target is not a supported signal, static bit-select, static part-select, or packed member. |
 | `FSIM-ELAB-SVFORCE-002` | error | A procedural force or release target is not a visible packed signal with an executable layout. |
 | `FSIM-ELAB-SVFORCE-003` | error | A four-state value is forced onto a two-state target without explicit conversion. |
+| `FSIM-ELAB-VHFORCE-001` | error | A VHDL force or release target is not a supported signal, static index, or static slice. |
+| `FSIM-ELAB-VHFORCE-002` | error | A VHDL force or release target is not a visible packed signal with an executable layout. |
+| `FSIM-ELAB-VHFORCE-003` | error | A four- or nine-state VHDL value is forced onto a two-state target without explicit conversion. |
 | `FSIM-ELAB-SVFILE-001` | error | A bounded SystemVerilog text-file handle is not a 32-bit integer expression. |
 | `FSIM-ELAB-SVFILE-002` | error | A file read/error target is not a whole mutable string object or automatic local. |
 | `FSIM-ELAB-SVFILE-003` | error | `$fopen` does not have bounded SystemVerilog byte-string filename and mode operands. |
@@ -2192,7 +2264,12 @@ production emitters use literal or constant literal codes, so the complete
 current set is covered.
 
 The Batch 162 UVM closure audit additionally freezes all 82 unique
-`FSIM-UVM-*` codes inside the current 2,071-code catalog and requires explicit
+`FSIM-UVM-*` codes inside the current 2,138-code catalog and requires explicit
 race/deadlock, cancellation, stale/cross-owner, resource, callback/rollback,
 and checkpoint/replay owners. The count is an inventory check; the individual
 table entries above remain the authority for severity and meaning.
+
+The Batch 163 VHDL/PSL closure audit freezes all 19 PSL codes in this table,
+exact positive/negative/execution witnesses, and zero
+unresolved active rows. Runtime PSL resource failures retain typed resource
+kinds rather than synthesizing uncataloged diagnostic spellings.

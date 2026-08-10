@@ -187,6 +187,10 @@ std::optional<frontend::Type> Lowerer::vhdl_expression_type(
         : std::nullopt;
   }
   if (expression.kind == ExpressionKind::Call) {
+    if (expression.text == "@vhdl-external"
+        && expression.operands.size() == 2) {
+      return vhdl_expression_type(expression.operands.front());
+    }
     if (expression.text == "@vhdl-dereference"
         && expression.operands.size() == 1) {
       const auto source = vhdl_expression_type(

@@ -33,10 +33,10 @@ namespace {
 [[nodiscard]] PackedLogic4 initial_packed_element(
     const ContainerType& type) {
   if (type.element_kind == ContainerElementKind::Scalar) {
-    return PackedLogic4::from_aval_bval(type.element_width, 0, 0);
+    return PackedLogic4(type.element_width, Logic4::zero);
   }
   return type.two_state
-      ? PackedLogic4::from_aval_bval(type.element_width, 0, 0)
+      ? PackedLogic4(type.element_width, Logic4::zero)
       : PackedLogic4{type.element_width, Logic4::x};
 }
 
@@ -385,8 +385,7 @@ void Interpreter::Impl::write_container_object_value(
 
 PackedLogic4 default_container_element(
     const ContainerType& type) {
-  return PackedLogic4::from_aval_bval(
-      type.element_width, 0, 0);
+  return PackedLogic4(type.element_width, Logic4::zero);
 }
 
 void resize_container_value(
@@ -481,11 +480,14 @@ void select_container_value(
         when_true.elements[index],
         when_false.elements[index]);
     if (destination.type.two_state) {
-      const auto word = merged.low_word();
-      merged = PackedLogic4::from_aval_bval(
-          destination.type.element_width,
-          word.aval & ~word.bval,
-          0);
+      auto coerced = PackedLogic4(
+          destination.type.element_width, Logic4::zero);
+      for (std::size_t bit = 0; bit < merged.width(); ++bit) {
+        if (merged.get(bit) == Logic4::one) {
+          coerced.set(bit, Logic4::one);
+        }
+      }
+      merged = std::move(coerced);
     }
     destination.elements.push_back(std::move(merged));
   }
@@ -816,8 +818,7 @@ void Interpreter::Impl::execute_container(
   const auto& source = get_register(process, operation.source);
   if (source.width() != target.type.element_width
       || source.is_logic9()
-      || (target.type.two_state
-          && source.low_word().bval != 0)) {
+      || (target.type.two_state && has_unknown(source))) {
     container_error(
         process.program.id, process.pc,
         "container element write type mismatch");
@@ -1277,7 +1278,7 @@ void Interpreter::Impl::execute_container(
   if (!selected->type.fixed || selected->elements.size() != 1U
       || value.width() != selected->type.element_width
       || value.is_logic9()
-      || (selected->type.two_state && value.low_word().bval != 0)) {
+      || (selected->type.two_state && has_unknown(value))) {
     container_error(
         process.program.id, process.pc,
         "aggregate member write leaf type mismatch");
@@ -1727,8 +1728,7 @@ void Interpreter::Impl::execute_container(
   const auto& source = get_register(process, operation.source);
   if (source.width() != target.type.element_width
       || source.is_logic9()
-      || (target.type.two_state
-          && source.low_word().bval != 0)) {
+      || (target.type.two_state && has_unknown(source))) {
     container_error(
         process.program.id, process.pc,
         "queue element write type mismatch");

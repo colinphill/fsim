@@ -1509,6 +1509,16 @@ They do not become supported when a permissive parser happens to consume them.
 Deferred rows are not release blockers unless the v1 scope is explicitly
 changed and the row is promoted to a required section.
 
+The later v2 Batch 163 closure supersedes the broad `D-VH-01` PSL/VHPI
+deferral for its documented digital subset only. The authoritative
+[`vhdl_psl_gap_inventory.tsv`](../tests/feature_matrix/vhdl_psl_gap_inventory.tsv)
+now contains 29 supported VHDL-2008/embedded-PSL rows, zero unresolved active
+rows, and four narrower deferrals; the 44-row
+[`vhdl_psl_release_closure.tsv`](../tests/feature_matrix/vhdl_psl_release_closure.tsv)
+governs engine, artifact, platform, resource, and installed-public evidence.
+VHDL-AMS, SDF, PSL beyond that embedded subset, and post-2008/vendor extensions
+remain deferred. See [`vhdl-psl.md`](vhdl-psl.md) for the current boundary.
+
 ## Release-gate rule
 
 **fsim v1 must not be released while any row marked `v1 target` remains, or

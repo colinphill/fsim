@@ -385,6 +385,10 @@ void DebuggerSession::execute(const std::vector<std::string>& command)  {
       uvm_command(command);
       return;
     }
+    if (command[0] == "vhdl") {
+      vhdl_command(command);
+      return;
+    }
     if (command[0] == "chandle" && command.size() == 2) {
       std::uint64_t handle{};
       const auto converted = std::from_chars(
@@ -1150,6 +1154,52 @@ void DebuggerSession::uvm_command(
         limits.maximum_formatted_bytes);
   } catch (const UvmDebugError& error) {
     error_ << error.diagnostic_code() << ": " << error.what() << '\n';
+  }
+}
+
+void DebuggerSession::vhdl_command(
+    const std::vector<std::string>& command) {
+  if (command.size() > 2) {
+    output_ << "usage: vhdl [summary|scopes|objects|processes|psl|all]\n";
+    return;
+  }
+  auto section = std::string_view{"summary"};
+  if (command.size() == 2) {
+    section = command[1];
+  }
+  if (section != "summary" && section != "scopes"
+      && section != "objects" && section != "processes"
+      && section != "psl" && section != "all") {
+    output_ << "usage: vhdl [summary|scopes|objects|processes|psl|all]\n";
+    return;
+  }
+  try {
+    const auto limits = VhdlDebugLimits{};
+    const auto formatted = format_vhdl_debug_snapshot(
+        simulation_.vhdl_debug_snapshot(limits),
+        limits.maximum_formatted_bytes);
+    if (section == "all") {
+      output_ << formatted;
+      return;
+    }
+    std::istringstream lines{formatted};
+    std::string line;
+    while (std::getline(lines, line)) {
+      const auto retain = section == "summary"
+          ? line.starts_with("vhdl ")
+          : section == "scopes"
+          ? line.starts_with("scope ")
+          : section == "objects"
+          ? line.starts_with("object ")
+          : section == "processes"
+          ? line.starts_with("process ")
+          : line.starts_with("psl ") || line.starts_with("coverage ");
+      if (retain) {
+        output_ << line << '\n';
+      }
+    }
+  } catch (const VhdlDebugError& error) {
+    error_ << "VHDL debug snapshot: " << error.what() << '\n';
   }
 }
 

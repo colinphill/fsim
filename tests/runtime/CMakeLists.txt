@@ -43,6 +43,7 @@ add_executable(
   runtime_scalar_text_tests.cpp
   runtime_chandle_tests.cpp
   runtime_unicode_string_tests.cpp
+  runtime_vhdl_psl_tests.cpp
   runtime_execution_tests.cpp
   runtime_synchronization_tests.cpp
   runtime_file_tests.cpp

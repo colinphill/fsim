@@ -322,6 +322,13 @@ The current tree contains:
   nine-state values, drivers, callbacks, foreign models, associations,
   root-isolated reporting, transactional restart/remap, and independently
   compiled versioned C/C++ images;
+- governed embedded PSL with 29 supported VHDL-2008/PSL inventory rows, zero
+  unresolved active rows, deterministic attempt/coverage/debug/VCD equality
+  through interpreter and LLVM O0/O2 cold/warm execution, source-independent
+  object/library/design replay, mixed roots, a 6 GiB process ceiling, and an
+  installed [`fsim-vhdl` tutorial](docs/vhdl-psl-tutorial.md); see the
+  [support boundary](docs/vhdl-psl.md) and
+  [closure audit](docs/vhdl-psl-closure-audit.md);
 - ordered VHDL sequential packed `case` statements with `|` choices and
   `others`, lowered through common exact case-equality branches;
 - concurrent and sequential VHDL-2008 conditional assignments with chained

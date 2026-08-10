@@ -87,6 +87,8 @@ SignalId Interpreter::add_signal(Signal signal) {
   impl_->driven_values.push_back(signal.initial_value);
   impl_->driver_values.emplace_back();
   impl_->driver_strengths.emplace_back();
+  impl_->forced_driver_values.emplace_back();
+  impl_->forced_driver_masks.emplace_back();
   impl_->external_driver_values.emplace_back();
   impl_->charge_decay_handles.emplace_back();
   impl_->charge_values.push_back(
@@ -277,6 +279,10 @@ ProcessId Interpreter::add_process(Process process) {
   if (process.final && process.initialize) {
     throw std::invalid_argument(
         "a SimIR final process cannot initialize at time zero");
+  }
+  if (process.reactive && process.postponed) {
+    throw std::invalid_argument(
+        "a SimIR process cannot be both reactive and postponed");
   }
   if (!process.register_value_kinds.empty()
       && process.register_value_kinds.size()
@@ -817,11 +823,12 @@ void Interpreter::deposit_container_object(
   impl_->write_container_object_value(object, value);
 }
 
-const PackedLogic4& Interpreter::driver_value(
+PackedLogic4 Interpreter::driver_value(
     const ProcessId process,
-    const SignalId signal) const {
-  (void)impl_->get_process(process);
-  return impl_->current_driver_value(process, signal);
+    const SignalId signal) const
+{
+    (void)impl_->get_process(process);
+    return impl_->underlying_driver_value(process, signal);
 }
 
 PackedLogic4 Interpreter::read_debug_local(

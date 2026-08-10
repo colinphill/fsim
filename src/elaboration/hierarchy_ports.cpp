@@ -27,6 +27,9 @@ void HierarchyBuilder::note_boundary_driver(
     if (binding != nullptr && binding->resolver) {
         const auto [found, inserted] =
             resolver_by_signal_.emplace(signal, *binding->resolver);
+        if (inserted) {
+            boundary_resolver_insertions_.push_back(signal);
+        }
         if (!inserted && found->second != *binding->resolver) {
             report(
                 "FSIM-ELAB-BIND-023",
@@ -58,6 +61,143 @@ bool HierarchyBuilder::connect_vhdl_expression_port(
             == frontend::ExpressionKind::Identifier
         && parent_signals.contains(connection.value.text)) {
         return false;
+    }
+    if ((port.direction == frontend::PortDirection::Output
+         || port.direction == frontend::PortDirection::Buffer)
+        && connection.kind == frontend::PortActualKind::Expression
+        && ((connection.value.kind == frontend::ExpressionKind::Index
+             && connection.value.operands.size() == 2
+             && connection.value.operands.front().kind
+                 == frontend::ExpressionKind::Identifier)
+            || (connection.value.kind == frontend::ExpressionKind::Call
+                && connection.value.operands.size() == 1
+                && parent_signals.contains(connection.value.text)))) {
+        const auto parsed_as_call =
+            connection.value.kind == frontend::ExpressionKind::Call;
+        const auto actual = parent_signals.find(
+            parsed_as_call
+                ? connection.value.text
+                : connection.value.operands.front().text);
+        const auto index = constant_index(
+            connection.value.operands[parsed_as_call ? 0 : 1]);
+        if (actual == parent_signals.end() || !index) {
+            report(
+                "FSIM-ELAB-VHPORT-002",
+                "VHDL selected output port actual for '" + path + "."
+                    + port.name
+                    + "' requires a known signal and locally static index",
+                connection.value.span);
+            return true;
+        }
+        const auto& actual_info = design_.signal_info_.at(actual->second);
+        std::optional<std::uint64_t> selected_offset;
+        SignalInfo selected_info = actual_info;
+        if (actual_info.vhdl_array
+            && actual_info.vhdl_array->dimensions.size() == 1
+            && actual_info.vhdl_array->dimensions.front().range) {
+            const auto& dimension =
+                actual_info.vhdl_array->dimensions.front();
+            const auto& range = *dimension.range;
+            if (range.contains(*index)) {
+                selected_offset =
+                    index_distance(*index, range.right) * dimension.stride;
+            }
+            if (!actual_info.vhdl_array->element_types.empty()) {
+                const auto& element =
+                    actual_info.vhdl_array->element_types.front();
+                selected_info.width = static_cast<std::size_t>(
+                    dimension.stride);
+                selected_info.type_name = element.spelling;
+                selected_info.source_domain = element.domain;
+                selected_info.is_signed = element.is_signed;
+                selected_info.packed_range = element.packed_range;
+                selected_info.vhdl_array = element.vhdl_array;
+                selected_info.vhdl_access = element.vhdl_access;
+                selected_info.vhdl_physical = element.vhdl_physical;
+                selected_info.packed_members = element.packed_members;
+                selected_info.integer_range = element.integer_range;
+                selected_info.nominal_type = element.nominal_type;
+                selected_info.enumeration_literals =
+                    element.enumeration_literals;
+                selected_info.enumeration_range = element.enumeration_range;
+            }
+        } else if (
+            actual_info.packed_range
+            && *index
+                >= std::min(
+                    actual_info.packed_range->left,
+                    actual_info.packed_range->right)
+            && *index
+                <= std::max(
+                    actual_info.packed_range->left,
+                    actual_info.packed_range->right)) {
+            selected_offset = index_distance(
+                *index, actual_info.packed_range->right);
+            selected_info.width = 1;
+            selected_info.packed_range.reset();
+            selected_info.vhdl_array.reset();
+            selected_info.packed_members.clear();
+        }
+        if (!selected_offset
+            || selected_info.width == 0
+            || selected_info.width
+                > std::numeric_limits<std::uint32_t>::max()
+            || *selected_offset > std::numeric_limits<std::uint32_t>::max()) {
+            report(
+                "FSIM-ELAB-VHPORT-002",
+                "VHDL selected output port actual for '" + path + "."
+                    + port.name + "' is outside its constrained signal",
+                connection.value.span);
+            return true;
+        }
+        const auto diagnostics_before = diagnostics_.size();
+        validate_boundary_type(
+            port,
+            selected_info,
+            path,
+            connection.span,
+            false);
+        if (diagnostics_.size() != diagnostics_before) {
+            return true;
+        }
+        const auto formal = add_owned_signal(port, path, result.signals);
+        if (!formal) {
+            return true;
+        }
+        if (design_.processes_.size()
+            > std::numeric_limits<ProcessId>::max()) {
+            report(
+                "FSIM-ELAB-011",
+                "the design has too many processes for a selected VHDL "
+                "output port",
+                connection.span);
+            return true;
+        }
+        Process bridge;
+        bridge.id = static_cast<ProcessId>(design_.processes_.size());
+        bridge.name = path + "." + port.name
+            + "$selected_output_bridge";
+        bridge.register_count = 1;
+        bridge.register_value_kinds.push_back(value_kind(port.type.domain));
+        bridge.static_sensitivity.push_back(
+            Sensitivity{*formal, EdgeKind::any});
+        bridge.operations.emplace_back(ReadSignal{0, *formal});
+        bridge.operations.emplace_back(WriteUpdateSlice{
+            actual->second,
+            0,
+            static_cast<std::uint32_t>(*selected_offset)});
+        bridge.operations.emplace_back(WaitSensitivity{});
+        bridge.operations.emplace_back(Jump{0});
+        bridge.driver_regions.push_back(Process::DriverRegion{
+            actual->second,
+            static_cast<std::uint32_t>(*selected_offset),
+            static_cast<std::uint32_t>(selected_info.width),
+            false});
+        design_.specializations_.back().processes.push_back(bridge.id);
+        design_.processes_.push_back(std::move(bridge));
+        note_boundary_driver(
+            actual->second, nullptr, path, connection.span);
+        return true;
     }
     if (port.direction != frontend::PortDirection::Input) {
         report(

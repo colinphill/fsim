@@ -381,18 +381,8 @@ void Lowerer::lower_procedure_call(const Statement& statement) {
         return;
     }
     if (language_ == frontend::Language::Vhdl2008
-        && statement.procedure_name == "deallocate"
-        && statement.procedure_arguments.size() == 1) {
-        const auto type = vhdl_expression_type(
-            statement.procedure_arguments.front().value);
-        if (type && type->vhdl_access) {
-            report(
-                "FSIM-ELAB-VHACCESS-022",
-                "explicit VHDL access deallocation is unsupported; "
-                "bounded objects have simulation lifetime",
-                statement.span);
-            return;
-        }
+        && lower_vhdl_access_deallocation(statement)) {
+        return;
     }
     if (!procedure_support_initialized_) {
         report(
@@ -498,11 +488,11 @@ void Lowerer::lower_procedure_call(const Statement& statement) {
         frame.arguments.reserve(procedure.arguments.size());
         for (const auto& argument : procedure.arguments) {
             const auto width = argument.type.width();
-            if (!width || *width == 0 || *width > 64) {
+            if (!width || *width == 0) {
                 report(
                     "FSIM-ELAB-VHPROC-020",
                     "procedure argument '" + argument.name
-                        + "' must have an executable width in [1, 64]",
+                        + "' must have a concrete nonempty executable width",
                     argument.span);
                 return;
             }

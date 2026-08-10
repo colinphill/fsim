@@ -1572,7 +1572,6 @@ context second_context is
   context work.first_context;
 end context second_context;
 context work.first_context;
-context work.too.many.parts;
 context work.not_present;
 entity invalid_context_user is
 end entity invalid_context_user;
@@ -1588,11 +1587,19 @@ end architecture rtl;
             "vhdl:work.invalid_context_user(rtl)");
     assert(!invalid_context_result.ok());
     assert(has_diagnostic(
-        invalid_context_result, "FSIM-ELAB-CTX-001"));
-    assert(has_diagnostic(
         invalid_context_result, "FSIM-ELAB-CTX-002"));
     assert(has_diagnostic(
         invalid_context_result, "FSIM-ELAB-CTX-003"));
+
+    const auto malformed_context = fsim::frontend::parse_text(
+        "malformed_context.vhd",
+        "context work.too.many.parts;\nentity recovered is end entity;\n",
+        fsim::frontend::Language::Vhdl2008);
+    assert(!malformed_context.ok());
+    assert(std::ranges::any_of(
+        malformed_context.diagnostics, [](const auto& diagnostic) {
+          return diagnostic.code == "FSIM-VHDL-PARSE-044";
+        }));
 
     const auto invalid_generics = fsim::frontend::parse_text(
         "invalid-generic-elaboration.vhd",

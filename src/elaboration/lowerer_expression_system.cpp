@@ -805,17 +805,43 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
                     .value_or(
                         infer_width(expression.operands[2])
                             .value_or(expected_width));
-            const auto when_true =
-                lower_expression(
-                    expression.operands[1],
-                    value_width,
-                    expected_type);
-            const auto when_false =
-                lower_expression(
-                    expression.operands[2],
-                    value_width,
-                    expected_type);
-            if (!when_true || !when_false) {
+            auto result_domain = frontend::ValueDomain::Logic4;
+            if (is_integer_expression(expression.operands[1])
+                && is_integer_expression(expression.operands[2])) {
+                result_domain = frontend::ValueDomain::Integer;
+            } else if (expected_type != nullptr
+                && expected_type->domain
+                    != frontend::ValueDomain::Unknown) {
+                result_domain = expected_type->domain;
+            } else if (const auto type =
+                    vhdl_expression_type(expression)) {
+                result_domain = type->domain;
+            }
+            const auto destination =
+                allocate_register(value_width, result_domain);
+            const auto branch_index = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Branch{
+                *condition, 0, 0, UnknownBranchPolicy::error});
+
+            const auto true_start = static_cast<InstructionIndex>(
+                process_.operations.size());
+            const auto when_true = lower_expression(
+                expression.operands[1], value_width, expected_type);
+            if (!when_true) {
+                return std::nullopt;
+            }
+            process_.operations.emplace_back(
+                CopyRegister{destination, *when_true});
+            const auto true_exit = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Jump{0});
+
+            const auto false_start = static_cast<InstructionIndex>(
+                process_.operations.size());
+            const auto when_false = lower_expression(
+                expression.operands[2], value_width, expected_type);
+            if (!when_false) {
                 return std::nullopt;
             }
             if (register_width(*when_true)
@@ -831,34 +857,17 @@ Lowerer::ExpressionAttempt Lowerer::lower_system_function_expression(
                     expression.span);
                 return std::nullopt;
             }
-            const auto result_domain =
-                language_ == frontend::Language::Vhdl2008
-                        && is_integer_expression(
-                            expression.operands[1])
-                        && is_integer_expression(
-                            expression.operands[2])
-                    ? frontend::ValueDomain::Integer
-                : register_domain(*when_true)
-                        == register_domain(*when_false)
-                    ? register_domain(*when_true)
-                : is_two_state_domain(register_domain(*when_true))
-                        && is_two_state_domain(
-                            register_domain(*when_false))
-                    ? frontend::ValueDomain::Bit2
-                : register_domain(*when_true)
-                            == frontend::ValueDomain::Logic9
-                        || register_domain(*when_false)
-                            == frontend::ValueDomain::Logic9
-                    ? frontend::ValueDomain::Logic9
-                    : frontend::ValueDomain::Logic4;
-            const auto destination =
-                allocate_register(
-                    register_width(*when_true), result_domain);
-            process_.operations.emplace_back(ConditionalSelect{
-                destination,
+            process_.operations.emplace_back(
+                CopyRegister{destination, *when_false});
+            const auto end =
+                static_cast<InstructionIndex>(
+                    process_.operations.size());
+            process_.operations[branch_index] = Branch{
                 *condition,
-                *when_true,
-                *when_false});
+                true_start,
+                false_start,
+                UnknownBranchPolicy::error};
+            process_.operations[true_exit] = Jump{end};
             return destination;
         }
 
