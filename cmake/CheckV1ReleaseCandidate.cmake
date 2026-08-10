@@ -125,12 +125,12 @@ list(JOIN FSIM_EVIDENCE_PATHS "\n" FSIM_EVIDENCE_CANONICAL)
 string(SHA256 FSIM_EVIDENCE_DIGEST "${FSIM_EVIDENCE_CANONICAL}\n")
 
 set(FSIM_EXPECTED_VALUES
-  FSIM_ROW_COUNT 1262
-  FSIM_EVIDENCE_SLOT_COUNT 5048
-  FSIM_EVIDENCE_PATH_COUNT 579
-  FSIM_TEST_EVIDENCE_COUNT 254
-  FSIM_PRODUCTION_EVIDENCE_COUNT 303
-  FSIM_RELEASE_EVIDENCE_COUNT 22)
+  FSIM_ROW_COUNT 1279
+  FSIM_EVIDENCE_SLOT_COUNT 5116
+  FSIM_EVIDENCE_PATH_COUNT 604
+  FSIM_TEST_EVIDENCE_COUNT 265
+  FSIM_PRODUCTION_EVIDENCE_COUNT 312
+  FSIM_RELEASE_EVIDENCE_COUNT 27)
 while(FSIM_EXPECTED_VALUES)
   list(POP_FRONT FSIM_EXPECTED_VALUES FSIM_VALUE_NAME FSIM_VALUE_EXPECTED)
   if(NOT ${FSIM_VALUE_NAME} EQUAL FSIM_VALUE_EXPECTED)
@@ -141,9 +141,9 @@ while(FSIM_EXPECTED_VALUES)
 endwhile()
 
 set(FSIM_EXPECTED_MATRIX_DIGEST
-  "3f6bc26424dd6dabe984f1efbef858808c2370b50c0969c6d82340499410e506")
+  "70deacfc60402730e5a567494e74aa015b4759b3655983a2ff6464c97ef11d42")
 set(FSIM_EXPECTED_EVIDENCE_DIGEST
-  "ca0f3e8d6e9eff61b4949b948e7c539ad61d6ea25031e1b547ec5b79240dafc2")
+  "2d9a2bf8fdc360b6b484087848eeb00def2a61cff5fecfacf9400fadcec2010b")
 if(NOT FSIM_MATRIX_DIGEST STREQUAL FSIM_EXPECTED_MATRIX_DIGEST
     OR NOT FSIM_EVIDENCE_DIGEST STREQUAL FSIM_EXPECTED_EVIDENCE_DIGEST)
   message(FATAL_ERROR
@@ -152,14 +152,14 @@ if(NOT FSIM_MATRIX_DIGEST STREQUAL FSIM_EXPECTED_MATRIX_DIGEST
 endif()
 
 foreach(FSIM_TOKEN IN ITEMS
-    "matrix-rows: 1262"
+    "matrix-rows: 1279"
     "matrix-sha256: ${FSIM_MATRIX_DIGEST}"
-    "evidence-slots: 5048"
-    "evidence-paths: 579"
+    "evidence-slots: 5116"
+    "evidence-paths: 604"
     "evidence-sha256: ${FSIM_EVIDENCE_DIGEST}"
-    "test-evidence-paths: 254"
-    "production-evidence-paths: 303"
-    "release-evidence-paths: 22"
+    "test-evidence-paths: 265"
+    "production-evidence-paths: 312"
+    "release-evidence-paths: 27"
     "runtime-evidence-paths: 138"
     "corpus-ctests: 36"
     "required-status: execute"
@@ -182,6 +182,6 @@ if(FSIM_REGISTRATION_INDEX EQUAL -1)
 endif()
 
 message(STATUS
-  "final release candidate: 1262 execute rows, 5048 linked evidence cells, "
-  "579 exact paths (254 test, 303 production, 22 release), 138 runtime files, "
+  "final release candidate: 1279 execute rows, 5116 linked evidence cells, "
+  "604 exact paths (265 test, 312 production, 27 release), 138 runtime files, "
   "and 36 corpus CTests")

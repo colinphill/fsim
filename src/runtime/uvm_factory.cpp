@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -50,6 +51,31 @@ namespace {
       entry.registration_order};
 }
 
+void append_quoted(std::string& output, const std::string_view text) {
+  output.push_back('"');
+  for (const char character : text) {
+    switch (character) {
+      case '\\': output += "\\\\"; break;
+      case '"': output += "\\\""; break;
+      case '\n': output += "\\n"; break;
+      case '\r': output += "\\r"; break;
+      case '\t': output += "\\t"; break;
+      default:
+        if (static_cast<unsigned char>(character) < 0x20U) {
+          constexpr char digits[]{"0123456789abcdef"};
+          output += "\\x";
+          output.push_back(digits[
+              (static_cast<unsigned char>(character) >> 4U) & 0xfU]);
+          output.push_back(digits[
+              static_cast<unsigned char>(character) & 0xfU]);
+        } else {
+          output.push_back(character);
+        }
+    }
+  }
+  output.push_back('"');
+}
+
 }
 
 SystemVerilogUvmFactoryService::SystemVerilogUvmFactoryService(
@@ -61,7 +87,9 @@ SystemVerilogUvmFactoryService::SystemVerilogUvmFactoryService(
       || limits_.max_type_name_bytes == 0
       || limits_.max_instance_path_bytes == 0
       || limits_.max_resolution_depth == 0
-      || limits_.max_report_bytes == 0) {
+      || limits_.max_report_bytes == 0
+      || limits_.max_trace_records == 0
+      || limits_.max_trace_bytes == 0) {
     throw std::invalid_argument{"UVM factory limits must be nonzero"};
   }
 }
@@ -300,6 +328,64 @@ SystemVerilogUvmFactoryResolution SystemVerilogUvmFactoryService::resolve(
       }
       ++entry.uses;
     }
+  }
+  append_trace(result, !count_uses);
+  return result;
+}
+
+void SystemVerilogUvmFactoryService::append_trace(
+    const SystemVerilogUvmFactoryResolution& resolution,
+    const bool debug) const {
+  if (!trace_enabled_) return;
+  if (trace_records_.size() == limits_.max_trace_records) {
+    trace_records_.pop_front();
+    ++dropped_trace_records_;
+  }
+  trace_records_.push_back(
+      {next_trace_sequence_++, debug, resolution});
+  if (trace_callback_) {
+    try {
+      trace_callback_(trace_records_.back());
+    } catch (...) {
+      ++trace_callback_failures_;
+    }
+  }
+}
+
+std::string SystemVerilogUvmFactoryService::trace_text() const {
+  std::string result;
+  const auto append = [&](const std::string_view text) {
+    if (result.size() > limits_.max_trace_bytes
+        || text.size() > limits_.max_trace_bytes - result.size()) {
+      throw std::length_error{"UVM factory trace exceeds configured limit"};
+    }
+    result += text;
+  };
+  for (const auto& record : trace_records_) {
+    std::string line{"UVM_FACTORY_TRACE sequence="};
+    line += std::to_string(record.sequence);
+    line += record.debug ? " mode=debug requested=" : " mode=create requested=";
+    append_quoted(line, record.resolution.requested_name);
+    line += " path=";
+    append_quoted(line, record.resolution.full_instance_path);
+    line += " resolved=";
+    append_quoted(
+        line, registry_->snapshot(record.resolution.resolved).type_name);
+    line += " steps=" + std::to_string(record.resolution.steps.size());
+    for (const auto& step : record.resolution.steps) {
+      line += step.kind == SystemVerilogUvmOverrideKind::Instance
+          ? " instance[" : " type[";
+      line += std::to_string(step.registration_order) + "]=";
+      append_quoted(line, step.original_name);
+      if (!step.instance_pattern.empty()) {
+        line += "@";
+        append_quoted(line, step.instance_pattern);
+      }
+      line += "->";
+      append_quoted(line, registry_->snapshot(step.override).type_name);
+    }
+    line.push_back('\n');
+    append(line);
   }
   return result;
 }

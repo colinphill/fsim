@@ -3,14 +3,14 @@
 
 This is the Batch 130 Task 7 reconciliation of diagnostics, authored source
 size, repository licensing, reviewed third-party material, conformance, and
-provenance. The inventories are release inputs, not substitutes for the
-Task 10 sanitizer and full executable regressions.
+provenance, updated through v2 Batch 162 Change 19. The inventories are release
+inputs, not substitutes for final sanitizer and full executable regressions.
 
 | Review ID | Frozen release inventory | Required ownership |
 |---|---|---|
-| `B130-T7-DIAGNOSTICS` | 1,659 production diagnostic codes | Every emitted `FSIM-*` diagnostic is unique in and exactly matched by `docs/diagnostics.md`; stale catalog entries and undocumented emissions fail the gate |
-| `B130-T7-SOURCES` | 463 authored C/C++ source and test files | Every file is at most 2,000 lines with an empty exception allowlist |
-| `B130-T7-LICENSES` | 553 authored repository files | Every owned build, workflow, documentation, example, header, source, and test artifact carries an Apache-2.0 SPDX identifier; the root license is Apache-2.0 |
+| `B130-T7-DIAGNOSTICS` | 2,071 production diagnostic codes | Every emitted `FSIM-*` diagnostic is unique in and exactly matched by `docs/diagnostics.md`; stale catalog entries and undocumented emissions fail the gate |
+| `B130-T7-SOURCES` | 826 authored C/C++ source and test files | Every file is at most 2,500 lines with a 2,000-line refactor target and an empty hard-limit exception list |
+| `B130-T7-LICENSES` | 937 authored repository files | Every owned build, workflow, documentation, example, header, source, and test artifact carries an Apache-2.0 SPDX identifier; the root license is Apache-2.0 |
 | `B130-T7-THIRD-PARTY` | One reviewed root with 31 files and 26 VHDL sources | IEEE P1076 packages retain the pinned commit, Apache-2.0 license/authorship/provenance files, exact loading inventory, and byte-for-byte SHA-256 checks |
 | `B130-T7-CONFORMANCE` | 105 expectations in 28 fixtures owned by 27 CTests | IDs, source identities, expected outcomes, fixture/test ownership, all required evidence modes, and the exact sorted digest remain frozen |
 | `B130-T7-PROVENANCE` | 10 reviewed source IDs and 6 explicit exclusions | Every external semantic reference is pinned and license-reviewed; no unrecorded third-party root or imported test text is permitted |
@@ -262,3 +262,12 @@ to 2,054 diagnostics, 809 bounded C/C++ sources, 910 authored artifacts, and
 305 authored test/control files. The exact upstream UVM trees remain governed
 external build products; all adapters, services, probes, and tests are
 clean-room authored code.
+
+v2 Batch 162 through Change 19 adds object-policy/copy/packer, synchronization,
+command-line, test-runner, source-smoke, platform-limit, and executable
+conformance/closure/documentation audit ownership as 27 SPDX-owned artifacts,
+including 17 bounded C/C++ headers/sources and eight additional authored test/control
+owners. Seventeen production diagnostic codes advance the reviewed inventory
+to 2,071 diagnostics, 826 bounded C/C++ sources, 937 authored artifacts, and
+313 authored test/control files. The exact upstream UVM trees remain governed
+external build products; no upstream source is vendored, patched, or counted.

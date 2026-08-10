@@ -3,8 +3,13 @@
 
 Fsim executes a bounded UVM environment from
 the unmodified Accellera UVM 1.2 and IEEE 1800.2-2020 kit version 2020.3.1
-sources. This document describes the implemented Batch 161 boundary. It is not
-a claim of complete UVM conformance.
+sources. This document describes the implemented boundary through Batch 162
+Change 18; it is not a claim of complete UVM conformance.
+
+For a tool-neutral project walkthrough using ordinary UVM registration,
+configuration, phases, objections, reports, engines, caches, traces, and
+portable artifacts, start with the
+[producer-independent UVM tutorial](uvm-tutorial.md).
 
 ## Supported releases and source policy
 
@@ -20,6 +25,42 @@ code may include/import the corresponding `uvm_macros.svh` and `uvm_pkg` names.
 No simulator compatibility define or source rewrite is required for the
 implemented example.
 
+Every governed source set selects its release explicitly:
+
+```toml
+[[source_set]]
+language = "systemverilog"
+standard = "2017"
+uvm_release = "1.2" # or "2020.3.1"
+files = ["uvm/src/uvm_pkg.sv", "tb.sv"]
+```
+
+Manifest-free commands accept the equivalent `--uvm-release` option. Fsim
+normalizes aliases to `1.2` or `2020.3.1`, verifies the selected value against
+the parsed `uvm_pkg` API surface, and rejects mixed source/object releases
+before publishing any checked, built, cached, or portable state.
+
+### Governed release difference matrix
+
+| Compatibility contract | UVM 1.2 | UVM 2020-3.1 |
+|---|---:|---:|
+| Canonical version tuple | 1.2 | 2020.3 |
+| Package-level test-done/stop/timeout controls | retained | removed |
+| Deprecated sequence/sequencer registration macros | retained | removed |
+| Component stop/kill/status methods | retained | removed |
+| Sequence-library lookup/start methods | retained | removed |
+| Component configuration compatibility methods | retained | retained |
+| `uvm_test_done_objection` compatibility class | retained | retained |
+| `uvm_policy`, `uvm_field_op`, and `uvm_copier` | absent | present |
+| IEEE object field-operation/policy dispatch | absent | present |
+| IEEE report-server summary methods | absent | present |
+
+The public `SystemVerilogUvmCompatibility` record is the normalized dispatch
+for this table. Release plus exact source identity is retained in `.fsimobj`
+metadata and class payloads, checked/built projects, native cache keys,
+`.fsimdesign` metadata, and schema-2 checkpoint provenance. Restore/replay
+compares both fields and fails transactionally on either mismatch.
+
 ## Implemented boundary
 
 The current executable foundation includes:
@@ -31,17 +72,34 @@ The current executable foundation includes:
   lookup, duplicate rejection, and deterministic teardown;
 - object, parameterized-object, and component utility registries with stable
   wrappers and create-by-type/name;
+- untouched UVM 1.2 legacy field/object/component/registry, sequence, callback,
+  analysis-implementation, and report macros with checked generated methods,
+  call signatures, factory publication, and portable metadata;
+- exact UVM 1.2 phase, objection, TLM-port, sequence, callback, register,
+  object/printer/comparer/packer/recorder, and command-line method profiles,
+  including the default deprecated root/test-done/configuration/stop/timeout
+  and sequence/sequencer aliases plus `UVM_NO_DEPRECATED` rejection;
+- exact UVM 2020-3.1 policy, field-operation, copier, object, printer, comparer,
+  packer, recorder, report-server, and version profiles, including retained
+  component-configuration/test-done compatibility shims and explicitly absent
+  global stop/timeout, component stop/kill, and sequence-library APIs;
 - factory type and instance overrides, instance-before-type precedence,
-  bounded `*`/`?` paths, loop rejection, and debug traces;
+  bounded `*`/`?` paths, loop rejection, stable print inventories, and bounded
+  create/debug resolution traces with ordered override steps;
 - typed resources, priority, auditing, callbacks, spell checking, and
-  `uvm_config_db` set/get/exists/wait-modified scope behavior;
-- recognized factory/config/resource/verbosity/timeout UVM plusargs;
+  `uvm_config_db` set/get/exists/wait-modified scope behavior, including stable
+  audited usage inventories and bounded lookup/read/write/set/get/exists
+  traces;
+- recognized factory/config/resource/verbosity/timeout/max-quit/objection-trace
+  UVM plusargs, including `+UVM_RESOURCE_DB_TRACE`,
+  `+UVM_CONFIG_DB_TRACE`, and source-ordered phase/time verbosity application;
 - report objects, handler precedence, severity/ID/verbosity/action routing,
   message elements, catchers, server accounting, max-quit, stdout and MCD/file
-  sinks, and bounded packed formatting;
+  sinks, hierarchical command controls, and bounded packed formatting;
 - exact common/runtime plus custom phase/domain graphs, component callbacks,
   synchronization, jumps, task-process suspension/cancellation, objections,
-  drain time, ready-to-end quiescence, and deterministic race/deadlock handling;
+  drain time, ready-to-end quiescence, deterministic race/deadlock handling,
+  and stable bounded objection tracing;
 - typed TLM1 ports/exports/implementations, FIFO and transport operations,
   request/response and analysis fanout, plus typed TLM2 initiator/target/
   passthrough sockets, generic payloads, extensions, byte enables, DMI,
@@ -56,13 +114,66 @@ The current executable foundation includes:
   field access policy, desired/mirrored/reset state, byte enables, all endian
   modes, multiple maps, adapters, predictors, frontdoors, VPI/VHPI backdoors,
   standard sequences, callbacks, and coverage;
-- immutable activity events, public debugger snapshots, DPI/VPI foreign
-  snapshots and callbacks, and schema-1 portable UVM checkpoints; and
+- immutable activity events, public debugger snapshots including
+  `uvm configuration` factory/resource/config traces, DPI/VPI foreign
+  snapshots and callbacks, and schema-2 portable UVM checkpoints; and
 - simulation-owned isolation across roots, sequential simulations, engines,
   caches, portable artifacts, and relocation.
 
-Remaining policy classes and complete UVM 1.2/2020 compatibility are explicit
-future work assigned to Batch 162 in the v2 plan.
+Batch 162 Change 13 adds one project-owned core smoke source compiled beside
+each untouched governed package. Its derived `uvm_test` binds the standard
+object printer/comparer/packer/recorder, factory, resource/configuration,
+command-line, report-server, and callback types and executes eleven named smoke
+methods for object policies, factory, resource/configuration, command-line,
+reporting, callbacks, test selection, topology, timeout, and seed behavior.
+The application requires every method body and standard base specialization
+after direct build and after `.fsimobj`/`.fsimdesign` reload, then exercises the
+corresponding simulation-owned behavior before emitting the exact
+`core_smoke=governed/project/...` transcript marker.
+
+Change 14 freezes the next project-owned flow layer after every direct or
+portable load: all nine phase callback bodies, the component's TLM1 port/FIFO
+members, sequence/sequencer/driver/monitor/agent/virtual-sequence/callback
+inheritance, and fourteen common `uvm_tlm_generic_payload` profiles. The exact
+matrix then executes phase/objection and cancellation behavior, sequence and
+role services, TLM1/TLM2 transport, callbacks, transactions, multiple roots,
+checkpoint replay, interpreter, LLVM O0/O2, cold/warm caches, and debug under
+the `flow_smoke=phase/objection/.../cancellation` marker.
+
+Change 15 freezes six project-owned register roles plus stable governed
+`uvm_reg_field`, `uvm_reg_map`, and `uvm_mem` profiles after every direct,
+object, or design load. The runtime smoke environment constructs register,
+field, memory, little- and big-endian map state; applies sparse byte enables;
+runs adapter/frontdoor/predictor and standard access-sequence paths; samples
+callbacks and coverage; joins VPI and VHPI slices in one HDL backdoor; and
+proves a DPI callback, wrong-width rollback, relocated checkpoint replay, and
+one-record-short capture rejection. The exact serial runner carries the
+`register_smoke=block/map/field/.../checkpoint/cap` marker through interpreter,
+LLVM O0/O2, cold/warm cache, debug, multiple roots, and all fourteen traces.
+
+Change 16 makes the exact matrix resource and platform contract executable.
+The test process applies a 6 GiB `RLIMIT_AS` ceiling on POSIX and the matching
+Windows Job Object process-memory limit before parsing any governed source.
+Every direct, compile, elaborate, or simulate stage has a 1,200-second CMake
+timeout, and each serial release matrix has the approved 7,200-second CTest
+timeout. A fast contract freezes filesystem-neutral source paths, both release
+registrations, MSVC-compatible test setup, `_WIN32` `__cdecl`, the append-only
+x64 C structure sizes/offsets, and compile-checked callback assignment. The
+exact transcript exposes this as `platform_contract=source/abi/linux/windows/
+cdecl/filesystem limits=as6g/stage1200/matrix7200`.
+
+Change 17 makes the complete supported-boundary inventory executable. The
+authoritative tab-separated inventory has 18 rows: 16 shared families and one
+release-specific family for each governed source, so exactly 17 apply to each
+run. It assigns positive, negative, and execution evidence to every family and
+marks every row `supported`; `xfail`, expected-failure, waiver, allowlist, and
+suppression entries are forbidden. After every direct build or portable design
+load, the application requires 53 UVM 1.2 or 56 UVM 2020-3.1 governed class
+identities plus all 27 project-owned classes. A missing identity, duplicate,
+unknown release, missing evidence owner, or changed count fails immediately.
+The exact transcript freezes this as
+`conformance_inventory=standard/project families=17 governed_classes=`
+`release-exact project_classes=27 supported_gaps=0 suppression=none`.
 
 ## Minimal object/factory/config/report example
 
@@ -126,7 +237,7 @@ endmodule
 
 ## Exact phase, TLM, sequence, and register example
 
-The registered Batch 161 fixture imports the real `uvm_object`,
+The registered Batch 162 fixture imports the real `uvm_object`,
 `uvm_component`, `uvm_phase`, parameterized blocking-put port, and TLM FIFO
 types from either governed release. One derived component implements real
 build, connect, end-of-elaboration, start-of-simulation, run, extract, check,
@@ -178,10 +289,32 @@ build/llvm22-ninja-debug/fsim run \
 
 Use explicit address-space controls in automation. The final clean package-only
 analysis peaks near 1.69 GiB for UVM 1.2 and 1.94 GiB for UVM 2020-3.1. Exact
-Batch 161 direct runs peak at 4,273,188 and 4,775,952 KiB respectively under
-6-GiB ceilings; portable compile uses 5/6 GiB,
-O0/O2 elaboration uses 5/5.5 GiB, and execution uses 3 GiB. Exact measurements
-are recorded in [the source-provenance record](uvm-source-provenance.md).
+Batch 162 Change 13 direct runs peak at 4,299,260 and 4,861,476 KiB
+respectively under 6-GiB ceilings. Focused portable compile peaks at
+3,365,800/3,735,852 KiB, object-only O2 elaboration at
+3,239,364/3,746,852 KiB, and loaded interpreter execution at
+936,660/1,041,144 KiB, all with zero swaps. Exact measurements are recorded in
+[the source-provenance record](uvm-source-provenance.md).
+
+The complete Change 16 serial matrix enforces those controls internally rather
+than relying on an outer shell. Its observed maximum RSS is 4,299,868 KiB for
+UVM 1.2 and 4,861,176 KiB for UVM 2020-3.1; focused capped direct probes peak
+at 4,299,428/4,861,616 KiB. All four records report zero swaps.
+
+The Change 17 inventory matrix passes ten stages per release in 8:03.14 and
+9:51.85, with observed maximum RSS of 4,299,292 and 4,861,336 KiB and zero
+swaps. Focused direct inventory probes pass in 1:52.41/2:09.16 at
+4,299,032/4,860,876 KiB. Each retained matrix log contains ten exact inventory
+markers, and all fourteen traces remain 28,345 bytes with the governed digest
+recorded in the source-provenance document.
+
+The Change 18 closure matrix passes ten stages per release in 8:28.42 and
+11:14.87, with observed maximum RSS of 4,299,288 and 4,860,288 KiB and zero
+swaps. Each retained log contains ten closure markers; all fourteen traces
+remain 28,345 bytes with the governed digest. The executable
+[release-closure matrix](../tests/feature_matrix/uvm_release_closure.tsv) and
+[closure audit](uvm-closure-audit.md) freeze compatibility, diagnostic,
+source, complexity, resource, artifact, cache, and zero-gap evidence.
 
 ## Portable artifact flow
 
@@ -260,7 +393,7 @@ The primary evidence owners are:
 - `fsim.diagnostics-catalog` and `fsim.source-line-budget` for public error and
   maintainability contracts; and
 - `fsim.uvm-phase-tlm-matrix` plus the two
-  `fsim.application.uvm_phase_tlm.*` tests for all 64 exact UVM diagnostics and
+  `fsim.application.uvm_phase_tlm.*` tests for all 79 exact UVM diagnostics and
   the unmodified-release direct/artifact/cache/debug/race/deadlock/sequence/
   register matrix.
 

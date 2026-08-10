@@ -3,6 +3,8 @@
 execute_uvm_function_phase(
     const runtime::SystemVerilogUvmPhaseHandle phase_handle) {
   const auto phase_snapshot = uvm_phases.snapshot(phase_handle);
+  (void)apply_uvm_report_settings(
+      phase_snapshot.identity, interpreter->scheduler().now());
   const auto invoke_callback =
       [&](const runtime::SystemVerilogClassHandle component,
           const std::string_view method_name) {
@@ -54,6 +56,8 @@ execute_uvm_function_phase(
 execute_uvm_task_phase(const runtime::SystemVerilogUvmPhaseHandle phase_handle,
                        const UvmTaskPhaseContinuation &continuation) {
   const auto phase_snapshot = uvm_phases.snapshot(phase_handle);
+  (void)apply_uvm_report_settings(
+      phase_snapshot.identity, interpreter->scheduler().now());
   const auto invoke_hook =
       [&](const runtime::SystemVerilogClassHandle component,
           const runtime::SystemVerilogUvmPhaseHandle,

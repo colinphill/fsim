@@ -47,6 +47,10 @@ void test_systemverilog_uvm_resource_pool() {
   limits.max_spell_distance = 3;
   limits.max_report_bytes = 4'096;
   SystemVerilogUvmResourcePoolService pool{&heap, limits};
+  pool.set_trace_enabled(true);
+  pool.set_trace_callback([](const auto&) {
+    throw std::runtime_error{"contained resource trace callback failure"};
+  });
 
   const auto first = pool.insert(packed_resource(
       "timeout", "env.*", "00000001"));
@@ -141,8 +145,13 @@ void test_systemverilog_uvm_resource_pool() {
       pool.audit_records().size() == limits.max_audit_records
           && pool.dropped_audit_records() > 0
           && pool.report().find("UVM Resource Pool\n") == 0
-          && pool.report().find("timeout @ env.*") != std::string::npos,
-      "UVM resource audits and reports must remain bounded and deterministic");
+          && pool.report().find("timeout @ env.*") != std::string::npos
+          && pool.trace_text().find("action=lookup_name") != std::string::npos
+          && pool.trace_text().find("action=write") != std::string::npos
+          && pool.trace_text().find("action=read") != std::string::npos
+          && pool.trace_callback_failures() == pool.trace_records().size(),
+      "UVM resource audits, traces, callbacks, and reports must remain bounded "
+      "and deterministic");
 
   SystemVerilogClassDescriptor object_descriptor;
   object_descriptor.declared_type = "uvm_pkg::uvm_object";
@@ -192,12 +201,18 @@ void test_systemverilog_uvm_resource_pool() {
   tiny_limits.max_spell_candidates = 1;
   tiny_limits.max_spell_distance = 1;
   tiny_limits.max_report_bytes = 8;
+  tiny_limits.max_trace_records = 1;
+  tiny_limits.max_trace_bytes = 8;
   SystemVerilogUvmResourcePoolService tiny{&heap, tiny_limits};
   const auto only = tiny.insert(packed_resource(
       "only", "*", "00000000"));
   bool resource_limit_rejected{};
   bool callback_limit_rejected{};
   bool report_limit_rejected{};
+  bool trace_limit_rejected{};
+  tiny.set_trace_enabled(true);
+  (void)tiny.lookup_name("scope", "only");
+  (void)tiny.lookup_type("scope", "uvm_resource#(logic[7:0])");
   (void)tiny.add_callback(only, [](auto, const auto&) {});
   try {
     (void)tiny.insert(packed_resource("extra", "*", "00000000"));
@@ -214,10 +229,18 @@ void test_systemverilog_uvm_resource_pool() {
   } catch (const std::length_error&) {
     report_limit_rejected = true;
   }
+  try {
+    (void)tiny.trace_text();
+  } catch (const std::length_error&) {
+    trace_limit_rejected = true;
+  }
   require(
       resource_limit_rejected && callback_limit_rejected
-          && report_limit_rejected,
-      "UVM resource, callback, and report limits must reject before growth");
+          && report_limit_rejected && trace_limit_rejected
+          && tiny.trace_records().size() == 1
+          && tiny.dropped_trace_records() == 1,
+      "UVM resource, callback, report, and trace limits must reject or evict "
+      "before growth");
 }
 
 }  // namespace fsim::tests::runtime

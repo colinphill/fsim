@@ -19,7 +19,7 @@ inline constexpr std::uint32_t kDesignIrStateSchema = 2;
 inline constexpr std::uint32_t kClassStateSchema = 9;
 inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 3;
 inline constexpr std::uint32_t kSystemVerilogCoverageStateSchema = 1;
-inline constexpr std::uint32_t kSystemVerilogUvmStateSchema = 1;
+inline constexpr std::uint32_t kSystemVerilogUvmStateSchema = 2;
 
 [[nodiscard]] std::optional<std::string> serialize_runtime_state(
     const elaboration::ElaboratedDesign& design,

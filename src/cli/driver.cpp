@@ -386,6 +386,8 @@ std::optional<project::Config> make_direct_config(
           invocation.command == Command::compile
                   && *language != project::Language::vhdl
               ? "source-set" : "file");
+      source_set.uvm_release = invocation.uvm_release.value_or(
+          project::SystemVerilogUvmRelease::none);
       for (const auto& directory : invocation.include_directories) {
         source_set.include_directories.push_back(absolute_normalized(directory));
       }
@@ -427,6 +429,13 @@ std::optional<project::Config> make_direct_config(
     config.library_mappings = invocation.library_mappings;
     for (auto& mapping : config.library_mappings) {
       mapping.path = absolute_normalized(mapping.path);
+    }
+  }
+  if (invocation.uvm_release.has_value()) {
+    for (auto& source_set : config.source_sets) {
+      if (source_set.language == project::Language::system_verilog) {
+        source_set.uvm_release = *invocation.uvm_release;
+      }
     }
   }
 
@@ -515,6 +524,8 @@ void print_help(std::ostream& output, const std::string_view program) {
       << "      --top [ALIAS=]NAME   Replace design tops; repeatable, aliases required for multiple\n"
       << "      --lang LANGUAGE      Language for every direct source file\n"
       << "      --standard VERSION   Standard for direct source files\n"
+      << "      --uvm-release VERSION\n"
+      << "                           Governed SystemVerilog UVM release: 1.2 or 2020.3.1\n"
       << "      --compilation-unit file|source-set\n"
       << "                           Compile files separately or as one unit\n"
       << "      --library NAME       Library for direct source files (default: work)\n"
@@ -713,6 +724,19 @@ std::optional<Invocation> parse_arguments(
           return std::nullopt;
         }
         invocation.standard = std::string(*value);
+      } else if (is_option(argument, "", "--uvm-release")) {
+        const auto value = take_value(
+            index, argc, argv, argument, "--uvm-release", diagnostics);
+        invocation.uvm_release = value.has_value()
+            ? project::parse_systemverilog_uvm_release(*value)
+            : std::nullopt;
+        if (!invocation.uvm_release
+            || *invocation.uvm_release
+                == project::SystemVerilogUvmRelease::none) {
+          argument_error(
+              diagnostics, "--uvm-release must be 1.2 or 2020.3.1");
+          return std::nullopt;
+        }
       } else if (is_option(argument, "", "--compilation-unit")) {
         const auto value = take_value(
             index, argc, argv, argument, "--compilation-unit", diagnostics);

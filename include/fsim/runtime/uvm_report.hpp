@@ -550,6 +550,13 @@ class SystemVerilogUvmReportService final {
   [[nodiscard]] std::size_t handler_count() const noexcept {
     return handlers_.size();
   }
+  [[nodiscard]] bool has_handler(
+      const SystemVerilogClassHandle report_object) const noexcept {
+    return handlers_.contains(report_object);
+  }
+  [[nodiscard]] bool has_id_verbosity(
+      SystemVerilogClassHandle report_object,
+      std::string_view id) const noexcept;
   [[nodiscard]] std::size_t setting_count() const noexcept {
     return setting_count_;
   }

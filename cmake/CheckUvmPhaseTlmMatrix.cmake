@@ -5,6 +5,7 @@ if(NOT DEFINED FSIM_SOURCE_DIR OR "${FSIM_SOURCE_DIR}" STREQUAL "")
 endif()
 
 set(FSIM_EVIDENCE_FILES
+  tests/runtime/runtime_class_heap_tests.cpp
   tests/runtime/runtime_uvm_phase_tests.cpp
   tests/runtime/runtime_uvm_objection_tests.cpp
   tests/runtime/runtime_uvm_quiescence_tests.cpp
@@ -14,6 +15,9 @@ set(FSIM_EVIDENCE_FILES
   tests/runtime/runtime_uvm_tlm2_tests.cpp
   tests/runtime/runtime_uvm_activity_tests.cpp
   tests/runtime/runtime_uvm_checkpoint_tests.cpp
+  tests/runtime/runtime_uvm_object_policy_tests.cpp
+  tests/runtime/runtime_uvm_packer_tests.cpp
+  tests/runtime/runtime_uvm_synchronization_policy_tests.cpp
   tests/runtime/runtime_uvm_sequence_tests.cpp
   tests/runtime/runtime_uvm_sequence_access_tests.cpp
   tests/runtime/runtime_uvm_sequence_handshake_tests.cpp
@@ -28,11 +32,14 @@ set(FSIM_EVIDENCE_FILES
   tests/runtime/runtime_uvm_register_backdoor_tests.cpp
   tests/runtime/runtime_uvm_register_sequence_tests.cpp
   tests/runtime/runtime_uvm_register_coverage_tests.cpp
+  tests/runtime/runtime_uvm_command_line_tests.cpp
+  tests/runtime/runtime_uvm_test_runner_tests.cpp
   tests/app/application_test_artifact_phases.cpp
   tests/app/application_test_classes.cpp
   tests/app/uvm_phase_tlm_application_test.cpp
   tests/app/uvm_phase_tlm_sequence_probe.cpp
   tests/app/uvm_phase_tlm_register_probe.cpp
+  tests/fixtures/systemverilog/uvm_core_smoke_probe.sv
 )
 
 set(FSIM_EXECUTABLE_EVIDENCE "")
@@ -49,6 +56,13 @@ set(FSIM_REQUIRED_DIAGNOSTICS
   FSIM-UVM-PHASE-001 FSIM-UVM-PHASE-002 FSIM-UVM-PHASE-003
   FSIM-UVM-PHASE-004 FSIM-UVM-PHASE-005 FSIM-UVM-PHASE-006
   FSIM-UVM-PHASE-007 FSIM-UVM-PHASE-008
+  FSIM-UVM-COPY-001 FSIM-UVM-COPY-002 FSIM-UVM-COPY-003
+  FSIM-UVM-COPY-004 FSIM-UVM-COPY-005
+  FSIM-UVM-PACK-001 FSIM-UVM-PACK-002
+  FSIM-UVM-SYNC-001 FSIM-UVM-SYNC-002
+  FSIM-UVM-CMD-001 FSIM-UVM-CMD-002
+  FSIM-UVM-RUN-001 FSIM-UVM-RUN-002 FSIM-UVM-RUN-003
+  FSIM-UVM-POLICY-001
   FSIM-UVM-OBJ-001 FSIM-UVM-OBJ-002 FSIM-UVM-OBJ-003 FSIM-UVM-OBJ-004
   FSIM-UVM-TLM1-001 FSIM-UVM-TLM1-002 FSIM-UVM-TLM1-003
   FSIM-UVM-TLM1-004 FSIM-UVM-TLM1-005 FSIM-UVM-TLM1-006
@@ -126,6 +140,21 @@ fsim_require_token(
   tests/runtime/runtime_uvm_checkpoint_tests.cpp
   "maximum_external_callbacks" "checkpoint callback-summary ceiling evidence")
 fsim_require_token(
+  tests/runtime/runtime_uvm_object_policy_tests.cpp
+  "SystemVerilogUvmPrinterKind::Table" "printer/comparer policy evidence")
+fsim_require_token(
+  tests/runtime/runtime_uvm_packer_tests.cpp
+  "SystemVerilogUvmPackerEndian::Little" "packer policy evidence")
+fsim_require_token(
+  tests/runtime/runtime_uvm_synchronization_policy_tests.cpp
+  "SystemVerilogUvmHeartbeatMode::All" "synchronization policy evidence")
+fsim_require_token(
+  tests/runtime/runtime_uvm_command_line_tests.cpp
+  "get_arg_values" "command-line processor query evidence")
+fsim_require_token(
+  tests/runtime/runtime_uvm_test_runner_tests.cpp
+  "SystemVerilogUvmRunStatus::TimedOut" "run_test lifecycle evidence")
+fsim_require_token(
   tests/runtime/runtime_uvm_sequence_tests.cpp
   "StrictRandom" "complete sequence arbitration evidence")
 fsim_require_token(
@@ -172,8 +201,88 @@ fsim_require_token(
   tests/app/uvm_phase_tlm_sequence_probe.cpp
   "sequence=arb/lock/response/virtual" "exact sequence environment transcript")
 fsim_require_token(
+  tests/app/uvm_phase_tlm_sequence_probe.cpp
+  "copier=deep/shallow/reference" "exact object copier policy transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_sequence_probe.cpp
+  "packer=big/little/metadata/unpack recorder=object/replay"
+  "exact packer and transaction recorder policy transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_sequence_probe.cpp
+  "sync=event/pool/barrier/queue/heartbeat/spell"
+  "exact synchronization policy transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_sequence_probe.cpp
+  "cmdline=args/plus/uvm/exact/prefix/value/tool/isolation"
+  "exact command-line processor transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_sequence_probe.cpp
+  "run_test=select/topology/timeout/seed/repeat/finish/fatal"
+  "exact run_test lifecycle transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_sequence_probe.cpp
+  "report=verbosity/severity/action/file/catcher/phase/time"
+  "exact report-control transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_sequence_probe.cpp
+  "objection_trace=on/bounded"
+  "exact objection-trace transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_sequence_probe.cpp
+  "tracing=factory/config/resource/debug/activity"
+  "exact configuration-tracing transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_sequence_probe.cpp
+  "legacy_macros=field/object/component/sequence/registry/callback/report"
+  "exact UVM 1.2 legacy-macro transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_sequence_probe.cpp
+  "legacy_api=phase/objection/tlm/sequence/callback/register/policy/"
+  "exact UVM 1.2 legacy-API transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_sequence_probe.cpp
+  "uvm2020_api=policy/field_op/copier/object/printer/comparer/packer/"
+  "exact UVM 2020-3.1 API transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_sequence_probe.cpp
+  "uvm_release=selected/provenance/object/design/cache/checkpoint/"
+  "exact dual-release provenance transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_sequence_probe.cpp
+  "core_smoke=governed/project/object/factory/resource/config/cmdline/"
+  "exact core smoke-suite transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_sequence_probe.cpp
+  "flow_smoke=phase/objection/sequence/sequencer/roles/virtual/tlm1/"
+  "exact phase/sequence/TLM flow-smoke transcript")
+foreach(FSIM_SUITE IN ITEMS
+    object_policy factory resource configuration command_line reporting
+    callback test_selection topology timeout seed)
+  fsim_require_token(
+    tests/fixtures/systemverilog/uvm_core_smoke_probe.sv
+    "${FSIM_SUITE}_smoke"
+    "project-owned ${FSIM_SUITE} smoke suite")
+endforeach()
+fsim_require_token(
   tests/app/uvm_phase_tlm_register_probe.cpp
-  "register=frontdoor/backdoor/predictor" "exact register environment transcript")
+  "invalid_width.status == SystemVerilogUvmRegisterOperationStatus::NotOk"
+  "exact register negative-operation evidence")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_application_test.cpp
+  "register_smoke=block/map/field/memory/adapter/predictor/frontdoor/"
+  "exact register/foreign smoke-suite transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_application_test.cpp
+  "platform_contract=source/abi/linux/windows/cdecl/filesystem"
+  "exact source/ABI portability transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_application_test.cpp
+  "conformance_inventory=standard/project families=17"
+  "exact governed/project conformance transcript")
+fsim_require_token(
+  tests/app/uvm_phase_tlm_application_test.cpp
+  "closure_audit=compatibility/diagnostics/source/complexity/memory/trace/"
+  "exact UVM closure-audit transcript")
 
 set(FSIM_RUNNER "${FSIM_SOURCE_DIR}/cmake/RunUvmPhaseTlmExample.cmake")
 foreach(FSIM_TOKEN IN ITEMS
@@ -181,6 +290,7 @@ foreach(FSIM_TOKEN IN ITEMS
     "compiled cold.fst"
     "compiled warm.fst"
     "debug debug.vcd"
+    "TIMEOUT \"\${FSIM_STAGE_TIMEOUT_SECONDS}\""
     "file(REMOVE_RECURSE")
   fsim_require_token(
     cmake/RunUvmPhaseTlmExample.cmake "${FSIM_TOKEN}"
@@ -195,4 +305,4 @@ fsim_require_token(
   "UVM 2020.3.1 matrix registration")
 
 message(STATUS
-  "UVM matrix: 64 diagnostics and aggregate execution contracts verified")
+  "UVM matrix: 79 diagnostics and aggregate execution contracts verified")

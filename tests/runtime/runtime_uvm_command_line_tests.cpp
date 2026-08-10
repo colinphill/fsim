@@ -2,6 +2,9 @@
 #include "runtime_test_support.hpp"
 
 #include "fsim/runtime/uvm_command_line.hpp"
+#include "fsim/runtime/uvm_objection.hpp"
+#include "fsim/runtime/uvm_report.hpp"
+
 
 #include <stdexcept>
 #include <string>
@@ -86,6 +89,15 @@ void test_systemverilog_uvm_command_line() {
   SystemVerilogUvmConfigDbService config{resources};
   SystemVerilogUvmCommandLineService command_line{
       factory, resources, config};
+  const auto report_root = components.create_root("command-line");
+  const auto report_top =
+      make_component("work::base", "top", 0, report_root);
+  const auto report_agent =
+      make_component("work::fast", "agent", report_top, report_root);
+  SystemVerilogUvmPhaseService phases{components};
+  SystemVerilogUvmObjectionService objections{
+      objects, components, phases};
+  SystemVerilogUvmReportService reports{objects, components};
 
   const std::vector<std::string> arguments{
       "+uvm_set_type_override=base,fast,0",
@@ -102,6 +114,10 @@ void test_systemverilog_uvm_command_line() {
       "+uvm_set_verbosity=top.*,_ALL_,UVM_HIGH,time,20",
       "+UVM_TIMEOUT=100,NO",
       "+UVM_TIMEOUT=200,YES",
+      "+UVM_MAX_QUIT_COUNT=7,NO",
+      "+UVM_MAX_QUIT_COUNT=9,YES",
+      "+UVM_PHASE_TRACE",
+      "+UVM_OBJECTION_TRACE",
       "+UVM_RESOURCE_DB_TRACE",
       "+UVM_CONFIG_DB_TRACE",
       "+USER_OPTION=retained",
@@ -122,7 +138,13 @@ void test_systemverilog_uvm_command_line() {
           && settings.timeout && settings.timeout->ticks == 100
           && !settings.timeout->overridable
           && settings.timeout_argument_count == 2
-          && settings.resource_db_trace && settings.config_db_trace,
+          && settings.max_quit_count
+          && settings.max_quit_count->count == 7
+          && !settings.max_quit_count->overridable
+          && settings.max_quit_count_argument_count == 2
+          && settings.phase_trace && settings.objection_trace
+          && settings.resource_db_trace && settings.config_db_trace
+          && resources.trace_enabled() && config.trace_enabled(),
       "UVM command-line parsing must retain all and unknown arguments while "
       "using the first repeated global verbosity and timeout settings");
   require(
@@ -133,6 +155,68 @@ void test_systemverilog_uvm_command_line() {
           && settings.verbosity_settings[0].source_index
               < settings.verbosity_settings[1].source_index,
       "phase and timed verbosity settings must retain command-line order");
+  require(
+          command_line.get_args() == arguments &&
+          command_line.get_plusargs() == arguments &&
+          command_line.get_uvm_args().size() == 20 &&
+          command_line.get_arg_matches(
+              "+UVM_VERBOSITY=UVM_LOW", true) ==
+              std::vector<std::string>{"+UVM_VERBOSITY=UVM_LOW"} &&
+          command_line.get_arg_values("+UVM_VERBOSITY=") ==
+              std::vector<std::string>{"UVM_HIGH", "UVM_LOW"} &&
+          command_line.get_arg_value("+UVM_VERBOSITY=") == "UVM_HIGH" &&
+          command_line.get_arg_matches(
+              "+uvm_set_config_string=").size() == 2 &&
+          command_line.get_tool_name() == "fsim" &&
+          command_line.get_tool_version() == "v2",
+      "UVM command-line processor queries must preserve ordered argv, plusarg "
+      "and UVM subsets, exact/prefix matches, duplicate values, and tool "
+      "identity");
+
+  reports.set_verbosity_hier(report_top, 100);
+  command_line.apply_initial_report_settings(reports, objections);
+  const auto build_settings = command_line.apply_report_settings(
+      components, reports, "build", 0);
+  const auto early_time_settings = command_line.apply_report_settings(
+      components, reports, "time", 19);
+  const auto timed_settings = command_line.apply_report_settings(
+      components, reports, "time", 20);
+  const auto repeated_settings = command_line.apply_report_settings(
+      components, reports, "time", 21);
+  require(
+      reports.default_verbosity() == 300
+          && reports.server().max_quit_count() == 7
+          && !reports.server().max_quit_overridable()
+          && objections.trace_enabled()
+          && build_settings.size() == 1
+          && build_settings.front().component == report_agent
+          && build_settings.front().verbosity == 400
+          && early_time_settings.empty() && timed_settings.size() == 1
+          && timed_settings.front().component == report_agent
+          && timed_settings.front().verbosity == 300
+          && repeated_settings.empty()
+          && reports.enabled(
+              report_agent, 300, SystemVerilogUvmReportSeverity::Info,
+              "CONTROL")
+          && !reports.enabled(
+              report_agent, 400, SystemVerilogUvmReportSeverity::Info,
+              "CONTROL"),
+      "initial, phase, and timed report controls must apply in command order "
+      "once while max-quit and objection tracing retain first precedence");
+
+  SystemVerilogUvmCommandLineService isolated{
+      factory, resources, config, {}, "fsim-isolated", "v2-test"};
+  const std::vector<std::string> isolated_arguments{
+      "fsim", "+SECOND=1", "-quiet"};
+  isolated.apply(isolated_arguments);
+  require(
+      isolated.get_args() == isolated_arguments &&
+          isolated.get_plusargs() == std::vector<std::string>{"+SECOND=1"} &&
+          isolated.get_uvm_args().empty() &&
+          isolated.get_tool_name() == "fsim-isolated" &&
+          isolated.get_tool_version() == "v2-test" &&
+          command_line.get_args() == arguments,
+      "UVM command-line argv and tool identity must remain simulation-local");
 
   const auto instance_resolution = factory.debug_resolve_by_type(
       base, "top.agent");
@@ -163,9 +247,14 @@ void test_systemverilog_uvm_command_line() {
           && decimal_value
           && std::get<PackedLogic4>(*decimal_value).aval_words().front()
               == 1'005
-          && config.entries().size() == 3 && resources.size() == 3,
+          && config.entries().size() == 3 && resources.size() == 3
+          && config.trace_records().size() == 3
+          && resources.trace_records().size() == 3
+          && config.trace_text().find("UVM_CONFIG_DB_TRACE") == 0
+          && resources.trace_text().find("UVM_RESOURCE_DB_TRACE") == 0,
       "config integers must apply before bitstreams, repeated strings must "
-      "remain source ordered, and both must publish through the resource pool");
+      "remain source ordered, publish through the resource pool, and honor "
+      "both command-line trace switches");
 
   const auto config_size = config.entries().size();
   const auto resource_size = resources.size();
@@ -227,6 +316,49 @@ void test_systemverilog_uvm_command_line() {
   require(
       total_limit_rejected,
       "total retained plusarg bytes must reject without unsigned underflow");
+
+  SystemVerilogUvmCommandLineLimits query_limits;
+  query_limits.max_query_results = 1;
+  SystemVerilogUvmCommandLineService query_limited{
+      factory, resources, config, query_limits};
+  const std::vector<std::string> duplicate_values{"+DUP=first", "+DUP=second"};
+  query_limited.apply(duplicate_values);
+  bool malformed_query{};
+  bool bounded_query{};
+  try {
+    (void)query_limited.get_arg_matches("");
+  } catch (const SystemVerilogUvmCommandLineError& error) {
+    malformed_query = error.diagnostic_code() == "FSIM-UVM-CMD-001";
+  }
+  try {
+    (void)query_limited.get_arg_values("+DUP=");
+  } catch (const SystemVerilogUvmCommandLineError& error) {
+    bounded_query = error.diagnostic_code() == "FSIM-UVM-CMD-002";
+  }
+  require(
+      malformed_query && bounded_query,
+      "UVM command-line queries must catalog malformed and retained-result "
+      "resource failures");
+
+  SystemVerilogUvmCommandLineLimits report_limits;
+  report_limits.max_report_control_matches = 1;
+  SystemVerilogUvmCommandLineService report_limited{
+      factory, resources, config, report_limits};
+  report_limited.apply(std::vector<std::string>{
+      "+uvm_set_verbosity=top*,_ALL_,UVM_FULL,build"});
+  SystemVerilogUvmReportService bounded_reports{objects, components};
+  bool report_limit_rejected{};
+  try {
+    (void)report_limited.apply_report_settings(
+        components, bounded_reports, "build", 0);
+  } catch (const SystemVerilogUvmCommandLineError& error) {
+    report_limit_rejected =
+        error.diagnostic_code() == "FSIM-UVM-CMD-002";
+  }
+  require(
+      report_limit_rejected && bounded_reports.handler_count() == 0,
+      "bounded report-control matching must reject transactionally before "
+      "publishing handler state");
 }
 
 }  // namespace fsim::tests::runtime

@@ -28,6 +28,7 @@ enum class SystemVerilogUvmActivityKind : std::uint8_t {
   Callback,
   Sequence,
   RegisterModel,
+  Configuration,
 };
 
 enum class SystemVerilogUvmActivityAction : std::uint8_t {

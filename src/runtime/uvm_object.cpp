@@ -11,13 +11,18 @@ namespace fsim::runtime {
 
 namespace {
 
-[[nodiscard]] bool same_property_shape(
-    const SystemVerilogClassPropertyValue& left,
-    const SystemVerilogClassPropertyValue& right) {
-  return left.kind == right.kind
-      && left.packed.width() == right.packed.width()
-      && left.handle_container.has_value()
-          == right.handle_container.has_value();
+[[nodiscard]] std::size_t property_size(
+    const SystemVerilogClassPropertyValue& value) {
+  if (value.packed.width() != 0) return value.packed.width();
+  if (value.kind == SystemVerilogClassPropertyKind::String) {
+    if (value.string.size() > std::numeric_limits<std::size_t>::max() / 8U) {
+      throw std::length_error{"UVM string print size overflow"};
+    }
+    return value.string.size() * 8U;
+  }
+  if (value.kind == SystemVerilogClassPropertyKind::ClassHandle) return 64;
+  return value.handle_container ? value.handle_container->size()
+                                : value.handles.size();
 }
 
 [[nodiscard]] std::string property_text(
@@ -60,7 +65,8 @@ SystemVerilogUvmObjectService::SystemVerilogUvmObjectService(
     const SystemVerilogUvmObjectLimits limits)
     : heap_(&heap),
       create_hook_(std::move(create_hook)),
-      limits_(limits) {
+      limits_(limits),
+      owner_(std::make_shared<unsigned char>()) {
   if (!create_hook_) {
     throw std::invalid_argument{"UVM object creation hook must not be empty"};
   }
@@ -83,6 +89,20 @@ void SystemVerilogUvmObjectService::register_type(
     if (field.property.empty() || !fields.insert(field.property).second) {
       throw std::invalid_argument{
           "UVM field automation requires unique nonempty properties"};
+    }
+    const auto recursion_flags =
+        static_cast<unsigned>(
+            has_flag(field.flags, SystemVerilogUvmFieldFlag::Reference))
+        + static_cast<unsigned>(
+            has_flag(field.flags, SystemVerilogUvmFieldFlag::Shallow))
+        + static_cast<unsigned>(
+            has_flag(field.flags, SystemVerilogUvmFieldFlag::Deep));
+    if (recursion_flags > 1
+        || (has_flag(field.flags, SystemVerilogUvmFieldFlag::Physical)
+            && has_flag(field.flags, SystemVerilogUvmFieldFlag::Abstract))) {
+      throw SystemVerilogUvmObjectPolicyError{
+          "FSIM-UVM-POLICY-001",
+          "UVM field automation has conflicting recursion or abstraction flags"};
     }
   }
   const auto identity = descriptor_value.specialization_identity;
@@ -116,6 +136,20 @@ bool SystemVerilogUvmObjectService::contains(
   if (!heap_->contains(object) || !metadata_.contains(object)) return false;
   const auto& value = heap_->object(object);
   return descriptors_.contains(value.specialization_identity);
+}
+
+SystemVerilogUvmObjectHandle SystemVerilogUvmObjectService::object_handle(
+    const SystemVerilogClassHandle object) const {
+  if (!contains(object)) {
+    throw SystemVerilogUvmCopyError{
+        "FSIM-UVM-COPY-001", "UVM object handle is empty or stale"};
+  }
+  return SystemVerilogUvmObjectHandle{owner_, object};
+}
+
+bool SystemVerilogUvmObjectService::contains(
+    const SystemVerilogUvmObjectHandle& object) const noexcept {
+  return object.valid() && object.owner_ == owner_ && contains(object.object_);
 }
 
 void SystemVerilogUvmObjectService::set_name(
@@ -186,230 +220,10 @@ SystemVerilogClassHandle SystemVerilogUvmObjectService::create(
   return created;
 }
 
-SystemVerilogClassHandle SystemVerilogUvmObjectService::clone(
-    const SystemVerilogClassHandle source) {
-  const auto result = create(source, std::string{name(source)});
-  try {
-    copy(result, source);
-  } catch (...) {
-    metadata_.erase(result);
-    (void)heap_->release(result);
-    throw;
-  }
-  return result;
-}
-
-void SystemVerilogUvmObjectService::copy(
-    const SystemVerilogClassHandle destination,
-    const SystemVerilogClassHandle source) {
-  if (destination == 0 || source == 0) {
-    throw std::invalid_argument{"UVM copy requires two non-null objects"};
-  }
-  if (type_name(destination) != type_name(source)) {
-    throw std::invalid_argument{"UVM copy requires matching object types"};
-  }
-
-  struct Context {
-    std::map<SystemVerilogClassHandle, SystemVerilogClassHandle> mapped;
-    std::map<SystemVerilogClassHandle, SystemVerilogClassObject> originals;
-    std::vector<SystemVerilogClassHandle> created;
-    std::size_t objects{};
-    std::size_t fields{};
-  } context;
-  context.mapped.emplace(source, destination);
-
-  const auto account_object = [&](const std::size_t depth) {
-    if (depth >= limits_.maximum_depth) {
-      throw std::length_error{"UVM copy recursion depth exceeded"};
-    }
-    if (++context.objects > limits_.maximum_objects) {
-      throw std::length_error{"UVM copy object budget exceeded"};
-    }
-  };
-  const auto account_field = [&] {
-    if (++context.fields > limits_.maximum_fields) {
-      throw std::length_error{"UVM copy field budget exceeded"};
-    }
-  };
-
-  std::function<void(
-      SystemVerilogClassHandle,
-      SystemVerilogClassHandle,
-      std::size_t)> copy_object;
-  std::function<SystemVerilogClassHandle(
-      SystemVerilogClassHandle,
-      std::string_view,
-      std::size_t)> copy_handle;
-
-  copy_handle = [&](const SystemVerilogClassHandle source_handle,
-                    const std::string_view child_name,
-                    const std::size_t depth) {
-    if (source_handle == 0) return SystemVerilogClassHandle{};
-    if (const auto found = context.mapped.find(source_handle);
-        found != context.mapped.end()) {
-      return found->second;
-    }
-    const auto created = create(source_handle, std::string{child_name});
-    context.created.push_back(created);
-    context.mapped.emplace(source_handle, created);
-    copy_object(created, source_handle, depth);
-    return created;
-  };
-
-  copy_object = [&](const SystemVerilogClassHandle target_handle,
-                    const SystemVerilogClassHandle source_handle,
-                    const std::size_t depth) {
-    account_object(depth);
-    if (type_name(target_handle) != type_name(source_handle)) {
-      throw std::invalid_argument{
-          "UVM recursive copy encountered mismatched object types"};
-    }
-    context.originals.try_emplace(
-        target_handle, heap_->object(target_handle));
-    const auto& type = descriptor(source_handle);
-    for (const auto& field : type.fields) {
-      account_field();
-      if (has_flag(field.flags, SystemVerilogUvmFieldFlag::NoCopy)) continue;
-      const auto source_value = heap_->property(source_handle, field.property);
-      if (!same_property_shape(
-              heap_->property(target_handle, field.property), source_value)) {
-        throw std::invalid_argument{
-            "UVM field copy encountered incompatible property shapes"};
-      }
-      if (source_value.packed.width() != 0) {
-        heap_->property(target_handle, field.property).packed =
-            source_value.packed;
-      } else if (source_value.kind == SystemVerilogClassPropertyKind::String) {
-        heap_->property(target_handle, field.property).string =
-            source_value.string;
-      } else if (
-          source_value.kind == SystemVerilogClassPropertyKind::ClassHandle) {
-        const auto copied_handle =
-            has_flag(field.flags, SystemVerilogUvmFieldFlag::Reference)
-            ? source_value.handle
-            : copy_handle(source_value.handle, field.property, depth + 1U);
-        heap_->property(target_handle, field.property).handle = copied_handle;
-      } else if (!source_value.handles.empty()) {
-        std::vector<SystemVerilogClassHandle> copied_handles;
-        copied_handles.reserve(source_value.handles.size());
-        for (std::size_t index = 0;
-             index < source_value.handles.size(); ++index) {
-          copied_handles.push_back(
-              has_flag(field.flags, SystemVerilogUvmFieldFlag::Reference)
-              ? source_value.handles[index]
-              : copy_handle(
-                    source_value.handles[index],
-                    field.property + "[" + std::to_string(index) + "]",
-                    depth + 1U));
-        }
-        heap_->property(target_handle, field.property).handles =
-            std::move(copied_handles);
-      } else {
-        heap_->property(target_handle, field.property).handle_container =
-            source_value.handle_container;
-      }
-    }
-    if (type.do_copy) type.do_copy(target_handle, source_handle);
-  };
-
-  try {
-    copy_object(destination, source, 0);
-  } catch (...) {
-    for (auto& [handle, original] : context.originals) {
-      if (heap_->contains(handle)) heap_->object(handle) = std::move(original);
-    }
-    for (auto handle = context.created.rbegin();
-         handle != context.created.rend(); ++handle) {
-      metadata_.erase(*handle);
-      (void)heap_->release(*handle);
-    }
-    throw;
-  }
-}
-
 bool SystemVerilogUvmObjectService::compare(
     const SystemVerilogClassHandle left,
     const SystemVerilogClassHandle right) {
-  if (left == 0 || right == 0) return left == right;
-
-  std::map<SystemVerilogClassHandle, SystemVerilogClassHandle> left_to_right;
-  std::map<SystemVerilogClassHandle, SystemVerilogClassHandle> right_to_left;
-  std::size_t objects{};
-  std::size_t fields{};
-  std::function<bool(
-      SystemVerilogClassHandle,
-      SystemVerilogClassHandle,
-      std::size_t)> compare_object;
-  compare_object = [&](const SystemVerilogClassHandle lhs,
-                       const SystemVerilogClassHandle rhs,
-                       const std::size_t depth) {
-    if (lhs == 0 || rhs == 0) return lhs == rhs;
-    if (depth >= limits_.maximum_depth) {
-      throw std::length_error{"UVM compare recursion depth exceeded"};
-    }
-    if (const auto mapped = left_to_right.find(lhs);
-        mapped != left_to_right.end()) {
-      return mapped->second == rhs;
-    }
-    if (right_to_left.contains(rhs)) return false;
-    if (++objects > limits_.maximum_objects) {
-      throw std::length_error{"UVM compare object budget exceeded"};
-    }
-    if (type_name(lhs) != type_name(rhs)) return false;
-    left_to_right.emplace(lhs, rhs);
-    right_to_left.emplace(rhs, lhs);
-    const auto& type = descriptor(lhs);
-    bool equal = true;
-    for (const auto& field : type.fields) {
-      if (++fields > limits_.maximum_fields) {
-        throw std::length_error{"UVM compare field budget exceeded"};
-      }
-      if (has_flag(field.flags, SystemVerilogUvmFieldFlag::NoCompare)) {
-        continue;
-      }
-      const auto& left_value = heap_->property(lhs, field.property);
-      const auto& right_value = heap_->property(rhs, field.property);
-      if (!same_property_shape(left_value, right_value)) return false;
-      if (left_value.packed.width() != 0) {
-        equal = equal && left_value.packed == right_value.packed;
-      } else if (
-          left_value.kind == SystemVerilogClassPropertyKind::String) {
-        equal = equal && left_value.string == right_value.string;
-      } else if (
-          left_value.kind == SystemVerilogClassPropertyKind::ClassHandle) {
-        equal = equal
-            && (has_flag(field.flags, SystemVerilogUvmFieldFlag::Reference)
-                    ? left_value.handle == right_value.handle
-                    : compare_object(
-                          left_value.handle, right_value.handle, depth + 1U));
-      } else if (!left_value.handles.empty()
-                 || !right_value.handles.empty()) {
-        if (left_value.handles.size() != right_value.handles.size()) {
-          equal = false;
-        } else {
-          for (std::size_t index = 0;
-               equal && index < left_value.handles.size(); ++index) {
-            equal = has_flag(
-                        field.flags, SystemVerilogUvmFieldFlag::Reference)
-                ? left_value.handles[index] == right_value.handles[index]
-                : compare_object(
-                      left_value.handles[index],
-                      right_value.handles[index], depth + 1U);
-          }
-        }
-      } else {
-        equal = equal
-            && left_value.handle_container.has_value()
-                == right_value.handle_container.has_value()
-            && (!left_value.handle_container
-                || left_value.handle_container->size()
-                    == right_value.handle_container->size());
-      }
-    }
-    if (type.do_compare) equal = type.do_compare(lhs, rhs) && equal;
-    return equal;
-  };
-  return compare_object(left, right, 0);
+  return compare_detailed(left, right).equal();
 }
 
 std::vector<SystemVerilogUvmObjectEntry>
@@ -421,6 +235,11 @@ SystemVerilogUvmObjectService::print(
   std::size_t objects{};
   std::size_t fields{};
   std::size_t bytes{};
+  const auto account_field = [&] {
+    if (++fields > limits_.maximum_fields) {
+      throw std::length_error{"UVM print field budget exceeded"};
+    }
+  };
   const auto append = [&](SystemVerilogUvmObjectEntry entry) {
     const auto added = entry.path.size() + entry.type_name.size()
         + entry.value.size();
@@ -436,7 +255,7 @@ SystemVerilogUvmObjectService::print(
              const std::size_t depth) {
     if (current == 0) {
       append({std::move(path), {}, "null", 0,
-              SystemVerilogUvmObjectEntryKind::NullHandle, depth});
+              SystemVerilogUvmObjectEntryKind::NullHandle, depth, 64});
       return;
     }
     if (depth >= limits_.maximum_depth) {
@@ -448,7 +267,7 @@ SystemVerilogUvmObjectService::print(
               active.contains(current)
                   ? SystemVerilogUvmObjectEntryKind::Cycle
                   : SystemVerilogUvmObjectEntryKind::Reference,
-              depth});
+              depth, 64});
       return;
     }
     if (++objects > limits_.maximum_objects) {
@@ -456,25 +275,74 @@ SystemVerilogUvmObjectService::print(
     }
     first_paths.emplace(current, path);
     active.insert(current);
-    append({path, type_name(current), std::string{name(current)}, current,
-            SystemVerilogUvmObjectEntryKind::Object, depth});
     const auto& type = descriptor(current);
+    append({path, type_name(current), std::string{name(current)}, current,
+            SystemVerilogUvmObjectEntryKind::Object, depth,
+            type.fields.size()});
     for (const auto& field : type.fields) {
-      if (++fields > limits_.maximum_fields) {
-        throw std::length_error{"UVM print field budget exceeded"};
-      }
       if (has_flag(field.flags, SystemVerilogUvmFieldFlag::NoPrint)) continue;
+      account_field();
       const auto field_path = path + "." + field.property;
       const auto& value = heap_->property(current, field.property);
       if (value.kind == SystemVerilogClassPropertyKind::ClassHandle
           && !has_flag(field.flags, SystemVerilogUvmFieldFlag::Reference)) {
         walk(value.handle, field_path, depth + 1U);
+      } else if (value.kind == SystemVerilogClassPropertyKind::Container) {
+        const auto container_size = value.handle_container
+            ? value.handle_container->size()
+            : value.handles.size();
+        append({field_path, {}, "size=" + std::to_string(container_size),
+                current, SystemVerilogUvmObjectEntryKind::Container,
+                depth + 1U, container_size});
+        const auto emit_handle = [&](const SystemVerilogClassHandle handle,
+                                     std::string element_path) {
+          account_field();
+          if (has_flag(field.flags, SystemVerilogUvmFieldFlag::Reference)) {
+            append({std::move(element_path), {},
+                    handle == 0 ? std::string{"null"}
+                                : "@" + std::to_string(handle),
+                    handle, handle == 0
+                        ? SystemVerilogUvmObjectEntryKind::NullHandle
+                        : SystemVerilogUvmObjectEntryKind::Reference,
+                    depth + 2U, 64});
+          } else {
+            walk(handle, std::move(element_path), depth + 2U);
+          }
+        };
+        for (std::size_t index = 0; index < value.handles.size(); ++index) {
+          emit_handle(value.handles[index],
+                      field_path + "[" + std::to_string(index) + "]");
+        }
+        if (value.handle_container) {
+          const auto sequential =
+              value.handle_container->sequential_values();
+          for (std::size_t index = 0; index < sequential.size(); ++index) {
+            emit_handle(sequential[index],
+                        field_path + "[" + std::to_string(index) + "]");
+          }
+          for (const auto& [key, handle] :
+               value.handle_container->keyed_values()) {
+            std::string escaped_key;
+            escaped_key.reserve(key.size());
+            for (const auto character : key) {
+              if (character == '"' || character == '\\') {
+                escaped_key.push_back('\\');
+              }
+              escaped_key.push_back(character);
+            }
+            emit_handle(
+                handle, field_path + "[\"" + escaped_key + "\"]");
+          }
+        }
       } else {
-        append({field_path, {}, property_text(value), current,
-                has_flag(field.flags, SystemVerilogUvmFieldFlag::Reference)
+        const auto referenced =
+            has_flag(field.flags, SystemVerilogUvmFieldFlag::Reference);
+        append({field_path, {}, property_text(value),
+                referenced ? value.handle : current,
+                referenced
                     ? SystemVerilogUvmObjectEntryKind::Reference
                     : property_entry_kind(value),
-                depth + 1U});
+                depth + 1U, property_size(value)});
       }
     }
     if (type.do_print) type.do_print(current, entries);

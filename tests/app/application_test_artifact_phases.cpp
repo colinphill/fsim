@@ -25,7 +25,7 @@ void ApplicationTestFixture::test_artifact_phase_semantics() {
   static_assert(app::kClassStateSchema == 9);
   static_assert(app::kSystemVerilogConstraintHirStateSchema == 3);
   static_assert(app::kSystemVerilogCoverageStateSchema == 1);
-  static_assert(app::kSystemVerilogUvmStateSchema == 1);
+  static_assert(app::kSystemVerilogUvmStateSchema == 2);
   const auto sv_source = directory / "artifact_phase.sv";
   const auto vhdl_source = directory / "artifact_phase.vhd";
   const auto sv_object = directory / "artifact-sv.fsimobj";

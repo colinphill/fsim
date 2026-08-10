@@ -39,6 +39,8 @@ int main() {
   metadata.delay_mode = "typ";
   metadata.optimization = "O2";
   metadata.cache_key = checksum("cache");
+  metadata.uvm_release = "2020.3.1";
+  metadata.uvm_source_identity = checksum("uvm-sources");
   metadata.seed = 17;
   metadata.search_libraries = {"vendor"};
   metadata.roots.push_back({"primary", "sv:work.tb", "sv:work.tb"});
@@ -67,6 +69,8 @@ int main() {
 
   auto format_one = metadata;
   format_one.format = 1;
+  format_one.uvm_release = "none";
+  format_one.uvm_source_identity.clear();
   format_one.design_digest =
       fsim::artifact::compute_design_digest(format_one);
   const auto format_one_encoded =

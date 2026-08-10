@@ -12,9 +12,9 @@ bool apply_uvm_command_line(
     diagnostic::Engine& diagnostics) {
   try {
     simulation.uvm_command_line().apply(plusargs);
-    simulation.uvm_reports().set_default_verbosity(
-        simulation.uvm_command_line().settings().initial_verbosity.value_or(
-            200));
+    simulation.uvm_command_line().apply_initial_report_settings(
+        simulation.uvm_reports(), simulation.uvm_objections());
+    simulation.schedule_uvm_report_settings();
     return true;
   } catch (const runtime::SystemVerilogUvmCommandLineError& error) {
     const auto column = static_cast<std::uint32_t>(

@@ -42,6 +42,7 @@ int main() {
   metadata.standard = "2017";
   metadata.library = "work";
   metadata.compilation_unit = "source-set";
+  metadata.uvm_release = "1.2";
   metadata.defines = {"WIDTH=8", "TRACE"};
   metadata.include_roots = {"includes/00000000"};
   metadata.sources.push_back({
@@ -77,6 +78,14 @@ int main() {
   assert(!fsim::artifact::deserialize_object_metadata(
       fsim::artifact::serialize_object_metadata(invalid),
       "invalid", invalid_diagnostics));
+  auto invalid_release = metadata;
+  invalid_release.uvm_release = "2020.4";
+  invalid_release.compilation_digest =
+      fsim::artifact::compute_object_compilation_digest(invalid_release);
+  fsim::diagnostic::Engine invalid_release_diagnostics;
+  assert(!fsim::artifact::deserialize_object_metadata(
+      fsim::artifact::serialize_object_metadata(invalid_release),
+      "invalid-release", invalid_release_diagnostics));
 
   const auto directory = std::filesystem::temp_directory_path()
       / ("fsim-object-artifact-test-"

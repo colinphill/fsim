@@ -22,6 +22,53 @@ constexpr std::string_view kCallbackFailure{"FSIM-UVM-OBJ-004"};
       std::string{code}, std::string{message}};
 }
 
+[[nodiscard]] std::string_view event_kind_name(
+    const SystemVerilogUvmObjectionEventKind kind) {
+  switch (kind) {
+    case SystemVerilogUvmObjectionEventKind::Raised: return "raised";
+    case SystemVerilogUvmObjectionEventKind::Dropped: return "dropped";
+    case SystemVerilogUvmObjectionEventKind::DrainStarted:
+      return "drain-started";
+    case SystemVerilogUvmObjectionEventKind::DrainCancelled:
+      return "drain-cancelled";
+    case SystemVerilogUvmObjectionEventKind::DrainCompleted:
+      return "drain-completed";
+    case SystemVerilogUvmObjectionEventKind::AllDropped: return "all-dropped";
+    case SystemVerilogUvmObjectionEventKind::ReadyToEnd: return "ready-to-end";
+  }
+  fail(kInvalidOperation, "UVM objection trace event kind is invalid");
+}
+
+[[nodiscard]] std::string_view operation_name(
+    const SystemVerilogUvmObjectionOperation operation) {
+  switch (operation) {
+    case SystemVerilogUvmObjectionOperation::Raise: return "raise";
+    case SystemVerilogUvmObjectionOperation::Drop: return "drop";
+    case SystemVerilogUvmObjectionOperation::Set: return "set";
+  }
+  fail(kInvalidOperation, "UVM objection trace operation is invalid");
+}
+
+[[nodiscard]] std::string escaped_trace_text(const std::string_view text) {
+  std::string result;
+  result.reserve(text.size());
+  constexpr char hex[] = "0123456789abcdef";
+  for (const auto character : text) {
+    const auto value = static_cast<unsigned char>(character);
+    if (character == '\\' || character == '"') {
+      result.push_back('\\');
+      result.push_back(character);
+    } else if (value < 0x20U || value == 0x7fU) {
+      result += "\\x";
+      result.push_back(hex[value >> 4U]);
+      result.push_back(hex[value & 0x0fU]);
+    } else {
+      result.push_back(character);
+    }
+  }
+  return result;
+}
+
 [[nodiscard]] std::uint64_t checked_increase(
     const std::uint64_t value,
     const std::uint64_t amount,
@@ -96,6 +143,7 @@ SystemVerilogUvmObjectionService::SystemVerilogUvmObjectionService(
       || limits_.maximum_propagation_depth == 0
       || limits_.maximum_callbacks_per_operation == 0
       || limits_.maximum_trace_records == 0
+      || limits_.maximum_trace_output_bytes == 0
       || limits_.maximum_mutations == 0
       || limits_.maximum_drain_settings == 0
       || limits_.maximum_pending_drains == 0
@@ -108,6 +156,44 @@ SystemVerilogUvmObjectionService::SystemVerilogUvmObjectionService(
 
 SystemVerilogUvmObjectionService::~SystemVerilogUvmObjectionService() {
   cancel_all();
+}
+
+void SystemVerilogUvmObjectionService::set_trace_enabled(
+    const bool enabled) noexcept {
+  if (enabled && !trace_enabled_) trace_start_sequence_ = next_sequence_;
+  trace_enabled_ = enabled;
+}
+
+std::string SystemVerilogUvmObjectionService::trace_text() const {
+  if (!trace_enabled_) return {};
+  std::string result;
+  const auto append = [&](const std::string_view text) {
+    if (text.size() > limits_.maximum_trace_output_bytes - result.size()) {
+      fail(kResourceLimit,
+           "UVM objection trace output exceeds its configured ceiling");
+    }
+    result.append(text);
+  };
+  for (const auto& event : trace_) {
+    if (event.sequence < trace_start_sequence_) continue;
+    const auto line =
+        std::string{"UVM_OBJECTION_TRACE sequence="}
+        + std::to_string(event.sequence) + " time="
+        + std::to_string(event.time) + " kind="
+        + std::string{event_kind_name(event.kind)} + " operation="
+        + std::string{operation_name(event.operation)} + " root="
+        + std::to_string(event.root) + " source="
+        + std::to_string(event.source.object_) + " target="
+        + (event.root_target ? std::string{"root"}
+                             : std::to_string(event.target))
+        + " amount=" + std::to_string(event.amount) + " source_count="
+        + std::to_string(event.source_count) + " target_count="
+        + std::to_string(event.target_count) + " drain="
+        + std::to_string(event.drain_time) + " description=\""
+        + escaped_trace_text(event.description) + "\"\n";
+    append(line);
+  }
+  return result;
 }
 
 SystemVerilogUvmObjectionSourceHandle

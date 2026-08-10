@@ -3,6 +3,7 @@
 #include "application_uvm_registry.hpp"
 
 #include <ranges>
+#include <set>
 
 namespace fsim::app {
 using namespace application_detail;
@@ -84,13 +85,17 @@ struct Simulation::Impl {
             }),
         uvm_factory(uvm_registry),
         uvm_resources(&class_heap),
+        uvm_synchronization(uvm_objects),
         uvm_config_db(uvm_resources),
         uvm_command_line(uvm_factory, uvm_resources, uvm_config_db),
+        uvm_test_runner(
+            uvm_objects, uvm_components, uvm_factory, uvm_command_line),
         uvm_reports(uvm_objects, uvm_components),
         interpreter(built.design.create_interpreter(
             runtime::SchedulerOptions{max_deltas, 32},
             built.seed)) {
     uvm_phases.set_scheduler(interpreter->scheduler());
+    uvm_synchronization.set_scheduler(interpreter->scheduler());
     uvm_activity.set_scheduler(interpreter->scheduler());
     uvm_phases.set_activity_service(uvm_activity);
     uvm_objections.set_scheduler(interpreter->scheduler());
@@ -628,6 +633,40 @@ struct Simulation::Impl {
             callback(scheduler, phase);
           }
         });
+  }
+
+  std::vector<runtime::SystemVerilogUvmCommandReportApplication>
+  apply_uvm_report_settings(
+      const std::string_view phase,
+      const SimulationTick time) {
+    return uvm_command_line.apply_report_settings(
+        uvm_components, uvm_reports, phase, time);
+  }
+
+  void schedule_uvm_report_settings() {
+    auto& scheduler = interpreter->scheduler();
+    for (const auto& handle : uvm_report_setting_tasks) {
+      (void)scheduler.cancel(handle);
+    }
+    uvm_report_setting_tasks.clear();
+    const auto now = scheduler.now();
+    (void)apply_uvm_report_settings("time", now);
+    std::set<SimulationTick> offsets;
+    for (const auto& setting : uvm_command_line.settings().verbosity_settings) {
+      if (setting.phase == "time" && setting.time_offset
+          && *setting.time_offset > now) {
+        offsets.insert(*setting.time_offset);
+      }
+    }
+    runtime::StableOrder order{};
+    for (const auto offset : offsets) {
+      uvm_report_setting_tasks.push_back(
+          scheduler.schedule_after_cancelable(
+              offset - now, runtime::SchedulerPhase::active, order++,
+              [this, offset](runtime::Scheduler&) {
+                (void)apply_uvm_report_settings("time", offset);
+              }));
+    }
   }
 
   void validate_external_value(
@@ -1653,9 +1692,12 @@ struct Simulation::Impl {
   runtime::SystemVerilogUvmRegistryService uvm_registry;
   runtime::SystemVerilogUvmFactoryService uvm_factory;
   runtime::SystemVerilogUvmResourcePoolService uvm_resources;
+  runtime::SystemVerilogUvmSynchronizationService uvm_synchronization;
   runtime::SystemVerilogUvmConfigDbService uvm_config_db;
   runtime::SystemVerilogUvmCommandLineService uvm_command_line;
+  runtime::SystemVerilogUvmTestRunnerService uvm_test_runner;
   runtime::SystemVerilogUvmReportService uvm_reports;
+  std::vector<runtime::ScheduledTaskHandle> uvm_report_setting_tasks;
   std::map<std::string, runtime::SystemVerilogUvmRootHandle, std::less<>>
       uvm_roots_by_scope;
 #if defined(FSIM_HAS_LLVM)

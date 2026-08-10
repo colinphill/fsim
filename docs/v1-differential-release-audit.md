@@ -137,3 +137,11 @@ register access, checkpoints, exact source, artifacts, relocation, caches, and
 contained negative behavior advance the linked totals to 487 interpreter, 404
 LLVM, 268 cache, 111 debugger, 138 VCD/trace, 472 scheduling, and 114 failure
 rows. The reviewed 36-CTest corpus inventory is unchanged.
+
+Batch 162's seventeen UVM closure rows advance the reviewed differential
+inventory to 1,279 required rows while retaining 138 distinct runtime owners.
+Object-policy, synchronization, command-line/test-runner, tracing,
+compatibility, core/flow/register smoke, platform, inventory, artifact/cache,
+and zero-gap closure evidence advance the linked totals to 489 interpreter,
+406 LLVM, 271 cache, 113 debugger, 138 VCD/trace, 489 scheduling, and 114
+failure rows. The reviewed 36-CTest corpus inventory is unchanged.

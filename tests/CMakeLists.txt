@@ -182,6 +182,34 @@ add_test(
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckUvmSourceHarness.cmake"
 )
 add_test(
+  NAME fsim.uvm-platform-contract
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckUvmPlatformContract.cmake"
+)
+add_test(
+  NAME fsim.uvm-conformance-inventory
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckUvmConformanceInventory.cmake"
+)
+add_test(
+  NAME fsim.uvm-closure-audit
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckUvmClosureAudit.cmake"
+)
+add_test(
+  NAME fsim.uvm-documentation
+  COMMAND
+    "${CMAKE_COMMAND}"
+    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+    -P "${PROJECT_SOURCE_DIR}/cmake/CheckUvmDocumentation.cmake"
+)
+add_test(
   NAME fsim.v1-conformance-corpus
   COMMAND
     "${CMAKE_COMMAND}"
@@ -353,6 +381,22 @@ set_tests_properties(
 set_tests_properties(
   fsim.uvm-source-harness
   PROPERTIES LABELS "fast;systemverilog;uvm;license;provenance;cmake"
+)
+set_tests_properties(
+  fsim.uvm-platform-contract
+  PROPERTIES LABELS "fast;systemverilog;uvm;abi;portability;windows;linux;resources;cmake"
+)
+set_tests_properties(
+  fsim.uvm-conformance-inventory
+  PROPERTIES LABELS "fast;systemverilog;uvm;conformance;inventory;positive;negative;cmake"
+)
+set_tests_properties(
+  fsim.uvm-closure-audit
+  PROPERTIES LABELS "fast;systemverilog;uvm;release;conformance;diagnostics;source;resources;provenance;cmake"
+)
+set_tests_properties(
+  fsim.uvm-documentation
+  PROPERTIES LABELS "fast;systemverilog;uvm;documentation;release;installed;portability;cmake"
 )
 set_tests_properties(
   fsim.v1-conformance-corpus
@@ -821,8 +865,10 @@ if(TARGET fsim_application)
   add_executable(
     fsim_uvm_phase_tlm_application_tests
     app/uvm_phase_tlm_application_test.cpp
+    app/uvm_conformance_inventory.cpp
     app/uvm_phase_tlm_register_probe.cpp
     app/uvm_phase_tlm_sequence_probe.cpp
+    app/uvm_process_limits.cpp
   )
   fsim_configure_test(fsim_uvm_phase_tlm_application_tests)
   target_compile_definitions(
@@ -858,7 +904,7 @@ if(TARGET fsim_application)
       PROPERTIES
         LABELS "slow;application;systemverilog;uvm;artifact;llvm;debug;trace"
         RUN_SERIAL TRUE
-        TIMEOUT 1800
+        TIMEOUT 7200
     )
   endif()
 

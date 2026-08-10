@@ -46,6 +46,13 @@ enum class SystemVerilogUvmResourceAuditAction : std::uint8_t {
   CallbackFailure,
 };
 
+enum class SystemVerilogUvmResourceTraceAction : std::uint8_t {
+  LookupName,
+  LookupType,
+  Read,
+  Write,
+};
+
 using SystemVerilogUvmResourceValue = std::variant<
     PackedLogic4,
     double,
@@ -95,6 +102,19 @@ struct SystemVerilogUvmResourceAuditRecord {
   std::uint64_t revision{};
 };
 
+struct SystemVerilogUvmResourceTraceRecord {
+  std::uint64_t sequence{};
+  SystemVerilogUvmResourceTraceAction action{
+      SystemVerilogUvmResourceTraceAction::LookupName};
+  std::string scope;
+  std::string name;
+  std::string type_identity;
+  std::string accessor;
+  SystemVerilogUvmResourceHandle selected{};
+  std::size_t match_count{};
+  bool success{};
+};
+
 struct SystemVerilogUvmResourceLimits {
   std::size_t max_resources{65'536};
   std::size_t max_type_identity_bytes{4'096};
@@ -109,6 +129,8 @@ struct SystemVerilogUvmResourceLimits {
   std::size_t max_spell_distance{64};
   std::size_t max_accessor_bytes{4'096};
   std::size_t max_report_bytes{16U * 1'024U * 1'024U};
+  std::size_t max_trace_records{65'536};
+  std::size_t max_trace_bytes{16U * 1'024U * 1'024U};
 };
 
 /// Scheduler-owned UVM resource metadata. Class-valued entries are non-owning
@@ -118,6 +140,8 @@ class SystemVerilogUvmResourcePoolService final {
   using Callback = std::function<void(
       SystemVerilogUvmResourceCallbackEvent,
       const SystemVerilogUvmResource&)>;
+  using TraceCallback =
+      std::function<void(const SystemVerilogUvmResourceTraceRecord&)>;
 
   explicit SystemVerilogUvmResourcePoolService(
       SystemVerilogClassHeap* heap = nullptr,
@@ -182,6 +206,20 @@ class SystemVerilogUvmResourcePoolService final {
       std::string_view name,
       std::size_t maximum_distance) const;
   [[nodiscard]] std::string report() const;
+  void set_trace_enabled(bool enabled) noexcept { trace_enabled_ = enabled; }
+  [[nodiscard]] bool trace_enabled() const noexcept { return trace_enabled_; }
+  void set_trace_callback(TraceCallback callback) {
+    trace_callback_ = std::move(callback);
+  }
+  [[nodiscard]] const std::deque<SystemVerilogUvmResourceTraceRecord>&
+  trace_records() const noexcept { return trace_records_; }
+  [[nodiscard]] std::string trace_text() const;
+  [[nodiscard]] std::uint64_t dropped_trace_records() const noexcept {
+    return dropped_trace_records_;
+  }
+  [[nodiscard]] std::uint64_t trace_callback_failures() const noexcept {
+    return trace_callback_failures_;
+  }
 
   [[nodiscard]] const std::deque<SystemVerilogUvmResourceAuditRecord>&
   audit_records() const noexcept { return audit_records_; }
@@ -223,6 +261,7 @@ class SystemVerilogUvmResourcePoolService final {
       SystemVerilogUvmResourceHandle handle,
       SystemVerilogUvmResourceCallbackEvent event,
       std::string_view accessor);
+  void append_trace(SystemVerilogUvmResourceTraceRecord record) const;
 
   SystemVerilogClassHeap* heap_{};
   SystemVerilogUvmResourceLimits limits_;
@@ -235,6 +274,12 @@ class SystemVerilogUvmResourcePoolService final {
   std::uint64_t dropped_audit_records_{};
   std::int64_t next_high_priority_{};
   std::int64_t next_low_priority_{};
+  mutable bool trace_enabled_{};
+  mutable TraceCallback trace_callback_;
+  mutable std::deque<SystemVerilogUvmResourceTraceRecord> trace_records_;
+  mutable std::uint64_t next_trace_sequence_{};
+  mutable std::uint64_t dropped_trace_records_{};
+  mutable std::uint64_t trace_callback_failures_{};
 };
 
 }  // namespace fsim::runtime

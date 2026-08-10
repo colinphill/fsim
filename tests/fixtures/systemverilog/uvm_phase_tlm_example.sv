@@ -13,6 +13,8 @@ package fsim_uvm_phase_tlm_example_pkg;
   import uvm_pkg::uvm_agent;
   import uvm_pkg::uvm_scoreboard;
   import uvm_pkg::uvm_env;
+  import uvm_pkg::uvm_test;
+  import uvm_pkg::uvm_object_wrapper;
   import uvm_pkg::uvm_callback;
   import uvm_pkg::uvm_reg;
   import uvm_pkg::uvm_reg_block;
@@ -89,6 +91,21 @@ package fsim_uvm_phase_tlm_example_pkg;
     function new(string name = "fsim_uvm_env",
                  uvm_component parent = null);
       super.new(name, parent);
+    endfunction
+  endclass
+
+  class fsim_uvm_test extends uvm_test;
+    function new(string name = "fsim_uvm_test",
+                 uvm_component parent = null);
+      super.new(name, parent);
+    endfunction
+
+    static function uvm_object_wrapper get_type();
+      return null;
+    endfunction
+
+    virtual function uvm_object_wrapper get_object_type();
+      return get_type();
     endfunction
   endclass
 
@@ -195,17 +212,33 @@ endpackage
 
 module fsim_uvm_phase_tlm_example;
   import fsim_uvm_phase_tlm_example_pkg::*;
+  import fsim_uvm_core_smoke_probe_pkg::*;
 
   logic observed_pass;
   int observed_payload;
 
   initial begin
     fsim_uvm_payload payload;
+    fsim_uvm_core_smoke_test smoke;
     payload = new("source_payload");
     payload.value = 37;
+    smoke = new("core_smoke", null);
+    smoke.object_policy_smoke();
+    smoke.factory_smoke();
+    smoke.resource_smoke();
+    smoke.configuration_smoke();
+    smoke.command_line_smoke();
+    smoke.reporting_smoke();
+    smoke.callback_smoke();
+    smoke.test_selection_smoke();
+    smoke.topology_smoke();
+    smoke.timeout_smoke();
+    smoke.seed_smoke();
     observed_payload = payload.value + 5;
-    observed_pass = observed_payload == 42;
+    observed_pass = observed_payload == 42 && smoke.completed_suites == 11;
     $display("FSIM-UVM-PHASE-TLM-SOURCE payload=%0d result=%0d pass=%0d",
              payload.value, observed_payload, observed_pass);
+    $display("FSIM-UVM-CORE-SMOKE-SOURCE suites=%0d pass=%0d",
+             smoke.completed_suites, observed_pass);
   end
 endmodule

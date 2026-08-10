@@ -131,6 +131,9 @@ std::optional<CheckedProject> load_objects(
   CheckedProject checked;
   std::set<std::string> known_units;
   std::map<std::string, std::string> known_sources;
+  auto selected_release = project::SystemVerilogUvmRelease::none;
+  compiler::CacheKeyBuilder uvm_identity;
+  uvm_identity.add("uvm-provenance-schema", "fsim-uvm-object-v1");
   for (const auto& object : objects) {
     auto metadata = artifact::load_object_metadata(object, diagnostics);
     if (!metadata.has_value()) {
@@ -144,6 +147,27 @@ std::optional<CheckedProject> load_objects(
               + support::path_to_utf8(object));
       return std::nullopt;
     }
+    const auto object_release =
+        project::parse_systemverilog_uvm_release(metadata->uvm_release);
+    if (!object_release) {
+      diagnostics.error(
+          "FSIM-UVM-VERSION-001",
+          ".fsimobj names an unsupported governed UVM release");
+      return std::nullopt;
+    }
+    if (*object_release != project::SystemVerilogUvmRelease::none) {
+      if (selected_release != project::SystemVerilogUvmRelease::none
+          && selected_release != *object_release) {
+        diagnostics.error(
+            "FSIM-UVM-VERSION-001",
+            "mixed governed UVM 1.2 and UVM 2020.3.1 objects are not "
+            "transactionally compatible");
+        return std::nullopt;
+      }
+      selected_release = *object_release;
+    }
+    uvm_identity.add("object-release", metadata->uvm_release);
+    uvm_identity.add("object-compilation", metadata->compilation_digest);
 
     CheckedProject::ObjectProvenance provenance;
     provenance.directory = object;
@@ -166,6 +190,7 @@ std::optional<CheckedProject> load_objects(
     provenance.source_settings.standard = metadata->standard;
     provenance.source_settings.library = metadata->library;
     provenance.source_settings.compilation_unit = metadata->compilation_unit;
+    provenance.source_settings.uvm_release = *object_release;
     provenance.source_settings.defines = metadata->defines;
 
     const auto source_root = object_source_root(*metadata);
@@ -216,7 +241,8 @@ std::optional<CheckedProject> load_objects(
             diagnostics);
         if (!unit || unit->library != metadata->library
             || indexed.language != "systemverilog"
-            || indexed.name != unit->compilation_unit_identity) {
+            || indexed.name != unit->compilation_unit_identity
+            || unit->uvm_release != metadata->uvm_release) {
           diagnostics.error(
               "FSIM-ART-0005",
               ".fsimobj class-unit identity does not match its index");
@@ -340,6 +366,30 @@ std::optional<CheckedProject> load_objects(
   }
   checked.systemverilog_class_specializations =
       std::move(class_specializations.specializations);
+  if (selected_release != project::SystemVerilogUvmRelease::none) {
+    const auto has_class = [&](const std::string_view suffix) {
+      return std::ranges::any_of(
+          checked.systemverilog_class_specializations,
+          [&](const auto& specialization) {
+            return specialization.declaration_identity.ends_with(suffix);
+          });
+    };
+    const bool has_uvm_object = has_class("::uvm_object");
+    const bool has_ieee_policy = has_class("::uvm_policy");
+    const auto compatibility =
+        project::systemverilog_uvm_compatibility(selected_release);
+    if (!has_uvm_object
+        || has_ieee_policy != compatibility.ieee_policy_classes) {
+      diagnostics.error(
+          "FSIM-UVM-VERSION-002",
+          "governed UVM object release does not match its portable uvm_pkg "
+          "API surface");
+      return std::nullopt;
+    }
+    checked.systemverilog_uvm_provenance.release = selected_release;
+    checked.systemverilog_uvm_provenance.source_identity =
+        uvm_identity.finish();
+  }
   if (diagnostics.has_error()) {
     return std::nullopt;
   }

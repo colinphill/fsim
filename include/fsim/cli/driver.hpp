@@ -43,6 +43,7 @@ struct Invocation {
   std::optional<project::Language> language;
   std::optional<std::string> standard;
   std::optional<std::string> compilation_unit;
+  std::optional<project::SystemVerilogUvmRelease> uvm_release;
   // Normalized ordered root selections. `top` remains the one-root
   // source-compatible view.
   std::vector<project::ProjectSection::TopLevel> tops;

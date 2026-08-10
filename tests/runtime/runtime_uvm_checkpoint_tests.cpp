@@ -58,7 +58,9 @@ fsim::runtime::SystemVerilogUvmCheckpointProvenance provenance() {
   return {"content-160-16",
           "native-cache-160-16",
           "artifact-160-16",
-          {"left", "right"}};
+          {"left", "right"},
+          "1.2",
+          "source-160-16"};
 }
 
 } // namespace
@@ -74,7 +76,8 @@ void test_systemverilog_uvm_checkpoint() {
   const auto captured =
       capture_systemverilog_uvm_checkpoint(source.foreign, provenance());
   require_checkpoint(
-      captured && captured.artifact.schema == 1 &&
+      captured
+          && captured.artifact.schema == systemverilog_uvm_checkpoint_schema &&
           captured.artifact.foreign_abi == FSIM_UVM_FOREIGN_ABI_VERSION &&
           captured.artifact.records.size() ==
               kSystemVerilogUvmStandardPhaseCount &&
@@ -165,6 +168,18 @@ void test_systemverilog_uvm_checkpoint() {
       validate_systemverilog_uvm_checkpoint(captured.artifact, expected) ==
           SystemVerilogUvmCheckpointError::RootMismatch,
       "UVM checkpoint root mismatch was accepted");
+  expected = provenance();
+  expected.uvm_release = "2020.3.1";
+  require_checkpoint(
+      validate_systemverilog_uvm_checkpoint(captured.artifact, expected) ==
+          SystemVerilogUvmCheckpointError::ReleaseMismatch,
+      "UVM checkpoint release mismatch was accepted");
+  expected = provenance();
+  expected.source_identity = "other-source";
+  require_checkpoint(
+      validate_systemverilog_uvm_checkpoint(captured.artifact, expected) ==
+          SystemVerilogUvmCheckpointError::SourceMismatch,
+      "UVM checkpoint source mismatch was accepted");
   mismatch = captured.artifact;
   mismatch.records.front().kind = FSIM_UVM_FOREIGN_PHASE_PROCESS;
   require_checkpoint(

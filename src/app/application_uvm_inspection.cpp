@@ -254,6 +254,50 @@ UvmDebugSnapshot Simulation::uvm_debug_snapshot(
                      limits.maximum_payload_bytes);
       result.sequence_items.push_back(std::move(value));
     }
+    result.factory_trace_records.assign(
+        uvm_factory().trace_records().begin(),
+        uvm_factory().trace_records().end());
+    reserve(result.factory_trace_records.size());
+    for (const auto& record : result.factory_trace_records) {
+      add_text_bytes(payload_bytes, record.resolution.requested_name,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, record.resolution.full_instance_path,
+                     limits.maximum_payload_bytes);
+      for (const auto& step : record.resolution.steps) {
+        add_text_bytes(payload_bytes, step.original_name,
+                       limits.maximum_payload_bytes);
+        add_text_bytes(payload_bytes, step.instance_pattern,
+                       limits.maximum_payload_bytes);
+      }
+    }
+    result.resource_trace_records.assign(
+        uvm_resources().trace_records().begin(),
+        uvm_resources().trace_records().end());
+    reserve(result.resource_trace_records.size());
+    for (const auto& record : result.resource_trace_records) {
+      add_text_bytes(payload_bytes, record.scope,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, record.name,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, record.type_identity,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, record.accessor,
+                     limits.maximum_payload_bytes);
+    }
+    result.config_trace_records.assign(
+        uvm_config_db().trace_records().begin(),
+        uvm_config_db().trace_records().end());
+    reserve(result.config_trace_records.size());
+    for (const auto& record : result.config_trace_records) {
+      add_text_bytes(payload_bytes, record.context_name,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, record.instance_name,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, record.field_name,
+                     limits.maximum_payload_bytes);
+      add_text_bytes(payload_bytes, record.type_identity,
+                     limits.maximum_payload_bytes);
+    }
     result.register_blocks = uvm_register_model().blocks();
     reserve(result.register_blocks.size());
     result.register_maps = uvm_register_model().maps();
@@ -369,7 +413,10 @@ std::string format_uvm_debug_snapshot(
         " transactions ", snapshot.transactions.size(), "/",
         snapshot.transaction_trace_records.size(), " sequences ",
         snapshot.sequencers.size(), "/", snapshot.sequences.size(), "/",
-        snapshot.sequence_items.size(), " register-model ",
+        snapshot.sequence_items.size(), " configuration ",
+        snapshot.factory_trace_records.size(), "/",
+        snapshot.resource_trace_records.size(), "/",
+        snapshot.config_trace_records.size(), " register-model ",
         snapshot.register_blocks.size(), "/", snapshot.registers.size(), "/",
         snapshot.register_fields.size(), "/",
         snapshot.register_memories.size());
@@ -500,6 +547,30 @@ std::string format_uvm_debug_snapshot(
              static_cast<unsigned>(value.state), " role ",
              static_cast<unsigned>(value.role), " type ",
              value.nominal_type);
+    }
+  }
+  if (selected(UvmDebugSection::configuration)) {
+    for (const auto& value : snapshot.factory_trace_records) {
+      append("factory trace ", value.sequence, " mode ",
+             value.debug ? "debug" : "create", " requested ",
+             value.resolution.requested_name, " path ",
+             value.resolution.full_instance_path, " resolved ",
+             value.resolution.resolved, " steps ",
+             value.resolution.steps.size());
+    }
+    for (const auto& value : snapshot.resource_trace_records) {
+      append("resource trace ", value.sequence, " action ",
+             static_cast<unsigned>(value.action), " scope ", value.scope,
+             " name ", value.name, " type ", value.type_identity,
+             " selected ", value.selected, " matches ", value.match_count,
+             " success ", value.success);
+    }
+    for (const auto& value : snapshot.config_trace_records) {
+      append("config trace ", value.sequence, " action ",
+             static_cast<unsigned>(value.action), " context ",
+             value.context_name, " instance ", value.instance_name,
+             " field ", value.field_name, " type ", value.type_identity,
+             " resource ", value.resource, " success ", value.success);
     }
   }
   if (selected(UvmDebugSection::register_model)) {

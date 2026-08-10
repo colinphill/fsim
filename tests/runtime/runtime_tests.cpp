@@ -103,6 +103,10 @@ int main() {
     test_simir_containers();
     test_systemverilog_class_heap();
     test_systemverilog_uvm_object();
+    test_systemverilog_uvm_object_policies();
+    test_systemverilog_uvm_packer();
+    test_systemverilog_uvm_synchronization_policies();
+    test_systemverilog_uvm_test_runner();
     test_systemverilog_uvm_component();
     test_systemverilog_uvm_phase();
     test_systemverilog_uvm_standard_schedule();

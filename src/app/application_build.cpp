@@ -34,6 +34,17 @@ std::optional<BuiltProject> build_checked_project(
   if (!checked) {
     return std::nullopt;
   }
+  for (const auto& source_set : config.source_sets) {
+    if (source_set.uvm_release != project::SystemVerilogUvmRelease::none
+        && source_set.uvm_release
+            != checked->systemverilog_uvm_provenance.release) {
+      diagnostics.error(
+          "FSIM-UVM-VERSION-001",
+          "requested UVM release does not match the checked source/object "
+          "provenance");
+      return std::nullopt;
+    }
+  }
   // Lowering remains a temporary compatibility projection while the owning
   // semantic HIR is the durable boundary. Moving it out proves that no build,
   // cache, runtime, debugger, trace, or API result can retain an address into
@@ -411,7 +422,8 @@ std::optional<BuiltProject> build_checked_project(
       config.base_directory,
       std::move(systemc_hierarchies),
       std::move(mapped_libraries),
-      std::move(checked->objects), {},
+      std::move(checked->objects),
+      std::move(checked->systemverilog_uvm_provenance), {},
       std::move(checked->systemverilog_class_specializations),
       std::move(systemverilog_coverage), std::nullopt};
 }

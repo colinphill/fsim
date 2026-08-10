@@ -858,11 +858,12 @@ void test_systemverilog_uvm_object() {
       {"child", SystemVerilogUvmFieldFlag::None}};
   bounded.register_type(std::move(bounded_type));
   bounded.initialize(root, "bounded-root");
+  bounded.initialize(child, "bounded-child");
   bool bounded_failed = false;
   try {
     (void)bounded.clone(root);
-  } catch (const std::length_error&) {
-    bounded_failed = true;
+  } catch (const SystemVerilogUvmCopyError& error) {
+    bounded_failed = error.diagnostic_code() == "FSIM-UVM-COPY-004";
   }
   require(
       bounded_failed && heap.live_objects() == live_before_failure
@@ -881,8 +882,8 @@ void test_systemverilog_uvm_object() {
   bool null_copy_failed = false;
   try {
     objects.copy(root, 0);
-  } catch (const std::invalid_argument&) {
-    null_copy_failed = true;
+  } catch (const SystemVerilogUvmCopyError& error) {
+    null_copy_failed = error.diagnostic_code() == "FSIM-UVM-COPY-001";
   }
   require(
       duplicate_failed && null_copy_failed,

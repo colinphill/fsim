@@ -2047,6 +2047,14 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-UVM-PHASE-006` | error | A per-component UVM phase callback threw or otherwise failed; the phase contains the failure and continues deterministic traversal. |
 | `FSIM-UVM-PHASE-007` | error | A UVM task-phase process tree, scheduled wait, synchronized execution group, completion, timeout, or jump request is invalid for its current state or domain. |
 | `FSIM-UVM-PHASE-008` | error | UVM task-phase quiescence deadlocked or exceeded its ready-to-end re-entry, scheduler callback, zero-time stabilization, delta-cycle, or iteration ceiling. |
+| `FSIM-UVM-COPY-001` | error | A UVM copier source, destination, or recursively traversed object handle is empty or stale. |
+| `FSIM-UVM-COPY-002` | error | A branded UVM copier source or destination handle belongs to another simulation-owned object service. |
+| `FSIM-UVM-COPY-003` | error | UVM copier source/destination types or automated field property shapes are incompatible. |
+| `FSIM-UVM-COPY-004` | error | A UVM copier recursion, object, field, or recursive-creation resource ceiling was exceeded; destination state and new objects were rolled back. |
+| `FSIM-UVM-COPY-005` | error | A UVM virtual creation or `do_copy` automation callback threw or returned incompatible state; destination state and new objects were rolled back. |
+| `FSIM-UVM-PACK-001` | error | A UVM packed payload has an invalid header, schema, metadata/endian policy, item tag, width, length, truncation, or trailing data. |
+| `FSIM-UVM-PACK-002` | error | UVM packing or unpacking exceeded its configured recursion-depth, item, bit, text, or payload-byte ceiling. |
+| `FSIM-UVM-POLICY-001` | error | A UVM printer, comparer, copier, packer-endian, or automated field policy has an unknown kind, conflicting recursion or abstraction flags, a malformed separator or indentation token, an invalid table width, or an out-of-range retained-mismatch limit. |
 | `FSIM-UVM-OBJ-001` | error | A UVM objection source, phase, root, or component handle is empty, stale, or owned by another simulation. |
 | `FSIM-UVM-OBJ-002` | error | A UVM objection operation has an invalid count, phase state, root association, or local drop underflow. |
 | `FSIM-UVM-OBJ-003` | error | UVM objection source, description, entry, count, propagation, callback, trace, mutation, drain, aggregate delay, or re-entry state exceeds its configured ceiling. |
@@ -2085,6 +2093,13 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-UVM-CALLBACK-002` | error | UVM callback registration, dispatch fanout, re-entry, failure retention, attribute/text storage, identity, order, or mutation state exceeds its configured resource ceiling. |
 | `FSIM-UVM-TR-001` | error | A UVM transaction begin/end, object/root, parent/link relation, attribute, terminal state, handle, release, or callback-time lifecycle operation is invalid. |
 | `FSIM-UVM-TR-002` | error | UVM transaction retention, active count, attribute/link/trace storage, text, identity, order, or mutation state exceeds its configured resource ceiling. |
+| `FSIM-UVM-CMD-001` | error | A recognized UVM command-line setting, trace-switch form, field, numeric value, delimiter, duplicate policy, or exact/prefix/value query is malformed or invalid. |
+| `FSIM-UVM-CMD-002` | error | UVM command-line argv, setting, query, query-result, text, or downstream config/resource trace, inventory, or entry capacity exceeded its configured ceiling. |
+| `FSIM-UVM-RUN-001` | error | A UVM `run_test` selection, root, test creation, repeated-run lifecycle, or re-entry operation is missing, stale, invalid, or incompatible. |
+| `FSIM-UVM-RUN-002` | error | UVM `run_test` count, name, topology, message, or global-timeout work exceeded its configured ceiling. |
+| `FSIM-UVM-RUN-003` | error | A UVM test terminated through a fatal result or a contained execution exception. |
+| `FSIM-UVM-SYNC-001` | error | A UVM event, barrier, pool, queue, heartbeat, waiter, callback, process owner, object payload, threshold, mode, key, index, or lifecycle operation is empty, stale, duplicated, out of range, or invalid for its current state. |
+| `FSIM-UVM-SYNC-002` | error | UVM event/barrier/waiter/callback/pool/queue/heartbeat/spell-check text, identity, entry, participant, failure, work, or mutation retention exceeded its configured resource ceiling. |
 | `FSIM-UVM-REG-001` | error | A UVM register-model block, map, register, field, or memory handle, root, hierarchy, name, ownership relation, width, offset, dimension, field layout, build state, or lock operation is invalid. |
 | `FSIM-UVM-REG-002` | error | UVM register-model block, map, register, field, memory, declaration, hierarchy depth, name, width, aggregate register-value bits, dimension, extent, identity, order, or mutation state exceeds its configured resource ceiling. |
 | `FSIM-UVM-REG-003` | error | A UVM register or memory configuration, value width, X/Z value, access right, prediction kind, reset kind, index, build/lock state, or value operation is invalid; failed operations leave desired, mirrored, write-once, and sparse memory state unchanged. |
@@ -2103,6 +2118,8 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-UVM-FOREIGN-002` | error | A DPI/VPI UVM snapshot, record, text, payload, caller buffer, callback, or retained-generation resource ceiling was exceeded. |
 | `FSIM-UVM-STATE-001` | error | A versioned UVM artifact has an invalid schema, ABI, provenance, phase graph, objection/drain, TLM connection/FIFO/transaction record, or contains a nonportable process object. |
 | `FSIM-UVM-STATE-002` | error | Portable UVM checkpoint construction or capture exceeded a configured record, root, identity, text, payload, callback-summary, or scheduler-state resource ceiling. |
+| `FSIM-UVM-VERSION-001` | error | Governed UVM release selection is invalid, applies to a non-SystemVerilog source set, mixes UVM 1.2 with UVM 2020-3.1 sources or objects, or disagrees with checked artifact provenance. |
+| `FSIM-UVM-VERSION-002` | error | The selected or retained governed UVM release disagrees with the parsed or portable `uvm_pkg` API surface. |
 | `FSIM-RUN-ASSERT-0001` | assertion severity | A false HDL assertion stopped a CLI simulation; the diagnostic retains its source location and message. |
 | `FSIM-HDL-REPORT` | report severity | A VHDL report or SystemVerilog severity task was emitted through a command or Tcl output stream. |
 | `FSIM-RUN-DELTA-0001` | error | Simulation exceeded `max_deltas`; the message includes pending processes and recent signals. |
@@ -2173,3 +2190,9 @@ assembled dynamically at runtime, nor can it prove that the documented
 severity and explanation still match every control-flow path. Current
 production emitters use literal or constant literal codes, so the complete
 current set is covered.
+
+The Batch 162 UVM closure audit additionally freezes all 82 unique
+`FSIM-UVM-*` codes inside the current 2,071-code catalog and requires explicit
+race/deadlock, cancellation, stale/cross-owner, resource, callback/rollback,
+and checkpoint/replay owners. The count is an inventory check; the individual
+table entries above remain the authority for severity and meaning.

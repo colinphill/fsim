@@ -80,6 +80,12 @@ std::string make_cache_key(
       "verilog-preprocessor",
       frontend::verilog_preprocessor_cache_version);
   key.add("systemc-plugin", systemc_plugin_key);
+  key.add(
+      "uvm-release",
+      project::to_string(checked.systemverilog_uvm_provenance.release));
+  key.add(
+      "uvm-source-identity",
+      checked.systemverilog_uvm_provenance.source_identity);
   std::vector<std::string> search_libraries;
   search_libraries.reserve(
       config.elaboration.search_libraries.size());
@@ -95,6 +101,7 @@ std::string make_cache_key(
     key.add("language", project::to_string(set.language));
     key.add("standard", set.standard);
     key.add("library", set.library);
+    key.add("uvm-release", project::to_string(set.uvm_release));
     for (const auto& define : set.defines) {
       key.add("define", define);
     }
@@ -367,6 +374,12 @@ make_specialization_cache_keys(
     key.add("unit", specialization.name);
     key.add("selected-unit-identity", specialization.name);
     key.add("selected-logical-library", specialization.library);
+    key.add(
+        "uvm-release",
+        project::to_string(checked.systemverilog_uvm_provenance.release));
+    key.add(
+        "uvm-source-identity",
+        checked.systemverilog_uvm_provenance.source_identity);
 #if defined(FSIM_HAS_LLVM)
     key.add("llvm-native-host", llvm_native_host_fingerprint);
 #endif
@@ -440,6 +453,10 @@ make_specialization_cache_keys(
       key.add(
           "semantic-dependency-compilation-unit",
           dependency_settings->source_set->compilation_unit);
+      key.add(
+          "semantic-dependency-uvm-release",
+          project::to_string(
+              dependency_settings->source_set->uvm_release));
       for (const auto& define :
            dependency_settings->source_set->defines) {
         key.add("semantic-dependency-define", define);

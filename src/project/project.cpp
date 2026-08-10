@@ -844,11 +844,23 @@ class Parser {
       source_has_language_[context_index_] = true;
       return;
     }
-    if (key == "standard" || key == "library" || key == "compilation_unit") {
+    if (key == "standard" || key == "library" || key == "compilation_unit"
+        || key == "uvm_release") {
       if (!require_kind(value, Value::Kind::string, key, "a string")) {
         return;
       }
-      if (key == "standard") {
+      if (key == "uvm_release") {
+        const auto release = parse_systemverilog_uvm_release(value.text);
+        if (!release.has_value() || *release == SystemVerilogUvmRelease::none) {
+          diagnostics_.error(
+              std::string(kValueCode),
+              "unsupported UVM release '" + value.text
+                  + "'; expected 1.2 or 2020.3.1",
+              value.span);
+          return;
+        }
+        source_set.uvm_release = *release;
+      } else if (key == "standard") {
         source_set.standard = value.text;
       } else if (key == "library") {
         source_set.library = value.text;
@@ -1251,6 +1263,14 @@ class Parser {
         source_set.standard = default_standard(source_set.language);
       }
       validate_standard(source_set, index, document_span);
+      if (source_set.uvm_release != SystemVerilogUvmRelease::none
+          && source_set.language != Language::system_verilog) {
+        diagnostics_.error(
+            std::string(kValueCode),
+            "[[source_set]] #" + std::to_string(index + 1)
+                + " uvm_release is valid only for SystemVerilog",
+            document_span);
+      }
       if (source_set.library.empty()) {
         diagnostics_.error(
             std::string(kValueCode),
@@ -1635,6 +1655,18 @@ std::string_view to_string(const DelayMode mode) noexcept {
   return "typ";
 }
 
+std::string_view to_string(const SystemVerilogUvmRelease release) noexcept {
+  switch (release) {
+    case SystemVerilogUvmRelease::none:
+      return "none";
+    case SystemVerilogUvmRelease::uvm_1_2:
+      return "1.2";
+    case SystemVerilogUvmRelease::ieee_1800_2_2020_3_1:
+      return "2020.3.1";
+  }
+  return "none";
+}
+
 std::optional<Language> parse_language(const std::string_view spelling) noexcept {
   const auto normalized = lowercase(spelling);
   if (normalized == "vhdl" || normalized == "vhdl-2008") {
@@ -1652,6 +1684,45 @@ std::optional<Language> parse_language(const std::string_view spelling) noexcept
     return Language::systemc;
   }
   return std::nullopt;
+}
+
+std::optional<SystemVerilogUvmRelease> parse_systemverilog_uvm_release(
+    const std::string_view spelling) noexcept {
+  const auto normalized = lowercase(spelling);
+  if (normalized.empty() || normalized == "none") {
+    return SystemVerilogUvmRelease::none;
+  }
+  if (normalized == "1.2" || normalized == "uvm-1.2"
+      || normalized == "uvm_1_2") {
+    return SystemVerilogUvmRelease::uvm_1_2;
+  }
+  if (normalized == "2020.3.1" || normalized == "uvm-2020.3.1"
+      || normalized == "uvm_2020_3_1"
+      || normalized == "ieee-1800.2-2020-3.1") {
+    return SystemVerilogUvmRelease::ieee_1800_2_2020_3_1;
+  }
+  return std::nullopt;
+}
+
+SystemVerilogUvmCompatibility systemverilog_uvm_compatibility(
+    const SystemVerilogUvmRelease release) noexcept {
+  switch (release) {
+    case SystemVerilogUvmRelease::uvm_1_2:
+      return {
+          release, 1, 2,
+          true, true, true, true,
+          true, true,
+          false, false, false};
+    case SystemVerilogUvmRelease::ieee_1800_2_2020_3_1:
+      return {
+          release, 2020, 3,
+          false, false, false, false,
+          true, true,
+          true, true, true};
+    case SystemVerilogUvmRelease::none:
+      return {};
+  }
+  return {};
 }
 
 std::optional<DelayMode> parse_delay_mode(

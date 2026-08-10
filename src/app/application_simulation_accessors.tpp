@@ -265,6 +265,16 @@ Simulation::uvm_resources() const noexcept {
   return impl_->uvm_resources;
 }
 
+runtime::SystemVerilogUvmSynchronizationService&
+Simulation::uvm_synchronization() noexcept {
+  return impl_->uvm_synchronization;
+}
+
+const runtime::SystemVerilogUvmSynchronizationService&
+Simulation::uvm_synchronization() const noexcept {
+  return impl_->uvm_synchronization;
+}
+
 runtime::SystemVerilogUvmConfigDbService& Simulation::uvm_config_db() noexcept {
   return impl_->uvm_config_db;
 }
@@ -284,6 +294,16 @@ Simulation::uvm_command_line() const noexcept {
   return impl_->uvm_command_line;
 }
 
+runtime::SystemVerilogUvmTestRunnerService&
+Simulation::uvm_test_runner() noexcept {
+  return impl_->uvm_test_runner;
+}
+
+const runtime::SystemVerilogUvmTestRunnerService&
+Simulation::uvm_test_runner() const noexcept {
+  return impl_->uvm_test_runner;
+}
+
 runtime::SystemVerilogUvmReportService& Simulation::uvm_reports() noexcept {
   return impl_->uvm_reports;
 }
@@ -291,6 +311,10 @@ runtime::SystemVerilogUvmReportService& Simulation::uvm_reports() noexcept {
 const runtime::SystemVerilogUvmReportService&
 Simulation::uvm_reports() const noexcept {
   return impl_->uvm_reports;
+}
+
+void Simulation::schedule_uvm_report_settings() {
+  impl_->schedule_uvm_report_settings();
 }
 
 runtime::SystemVerilogClassHandle Simulation::allocate_class(

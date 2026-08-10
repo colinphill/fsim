@@ -123,6 +123,23 @@ void ApplicationTestFixture::test_non_project_cli() {
   assert(compile->command == cli::Command::compile);
   assert(compile->artifact_output == object);
   assert(compile->files == std::vector{source});
+  const std::vector<const char*> uvm_release_arguments{
+      "fsim", "check", "--uvm-release", "uvm-2020.3.1",
+      source_text.c_str()};
+  diagnostic::Engine uvm_release_diagnostics;
+  const auto uvm_release = cli::parse_arguments(
+      static_cast<int>(uvm_release_arguments.size()),
+      uvm_release_arguments.data(), uvm_release_diagnostics);
+  assert(uvm_release && !uvm_release_diagnostics.has_error());
+  assert(uvm_release->uvm_release
+      == project::SystemVerilogUvmRelease::ieee_1800_2_2020_3_1);
+  const std::vector<const char*> invalid_uvm_release_arguments{
+      "fsim", "check", "--uvm-release", "2024", source_text.c_str()};
+  diagnostic::Engine invalid_uvm_release_diagnostics;
+  assert(!cli::parse_arguments(
+      static_cast<int>(invalid_uvm_release_arguments.size()),
+      invalid_uvm_release_arguments.data(),
+      invalid_uvm_release_diagnostics));
 
   const std::vector<const char*> elaborate_arguments{
       "fsim", "elaborate", "--object", object_text.c_str(), "--top",

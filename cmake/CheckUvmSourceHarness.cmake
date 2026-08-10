@@ -9,9 +9,43 @@ set(materializer "${FSIM_SOURCE_DIR}/cmake/MaterializeUvmSources.cmake")
 set(provenance "${FSIM_SOURCE_DIR}/docs/uvm-source-provenance.md")
 set(root_cmake "${FSIM_SOURCE_DIR}/CMakeLists.txt")
 set(test_cmake "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
-foreach(input IN ITEMS "${module}" "${materializer}" "${provenance}" "${root_cmake}" "${test_cmake}")
+set(smoke_probe
+  "${FSIM_SOURCE_DIR}/tests/fixtures/systemverilog/uvm_core_smoke_probe.sv")
+set(flow_probe
+  "${FSIM_SOURCE_DIR}/tests/fixtures/systemverilog/uvm_phase_tlm_example.sv")
+foreach(input IN ITEMS "${module}" "${materializer}" "${provenance}" "${root_cmake}" "${test_cmake}" "${smoke_probe}" "${flow_probe}")
   if(NOT EXISTS "${input}")
     message(FATAL_ERROR "UVM source-harness input not found: ${input}")
+  endif()
+endforeach()
+
+file(READ "${flow_probe}" flow_contents)
+foreach(token IN ITEMS
+    fsim_native_component fsim_uvm_sequence fsim_uvm_virtual_sequence
+    fsim_uvm_sequencer fsim_uvm_driver fsim_uvm_monitor fsim_uvm_agent
+    fsim_uvm_callback uvm_blocking_put_port uvm_tlm_fifo)
+  string(FIND "${flow_contents}" "${token}" token_index)
+  if(token_index EQUAL -1)
+    message(FATAL_ERROR "project-owned UVM flow probe omits ${token}")
+  endif()
+endforeach()
+
+foreach(token IN ITEMS
+    fsim_uvm_reg fsim_uvm_reg_block fsim_uvm_reg_adapter
+    fsim_uvm_reg_predictor fsim_uvm_reg_sequence fsim_uvm_reg_callback)
+  string(FIND "${flow_contents}" "${token}" token_index)
+  if(token_index EQUAL -1)
+    message(FATAL_ERROR "project-owned UVM register probe omits ${token}")
+  endif()
+endforeach()
+
+file(READ "${smoke_probe}" smoke_contents)
+foreach(suite IN ITEMS
+    object_policy factory resource configuration command_line reporting
+    callback test_selection topology timeout seed)
+  string(FIND "${smoke_contents}" "${suite}_smoke" suite_index)
+  if(suite_index EQUAL -1)
+    message(FATAL_ERROR "project-owned UVM smoke probe omits ${suite}")
   endif()
 endforeach()
 
@@ -76,5 +110,6 @@ endif()
 message(
   STATUS
   "UVM source harness governs 2 releases, 1286 extracted files, "
-  "12 exact entry points, isolated roots, and deterministic tree identities"
+  "12 exact entry points, 11 core, 10 flow, and 6 register smoke contracts, "
+  "isolated roots, and deterministic tree identities"
 )

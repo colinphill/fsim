@@ -787,6 +787,8 @@ std::optional<std::string> serialize_portable_class_unit(
     const PortableSystemVerilogClassUnit& unit,
     diagnostic::Engine& diagnostics) {
   if (unit.library.empty() || unit.compilation_unit_identity.empty()
+      || (unit.uvm_release != "none" && unit.uvm_release != "1.2"
+          && unit.uvm_release != "2020.3.1")
       || (unit.declarations.empty() && unit.method_definitions.empty())) {
     diagnostics.error(
         std::string{kCode}, "portable class unit is empty or unidentified");
@@ -881,6 +883,8 @@ deserialize_portable_class_unit(
       || schema != kOwningUnitSchemaVersion || !reader.read(unit)
       || reader.remaining() != 0 || unit.library.empty()
       || unit.compilation_unit_identity.empty()
+      || (unit.uvm_release != "none" && unit.uvm_release != "1.2"
+          && unit.uvm_release != "2020.3.1")
       || (unit.declarations.empty() && unit.method_definitions.empty())) {
     auto message = reader.failure();
     if (message.empty() && schema != kOwningUnitSchemaVersion) {

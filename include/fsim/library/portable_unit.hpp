@@ -14,12 +14,13 @@ namespace fsim::library {
 
 // Stable little-endian owning-unit schema. This is independent of the host
 // compiler ABI and the LLVM native-object schema.
-inline constexpr std::uint32_t kOwningUnitSchemaVersion = 13;
+inline constexpr std::uint32_t kOwningUnitSchemaVersion = 14;
 inline constexpr std::uint32_t kUdpDeclarationSchemaVersion = 1;
 
 struct PortableSystemVerilogClassUnit {
   std::string library;
   std::string compilation_unit_identity;
+  std::string uvm_release{"none"};
   std::vector<frontend::SystemVerilogClassDeclaration> declarations;
   std::vector<frontend::SystemVerilogClassMethod> method_definitions;
 };

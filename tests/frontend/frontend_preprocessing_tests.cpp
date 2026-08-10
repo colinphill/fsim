@@ -531,24 +531,125 @@ module bad_open; endmodule
         upstream_probe,
         R"(`include "uvm_macros.svh"
 class fsim_uvm_macro_item;
-  `uvm_object_utils(fsim_uvm_macro_item)
+  int integral;
+  real real_value;
+  string text;
+  fsim_uvm_macro_item child;
+  int dynamic_values[];
+  int queue_values[$];
+  int keyed_values[string];
+  `uvm_object_utils_begin(fsim_uvm_macro_item)
+    `uvm_field_int(integral, UVM_ALL_ON)
+    `uvm_field_real(real_value, UVM_DEFAULT)
+    `uvm_field_string(text, UVM_DEFAULT)
+    `uvm_field_object(child, UVM_REFERENCE)
+    `uvm_field_array_int(dynamic_values, UVM_DEFAULT)
+    `uvm_field_queue_int(queue_values, UVM_DEFAULT)
+    `uvm_field_aa_int_string(keyed_values, UVM_DEFAULT)
+  `uvm_object_utils_end
+endclass
+class fsim_uvm_macro_component;
+  `uvm_component_utils(fsim_uvm_macro_component)
+  `uvm_register_cb(fsim_uvm_macro_component, fsim_uvm_macro_callback)
+endclass
+class fsim_uvm_explicit_object_registry;
+  `uvm_object_registry(fsim_uvm_explicit_object_registry,
+                       "fsim_uvm_explicit_object_registry")
+endclass
+class fsim_uvm_explicit_component_registry;
+  `uvm_component_registry(fsim_uvm_explicit_component_registry,
+                          "fsim_uvm_explicit_component_registry")
 endclass
 `uvm_analysis_imp_decl(_fsim)
+function void fsim_uvm_legacy_macro_calls;
+  fsim_uvm_macro_item request;
+  `uvm_create(request)
+  `uvm_do(request)
+  `uvm_do_pri_with(request, 7, { integral > 0; })
+  `uvm_send(request)
+  `uvm_rand_send_with(request, { integral < 32; })
+  `uvm_do_callbacks(fsim_uvm_macro_component,
+                    fsim_uvm_macro_callback, invoked())
+  `uvm_info("LEGACY_INFO", "message", UVM_LOW)
+  `uvm_warning("LEGACY_WARNING", "message")
+  `uvm_error("LEGACY_ERROR", "message")
+  `uvm_fatal("LEGACY_FATAL", "message")
+endfunction
 )" );
     PreprocessorOptions upstream_options;
     upstream_options.include_directories = {upstream_roots[release]};
     const auto upstream = preprocess_verilog_file(
         upstream_probe, Language::SystemVerilog2017, upstream_options);
+    const auto identifier_count = [&](const std::string_view spelling) {
+      return std::ranges::count_if(
+          upstream.lexed.tokens,
+          [&](const Token& token) {
+            return token.kind == TokenKind::Identifier
+                && token.text == spelling;
+          });
+    };
+    const std::array required_identifiers{
+        std::string_view{"uvm_analysis_imp_fsim"},
+        std::string_view{"m_register_cb_fsim_uvm_macro_callback"},
+        std::string_view{"uvm_callback_iter"},
+        std::string_view{"create_item"},
+        std::string_view{"start_item"},
+        std::string_view{"finish_item"},
+        std::string_view{"uvm_report_info"},
+        std::string_view{"uvm_report_warning"},
+        std::string_view{"uvm_report_error"},
+        std::string_view{"uvm_report_fatal"}};
+    const auto field_helper =
+        release == 0 ? std::string_view{"__m_uvm_field_automation"}
+                     : std::string_view{"__m_uvm_execute_field_op"};
+    const auto required_present = std::ranges::all_of(
+        required_identifiers,
+        [&](const auto spelling) {
+          return identifier_count(spelling) > 0;
+        });
+    const auto macro_free = std::ranges::none_of(
+        upstream.lexed.tokens,
+        [](const Token& token) {
+          return token.text.find('`') != std::string::npos;
+        });
+    std::string observed{
+        " ok=" + std::to_string(upstream.ok())
+        + " required=" + std::to_string(required_present)
+        + " macro_free=" + std::to_string(macro_free)
+        + " type_id=" + std::to_string(identifier_count("type_id"))
+        + " get_type=" + std::to_string(identifier_count("get_type"))
+        + " get_object_type="
+        + std::to_string(identifier_count("get_object_type"))
+        + " create_item=" + std::to_string(identifier_count("create_item"))
+        + " start_item=" + std::to_string(identifier_count("start_item"))
+        + " finish_item=" + std::to_string(identifier_count("finish_item"))};
+    observed += " field_helper=";
+    observed += std::to_string(identifier_count(field_helper));
+    for (const auto& diagnostic : upstream.lexed.diagnostics) {
+      observed += " ";
+      observed += diagnostic.code;
+    }
+    for (const auto spelling : required_identifiers) {
+      observed += " ";
+      observed += spelling;
+      observed += "=";
+      observed += std::to_string(identifier_count(spelling));
+    }
     require(
         upstream.ok()
-            && std::ranges::any_of(
-                upstream.lexed.tokens,
-                [](const Token& token) {
-                  return token.kind == TokenKind::Identifier
-                      && token.text == "uvm_analysis_imp_fsim";
-                }),
-        "the exact governed UVM macro entry point and representative generated "
-        "declarations must preprocess without modification");
+            && required_present
+            && identifier_count(field_helper) > 0
+            && identifier_count("type_id") >= 4
+            && identifier_count("get_type") >= 4
+            && identifier_count("get_object_type") >= 4
+            && identifier_count("create_item") >= 3
+            && identifier_count("start_item") >= 4
+            && identifier_count("finish_item") >= 4
+            && macro_free,
+        "the exact governed UVM 1.2 legacy field/object/component/registry, "
+        "sequence, callback, TLM declaration, and report macro families must "
+        "expand to their expected utility and call signatures without source "
+        "modification;" + observed);
     const auto upstream_package = preprocess_verilog_file(
         upstream_roots[release] / "uvm_pkg.sv",
         Language::SystemVerilog2017, upstream_options);
@@ -556,6 +657,223 @@ endclass
         upstream_package.ok(),
         "the complete exact governed UVM package must preprocess without "
         "modification");
+    const auto package_identifier_count =
+        [&](const std::string_view spelling) {
+          return std::ranges::count_if(
+              upstream_package.lexed.tokens,
+              [&](const Token& token) {
+                return token.kind == TokenKind::Identifier
+                    && token.text == spelling;
+              });
+        };
+    const auto version_probe =
+        directory / ("upstream-version-" + std::to_string(release) + ".sv");
+    if (release == 0) {
+      write_text(
+          version_probe,
+          R"(`include "macros/uvm_version_defines.svh"
+`UVM_MAJOR_REV
+`UVM_MINOR_REV
+`UVM_VERSION_STRING
+`ifdef UVM_VERSION_1_2
+uvm_version_1_2_enabled
+`endif
+)" );
+    } else {
+      write_text(
+          version_probe,
+          R"(`include "macros/uvm_version_defines.svh"
+`UVM_VERSION
+`UVM_MAJOR_REV
+`UVM_MINOR_REV
+`UVM_VERSION_STRING
+`ifdef UVM_VERSION_POST_2020_2_0
+uvm_version_post_2020_2_0_enabled
+`endif
+`ifdef UVM_POST_VERSION_1_2
+uvm_post_version_1_2_enabled
+`endif
+)" );
+    }
+    const auto version = preprocess_verilog_file(
+        version_probe, Language::SystemVerilog2017, upstream_options);
+    const auto version_has_token = [&](const std::string_view spelling) {
+      return std::ranges::any_of(
+          version.lexed.tokens,
+          [&](const Token& token) { return token.text == spelling; });
+    };
+    require(
+        version.ok()
+            && (release == 0
+                    ? version_has_token("1") && version_has_token("2")
+                          && version_has_token("\"UVM-1.2\"")
+                          && version_has_token("uvm_version_1_2_enabled")
+                    : version_has_token("2020") && version_has_token("3.0")
+                          && version_has_token("uvm_pkg")
+                          && version_has_token("UVM_VERSION_STRING")
+                          && version_has_token(
+                              "uvm_version_post_2020_2_0_enabled")
+                          && version_has_token(
+                              "uvm_post_version_1_2_enabled")),
+        "the exact governed release must expose its own version numbers, "
+        "string mapping, and compatibility ladder");
+    if (release == 0) {
+      const std::array legacy_package_aliases{
+          std::string_view{"uvm_top"},
+          std::string_view{"uvm_test_done"},
+          std::string_view{"global_stop_request"},
+          std::string_view{"set_global_timeout"},
+          std::string_view{"set_global_stop_timeout"}};
+      require(
+          std::ranges::all_of(
+              legacy_package_aliases,
+              [&](const auto spelling) {
+                return package_identifier_count(spelling) > 0;
+              }),
+          "the exact governed UVM 1.2 package must retain its deprecated "
+          "root, test-done, stop-request, and timeout aliases");
+
+      const auto deprecated_probe = directory / "upstream-deprecated-0.sv";
+      write_text(
+          deprecated_probe,
+          R"(`include "uvm_macros.svh"
+class fsim_uvm_deprecated_sequencer;
+  `uvm_sequencer_utils(fsim_uvm_deprecated_sequencer)
+endclass
+class fsim_uvm_deprecated_sequence;
+  `uvm_sequence_utils(fsim_uvm_deprecated_sequence,
+                      fsim_uvm_deprecated_sequencer)
+endclass
+)" );
+      const auto deprecated = preprocess_verilog_file(
+          deprecated_probe, Language::SystemVerilog2017, upstream_options);
+      const auto deprecated_identifier_count =
+          [&](const std::string_view spelling) {
+            return std::ranges::count_if(
+                deprecated.lexed.tokens,
+                [&](const Token& token) {
+                  return token.kind == TokenKind::Identifier
+                      && token.text == spelling;
+                });
+          };
+      const std::array deprecated_generated_identifiers{
+          std::string_view{"add_typewide_sequence"},
+          std::string_view{"remove_typewide_sequence"},
+          std::string_view{"uvm_update_sequence_lib"},
+          std::string_view{"is_registered_with_sequencer"},
+          std::string_view{"m_set_p_sequencer"},
+          std::string_view{"type_id"}};
+      require(
+          deprecated.ok()
+              && std::ranges::all_of(
+                  deprecated_generated_identifiers,
+                  [&](const auto spelling) {
+                    return deprecated_identifier_count(spelling) > 0;
+                  })
+              && std::ranges::none_of(
+                  deprecated.lexed.tokens,
+                  [](const Token& token) {
+                    return token.text.find('`') != std::string::npos;
+                  }),
+          "the exact governed UVM 1.2 deprecated sequence and sequencer "
+          "registration aliases must expand to their complete generated "
+          "method and registry surface");
+
+      auto no_deprecated_options = upstream_options;
+      no_deprecated_options.defines = {"UVM_NO_DEPRECATED=1"};
+      const auto disabled_deprecated = preprocess_verilog_file(
+          deprecated_probe, Language::SystemVerilog2017,
+          no_deprecated_options);
+      require(
+          !disabled_deprecated.ok()
+              && std::ranges::any_of(
+                  disabled_deprecated.lexed.diagnostics,
+                  [](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-SV-PP-028";
+                  }),
+          "UVM_NO_DEPRECATED must remove the governed UVM 1.2 registration "
+          "aliases with the exact undefined-macro diagnostic");
+
+      const auto invalid_arity_probe = directory / "upstream-bad-arity-0.sv";
+      write_text(
+          invalid_arity_probe,
+          "`include \"uvm_macros.svh\"\n"
+          "`uvm_info(\"LEGACY\", \"missing verbosity\")\n");
+      const auto invalid_arity = preprocess_verilog_file(
+          invalid_arity_probe, Language::SystemVerilog2017,
+          upstream_options);
+      require(
+          !invalid_arity.ok()
+              && std::ranges::any_of(
+                  invalid_arity.lexed.diagnostics,
+                  [](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-SV-PP-030";
+                  }),
+          "an exact governed UVM 1.2 report-macro arity error must retain "
+          "FSIM-SV-PP-030");
+
+      auto shallow_options = upstream_options;
+      shallow_options.maximum_macro_expansion_depth = 1;
+      const auto shallow = preprocess_verilog_file(
+          upstream_probe, Language::SystemVerilog2017, shallow_options);
+      require(
+          !shallow.ok()
+              && std::ranges::any_of(
+                  shallow.lexed.diagnostics,
+                  [](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-SV-PP-029";
+                  }),
+          "an exact governed UVM 1.2 nested expansion over its configured "
+          "limit must retain FSIM-SV-PP-029");
+    } else {
+      const std::array ieee_2020_names{
+          std::string_view{"uvm_policy"},
+          std::string_view{"uvm_field_op"},
+          std::string_view{"uvm_copier"},
+          std::string_view{"uvm_revision_string"}};
+      require(
+          std::ranges::all_of(
+              ieee_2020_names,
+              [&](const auto spelling) {
+                return package_identifier_count(spelling) > 0;
+              }),
+          "the exact governed UVM 2020-3.1 package must retain its IEEE "
+          "policy, field-operation, copier, and revision names");
+      const std::array removed_package_aliases{
+          std::string_view{"uvm_test_done"},
+          std::string_view{"global_stop_request"},
+          std::string_view{"set_global_timeout"},
+          std::string_view{"set_global_stop_timeout"}};
+      require(
+          std::ranges::none_of(
+              removed_package_aliases,
+              [&](const auto spelling) {
+                return package_identifier_count(spelling) > 0;
+              }),
+          "the exact governed UVM 2020-3.1 package must not retain removed "
+          "UVM 1.2 test-done, stop-request, or timeout aliases");
+
+      const auto removed_macro_probe =
+          directory / "upstream-removed-deprecated-1.sv";
+      write_text(
+          removed_macro_probe,
+          "`include \"uvm_macros.svh\"\n"
+          "`uvm_sequencer_utils(fsim_removed_sequencer)\n"
+          "`uvm_sequence_utils(fsim_removed_sequence, "
+          "fsim_removed_sequencer)\n");
+      const auto removed_macros = preprocess_verilog_file(
+          removed_macro_probe, Language::SystemVerilog2017,
+          upstream_options);
+      require(
+          !removed_macros.ok()
+              && std::ranges::count_if(
+                     removed_macros.lexed.diagnostics,
+                     [](const Diagnostic& diagnostic) {
+                       return diagnostic.code == "FSIM-SV-PP-028";
+                     }) == 2,
+          "the exact governed UVM 2020-3.1 macros must reject both removed "
+          "sequence and sequencer registration aliases");
+    }
   }
 #endif
 

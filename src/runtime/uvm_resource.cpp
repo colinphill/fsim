@@ -76,12 +76,54 @@ const char* value_kind_name(
   return "unknown";
 }
 
+const char* trace_action_name(
+    const SystemVerilogUvmResourceTraceAction action) noexcept {
+  switch (action) {
+    case SystemVerilogUvmResourceTraceAction::LookupName:
+      return "lookup_name";
+    case SystemVerilogUvmResourceTraceAction::LookupType:
+      return "lookup_type";
+    case SystemVerilogUvmResourceTraceAction::Read: return "read";
+    case SystemVerilogUvmResourceTraceAction::Write: return "write";
+  }
+  return "unknown";
+}
+
+void append_quoted(std::string& output, const std::string_view text) {
+  output.push_back('"');
+  for (const char character : text) {
+    switch (character) {
+      case '\\': output += "\\\\"; break;
+      case '"': output += "\\\""; break;
+      case '\n': output += "\\n"; break;
+      case '\r': output += "\\r"; break;
+      case '\t': output += "\\t"; break;
+      default:
+        if (static_cast<unsigned char>(character) < 0x20U) {
+          constexpr char digits[]{"0123456789abcdef"};
+          output += "\\x";
+          output.push_back(digits[
+              (static_cast<unsigned char>(character) >> 4U) & 0xfU]);
+          output.push_back(digits[
+              static_cast<unsigned char>(character) & 0xfU]);
+        } else {
+          output.push_back(character);
+        }
+    }
+  }
+  output.push_back('"');
+}
+
 }  // namespace
 
 SystemVerilogUvmResourcePoolService::SystemVerilogUvmResourcePoolService(
     SystemVerilogClassHeap* heap,
     SystemVerilogUvmResourceLimits limits)
-    : heap_(heap), limits_(limits) {}
+    : heap_(heap), limits_(limits) {
+  if (limits_.max_trace_records == 0 || limits_.max_trace_bytes == 0) {
+    throw std::invalid_argument{"UVM resource trace limits must be nonzero"};
+  }
+}
 
 SystemVerilogUvmResourceHandle
 SystemVerilogUvmResourcePoolService::insert(
@@ -205,6 +247,11 @@ SystemVerilogUvmResourcePoolService::lookup_name(
         }
         return lhs.registration_order < rhs.registration_order;
       });
+  append_trace({
+      0, SystemVerilogUvmResourceTraceAction::LookupName,
+      std::string{scope}, std::string{name},
+      type_identity ? std::string{*type_identity} : std::string{}, {},
+      result.empty() ? 0 : result.front(), result.size(), !result.empty()});
   return result;
 }
 
@@ -250,6 +297,10 @@ SystemVerilogUvmResourcePoolService::lookup_type(
         }
         return lhs.registration_order < rhs.registration_order;
       });
+  append_trace({
+      0, SystemVerilogUvmResourceTraceAction::LookupType,
+      std::string{scope}, {}, std::string{type_identity}, {},
+      result.empty() ? 0 : result.front(), result.size(), !result.empty()});
   return result;
 }
 
@@ -278,6 +329,10 @@ SystemVerilogUvmResourceValue SystemVerilogUvmResourcePoolService::read(
         accessor, true);
   }
   notify(handle, SystemVerilogUvmResourceCallbackEvent::PostRead, accessor);
+  append_trace({
+      0, SystemVerilogUvmResourceTraceAction::Read,
+      resource.scope_pattern, resource.name, resource.type.identity,
+      std::string{accessor}, handle, 1, true});
   return value;
 }
 
@@ -296,6 +351,10 @@ bool SystemVerilogUvmResourcePoolService::write(
           initial, SystemVerilogUvmResourceAuditAction::RejectedWrite,
           accessor, false);
     }
+    append_trace({
+        0, SystemVerilogUvmResourceTraceAction::Write,
+        initial.scope_pattern, initial.name, initial.type.identity,
+        std::string{accessor}, handle, 1, false});
     return false;
   }
   notify(handle, SystemVerilogUvmResourceCallbackEvent::PreWrite, accessor);
@@ -306,6 +365,10 @@ bool SystemVerilogUvmResourcePoolService::write(
           resource, SystemVerilogUvmResourceAuditAction::RejectedWrite,
           accessor, false);
     }
+    append_trace({
+        0, SystemVerilogUvmResourceTraceAction::Write,
+        resource.scope_pattern, resource.name, resource.type.identity,
+        std::string{accessor}, handle, 1, false});
     return false;
   }
   validate_value(resource.type, value);
@@ -318,7 +381,58 @@ bool SystemVerilogUvmResourcePoolService::write(
         accessor, true);
   }
   notify(handle, SystemVerilogUvmResourceCallbackEvent::PostWrite, accessor);
+  append_trace({
+      0, SystemVerilogUvmResourceTraceAction::Write,
+      resource.scope_pattern, resource.name, resource.type.identity,
+      std::string{accessor}, handle, 1, true});
   return true;
+}
+
+void SystemVerilogUvmResourcePoolService::append_trace(
+    SystemVerilogUvmResourceTraceRecord record) const {
+  if (!trace_enabled_) return;
+  if (trace_records_.size() == limits_.max_trace_records) {
+    trace_records_.pop_front();
+    ++dropped_trace_records_;
+  }
+  record.sequence = next_trace_sequence_++;
+  trace_records_.push_back(std::move(record));
+  if (trace_callback_) {
+    try {
+      trace_callback_(trace_records_.back());
+    } catch (...) {
+      ++trace_callback_failures_;
+    }
+  }
+}
+
+std::string SystemVerilogUvmResourcePoolService::trace_text() const {
+  std::string result;
+  const auto append = [&](const std::string_view text) {
+    if (result.size() > limits_.max_trace_bytes
+        || text.size() > limits_.max_trace_bytes - result.size()) {
+      throw std::length_error{"UVM resource trace byte budget exceeded"};
+    }
+    result += text;
+  };
+  for (const auto& record : trace_records_) {
+    std::string line{"UVM_RESOURCE_DB_TRACE sequence="};
+    line += std::to_string(record.sequence) + " action=";
+    line += trace_action_name(record.action);
+    line += " scope=";
+    append_quoted(line, record.scope);
+    line += " name=";
+    append_quoted(line, record.name);
+    line += " type=";
+    append_quoted(line, record.type_identity);
+    line += " accessor=";
+    append_quoted(line, record.accessor);
+    line += " selected=" + std::to_string(record.selected);
+    line += " matches=" + std::to_string(record.match_count);
+    line += record.success ? " success=yes\n" : " success=no\n";
+    append(line);
+  }
+  return result;
 }
 
 SystemVerilogUvmResourceCallbackToken

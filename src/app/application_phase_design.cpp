@@ -422,6 +422,10 @@ bool publish_design_artifact(
   metadata.delay_mode = std::string{project::to_string(config.run.delay_mode)};
   metadata.optimization = std::string{project::to_string(project.optimization)};
   metadata.cache_key = project.cache_key;
+  metadata.uvm_release = std::string{project::to_string(
+      project.systemverilog_uvm_provenance.release)};
+  metadata.uvm_source_identity =
+      project.systemverilog_uvm_provenance.source_identity;
   metadata.seed = project.seed;
   metadata.entropy_seed = project.entropy_seed;
   metadata.search_libraries = config.elaboration.search_libraries;
@@ -442,6 +446,8 @@ bool publish_design_artifact(
   uvm_provenance.cache_identity = project.cache_key + ":"
       + std::string{project::to_string(project.optimization)};
   uvm_provenance.artifact_identity = project.artifact_identity;
+  uvm_provenance.uvm_release = metadata.uvm_release;
+  uvm_provenance.source_identity = metadata.uvm_source_identity;
   uvm_provenance.roots.reserve(metadata.roots.size());
   for (const auto& root : metadata.roots) {
     uvm_provenance.roots.push_back(root.alias);
@@ -675,7 +681,9 @@ std::optional<BuiltProject> load_design_artifact(
       metadata->cache_key,
       metadata->cache_key + ":" + metadata->optimization,
       uvm_state->provenance.artifact_identity,
-      roots};
+      roots,
+      metadata->uvm_release,
+      metadata->uvm_source_identity};
   if (runtime->roots() != roots || design_ir->roots() != roots
       || semantics->units().size() != metadata->unit_count
       || semantics->source_files().size() != metadata->semantic_source_count
@@ -717,7 +725,11 @@ std::optional<BuiltProject> load_design_artifact(
       std::move(primary_hierarchy), std::move(live_systemc->roots),
       metadata->seed, metadata->entropy_seed, false,
       directory.parent_path(), std::move(live_systemc->registries), {},
-      std::move(objects), metadata->design_digest, std::move(*classes),
+      std::move(objects),
+      {project::parse_systemverilog_uvm_release(metadata->uvm_release)
+           .value_or(project::SystemVerilogUvmRelease::none),
+       metadata->uvm_source_identity},
+      metadata->design_digest, std::move(*classes),
       std::move(*coverage), std::move(*uvm_state)};
 }
 

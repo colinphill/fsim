@@ -453,7 +453,12 @@ add_library(
     src/runtime/class_containers.cpp
     src/runtime/class_methods.cpp
     src/runtime/class_static.cpp
-    src/runtime/uvm_object.cpp
+  src/runtime/uvm_object.cpp
+  src/runtime/uvm_object_copy.cpp
+  src/runtime/uvm_object_policy.cpp
+  src/runtime/uvm_packer.cpp
+  src/runtime/uvm_synchronization.cpp
+  src/runtime/uvm_test_runner.cpp
     src/runtime/uvm_component.cpp
     src/runtime/uvm_phase.cpp
     src/runtime/uvm_activity.cpp
@@ -473,7 +478,8 @@ add_library(
     src/runtime/uvm_tlm1_execution.cpp
     src/runtime/uvm_tlm1_analysis.cpp
     src/runtime/uvm_tlm2.cpp
-    src/runtime/uvm_tlm2_transport.cpp
+  src/runtime/uvm_tlm2_transport.cpp
+  src/runtime/uvm_transaction_policy.cpp
     src/runtime/uvm_sequence.cpp
     src/runtime/uvm_sequence_execution.cpp
     src/runtime/uvm_sequence_arbitration.cpp

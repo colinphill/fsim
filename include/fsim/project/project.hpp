@@ -34,6 +34,35 @@ enum class DelayMode : std::uint8_t {
   maximum,
 };
 
+// Canonical governed UVM source release. `none` preserves ordinary
+// SystemVerilog projects which do not opt into a governed UVM package.
+enum class SystemVerilogUvmRelease : std::uint8_t {
+  none,
+  uvm_1_2,
+  ieee_1800_2_2020_3_1,
+};
+
+// Normalized compatibility dispatch for the complete governed difference
+// boundary. Common runtime behavior is deliberately absent from this record.
+struct SystemVerilogUvmCompatibility {
+  SystemVerilogUvmRelease release{SystemVerilogUvmRelease::none};
+  std::uint32_t version_major{};
+  std::uint32_t version_minor{};
+  bool legacy_global_controls{};
+  bool legacy_registration_macros{};
+  bool legacy_component_stop_methods{};
+  bool legacy_sequence_library_methods{};
+  bool component_config_compatibility{};
+  bool test_done_objection_compatibility{};
+  bool ieee_policy_classes{};
+  bool ieee_object_policy_dispatch{};
+  bool ieee_report_summary_methods{};
+
+  friend bool operator==(
+      const SystemVerilogUvmCompatibility&,
+      const SystemVerilogUvmCompatibility&) = default;
+};
+
 struct ProjectSection {
   struct TopLevel {
     std::string target;
@@ -61,6 +90,7 @@ struct SourceSet {
   std::vector<std::filesystem::path> include_directories;
   std::vector<std::string> defines;
   std::string compilation_unit{"file"};
+  SystemVerilogUvmRelease uvm_release{SystemVerilogUvmRelease::none};
 };
 
 struct Binding {
@@ -125,7 +155,12 @@ struct Config {
 [[nodiscard]] std::string_view to_string(Language language) noexcept;
 [[nodiscard]] std::string_view to_string(Optimization optimization) noexcept;
 [[nodiscard]] std::string_view to_string(DelayMode mode) noexcept;
+[[nodiscard]] std::string_view to_string(SystemVerilogUvmRelease release) noexcept;
 [[nodiscard]] std::optional<Language> parse_language(std::string_view spelling) noexcept;
+[[nodiscard]] std::optional<SystemVerilogUvmRelease>
+parse_systemverilog_uvm_release(std::string_view spelling) noexcept;
+[[nodiscard]] SystemVerilogUvmCompatibility
+systemverilog_uvm_compatibility(SystemVerilogUvmRelease release) noexcept;
 [[nodiscard]] std::optional<DelayMode> parse_delay_mode(
     std::string_view spelling) noexcept;
 

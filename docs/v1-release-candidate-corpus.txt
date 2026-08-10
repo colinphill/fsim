@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # Batch 130 Task 9 final release-candidate corpus.
 # Every required row is classified execute and owns nonempty P+/P-/E/R links.
-# matrix-rows: 1262
-# matrix-sha256: 3f6bc26424dd6dabe984f1efbef858808c2370b50c0969c6d82340499410e506
-# evidence-slots: 5048
-# evidence-paths: 579
-# evidence-sha256: ca0f3e8d6e9eff61b4949b948e7c539ad61d6ea25031e1b547ec5b79240dafc2
-# test-evidence-paths: 254
-# production-evidence-paths: 303
-# release-evidence-paths: 22
+# matrix-rows: 1279
+# matrix-sha256: 70deacfc60402730e5a567494e74aa015b4759b3655983a2ff6464c97ef11d42
+# evidence-slots: 5116
+# evidence-paths: 604
+# evidence-sha256: 2d9a2bf8fdc360b6b484087848eeb00def2a61cff5fecfacf9400fadcec2010b
+# test-evidence-paths: 265
+# production-evidence-paths: 312
+# release-evidence-paths: 27
 # runtime-evidence-paths: 138
 # corpus-ctests: 36
 # required-status: execute
@@ -111,3 +111,12 @@
 # Debug and Release regressions 118/118 in 384.37 and 323.00 seconds and the
 # exact two-release matrix 2/2 in 1,033.92 seconds. Sanitizer and hosted CI
 # monitoring are intentionally excluded at this non-monitoring boundary.
+#
+# Batch 162 advances the reviewed matrix to 1279 rows and 5116 evidence cells
+# across 604 exact paths (265 test, 312 production, 27 release), with 138
+# runtime owners.
+# SV-823 through SV-839 close object policies, packing/recording,
+# synchronization, command-line/test-runner and trace behavior, exact legacy/
+# IEEE API differences, project core/flow/register smoke environments,
+# platform limits, executable conformance inventory, and the two-release zero-
+# gap closure audit. Change 20 owns the fresh complete local release gates.

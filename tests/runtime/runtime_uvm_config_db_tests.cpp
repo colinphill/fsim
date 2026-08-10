@@ -48,6 +48,10 @@ void test_systemverilog_uvm_config_db() {
   config_limits.max_regex_states = 1'024;
   config_limits.max_context_depth = 16;
   SystemVerilogUvmConfigDbService config{resources, config_limits};
+  config.set_trace_enabled(true);
+  config.set_trace_callback([](const auto&) {
+    throw std::runtime_error{"contained config trace callback failure"};
+  });
 
   const SystemVerilogUvmConfigContext root{"", 0};
   const SystemVerilogUvmConfigContext env{"uvm_test_top.env", 2};
@@ -138,6 +142,16 @@ void test_systemverilog_uvm_config_db() {
           && spelling.size() == 1 && spelling.front() == "timeout",
       "config exists must preserve nominal typing and bounded optional spell "
       "checking without reading the resource value");
+  require(
+      config.trace_text().find("action=set") != std::string::npos
+          && config.trace_text().find("action=get") != std::string::npos
+          && config.trace_text().find("action=exists") != std::string::npos
+          && config.trace_callback_failures() == config.trace_records().size()
+          && config.report(true).find("UVM Config DB\n") == 0
+          && config.report(true).find("audit=") != std::string::npos
+          && config.report(true).find("reads=") != std::string::npos,
+      "config trace and audited usage inventories must be deterministic and "
+      "contain trace callback failures");
 
   bool regex_rejected{};
   try {
@@ -159,12 +173,20 @@ void test_systemverilog_uvm_config_db() {
   tiny_limits.max_context_depth = 1;
   tiny_limits.default_precedence = 2;
   tiny_limits.max_wake_callbacks_per_set = 1;
+  tiny_limits.max_report_bytes = 8;
+  tiny_limits.max_trace_records = 1;
+  tiny_limits.max_trace_bytes = 8;
   SystemVerilogUvmConfigDbService tiny{tiny_resources, tiny_limits};
   (void)tiny.set(
       root, "a", "first", packed_type(), packed(1),
       SystemVerilogUvmConfigPhase::Build);
   bool entry_limit_rejected{};
   bool waiter_limit_rejected{};
+  bool report_limit_rejected{};
+  bool trace_limit_rejected{};
+  tiny.set_trace_enabled(true);
+  (void)tiny.get(root, "a", "first", packed_type().identity);
+  (void)tiny.exists(root, "a", "first", packed_type().identity);
   try {
     (void)tiny.set(
         root, "b", "second", packed_type(), packed(2),
@@ -179,10 +201,24 @@ void test_systemverilog_uvm_config_db() {
   } catch (const std::length_error&) {
     waiter_limit_rejected = true;
   }
+  try {
+    (void)tiny.report(true);
+  } catch (const std::length_error&) {
+    report_limit_rejected = true;
+  }
+  try {
+    (void)tiny.trace_text();
+  } catch (const std::length_error&) {
+    trace_limit_rejected = true;
+  }
   require(
       entry_limit_rejected && waiter_limit_rejected
-          && tiny.entries().size() == 1 && tiny.waiter_count() == 1,
-      "config entry and waiter capacities must reject before unbounded growth");
+          && report_limit_rejected && trace_limit_rejected
+          && tiny.entries().size() == 1 && tiny.waiter_count() == 1
+          && tiny.trace_records().size() == 1
+          && tiny.dropped_trace_records() == 1,
+      "config entry, waiter, report, and trace capacities must reject or evict "
+      "before unbounded growth");
 
   SystemVerilogUvmResourcePoolService wake_resources{&heap};
   SystemVerilogUvmConfigDbLimits wake_limits;

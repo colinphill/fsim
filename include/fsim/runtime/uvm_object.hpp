@@ -8,7 +8,9 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -23,6 +25,10 @@ enum class SystemVerilogUvmFieldFlag : std::uint16_t {
   NoPrint = 1U << 2U,
   NoRecord = 1U << 3U,
   Reference = 1U << 4U,
+  Physical = 1U << 5U,
+  Abstract = 1U << 6U,
+  Shallow = 1U << 7U,
+  Deep = 1U << 8U,
 };
 
 [[nodiscard]] constexpr SystemVerilogUvmFieldFlag operator|(
@@ -64,6 +70,133 @@ struct SystemVerilogUvmObjectEntry {
   SystemVerilogUvmObjectEntryKind kind{
       SystemVerilogUvmObjectEntryKind::Object};
   std::size_t depth{};
+  std::size_t size{};
+};
+
+enum class SystemVerilogUvmPrinterKind : std::uint8_t {
+  Line,
+  Tree,
+  Table,
+};
+
+struct SystemVerilogUvmPrinterPolicy {
+  SystemVerilogUvmPrinterKind kind{SystemVerilogUvmPrinterKind::Line};
+  std::string indentation{"  "};
+  std::string separator{" | "};
+  std::size_t name_width{32};
+  std::size_t type_width{20};
+  std::size_t size_width{8};
+  std::size_t value_width{40};
+  bool emit_type_names{true};
+  bool emit_sizes{true};
+};
+
+struct SystemVerilogUvmPrintResult {
+  std::vector<SystemVerilogUvmObjectEntry> entries;
+  std::string text;
+};
+
+enum class SystemVerilogUvmRecursionPolicy : std::uint8_t {
+  Deep,
+  Shallow,
+  Reference,
+};
+
+struct SystemVerilogUvmComparerPolicy {
+  SystemVerilogUvmRecursionPolicy recursion{
+      SystemVerilogUvmRecursionPolicy::Deep};
+  bool check_type{true};
+  bool compare_physical{true};
+  bool compare_abstract{true};
+  std::size_t show_max{64};
+};
+
+enum class SystemVerilogUvmMismatchKind : std::uint8_t {
+  Type,
+  Shape,
+  Value,
+  Handle,
+  Size,
+  Alias,
+  Hook,
+};
+
+struct SystemVerilogUvmMismatch {
+  std::string path;
+  std::string left;
+  std::string right;
+  SystemVerilogUvmMismatchKind kind{SystemVerilogUvmMismatchKind::Value};
+};
+
+struct SystemVerilogUvmComparisonResult {
+  std::size_t compared_objects{};
+  std::size_t compared_fields{};
+  std::size_t mismatch_count{};
+  std::vector<SystemVerilogUvmMismatch> mismatches;
+
+  [[nodiscard]] bool equal() const noexcept { return mismatch_count == 0; }
+};
+
+class SystemVerilogUvmObjectHandle final {
+ public:
+  SystemVerilogUvmObjectHandle() = default;
+  [[nodiscard]] bool valid() const noexcept {
+    return owner_ && object_ != 0;
+  }
+  explicit operator bool() const noexcept { return valid(); }
+  [[nodiscard]] SystemVerilogClassHandle object() const noexcept {
+    return object_;
+  }
+  friend bool operator==(
+      const SystemVerilogUvmObjectHandle&,
+      const SystemVerilogUvmObjectHandle&) = default;
+
+ private:
+  friend class SystemVerilogUvmObjectService;
+  SystemVerilogUvmObjectHandle(
+      std::shared_ptr<const void> owner,
+      const SystemVerilogClassHandle object)
+      : owner_(std::move(owner)), object_(object) {}
+
+  std::shared_ptr<const void> owner_;
+  SystemVerilogClassHandle object_{};
+};
+
+struct SystemVerilogUvmCopierPolicy {
+  SystemVerilogUvmRecursionPolicy recursion{
+      SystemVerilogUvmRecursionPolicy::Deep};
+  bool copy_physical{true};
+  bool copy_abstract{true};
+};
+
+struct SystemVerilogUvmCopyResult {
+  SystemVerilogUvmObjectHandle destination;
+  std::size_t copied_objects{};
+  std::size_t copied_fields{};
+  std::size_t created_objects{};
+};
+
+class SystemVerilogUvmCopyError final : public std::runtime_error {
+ public:
+  SystemVerilogUvmCopyError(std::string code, std::string message);
+  [[nodiscard]] const std::string& diagnostic_code() const noexcept {
+    return diagnostic_code_;
+  }
+
+ private:
+  std::string diagnostic_code_;
+};
+
+class SystemVerilogUvmObjectPolicyError final
+    : public std::invalid_argument {
+ public:
+  SystemVerilogUvmObjectPolicyError(std::string code, std::string message);
+  [[nodiscard]] const std::string& diagnostic_code() const noexcept {
+    return diagnostic_code_;
+  }
+
+ private:
+  std::string diagnostic_code_;
 };
 
 struct SystemVerilogUvmObjectDescriptor {
@@ -113,6 +246,10 @@ class SystemVerilogUvmObjectService final {
   void initialize(SystemVerilogClassHandle object, std::string name = {});
   [[nodiscard]] bool contains(
       SystemVerilogClassHandle object) const noexcept;
+  [[nodiscard]] SystemVerilogUvmObjectHandle object_handle(
+      SystemVerilogClassHandle object) const;
+  [[nodiscard]] bool contains(
+      const SystemVerilogUvmObjectHandle& object) const noexcept;
   void set_name(SystemVerilogClassHandle object, std::string name);
   void set_full_name(SystemVerilogClassHandle object, std::string full_name);
   [[nodiscard]] std::string_view name(SystemVerilogClassHandle object) const;
@@ -130,14 +267,28 @@ class SystemVerilogUvmObjectService final {
       std::string name = {});
   [[nodiscard]] SystemVerilogClassHandle clone(
       SystemVerilogClassHandle source);
+  [[nodiscard]] SystemVerilogUvmCopyResult clone_detailed(
+      const SystemVerilogUvmObjectHandle& source,
+      SystemVerilogUvmCopierPolicy policy = {});
   void copy(
       SystemVerilogClassHandle destination,
       SystemVerilogClassHandle source);
+  [[nodiscard]] SystemVerilogUvmCopyResult copy_detailed(
+      const SystemVerilogUvmObjectHandle& destination,
+      const SystemVerilogUvmObjectHandle& source,
+      SystemVerilogUvmCopierPolicy policy = {});
   [[nodiscard]] bool compare(
       SystemVerilogClassHandle left,
       SystemVerilogClassHandle right);
+  [[nodiscard]] SystemVerilogUvmComparisonResult compare_detailed(
+      SystemVerilogClassHandle left,
+      SystemVerilogClassHandle right,
+      SystemVerilogUvmComparerPolicy policy = {});
   [[nodiscard]] std::vector<SystemVerilogUvmObjectEntry> print(
       SystemVerilogClassHandle object);
+  [[nodiscard]] SystemVerilogUvmPrintResult print_formatted(
+      SystemVerilogClassHandle object,
+      SystemVerilogUvmPrinterPolicy policy = {});
   [[nodiscard]] std::vector<SystemVerilogUvmObjectEntry> record(
       SystemVerilogClassHandle object);
   void set_print_hook(EntryHook hook) { print_hook_ = std::move(hook); }
@@ -163,6 +314,7 @@ class SystemVerilogUvmObjectService final {
   SystemVerilogClassHeap* heap_{};
   CreateHook create_hook_;
   SystemVerilogUvmObjectLimits limits_;
+  std::shared_ptr<const void> owner_;
   std::map<std::string, SystemVerilogUvmObjectDescriptor, std::less<>>
       descriptors_;
   std::map<SystemVerilogClassHandle, Metadata> metadata_;

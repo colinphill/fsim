@@ -72,6 +72,7 @@ struct SystemVerilogUvmObjectionLimits {
   std::size_t maximum_propagation_depth{256};
   std::size_t maximum_callbacks_per_operation{512};
   std::size_t maximum_trace_records{1U << 20U};
+  std::size_t maximum_trace_output_bytes{16U * 1'024U * 1'024U};
   std::size_t maximum_mutations{1U << 20U};
   std::size_t maximum_drain_settings{65'536};
   std::size_t maximum_pending_drains{65'536};
@@ -254,6 +255,9 @@ class SystemVerilogUvmObjectionService final {
     return trace_;
   }
   void clear_trace() noexcept { trace_.clear(); }
+  void set_trace_enabled(bool enabled) noexcept;
+  [[nodiscard]] bool trace_enabled() const noexcept { return trace_enabled_; }
+  [[nodiscard]] std::string trace_text() const;
   [[nodiscard]] std::span<const SystemVerilogUvmObjectionCallbackFailure>
   callback_failures() const noexcept {
     return callback_failures_;
@@ -363,6 +367,8 @@ class SystemVerilogUvmObjectionService final {
   std::map<SourceKey, SimulationTick> drain_times_;
   std::map<SourceKey, PendingDrain> pending_drains_;
   std::vector<SystemVerilogUvmObjectionEvent> trace_;
+  bool trace_enabled_{};
+  std::uint64_t trace_start_sequence_{};
   std::vector<SystemVerilogUvmObjectionCallbackFailure> callback_failures_;
   Callback callback_;
   AllDroppedCallback all_dropped_callback_;

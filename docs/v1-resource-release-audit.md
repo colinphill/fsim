@@ -25,3 +25,22 @@ locals in 0.84 seconds, and the composed resource audit in 0.07 seconds.
 The Task 10 hosted inspection remains mandatory after the final checkpoint is
 pushed. Task 8 performs no hosted execution, sanitizer, Release, full
 regression, commit, push, or GitHub Actions inspection.
+
+## V2 Batch 162 governed UVM resource addendum
+
+The supported two-release closure matrix applies a 6 GiB child-process address-
+space ceiling, 1,200-second stage limits, and a 7,200-second serial release
+limit. Its final Change 18 evidence passes UVM 1.2 ten stages in 8:28.42 at
+4,299,288 KiB maximum RSS and UVM 2020-3.1 ten stages in 11:14.87 at 4,860,288
+KiB: 20/20 in 19:43.29 with zero swaps. All fourteen retained VCD/FST files are
+28,345 bytes with SHA-256
+`62df6d6de11f33dcea64ae245060ebc70f578b4e54e326a911aa44ccb9797057`.
+These are retained local baselines, not a promise that arbitrary UVM projects
+use the same memory. CI should preserve exact logs and avoid concurrent full
+release matrices unless the host can supply their combined resident memory.
+
+Change 20's fresh clean-first Debug/Release builds complete 733 steps in
+9:36.84/8:49.59 at 4,070,136/2,506,320 KiB maximum RSS. Their 122/122 complete
+regressions pass in 6:24.90/5:26.29 at 3,777,748/3,783,548 KiB. The final exact
+two-release UVM matrix passes in 18:39.19 at 4,860,744 KiB. Every measured run
+reports zero swaps.

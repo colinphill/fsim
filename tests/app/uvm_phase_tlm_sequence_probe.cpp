@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "uvm_phase_tlm_sequence_probe.hpp"
 
+#include "fsim/runtime/uvm_packer.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -189,6 +191,193 @@ exercise_exact_uvm_sequence_environment(fsim::app::Simulation &simulation,
       item_type.specialization_identity,
       SystemVerilogUvmSequenceItemRole::Response, high_sequence, sequencer));
 
+  const auto low_object = sequences.snapshot(low_item).object;
+  const auto high_object = sequences.snapshot(high_item).object;
+  const auto value_property = [&](const SystemVerilogClassHandle object) {
+    const auto& value = simulation.class_heap().object(object);
+    const auto found = std::ranges::find_if(
+        value.property_names,
+        [](const auto& property) { return property.ends_with("::value"); });
+    assert(found != value.property_names.end());
+    return *found;
+  };
+  const auto low_value = value_property(low_object);
+  const auto high_value = value_property(high_object);
+  simulation.class_heap().property(low_object, low_value).packed =
+      PackedLogic4::from_aval_bval(32, 161, 0);
+  simulation.class_heap().property(high_object, high_value).packed =
+      PackedLogic4::from_aval_bval(32, 161, 0);
+  auto& object_policies = simulation.uvm_objects();
+  const auto equal_policy =
+      object_policies.compare_detailed(low_object, high_object);
+  const auto line = object_policies.print_formatted(low_object);
+  SystemVerilogUvmPrinterPolicy tree_policy;
+  tree_policy.kind = SystemVerilogUvmPrinterKind::Tree;
+  const auto tree = object_policies.print_formatted(low_object, tree_policy);
+  SystemVerilogUvmPrinterPolicy table_policy;
+  table_policy.kind = SystemVerilogUvmPrinterKind::Table;
+  const auto table = object_policies.print_formatted(low_object, table_policy);
+  assert(equal_policy.equal() && !line.text.empty() && !tree.text.empty()
+         && table.text.starts_with("Name")
+         && line.text == object_policies.print_formatted(low_object).text);
+  simulation.class_heap().property(high_object, high_value).packed =
+      PackedLogic4::from_aval_bval(32, 162, 0);
+  SystemVerilogUvmComparerPolicy mismatch_policy;
+  mismatch_policy.show_max = 1;
+  const auto mismatch = object_policies.compare_detailed(
+      low_object, high_object, mismatch_policy);
+  assert(!mismatch.equal() && mismatch.mismatch_count == 1
+         && mismatch.mismatches.size() == 1);
+  const auto low_owned = object_policies.object_handle(low_object);
+  const auto high_owned = object_policies.object_handle(high_object);
+  const auto deep_copy = object_policies.clone_detailed(low_owned);
+  SystemVerilogUvmCopierPolicy shallow_copier;
+  shallow_copier.recursion = SystemVerilogUvmRecursionPolicy::Shallow;
+  const auto shallow_copy =
+      object_policies.clone_detailed(low_owned, shallow_copier);
+  SystemVerilogUvmCopierPolicy reference_copier;
+  reference_copier.recursion = SystemVerilogUvmRecursionPolicy::Reference;
+  const auto reference_copy =
+      object_policies.clone_detailed(low_owned, reference_copier);
+  const auto restored = object_policies.copy_detailed(high_owned, low_owned);
+  assert(
+      object_policies.compare(low_object, deep_copy.destination.object()) &&
+      object_policies.compare(low_object, shallow_copy.destination.object()) &&
+      object_policies.compare(low_object, reference_copy.destination.object()) &&
+      object_policies.compare(low_object, high_object) &&
+      deep_copy.created_objects == 1 && shallow_copy.created_objects == 1 &&
+      reference_copy.created_objects == 1 && restored.created_objects == 0);
+  bool malformed_policy{};
+  try {
+    auto invalid = table_policy;
+    invalid.separator = "\n";
+    (void)object_policies.print_formatted(low_object, invalid);
+  } catch (const SystemVerilogUvmObjectPolicyError& error) {
+    malformed_policy =
+        error.diagnostic_code() == "FSIM-UVM-POLICY-001";
+  }
+  bool malformed_copier{};
+  try {
+    auto invalid = SystemVerilogUvmCopierPolicy{};
+    invalid.recursion = static_cast<SystemVerilogUvmRecursionPolicy>(255);
+    (void)object_policies.copy_detailed(high_owned, low_owned, invalid);
+  } catch (const SystemVerilogUvmObjectPolicyError& error) {
+    malformed_copier =
+        error.diagnostic_code() == "FSIM-UVM-POLICY-001";
+  }
+  assert(malformed_policy && malformed_copier);
+
+  SystemVerilogUvmPackItem packed_bits;
+  packed_bits.name = "logic";
+  packed_bits.type_name = "logic[3:0]";
+  packed_bits.kind = SystemVerilogUvmPackItemKind::Bits;
+  packed_bits.bits = PackedLogic4::from_msb_string("10xz");
+  SystemVerilogUvmPackItem packed_bytes;
+  packed_bytes.name = "bytes";
+  packed_bytes.type_name = "byte[]";
+  packed_bytes.kind = SystemVerilogUvmPackItemKind::Bytes;
+  packed_bytes.bytes = {0x01, 0x7f, 0x80, 0xff};
+  SystemVerilogUvmPackItem packed_integers;
+  packed_integers.name = "integers";
+  packed_integers.type_name = "longint[]";
+  packed_integers.kind = SystemVerilogUvmPackItemKind::Integers;
+  packed_integers.integers = {UINT64_C(0x0102030405060708), UINT64_C(161)};
+  SystemVerilogUvmPackItem packed_string;
+  packed_string.name = "text";
+  packed_string.type_name = "string";
+  packed_string.kind = SystemVerilogUvmPackItemKind::String;
+  packed_string.string_value = std::string{"exact\0uvm", 9};
+  SystemVerilogUvmPackItem packed_real;
+  packed_real.name = "real";
+  packed_real.type_name = "real";
+  packed_real.kind = SystemVerilogUvmPackItemKind::Real;
+  packed_real.real_value = 16.25;
+  SystemVerilogUvmPackItem packed_object;
+  packed_object.name = "object";
+  packed_object.type_name = "uvm_object";
+  packed_object.kind = SystemVerilogUvmPackItemKind::Object;
+  packed_object.object_identity = low_object;
+  SystemVerilogUvmPackItem packed_array;
+  packed_array.name = "array";
+  packed_array.type_name = "uvm_field[]";
+  packed_array.kind = SystemVerilogUvmPackItemKind::Array;
+  packed_array.elements = {packed_bits, packed_object};
+  const std::vector packed_items{packed_bits, packed_bytes, packed_integers,
+                                 packed_string, packed_real, packed_object,
+                                 packed_array};
+  const SystemVerilogUvmPacker big_packer;
+  const auto big_payload = big_packer.pack(packed_items);
+  auto little_policy = SystemVerilogUvmPackerPolicy{};
+  little_policy.endian = SystemVerilogUvmPackerEndian::Little;
+  const SystemVerilogUvmPacker little_packer{little_policy};
+  const auto little_payload = little_packer.pack(packed_items);
+  bool malformed_pack{};
+  try {
+    auto truncated = big_payload.bytes;
+    truncated.pop_back();
+    (void)big_packer.unpack(truncated);
+  } catch (const SystemVerilogUvmPackerError& error) {
+    malformed_pack = error.diagnostic_code() == "FSIM-UVM-PACK-001";
+  }
+  assert(big_packer.unpack(big_payload.bytes) == packed_items &&
+         little_packer.unpack(little_payload.bytes) == packed_items &&
+         big_payload.bytes != little_payload.bytes && malformed_pack);
+
+  auto& synchronization = simulation.uvm_synchronization();
+  const auto policy_event = synchronization.event("phase_done");
+  std::vector<std::string> synchronization_order;
+  (void)synchronization.add_event_callback(
+      policy_event, [&](const auto, const auto data) {
+        assert(data == low_object);
+        synchronization_order.push_back("callback");
+      });
+  (void)synchronization.wait_event(
+      policy_event, 161, SystemVerilogUvmEventWaitKind::Trigger,
+      [&](const auto outcome, const auto data) {
+        assert(outcome == SystemVerilogUvmWaitOutcome::Triggered &&
+               data == low_object);
+        synchronization_order.push_back("waiter");
+      });
+  synchronization.trigger_event(policy_event, low_object);
+  const auto policy_barrier =
+      synchronization.create_barrier("exact_join", 2, true);
+  (void)synchronization.wait_barrier(
+      policy_barrier, 162,
+      [&](const auto, const auto) { synchronization_order.push_back("left"); });
+  (void)synchronization.wait_barrier(
+      policy_barrier, 163,
+      [&](const auto, const auto) { synchronization_order.push_back("right"); });
+  const auto policy_pool = synchronization.create_pool("exact_pool");
+  synchronization.pool_put(policy_pool, "object", packed_object);
+  const auto policy_queue = synchronization.create_queue("exact_queue");
+  synchronization.queue_push_back(policy_queue, packed_bits);
+  synchronization.queue_push_front(policy_queue, packed_string);
+  const auto heartbeat_event = synchronization.event("heartbeat_tick");
+  const auto heartbeat = synchronization.create_heartbeat(
+      "exact_heartbeat", heartbeat_event, SystemVerilogUvmHeartbeatMode::All);
+  synchronization.heartbeat_add(heartbeat, low_object);
+  synchronization.heartbeat_add(heartbeat, high_object);
+  synchronization.heartbeat_start(heartbeat);
+  synchronization.heartbeat_beat(heartbeat, low_object);
+  synchronization.heartbeat_beat(heartbeat, high_object);
+  synchronization.trigger_event(heartbeat_event);
+  const auto expected_synchronization_order =
+      std::vector<std::string>{"callback", "waiter", "left", "right"};
+  const auto spelling = synchronization.spell_challenge(
+      "phase_dne", {"heartbeat_tick", "phase_done"}, 2);
+  assert(
+      synchronization_order == expected_synchronization_order &&
+      synchronization.event_snapshot(policy_event).trigger_count == 1 &&
+      synchronization.barrier_snapshot(policy_barrier).release_count == 1 &&
+      synchronization.pool_get(policy_pool, "object")->object_identity ==
+          low_object &&
+      synchronization.queue_size(policy_queue) == 2 &&
+      synchronization.queue_get(policy_queue, 0)->string_value ==
+          packed_string.string_value &&
+      synchronization.heartbeat_snapshot(heartbeat).checks == 1 &&
+      synchronization.heartbeat_snapshot(heartbeat).failures == 0 &&
+      spelling == std::vector<std::string>{"phase_done"});
+
   const auto low_lock = sequences.request_lock(low_sequence);
   const auto high_grab = sequences.request_grab(high_sequence);
   assert(sequences.access_snapshot(low_lock).state ==
@@ -331,15 +520,24 @@ exercise_exact_uvm_sequence_environment(fsim::app::Simulation &simulation,
                           std::nullopt,
                           {{"priority", std::uint64_t{161}}}});
   transactions.record_attribute(transaction, {"response", std::uint64_t{161}});
+  transactions.record_object(transaction, low_object, "exact");
   transactions.end(transaction);
   const auto transaction_snapshot = transactions.snapshot(transaction);
-  const auto expected_callback_order = std::vector<std::string>{
-      "begin", "begin", "attribute", "attribute", "end", "end"};
-  if (!(callback_order == expected_callback_order &&
+  const auto replayed_transactions =
+      transactions.replay_trace(transactions.trace_records());
+  if (!(callback_order.size() == 42 && callback_order[0] == "begin" &&
+        callback_order[1] == "begin" &&
+        std::ranges::count(callback_order, "attribute") == 38 &&
+        callback_order[40] == "end" && callback_order[41] == "end" &&
         transaction_snapshot.state ==
             SystemVerilogUvmTransactionState::Completed &&
-        transaction_snapshot.attributes.size() == 3 &&
-        transactions.trace_records().size() == 5)) {
+        transaction_snapshot.attributes.size() == 21 &&
+        transactions.trace_records().size() == 23 &&
+        replayed_transactions.size() == 1 &&
+        replayed_transactions.front().identity == transaction_snapshot.identity &&
+        replayed_transactions.front().attributes.size() == 21 &&
+        replayed_transactions.front().state ==
+            SystemVerilogUvmTransactionState::Completed)) {
     std::string observed_order;
     for (const auto &operation : callback_order) {
       if (!observed_order.empty())
@@ -355,6 +553,151 @@ exercise_exact_uvm_sequence_environment(fsim::app::Simulation &simulation,
         " traces=" + std::to_string(transactions.trace_records().size())};
   }
 
+  auto& command_line = simulation.uvm_command_line();
+  auto& activity = simulation.uvm_activity();
+  auto& factory = simulation.uvm_factory();
+  auto& resources = simulation.uvm_resources();
+  auto& config_db = simulation.uvm_config_db();
+  factory.set_trace_enabled(true);
+  factory.set_trace_callback([&](const auto& record) {
+    activity.publish({
+        SystemVerilogUvmActivityKind::Configuration,
+        SystemVerilogUvmActivityAction::Updated,
+        "factory:" + record.resolution.requested_name,
+        "steps=" + std::to_string(record.resolution.steps.size()),
+        root, record.resolution.resolved});
+  });
+  resources.set_trace_callback([&](const auto& record) {
+    activity.publish({
+        SystemVerilogUvmActivityKind::Configuration,
+        SystemVerilogUvmActivityAction::Updated,
+        "resource:" + record.name,
+        "matches=" + std::to_string(record.match_count),
+        root, record.selected});
+  });
+  config_db.set_trace_callback([&](const auto& record) {
+    activity.publish({
+        SystemVerilogUvmActivityKind::Configuration,
+        SystemVerilogUvmActivityAction::Updated,
+        "config:" + record.field_name,
+        record.instance_name, root, record.resource});
+  });
+  const std::vector<std::string> exact_arguments{
+      "fsim", "+UVM_TESTNAME=fsim_uvm_test", "+USER=first", "+USER=second",
+      "+ntb_random_seed=161", "+UVM_TIMEOUT=20,YES",
+      "+UVM_VERBOSITY=UVM_LOW", "+UVM_MAX_QUIT_COUNT=3,NO",
+      "+UVM_OBJECTION_TRACE", "+UVM_RESOURCE_DB_TRACE",
+      "+UVM_CONFIG_DB_TRACE",
+      "+uvm_set_config_string=sequence_env.*,trace_mode,enabled",
+      "+uvm_set_verbosity=sequence_env.*,_ALL_,UVM_FULL,run", "-quiet"};
+  command_line.apply(exact_arguments);
+  const auto exact_user_values = command_line.get_arg_values("+USER=");
+  assert(command_line.get_args() == exact_arguments &&
+         command_line.get_plusargs().size() == 12 &&
+         command_line.get_uvm_args().size() == 9 &&
+         command_line.get_arg_matches(
+             "+UVM_TESTNAME=fsim_uvm_test", true).size() == 1 &&
+         exact_user_values ==
+             std::vector<std::string>({"first", "second"}) &&
+         command_line.get_arg_value("+USER=") == "first" &&
+         command_line.get_tool_name() == "fsim" &&
+         command_line.get_tool_version() == "v2");
+  const auto registered_factory_types = simulation.uvm_registry().types();
+  assert(!registered_factory_types.empty());
+  const auto factory_resolution = factory.debug_resolve_by_type(
+      registered_factory_types.front().wrapper, "sequence_env.agent");
+  const auto config_value = config_db.get(
+      {"", 0}, "sequence_env.agent", "trace_mode",
+      kSystemVerilogUvmStringConfigType, "sequence_env.agent");
+  const auto resource = resources.get_by_name(
+      "sequence_env.agent", "trace_mode",
+      kSystemVerilogUvmStringConfigType);
+  assert(factory_resolution.resolved == registered_factory_types.front().wrapper &&
+         config_value &&
+         std::get<std::string>(*config_value) == "enabled" && resource != 0 &&
+         factory.report(true).find("Registered Types\n") == 0 &&
+         config_db.report(true).find("trace_mode") != std::string::npos &&
+         factory.trace_text().find("UVM_FACTORY_TRACE") == 0 &&
+         resources.trace_text().find("UVM_RESOURCE_DB_TRACE") == 0 &&
+         config_db.trace_text().find("UVM_CONFIG_DB_TRACE") == 0 &&
+         factory.trace_callback_failures() == 0 &&
+         resources.trace_callback_failures() == 0 &&
+         config_db.trace_callback_failures() == 0);
+  factory.set_trace_enabled(false);
+  resources.set_trace_enabled(false);
+  config_db.set_trace_enabled(false);
+  auto& reports = simulation.uvm_reports();
+  reports.set_severity_override(
+      agent, SystemVerilogUvmReportSeverity::Warning,
+      SystemVerilogUvmReportSeverity::Error);
+  reports.set_id_action_hier(
+      environment, "EXACT", SystemVerilogUvmReportAction::Log);
+  reports.set_id_file_hier(environment, "EXACT", 17);
+  const auto exact_catcher = reports.add_catcher(
+      agent, "exact_report_catcher", [](auto& context) {
+        context.set_context("exact-catcher");
+        return SystemVerilogUvmReportCatcherResult::Throw;
+      });
+  command_line.apply_initial_report_settings(
+      reports, simulation.uvm_objections());
+  const auto report_controls = command_line.apply_report_settings(
+      simulation.uvm_components(), reports, "run", 10);
+  const auto report_policy = reports.policy(
+      agent, SystemVerilogUvmReportSeverity::Warning, "EXACT");
+  assert(reports.default_verbosity() == 100 &&
+         reports.server().max_quit_count() == 3 &&
+         !reports.server().max_quit_overridable() &&
+         simulation.uvm_objections().trace_enabled() &&
+         report_controls.size() == 6 &&
+         std::ranges::all_of(report_controls, [](const auto& control) {
+           return control.verbosity == 400 && control.phase == "run";
+         }) &&
+         report_policy.severity == SystemVerilogUvmReportSeverity::Error &&
+         report_policy.verbosity == 400 &&
+         report_policy.action == SystemVerilogUvmReportAction::Log &&
+         report_policy.file == 17 && reports.catcher_enabled(exact_catcher));
+  auto& test_runner = simulation.uvm_test_runner();
+  const auto selected_run = test_runner.run_test(
+      root, {}, [&](const auto test, const auto seed) {
+        assert(simulation.uvm_components().full_name(test) == "uvm_test_top" &&
+               seed == 161);
+        return SystemVerilogUvmRunExecution{
+            SystemVerilogUvmRunStatus::Completed, 10, "completed"};
+      });
+  auto repeated_options = SystemVerilogUvmRunOptions{};
+  repeated_options.test_name = "fsim_uvm_test";
+  repeated_options.seed = 162;
+  repeated_options.timeout = 5;
+  const auto repeated_run = test_runner.run_test(
+      root, repeated_options, [](const auto, const auto) {
+        return SystemVerilogUvmRunExecution{
+            SystemVerilogUvmRunStatus::Finished, 5, "$finish"};
+      });
+  const auto runs_ok =
+      selected_run.success() && selected_run.seed == 161 &&
+      selected_run.timeout == 20 && selected_run.cleaned &&
+      selected_run.topology.find("uvm_test_top (fsim_uvm_test)") !=
+          std::string::npos &&
+      repeated_run.success() && repeated_run.seed == 162 &&
+      repeated_run.cleaned && test_runner.run_count() == 2;
+  if (!runs_ok) {
+    throw std::logic_error{
+        "exact UVM run_test proof failed: selected=" +
+        std::to_string(selected_run.success()) + "/" +
+        std::to_string(selected_run.seed) + "/" +
+        std::to_string(selected_run.timeout.value_or(0)) + "/" +
+        std::to_string(selected_run.cleaned) + "/" +
+        selected_run.diagnostic_code + "/" + selected_run.message +
+        " topology=" +
+        selected_run.topology + " repeated=" +
+        std::to_string(repeated_run.success()) + "/" +
+        std::to_string(repeated_run.seed) + "/" +
+        std::to_string(repeated_run.cleaned) + "/" +
+        repeated_run.diagnostic_code + "/" + repeated_run.message +
+        " count=" +
+        std::to_string(test_runner.run_count())};
+  }
+
   const auto checkpoint = simulation.capture_uvm_checkpoint();
   assert(checkpoint && !checkpoint.artifact.records.empty());
   auto bounded_limits = SystemVerilogUvmCheckpointLimits{};
@@ -366,10 +709,40 @@ exercise_exact_uvm_sequence_environment(fsim::app::Simulation &simulation,
   const auto debug = simulation.uvm_debug_snapshot();
   assert(debug.sequencers.size() >= 2 && debug.sequences.size() >= 4 &&
          debug.sequence_items.size() >= 3 && debug.callbacks.size() >= 2 &&
-         debug.transactions.size() >= 1);
+         debug.transactions.size() >= 1 &&
+         debug.factory_trace_records.size() == 1 &&
+         debug.resource_trace_records.size() == 2 &&
+         debug.config_trace_records.size() == 1 &&
+         fsim::app::format_uvm_debug_snapshot(
+             debug, fsim::app::UvmDebugSection::configuration)
+             .find("factory trace") != std::string::npos &&
+         std::ranges::count_if(
+             activity.events(), [](const auto& event) {
+               return event.kind == SystemVerilogUvmActivityKind::Configuration;
+             }) == 4);
   return " sequence=arb/lock/response/virtual "
          "roles=agent/driver/monitor/scoreboard"
-         " callback=6 transaction=5 cap=records";
+         " callback=42 transaction=23 cap=records"
+         " policy=line/tree/table compare=deep/mismatch/limit"
+         " copier=deep/shallow/reference"
+         " packer=big/little/metadata/unpack recorder=object/replay"
+         " sync=event/pool/barrier/queue/heartbeat/spell"
+         " cmdline=args/plus/uvm/exact/prefix/value/tool/isolation"
+         " run_test=select/topology/timeout/seed/repeat/finish/fatal"
+         " report=verbosity/severity/action/file/catcher/phase/time"
+         " objection_trace=on/bounded"
+         " tracing=factory/config/resource/debug/activity"
+         " legacy_macros=field/object/component/sequence/registry/callback/report"
+         " legacy_api=phase/objection/tlm/sequence/callback/register/policy/"
+         "cmdline/aliases/negative"
+         " uvm2020_api=policy/field_op/copier/object/printer/comparer/packer/"
+         "recorder/report/version/removed"
+         " uvm_release=selected/provenance/object/design/cache/checkpoint/"
+         "replay/mismatch"
+         " core_smoke=governed/project/object/factory/resource/config/cmdline/"
+         "report/callback/run_test/topology/timeout/seed"
+         " flow_smoke=phase/objection/sequence/sequencer/roles/virtual/tlm1/"
+         "tlm2/callback/transaction/cancellation";
 }
 
 } // namespace fsim::tests::app

@@ -349,13 +349,25 @@ void HierarchyBuilder::validate_systemverilog_exports(
                                 candidate, package->tasks)
                             || explicitly_exported(candidate.name));
                 });
+            const auto class_declaration = std::find_if(
+                specialized_package->unit.systemverilog_classes.begin(),
+                specialized_package->unit.systemverilog_classes.end(),
+                [&](const auto& candidate) {
+                    return candidate.name == constant_name
+                        && (directly_declared(
+                                candidate,
+                                package->systemverilog_classes)
+                            || explicitly_exported(candidate.name));
+                });
             if (declaration == nullptr
                 && alias
                     == specialized_package->unit.type_aliases.end()
                 && function
                     == specialized_package->unit.functions.end()
                 && task
-                    == specialized_package->unit.tasks.end()) {
+                    == specialized_package->unit.tasks.end()
+                && class_declaration
+                    == specialized_package->unit.systemverilog_classes.end()) {
                 report(
                     "FSIM-ELAB-SVPKG-002",
                     "SystemVerilog package '"
@@ -390,6 +402,12 @@ void HierarchyBuilder::validate_systemverilog_exports(
                 auto imported = *task;
                 imported.name = identifier;
                 task_imports.push_back(std::move(imported));
+                append_package_dependencies(
+                    unit, *package, *specialized_package);
+                continue;
+            }
+            if (class_declaration
+                != specialized_package->unit.systemverilog_classes.end()) {
                 append_package_dependencies(
                     unit, *package, *specialized_package);
                 continue;

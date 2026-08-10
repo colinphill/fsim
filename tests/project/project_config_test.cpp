@@ -65,6 +65,7 @@ files = [
 include_dirs = ["include"]
 defines = ["WIDTH=8"]
 compilation_unit = "source-set"
+uvm_release = "2020.3.1"
 
 [[source_set]]
 language = "vhdl"
@@ -144,6 +145,10 @@ libraries = ["m"]
     check(
         config->source_sets[1].standard == "2008",
         "language-specific default standard is applied");
+    check(
+        config->source_sets[0].uvm_release
+            == fsim::project::SystemVerilogUvmRelease::ieee_1800_2_2020_3_1,
+        "governed UVM release selection is retained canonically");
     check(
         config->bindings.size() == 2
             && !config->bindings[1].target.has_value()
@@ -559,6 +564,38 @@ delay_mode = "slow"
       "invalid manifest delay mode has a stable targeted diagnostic");
 }
 
+void test_uvm_release_values() {
+  using Release = fsim::project::SystemVerilogUvmRelease;
+  check(
+      fsim::project::parse_systemverilog_uvm_release("uvm-1.2")
+              == Release::uvm_1_2
+          && fsim::project::parse_systemverilog_uvm_release("2020.3.1")
+              == Release::ieee_1800_2_2020_3_1
+          && fsim::project::to_string(Release::uvm_1_2) == "1.2"
+          && fsim::project::to_string(
+                 Release::ieee_1800_2_2020_3_1) == "2020.3.1",
+      "UVM release aliases normalize to two canonical governed values");
+
+  fsim::diagnostic::Engine diagnostics;
+  const auto config = fsim::project::parse(
+      R"(schema = 2
+[[source_set]]
+language = "vhdl"
+uvm_release = "1.2"
+files = ["missing.vhd"]
+)",
+      "bad-uvm-release.toml", ".", diagnostics);
+  check(!config.has_value(), "non-SystemVerilog UVM release is rejected");
+  check(
+      std::ranges::any_of(
+          diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-PROJ-0007"
+                && diagnostic.message.find("uvm_release")
+                    != std::string::npos;
+          }),
+      "invalid UVM release placement has a stable manifest diagnostic");
+}
+
 }  // namespace
 
 int main() {
@@ -573,6 +610,7 @@ int main() {
   test_json_diagnostics_are_escaped();
   test_zero_time_resolution_is_rejected();
   test_delay_mode_values();
+  test_uvm_release_values();
   if (failures != 0) {
     std::cerr << failures << " test(s) failed\n";
     return 1;

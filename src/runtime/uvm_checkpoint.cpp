@@ -19,7 +19,14 @@ bool valid_provenance(const SystemVerilogUvmCheckpointProvenance &value,
       value.content_identity.size() > limits.maximum_identity_bytes ||
       value.cache_identity.size() > limits.maximum_identity_bytes ||
       value.artifact_identity.size() > limits.maximum_identity_bytes ||
+      value.source_identity.size() > limits.maximum_identity_bytes ||
       value.roots.size() > limits.maximum_roots) {
+    return false;
+  }
+  if ((value.uvm_release != "none" && value.uvm_release != "1.2"
+       && value.uvm_release != "2020.3.1")
+      || (value.uvm_release == "none" && !value.source_identity.empty())
+      || (value.uvm_release != "none" && value.source_identity.empty())) {
     return false;
   }
   std::set<std::string, std::less<>> roots;
@@ -38,6 +45,8 @@ bool provenance_exceeds_limits(
   if (value.content_identity.size() > limits.maximum_identity_bytes ||
       value.cache_identity.size() > limits.maximum_identity_bytes ||
       value.artifact_identity.size() > limits.maximum_identity_bytes ||
+      value.uvm_release.size() > limits.maximum_identity_bytes ||
+      value.source_identity.size() > limits.maximum_identity_bytes ||
       value.roots.size() > limits.maximum_roots) {
     return true;
   }
@@ -87,6 +96,12 @@ provenance_error(const SystemVerilogUvmCheckpointProvenance &saved,
   }
   if (saved.roots != expected.roots) {
     return SystemVerilogUvmCheckpointError::RootMismatch;
+  }
+  if (saved.uvm_release != expected.uvm_release) {
+    return SystemVerilogUvmCheckpointError::ReleaseMismatch;
+  }
+  if (saved.source_identity != expected.source_identity) {
+    return SystemVerilogUvmCheckpointError::SourceMismatch;
   }
   return SystemVerilogUvmCheckpointError::None;
 }

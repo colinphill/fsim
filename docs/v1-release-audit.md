@@ -9,13 +9,13 @@ remains the final Task 10 boundary.
 
 ## Matrix baseline
 
-The current matrix contains exactly 1,262 required rows. Every row is classified
+The current matrix contains exactly 1,279 required rows. Every row is classified
 `execute`, has nonempty positive parse, negative diagnostic, elaboration, and
 runtime evidence, and names evidence paths that exist in the checkout.
 
 | Surface | Prefix | Required rows | Final review owner |
 |---|---|---:|---:|
-| SystemVerilog language | `SV` | 822 | Task 2 plus v2 Batches 144-157 and 159-161 |
+| SystemVerilog language | `SV` | 839 | Task 2 plus v2 Batches 144-157 and 159-162 |
 | SystemVerilog release contract | `V1-SV` | 9 | Task 2 |
 | VHDL language | `VH` | 279 | Task 3 plus v2 Batches 140-143 and 158 |
 | VHDL release contract | `V1-VH` | 8 | Task 3 |
@@ -25,7 +25,7 @@ runtime evidence, and names evidence paths that exist in the checkout.
 | Common release contract | `V1-CM` | 10 | Tasks 5 through 9 |
 
 The Task 1 baseline matrix digest is
-`3f6bc26424dd6dabe984f1efbef858808c2370b50c0969c6d82340499410e506`.
+`70deacfc60402730e5a567494e74aa015b4759b3655983a2ff6464c97ef11d42`.
 Changing any row requires an intentional audit update and the owning focused
 gate; the digest is evidence of review, not a substitute for semantic tests.
 Corrective Batch 131 re-reviewed the affected container rows after replacing
@@ -88,15 +88,20 @@ arbitration, access, driver handshakes, component roles, virtual sequences,
 callbacks and transaction recording, the register model/maps/frontdoors/
 backdoors/standard sequences/callbacks/coverage, integrated checkpoint state,
 and exact unmodified UVM 1.2/2020.3.1 sequence/register parity.
+V2 Batch 162 adds `SV-823` through `SV-839` for object policies, packing and
+recording, synchronization, command-line/test-runner/tracing behavior, exact
+legacy/IEEE compatibility, project core/flow/register smoke environments,
+portable provenance, platform bounds, executable conformance inventory, and a
+two-release zero-unresolved-supported-gap closure audit.
 
 ## Existing release evidence
 
 The composed local gates currently establish:
 
-- 2,054 production diagnostics are cataloged;
-- 809 authored C/C++ sources remain within the 2,500-line hard limit; any file
+- 2,071 production diagnostics are cataloged;
+- 826 authored C/C++ sources remain within the 2,500-line hard limit; any file
   that exceeds it must be refactored below the 2,000-line target;
-- all 1,262 required matrix rows are executable with no explicit evidence gap;
+- all 1,279 required matrix rows are executable with no explicit evidence gap;
 - 105 independently authored conformance expectations in 28 fixtures are
   owned by 27 CTests;
 - 20 exact portability rows cover Debug/Release, interpreter/LLVM O0/O2,
@@ -109,6 +114,21 @@ These are inventory facts, not fresh release-candidate execution. Tasks 2
 through 9 must re-read the owning rows and tests, repair any mismatch found,
 and retain focused executable evidence. Task 10 owns the accumulated local
 release gates and hosted proof.
+
+The synchronized Batch 162 candidate corpus now freezes 1,279 executable rows,
+5,116 linked evidence cells, and 604 exact paths split across 265 test, 312
+production, and 27 release/build owners. It retains 138 runtime files and 36
+corpus CTests with matrix digest
+`70deacfc60402730e5a567494e74aa015b4759b3655983a2ff6464c97ef11d42`
+and evidence digest
+`2d9a2bf8fdc360b6b484087848eeb00def2a61cff5fecfacf9400fadcec2010b`.
+
+Batch 162 Change 20 completes fresh exact-LLVM Debug and Release builds and
+122/122 regressions, then passes both governed ten-stage UVM release matrices
+2/2. The final local validation includes all composed inventory, public,
+installed, portability, documentation, evidence, and release gates. Sanitizer
+and hosted-CI inspection remain intentionally excluded at this non-monitoring
+boundary.
 
 ## Exact final closure queue
 

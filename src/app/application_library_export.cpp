@@ -400,6 +400,8 @@ bool export_library(
     auto& unit = class_units[declaration.compilation_unit_identity];
     unit.library = std::string{library_name};
     unit.compilation_unit_identity = declaration.compilation_unit_identity;
+    unit.uvm_release = std::string{project::to_string(
+        checked->systemverilog_uvm_provenance.release)};
     unit.declarations.push_back(declaration);
   }
   // Class resolution has already transactionally linked every valid

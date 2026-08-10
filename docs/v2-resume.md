@@ -70,6 +70,499 @@ authoritative v2 batch/status record. Preserve the completed v1 history in
     field/object/array traversal, cycle handling, mismatch accounting, stable
     formatting, resource ceilings, cataloged malformed-policy diagnostics, and
     focused unmodified UVM 1.2/2020.3.1 evidence.
+14. Change 1 is complete in the intentionally dirty Batch 162 worktree. The
+    simulation-owned object service now owns deterministic escaped line, tree,
+    and table formatting with configurable indentation, separators, columns,
+    type/size visibility, and output ceilings. Detailed comparison implements
+    deep, shallow, and reference recursion; type, physical, and abstract knobs;
+    per-field recursion overrides; complete mismatch counting with bounded
+    retained detail; and bijective alias/cycle handling across scalar, string,
+    object, sequential-array, and associative-array fields. Legacy Boolean
+    compare and raw print-entry APIs preserve compatible defaults. Conflicting
+    field flags and malformed printer/comparer settings are cataloged as
+    `FSIM-UVM-POLICY-001`.
+15. Runtime proof covers all recursion modes, scalar/string/object/array/keyed
+    traversal, cycles and aliases, physical/abstract/type filtering, field
+    overrides, complete bounded mismatch accounting, stable repeated output,
+    escaped control/quote/backslash text, formatting ceilings, and every
+    malformed-policy path. The runtime, diagnostics-catalog, source-line-budget,
+    and UVM phase/TLM matrix gates pass 4/4. The final exact-LLVM governed build
+    refreshes 88 affected steps warning-free. Exact unmodified UVM 1.2 passes
+    in 469.72 seconds and UVM 2020-3.1 passes in 581.15 seconds, 2/2 in 1,050.88
+    seconds with maximum RSS 4,775,892 KiB and zero swaps. All twenty release/
+    stage transcripts retain the policy marker. All fourteen traces are 17,833
+    bytes with SHA-256
+    `95caf4dbb04fa7f1b1397df9b40e03a1fdbc19b90c6387221a8b59635ebd5eff`.
+16. Preserve all Change 1 tracked and untracked files. Do not reset, commit, or
+    push before Change 20, and do not run sanitizer or hosted-CI gates at this
+    non-boundary. Next implement Batch 162 Change 2: deep/shallow/reference
+    copier behavior, automation hooks, field macros, clone/copy ownership,
+    recursion/alias preservation, rollback, exception containment, stale and
+    cross-owner rejection, explicit ceilings, cataloged diagnostics, and exact
+    two-release evidence.
+17. Change 2 is complete in the intentionally dirty Batch 162 worktree. UVM
+    object references are service-owner branded, and compatible raw-handle
+    clone/copy APIs delegate to one detailed copier. Deep copies preserve cycles
+    and bijective aliases across object, vector, and keyed container fields;
+    shallow copies materialize one object level; reference copies retain source
+    handles. Physical/abstract filters and per-field deep/shallow/reference/no-
+    copy automation flags override the global policy. Runtime packed-value
+    widths are copied from the source only after exact-specialization and
+    property-kind validation. Virtual creation and `do_copy` hooks execute per
+    object. Any callback, stale/foreign ownership, type/shape, or resource
+    failure rolls back destination state and every newly created object under
+    cataloged `FSIM-UVM-COPY-001` through `005` diagnostics.
+18. Focused runtime proof covers scalar/string/object/vector/keyed fields,
+    cycles, aliases, deep/shallow/reference modes, per-field overrides,
+    physical/abstract filtering, no-copy, current-width packed values, self-
+    copy, hook counts and failure containment, stale/foreign/type rejection,
+    clone-root and recursive ownership, and resource rollback. Runtime,
+    diagnostics-catalog, source-line-budget, and UVM phase/TLM matrix gates pass
+    4/4. The governed exact-LLVM tree refreshes 80 affected steps warning-free
+    and rebuilds three steps after the final runtime-width correction. Exact
+    UVM 1.2 passes in 469.92 seconds and UVM 2020-3.1 passes in 587.70 seconds,
+    2/2 in 1,057.62 seconds with maximum RSS 4,775,736 KiB and zero swaps. All
+    twenty stage transcripts retain the copier marker. All fourteen traces are
+    17,833 bytes with SHA-256
+    `95caf4dbb04fa7f1b1397df9b40e03a1fdbc19b90c6387221a8b59635ebd5eff`.
+19. Preserve all Changes 1-2 tracked and untracked files. Do not reset, commit,
+    or push before Change 20; do not run sanitizer or hosted-CI gates at this
+    non-boundary. Next implement Batch 162 Change 3: scalar/string/real/object/
+    array packer and recorder policies, endian and bit/byte/int packing, unpack
+    validation, transaction attribute/link integration, deterministic replay,
+    retained-record limits, rollback, diagnostics, and exact two-release proof.
+20. Change 3 is complete in the intentionally dirty Batch 162 worktree. The
+    versioned typed packer closes big/little-endian four-/nine-state bits,
+    bytes, integers, embedded-NUL strings, reals, object identities, recursive
+    arrays, optional metadata, strict unpack validation, and bounded malformed/
+    resource diagnostics. Transaction object recording publishes prefixed
+    typed automation attributes transactionally; trace replay validates and
+    reconstructs ordered begin/attribute/link/end identity, hierarchy, timing,
+    links, attributes, and terminal state under retained-record ceilings.
+    Runtime, diagnostics-catalog, source-line-budget, and UVM phase/TLM matrix
+    gates pass 4/4. The governed exact-LLVM tree refreshes 100 affected steps
+    warning-free and rebuilds three steps after the exact inherited-field count
+    correction. Exact UVM 1.2 passes in 459.60 seconds and UVM 2020-3.1 passes
+    in 567.53 seconds, 2/2 in 1,027.12 seconds with maximum RSS 4,775,616 KiB
+    and zero swaps. All twenty stage transcripts retain the packer/recorder
+    marker. All fourteen traces are 27,913 bytes with SHA-256
+    `63a73aa8584815862ee48c591dee8c0b5a164a9f0aa43234a8628ef302019409`.
+21. Preserve all Changes 1-3 tracked and untracked files. Do not reset, commit,
+    or push before Change 20; do not run sanitizer or hosted-CI gates at this
+    non-boundary. Next implement Batch 162 Change 4: event, event-pool, barrier,
+    pool, queue, heartbeat, spell-challenge, and remaining policy-class
+    behavior with callback/wait/threshold/reset/cancellation semantics,
+    deterministic lifecycle order, bounded resources, and exact two-release
+    evidence.
+22. Change 4 is complete in the intentionally dirty Batch 162 worktree. The
+    simulation-owned synchronization service closes named event-pool identity,
+    trigger/persistent/on/off waits, object payloads, callback snapshots and
+    containment, scheduler timing, reset/wakeup/cancel, threshold/auto-reset
+    barriers, typed deterministic pools/queues, event-driven ANY/ALL/ONE
+    heartbeat windows, bounded spell challenges, referenced teardown, and
+    waiter-cancelling service reset. Cataloged `FSIM-UVM-SYNC-001` and `002`
+    diagnostics cover stale, malformed, state, ownership, threshold, mode,
+    index, text, entry, participant, work, and mutation failures. Runtime,
+    diagnostics-catalog, source-line-budget, and UVM phase/TLM matrix gates pass
+    4/4. The exact-LLVM tree refreshes 92 affected steps warning-free. Exact UVM
+    1.2 passes in 463.93 seconds and UVM 2020-3.1 passes in 567.65 seconds, 2/2
+    in 1,031.57 seconds with maximum RSS 4,775,812 KiB and zero swaps. All
+    twenty stage transcripts retain the synchronization marker. All fourteen
+    traces remain 27,913 bytes with SHA-256
+    `63a73aa8584815862ee48c591dee8c0b5a164a9f0aa43234a8628ef302019409`.
+23. Preserve all Changes 1-4 tracked and untracked files. Do not reset, commit,
+    or push before Change 20; do not run sanitizer or hosted-CI gates at this
+    non-boundary. Next implement Batch 162 Change 5: complete command-line
+    processor ordered argv retention, exact/prefix queries, value extraction,
+    plusargs, tool/version arguments, duplicates, malformed input, simulation
+    isolation, bounded query/text resources, diagnostics, and exact two-release
+    evidence.
+24. Change 5 is complete in the intentionally dirty Batch 162 worktree. The
+    simulation-owned command-line processor now closes ordered argv, plusarg
+    and UVM subsets, explicit exact/prefix matches, first/all value extraction,
+    ordered duplicates, stable tool/version identity, simulation isolation,
+    missing/malformed queries, and independent query text/result-count/result-
+    byte ceilings. Existing transactional factory/config/verbosity/timeout/
+    trace-switch application remains intact. Cataloged `FSIM-UVM-CMD-001` and
+    `002` diagnostics distinguish malformed/state input from retained argv,
+    setting, query, result, and downstream resource exhaustion. Runtime,
+    diagnostics-catalog, source-line-budget, and UVM phase/TLM matrix gates pass
+    4/4. The exact-LLVM tree refreshes 46 affected steps warning-free. Exact UVM
+    1.2 passes in 459.05 seconds and UVM 2020-3.1 passes in 557.18 seconds, 2/2
+    in 1,016.23 seconds with maximum RSS 4,775,796 KiB and zero swaps. All
+    twenty stage transcripts retain the command-line query marker. All fourteen
+    traces remain 27,913 bytes with SHA-256
+    `63a73aa8584815862ee48c591dee8c0b5a164a9f0aa43234a8628ef302019409`.
+25. Preserve all Changes 1-5 tracked and untracked files. Do not reset, commit,
+    or push before Change 20; do not run sanitizer or hosted-CI gates at this
+    non-boundary. Next implement Batch 162 Change 6: `run_test`, test-name
+    selection, topology printing, global timeout, seed selection/reporting,
+    command precedence, repeated-run cleanup, fatal/finish behavior, and
+    deterministic interpreter/compiled/debug execution for both governed
+    releases.
+26. Change 6 is complete in the intentionally dirty Batch 162 worktree. The
+    simulation-owned test runner applies explicit-before-command precedence for
+    test name, seed, and global timeout; creates `uvm_test_top` through the
+    factory; prints deterministic bounded topology; distinguishes completion,
+    `$finish`, fatal/exception, and timeout outcomes; rejects stale/reentrant
+    runs; and cleans every repeated hierarchy. Exact source proof uses a real
+    registered `uvm_test` and retains the runner marker across all twenty
+    direct/object/O0/O2/cache/debug stage transcripts. Cataloged
+    `FSIM-UVM-RUN-001` through `003` cover lifecycle/selection, resource/
+    timeout, and fatal termination.
+27. The governed exact-LLVM tree refreshes 93 affected steps warning-free.
+    Exact UVM 1.2 passes in 469.08 seconds and UVM 2020-3.1 passes in 577.08
+    seconds, 2/2 in 1,046.16 seconds with maximum RSS 4,776,356 KiB and zero
+    swaps. All fourteen traces remain 27,913 bytes with SHA-256
+    `63a73aa8584815862ee48c591dee8c0b5a164a9f0aa43234a8628ef302019409`.
+    Runtime, diagnostics-catalog, source-line-budget, and the 79-family UVM
+    phase/TLM matrix gates pass 4/4. Preserve Changes 1-6 without reset,
+    commit, push, sanitizer, or hosted CI. Next implement Change 7: close
+    report verbosity/severity/action/file switches and objection tracing with
+    hierarchical overrides, phase/time-aware output, callback/catcher
+    containment, command precedence, bounded resources, and stable exact
+    cross-engine transcripts.
+28. Change 7 is complete in the intentionally dirty Batch 162 worktree. The
+    command-line processor applies default verbosity, first-wins max-quit and
+    objection-trace controls initially, then source-ordered component or ID
+    verbosity controls at exact phase entry or due simulation time. Sorted
+    root/descendant matching, bounded wildcards, and transactional match/work/
+    trace/report-capacity preflight preserve deterministic hierarchy behavior.
+    Exact proof combines hierarchical severity, action, file, verbosity, and
+    catcher policy with stable bounded objection trace enable/disable sequence
+    boundaries and escaped phase-aware records. `FSIM-UVM-CMD-001`/`002` and
+    `FSIM-UVM-OBJ-003` retain malformed and resource-limit failures.
+29. The governed exact-LLVM tree refreshes 68 affected steps warning-free.
+    Exact UVM 1.2 passes in 469.61 seconds and UVM 2020-3.1 passes in 584.10
+    seconds, 2/2 in 1,053.72 seconds with maximum RSS 4,776,356 KiB and zero
+    swaps. All twenty stage transcripts retain the report-control and
+    objection-trace markers. All fourteen traces remain 27,913 bytes with
+    SHA-256
+    `63a73aa8584815862ee48c591dee8c0b5a164a9f0aa43234a8628ef302019409`.
+    Runtime, diagnostics-catalog, source-line-budget, and UVM phase/TLM matrix
+    gates pass 4/4. Preserve Changes 1-7 without reset, commit, push, sanitizer,
+    or hosted CI. Next implement Change 8: factory/config/resource tracing,
+    print/usage inventories, wildcard and override reporting, root isolation,
+    callback containment, deterministic order, debugger/activity integration,
+    and cataloged option/resource diagnostics.
+30. Change 8 is complete in the intentionally dirty Batch 162 worktree.
+    Simulation-owned factory, resource, and config services now retain bounded,
+    stable, fully escaped traces with deterministic oldest-first eviction and
+    contained callback failures. Factory traces include create/debug resolution
+    and ordered instance/type override steps. Resource traces cover name/type
+    lookup, read, and write; config traces cover set/get/exists. Stable factory
+    and audited config inventories expose registration, override, creation,
+    precedence, and read/write usage. Standard resource/config trace plusargs
+    enable shared service state without a later absent switch disabling it.
+    The debugger's `uvm configuration` section and immutable configuration
+    activity events expose the same bounded interval without cross-root or
+    cross-simulation leakage.
+31. The exact-LLVM tree refreshes 75 affected steps warning-free and four steps
+    after the final control-byte escaping correction. Exact UVM 1.2 passes in
+    473.16 seconds and UVM 2020-3.1 passes in 580.81 seconds, 2/2 in 1,053.97
+    seconds with maximum RSS 4,776,552 KiB and zero swaps. All twenty stage
+    transcripts retain the factory/config/resource/debug/activity marker. All
+    fourteen traces are 28,345 bytes with SHA-256
+    `62df6d6de11f33dcea64ae245060ebc70f578b4e54e326a911aa44ccb9797057`.
+    Runtime, diagnostics-catalog, source-line-budget, and UVM phase/TLM matrix
+    gates pass 4/4. Preserve Changes 1-8 without reset, commit, push, sanitizer,
+    or hosted CI. Next implement Change 9: close UVM 1.2 legacy field/object/
+    component/sequence/register macros, callback declarations, factory
+    utilities, report helpers, and exact expansion/call signatures against the
+    unmodified governed source tree.
+32. Change 9 is complete in the intentionally dirty Batch 162 worktree. The
+    governed frontend probe expands real UVM 1.2 field/object/component/
+    registry, sequence, callback, analysis-implementation, and report macros
+    and checks the generated factory utilities and call signatures without
+    modifying either source tree. It also verifies the compatible release
+    distinction between UVM 1.2 `__m_uvm_field_automation` and UVM 2020.3.1
+    `__m_uvm_execute_field_op`. A project-owned macro source compiled beside
+    both packages retains generated item/sequence/component/register/callback
+    methods, nonempty sequence/callback/report bodies, analysis-imp
+    inheritance, factory wrappers, and debug resolution through direct,
+    object, design, interpreter, O0/O2, cache, and debugger paths. The exact
+    frontend suite passes in 63.58 seconds at 413,868 KiB maximum RSS with zero
+    swaps.
+33. Exact UVM 1.2 passes in 480.29 seconds and UVM 2020-3.1 passes in 583.37
+    seconds, 2/2 in 1,063.67 seconds with maximum RSS 4,804,484 KiB and zero
+    swaps. All twenty stage transcripts retain the legacy-macro marker. All
+    fourteen traces remain 28,345 bytes with SHA-256
+    `62df6d6de11f33dcea64ae245060ebc70f578b4e54e326a911aa44ccb9797057`.
+    Frontend, runtime, diagnostics-catalog, source-line-budget, and UVM
+    phase/TLM matrix gates pass 5/5. Preserve Changes 1-9 without reset, commit,
+    push, sanitizer,
+    or hosted CI. Next implement Change 10: close remaining UVM 1.2 legacy APIs
+    and behavioral contracts across phases, objections, TLM, sequences,
+    callbacks, registers, policies, command-line processing, deprecation
+    aliases, and negative diagnostics.
+34. Change 10 is complete in the intentionally dirty Batch 162 worktree.
+    Direct and portable governed UVM 1.2 execution requires 107 exact method
+    profiles, including function/task kind and argument count, across phases,
+    objections, TLM ports, sequences, callbacks, registers, object/printer/
+    comparer/packer/recorder policies, command-line processing, deprecated
+    component configuration/stop APIs, and `uvm_test_done_objection`. The
+    governed frontend also requires package-level `uvm_top`, `uvm_test_done`,
+    stop-request, and timeout aliases; expands deprecated sequence/sequencer
+    registration utilities; proves `UVM_NO_DEPRECATED` removes them; and
+    retains exact undefined-macro, expansion-depth, and arity diagnostics.
+    The exact frontend suite passes in 64.19 seconds at 413,888 KiB maximum RSS
+    with zero swaps. Normal and governed affected builds complete five steps
+    warning-free with eight workers.
+35. Exact UVM 1.2 passes in 458.84 seconds and UVM 2020-3.1 passes in 560.74
+    seconds, 2/2 in 1,019.58 seconds with maximum RSS 4,804,092 KiB and zero
+    swaps. All twenty stage transcripts retain the legacy-API marker. All
+    fourteen traces remain 28,345 bytes with SHA-256
+    `62df6d6de11f33dcea64ae245060ebc70f578b4e54e326a911aa44ccb9797057`.
+    Frontend, runtime, diagnostics-catalog, source-line-budget, and UVM
+    phase/TLM matrix gates pass 5/5. Preserve Changes 1-10 without reset,
+    commit, push, sanitizer, or hosted CI. Next implement Change 11: close UVM
+    2020-3.1 additions, IEEE 1800.2 names/signatures, policy/reporting
+    additions, deprecated/removed aliases, version macros, and release-specific
+    behavior while preserving the common simulation-owned runtime model.
+36. Change 11 is complete in the intentionally dirty Batch 162 worktree.
+    Direct and portable governed UVM 2020.3.1 execution requires 134 exact
+    method profiles across new policy, field-operation, and copier classes;
+    object seeding/long-integer/copy dispatch; printer/comparer/packer/recorder
+    accessors and recursion state; report-server summaries; and retained
+    component configuration plus test-done compatibility shims. Removed
+    component status/kill/stop and sequence-library methods must remain absent
+    after every artifact load. The governed frontend requires each release's
+    exact version numbers/string/compatibility ladder, the IEEE policy/copier/
+    revision names, removed global test-done/stop/timeout aliases, and two
+    exact undefined-macro diagnostics for removed sequence/sequencer utilities.
+    The exact frontend suite passes in 65.25 seconds at 414,100 KiB maximum RSS
+    with zero swaps. Normal and governed affected builds complete five steps
+    warning-free with eight workers.
+37. Exact UVM 1.2 passes in 457.48 seconds and UVM 2020-3.1 passes in 557.05
+    seconds, 2/2 in 1,014.54 seconds with maximum RSS 4,804,040 KiB and zero
+    swaps. All twenty stage transcripts retain the UVM-2020 API marker. All
+    fourteen traces remain 28,345 bytes with SHA-256
+    `62df6d6de11f33dcea64ae245060ebc70f578b4e54e326a911aa44ccb9797057`.
+    Frontend, runtime, diagnostics-catalog, source-line-budget, and UVM
+    phase/TLM matrix gates pass 5/5. Preserve Changes 1-11 without reset,
+    commit, push, sanitizer, or hosted CI. Next implement Change 12: explicit
+    dual-release selection and normalized compatibility dispatch, retained
+    source/release provenance through artifacts/caches/checkpoints/replay,
+    transactional mixed-release rejection, and the complete difference matrix.
+38. Change 12 is complete in the intentionally dirty Batch 162 worktree.
+    Manifest `uvm_release` and CLI `--uvm-release` selection normalize to a
+    public 1.2/2020.3.1 enum and complete compatibility-dispatch record. The
+    selected release is checked against the real parsed or portable `uvm_pkg`
+    surface. `FSIM-UVM-VERSION-001` rejects invalid language placement, mixed
+    source/object releases, and selected/artifact disagreement;
+    `FSIM-UVM-VERSION-002` rejects an API-surface mismatch. Synthetic focused
+    proof exercises both failures before any project/artifact publication.
+39. Canonical release plus a content-derived exact source identity now crosses
+    source settings, checked/built projects, `.fsimobj` metadata and class
+    payloads, project/specialization cache keys, `.fsimdesign` metadata, and
+    checkpoint restore/replay. Object format 2, owning-unit schema 14, design
+    format 4, UVM-state schema 2, and checkpoint schema 2 freeze that boundary.
+    The normal exact-LLVM tree rebuilds 183 affected steps and the governed
+    tree 63 steps warning-free with eight workers. Project/library/object/
+    design/cache/diagnostics/matrix/source gates pass 8/8; application/
+    artifact/runtime gates pass 3/3; and the standalone negative proof passes.
+40. Direct UVM 1.2 passes in 1:50.48 at 4,296,956 KiB maximum RSS and direct
+    UVM 2020.3.1 in 2:04.50 at 4,805,272 KiB, both with zero swaps. The full
+    serial matrices pass 10/10 in 7:55.26 and 10/10 in 9:27.80, respectively:
+    20/20 in 17:23.06 with matrix maximum RSS 4,803,608 KiB and zero swaps.
+    All fourteen traces are 28,345 bytes with SHA-256
+    `62df6d6de11f33dcea64ae245060ebc70f578b4e54e326a911aa44ccb9797057`.
+    Preserve Changes 1-12 without reset, commit, push, sanitizer, or hosted CI.
+    Next implement Change 13: run and retain the governed standard and
+    project-owned object-policy, factory/config/resource, command-line,
+    reporting, callback, test-selection, topology, timeout, and seed smoke
+    suites through direct source and portable objects for both releases.
+41. Change 13 is complete in the intentionally dirty Batch 162 worktree. One
+    project-owned source derives `uvm_test`, binds the governed object-policy,
+    factory, resource/configuration, command-line, report-server, and callback
+    types, and executes eleven named core smoke methods. Direct and portable
+    application stages require its standard base and every nonempty method body
+    after object/design reload, then exercise the matching simulation-owned
+    policies, factory, databases, command-line/report/callback controls, and
+    test selection/topology/timeout/seed behavior. The static source harness
+    freezes the same eleven-category inventory and exact transcript marker.
+42. The new 2020.3.1 report-server member exposed and closed a qualified
+    package-class lookup gap. External package qualification now recognizes a
+    class only when directly declared or explicitly exported and retains its
+    package dependency; a focused class-member regression passes. Normal and
+    governed exact-LLVM Debug trees refresh 21 and 159 steps warning-clean with
+    eight workers. Elaboration, diagnostics catalog, source policy, source
+    harness, and phase/TLM matrix gates pass 5/5.
+43. Direct UVM 1.2/2020.3.1 passes in 1:50.06/2:10.02 at
+    4,299,260/4,861,476 KiB maximum RSS. Portable compile passes in
+    2:29.65/3:17.21 at 3,365,800/3,735,852 KiB; object-only O2 elaboration in
+    1:38.54/2:00.99 at 3,239,364/3,746,852 KiB; and loaded execution in
+    1.50/1.69 seconds at 936,660/1,041,144 KiB. All stages report zero swaps.
+    The four direct/portable traces are 28,345 bytes with SHA-256
+    `62df6d6de11f33dcea64ae245060ebc70f578b4e54e326a911aa44ccb9797057`.
+    Preserve Changes 1-13 without reset, commit, push, sanitizer, or hosted CI.
+    Next implement Change 14's phase/objection/sequence/role/TLM/callback/
+    transaction/cancellation smoke matrix across engines, caches, roots, debug,
+    and replay.
+44. Change 14 is complete in the intentionally dirty Batch 162 worktree. The
+    existing project phase/TLM source now has explicit post-load assertions for
+    32 flow contracts: nine phase callback bodies, two TLM1 members, seven
+    sequence/role/callback base identities, and fourteen common TLM2 payload
+    profiles. Every stage checks those retained profiles before exercising
+    phase/objection scheduling, sequence/sequencer/driver/monitor/agent and
+    virtual-sequence behavior, TLM1/TLM2, callbacks, transactions,
+    cancellation, multiple roots, and checkpoint replay. The static source
+    harness freezes ten matching flow types and the transcript freezes one
+    flow-smoke marker.
+45. The serial exact matrix passes UVM 1.2 ten stages in 7:53.85 at
+    4,299,156 KiB maximum RSS and UVM 2020-3.1 ten stages in 9:46.97 at
+    4,861,116 KiB: 20/20 stages in 17:40.82 with zero swaps. Both retained
+    stage logs contain exactly ten flow-smoke transcripts. All fourteen traces
+    are 28,345 bytes with SHA-256
+    `62df6d6de11f33dcea64ae245060ebc70f578b4e54e326a911aa44ccb9797057`.
+46. The normal exact-LLVM Debug tree refreshes three affected steps warning-
+    clean with eight workers and the governed tree is already current.
+    Preserve Changes 1-14 without reset, commit, push, sanitizer, or hosted CI.
+    Next implement Change 15's register block/map/field/memory, adapter/
+    predictor/frontdoor/backdoor, standard sequence, callback/coverage, DPI,
+    VPI, and VHPI smoke suites with relocation, mixed-abstraction, negative,
+    checkpoint, and retained-cap evidence.
+47. Change 15 is complete in the intentionally dirty Batch 162 worktree. Every
+    direct or loaded-design stage validates six project register-role base
+    identities, adapter profiles, and stable governed field/map/memory method
+    profiles before execution. The exact environment proves hierarchy,
+    little/big endian, sparse byte enables, adapter/frontdoor/predictor,
+    mixed-VPI/VHPI backdoor, standard access sequence, callback/coverage, DPI
+    callback, wrong-width rollback, debugger inventory, relocation, checkpoint
+    replay, and a one-record-short retained capture cap. The transcript freezes
+    the complete register-smoke contract.
+48. The serial exact matrix passes UVM 1.2 ten stages in 7:59.08 at
+    4,299,536 KiB maximum RSS and UVM 2020-3.1 ten stages in 9:55.15 at
+    4,860,764 KiB: 20/20 stages in 17:54.23 with zero swaps. Both retained logs
+    contain exactly ten register-smoke transcripts. All fourteen traces are
+    28,345 bytes with SHA-256
+    `62df6d6de11f33dcea64ae245060ebc70f578b4e54e326a911aa44ccb9797057`.
+49. The normal and governed exact-LLVM Debug targets each refresh three
+    affected steps warning-clean with eight workers. Diagnostics catalog,
+    source-line-budget, UVM source-harness, and phase/TLM matrix pass 4/4.
+    One exploratory broader `fsim.v1-inventory-release` run remains expected-
+    red because its frozen release text does not yet match the accumulated
+    2,054-code diagnostic catalog; Changes 18-20 own that synchronization.
+    Preserve Changes 1-15 without reset, commit, push, sanitizer, or hosted CI.
+    Next implement Change 16's Linux/Windows source and ABI portability
+    contracts plus the bounded combined direct/object/design, interpreter,
+    LLVM O0/O2, cache, debug, trace, foreign, relocation, and replay matrix.
+50. Change 16 is complete in the intentionally dirty Batch 162 worktree. The
+    exact test child applies a 6 GiB POSIX `RLIMIT_AS` or Windows Job Object
+    process-memory ceiling before governed parsing. Each direct, compile,
+    elaborate, and simulate invocation has a validated 1,200-second CMake
+    timeout; each serial release matrix has the approved 7,200-second CTest
+    timeout. The C11 probe freezes x64 snapshot/record/activity/host sizes and
+    offsets, append-only host tail, and callback calling convention. The fast
+    platform contract freezes both source registrations, filesystem-neutral
+    paths, MSVC setup, Windows `__cdecl`, limits, and transcript marker.
+51. The capped matrix passes UVM 1.2 ten stages in 7:55.05 at 4,299,868 KiB
+    maximum RSS and UVM 2020-3.1 ten stages in 9:55.48 at 4,861,176 KiB: 20/20
+    in 17:50.53 with zero swaps and twenty platform-contract markers. Focused
+    capped direct probes pass at 4,299,428/4,861,616 KiB. All fourteen traces
+    are 28,345 bytes with SHA-256
+    `62df6d6de11f33dcea64ae245060ebc70f578b4e54e326a911aa44ccb9797057`.
+52. The normal target refreshes two final limiter steps and the governed tree
+    refreshes five affected steps warning-clean with eight workers. Runtime,
+    UVM platform/source/matrix, MSVC Debug/Release, Windows LLVM, resource/tool
+    portability, installed-public, diagnostic-catalog, and source-line-budget
+    gates pass 12/12. Preserve Changes 1-16 without reset, commit, push,
+    sanitizer, or hosted CI. Next execute Change 17's complete governed
+    standard/project conformance inventory, classify every observed mismatch,
+    and close every in-scope gap with no allowlisted supported failure.
+53. Change 17 is complete in the intentionally dirty Batch 162 worktree. The
+    authoritative 18-row tab-separated inventory selects exactly 17 supported
+    families per release and assigns positive, negative, and execution owners
+    to every row. The post-load verifier requires unique rows/classes, valid
+    evidence paths, 53 UVM 1.2 or 56 UVM 2020-3.1 governed class identities,
+    and all 27 project identities after direct builds and portable design
+    reloads. The registered fast contract rejects changed schema/counts and
+    every failure-waiver spelling. All mismatches are therefore supported hard
+    failures; the complete inventory observed none and left zero in-scope gaps.
+54. Focused direct inventory probes pass in 1:52.41/2:09.16 at
+    4,299,032/4,860,876 KiB maximum RSS. The exact UVM 1.2 matrix passes ten
+    stages in 8:03.14 at 4,299,292 KiB and UVM 2020-3.1 ten stages in 9:51.85
+    at 4,861,336 KiB: 20/20 in 17:54.99 with zero swaps and ten exact inventory
+    markers per release. All fourteen traces are 28,345 bytes with SHA-256
+    `62df6d6de11f33dcea64ae245060ebc70f578b4e54e326a911aa44ccb9797057`.
+55. The normal and governed exact-LLVM Debug targets each rebuild three steps
+    warning-clean with eight workers. Runtime, diagnostics-catalog,
+    source-line-budget, UVM source-harness, platform, phase/TLM matrix, and
+    conformance-inventory gates pass 7/7. Preserve Changes 1-17 without reset,
+    commit, push, sanitizer, or hosted CI. Next implement Change 18's complete
+    two-release compatibility/behavior matrix, diagnostic/source/complexity/
+    resource/provenance consolidation, and explicit zero-unresolved-supported-
+    gap audit.
+56. Change 18 is complete in the intentionally dirty Batch 162 worktree. The
+    authoritative 21-row release closure matrix freezes canonical releases,
+    all nine public compatibility switches, 53/56 governed and 27 project
+    classes, 17 active families, ten stages, memory/trace baselines,
+    artifact/cache provenance, and zero unresolved supported gaps. Its
+    post-load verifier requires every exact value and evidence owner.
+57. The aggregate closure contract composes the diagnostic, source, SPDX,
+    conformance, and release-inventory audits. It freezes 82 `FSIM-UVM-*`
+    diagnostics within the 2,071-code catalog, 826 bounded C/C++ sources, 937
+    SPDX-owned files, 313 authored test/control files, and the reviewed bounded
+    compare/copy/replay/inventory complexity. The stale release inventory was
+    corrected to those current counts. Race, cancellation, stale, cross-owner,
+    resource, rollback, artifact, cache, and trace owners are explicit and no
+    supported mismatch or waiver remains.
+58. Direct closure probes pass in 1:48.68/2:24.74 at
+    4,299,044/4,860,820 KiB maximum RSS. The exact UVM 1.2 matrix passes ten
+    stages in 8:28.42 at 4,299,288 KiB and UVM 2020-3.1 passes ten in 11:14.87
+    at 4,860,288 KiB: 20/20 in 19:43.29 with zero swaps and ten closure markers
+    per release. All fourteen traces are 28,345 bytes with SHA-256
+    `62df6d6de11f33dcea64ae245060ebc70f578b4e54e326a911aa44ccb9797057`.
+    The normal/governed eight-worker builds are warning-clean and the focused
+    closure suite passes 9/9. Preserve Changes 1-18 without reset, commit,
+    push, sanitizer, or hosted CI. Next implement Change 19's complete public
+    documentation, tutorial, evidence, inventory, portability, and release-
+    contract synchronization.
+59. Change 19 is complete in the intentionally dirty Batch 162 worktree.
+    README, the UVM/version guide, architecture, language support, diagnostics,
+    feature/evidence matrices, source provenance, resource baselines, public/
+    inventory/differential/SystemVerilog/release audits, and this handoff now
+    describe the same bounded two-release closure. The installed producer-
+    independent tutorial covers source sets/manifests, standard UVM code,
+    interpreter/compiled/debug engines, cache/trace comparison, portable
+    phases, plusargs, resource limits, pass criteria, and diagnosis without a
+    producer wrapper or patched source. The new documentation gate freezes 15
+    synchronized owners and installed Markdown.
+60. The reviewed release baseline advances to 1,279 executable rows, 5,116
+    evidence cells, and 604 exact paths split across 265 test, 312 production,
+    and 27 release/build owners, retaining 138 runtime files and 36 corpus
+    CTests. Matrix digest is
+    `70deacfc60402730e5a567494e74aa015b4759b3655983a2ff6464c97ef11d42`;
+    evidence digest is
+    `2d9a2bf8fdc360b6b484087848eeb00def2a61cff5fecfacf9400fadcec2010b`.
+    Authored ownership is 937 SPDX files; diagnostics remain 2,071, bounded
+    C/C++ sources 826, and authored test/control files 313.
+61. Both configured exact-LLVM Debug trees regenerate warning-clean with eight
+    workers and no compilation. Documentation, installed-public, portability,
+    inventory, and release contracts pass 32/32 in 8.98 seconds, including the
+    Unicode staged install with the tutorial and closure audit. Preserve
+    Changes 1-19 without reset, commit, push, sanitizer, or hosted CI. Next run
+    Change 20's fresh full Debug/Release builds, all regressions, both governed
+    matrices, audits, installed/public/platform contracts, and release gates;
+    only after every local gate is clean commit and push the accumulated batch.
+62. Change 20 and Batch 162 are complete in the accumulated implementation
+    worktree. Fresh clean-first exact-LLVM 22.1.8 Debug and Release eight-worker
+    builds each complete 733 steps warning-free in 9:36.84 and 8:49.59 with
+    peak RSS 4,070,136 and 2,506,320 KiB and zero swaps. Their complete
+    regressions pass 122/122 in 6:24.90 and 5:26.29 with peak RSS 3,777,748 and
+    3,783,548 KiB and zero swaps.
+63. The governed tree is current. Exact UVM 1.2 passes all ten stages in
+    8:18.93 and UVM 2020-3.1 in 10:20.25: 2/2 in 18:39.19 with peak RSS
+    4,860,744 KiB and zero swaps. All fourteen regenerated VCD/FST files are
+    28,345 bytes with SHA-256
+    `62df6d6de11f33dcea64ae245060ebc70f578b4e54e326a911aa44ccb9797057`.
+64. The full regressions include every diagnostic/source/license/inventory,
+    documentation, installed/public/platform/portability, evidence, and
+    release-candidate gate. No sanitizer or hosted-CI inspection ran at this
+    non-monitoring boundary. The final post-documentation contract slice passes
+    32/32 and the whitespace check is clean. Commit and push the single
+    accumulated Changes 1-20 implementation, then save and push the
+    Batch 163 restart plan and clear context before Batch 163 implementation.
 
 ## Batch 161 planned restart checkpoint - 2026-08-09
 

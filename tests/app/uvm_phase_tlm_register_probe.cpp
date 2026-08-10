@@ -147,6 +147,12 @@ exercise_exact_uvm_register_environment(fsim::app::Simulation &simulation,
                     byte_enables)
              .success());
   assert(model.read(memory, index).value.low_word().aval == 0x11bb33dd);
+  const auto before_invalid = model.get_mirrored(control);
+  const auto invalid_width =
+      model.write(control, PackedLogic4{1, Logic4::zero});
+  assert(!invalid_width.success() &&
+         invalid_width.status == SystemVerilogUvmRegisterOperationStatus::NotOk &&
+         model.get_mirrored(control) == before_invalid);
 
   std::vector<SystemVerilogUvmRegisterBusItem> bus_items;
   std::vector<std::pair<SystemVerilogUvmSequenceItemHandle,

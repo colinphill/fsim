@@ -5,8 +5,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <functional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fsim::runtime {
@@ -23,6 +26,8 @@ struct SystemVerilogUvmFactoryLimits {
   std::size_t max_instance_path_bytes{16'384};
   std::size_t max_resolution_depth{1'024};
   std::size_t max_report_bytes{16U * 1'024U * 1'024U};
+  std::size_t max_trace_records{65'536};
+  std::size_t max_trace_bytes{16U * 1'024U * 1'024U};
 };
 
 struct SystemVerilogUvmFactoryOverride {
@@ -52,8 +57,17 @@ struct SystemVerilogUvmFactoryResolution {
   std::vector<SystemVerilogUvmFactoryTraceStep> steps;
 };
 
+struct SystemVerilogUvmFactoryTraceRecord {
+  std::uint64_t sequence{};
+  bool debug{};
+  SystemVerilogUvmFactoryResolution resolution;
+};
+
 class SystemVerilogUvmFactoryService final {
  public:
+  using TraceCallback =
+      std::function<void(const SystemVerilogUvmFactoryTraceRecord&)>;
+
   explicit SystemVerilogUvmFactoryService(
       SystemVerilogUvmRegistryService& registry,
       SystemVerilogUvmFactoryLimits limits = {});
@@ -114,6 +128,20 @@ class SystemVerilogUvmFactoryService final {
   [[nodiscard]] const std::vector<SystemVerilogUvmFactoryOverride>&
   instance_overrides() const noexcept { return instance_overrides_; }
   [[nodiscard]] std::string report(bool all_types = true) const;
+  void set_trace_enabled(bool enabled) noexcept { trace_enabled_ = enabled; }
+  [[nodiscard]] bool trace_enabled() const noexcept { return trace_enabled_; }
+  void set_trace_callback(TraceCallback callback) {
+    trace_callback_ = std::move(callback);
+  }
+  [[nodiscard]] const std::deque<SystemVerilogUvmFactoryTraceRecord>&
+  trace_records() const noexcept { return trace_records_; }
+  [[nodiscard]] std::string trace_text() const;
+  [[nodiscard]] std::uint64_t dropped_trace_records() const noexcept {
+    return dropped_trace_records_;
+  }
+  [[nodiscard]] std::uint64_t trace_callback_failures() const noexcept {
+    return trace_callback_failures_;
+  }
   [[nodiscard]] const SystemVerilogUvmFactoryLimits& limits() const noexcept {
     return limits_;
   }
@@ -130,12 +158,21 @@ class SystemVerilogUvmFactoryService final {
   void validate_instance_path(std::string_view path) const;
   [[nodiscard]] static std::string full_instance_path(
       std::string_view parent, std::string_view name);
+  void append_trace(
+      const SystemVerilogUvmFactoryResolution& resolution,
+      bool debug) const;
 
   SystemVerilogUvmRegistryService* registry_{};
   SystemVerilogUvmFactoryLimits limits_;
   mutable std::vector<SystemVerilogUvmFactoryOverride> type_overrides_;
   mutable std::vector<SystemVerilogUvmFactoryOverride> instance_overrides_;
   std::uint64_t next_registration_order_{};
+  mutable bool trace_enabled_{};
+  mutable TraceCallback trace_callback_;
+  mutable std::deque<SystemVerilogUvmFactoryTraceRecord> trace_records_;
+  mutable std::uint64_t next_trace_sequence_{};
+  mutable std::uint64_t dropped_trace_records_{};
+  mutable std::uint64_t trace_callback_failures_{};
 };
 
 }

@@ -15,8 +15,8 @@ The installed v1 surface is:
   `fsim/systemc/` facade header tree;
 - the `fsim_api` shared library and `fsim_systemc_support` library;
 - the bundled Tcl runtime and license when selected; and
-- project documentation, the Apache-2.0 license, README, and reviewed IEEE
-  package tree.
+- project documentation including the producer-independent UVM tutorial and
+  closure audit, the Apache-2.0 license, README, and reviewed IEEE package tree.
 
 | Review ID | Surface | Required check |
 |---|---|---|
@@ -32,6 +32,12 @@ layout and header bytes, runs the installed main and alias commands, and checks
 the invalid-option exit status. Compilation of those same public C, strict-C,
 and C++ facade headers remains owned by the normal warning-as-error build and
 its dedicated header/ABI CTests.
+
+V2 Batch 162 adds installed checks for `systemverilog-uvm.md`,
+`uvm-tutorial.md`, and `uvm-closure-audit.md`. The tutorial uses only ordinary
+SystemVerilog/UVM source-set, registration, configuration, phase, objection,
+report, direct-engine, portable-artifact, plusarg, and bounded-automation
+contracts; it requires no producer wrapper or patched compatibility source.
 
 ## Closure evidence
 

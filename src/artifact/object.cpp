@@ -190,11 +190,12 @@ class Reader {
 
 std::string compilation_digest(const ObjectMetadata& metadata) {
   Writer writer;
-  writer.string("fsim-object-compilation-v1");
+  writer.string("fsim-object-compilation-v2");
   writer.string(metadata.language);
   writer.string(metadata.standard);
   writer.string(metadata.library);
   writer.string(metadata.compilation_unit);
+  writer.string(metadata.uvm_release);
   writer.sequence(metadata.defines, [&](const auto& item) {
     writer.string(item);
   });
@@ -232,11 +233,16 @@ bool validate_metadata(
       || !library_name(metadata.library)
       || (metadata.compilation_unit != "file"
           && metadata.compilation_unit != "source-set")
+      || (metadata.uvm_release != "none" && metadata.uvm_release != "1.2"
+          && metadata.uvm_release != "2020.3.1")
+      || (metadata.uvm_release != "none"
+          && metadata.language != "systemverilog")
       || !checksum_spelling(metadata.compilation_digest)) {
     error(
         diagnostics, kValueCode,
         "object metadata requires producer, supported HDL language/standard, "
-        "safe library, compilation mode, and compilation digest", source);
+        "safe library, compilation mode, UVM release, and compilation digest",
+        source);
   }
   std::unordered_set<std::string> include_roots;
   for (const auto& include : metadata.include_roots) {
@@ -409,6 +415,7 @@ std::string serialize_object_metadata(const ObjectMetadata& metadata) {
   writer.string(metadata.standard);
   writer.string(metadata.library);
   writer.string(metadata.compilation_unit);
+  writer.string(metadata.uvm_release);
   writer.string(metadata.compilation_digest);
   writer.sequence(metadata.defines, [&](const auto& item) {
     writer.string(item);
@@ -463,6 +470,7 @@ std::optional<ObjectMetadata> deserialize_object_metadata(
   if (!read_string(metadata.producer) || !read_string(metadata.language)
       || !read_string(metadata.standard) || !read_string(metadata.library)
       || !read_string(metadata.compilation_unit)
+      || !read_string(metadata.uvm_release)
       || !read_string(metadata.compilation_digest)) {
     error(diagnostics, kSchemaCode, "truncated .fsimobj metadata root", source_name);
     return std::nullopt;

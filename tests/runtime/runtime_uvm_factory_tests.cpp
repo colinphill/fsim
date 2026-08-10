@@ -123,6 +123,10 @@ void test_systemverilog_uvm_factory() {
           && factory.set_type_override_by_type(fast, final_type),
       "UVM instance override registration must preserve source order and "
       "reject exact duplicates");
+  factory.set_trace_enabled(true);
+  factory.set_trace_callback([](const auto&) {
+    throw std::runtime_error{"contained factory trace callback failure"};
+  });
   const auto exact = factory.resolve_by_type(base, "top.special");
   const auto wildcard = factory.resolve_by_name("base", "top.other");
   require(
@@ -145,9 +149,17 @@ void test_systemverilog_uvm_factory() {
   const auto debug = factory.debug_resolve_by_type(base, "top.special");
   require(
       debug.resolved == final_type && debug.steps.size() == 2
-          && factory.instance_overrides()[0].uses == uses_before_debug,
+          && factory.instance_overrides()[0].uses == uses_before_debug
+          && factory.trace_records().size() == 4
+          && factory.trace_callback_failures() == 4
+          && factory.trace_text().find("mode=create requested=\"base\"")
+              != std::string::npos
+          && factory.trace_text().find("mode=debug") != std::string::npos
+          && factory.trace_text().find("instance[0]=\"base\"@\"top.special\"")
+              != std::string::npos,
       "UVM factory debug resolution must report the selected chain without "
-      "mutating use counts");
+      "mutating use counts while bounded tracing remains deterministic and "
+      "contains callback failures");
 
   const auto object = factory.create_object_by_type(base, "top", "special");
   SystemVerilogUvmFactoryService component_factory{registry};
@@ -217,6 +229,27 @@ void test_systemverilog_uvm_factory() {
           && report.find("uses=") != std::string::npos,
       "UVM factory reports must deterministically include registered types, "
       "override order, selected targets, paths, and use counts");
+
+  SystemVerilogUvmFactoryLimits trace_limits;
+  trace_limits.max_trace_records = 1;
+  trace_limits.max_trace_bytes = 8;
+  SystemVerilogUvmFactoryService trace_limited{registry, trace_limits};
+  trace_limited.set_trace_enabled(true);
+  (void)trace_limited.resolve_by_type(base);
+  (void)trace_limited.resolve_by_type(fast);
+  bool trace_limit_rejected{};
+  try {
+    (void)trace_limited.trace_text();
+  } catch (const std::length_error&) {
+    trace_limit_rejected = true;
+  }
+  require(
+      trace_limited.trace_records().size() == 1
+          && trace_limited.dropped_trace_records() == 1
+          && trace_limit_rejected
+          && replacement_factory.trace_records().empty(),
+      "factory traces must remain bounded, report output exhaustion, and stay "
+      "isolated between simulation-owned factory services");
 
   objects.erase(object);
   require(heap.release(object),

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -21,6 +22,41 @@ struct RegexAtom {
   bool any{};
   Quantifier quantifier{Quantifier::One};
 };
+
+const char* trace_action_name(
+    const SystemVerilogUvmConfigTraceAction action) noexcept {
+  switch (action) {
+    case SystemVerilogUvmConfigTraceAction::Set: return "set";
+    case SystemVerilogUvmConfigTraceAction::Get: return "get";
+    case SystemVerilogUvmConfigTraceAction::Exists: return "exists";
+  }
+  return "unknown";
+}
+
+void append_quoted(std::string& output, const std::string_view text) {
+  output.push_back('"');
+  for (const char character : text) {
+    switch (character) {
+      case '\\': output += "\\\\"; break;
+      case '"': output += "\\\""; break;
+      case '\n': output += "\\n"; break;
+      case '\r': output += "\\r"; break;
+      case '\t': output += "\\t"; break;
+      default:
+        if (static_cast<unsigned char>(character) < 0x20U) {
+          constexpr char digits[]{"0123456789abcdef"};
+          output += "\\x";
+          output.push_back(digits[
+              (static_cast<unsigned char>(character) >> 4U) & 0xfU]);
+          output.push_back(digits[
+              static_cast<unsigned char>(character) & 0xfU]);
+        } else {
+          output.push_back(character);
+        }
+    }
+  }
+  output.push_back('"');
+}
 
 bool glob_matches(
     const std::string_view pattern,
@@ -176,7 +212,9 @@ SystemVerilogUvmConfigDbService::SystemVerilogUvmConfigDbService(
     : resources_(&resources), limits_(limits) {
   if (limits_.default_precedence < 0
       || static_cast<std::uint64_t>(limits_.default_precedence)
-          < limits_.max_context_depth) {
+          < limits_.max_context_depth
+      || limits_.max_report_bytes == 0 || limits_.max_trace_records == 0
+      || limits_.max_trace_bytes == 0) {
     throw std::invalid_argument{
         "UVM config default precedence must cover the context-depth budget"};
   }
@@ -220,6 +258,10 @@ SystemVerilogUvmResourceHandle SystemVerilogUvmConfigDbService::set(
     found->second.phase = phase;
     found->second.update_order = next_update_order_++;
     trigger_waiters(found->second);
+    append_trace({
+        0, SystemVerilogUvmConfigTraceAction::Set,
+        context.full_name, instance_pattern, std::string{field_name},
+        found->second.type_identity, found->second.resource, true});
     return found->second.resource;
   }
   if (entries_.size() >= limits_.max_entries) {
@@ -255,6 +297,10 @@ SystemVerilogUvmResourceHandle SystemVerilogUvmConfigDbService::set(
     (void)resources_->erase(handle);
     throw;
   }
+  append_trace({
+      0, SystemVerilogUvmConfigTraceAction::Set,
+      context.full_name, instance_pattern, std::string{field_name},
+      entries_.at(key).type_identity, handle, true});
   return handle;
 }
 
@@ -268,8 +314,19 @@ SystemVerilogUvmConfigDbService::get(
   validate_context(context);
   const auto full_name = full_instance_name(context, instance_name);
   const auto* entry = resolve(full_name, field_name, type_identity);
-  if (!entry) return std::nullopt;
-  return resources_->read(entry->resource, accessor);
+  if (!entry) {
+    append_trace({
+        0, SystemVerilogUvmConfigTraceAction::Get,
+        context.full_name, full_name, std::string{field_name},
+        std::string{type_identity}, 0, false});
+    return std::nullopt;
+  }
+  auto value = resources_->read(entry->resource, accessor);
+  append_trace({
+      0, SystemVerilogUvmConfigTraceAction::Get,
+      context.full_name, full_name, std::string{field_name},
+      std::string{type_identity}, entry->resource, true});
+  return value;
 }
 
 bool SystemVerilogUvmConfigDbService::exists(
@@ -286,6 +343,12 @@ bool SystemVerilogUvmConfigDbService::exists(
     *spelling = resources_->spell_check(
         field_name, resources_->limits().max_spell_distance);
   }
+  const auto* entry = result
+      ? resolve(full_name, field_name, type_identity) : nullptr;
+  append_trace({
+      0, SystemVerilogUvmConfigTraceAction::Exists,
+      context.full_name, full_name, std::string{field_name},
+      std::string{type_identity}, entry ? entry->resource : 0, result});
   return result;
 }
 
@@ -332,6 +395,93 @@ SystemVerilogUvmConfigDbService::entries() const {
   }
   std::ranges::sort(
       result, {}, &SystemVerilogUvmConfigEntry::creation_order);
+  return result;
+}
+
+void SystemVerilogUvmConfigDbService::append_trace(
+    SystemVerilogUvmConfigTraceRecord record) const {
+  if (!trace_enabled_) return;
+  if (trace_records_.size() == limits_.max_trace_records) {
+    trace_records_.pop_front();
+    ++dropped_trace_records_;
+  }
+  record.sequence = next_trace_sequence_++;
+  trace_records_.push_back(std::move(record));
+  if (trace_callback_) {
+    try {
+      trace_callback_(trace_records_.back());
+    } catch (...) {
+      ++trace_callback_failures_;
+    }
+  }
+}
+
+std::string SystemVerilogUvmConfigDbService::trace_text() const {
+  std::string result;
+  const auto append = [&](const std::string_view text) {
+    if (result.size() > limits_.max_trace_bytes
+        || text.size() > limits_.max_trace_bytes - result.size()) {
+      throw std::length_error{"UVM config trace byte budget exceeded"};
+    }
+    result += text;
+  };
+  for (const auto& record : trace_records_) {
+    std::string line{"UVM_CONFIG_DB_TRACE sequence="};
+    line += std::to_string(record.sequence) + " action=";
+    line += trace_action_name(record.action);
+    line += " context=";
+    append_quoted(line, record.context_name);
+    line += " instance=";
+    append_quoted(line, record.instance_name);
+    line += " field=";
+    append_quoted(line, record.field_name);
+    line += " type=";
+    append_quoted(line, record.type_identity);
+    line += " resource=" + std::to_string(record.resource);
+    line += record.success ? " success=yes\n" : " success=no\n";
+    append(line);
+  }
+  return result;
+}
+
+std::string SystemVerilogUvmConfigDbService::report(const bool audit) const {
+  std::string result{"UVM Config DB\n"};
+  const auto append = [&](const std::string_view text) {
+    if (result.size() > limits_.max_report_bytes
+        || text.size() > limits_.max_report_bytes - result.size()) {
+      throw std::length_error{"UVM config report byte budget exceeded"};
+    }
+    result += text;
+  };
+  std::map<SystemVerilogUvmResourceHandle, std::size_t> audit_counts;
+  if (audit) {
+    for (const auto& record : resources_->audit_records()) {
+      ++audit_counts[record.resource];
+    }
+  }
+  for (const auto& entry : entries()) {
+    const auto resource = resources_->snapshot(entry.resource);
+    std::string line{"  ["};
+    line += std::to_string(entry.creation_order) + "] context=";
+    append_quoted(line, entry.context_name);
+    line += " instance=";
+    append_quoted(line, entry.instance_pattern);
+    line += " field=";
+    append_quoted(line, entry.field_pattern);
+    line += " type=";
+    append_quoted(line, entry.type_identity);
+    line += " resource=" + std::to_string(entry.resource);
+    line += " precedence=" + std::to_string(entry.precedence);
+    line += entry.phase == SystemVerilogUvmConfigPhase::Build
+        ? " phase=build" : " phase=runtime";
+    line += " reads=" + std::to_string(resource.read_count);
+    line += " writes=" + std::to_string(resource.write_count);
+    if (audit) {
+      line += " audit=" + std::to_string(audit_counts[entry.resource]);
+    }
+    line.push_back('\n');
+    append(line);
+  }
   return result;
 }
 

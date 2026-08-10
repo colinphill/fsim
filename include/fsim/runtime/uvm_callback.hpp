@@ -349,6 +349,9 @@ public:
   begin(SystemVerilogUvmTransactionDescriptor descriptor);
   void record_attribute(SystemVerilogUvmTransactionHandle transaction,
                         SystemVerilogUvmTransactionAttribute attribute);
+  void record_object(SystemVerilogUvmTransactionHandle transaction,
+                     SystemVerilogClassHandle object,
+                     std::string prefix = {});
   void add_link(SystemVerilogUvmTransactionHandle transaction,
                 SystemVerilogUvmTransactionHandle related,
                 std::string relation);
@@ -365,6 +368,8 @@ public:
   trace_records() const noexcept {
     return trace_records_;
   }
+  [[nodiscard]] std::vector<SystemVerilogUvmTransactionSnapshot> replay_trace(
+      std::span<const SystemVerilogUvmTransactionTraceRecord> records) const;
   [[nodiscard]] std::uint64_t mutation_count() const noexcept {
     return mutations_;
   }

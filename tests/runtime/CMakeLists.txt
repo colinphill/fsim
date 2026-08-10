@@ -48,6 +48,10 @@ add_executable(
   runtime_file_tests.cpp
   runtime_container_tests.cpp
   runtime_class_heap_tests.cpp
+  runtime_uvm_object_policy_tests.cpp
+  runtime_uvm_packer_tests.cpp
+  runtime_uvm_synchronization_policy_tests.cpp
+  runtime_uvm_test_runner_tests.cpp
   runtime_uvm_component_tests.cpp
   runtime_uvm_phase_tests.cpp
   runtime_uvm_quiescence_tests.cpp

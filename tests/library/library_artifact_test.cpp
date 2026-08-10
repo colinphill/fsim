@@ -52,7 +52,7 @@ fsim::library::Metadata example_metadata() {
 }  // namespace
 
 int main() {
-  static_assert(fsim::library::kOwningUnitSchemaVersion == 13);
+  static_assert(fsim::library::kOwningUnitSchemaVersion == 14);
   static_assert(fsim::library::kPortableSchemaVersion == 9);
   const auto expected = example_metadata();
   const auto serialized = fsim::library::serialize_metadata(expected);

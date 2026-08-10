@@ -197,14 +197,19 @@ class Reader {
 };
 
 void write_digest_fields(Writer& writer, const DesignMetadata& metadata) {
-  writer.string(
-      metadata.format == 1 ? "fsim-design-provenance-v1"
-                           : "fsim-design-provenance-v2");
+  writer.string(metadata.format == 1
+                    ? "fsim-design-provenance-v1"
+                    : metadata.format < 4 ? "fsim-design-provenance-v2"
+                                          : "fsim-design-provenance-v3");
   writer.u32(metadata.runtime_abi);
   writer.string(metadata.time_resolution);
   writer.string(metadata.delay_mode);
   writer.string(metadata.optimization);
   writer.string(metadata.cache_key);
+  if (metadata.format >= 4) {
+    writer.string(metadata.uvm_release);
+    writer.string(metadata.uvm_source_identity);
+  }
   writer.u64(metadata.seed);
   writer.boolean(metadata.entropy_seed);
   writer.sequence(metadata.search_libraries, [&](const auto& value) {
@@ -273,6 +278,14 @@ bool validate(
           && metadata.delay_mode != "max")
       || (metadata.optimization != "O0" && metadata.optimization != "O2")
       || !checksum_spelling(metadata.cache_key)
+      || (metadata.format >= 4
+          && (metadata.uvm_release != "none"
+              && metadata.uvm_release != "1.2"
+              && metadata.uvm_release != "2020.3.1"))
+      || (metadata.format >= 4 && metadata.uvm_release == "none"
+          && !metadata.uvm_source_identity.empty())
+      || (metadata.format >= 4 && metadata.uvm_release != "none"
+          && !checksum_spelling(metadata.uvm_source_identity))
       || !checksum_spelling(metadata.design_digest)) {
     report(
         diagnostics, kValueCode,
@@ -555,6 +568,10 @@ std::string serialize_design_metadata(const DesignMetadata& metadata) {
   writer.string(metadata.delay_mode);
   writer.string(metadata.optimization);
   writer.string(metadata.cache_key);
+  if (metadata.format >= 4) {
+    writer.string(metadata.uvm_release);
+    writer.string(metadata.uvm_source_identity);
+  }
   writer.u64(metadata.seed);
   writer.boolean(metadata.entropy_seed);
   writer.sequence(metadata.search_libraries, [&](const auto& value) {
@@ -643,17 +660,19 @@ std::optional<DesignMetadata> deserialize_design_metadata(
     value = std::move(*read);
     return true;
   };
-  const auto seed = [&]() -> std::optional<std::uint64_t> {
-    if (!read_string(metadata.producer)
+  if (!read_string(metadata.producer)
         || !read_string(metadata.design_digest)
         || !read_string(metadata.time_resolution)
         || !read_string(metadata.delay_mode)
         || !read_string(metadata.optimization)
-        || !read_string(metadata.cache_key)) {
-      return std::nullopt;
-    }
-    return reader.u64();
-  }();
+        || !read_string(metadata.cache_key)
+        || (metadata.format >= 4
+            && (!read_string(metadata.uvm_release)
+                || !read_string(metadata.uvm_source_identity)))) {
+    report(diagnostics, kSchemaCode, "truncated .fsimdesign root", source_name);
+    return std::nullopt;
+  }
+  const auto seed = reader.u64();
   const auto entropy = reader.boolean();
   if (!seed || !entropy) {
     report(diagnostics, kSchemaCode, "truncated .fsimdesign root", source_name);

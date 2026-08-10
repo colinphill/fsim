@@ -61,6 +61,9 @@ set(FSIM_EXPECTED_PATHS
   "${FSIM_STAGE}/${FSIM_DOCDIR}/LICENSE"
   "${FSIM_STAGE}/${FSIM_DOCDIR}/README.md"
   "${FSIM_STAGE}/${FSIM_DOCDIR}/architecture.md"
+  "${FSIM_STAGE}/${FSIM_DOCDIR}/systemverilog-uvm.md"
+  "${FSIM_STAGE}/${FSIM_DOCDIR}/uvm-tutorial.md"
+  "${FSIM_STAGE}/${FSIM_DOCDIR}/uvm-closure-audit.md"
   "${FSIM_STAGE}/${FSIM_DOCDIR}/v1-release-audit.md"
   "${FSIM_STAGE}/share/fsim/vhdl/ieee-1076-2019/SHA256SUMS"
 )

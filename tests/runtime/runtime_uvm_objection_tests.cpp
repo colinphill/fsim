@@ -155,6 +155,9 @@ void test_systemverilog_uvm_objection() {
 
   SystemVerilogUvmObjectionService objections{
       fixture.objects, fixture.components, fixture.phases};
+  require(!objections.trace_enabled() && objections.trace_text().empty(),
+          "objection trace output must be disabled by default");
+  objections.set_trace_enabled(true);
   SystemVerilogUvmActivityService activity;
   objections.set_activity_service(activity);
   const auto leaf_source = objections.bind_source(leaf);
@@ -209,6 +212,17 @@ void test_systemverilog_uvm_objection() {
                     && snapshot.count == 2;
               }),
       "raises must retain exact descriptions and propagate leaf-to-root counts");
+  const auto initial_trace_text = objections.trace_text();
+  require(
+      initial_trace_text.starts_with(
+          "UVM_OBJECTION_TRACE sequence=0 time=0 kind=raised operation=raise")
+          && initial_trace_text.find("description=\"work\"")
+              != std::string::npos,
+      "enabled objection tracing must format stable ordered lifecycle fields");
+  objections.set_trace_enabled(false);
+  require(objections.trace_text().empty(),
+          "disabled objection tracing must suppress formatted output");
+  objections.set_trace_enabled(true);
 
   callback_targets.clear();
   const auto plain_raised = objections.raise(
@@ -442,6 +456,36 @@ void test_systemverilog_uvm_objection() {
           && trace_limited.source_count(
                  fixture.run, trace_source, "trace") == 1,
       "trace exhaustion must reject a drop before mutating counts");
+
+  SystemVerilogUvmObjectionLimits output_limits;
+  output_limits.maximum_trace_output_bytes = 8;
+  SystemVerilogUvmObjectionService output_limited{
+      fixture.objects, fixture.components, fixture.phases, output_limits};
+  const auto output_source = output_limited.bind_source(
+      plain, fixture.first_root);
+  output_limited.set_trace_enabled(true);
+  (void)output_limited.raise(
+      fixture.run, output_source, "line\n\"quoted", 1);
+  require(
+      rejects("FSIM-UVM-OBJ-003", [&] {
+        (void)output_limited.trace_text();
+      })
+          && output_limited.source_count(
+                 fixture.run, output_source) == 1,
+      "objection trace output exhaustion must diagnose without changing "
+      "published counts");
+
+  SystemVerilogUvmObjectionService escaped_trace{
+      fixture.objects, fixture.components, fixture.phases};
+  const auto escaped_source = escaped_trace.bind_source(
+      plain, fixture.first_root);
+  escaped_trace.set_trace_enabled(true);
+  (void)escaped_trace.raise(
+      fixture.run, escaped_source, "line\n\"quoted", 1);
+  require(
+      escaped_trace.trace_text().find(
+          "description=\"line\\x0a\\\"quoted\"") != std::string::npos,
+      "objection trace descriptions must escape controls and quotes stably");
 
   SystemVerilogUvmObjectionLimits mutation_limits;
   mutation_limits.maximum_mutations = 1;

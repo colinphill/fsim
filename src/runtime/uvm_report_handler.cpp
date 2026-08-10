@@ -143,6 +143,14 @@ void SystemVerilogUvmReportService::set_verbosity(
   mutable_handler(report_object).verbosity = verbosity;
 }
 
+bool SystemVerilogUvmReportService::has_id_verbosity(
+    const SystemVerilogClassHandle report_object,
+    const std::string_view id) const noexcept {
+  const auto handler = handlers_.find(report_object);
+  return handler != handlers_.end()
+      && handler->second.id_verbosities.contains(id);
+}
+
 void SystemVerilogUvmReportService::set_id_verbosity(
     const SystemVerilogClassHandle report_object,
     std::string id,

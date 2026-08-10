@@ -129,6 +129,7 @@ bool compile_object(
   metadata.standard = source_set.standard;
   metadata.library = source_set.library;
   metadata.compilation_unit = source_set.compilation_unit;
+  metadata.uvm_release = std::string{project::to_string(source_set.uvm_release)};
   metadata.defines = source_set.defines;
   for (std::size_t index = 0;
        index < source_set.include_directories.size(); ++index) {
@@ -270,6 +271,7 @@ bool compile_object(
     auto& unit = class_units[declaration.compilation_unit_identity];
     unit.library = std::string{declaration_library};
     unit.compilation_unit_identity = declaration.compilation_unit_identity;
+    unit.uvm_release = metadata.uvm_release;
     unit.declarations.push_back(declaration);
   }
   // Class resolution has already transactionally linked every valid

@@ -10,7 +10,7 @@
 
 namespace fsim::runtime {
 
-inline constexpr std::uint32_t systemverilog_uvm_checkpoint_schema = 1;
+inline constexpr std::uint32_t systemverilog_uvm_checkpoint_schema = 2;
 
 struct SystemVerilogUvmCheckpointLimits {
   std::size_t maximum_records{1U << 20U};
@@ -27,6 +27,8 @@ struct SystemVerilogUvmCheckpointProvenance {
   std::string cache_identity;
   std::string artifact_identity;
   std::vector<std::string> roots;
+  std::string uvm_release{"none"};
+  std::string source_identity;
 
   friend bool
   operator==(const SystemVerilogUvmCheckpointProvenance &,
@@ -80,6 +82,8 @@ enum class SystemVerilogUvmCheckpointError {
   CacheMismatch,
   ArtifactMismatch,
   RootMismatch,
+  ReleaseMismatch,
+  SourceMismatch,
   StateMismatch,
   ResourceLimit,
 };

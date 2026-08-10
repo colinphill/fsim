@@ -62,6 +62,10 @@ class_descriptor(const std::string_view specialization) {
                                       "uvm_pkg::uvm_object"};
   if (specialization == kComponentType) {
     result.assignable_declared_types.push_back("uvm_pkg::uvm_component");
+  } else {
+    result.properties = {
+        {"value", SystemVerilogClassPropertyKind::Logic4, 8},
+        {"label", SystemVerilogClassPropertyKind::String, 0}};
   }
   return result;
 }
@@ -86,6 +90,11 @@ struct CallbackFixture {
       SystemVerilogUvmObjectDescriptor descriptor;
       descriptor.specialization_identity = std::string{type};
       descriptor.type_name = std::string{type};
+      if (type == kObjectType) {
+        descriptor.fields = {
+            {"value", SystemVerilogUvmFieldFlag::None},
+            {"label", SystemVerilogUvmFieldFlag::None}};
+      }
       objects.register_type(std::move(descriptor));
     }
     first_root = components.create_root("first");
@@ -410,6 +419,76 @@ void test_systemverilog_uvm_callbacks_and_transactions() {
       "transaction begin/end, attributes, and links must dispatch callback "
       "masks and publish bounded activity events");
 
+  const auto replayed = transactions.replay_trace(traces);
+  require_callback(
+      replayed.size() == 2 && replayed[0].identity == 1 &&
+          replayed[0].state == SystemVerilogUvmTransactionState::Cancelled &&
+          replayed[1].identity == 2 && replayed[1].parent_identity == 1 &&
+          replayed[1].links == child_snapshot.links &&
+          replayed[1].state == SystemVerilogUvmTransactionState::Completed,
+      "UVM transaction traces must replay deterministic identity, hierarchy, "
+      "links, attributes, timing, and terminal states");
+
+  const auto payload = fixture.make_object(kObjectType, "payload");
+  fixture.heap.property(payload, "value").packed =
+      PackedLogic4::from_aval_bval(8, 0xa5, 0);
+  fixture.heap.property(payload, "label").string = "recorded";
+  const auto object_record = transactions.begin(
+      {"object", "bus", "payload", fixture.first_root, first,
+       std::nullopt, {}});
+  transactions.record_object(object_record, payload, "packed");
+  transactions.end(object_record);
+  const auto object_snapshot = transactions.snapshot(object_record);
+  require_callback(
+      std::ranges::any_of(object_snapshot.attributes, [](const auto& attribute) {
+        return attribute.name == "packed.payload.value" &&
+            std::get<std::string>(attribute.value).ends_with(":10100101");
+      }) &&
+          std::ranges::any_of(
+              object_snapshot.attributes, [](const auto& attribute) {
+                return attribute.name == "packed.payload.label" &&
+                    std::get<std::string>(attribute.value).ends_with(
+                        ":recorded");
+              }),
+      "UVM object recorder must integrate typed automated entries as "
+      "transaction attributes");
+
+  SystemVerilogUvmTransactionLimits object_record_limits;
+  object_record_limits.maximum_attributes_per_transaction = 2;
+  SystemVerilogUvmTransactionRecorderService object_record_bounded{
+      fixture.objects, fixture.components, callbacks, object_record_limits};
+  const auto bounded_object_record = object_record_bounded.begin(
+      {"bounded-object", "bus", "payload", fixture.first_root, 0,
+       std::nullopt, {}});
+  require_transaction_error(
+      "FSIM-UVM-TR-002",
+      [&] {
+        object_record_bounded.record_object(
+            bounded_object_record, payload, "packed");
+      },
+      "UVM object recording must enforce aggregate attribute ceilings");
+  require_callback(
+      object_record_bounded.snapshot(bounded_object_record).attributes.empty() &&
+          object_record_bounded.trace_records().size() == 1,
+      "rejected UVM object recording must not publish partial attributes");
+
+  auto malformed_replay =
+      std::vector<SystemVerilogUvmTransactionTraceRecord>{
+          transactions.trace_records().begin(), transactions.trace_records().end()};
+  malformed_replay[1].sequence = malformed_replay[0].sequence;
+  require_transaction_error(
+      "FSIM-UVM-TR-001",
+      [&] { (void)transactions.replay_trace(malformed_replay); },
+      "UVM transaction replay must reject non-monotonic trace sequences");
+  SystemVerilogUvmTransactionLimits replay_limits;
+  replay_limits.maximum_trace_records = 1;
+  SystemVerilogUvmTransactionRecorderService replay_bounded{
+      fixture.objects, fixture.components, callbacks, replay_limits};
+  require_transaction_error(
+      "FSIM-UVM-TR-002",
+      [&] { (void)replay_bounded.replay_trace(transactions.trace_records()); },
+      "UVM transaction replay must enforce retained-record ceilings");
+
   require_transaction_error(
       "FSIM-UVM-TR-001",
       [&] { transactions.record_attribute(child, {"late", std::uint64_t{1}}); },
@@ -431,6 +510,7 @@ void test_systemverilog_uvm_callbacks_and_transactions() {
       "referenced UVM transaction records must reject premature release");
   transactions.release(child);
   transactions.release(parent);
+  transactions.release(object_record);
   require_transaction_error(
       "FSIM-UVM-TR-001", [&] { (void)transactions.snapshot(child); },
       "released UVM transaction handles must become stale");

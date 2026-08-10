@@ -784,6 +784,34 @@ endmodule
     }
     assert(self_qualified_package_result.ok());
 
+    const auto qualified_package_class = fsim::frontend::parse_text(
+        "qualified_package_class.sv",
+        R"(
+package qualified_package_class_types;
+  class item;
+  endclass
+endpackage
+class qualified_package_class_owner;
+  qualified_package_class_types::item saved;
+endclass
+module qualified_package_class_user;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(qualified_package_class.ok());
+    const auto qualified_package_class_result =
+        fsim::elaboration::elaborate(
+            qualified_package_class.design,
+            "sv:work.qualified_package_class_user");
+    if (!qualified_package_class_result.ok()) {
+      for (const auto& diagnostic :
+           qualified_package_class_result.diagnostics) {
+        std::cerr << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    assert(qualified_package_class_result.ok());
+
     auto hydrated_class_type_scope = fsim::frontend::parse_text(
         "hydrated_class_type_scope.sv",
         R"(

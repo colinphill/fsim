@@ -1132,12 +1132,14 @@ void DebuggerSession::uvm_command(
       section = UvmDebugSection::transactions;
     } else if (command[1] == "sequences") {
       section = UvmDebugSection::sequences;
+    } else if (command[1] == "configuration") {
+      section = UvmDebugSection::configuration;
     } else if (command[1] == "registers") {
       section = UvmDebugSection::register_model;
     } else if (command[1] == "all") {
       section = UvmDebugSection::all;
     } else if (command[1] != "summary") {
-      output_ << "usage: uvm [summary|phases|objections|tlm1|tlm2|callbacks|transactions|sequences|registers|all]\n";
+      output_ << "usage: uvm [summary|phases|objections|tlm1|tlm2|callbacks|transactions|sequences|configuration|registers|all]\n";
       return;
     }
   }

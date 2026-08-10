@@ -925,10 +925,19 @@ relocate, and execute through aliased roots with identical callbacks, traces,
 cache behavior, and transcripts. Future or malformed schema state rejects
 before execution.
 
-This is deliberately the Batch 161 boundary, not a claim of complete UVM.
-Remaining policy classes and complete 1.2/2020 compatibility are owned by Batch
-162. The public usage and evidence boundary is documented in
-[`systemverilog-uvm.md`](systemverilog-uvm.md).
+Batch 162 closes the locked supported boundary without claiming exhaustive UVM
+conformance. Printer/comparer/copier/packer/recorder policy, event/pool/barrier/
+queue/heartbeat synchronization, command-line/test-runner behavior, report and
+objection tracing, governed release compatibility, project-owned core/flow/
+register smoke suites, and platform limits all use the simulation-owned
+services above. One 18-row conformance inventory requires exact 53/56 governed
+and 27 project class identities after direct and portable loads. One 21-row
+release matrix freezes every public compatibility switch, diagnostic/source/
+complexity and resource evidence, artifact/cache provenance, and zero
+unresolved supported gaps. The public usage, tutorial, and evidence boundaries
+are documented in [`systemverilog-uvm.md`](systemverilog-uvm.md),
+[`uvm-tutorial.md`](uvm-tutorial.md), and
+[`uvm-closure-audit.md`](uvm-closure-audit.md).
 
 ### Concurrent assertion ownership and observation
 

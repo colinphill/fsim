@@ -31,7 +31,7 @@ when that update explicitly retains it for a particular operation.
 | Preprocessing/directives | Quoted and angle includes, manifest/CLI definitions, object/function macros with default arguments, multiline replacement, argument substitution, token concatenation/stringification, `__FILE__`/`__LINE__`, `undef`, nested conditional compilation, logical `` `line`` source remapping, legal `` `timescale``, `` `default_nettype``, reset/cell/keyword-version/unconnected-drive state, and ordered `file`/`source-set`/`combined` policies | Included units and macro-selected executable source enter the normal frontend; active `` `line`` mappings reach parser diagnostics, macro ancestry, DesignIR/SimIR debug points, report callbacks, and LLVM objects while physical ownership remains in analysis/native cache provenance; mappings reset for includes and compilation-unit roots; source-set/combined roots otherwise share macro, conditional, and parser directive state while retaining library ownership; scalar implicit nets and default port net types honor `` `default_nettype``; cell metadata and omitted-input pulls reach DesignIR/runtime; time directives and declarations scale exact delays and contribute to `auto` resolution; ordered snapshots participate in cache identity; `wand`/`triand` and `wor`/`trior` use native per-driver four-state resolution | Standardized pragma payload behavior remains incomplete; unsupported directives receive targeted errors |
 | SystemC | C++ compatibility header, macro-exported typed factories, HDL-backed module proxies, append-only versioned plug-in ABI, and peer mixed-language hierarchy | Common signals/ports/exports/events/channels, native children, same-path HDL proxy modules with ordinary port binding, ordered lifecycle callbacks, statically and dynamically sensitive `SC_METHOD`, and Boost.Context-backed `SC_THREAD`/`SC_CTHREAD` time/event/list/timeout/static waits execute on the deterministic common kernel | Executable behavior or nested objects inside HDL proxies, arbitrary custom-interface values/binding/updates, dynamic processes, thread reset/kill, TLM/AMS/CCI, and Accellera ABI compatibility remain unsupported |
 
-Batch 161 UVM status update: the exact unmodified UVM 1.2 and UVM 2020-3.1
+Batch 162 UVM closure update: the exact unmodified UVM 1.2 and UVM 2020-3.1
 package/macro entry points preprocess and analyze through the ordinary
 SystemVerilog-2017 frontend under a governed external-source contract. The
 executable foundation covers `uvm_object` and `uvm_component` construction,
@@ -50,12 +50,18 @@ agents/monitors/scoreboards, callbacks/transactions, and the register model are
 executable. Register support includes value policies, memories, hierarchical
 and multiple maps, all endian modes, byte enables, adapters/predictors,
 frontdoor and VPI/VHPI backdoor access, standard sequences, callbacks, and
-coverage. The exact aggregate example agrees through interpreter, LLVM O0/O2,
-and debug engines with VCD/FST, cold/warm caches, portable object/design
-artifacts, relocation, and deterministic transcripts. All services are
-simulation-owned and resource-bounded. Remaining policy classes and complete
-UVM 1.2/2020 closure remain explicitly deferred to Batch 162. See
-[`systemverilog-uvm.md`](systemverilog-uvm.md) for exact usage and evidence.
+coverage. Object policies, packing/recording, synchronization, command-line,
+test-runner, tracing, project core/flow/register environments, and portable
+release/source provenance are also executable. The exact aggregate example
+agrees through interpreter, LLVM O0/O2, and debug engines with VCD/FST,
+cold/warm caches, portable object/design artifacts, relocation, and
+deterministic transcripts. All services are simulation-owned and resource-
+bounded. The locked supported boundary is executable through an 18-row
+conformance inventory and a 21-row two-release closure matrix with zero
+unresolved supported gaps; this remains a bounded support claim, not exhaustive
+UVM conformance. See [`systemverilog-uvm.md`](systemverilog-uvm.md) for exact
+support, [`uvm-tutorial.md`](uvm-tutorial.md) for producer-independent usage,
+and [`uvm-closure-audit.md`](uvm-closure-audit.md) for evidence.
 
 UDP status update: Verilog-2005/SystemVerilog combinational and sequential
 user-defined primitives now retain ordered scalar terminals, exact level/edge

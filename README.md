@@ -261,14 +261,63 @@ The current tree contains:
   save/restart, and versioned C/C++ plug-ins whose native state is explicitly
   retained or invalidated across restart and artifact flows;
 - governed unmodified UVM 1.2 and UVM 2020-3.1 source entry points plus a
-  simulation-owned object/component, registry/factory, resource/configuration,
-  command-line, report, phase/domain, objection/drain, activity/debug, TLM1,
-  TLM2, sequence/sequencer, driver/monitor/agent/scoreboard, callback/
-  transaction, register-model, foreign snapshot, and portable-checkpoint
-  boundary. Interpreter, LLVM O0/O2, debug, multiple-root, callback, VCD/FST,
-  cold/warm cache, and portable relocated artifact paths agree under explicit
-  resource bounds; remaining policy classes and complete conformance remain a
-  later closure boundary;
+  simulation-owned object/component, deterministic line/tree/table printer and
+  deep/shallow/reference comparer policy, registry/factory,
+  resource/configuration, command-line, report, phase/domain, objection/drain,
+  activity/debug, TLM1, TLM2, sequence/sequencer,
+  driver/monitor/agent/scoreboard, callback/transaction, register-model,
+  foreign snapshot, and portable-checkpoint boundary. Interpreter, LLVM O0/O2,
+  debug, multiple-root, callback, VCD/FST, cold/warm cache, and portable
+  relocated artifact paths agree under explicit resource bounds; typed endian-
+  aware object packing, transaction object recording, deterministic replay,
+  event pools, barriers, generic pools/queues, heartbeats, and spell challenges
+  are closed. Its simulation-isolated command-line processor retains ordered
+  argv and supplies bounded plusarg/UVM, exact/prefix, duplicate-value, and
+  tool/version queries. Simulation-owned `run_test` applies deterministic test,
+  seed, and timeout precedence, prints bounded topology, and cleans repeated,
+  finished, fatal, or timed-out runs. Hierarchical report controls apply
+  source-ordered phase/time verbosity, max-quit, severity/action/file and
+  catcher policy, while bounded objection tracing preserves stable escaped
+  records across engines. Factory/config/resource tracing supplies stable
+  escaped resolution/access records, usage inventories, contained callbacks,
+  and matching debugger/activity views across engines. Untouched UVM 1.2
+  legacy field, utility/registry, sequence, callback, analysis-implementation,
+  and report macros retain their generated signatures and factory/portable
+  metadata across the same paths. Its phase, objection, TLM, sequence,
+  callback, register, policy, and command-line classes retain exact legacy
+  method profiles, while default deprecated package/component/test-done and
+  sequence/sequencer aliases plus their disabled and malformed diagnostics are
+  governed explicitly. UVM 2020.3.1 policy/copier/field-operation, long-integer
+  packing, printer/comparer/packer/recorder, reporting, version, retained-
+  compatibility, and removed-API differences are frozen independently;
+  explicit manifest/CLI release selection normalizes the complete difference
+  dispatch and retains release plus exact source identity through objects,
+  native caches, designs, schema-2 checkpoints, and replay while rejecting
+  mixed or mismatched state transactionally. An explicit project-owned core
+  smoke source binds the governed object-policy, factory, resource/config,
+  command-line, report, callback, and test-runner surfaces and retains all
+  eleven category method bodies through direct and portable object/design
+  execution for both releases. A retained flow inventory additionally freezes
+  phase callbacks, TLM1 members, sequence/role/callback inheritance, and the
+  common TLM2 payload API before the two-release interpreter/LLVM O0/O2,
+  cold/warm-cache, debug, multiple-root, cancellation, and replay matrix. The
+  retained register inventory also freezes project register roles and common
+  standard field/map/memory profiles, then exercises little/big-endian maps,
+  byte enables, adapters, predictors, frontdoors, mixed VPI/VHPI backdoors,
+  standard sequences, callbacks, coverage, DPI callbacks, negative operations,
+  relocated checkpoints, and retained-record caps across the same paths. The
+  exact runner is filesystem-neutral and freezes the x64 C/cdecl foreign ABI;
+  every stage has a 1,200-second wall limit, every process has a cross-platform
+  6 GiB address-space limit, and each serial release matrix has a 7,200-second
+  limit. An authoritative supported-boundary inventory assigns positive,
+  negative, and execution owners to 17 active families per release and rejects
+  any missing retained identity among 53 UVM 1.2 or 56 UVM 2020-3.1 governed
+  classes and all 27 project classes, with no supported-failure waiver path;
+  a 21-row executable release-closure matrix additionally freezes every public
+  compatibility switch, retained resource/trace baseline, diagnostic/source/
+  complexity audit, artifact/cache provenance, and zero unresolved supported
+  gaps. Exhaustive conformance beyond this documented boundary remains later
+  work;
 - governed VHDL-2008 VHPI with selected/indexed hierarchy, scalar/composite/
   nine-state values, drivers, callbacks, foreign models, associations,
   root-isolated reporting, transactional restart/remap, and independently
@@ -846,7 +895,9 @@ build, run, VCD, hierarchy-navigation, breakpoint, and trace-selection steps.
 - [v1 conformance provenance audit](docs/v1-conformance-audit.md)
 - [SystemC subset and plug-in model](docs/systemc-subset.md)
 - [SystemVerilog UVM foundation](docs/systemverilog-uvm.md)
+- [Producer-independent UVM tutorial](docs/uvm-tutorial.md)
 - [Governed external UVM source provenance](docs/uvm-source-provenance.md)
+- [UVM release-closure audit](docs/uvm-closure-audit.md)
 
 ## Licensing
 

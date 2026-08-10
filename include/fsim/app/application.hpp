@@ -24,6 +24,8 @@
 #include "fsim/runtime/uvm_registry.hpp"
 #include "fsim/runtime/uvm_factory.hpp"
 #include "fsim/runtime/uvm_resource.hpp"
+#include "fsim/runtime/uvm_synchronization.hpp"
+#include "fsim/runtime/uvm_test_runner.hpp"
 #include "fsim/runtime/uvm_config_db.hpp"
 #include "fsim/runtime/uvm_command_line.hpp"
 #include "fsim/runtime/uvm_report.hpp"
@@ -67,6 +69,18 @@ struct CheckedSource {
   std::string compilation_unit_digest;
   /// Optional consumer-local backing file for a relocatable logical path.
   std::filesystem::path backing_path;
+};
+
+struct SystemVerilogUvmProvenance {
+  project::SystemVerilogUvmRelease release{
+      project::SystemVerilogUvmRelease::none};
+  // Content-derived identity of the exact roots, dependencies, or portable
+  // objects which supplied the selected release.
+  std::string source_identity;
+
+  friend bool operator==(
+      const SystemVerilogUvmProvenance&,
+      const SystemVerilogUvmProvenance&) = default;
 };
 
 struct CheckedProject {
@@ -115,6 +129,7 @@ struct CheckedProject {
   std::vector<MappedLibrary> mapped_libraries;
   /// Explicit non-project objects in command-line declaration order.
   std::vector<ObjectProvenance> objects;
+  SystemVerilogUvmProvenance systemverilog_uvm_provenance;
   std::size_t source_count{};
 };
 
@@ -156,6 +171,7 @@ struct BuiltProject {
       systemc_hierarchies;
   std::vector<MappedLibraryProvenance> mapped_libraries;
   std::vector<CheckedProject::ObjectProvenance> objects;
+  SystemVerilogUvmProvenance systemverilog_uvm_provenance;
   /// Content-only identity of a loaded standalone design artifact. Project
   /// builds leave this empty; standalone native-cache keys include it.
   std::string artifact_identity;
@@ -329,6 +345,7 @@ enum class UvmDebugSection : std::uint8_t {
   callbacks,
   transactions,
   sequences,
+  configuration,
   register_model,
   all,
 };
@@ -366,6 +383,12 @@ struct UvmDebugSnapshot {
   std::vector<runtime::SystemVerilogUvmSequencerSnapshot> sequencers;
   std::vector<runtime::SystemVerilogUvmSequenceSnapshot> sequences;
   std::vector<runtime::SystemVerilogUvmSequenceItemSnapshot> sequence_items;
+  std::vector<runtime::SystemVerilogUvmFactoryTraceRecord>
+      factory_trace_records;
+  std::vector<runtime::SystemVerilogUvmResourceTraceRecord>
+      resource_trace_records;
+  std::vector<runtime::SystemVerilogUvmConfigTraceRecord>
+      config_trace_records;
   std::vector<runtime::SystemVerilogUvmRegisterBlockSnapshot> register_blocks;
   std::vector<runtime::SystemVerilogUvmRegisterMapSnapshot> register_maps;
   std::vector<runtime::SystemVerilogUvmRegisterSnapshot> registers;
@@ -551,6 +574,10 @@ class Simulation final {
   uvm_resources() noexcept;
   [[nodiscard]] const runtime::SystemVerilogUvmResourcePoolService&
   uvm_resources() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmSynchronizationService&
+  uvm_synchronization() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmSynchronizationService&
+  uvm_synchronization() const noexcept;
   [[nodiscard]] runtime::SystemVerilogUvmConfigDbService&
   uvm_config_db() noexcept;
   [[nodiscard]] const runtime::SystemVerilogUvmConfigDbService&
@@ -559,10 +586,17 @@ class Simulation final {
   uvm_command_line() noexcept;
   [[nodiscard]] const runtime::SystemVerilogUvmCommandLineService&
   uvm_command_line() const noexcept;
+  [[nodiscard]] runtime::SystemVerilogUvmTestRunnerService&
+  uvm_test_runner() noexcept;
+  [[nodiscard]] const runtime::SystemVerilogUvmTestRunnerService&
+  uvm_test_runner() const noexcept;
   [[nodiscard]] runtime::SystemVerilogUvmReportService&
   uvm_reports() noexcept;
   [[nodiscard]] const runtime::SystemVerilogUvmReportService&
   uvm_reports() const noexcept;
+  /// Apply phase controls immediately and schedule time-qualified UVM report
+  /// command-line controls on the simulation scheduler.
+  void schedule_uvm_report_settings();
   /// Deterministic packed class-property/static values suitable for trace
   /// declaration or snapshots. Paths and handles contain no host addresses.
   [[nodiscard]] std::vector<ClassPackedTraceValue>

@@ -8,9 +8,90 @@
 namespace fsim::app {
 using namespace application_detail;
 
+namespace {
+
+std::optional<project::SystemVerilogUvmRelease> selected_uvm_release(
+    const project::Config& config,
+    diagnostic::Engine& diagnostics) {
+  auto selected = project::SystemVerilogUvmRelease::none;
+  for (const auto& source_set : config.source_sets) {
+    if (source_set.uvm_release == project::SystemVerilogUvmRelease::none) {
+      continue;
+    }
+    if (source_set.language != project::Language::system_verilog) {
+      diagnostics.error(
+          "FSIM-UVM-VERSION-001",
+          "a governed UVM release may be selected only for SystemVerilog");
+      return std::nullopt;
+    }
+    if (selected != project::SystemVerilogUvmRelease::none
+        && selected != source_set.uvm_release) {
+      diagnostics.error(
+          "FSIM-UVM-VERSION-001",
+          "mixed governed UVM 1.2 and UVM 2020.3.1 source sets are not "
+          "transactionally compatible");
+      return std::nullopt;
+    }
+    selected = source_set.uvm_release;
+  }
+  return selected;
+}
+
+std::string uvm_source_identity(
+    const project::SystemVerilogUvmRelease release,
+    const std::span<const CheckedSource> sources) {
+  if (release == project::SystemVerilogUvmRelease::none) {
+    return {};
+  }
+  compiler::CacheKeyBuilder key;
+  key.add("uvm-provenance-schema", "fsim-uvm-source-v1");
+  key.add("uvm-release", project::to_string(release));
+  for (const auto& source : sources) {
+    key.add("source-content", source.content_digest);
+    key.add("source-compilation-unit", source.compilation_unit_digest);
+    for (const auto& dependency : source.dependencies) {
+      key.add("dependency-content", dependency.content_digest);
+    }
+  }
+  return key.finish();
+}
+
+bool validate_uvm_api_release(
+    const project::SystemVerilogUvmRelease release,
+    const std::span<const frontend::SystemVerilogClassSpecialization> classes,
+    diagnostic::Engine& diagnostics) {
+  if (release == project::SystemVerilogUvmRelease::none) {
+    return true;
+  }
+  const auto has_class = [&](const std::string_view suffix) {
+    return std::ranges::any_of(classes, [&](const auto& specialization) {
+      return specialization.declaration_identity.ends_with(suffix);
+    });
+  };
+  const bool has_uvm_object = has_class("::uvm_object");
+  const bool has_ieee_policy = has_class("::uvm_policy");
+  const auto compatibility =
+      project::systemverilog_uvm_compatibility(release);
+  const bool matches = has_uvm_object
+      && has_ieee_policy == compatibility.ieee_policy_classes;
+  if (!matches) {
+    diagnostics.error(
+        "FSIM-UVM-VERSION-002",
+        "selected governed UVM release does not match the parsed uvm_pkg API "
+        "surface");
+  }
+  return matches;
+}
+
+}  // namespace
+
 std::optional<CheckedProject> check_project(
     const project::Config& config,
     diagnostic::Engine& diagnostics) {
+  const auto uvm_release = selected_uvm_release(config, diagnostics);
+  if (!uvm_release) {
+    return std::nullopt;
+  }
   std::vector<ParseGroup> groups;
   std::map<std::string, std::size_t> combined_groups;
   std::size_t systemc_source_count = 0;
@@ -411,6 +492,11 @@ std::optional<CheckedProject> check_project(
   }
   checked.systemverilog_class_specializations =
       std::move(class_specializations.specializations);
+  if (!validate_uvm_api_release(
+          *uvm_release, checked.systemverilog_class_specializations,
+          diagnostics)) {
+    return std::nullopt;
+  }
   if (diagnostics.has_error()) {
     return std::nullopt;
   }
@@ -430,6 +516,9 @@ std::optional<CheckedProject> check_project(
         "source analysis produced an invalid owning semantic projection");
     return std::nullopt;
   }
+  checked.systemverilog_uvm_provenance.release = *uvm_release;
+  checked.systemverilog_uvm_provenance.source_identity =
+      uvm_source_identity(*uvm_release, checked.hdl_sources);
   return checked;
 }
 
