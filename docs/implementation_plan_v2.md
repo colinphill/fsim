@@ -6954,21 +6954,111 @@ carry an explicit evidence-backed scope disposition approved by the user.
   explicit host-addressability or governed resource ceilings, diagnose those
   physical boundaries distinctly from language legality, and add positive,
   negative, execution, artifact, and resource evidence above the former limits.
-- **Changes 1-4:** inventory and close remaining IEEE 1364-2005 lexical,
-  directive, config/library, declaration, net/variable, expression, generate,
-  and hierarchy rules.
-- **Changes 5-8:** close remaining gate/switch/UDP, strength, charge, continuous/
-  procedural assignment, event, task/function, memory, timing-control, and race
-  semantics beyond Batches 144-146.
-- **Changes 9-12:** close remaining specify/path/timing-check/pulse behavior,
-  compiler directives, celldefine/unconnected-drive/default-net behavior, and
-  standard system tasks/functions.
-- **Changes 13-16:** integrate residual behavior with VPI/DPI, SDF-ready timing
-  identity, mixed hierarchy, debugger/trace, artifacts, relocation, and caches.
-- **Changes 17-19:** add LRM-indexed conformance and negative matrices,
-  cross-engine/platform tests, docs, diagnostics, inventories, and handoff.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+- **Change 1:** establish one authoritative clause-indexed IEEE 1364-2005 gap
+  inventory. Reconcile every active row against current parser, preprocessing,
+  semantic, elaboration, SimIR, interpreter, LLVM, public API and release
+  evidence; separately inventory every literal-width cap or host-word
+  assumption. Freeze supported, unsupported and explicitly deferred boundaries,
+  assign Changes 2-16 one-to-one closure ownership, and make duplicates,
+  missing evidence, unowned active rows and scope drift fail a registered gate.
+- **Change 2:** close lexical tokens and numeric literals, including escaped
+  identifiers, strings, comments, attributes, integer/real/time forms and all
+  binary/octal/decimal/hex based numbers. Remove arbitrary bit-string and
+  based-number width limits end to end: preserve source-determined sizing,
+  signedness, X/Z digits and exact value bits beyond host-word size through
+  parsing, folding, execution and diagnostics. Retain only separately diagnosed
+  host-addressability or governed resource ceilings, with evidence beyond each
+  former limit.
+- **Change 3:** close preprocessing and compiler-directive semantics: macro
+  arguments, substitution, token pasting, quoting, recursion containment,
+  conditional compilation, include search/provenance, line control, timescale,
+  default-nettype, celldefine, unconnected-drive, nounconnected-drive, resetall
+  and directive lifetime across source sets, objects, libraries and caches.
+- **Change 4:** close declarations and data objects: module/port forms,
+  parameters/localparams/specparams, nets, regs, integers, time/realtime/reals,
+  events, genvars, ranges, memories and attributes. Preserve exact declared and
+  inferred widths, directions, signedness, initialization, lifetime and source
+  identity without narrowing wide literal initializers.
+- **Change 5:** close expression semantics: self/context-determined sizing,
+  signedness propagation, arithmetic, logical, relational, equality and case
+  equality, shifts, reductions, conditionals, concatenation/replication,
+  bit/part selects and constant functions. Exercise arbitrary-width operands
+  and results across interpreter and LLVM without host-word truncation.
+- **Change 6:** close hierarchy and elaboration: module instances, parameter
+  overrides, arrays of instances, generate-if/case/for, defparam, hierarchical
+  names, library/configuration selection, unresolved/duplicate handling and
+  deterministic multiple-root ownership. Preserve wide parameters and derived
+  ranges through specialization and cache identities.
+- **Change 7:** close built-in gate primitives and user-defined primitives,
+  including combinational/sequential UDP tables, edge symbols, initialization,
+  instance arrays, terminals, delays, strengths and exact unknown/high-
+  impedance truth-table behavior with positive and cataloged-negative evidence.
+- **Change 8:** close MOS/CMOS/bidirectional switch networks, resistive
+  reduction, tran/tranif families, drive/charge strengths, trireg charge
+  storage/decay and supply/wand/wor/tri resolution. Prove deterministic
+  convergence, contention, force/release interaction and bounded
+  nonconvergence/resource behavior.
+- **Change 9:** close continuous assignments and net-driver scheduling:
+  scalar/vector/memory lvalues, multiple drivers, strength resolution,
+  rise/fall/turnoff delays, inertial pulse rejection, cancellation, zero-delay
+  updates and exact delta ordering. Preserve wide values and slices through all
+  driver and resolution paths.
+- **Change 10:** close procedural assignment semantics: blocking/nonblocking
+  updates, intra-assignment controls, concatenated/selected lvalues,
+  procedural continuous assign/deassign and force/release for nets and
+  variables. Retain underlying versus effective values, driver identity,
+  scheduling regions and debugger/API visibility.
+- **Change 11:** close statements, named blocks, loops, disable, event triggers,
+  event expressions, delay/event/repeat controls, fork/join variants and race-
+  sensitive scheduler ordering. Specify deterministic active/inactive/NBA/
+  monitor behavior, cancellation, time overflow and bounded delta-cycle
+  failure contracts.
+- **Change 12:** close tasks, functions and standard system tasks/functions:
+  automatic/static lifetime, recursion, argument directions, hierarchical
+  calls, disable/return behavior, display/format, simulation control, random,
+  conversion, bit-query, time, file and command-line services. Preserve wide
+  actuals/results and diagnose only genuine API/resource boundaries.
+- **Change 13:** close memories and file-backed initialization: packed/unpacked
+  indices, memory words, selects, assignment, ports and `$readmem*`/`$writemem*`
+  address/range/token semantics. Prove exact arbitrary-width words, X/Z digits,
+  sparse ranges, malformed input rollback, sandboxing and governed file/work
+  ceilings.
+- **Change 14:** close specify blocks and timing semantics: module/specparam
+  paths, conditional/edge-sensitive paths, path pulses, pulsestyle/showcancelled,
+  timing checks, notifiers and stable SDF-ready path/check identity. Exercise
+  simultaneous boundaries, cancellation and wide-vector path slices in both
+  engines.
+- **Change 15:** integrate all residual behavior with VPI and the existing
+  PLI/DPI host boundary: hierarchy/type/value/driver iteration, callbacks,
+  control, force/deposit/release, time, handles, stale-generation rejection and
+  append-only ABI contracts. Keep public stored-driver and effective-value
+  semantics distinct.
+- **Change 16:** integrate residual Verilog behavior across VHDL,
+  SystemVerilog and SystemC hierarchy, conversions, bindings, multiple roots,
+  debugger, callbacks, activity, VCD/trace and public C/Tcl/CLI surfaces. Add
+  exact wide-value and timing-identity evidence at every boundary.
+- **Change 17:** preserve the complete Batch 164 state through object/design
+  artifacts, mapped libraries, checkpoints, cold/warm native caches,
+  relocation, replay and standalone execution. Version schemas and cache keys,
+  reject stale/incompatible payloads deterministically, and prove arbitrary-
+  width literals/values survive every round trip.
+- **Change 18:** execute the complete clause-indexed positive/negative inventory
+  through direct, interpreter, LLVM O0/O2, cache, debugger, trace, artifact,
+  relocation, replay, multiple-root and mixed-language stages under explicit
+  time/address-space/work limits. Require zero unresolved supported rows and
+  retain exact transcript, diagnostic, trace and peak-RSS evidence.
+- **Change 19:** synchronize diagnostics, feature/evidence matrices, language
+  support, architecture, VPI/timing guides, public tutorial, inventories,
+  installed/public/platform/portability contracts, counts, digests and the
+  restart handoff. Publish the literal-width design rule and distinguish
+  physical resource ceilings from language legality.
+- **Change 20:** run fresh clean-first exact-LLVM Debug and Release eight-worker
+  builds, complete regressions, governed Verilog and mixed-language matrices,
+  artifacts, audits, installed/public/platform/portability and release-
+  candidate gates. Retain timing/RSS/swap evidence; this is not a sanitizer or
+  hosted-CI monitoring boundary. Commit and push Changes 1-20 once only after
+  every local gate is clean, then save the Batch 165 restart plan and clear
+  context before implementation.
 
 ### Batch 165 - SystemVerilog-2017 residual language closure
 

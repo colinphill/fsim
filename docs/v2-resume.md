@@ -5,6 +5,91 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
+## Batch 164 planned restart checkpoint - 2026-08-10
+
+1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
+   expanded Batch 164 allocation in `implementation_plan_v2.md`, and verify
+   branch `codex/v2` is clean and synchronized at Batch 163 implementation
+   `890122e6018fa2d371036d4cede5311247a398bf` plus this documentation-only
+   Batch 164 planning checkpoint.
+2. This checkpoint implements the required pre-batch flow. Batch 164 is
+   expanded into exactly twenty changes without broadening the locked
+   Verilog-2005 residual-language closure scope. No Batch 164 implementation
+   file has changed; clear context after pushing this plan and resume only from
+   this section and the authoritative allocation.
+3. Preserve Batch 163's VHDL-2008/embedded-PSL clause inventory, arbitrary-
+   width VHDL bit-string and IEEE numeric/fixed behavior, sequential/concurrent
+   scheduling, force/release driver identity, hierarchy/configuration,
+   access/file/protected objects, PSL clocks/properties/directives, mixed-
+   language/debug/trace/VHPI integration, artifacts and public documentation at
+   pushed commit `890122e`.
+4. Batch 163's fresh clean-first exact-LLVM 22.1.8 Debug and Release
+   eight-worker builds complete 741 steps warning-free in 10:19.03 and 8:39.05
+   with peak RSS 4,286,220 and 3,017,072 KiB and zero swaps. Complete Debug and
+   Release regressions pass 126/126 in 6:16.02 and 5:28.32 with peak RSS
+   3,785,680 and 3,766,280 KiB and zero swaps.
+5. The final explicit VHDL-labelled matrices pass 36/36 in 37.77 and 35.80
+   seconds. The documentation/release slice passes 13/13, the exact post-format
+   driver correction slice passes 4/4 in both configurations, the new Batch 163
+   sources and Change 20 correction ranges pass the WebKit gate, and the
+   repository whitespace check is clean.
+6. The Batch 163 release baseline is 2,138 diagnostics, 835 bounded C/C++
+   sources, 955 SPDX-owned files including `.clang-format`, 316 authored
+   test/control files, 1,279 executable feature rows, 5,116 linked evidence
+   cells, 604 exact paths split 265/312/27 test/production/release, 138 runtime
+   files, and 36 corpus CTests.
+7. Its exact SHA-256 identities are feature matrix
+   `e38217f0ced26556c13e4ef6d4f32aa4d46172192ec54e926e739d165abbbab7`,
+   evidence
+   `2d9a2bf8fdc360b6b484087848eeb00def2a61cff5fecfacf9400fadcec2010b`,
+   VHDL/PSL gap inventory
+   `0a60ca24775a1e5e7282059b282557d36656e1f926d4207f1f3df48f4c8b891b`,
+   and VHDL/PSL closure
+   `169bc75fd1d0713fcc5760da8a22fe12376f0e655b26510566e33d78a336de35`.
+8. Batch 164's cross-cutting correctness requirement is to inventory and remove
+   every arbitrary Verilog bit-string or based-number literal-width cap. Exact
+   source-determined width, signedness and X/Z bits must survive parsing,
+   folding, elaboration, both engines, public boundaries, artifacts, caches and
+   relocation beyond host-word size. Retain only explicit host-addressability
+   or governed resource ceilings, diagnose those as physical limits rather
+   than language illegality, and prove behavior above every former cap.
+9. Changes 1-4 create the authoritative IEEE 1364-2005 clause and width-limit
+   inventories, then close lexical/numeric, preprocessing/directives and
+   declaration/data-object rules with exact positive, negative, diagnostic,
+   provenance and wide-value evidence.
+10. Changes 5-8 close expression sizing/signing, hierarchy/generate/configuration,
+    gate/UDP and switch/strength/charge behavior, preserving arbitrary-width
+    values and deterministic bounded resolution.
+11. Changes 9-12 close continuous and procedural assignments, force/release,
+    event/timing/scheduler statements, tasks/functions and standard system
+    services with exact delta/race semantics and wide actual/result behavior.
+12. Changes 13-16 close memories and `$readmem*`/`$writemem*`, specify paths/
+    timing checks/pulses, VPI/host integration, and mixed VHDL/SystemVerilog/
+    SystemC plus debugger/trace/public surfaces. New SDF application remains
+    owned by Batch 170; Batch 164 supplies stable SDF-ready timing identity.
+13. Changes 17-19 preserve every new construct through artifacts, libraries,
+    checkpoints, caches, relocation and replay; run the zero-gap governed
+    cross-engine/platform/resource matrix; and synchronize diagnostics, docs,
+    tutorials, matrices, counts, digests, contracts and this handoff.
+14. Change 20 runs fresh clean-first exact-LLVM Debug/Release eight-worker
+    builds, full regressions, governed Verilog/mixed-language matrices, artifact
+    and release gates, then creates the sole Batch 164 implementation commit/
+    push. Use 120-minute command timeouts, at least eight build workers, serial
+    governed stages and explicit process address-space/work limits; retain
+    timing, RSS, swap, transcript, diagnostic and trace evidence.
+15. Accumulate Changes 1-20 in one intentionally dirty Batch 164 worktree. Do
+    not reset, commit or push implementation before Change 20. Batch 164 is not
+    a sanitizer or hosted-CI monitoring boundary; do not run either unless a
+    newly observed failure requires it. After the implementation commit, save
+    and push the exact Batch 165 restart plan and clear context before Batch 165
+    implementation.
+16. Next action after this checkpoint is pushed and context is cleared:
+    implement Batch 164 Change 1 only. Start with the clause-indexed IEEE
+    1364-2005 and literal-width-limit inventory, reconcile it against current
+    code and executable evidence, assign Changes 2-16 one-to-one owners, freeze
+    supported/unsupported/deferred scope, and make duplicate, missing, unowned
+    or drifted active rows fail a registered contract.
+
 ## Batch 163 planned restart checkpoint - 2026-08-10
 
 1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
