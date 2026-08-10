@@ -5,6 +5,88 @@ Read [implementation_plan_v2.md](implementation_plan_v2.md) first; it is the
 authoritative v2 batch/status record. Preserve the completed v1 history in
 `v1-resume.md`.
 
+## Batch 163 planned restart checkpoint - 2026-08-10
+
+1. Start in `/home/colin/projects/fsim`, read this file and the authoritative
+   expanded Batch 163 allocation in `implementation_plan_v2.md`, and verify
+   branch `codex/v2` is clean and synchronized at Batch 162 implementation
+   `25f6f83f222c3ed46b3cb53a0fe9bbb5a6967e6e` plus this documentation-only
+   Batch 163 planning checkpoint.
+2. This checkpoint implements the required pre-batch flow. Batch 163 is
+   expanded into exactly twenty changes without broadening the locked
+   VHDL-2008 and embedded-PSL digital-language closure scope. No Batch 163
+   implementation file has changed; clear context after pushing this plan and
+   resume only from this section and the authoritative allocation.
+3. Preserve Batch 162's UVM 1.2/2020-3.1 object policies, synchronization,
+   command-line/test runner, report/objection/factory/config/resource tracing,
+   release compatibility/provenance, conformance inventory, project-owned
+   smoke coverage, platform/public contracts, closure audit, and tutorial at
+   pushed commit `25f6f83`.
+4. Batch 162's fresh clean-first exact-LLVM 22.1.8 Debug and Release
+   eight-worker builds complete 733 steps warning-free in 9:36.84 and 8:49.59
+   with peak RSS 4,070,136 and 2,506,320 KiB and zero swaps. Complete Debug and
+   Release regressions pass 122/122 in 6:24.90 and 5:26.29 with peak RSS
+   3,777,748 and 3,783,548 KiB and zero swaps.
+5. The final exact UVM 1.2 matrix passes all ten stages in 8:18.93 and UVM
+   2020-3.1 in 10:20.25: 2/2 in 18:39.19 with peak RSS 4,860,744 KiB and zero
+   swaps. All fourteen regenerated traces are 28,345 bytes with SHA-256
+   `62df6d6de11f33dcea64ae245060ebc70f578b4e54e326a911aa44ccb9797057`.
+   The final documentation/public/release contract slice passes 32/32 and the
+   whitespace check is clean.
+6. The Batch 162 release baseline is 1,279 executable feature rows, 5,116
+   linked evidence cells, 604 exact paths split across 265 test, 312 production,
+   and 27 release/build owners, 138 runtime files, 36 corpus CTests, 937 SPDX-
+   owned files, 2,071 diagnostics, 826 bounded C/C++ sources, and 313 authored
+   test/control owners. Its matrix/evidence digests are
+   `70deacfc60402730e5a567494e74aa015b4759b3655983a2ff6464c97ef11d42`
+   and `2d9a2bf8fdc360b6b484087848eeb00def2a61cff5fecfacf9400fadcec2010b`.
+7. Changes 1-4 create the authoritative clause-indexed IEEE 1076-2008 and
+   embedded-PSL inventory, then close lexical/design-unit, declaration/type,
+   expression/overload, generic-package, configuration/context, and external-
+   name gaps with exact positive, negative, runtime, diagnostic, and resource
+   ownership.
+8. Changes 5-8 close sequential timing/assignment/control, concurrent/process/
+   postponed/guard/disconnect/driver behavior, block/generate/configuration
+   elaboration, and access/file/protected/shared-object execution with stable
+   scheduling, lifecycle, rollback, stale-owner rejection, and explicit work/
+   storage ceilings.
+9. Changes 9-12 add embedded PSL verification units, clocks, sequences,
+   properties, endpoints, and directives; analyze temporal operators and
+   bounds; execute sampled attempts with abort/vacuity/reset/end-of-run rules;
+   and publish deterministic reports, coverage, callbacks, debug, traces,
+   artifacts, limits, and negative evidence.
+10. Changes 13-16 integrate the residual VHDL/PSL behavior with current IEEE/
+    VITAL ownership, mixed SystemVerilog/SystemC boundaries, multiple roots,
+    debugger/callback/waveform/activity/VHPI visibility, and versioned object/
+    design artifacts, libraries, checkpoints, caches, relocation, and replay.
+    New SDF ownership remains deferred to Batch 170.
+11. Changes 17-19 require zero unresolved supported rows in the clause-indexed
+    conformance inventory, then run direct/interpreter/LLVM O0/O2/cache/debug/
+    trace/relocation/replay/root/mixed/platform evidence and synchronize all
+    diagnostics, matrices, docs, tutorials, inventories, installed/public
+    contracts, audits, counts, digests, and this handoff.
+12. Change 20 runs fresh clean-first exact-LLVM Debug/Release eight-worker
+    builds, complete regressions, governed VHDL/PSL and mixed-language
+    matrices, cross-engine/cache/debug/trace/relocation evidence, every audit,
+    installed/public/platform/portability contract, and release-candidate gate
+    before the sole implementation commit/push.
+13. Accumulate Changes 1-20 in one dirty Batch 163 worktree. Use at least eight
+    workers for local builds, retain exact test/memory/transcript/trace output,
+    update this handoff after every completed change, and do not reset, commit,
+    or push the implementation before Change 20. Serial governed runs and
+    explicit RSS/work ceilings must prevent any return of over-20-GiB behavior.
+14. Batch 163 is not a sanitizer or hosted-CI monitoring boundary. Do not run a
+    sanitizer or inspect hosted CI unless a new failure requires it. After the
+    Batch 163 implementation commit, expand and push the exact Batch 164 restart
+    plan and clear context before Batch 164 implementation.
+15. Next action after this checkpoint is pushed and context is cleared:
+    implement Batch 163 Change 1 only. Begin with the clause-indexed IEEE
+    1076-2008 and embedded IEEE 1850 PSL inventory, reconcile it against current
+    parser/analyzer/elaborator/runtime and release evidence, assign positive,
+    negative, execution, diagnostic, and resource owners, freeze supported/
+    unsupported/deferred scope, and make duplicate, missing, or unowned active
+    rows fail a registered contract.
+
 ## Batch 162 planned restart checkpoint - 2026-08-09
 
 1. Start in `/home/colin/projects/fsim`, read this file and the authoritative

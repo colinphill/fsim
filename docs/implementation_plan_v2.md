@@ -6421,22 +6421,99 @@ carry an explicit evidence-backed scope disposition approved by the user.
 
 ### Batch 163 - VHDL-2008 and PSL digital-language closure
 
-- **Changes 1-4:** inventory and close remaining VHDL-2008 lexical, declaration,
-  type, expression, overload, generic, package, configuration, context, and
-  external-name gaps.
-- **Changes 5-8:** close remaining sequential/concurrent, access/file/protected,
-  resolution, postponed, shared-variable, disconnect, guard, block, and generate
-  semantics.
-- **Changes 9-12:** parse, analyze, and execute the IEEE 1850 PSL subset embedded
-  in VHDL, including clocks, sequences, properties, directives, abort/vacuity,
-  reports, and coverage.
-- **Changes 13-16:** integrate residual VHDL/PSL behavior with VITAL, mixed
-  boundaries, multiple roots, debugger/callback/trace, artifacts, relocation,
-  caches, and VHPI.
-- **Changes 17-19:** add LRM-indexed positive/negative conformance matrices,
-  cross-engine tests, docs, diagnostics, inventories, and handoff.
-- **Change 20:** run full non-sanitized Debug/Release and release gates, then
-  commit and push once without hosted CI monitoring.
+- **Change 1:** establish an authoritative clause-indexed IEEE 1076-2008 and
+  embedded IEEE 1850 PSL gap inventory. Map every supported, unsupported, and
+  deferred row to parser, analyzer, elaborator, runtime, positive, negative,
+  execution, diagnostic, and resource evidence; freeze exact release scope and
+  reject unowned or duplicate rows.
+- **Change 2:** close remaining lexical and design-unit behavior: extended and
+  basic identifiers, character/string/bit-string literals, delimiters, comments,
+  library/use/context clauses and context declarations, secondary-unit identity,
+  analysis order, standard-mode legality, recovery, and bounded diagnostics.
+- **Change 3:** close remaining declarations and types: incomplete/access/file/
+  protected types, physical and fixed/unconstrained composites, subtypes,
+  aliases, attributes, groups, shared variables, deferred constants, interface
+  objects, visibility, homographs, freezing, ownership, and negative legality.
+- **Change 4:** close remaining expressions, names, and reusable-unit semantics:
+  universal/fixed/physical arithmetic, aggregates, qualified/conversion forms,
+  conditional and case expressions, overload resolution, generic packages and
+  subprograms, package instantiation, configurations, contexts, and external
+  names, with exact specialization and rollback evidence.
+- **Change 5:** close remaining sequential semantics: wait, assertion/report,
+  variable and signal assignment including conditional/selected waveforms,
+  force/release, procedure calls, loops, next/exit/return/null, case choices,
+  reject/inertial/transport timing, cancellation, and delta-cycle ordering.
+- **Change 6:** close remaining concurrent and process semantics: sensitized and
+  all-sensitive processes, postponed processes, concurrent calls/assertions/
+  assignments, guarded and disconnected drivers, blocks, stable activation,
+  driver ownership, resolution, teardown, and bounded nonconvergence handling.
+- **Change 7:** close block/generate/configuration elaboration: for/if/case
+  generates, locally static alternatives, nested labels and scopes, component
+  binding, configuration specifications/declarations, generic/port association,
+  implicit signals, multiple drivers, resolved subelements, and transactional
+  hierarchy rollback.
+- **Change 8:** close access, file, protected, and shared-object execution:
+  allocation/deallocation, designated-value identity, endfile/read/write modes,
+  protected method mutual exclusion and reentrancy, shared-variable legality,
+  pure/impure access, finalization, stale/cross-owner rejection, deterministic
+  scheduling, and explicit storage/work ceilings.
+- **Change 9:** add embedded PSL lexical, grammar, and declaration ownership for
+  VHDL comments and design units: verification units, default clocks, Boolean/
+  sequence/property declarations, endpoints, formal parameters, directive
+  labels, assert/assume/restrict/cover forms, standard selection, recovery, and
+  cataloged malformed-subset diagnostics.
+- **Change 10:** analyze PSL clocks and temporal expressions: sampled Boolean
+  values, clock inference/override, sequence concatenation/fusion/repetition,
+  suffix implication, next/prev/eventually/always, until/before/within, endpoint
+  typing, static bounds, cross-clock rejection, and unknown-value policy.
+- **Change 11:** elaborate and execute PSL sequences and properties with exact
+  sampling-region, delta, and clock-edge behavior; overlapping attempts,
+  strong/weak completion, abort/async-abort, vacuity, reset, disable, finite-run
+  termination, deterministic attempt order, lifecycle cleanup, and work limits.
+- **Change 12:** execute PSL directives and publish deterministic assertion,
+  assumption, restriction, and cover outcomes with source/instance identity,
+  report/severity routing, callback/debugger observation, coverage counters,
+  trace/artifact retention, transactional failure handling, and positive/
+  negative/vacuous/end-of-run evidence.
+- **Change 13:** integrate residual VHDL-2008 and PSL behavior with the existing
+  IEEE/VITAL environment: package identity, resolved/scalar/vector values,
+  delayed and path-sensitive VITAL calls already in scope, protected/file/
+  physical values, PSL observation, diagnostics, and portable library export;
+  defer new SDF ownership to Batch 170.
+- **Change 14:** integrate VHDL/PSL across SystemVerilog and SystemC boundaries
+  and multiple roots: exact type conversions, ports/generics, resolved values,
+  time/delta synchronization, callbacks, failure propagation, PSL clock/sample
+  ordering, deterministic root order, ownership, teardown, and negative paths.
+- **Change 15:** complete debugger, callback, waveform/trace, activity, and VHPI
+  visibility for the new constructs: scopes, external names, access/protected/
+  file values, postponed regions, drivers, PSL attempts/outcomes/coverage,
+  breakpoint/replay identity, stale handles, and bounded snapshots.
+- **Change 16:** preserve all new VHDL/PSL state through object/design artifacts,
+  libraries, checkpoints, cache keys, direct/non-project phases, relocation, and
+  replay. Version schemas and standard/package identities, reject corrupt or
+  incompatible payloads transactionally, and prove cold/warm equivalence.
+- **Change 17:** execute the complete clause-indexed conformance inventory with
+  independent positive, negative, and runtime witnesses for every active row;
+  close every supported gap, require cataloged diagnostics and exact source
+  locations, and publish zero unresolved supported rows without waivers.
+- **Change 18:** run the governed VHDL/PSL corpus through direct, interpreter,
+  LLVM O0/O2, cold/warm cache, debugger, trace, relocation, replay, multiple-
+  root, mixed-language, platform, and installed-public paths. Consolidate race,
+  cancellation, nonconvergence, malformed-input, resource, memory, source-
+  complexity, license, and provenance evidence with explicit RSS/work ceilings.
+- **Change 19:** synchronize diagnostics, feature/evidence matrices, language
+  support, architecture, VHDL/PSL/VITAL guides, tutorials, inventories, source
+  provenance, installed/public/platform contracts, release audits, corpus
+  owners, and this restart handoff. Regenerate all exact counts/digests and run
+  the complete documentation/inventory/release contract slice.
+- **Change 20:** run fresh clean-first exact-LLVM Debug and Release eight-worker
+  builds, complete regressions, governed VHDL/PSL and mixed-language matrices,
+  cross-engine/cache/debug/trace/relocation evidence, audits, installed/public/
+  platform/portability contracts, and release-candidate gates. Retain timing,
+  RSS, swap, diagnostic, transcript, and trace evidence; this is not a sanitizer
+  or hosted-CI monitoring boundary. Commit and push Changes 1-20 once only after
+  every local gate is clean, then save the Batch 164 restart plan and clear
+  context before implementation.
 
 ### Batch 164 - Verilog-2005 residual language closure
 
